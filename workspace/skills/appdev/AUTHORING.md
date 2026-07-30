@@ -101,16 +101,18 @@ currently loaded build and ask the user when to adopt the new one. `immediate`
 is used for first load, user-requested rollback, and terminal process
 replacement. Terminal apps are supervised by the server runner once started.
 
-For explicit version controls, call `workspace.units.versions(appName)` to list
-current/previous app builds and `workspace.units.rollback(appName, { buildKey?
-})` to restore one. Shell can manage all app units; ordinary app callers can
-manage their own app unit.
+For explicit version controls, call
+`runtime.supervision.versions({ kind: "app", releaseId: appName })` to list
+current/previous app builds and
+`runtime.supervision.rollback({ kind: "app", releaseId: appName }, { buildKey? })`
+to restore one. Shell can manage all app releases; ordinary app callers can
+manage their own app release.
 
 Host notifications can include typed app commands:
 
 - `{ type: "app.applyUpdate", appId }`
-- `{ type: "app.rollback", appId, buildKey? }`
-- `{ type: "workspace.restartUnit", name }`
+- `{ type: "runtime.supervision.rollback", release: { kind: "app", releaseId: appId }, buildKey? }`
+- `{ type: "runtime.supervision.restart", identity: { kind: "app", entityId } }`
 
 Prefer these structured commands over encoding app ids in action strings.
 Desktop shell also exposes a durable App updates section in connection settings
@@ -124,7 +126,7 @@ through `this.sql`. The app resolves the service through the runtime and calls
 narrow RPC methods:
 
 ```ts
-import { rpc, workers } from "@vibestudio/runtime";
+import { rpc, workers } from "@workspace/runtime";
 
 const store = await workers.resolveService("example.todos.v1", "project-123");
 if (store.kind !== "durable-object") throw new Error("Expected DO service");
@@ -140,8 +142,8 @@ services:
   - source: workers/todo-store
     name: todo-store
     protocols: [example.todos.v1]
-    policy:
-      allowed: [app, panel, do, worker]
+    authority:
+      principals: [user, code]
     durableObject:
       className: TodoStore
 ```
@@ -149,7 +151,12 @@ services:
 The DO methods must also admit app callers:
 
 ```ts
-@rpc({ callers: ["app", "panel", "do", "worker"] })
+@rpc({
+  principals: ["user", "code"],
+  effect: { kind: "open" },
+  tier: "open",
+  sensitivity: "read",
+})
 listTodos() { ... }
 ```
 
@@ -186,8 +193,9 @@ Guidelines:
   [vibestudio-vcs](../vibestudio-vcs/SKILL.md), author against an exact working
   head, build or test that state, commit the complete local application chain,
   and publish only after semantic ancestry/integration validation and approval.
-  Builds and tests are explicit advisory checks, while post-publication builds
-  are derived projections. Managed move/copy operations preserve file identity
+  Builds and tests are explicit local feedback checks; protected publication
+  repeats the exact-candidate build/typecheck gate, while post-publication
+  builds are derived projections. Managed move/copy operations preserve file identity
   and provenance; raw filesystem mutation is not an alternate source-authority
   path.
 

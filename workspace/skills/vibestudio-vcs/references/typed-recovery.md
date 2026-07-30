@@ -105,6 +105,9 @@ must also have identical heads and working counts.
   wrapper or synthetic invocation.
 - `ExternalEffectFailed`: preserve diagnostics; retry with the same command ID
   only when the original response remains uncertain and the request is exact.
+- `BuildGateFailed`: read `errorData.diagnostics` using the same build-report
+  diagnostic shape, repair the cited files, rerun the exact-context build
+  report, commit the repaired chain, and retry publication from the new event.
 - `IntegrityFailure`: stop mutation, preserve evidence, and escalate.
 
 Known refusals stay structured across RPC, CLI, UI, and agent tools. Never use

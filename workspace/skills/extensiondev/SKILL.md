@@ -1,6 +1,6 @@
 ---
 name: extensiondev
-description: Author Vibestudio extensions — long-lived Node processes that expose RPC APIs (and optionally HTTP fetch handlers) to panels, workers, and other extensions. Covers manifest, activate(), the ctx surface, approvals, the VCS dev loop, debugging.
+description: Author Vibestudio extensions — long-lived Node processes that expose RPC APIs (and optionally HTTP fetch handlers) to panels, workers, and other extensions. Covers manifest, activate(), capability declarations, the VCS dev loop, and debugging.
 ---
 
 # Extension Development Skill
@@ -11,13 +11,12 @@ If you're calling an existing extension from a panel or worker, you don't need t
 
 ## Files
 
-| Document                       | Content                                                                                                       |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| [AUTHORING.md](AUTHORING.md)   | Workspace layout, `package.json`, `activate(ctx)`, the API contract, the `ctx.*` surface                      |
-| [APPROVALS.md](APPROVALS.md)   | `ctx.invocation.current()`, `ctx.approvals.request(...)`, shared-resource grants for extension-owned services |
-| [FETCH.md](FETCH.md)           | Optional default-export `fetch` handler and the `/_r/ext/<name>/*` route                                      |
-| [DEV_LOOP.md](DEV_LOOP.md)     | Semantic publication as the dev signal, dev-session approval, inspector, log stream                           |
-| [MIGRATIONS.md](MIGRATIONS.md) | Migrating an in-host service into an extension (the canary pattern)                                           |
+| Document                       | Content                                                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------------------- |
+| [AUTHORING.md](AUTHORING.md)   | Workspace layout, `package.json`, `activate(ctx)`, the API contract, the `ctx.*` surface |
+| [FETCH.md](FETCH.md)           | Optional default-export `fetch` handler and the `/_r/ext/<name>/*` route                 |
+| [DEV_LOOP.md](DEV_LOOP.md)     | Semantic publication as the dev signal, dev-session approval, inspector, log stream      |
+| [MIGRATIONS.md](MIGRATIONS.md) | Migrating an in-host service into an extension (the canary pattern)                      |
 
 ## When to write an extension
 
@@ -32,15 +31,21 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 1. **`workspace/extensions/<name>/`** is the location. The package must be `private: true` and `type: "module"`, and the `package.json` must have `vibestudio.extension` (validated at install **and** boot — bad manifests fail closed).
 2. **`activate(ctx)` returns a plain object.** Its own enumerable function properties become RPC methods. Inherited methods, `then`, and non-function properties are skipped.
 3. **`ctx.fs` for an extension is unrestricted** — it covers the whole host filesystem. This is not a sandbox; it exists for _auditable_ writes. For silent ambient work, import `node:fs` directly. The install approval is the trust boundary.
-4. **Use `ctx.approvals.request(...)` only for extension-owned shared resources exposed to other userland callers.** Do not use it as a generic confirmation prompt or wrapper around ordinary filesystem/process/network work; the host/runtime APIs own those permission boundaries.
+4. **Protect extension-owned resources declaratively.** Add exact
+   `authority.provides` definitions and bind protected methods with
+   `vibestudio.extension.methodAuthority`. The extension dispatcher enforces
+   them before `activate()` API code runs; never add an advisory prompt inside
+   a method.
 5. **Prefer ESM**. For external CommonJS packages, use default imports + destructure (`import pkg from "x"; const { fn } = pkg`). Named imports from CJS are blocked.
-6. **No `console.log` in production paths.** Use `ctx.log.{debug,info,warn,error}` so logs land in the workspace-unit stream (`workspace.units.logs(name)`). `console.*` is captured too, but as `source: "stdout"` / `"stderr"` instead of structured records.
+6. **No `console.log` in production paths.** Use `ctx.log.{debug,info,warn,error}` so logs land in the exact supervised entity's stream (`runtime.supervision.logs(identity)`). `console.*` is captured too, but as `source: "stdout"` / `"stderr"` instead of structured records.
 7. **Protected semantic publication is the dev signal.** Read
    [vibestudio-vcs](../vibestudio-vcs/SKILL.md), author source on an exact
    working head, commit the complete local application chain, and publish the
    committed event through semantic ancestry/integration validation, approval,
-   and atomic protected-ref publication. Explicit builds are advisory, while a
-   successful `main` advance triggers the separate build/update projection.
+   and atomic protected-ref publication. Explicit builds provide fast local
+   feedback, while the push gate repeats the exact-candidate build/typecheck
+   check before approval and a successful `main` advance triggers the separate
+   build/update projection.
    That projection requires extension update approval before replacement and
    retains the previous runnable extension on any build or activation failure.
    Working or merely committed context work does not update the active
@@ -92,7 +97,7 @@ extensions:
 Saving that change (a gated meta write) raises one **elevated, joint approval** listing every newly-declared extension, because they run as native code. Once approved and running, call it:
 
 ```ts
-import { extensions } from "@vibestudio/runtime";
+import { extensions } from "@workspace/runtime";
 const hello = extensions.use<{ greet(name: string): Promise<string> }>(
   "@workspace-extensions/hello"
 );
@@ -103,16 +108,16 @@ The declared set in `meta/vibestudio.yml` is the single source of truth, reconci
 
 ## Common tasks
 
-| Task                                              | How                                                                                                                            |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Scaffold a new extension                          | Copy from `docs/extensions/templates/{minimal,plain-js-dep,external-cjs,native-wasm}/`                                         |
-| Read manifest rules                               | See [AUTHORING.md](AUTHORING.md) — `vibestudio.extension` shape, `dependencyMode`                                              |
-| Gate access to an extension-owned shared resource | See [APPROVALS.md](APPROVALS.md) — `ctx.approvals.request` + grant lookup                                                      |
-| Add an HTTP endpoint                              | See [FETCH.md](FETCH.md) — default-export `fetch` handler                                                                      |
-| Publish source and pick up changes                | See [DEV_LOOP.md](DEV_LOOP.md) — semantic commit/publication gates, dev-session, inspector                                     |
-| Migrate from `src/server/services/*`              | See [MIGRATIONS.md](MIGRATIONS.md) — canary pattern, `extensions.use(...)` codemod                                             |
-| Inspect an extension's status / health / logs     | `workspace.units.list()`, `workspace.units.diagnostics(name)`, `workspace.units.logs(name)`, `workspace.units.inspector(name)` |
-| Force restart (no source change)                  | `extensions.reload(name)` — approval-gated, restarts the active approved build                                                 |
+| Task                                              | How                                                                                                                         |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Scaffold a new extension                          | Copy from `docs/extensions/templates/{minimal,plain-js-dep,external-cjs,native-wasm}/`                                      |
+| Read manifest rules                               | See [AUTHORING.md](AUTHORING.md) — `vibestudio.extension` shape, `dependencyMode`                                           |
+| Gate access to an extension-owned shared resource | Declare `authority.provides` + `extension.methodAuthority`; see [AUTHORING.md](AUTHORING.md)                                |
+| Add an HTTP endpoint                              | See [FETCH.md](FETCH.md) — default-export `fetch` handler                                                                   |
+| Publish source and pick up changes                | See [DEV_LOOP.md](DEV_LOOP.md) — semantic commit/publication gates and exact runtime supervision                            |
+| Migrate from `src/server/services/*`              | See [MIGRATIONS.md](MIGRATIONS.md) — canary pattern, `extensions.use(...)` codemod                                          |
+| Inspect an extension's status / health / logs     | Select its exact identity from `runtime.supervision.list({ kind: "extension" })`, then use `describe`, `health`, and `logs` |
+| Force restart (no source change)                  | `extensions.reload(name)` — approval-gated, restarts the active approved build                                              |
 
 ## Reference material
 

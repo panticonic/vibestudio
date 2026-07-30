@@ -258,7 +258,6 @@ export const agentCapabilityTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
       "Check whether a small external JavaScript package can be loaded dynamically and used here.",

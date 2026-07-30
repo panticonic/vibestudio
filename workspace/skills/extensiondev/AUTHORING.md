@@ -31,7 +31,7 @@ External extensions clone into the same tree at install time. There is no per-us
     }
   },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*"
+    "@workspace/runtime": "workspace:*"
   },
   "pnpm": {
     "overrides": {
@@ -138,30 +138,29 @@ Returning `void` is valid — the extension is then fire-and-forget (only useful
 
 Today's surface (mirrors what panels and workers see; will narrow as capabilities migrate):
 
-| Client                       | Use                                                                                                                                                |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ctx.name`, `ctx.version`    | Extension identity                                                                                                                                 |
-| `ctx.storage`                | Per-extension scratch directory (path-scoped to the storage root)                                                                                  |
-| `ctx.fs`                     | **Unrestricted** filesystem RPC — for auditable writes                                                                                             |
-| `ctx.git`                    | Canonical typed external Git client (`gitInterop.*`)                                                                                               |
-| `ctx.workspace`              | Workspace info (`getInfo`, etc.)                                                                                                                   |
-| `ctx.rpc`                    | `call(targetId, method, ...args)` for unified RPC targets                                                                                          |
-| `ctx.workers`                | Workspace service/DO discovery (`listServices`, `resolveService`, `resolveDurableObject`)                                                          |
-| `ctx.credentials`            | Stored credentials (OAuth tokens, secrets)                                                                                                         |
-| `ctx.webhooks`               | Webhook ingress (`webhookIngress` service)                                                                                                         |
-| `ctx.notifications`          | `show`/`dismiss` notifications in the shell                                                                                                        |
-| `ctx.extensions`             | Call other extensions (`use`, `on`, `list`, management methods)                                                                                    |
-| `ctx.approvals.request(req)` | Ask the original panel/worker to grant access to an extension-owned shared resource (see [APPROVALS.md](APPROVALS.md))                             |
-| `ctx.invocation.current()`   | The current `ExtensionInvocation` envelope, including caller and chained `contextId` when invoked from userland (see [APPROVALS.md](APPROVALS.md)) |
-| `ctx.subscriptions`          | Push `Disposable`s; auto-disposed LIFO on deactivate                                                                                               |
-| `ctx.log`                    | Structured logger (`debug`/`info`/`warn`/`error`)                                                                                                  |
-| `ctx.health`                 | Self-report operational health (`healthy`/`degraded`/`unhealthy`)                                                                                  |
-| `ctx.emit(event, payload)`   | Fan-out to `extensions.on(name, event, cb)` subscribers                                                                                            |
+| Client                     | Use                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------- |
+| `ctx.name`, `ctx.version`  | Extension identity                                                                                |
+| `ctx.storage`              | Per-extension scratch directory (path-scoped to the storage root)                                 |
+| `ctx.fs`                   | **Unrestricted** filesystem RPC — for auditable writes                                            |
+| `ctx.git`                  | Canonical typed external Git client (`gitInterop.*`)                                              |
+| `ctx.workspace`            | Workspace info (`getInfo`, etc.)                                                                  |
+| `ctx.rpc`                  | `call(targetId, method, ...args)` for unified RPC targets                                         |
+| `ctx.workers`              | Workspace service/DO discovery (`listServices`, `resolveService`, `resolveDurableObject`)         |
+| `ctx.credentials`          | Stored credentials (OAuth tokens, secrets)                                                        |
+| `ctx.webhooks`             | Webhook ingress (`webhookIngress` service)                                                        |
+| `ctx.notifications`        | `show`/`dismiss` notifications in the shell                                                       |
+| `ctx.extensions`           | Call other extensions (`use`, `on`, `list`, management methods)                                   |
+| `ctx.invocation.current()` | The current `ExtensionInvocation` envelope, including the verified caller and chained `contextId` |
+| `ctx.subscriptions`        | Push `Disposable`s; auto-disposed LIFO on deactivate                                              |
+| `ctx.log`                  | Structured logger (`debug`/`info`/`warn`/`error`)                                                 |
+| `ctx.health`               | Self-report operational health (`healthy`/`degraded`/`unhealthy`)                                 |
+| `ctx.emit(event, payload)` | Fan-out to `extensions.on(name, event, cb)` subscribers                                           |
 
 ### What's _not_ on `ctx.*`
 
 - `ctx.panel` — the host panel orchestration service is shell-only; extensions cannot create or close panels in v1.
-- `ctx.db` — no general-purpose DB service exists. Prefer a manifest-declared service and `ctx.workers.resolveService(...)` plus `ctx.rpc.call(targetId, ...)` for shared DO-backed storage, or `ctx.storage` for scratch. Raw `resolveDurableObject(...)` accepts workspace worker classes, but product-internal DOs are closed except for exact reviewed source/class/key targets; never guess an internal class or object key.
+- `ctx.db` — no general-purpose DB service exists. Prefer a manifest-declared service and `ctx.workers.resolveService(...)` plus `ctx.rpc.call(targetId, ...)` for shared DO-backed storage, or `ctx.storage` for scratch. Raw `resolveDurableObject(...)` accepts workspace worker classes; host-internal DOs are not workspace targets and cannot be reached by guessing a class or object key.
 
 If you find yourself wanting either, the right move is usually a new extension behind `ctx.extensions.use(...)`.
 
@@ -219,7 +218,11 @@ ctx.health.degraded({ summary: "FCM credentials expired", retryAt: Date.now() + 
 ctx.health.unhealthy({ summary: "native libvips missing", reasons: ["dlopen failed: ..."] });
 ```
 
-State is **operational** (is the extension doing its job), separate from **lifecycle** status (is it running). A `running` extension can be `degraded`. The unified-status surface (`workspace.units.list()`) shows both.
+State is **operational** (is the extension doing its job), separate from
+**lifecycle** status (is it running). A `running` extension can be `degraded`.
+Select the extension's exact identity with
+`runtime.supervision.list({ kind: "extension" })`; `describe(identity)` reports
+lifecycle/artifact state and `health(identity)` reports operational state.
 
 `detail` is required for `degraded` and `unhealthy`. `retryAt` (epoch ms), when set, lets the UI render a countdown.
 
@@ -236,7 +239,11 @@ ctx.log.error("upstream failed", { code: "ETIMEDOUT" });
 Records flow into the workspace-wide unit-log stream:
 
 ```ts
-workspace.units.logs("@workspace-extensions/hello", { since: Date.now() - 60_000, level: "warn" });
+const [extension] = await runtime.supervision.list({ kind: "extension" });
+const logs = await runtime.supervision.logs(extension.identity, {
+  since: Date.now() - 60_000,
+  level: "warn",
+});
 ```
 
 `console.*` is captured too (via stdout/stderr) and lands in the same stream with `source: "stdout"` / `"stderr"`. Prefer `ctx.log` for production records — the structured fields are searchable.
@@ -245,7 +252,10 @@ workspace.units.logs("@workspace-extensions/hello", { since: Date.now() - 60_000
 
 Each extension runs in its own forked Node process. Crashes are contained to that process. The manager respawns with exponential backoff: `1s, 2s, 4s, 8s, 16s`. After five attempts in a 60-second window, the extension is marked `error` and won't restart until `extensions.reload(name)` is called explicitly.
 
-If `activate(ctx)` throws, the extension is marked `error` immediately — no respawn. A bad manifest, missing dependency, or assertion in your activation path will land you here. Check `workspace.units.list()` for `lastError`, then push a fix.
+If `activate(ctx)` throws, the extension is marked `error` immediately — no
+respawn. A bad manifest, missing dependency, or assertion in your activation
+path will land you here. Inspect the exact extension with
+`runtime.supervision.describe(identity)` for `lastError`, then push a fix.
 
 ## Templates
 

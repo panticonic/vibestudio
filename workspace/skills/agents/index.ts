@@ -9,7 +9,7 @@
  * (it can adopt another channel's in-flight turn → duplicate envelope ids → GAD
  * id-collision). `*-standing` keys are ONLY for scheduled instances in `vibestudio.yml`.
  */
-import { contextId as runtimeContextId, rpc } from "@vibestudio/runtime";
+import { contextId as runtimeContextId, rpc } from "@workspace/runtime";
 import { toSubscriptionConfig, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
 
 export interface AddAgentToChannelArgs {

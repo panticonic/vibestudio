@@ -1,5 +1,5 @@
-import { credentials, git, openExternal, openPanel } from "@vibestudio/runtime";
-import type { RequestCredentialInputRequest, StoredCredentialSummary } from "@vibestudio/runtime";
+import { credentials, git, openExternal, openPanel } from "@workspace/runtime";
+import type { RequestCredentialInputRequest, StoredCredentialSummary } from "@workspace/runtime";
 import {
   GITHUB_FINE_GRAINED_BROAD_PERMISSIONS,
   githubBindings,
@@ -300,7 +300,7 @@ function getCredentialRuntime(): RuntimeCredentials {
   const api = credentials as Partial<RuntimeCredentials> | undefined;
   if (!api) {
     throw new Error(
-      "Vibestudio credential runtime is unavailable: @vibestudio/runtime did not export credentials."
+      "Vibestudio credential runtime is unavailable: @workspace/runtime did not export credentials."
     );
   }
   for (const method of [

@@ -29,7 +29,7 @@ function addFile(p: string, content: string | Uint8Array): void {
   mocks.files.set(normalized, content);
 }
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   vcs: {
     status: mocks.status,
     edit: mocks.edit,
@@ -206,7 +206,7 @@ describe("createProject", () => {
       vibestudio: {
         title: "Hello",
         entry: "index.tsx",
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
         exposeModules: expect.arrayContaining([
           "react",
           "react/jsx-runtime",
@@ -536,7 +536,7 @@ describe("forkProject", () => {
         type: "module",
         vibestudio: {
           entry: "source-worker.ts",
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
           durable: { classes: [{ className: "SourceWorker" }] },
         },
       })
@@ -595,7 +595,7 @@ describe("forkProject", () => {
         vibestudio: {
           title: "Source",
           entry: "source-worker.ts",
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
           durable: { classes: [{ className: "SourceWorker" }] },
         },
       })

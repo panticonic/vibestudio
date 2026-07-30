@@ -95,10 +95,10 @@ ancestry. They are not another VCS. The semantic authority performs no direct
 filesystem or protected-ref effect.
 
 The build subsystem is a separate content consumer, not a semantic effect port.
-It can be invoked explicitly against an exact context for advisory feedback or
-react to published source to produce runtime artifacts. Its observations and
-artifacts do not authorize publication, advance refs, or become semantic
-history.
+It can be invoked explicitly against an exact context for fast feedback and is
+also invoked by protected publication for the affected build closure. Build
+observations and artifacts do not become semantic history; only the successful
+candidate gate permits the protected ref effect.
 
 Materialized context folders and host content-tree digests are projections.
 Build keys identify derived artifacts. None is semantic revision identity.
@@ -130,12 +130,15 @@ these edges, make it a rebuildable cache or delete it.
 Builds are content-addressed and demand-driven. An effective version derives
 from one unit's content, transitive internal dependencies, and global build
 keys. Equal effective versions reuse artifacts. An explicit context build is
-an advisory check; a post-publication build is a derived projection.
+the fast local diagnostic loop; the protected-main gate repeats the exact
+candidate build/typecheck before ref mutation. A post-publication build
+remains a derived projection.
 
 Protected `vcs.push` publishes an already committed event. The semantic
 authority validates event ancestry and integration facts; the publication gate
 obtains approval and atomically advances protected refs. Publication creates no
-source-history event and has no build precondition.
+source-history event. Candidate build/typecheck success is a precondition for
+content-changing pushes.
 
 Runtime activation consumes derived artifacts and fails closed. If the newly
 published source cannot be built, validated, or started, its artifact is not

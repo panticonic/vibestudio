@@ -12,10 +12,11 @@ Use `client_eval` to statically import `composeOnboardingSnapshot` from
 composer inside the inviting chat panel, where direct owner APIs and the
 redacted Electron host topology read are both reachable.
 
-Render that array as the `snapshot` prop of the checked-in setup hub. Do not
-recreate its catalog in prose. In a non-panel client, summarize blocking or
-attention states concisely and mention that all other configuration is
-optional.
+Read the cached verified template catalog through the templates skill and
+render `{ snapshot, templateCatalog }` with the base-owned setup hub. Do not
+recreate either catalog in prose. In a non-panel client, summarize blocking,
+attention, and installable states concisely and mention that all other
+configuration is optional.
 
 ## Handle a choice
 
@@ -43,7 +44,9 @@ Template catalog selections are a separate typed route. Render
 it inspects before add and uses the ordinary protected-publication approval card. The client does
 not look up versions or install anything itself. Pass the cached verified
 `TemplateCatalogSnapshot` from the userland template composer as the component's
-`catalog` prop; catalog selections carry that snapshot's `revision`.
+`catalog` prop; catalog selections carry that snapshot's exact registry commit
+and snapshot digest. Missing optional owners route to this same verified
+selection flow; they are never shown as ready and never invoke a missing skill.
 
 After any check or workflow outcome, call the composer through `client_eval`
 again and render a new observation. A Google/GitHub check passes the selected

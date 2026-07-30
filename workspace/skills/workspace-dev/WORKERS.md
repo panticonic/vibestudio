@@ -2,6 +2,16 @@
 
 Credentials are URL-bound and may only be used through host-mediated egress.
 
+The portable `@workspace/runtime` surface is shared by panels, workers, Durable
+Objects, and eval. In particular, `services` is the same dynamic service
+namespace everywhere, `hosts` is the same owner-scoped attached-host client,
+and `runtime` is the same typed lifecycle/supervision client—not an eval-only
+compatibility surface.
+
+Filesystem calls have no implicit RPC deadline. They run until they settle or
+the owning execution aborts them through an `AbortSignal`; any settled-operation
+telemetry is observational and never aborts a call.
+
 ## Worker Runtime Surface
 
 <!-- BEGIN GENERATED: worker-runtime-surface -->
@@ -21,24 +31,25 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibestudio service routes. |
-| `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
-| `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@vibestudio/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
+| `gatewayFetch` | value |  | Gateway-origin fetch helper. It accepts relative paths and absolute URLs on the configured gateway origin, then authenticates that request; cross-origin targets are rejected. Use credentials.fetch for external egress. |
+| `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
 | `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `summarizeStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
 | `browserData` | namespace | `getBrowserEnvironment`, `listImportHosts`, `listImportSources`, `previewImport`, `startImport`, `cancelImport`, `getImportJob`, `listImportJobs`, `listOpenTabs`, `openTabsAsPanels`, `getSitePreferences`, `setSiteZoom`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getFormFillSuggestions`, `addFormFillValue`, `updateFormFillValue`, `markFormFillValueUsed`, `deleteFormFillValue`, `clearFormFillValues`, `getSearchEngines`, `setDefaultEngine`, `applyCookieMutations`, `getCookieSnapshot`, `getCookiesForOrigin`, `clearCookiesForOrigin`, `clearAllCookies`, `endBrowserSession`, `getCookieSiteSummary`, `flushCookieProjection`, `getCookieProjectionDiagnostics`, `listDownloads`, `listDownloadRecords`, `upsertDownloadRecord`, `pauseDownload`, `resumeDownload`, `cancelDownload`, `openDownload`, `revealDownload`, `putPageFavicon`, `getPageFavicon`, `exportBookmarks`, `exportPasswords`, `exportCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
-| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `commitMapping`, `importProject`, `pushTemplateContribution`, `publishTemplate` | Typed external Git operations routed through the workspace's configured gitInterop provider. Import and pull create unpublished semantic candidates; only ordinary VCS integration and explicit publication advance protected main. Declarations carry logical credential names resolved by the host, while credential-free remotes are anonymous-first. Pull dry-runs use isolated temporary state and do not mutate managed Git, semantic state, or the remote. |
+| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `commitMapping`, `importProject` | Typed external Git operations routed through the workspace's configured gitInterop provider. Import and pull create unpublished semantic candidates; only ordinary VCS integration and explicit publication advance protected main. Declarations carry logical credential names resolved by the host, while credential-free remotes are anonymous-first. Pull dry-runs use isolated temporary state and do not mutate managed Git, semantic state, or the remote. |
 | `vcs` | namespace | `edit`, `move`, `copy`, `integrate`, `revert`, `commit`, `discard`, `importSnapshot`, `registerExternalDelta`, `supersedeExternalDelta`, `finalizeExternalDelta`, `push`, `status`, `compare`, `inspect`, `neighbors`, `history`, `blame`, `readMemory`, `resolveRepository`, `readFile`, `listDirectory`, `listFiles` | Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, directly walkable provenance, and atomic external-snapshot acknowledgements containing the committed event/application/work-unit/repository/snapshot tuple. |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `diagnoseInvocation`, `inspectChannelRoster`, `inspectAgentHealth`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
+| `gad` | namespace | `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryBranches`, `listTrajectoryInvocations`, `listTrajectoryApprovals`, `listChannelEnvelopes`, `listTrajectoryEvents`, `appendChannelEnvelope`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `diagnoseInvocation`, `inspectChannelRoster`, `inspectAgentHealth`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
 | `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree`, `delete`, `list`, `putBytes`, `getBytes`, `readText` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string \| null. Runtime-only putBytes(Uint8Array \| ArrayBuffer) and getBytes(digest) losslessly bridge the wire's base64 representation; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` | Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Each subscription has an explicit maxBodyBytes budget: relay defaults to its 1,500,000-byte transport ceiling, while direct defaults to the operator-configured host ceiling (16 MiB by default). Delivery events currently include rawBodyBase64, so the host ceiling also bounds that in-memory expansion. Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings. |
-| `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
-| `approvals` | namespace | `request`, `revoke`, `list` |  |
+| `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
-| `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
+| `services` | value |  | Portable dynamic service namespace. Rich runtime clients are available by name; other services dispatch through the caller-scoped main service boundary. The same client is available in panels, workers, Durable Objects, and eval. |
+| `hosts` | value |  | Portable owner-scoped attached-host access for development sessions. |
+| `runtime` | value |  | Portable typed runtime lifecycle and supervision client for the current workspace context. |
+| `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `applyPreparedConfig`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `recurring`, `heartbeats`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
 | `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
-| `listPanels` | value |  | Alias for runtime.panelTree.list(). |
 | `getPanelHandle` | value |  | Alias for runtime.panelTree.get(id, kind?). |
-| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Runtime property, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create. |
+| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate` | Runtime property, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
 | `handleRpcPost` | value |  |  |
 | `destroy` | value |  |  |
 <!-- END GENERATED: worker-runtime-surface -->
@@ -114,7 +125,7 @@ import {
   handleWorkerRpc,
   type ExecutionContext,
   type WorkerEnv,
-} from "@vibestudio/runtime/worker";
+} from "@workspace/runtime/worker";
 
 let exposedForWorker: string | null = null;
 
@@ -160,27 +171,28 @@ Workspace-level singletons, services, and HTTP routes live in
 `workers.resolveService(...)`; do not hardcode `workers/foo`, DO class names,
 or `/_r/w/...` paths in callers. Before starting an eval, use the agent tools
 `docs_search`/`docs_open` when the live contract is not already known. They are not
-exports from `@vibestudio/runtime`; inside eval, use the documented `workers.*` and
+exports from `@workspace/runtime`; inside eval, use the documented `workers.*` and
 `rpc.*` runtime APIs. `workers.listServices()` rows for workspace-owned services
 include a `docsId` for that same live catalog; pass that id to the agent's
 `docs_open` tool instead of scanning the provider source for methods. A declaration
 in another context is neither visible nor callable here.
 
-The receiver effect must match the route the caller is allowed to use:
+The receiver method and target route are separate authority layers:
 
-- A method exposed through a `meta/vibestudio.yml` service declares
-  `effect: { kind: "workspace-service" }` and callers use
-  `workers.resolveService(protocol, objectKey?)`.
-- A lifecycle-owned, context-local DO addressed directly by source/class/key
-  declares `effect: { kind: "runtime-intrinsic" }` and callers use
-  `workers.resolveDurableObject(source, className, objectKey)`.
+- An unprotected receiver method declares `effect: { kind: "open" }`.
+- A provider-owned protected method declares a literal
+  `effect: { kind: "userland-capability", ... }` matching its package's
+  `authority.provides`.
+- Resolving a `meta/vibestudio.yml` service independently contributes the exact
+  `workspace-service:<name>` target requirement from that live declaration.
+- A lifecycle-owned, context-local DO addressed through
+  `workers.resolveDurableObject(source, className, objectKey)` has no service
+  target requirement; its method effect and lifecycle/context ownership still
+  apply.
 
-These are not interchangeable spellings. Direct resolution deliberately cannot
-bypass a declared workspace-service boundary; the receiver rejects an
-attestation whose effect does not match its literal `@rpc` contract. Prefer the
-declared-service route for application APIs. Use direct resolution only for
-objects whose lifecycle the caller explicitly owns, such as a disposable
-development probe, and retire/clear them when finished.
+Prefer the declared-service route for application APIs. Use direct resolution
+only for objects whose lifecycle the caller explicitly owns, such as a
+disposable development probe, and retire/clear them when finished.
 
 If installed code consumes the service, declare an exact
 `workspace-service:<name>` request in its authority manifest. The request may precede
@@ -188,7 +200,7 @@ the provider's presence in this checkout; build-time service enumeration is not 
 authority boundary. Runtime resolution still requires a matching live declaration,
 exact provider EV, caller-context visibility, and grant. Never use
 `workspace-service:*` in an installed-unit request or add the service to a generated
-product authority catalog.
+host authority catalog.
 
 Worker packages may declare simple string overrides in top-level `overrides`.
 BuildV2 forwards those overrides, plus overrides from transitive workspace
@@ -264,7 +276,7 @@ Canonical shape:
 1. Create `workers/<store>` with a `DurableObjectBase` subclass.
 2. Store durable rows in the DO's SQLite database through `this.sql`.
 3. Expose narrow app methods with explicit
-   `@rpc({ principals, effect: { kind: "workspace-service" }, tier, sensitivity })`
+   `@rpc({ principals, effect: { kind: "open" }, tier, sensitivity })`
    contracts; the effect must be a literal object so the exact build can document it
    without executing provider code. Do not expose a
    raw SQL console to normal UI callers.
@@ -276,7 +288,7 @@ Canonical shape:
 Minimal store:
 
 ```ts
-import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 
 type TodoRow = {
   id: string;
@@ -305,7 +317,7 @@ export class TodoStore extends DurableObjectBase {
 
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -329,7 +341,7 @@ export class TodoStore extends DurableObjectBase {
 
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -372,7 +384,7 @@ Call it from eval, a panel, an inline UI component, an app, a worker, or
 another DO:
 
 ```ts
-import { rpc, workers } from "@vibestudio/runtime";
+import { rpc, workers } from "@workspace/runtime";
 
 const svc = await workers.resolveService("example.todos.v1");
 if (svc.kind !== "durable-object") throw new Error("Expected DO service");
@@ -397,11 +409,10 @@ The declaration and receiver must both admit the caller:
 - `services[].authority` controls which authenticated principal families may
   resolve the service in this exact context.
 - Each method's `@rpc` contract independently enforces principals, tier,
-  receiver relationships, and the concrete resource. Gated and critical
-  methods additionally require a sealed unit request; a request still grants nothing.
-
-For sensitive shared resources, add a user decision inside the DO method with
-`approvals.request(...)`; do not use approvals for ordinary private app rows.
+  receiver relationships, and the concrete resource. A provider-owned protected
+  method binds a `userland-capability` effect to a definition in the provider
+  package's `authority.provides`; the host acquires authority before entering
+  provider code.
 
 For a running Vibestudio system—including agent eval—exercise the real object
 through `workers.resolveService(...)` / `workers.resolveDurableObject(...)` and
@@ -411,7 +422,7 @@ and the object's persistent SQLite database.
 
 Prefer `resolveService(...)` whenever a service exists. Raw
 `resolveDurableObject(...)` may address workspace worker DO classes, but
-product-internal DOs remain closed behind their reviewed static host catalog.
+host-internal DOs are not workspace targets and remain inaccessible.
 Workspace-built DOs are admitted dynamically from the caller's live semantic
 declarations and still require exact source/class/object-key receiver authority.
 An exported class is not a class-wide grant, and another key is another resource.
@@ -481,19 +492,21 @@ should reach.
 The RPC relay is open between authenticated participants, so the recipient must
 gate. Every relay-reachable workspace method declares the authenticated principal
 families it accepts (`"host" | "user" | "code"`), its effect, reviewed tier, and
-sensitivity. Missing policy is default-deny. A workspace service method normally
-uses the literal `effect: { kind: "workspace-service" }`; do not hide it behind a
-constant or factory because live docs are extracted from the exact source build
+sensitivity. Missing policy is default-deny. An unprotected workspace service
+method uses literal `effect: { kind: "open" }`; the live service declaration
+adds its independent target requirement. A provider-owned protected method uses
+a literal `userland-capability` effect matching `authority.provides`. Keep the
+effect literal because live docs are extracted from the exact source build
 without executing that source.
 
 ```ts
-import { rpc } from "@vibestudio/runtime/worker";
+import { rpc } from "@workspace/runtime/worker";
 
 export class MyStoreDO extends DurableObjectBase {
-  @rpc({ principals: ["user", "code"], effect: { kind: "workspace-service" }, tier: "gated", sensitivity: "write" })
+  @rpc({ principals: ["user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async addItem(label: string): Promise<{ id: string }> { ... }
 
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async onWebhookDelivery(event: WebhookEvent): Promise<void> { ... }
 
   private bumpCounter(): void { ... }       // no @rpc — unreachable over RPC
@@ -513,7 +526,7 @@ class), add an inline check ON TOP of the floor using the server-authenticated
 caller, which cannot be forged:
 
 ```ts
-@rpc({ principals: ["code"], effect: { kind: "workspace-service" }, tier: "gated", sensitivity: "write" })
+@rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
 async onChannelOp(channelId: string): Promise<void> {
   await this.assertOwnEvalCaller(channelId); // only THIS agent's own EvalDO
   ...
@@ -522,21 +535,20 @@ async onChannelOp(channelId: string): Promise<void> {
 // validated token. Every DO, including server-realm DOs, uses @rpc authority.
 ```
 
-### When to add a USER-APPROVAL gate
+### When to declare a userland capability
 
-Reachability (Layers 1–2) answers "may this caller reach the method"; it never
-asks the user. For a _userland-useful but sensitive_ action, require a user
-decision:
+Reachability answers whether the caller may enter the method. For a
+userland-owned sensitive resource, declare its authority at that receiver:
 
 - **Built-in host actions** (credentials, external opens, git writes, project
   imports, webhooks, publishing main, spawning workers): call the existing
-  runtime API and let Vibestudio's built-in capability-permission flow prompt — do
-  NOT re-implement approval.
-- **Custom shared resources** your worker exposes to other userland callers: use
-  `runtime.approvals.request(...)` (see "Userland Approval Prompts" below).
+  runtime API and let its receiver acquire the host capability.
+- **Custom shared resources** exposed to other userland callers: declare a
+  capability in `vibestudio.authority.provides` and bind the method to its
+  unit-local name with a `userland-capability` effect.
 
-Never cache an approval result or invent your own grant scope — the host owns
-persistence, scope (once/session/version), and revocation.
+Never prompt inside provider code or invent a second grant store. The host owns
+acquisition, persistence, scope, and revocation.
 
 ## Store
 
@@ -598,71 +610,40 @@ await credentials.fetch("https://api.example.com/v1/items", undefined, {
 });
 ```
 
-## Userland Approval Prompts
+## Userland capability definitions
 
-Workers can ask the user for provider-defined decisions through the runtime's
-approval helpers. Use this when a worker exposes its own security-gated service
-to other userland callers and needs a human decision that Vibestudio cannot model
-as a built-in credential or capability permission.
+Every executable package authority manifest contains both `requests` and
+`provides`. `requests` is the maximum host or workspace-service authority that
+the unit may exercise; `provides` names protected resources owned by the unit.
+Each provided definition supplies the user-facing title/action, tier,
+sensitivity, resource type, reviewed `presentation.domain` /
+`presentation.verb`, and allowed grant scopes. The domain and verb come from
+the shared authority vocabulary; userland providers cannot declare the Safety
+controls domain.
 
-Do not call `approvals.request()` before actions the worker or agent can already
-take through normal runtime APIs. Context filesystem work, eval work, panel
-operations, browser automation, git/runtime APIs, external opens, and credential
-use are protected by the outer Vibestudio permission model where approval is
-required.
+Bind a Durable Object receiver to a provided unit-local name:
 
 ```ts
-import { createWorkerRuntime } from "@vibestudio/runtime/worker";
-
-export default {
-  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext) {
-    const runtime = createWorkerRuntime(env);
-
-    const decision = await runtime.approvals.request({
-      subject: {
-        id: "team-x:calendar-write",
-        label: "Team X calendar write access",
-      },
-      title: "Allow calendar writes?",
-      summary: "This custom calendar worker wants to let the caller create Team X events.",
-      details: [
-        { label: "Caller", value: request.headers.get("x-caller") ?? "unknown" },
-        { label: "Operation", value: "Create calendar events" },
-      ],
-      options: [
-        { value: "allow", label: "Allow", tone: "primary" },
-        { value: "deny", label: "Deny", tone: "danger" },
-      ],
-    });
-
-    if (decision.kind !== "choice" || decision.choice !== "allow") {
-      return new Response("Not approved", { status: 403 });
-    }
-
-    return new Response("Approved");
+@rpc({
+  principals: ["code"],
+  effect: {
+    kind: "userland-capability",
+    capability: "calendar.write",
+    resource: { kind: "receiver-object" },
   },
-};
+  tier: "gated",
+  sensitivity: "write",
+})
+async createCalendarEvent(input: CalendarEventInput): Promise<void> {
+  // Authority has already been acquired for this exact provider/object.
+}
 ```
 
-Every non-dismiss choice is persisted by the server under the verified issuer
-worker and `subject.id`. Subsequent calls with the same `subject.id` return the
-stored choice immediately. Use `runtime.approvals.revoke(subjectId)` to forget a
-decision, and `runtime.approvals.list()` to inspect decisions owned by the same
-worker.
-
-```ts
-await runtime.approvals.revoke("team-x:calendar-write");
-const grants = await runtime.approvals.list();
-```
-
-Keep `subject.id` stable and provider-owned. It must be 1-128 chars using only
-letters/numbers/`._:/-`, and cannot start with `shell:`, `server:`, `system:`,
-or `@`. Options must have unique values; `dismiss` is reserved. Treat
-`approvals.request()` as a userland policy gate for custom shared resources only.
-For host-mediated actions such as external browser opens, credentials, git
-writes, project imports, or webhooks, call the existing runtime API and let
-Vibestudio's built-in permission flow handle the prompt and trust scope. For
-ordinary context file edits and test temp directories, do not prompt.
+The host validates the literal effect against the exact provider manifest and
+effective version before dispatch. For prepared private state, use the
+opaque-handle pattern documented in
+[`skills/capabilities/SKILL.md`](../capabilities/SKILL.md); never pass a private
+selector to a caller or treat a handle as permission.
 
 ## Agent Debug Port
 
@@ -699,8 +680,9 @@ probe to five seconds. A retired agent fails before inspection dispatch.
 
 ## Host Server Logs
 
-Use `workspace.units.logs(name)` and `workspace.units.diagnostics(name)` for the
-panel, worker, DO, extension, or app unit itself. Use `serverLog` when the
+Use the exact identity returned by `runtime.supervision.list()` with
+`runtime.supervision.logs(identity)` or `health(identity)` for the panel,
+worker, DO, extension, or app execution itself. Use `serverLog` when the
 failure may be in the workspace server around that unit: build/reconcile,
 workerd supervision, routing, RPC dispatch, gateway reconnects, idle exit, or
 startup/shutdown.
@@ -740,9 +722,12 @@ const get = await runtime.gatewayFetch(`/_r/s/blobstore/blob/${digest}`);
 // `get.body` is a ReadableStream of the original bytes.
 ```
 
-`gatewayFetch` prefixes `GATEWAY_URL` and sends `Authorization: Bearer
-<RPC_AUTH_TOKEN>`. Worker tokens are minted from the central `TokenManager`,
-so the route's `caller-token` auth admits them.
+`gatewayFetch` resolves a relative path against `GATEWAY_URL` and authenticates
+that gateway request with the worker's bearer. An absolute URL is also accepted
+when it has that exact gateway origin; a cross-origin URL is rejected before
+the bearer can be sent. For external HTTP, use `credentials.fetch` rather than
+`gatewayFetch`. Worker tokens are minted from the central `TokenManager`, so
+the route's `caller-token` auth admits them.
 
 `blobstore.delete` and `blobstore.list` are restricted to shell/server callers
 and cannot be invoked from a worker — design the upper layer (e.g. a server

@@ -22,7 +22,6 @@ const NON_INTERACTIVE_TERMINAL_WAIT_REASONS = [
 
 type MaybePromise<T> = T | Promise<T>;
 type RunSuiteFilter = { category?: string; name?: string; concurrency?: number };
-const DEFAULT_PARALLEL_CONCURRENCY = 4;
 
 export class TestRunner {
   private cancellationError: Error | null = null;
@@ -50,11 +49,6 @@ export class TestRunner {
     }
   }
 
-  /** Alias for runSuite */
-  run = this.runSuite.bind(this);
-  /** Alias for runSuite */
-  runTests = this.runSuite.bind(this);
-
   get cancelled(): boolean {
     return this.cancellationError !== null;
   }
@@ -71,14 +65,6 @@ export class TestRunner {
     for (const controller of this.activeWaits) controller.abort(reason);
     this.wakeSuiteSchedulers?.();
   }
-
-  /** Alias for runSuite with an explicit concurrency cap */
-  runSuiteParallel = (tests: TestCase[], opts?: RunSuiteFilter): Promise<TestSuiteResult> => {
-    return this.runSuite(tests, {
-      ...opts,
-      concurrency: opts?.concurrency ?? this.opts?.concurrency ?? DEFAULT_PARALLEL_CONCURRENCY,
-    });
-  };
 
   async runSuite(tests: TestCase[], filter?: RunSuiteFilter): Promise<TestSuiteResult> {
     const filtered = tests.filter((t) => {
@@ -100,6 +86,7 @@ export class TestRunner {
     const resourcesFor = (test: TestCase): string[] => [
       ...new Set([
         ...(test.workspaceRepoFixture ? ["vcs:protected-main"] : []),
+        ...(test.category === "workers" ? ["category:workers"] : []),
         ...(test.resources ?? []).filter(Boolean),
       ]),
     ];
@@ -319,7 +306,10 @@ export class TestRunner {
       // remain content-addressed in the durable execution record.
       execution.toolFailures = validationExecution.toolFailures;
       enterPhase("validation");
-      const result = test.validate(validationExecution);
+      const result =
+        test.validation === "harness"
+          ? test.validate(validationExecution)
+          : validateAgentCompletionReport(validationExecution);
       outcome = { result, execution };
     } catch (err) {
       const duration = Date.now() - startTime;
@@ -790,7 +780,19 @@ function classifyExpectedToolFailures(
       result: failure.resultSummary,
     });
     if (builtIn) {
-      return { ...failure, expected: true, classification: builtIn };
+      // Correctable and fail-closed does not mean intentional. Keep the
+      // classification so diagnostics can distinguish an ergonomics problem
+      // from a failed platform effect, but count it unless this exact test
+      // declared that it deliberately exercises the failure.
+      const text = `${failure.error ?? ""}\n${failure.resultSummary ?? ""}`.toLowerCase();
+      const deliberatelyExpected = expected?.some(
+        (candidate) =>
+          candidate.name === failure.name &&
+          (!candidate.errorIncludes || text.includes(candidate.errorIncludes.toLowerCase()))
+      );
+      return deliberatelyExpected
+        ? { ...failure, expected: true, classification: builtIn }
+        : { ...failure, classification: builtIn };
     }
     if (!expected?.length) return failure;
     const text = `${failure.error ?? ""}\n${failure.resultSummary ?? ""}`.toLowerCase();
@@ -889,6 +891,37 @@ function parseJson(value: string | undefined): unknown {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+export function validateAgentCompletionReport(result: TestExecutionResult): TestResult {
+  const firstSender = result.messages[0]?.senderId;
+  const final = [...result.messages]
+    .reverse()
+    .find(
+      (message) =>
+        message.senderId !== firstSender &&
+        message.kind === "message" &&
+        message.complete &&
+        message.contentType !== "thinking" &&
+        message.contentType !== "typing" &&
+        message.contentType !== "invocation" &&
+        !message.pending
+    )
+    ?.content?.trim();
+  if (!final) return { passed: false, reason: "No agent completion report received" };
+
+  if (final.startsWith("Task completed.")) return { passed: true };
+  if (final.startsWith("Task not completed.")) {
+    return {
+      passed: false,
+      reason: `Agent reported that it did not complete the task: ${final.slice(0, 400)}`,
+    };
+  }
+  return {
+    passed: false,
+    reason:
+      "Agent completion report did not begin with the required “Task completed.” or “Task not completed.” status marker",
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

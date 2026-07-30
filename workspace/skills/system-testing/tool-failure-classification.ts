@@ -9,6 +9,7 @@ const SAFE_VCS_REJECTIONS = new Set([
   "NoEffect",
   "RevisionChanged",
   "WorkingChangesPresent",
+  "BuildGateFailed",
 ]);
 
 /**

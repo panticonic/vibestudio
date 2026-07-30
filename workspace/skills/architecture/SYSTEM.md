@@ -54,7 +54,7 @@ Two deliberate systems, non-overlapping:
   target, one value or one streamed Response. Used for host service calls
   (`fs.read`, `credentials.fetch`, `blobstore.*`), credential proxying, model
   fetches.
-- **Workspace services** are workspace-authored workers/DOs or product-sealed services resolved by
+- **Workspace services** are workspace-authored workers/DOs resolved by
   protocol (declared in `meta/vibestudio.yml`, resolved via
   `workers.resolveService`). Conversation-shaped: multiple subscribers,
   replay, participants, structured streaming chunks. Channels are the

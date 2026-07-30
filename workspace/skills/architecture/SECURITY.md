@@ -37,16 +37,18 @@ Generated catalogs, inferred code use, builds, and documentation never mint rows
    external browser opens, lifecycle control, and protected publication. Receiver
    contracts declare principals, tier, compositional relationships, and resource
    derivation. Never hand-roll this state in a service.
-2. **Userland approval** answers a policy question owned by workspace code. The host
-   binds the issuer to the exact calling principal and stores the choice in the same
+2. **Userland capability authority** protects a resource owned by workspace
+   code. The exact provider manifest declares the capability, the receiver binds
+   it to a concrete resource, and the host acquires/stores grants in the same
    authority ledger. It cannot substitute for host capability authority.
 3. **Protected-main publication** checks semantic ancestry/integration and authorizes
-   the exact main transition. Builds are advisory checks before publication and
-   derived projections after it; neither is the publication authority.
+   the exact main transition. The publication gate runs the exact candidate
+   build/typecheck before approval; post-publication builds remain derived
+   projections and cannot roll back semantic history.
 
 ## Static host contracts and dynamic workspace contracts
 
-Static reviewed censuses are appropriate for static host/product methods. A changed
+Static reviewed censuses are appropriate for static host methods. A changed
 host method, tier, receiver requirement, or direct target must produce a reviewed
 census diff.
 

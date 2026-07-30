@@ -62,6 +62,7 @@ function commit(eventId: string, applicationIds: string[], sourceEventId: string
       committedApplicationIds: applicationIds,
       integrationSourceEventIds: [sourceEventId],
     },
+    status: status(eventId).result,
   };
 }
 
@@ -121,14 +122,13 @@ describe("joined VCS scenario validators", () => {
         { operation: "commit", message: "Two steps" },
         commit(eventId, ["application:1", "application:2"])
       ),
-      invocation("status", "vcs", { operation: "status" }, status(eventId)),
     ];
     const final = `Both related edits are now one clean milestone at ${eventId}.`;
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
 
     // The clean state is canonical tool evidence, not a prose claim. A model
-    // may summarize it naturally instead of repeating the requested field,
-    // while the final status still proves the exact committed event is clean.
+    // may summarize it naturally while the commit's atomic post-status still
+    // proves the exact committed event is clean.
     const naturalFinal = `The complete two-step chain is committed at ${eventId}; the working tree is clean.`;
     expect(test.validate(execution(naturalFinal, calls))).toEqual({
       passed: true,
@@ -136,13 +136,13 @@ describe("joined VCS scenario validators", () => {
     });
 
     const dirtyCalls = [...calls];
-    dirtyCalls[3] = invocation(
-      "status",
+    dirtyCalls[2] = invocation(
+      "commit",
       "vcs",
-      { operation: "status" },
+      { operation: "commit", message: "Two steps" },
       {
-        ...status(eventId),
-        result: {
+        ...commit(eventId, ["application:1", "application:2"]),
+        status: {
           ...status(eventId).result,
           clean: false,
           workingCounts: { applications: 1, workUnits: 1, changes: 1 },

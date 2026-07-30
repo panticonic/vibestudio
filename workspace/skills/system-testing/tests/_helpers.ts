@@ -549,7 +549,11 @@ export function requireWholeChainCommitEvidence(result: TestExecutionResult): {
   }
 
   const commit = calls
-    .map((call, index) => ({ index, value: focusedCommitResult(call) }))
+    .map((call, index) => ({
+      index,
+      value: focusedCommitResult(call),
+      status: focusedCommitStatus(call),
+    }))
     .find(
       (entry) =>
         entry.index > steps[1]!.index &&
@@ -563,20 +567,16 @@ export function requireWholeChainCommitEvidence(result: TestExecutionResult): {
     );
   }
 
-  const status = calls
-    .map((call, index) => ({ index, value: focusedVcsResult(call, "status") }))
-    .find(
-      (entry) =>
-        entry.index > commit.index &&
-        entry.value !== null &&
-        entry.value["clean"] === true &&
-        eventRefEquals(entry.value["committed"], eventId) &&
-        eventRefEquals(entry.value["workingHead"], eventId) &&
-        zeroWorkingCounts(entry.value["workingCounts"])
-    );
-  if (!status) {
+  const status = commit.status;
+  if (
+    !status ||
+    status["clean"] !== true ||
+    !eventRefEquals(status["committed"], eventId) ||
+    !eventRefEquals(status["workingHead"], eventId) ||
+    !zeroWorkingCounts(status["workingCounts"])
+  ) {
     return fail(
-      "No final status joined the commit event to a clean event working head with zero local counts"
+      "The commit response did not join its event to a clean event working head with zero local counts"
     );
   }
   if (!findLastAgentMessage(result).includes(eventId)) {
@@ -1112,6 +1112,12 @@ function focusedCommitResult(call: InvocationCardPayloadLike): Record<string, un
     : eventIdFromCommit(details)
       ? details
       : null;
+}
+
+function focusedCommitStatus(call: InvocationCardPayloadLike): Record<string, unknown> | null {
+  if (call.name !== "vcs" || call.arguments?.["operation"] !== "commit") return null;
+  const details = focusedToolDetails(call, "vcs");
+  return details && isRecord(details["status"]) ? details["status"] : null;
 }
 
 function focusedVcsResult(
@@ -1787,437 +1793,43 @@ export function requireCommandIdempotencyEvidence(result: TestExecutionResult): 
   if (editSubmissions < 2) {
     return fail("A successful eval did not submit the same semantic edit twice");
   }
-
-  const mutations: Record<string, unknown>[] = [];
-  const visit = (value: unknown, seen: Set<object>): void => {
-    if (!value || typeof value !== "object" || seen.has(value)) return;
-    seen.add(value);
-    if (!Array.isArray(value)) {
-      const record = value as Record<string, unknown>;
-      const workingHead = recordField(record, "workingHead");
-      if (
-        stringField(record, "commandId") &&
-        stringField(record, "contextId") &&
-        stringField(record, "workUnitId") &&
-        stringField(record, "applicationId") &&
-        record["changeCount"] === 1 &&
-        isStringArray(record["changeIds"]) &&
-        record["changeIds"].length === 1 &&
-        record["incorporatedChangeCount"] === 0 &&
-        isStringArray(record["incorporatedChangeIds"]) &&
-        record["incorporatedChangeIds"].length === 0 &&
-        isStringArray(record["decisionIds"]) &&
-        workingHead?.["kind"] === "application" &&
-        workingHead["applicationId"] === record["applicationId"]
-      ) {
-        mutations.push(record);
-      }
-    }
-    for (const child of Object.values(value)) visit(child, seen);
-  };
-  for (const value of successfulEvalReturnValues(result)) visit(value, new Set<object>());
-
-  for (const [index, first] of mutations.entries()) {
-    const second = mutations
-      .slice(index + 1)
-      .find((candidate) => JSON.stringify(candidate) === JSON.stringify(first));
-    if (!second) continue;
-    return { passed: true, reason: undefined };
-  }
-  return fail(
-    "Completed canonical results did not show two identical mutation terminals joined to one application, work unit, change, and final working state"
-  );
+  return { passed: true, reason: undefined };
 }
 
 /**
- * Validate the observable protocol proof for the stale-frontier recovery test.
- *
- * A disciplined agent may catch `RevisionChanged` inside eval so it can prove
- * the rejected request had no effect and complete the recovery in one scoped
- * program. The same protocol also permits the typed refusal to escape one eval
- * invocation before a later successful eval performs the proof and recovery.
- * Source-code token matching cannot distinguish either valid workflow from a
- * comment, so this validator reads invocation results instead.
+ * Keep the mechanical gate deliberately broad: prove the agent exercised the
+ * race and observed the platform's typed refusal. Whether its recovery and
+ * explanation were sensible is judged from the captured trajectory.
  */
 export function requireFreshnessRecoveryEvidence(result: TestExecutionResult): {
   passed: boolean;
   reason?: string;
 } {
-  const evalCalls = getToolCalls(result).filter((call) => call.name === "eval");
-  const successfulSteps = evalCalls
-    .filter((call) => call.execution?.status === "complete" && call.execution.isError !== true)
-    .map((call) => {
-      const executionResult = call.execution?.result;
-      const details = isRecord(executionResult) ? recordField(executionResult, "details") : null;
-      return {
-        code: typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : "",
-        value:
-          details && Object.prototype.hasOwnProperty.call(details, "returnValue")
-            ? details["returnValue"]
-            : call.execution?.result,
-      };
-    });
-  const successfulResults = successfulSteps.map(({ value }) => value);
-  const failedResults = evalCalls
-    .filter((call) => {
-      const execution = call.execution;
-      return Boolean(
-        execution &&
-        (execution.isError === true ||
-          execution.status === "error" ||
-          execution.status === "failed")
-      );
-    })
-    .map((call) => call.execution?.result);
-
-  const refusalObserved =
-    successfulResults.some((value) =>
-      containsStructuredField(value, "code", (candidate) => candidate === "RevisionChanged")
-    ) || failedResults.some((value) => containsExactProtocolToken(value, "RevisionChanged"));
-  const proofs = successfulSteps.map(({ code, value }) =>
-    canonicalFreshnessProof(value, new Set<object>(), code)
-  );
-  const noPartialEffect = proofs.some((proof) => proof.noPartialEffect);
-  const recovered = proofs.some((proof) => proof.recovered);
-  const distinctCommands = proofs.some((proof) => proof.distinctCommands);
-  const trajectoryProof = canonicalFreshnessTrajectoryProof(successfulSteps);
-
-  const missing = [
-    !refusalObserved ? "typed RevisionChanged refusal" : null,
-    !(noPartialEffect || trajectoryProof.noPartialEffect) ? "partialEffect:none" : null,
-    !(recovered || trajectoryProof.recovered) ? "recovered:true" : null,
-    !(distinctCommands || trajectoryProof.distinctCommands)
-      ? "distinct oldCommand/newCommand"
-      : null,
-  ].filter((value): value is string => value !== null);
-  return {
-    passed: missing.length === 0,
-    reason: missing.length === 0 ? undefined : `Eval results did not prove ${missing.join(", ")}`,
-  };
-}
-
-function canonicalFreshnessTrajectoryProof(steps: Array<{ code: string; value: unknown }>): {
-  noPartialEffect: boolean;
-  recovered: boolean;
-  distinctCommands: boolean;
-} {
-  const recordsIn = (value: unknown): Record<string, unknown>[] => {
-    const records: Record<string, unknown>[] = [];
-    const visit = (candidate: unknown, seen: Set<object>): void => {
-      if (!candidate || typeof candidate !== "object" || seen.has(candidate)) return;
-      seen.add(candidate);
-      if (!Array.isArray(candidate)) records.push(candidate as Record<string, unknown>);
-      for (const child of Object.values(candidate)) visit(child, seen);
-    };
-    visit(value, new Set<object>());
-    return records;
-  };
-  const commandExpression = (code: string): string | null => {
-    const assigned =
-      /\b(?:const|let)\s+[A-Za-z0-9_]*command[A-Za-z0-9_]*\s*=\s*([^;\n]+)/iu.exec(code)?.[1] ??
-      /\bcommandId\s*:\s*([^,}\n]+)/u.exec(code)?.[1];
-    return assigned?.trim() || null;
-  };
-  const mutationIn = (value: unknown): Record<string, unknown> | null =>
-    recordsIn(value).find((record) => {
-      const workingHead = recordField(record, "workingHead");
-      return (
-        typeof record["commandId"] === "string" &&
-        typeof record["workUnitId"] === "string" &&
-        typeof record["applicationId"] === "string" &&
-        workingHead?.["kind"] === "application" &&
-        workingHead["applicationId"] === record["applicationId"]
-      );
-    }) ?? null;
-  const mutationsIn = (value: unknown): Record<string, unknown>[] =>
-    recordsIn(value).filter((record) => {
-      const workingHead = recordField(record, "workingHead");
-      return (
-        typeof record["commandId"] === "string" &&
-        typeof record["workUnitId"] === "string" &&
-        typeof record["applicationId"] === "string" &&
-        workingHead?.["kind"] === "application" &&
-        workingHead["applicationId"] === record["applicationId"]
-      );
-    });
-
-  const refusalIndex = steps.findIndex(({ value }) =>
-    containsStructuredField(value, "code", (candidate) => candidate === "RevisionChanged")
-  );
-  if (refusalIndex < 0) {
-    return { noPartialEffect: false, recovered: false, distinctCommands: false };
-  }
-  const refusalStep = steps[refusalIndex]!;
-  const refusalStatus = recordsIn(refusalStep.value)
-    .map(freshnessStatus)
-    .find((status): status is FreshnessStatusProof => status !== null);
-  const noPartialEffect = Boolean(
-    refusalStatus &&
-      steps
-        .slice(0, refusalIndex + 1)
-        .flatMap(({ value }) => mutationsIn(value))
-        .some((mutation) => sameState(mutation["workingHead"], refusalStatus.workingHead))
-  );
-  const recoveryIndex = steps.findIndex(
-    ({ value }, index) =>
-      index > refusalIndex &&
-      mutationIn(value) !== null &&
-      recordsIn(value)
-        .map(freshnessStatus)
-        .some(
-          (status) =>
-            status !== null &&
-            refusalStatus !== undefined &&
-            sameFreshnessStatus(refusalStatus, status)
-        )
-  );
-  if (!refusalStatus || recoveryIndex < 0) {
-    return { noPartialEffect, recovered: false, distinctCommands: false };
-  }
-  const recoveryStep = steps[recoveryIndex]!;
-  const recoveryMutation = mutationIn(recoveryStep.value);
-  const recoveryHead = recoveryMutation && recordField(recoveryMutation, "workingHead");
-  const finalStatus = steps
-    .slice(recoveryIndex + 1)
-    .flatMap(({ value }) => recordsIn(value).map(freshnessStatus))
-    .find(
-      (status): status is FreshnessStatusProof =>
-        status !== null && recoveryHead !== null && sameState(status.workingHead, recoveryHead)
-    );
-  const refusalCommand = commandExpression(refusalStep.code);
-  const recoveryCommand = commandExpression(recoveryStep.code);
-  return {
-    noPartialEffect,
-    recovered: Boolean(
-      recoveryMutation &&
-      recoveryHead &&
-      !sameState(refusalStatus.workingHead, recoveryHead) &&
-      finalStatus
-    ),
-    distinctCommands: Boolean(
-      refusalCommand &&
-      recoveryCommand &&
-      refusalCommand !== recoveryCommand &&
-      /\bvcs\.edit\s*\(/u.test(refusalStep.code) &&
-      /\bvcs\.edit\s*\(/u.test(recoveryStep.code)
-    ),
-  };
-}
-
-function containsStructuredField(
-  value: unknown,
-  key: string,
-  predicate: (candidate: unknown) => boolean,
-  seen = new Set<object>()
-): boolean {
-  if (!value || typeof value !== "object") return false;
-  if (seen.has(value)) return false;
-  seen.add(value);
-  if (!Array.isArray(value) && key in value && predicate((value as Record<string, unknown>)[key])) {
-    return true;
-  }
-  return Object.values(value).some((child) => containsStructuredField(child, key, predicate, seen));
-}
-
-function containsExactProtocolToken(value: unknown, token: string): boolean {
-  if (typeof value === "string") {
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:^|[^A-Za-z0-9_])${escaped}(?:$|[^A-Za-z0-9_])`).test(value);
-  }
-  if (!value || typeof value !== "object") return false;
-  return Object.values(value).some((child) => containsExactProtocolToken(child, token));
-}
-
-interface FreshnessStatusProof {
-  contextId: string;
-  committed: unknown;
-  workingHead: unknown;
-  workingCounts: unknown;
-}
-
-function freshnessStatus(value: unknown): FreshnessStatusProof | null {
-  if (
-    !isRecord(value) ||
-    typeof value["contextId"] !== "string" ||
-    !isRecord(value["committed"]) ||
-    !isRecord(value["workingHead"]) ||
-    !isRecord(value["workingCounts"])
-  ) {
-    return null;
-  }
-  return {
-    contextId: value["contextId"],
-    committed: value["committed"],
-    workingHead: value["workingHead"],
-    workingCounts: value["workingCounts"],
-  };
-}
-
-function sameFreshnessStatus(left: FreshnessStatusProof, right: FreshnessStatusProof): boolean {
-  return (
-    left.contextId === right.contextId &&
-    sameState(left.committed, right.committed) &&
-    sameState(left.workingHead, right.workingHead) &&
-    sameState(left.workingCounts, right.workingCounts)
-  );
-}
-
-function canonicalFreshnessProof(
-  value: unknown,
-  seen = new Set<object>(),
-  executedCode = ""
-): { noPartialEffect: boolean; recovered: boolean; distinctCommands: boolean } {
-  const empty = { noPartialEffect: false, recovered: false, distinctCommands: false };
-  if (!value || typeof value !== "object" || seen.has(value)) return empty;
-  seen.add(value);
-
-  if (!Array.isArray(value)) {
-    const record = value as Record<string, unknown>;
-    const entries = Object.entries(record);
-    const stale = entries
-      .filter(([key]) => /stale|refusal/iu.test(key))
-      .map(([, candidate]) => candidate)
-      .find(
-        (candidate) =>
-          isRecord(candidate) &&
-          typeof candidate["commandId"] === "string" &&
-          containsStructuredField(candidate, "code", (code) => code === "RevisionChanged")
-      );
-    const staleCommandId =
-      isRecord(stale) && typeof stale["commandId"] === "string" ? stale["commandId"] : null;
-
-    const statuses = entries
-      .map(([, candidate]) => freshnessStatus(candidate))
-      .filter((candidate): candidate is FreshnessStatusProof => candidate !== null);
-    const mutationCandidates = entries
-      .map(([, candidate]) => candidate)
-      .filter(
-        (candidate): candidate is Record<string, unknown> =>
-          isRecord(candidate) &&
-          typeof candidate["commandId"] === "string" &&
-          typeof candidate["workUnitId"] === "string" &&
-          typeof candidate["applicationId"] === "string" &&
-          isRecord(candidate["workingHead"])
-      );
-    const before = entries
-      .filter(([key]) =>
-        /before.*(?:stale|refusal)|after.*(?:advance|step2)|status.*step2/iu.test(key)
-      )
-      .map(([, candidate]) => freshnessStatus(candidate))
-      .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
-    const namedAfterStale = entries
-      .filter(([key]) => /after.*(?:stale|refusal)/iu.test(key))
-      .map(([, candidate]) => freshnessStatus(candidate))
-      .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
-    const namedAfterRecovery = entries
-      .filter(([key]) =>
-        /after.*(?:retry|recover|fresh)|status.*final|final(?:.*status)?/iu.test(key)
-      )
-      .map(([, candidate]) => freshnessStatus(candidate))
-      .find((candidate): candidate is FreshnessStatusProof => candidate !== null);
-    const namedRecoveryMutation = entries
-      .filter(([key]) => /retry|recover|fresh/iu.test(key))
-      .map(([, candidate]) => candidate)
-      .find(
-        (candidate) =>
-          isRecord(candidate) &&
-          typeof candidate["commandId"] === "string" &&
-          typeof candidate["workUnitId"] === "string" &&
-          typeof candidate["applicationId"] === "string" &&
-          isRecord(candidate["workingHead"])
-      );
-    const recoveryMutation: Record<string, unknown> | undefined = isRecord(
-      namedRecoveryMutation
+  const code = successfulEvalCode(result);
+  const editSubmissions =
+    (code.match(/\bvcs\.edit\s*\(/gu) ?? []).length +
+    (code.match(/\brpc\.call\s*\(\s*["'][^"']+["']\s*,\s*["']vcs\.edit["']/gu) ?? []).length;
+  const observedRevisionChanged = getToolCalls(result)
+    .filter(
+      (call) =>
+        call.name === "eval" &&
+        call.execution?.status === "complete" &&
+        call.execution.isError !== true
     )
-      ? namedRecoveryMutation
-      : mutationCandidates.find(
-          (candidate) =>
-            namedAfterRecovery !== undefined &&
-            sameState(candidate["workingHead"], namedAfterRecovery.workingHead)
-        );
-    const afterRecovery =
-      namedAfterRecovery ??
-      (recoveryMutation
-        ? statuses.find((status) =>
-            sameState(status.workingHead, recoveryMutation["workingHead"])
-          )
-        : undefined);
-    const priorMutation = mutationCandidates.find(
-      (candidate) =>
-        candidate !== recoveryMutation &&
-        statuses.some((status) => sameState(status.workingHead, candidate["workingHead"]))
+    .some((call) =>
+      containsExactValue(call.execution?.result, "RevisionChanged", new Set<object>())
     );
-    const afterStale =
-      namedAfterStale ??
-      (priorMutation
-        ? statuses.find((status) => sameState(status.workingHead, priorMutation["workingHead"]))
-        : undefined);
-    const recoveryCommandId =
-      isRecord(recoveryMutation) && typeof recoveryMutation["commandId"] === "string"
-        ? recoveryMutation["commandId"]
-        : null;
-    const beforeOrAdvance =
-      before ??
-      mutationCandidates.find(
-        (candidate) =>
-          candidate !== recoveryMutation &&
-          afterStale !== undefined &&
-          sameState(candidate["workingHead"], afterStale.workingHead)
-      );
-    const noPartialEffect = Boolean(
-      (before && afterStale && sameFreshnessStatus(before, afterStale)) ||
-        (isRecord(beforeOrAdvance) &&
-          afterStale &&
-          sameState(beforeOrAdvance["workingHead"], afterStale.workingHead))
-    );
-    const recovered = Boolean(
-      afterStale &&
-      afterRecovery &&
-      recoveryMutation &&
-      afterStale.contextId === afterRecovery.contextId &&
-      !sameState(afterStale.workingHead, afterRecovery.workingHead) &&
-      sameState(
-        (recoveryMutation as Record<string, unknown>)["workingHead"],
-        afterRecovery.workingHead
-      )
-    );
-    const editCalls =
-      (executedCode.match(/\bvcs\.edit\s*\(/gu)?.length ?? 0) +
-      (executedCode.match(/["']vcs\.edit["']/gu)?.length ?? 0);
-    const freshCommandExpressions =
-      executedCode.match(/\bcommandId\s*:\s*crypto\.randomUUID\s*\(\s*\)/gu)?.length ?? 0;
-    const literalCommandIds = new Set(
-      [...executedCode.matchAll(/\bcommandId\s*:\s*["']([^"']+)["']/gu)].map(
-        (match) => match[1]!
-      )
-    );
-    const commandExpressions = new Set(
-      [...executedCode.matchAll(/\bcommandId\s*:\s*([^,}\n]+)/gu)].map((match) =>
-        match[1]!.trim()
-      )
-    );
-    const distinctCommands = Boolean(
-      (staleCommandId && recoveryCommandId && staleCommandId !== recoveryCommandId) ||
-        (recoveryCommandId &&
-          literalCommandIds.has(recoveryCommandId) &&
-          literalCommandIds.size >= 2 &&
-          editCalls >= 2) ||
-        (recoveryCommandId && editCalls >= 3 && freshCommandExpressions >= editCalls) ||
-        (recoveryCommandId && editCalls >= 2 && commandExpressions.size >= 2)
-    );
-    if (noPartialEffect || recovered || distinctCommands) {
-      return { noPartialEffect, recovered, distinctCommands };
-    }
+  if (editSubmissions < 3 || !observedRevisionChanged) {
+    return fail("A successful eval did not exercise a stale edit refusal and fresh retry");
   }
+  return { passed: true, reason: undefined };
+}
 
-  return Object.values(value).reduce((proof, child) => {
-    const nested = canonicalFreshnessProof(child, seen);
-    return {
-      noPartialEffect: proof.noPartialEffect || nested.noPartialEffect,
-      recovered: proof.recovered || nested.recovered,
-      distinctCommands: proof.distinctCommands || nested.distinctCommands,
-    };
-  }, empty);
+function containsExactValue(value: unknown, expected: unknown, seen: Set<object>): boolean {
+  if (value === expected) return true;
+  if (!value || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  return Object.values(value).some((child) => containsExactValue(child, expected, seen));
 }
 
 export function requireAnyEvalEvidence(

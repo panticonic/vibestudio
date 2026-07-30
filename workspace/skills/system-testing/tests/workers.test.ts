@@ -116,7 +116,6 @@ describe("worker test validators", () => {
           decision: "once",
         },
       ],
-      userland: [],
     });
   });
 
@@ -134,7 +133,6 @@ describe("worker test validators", () => {
           decision: "once",
         },
       ],
-      userland: [],
     });
   });
 
@@ -151,7 +149,7 @@ describe("worker test validators", () => {
       test("list-sources").validate(
         execution(
           "Two worker sources are available to start.",
-          "const units = await workspace.units.list(); return units.filter((unit) => unit.kind === 'worker' && unit.status === 'available');",
+          "const units = await build.listUnits(); return units.filter((unit) => unit.kind === 'worker' && unit.status === 'available');",
           [
             { source: "workers/a", kind: "worker", status: "available" },
             { source: "workers/b", kind: "worker", status: "available" },
@@ -175,11 +173,8 @@ describe("worker test validators", () => {
       test("list-workers").validate(
         execution(
           "No worker unit currently has a running instance.",
-          "const units = await workspace.units.list(); return { runningWorkers: units.filter((unit) => unit.kind === 'worker' && unit.status === 'running').length, workers: units.filter((unit) => unit.kind === 'worker') };",
-          {
-            runningWorkers: 0,
-            workers: [{ name: "@workspace-workers/example", kind: "worker", status: "available" }],
-          }
+          "return runtime.supervision.list();",
+          []
         )
       ).passed
     ).toBe(true);

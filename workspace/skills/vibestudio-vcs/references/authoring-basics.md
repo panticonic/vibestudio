@@ -6,7 +6,7 @@ In eval and runtime code, import the goal-shaped client instead of assembling
 raw RPC transport calls:
 
 ```ts
-import { contextId, vcs } from "@vibestudio/runtime";
+import { contextId, vcs } from "@workspace/runtime";
 
 const status = await vcs.status({ contextId });
 const repository = await vcs.resolveRepository({
@@ -31,12 +31,11 @@ stable `repositoryId`. Do not scan all state neighbors merely to turn one known
 path into its identity. A file listing supplies stable `repositoryId`, `fileId`,
 path, content digest, authoring change/work-unit IDs, persisted `contentClass`
 and `externalKeys`, mode, `contentKind`, `byteLength`, and `coordinateExtent`.
-Inside an agent, the path-friendly equivalent is
-`vcs({ operation: "listFiles", path: "projects/example" })`; the compact tool
-resolves the repository identity at the live working state and returns each
-full workspace path plus a complete typed file root. Copy that root unchanged
-into compact `inspect`/`neighbors`; use the full workspace path for compact
-`blame`.
+Inside an agent, browse with `ls`, `find`, and `read`; these use the same
+context-scoped filesystem as injected JavaScript `fs` and resolve semantic
+repository state in the background. Use full workspace paths for compact
+`blame`. When an agent genuinely needs a typed semantic root, obtain it from a
+semantic operation rather than using VCS as a second filesystem browser.
 
 Read a managed file with `vcs.readFile` at the same state. Prefer a stable file
 ID after discovery; use a path only to resolve the initial identity. A `null`

@@ -5,9 +5,10 @@ describe("phone setup skill", () => {
   it("documents the executable service boundary without inventing a skill package", () => {
     const markdown = readFileSync(new URL("./SKILL.md", import.meta.url), "utf8");
 
-    expect(markdown).toContain('rpc.call("main", "phoneProvisioning.providers", [])');
-    expect(markdown).toContain("Do not import");
-    expect(markdown).toContain("@workspace-skills/phone-setup");
+    expect(markdown).toContain('workers.resolveService("vibestudio.phone-provisioning.v1")');
+    expect(markdown).toContain("Reuse `phone.targetId`");
+    expect(markdown).toContain("This skill is documentation, not an importable code package");
+    expect(markdown).toContain("no such runtime package exists");
     expect(markdown).toContain("Do not add an eval-level `authority`");
     expect(markdown).toContain('approvals: "pregranted-only"');
     expect(markdown).toContain("Allow USB debugging?");

@@ -81,7 +81,7 @@ database.
 
 ### Runtime APIs
 
-All panels and sandbox code can import from `@vibestudio/runtime`:
+All panels and sandbox code can import from `@workspace/runtime`:
 
 | API         | What it provides                                     |
 | ----------- | ---------------------------------------------------- |
@@ -91,15 +91,16 @@ All panels and sandbox code can import from `@vibestudio/runtime`:
 | `workspace` | List, create, configure, switch workspaces           |
 | `rpc`       | Call services on the main process or other panels    |
 
-Additional surfaces: `browserData` from `@vibestudio/runtime` (browser data import/export), and `@vibestudio/cdp-client` (the workerd-native CDP client used by `handle.cdp.page()` — the single Playwright-style browser-automation surface; reach it through the handle, and use its exported `CdpConnection` only for protocol-level work).
+Additional surfaces: `browserData` from `@workspace/runtime` (browser data import/export), and `@workspace/cdp-client` (the workerd-native CDP client used by `handle.cdp.page()` — the single Playwright-style browser-automation surface; reach it through the handle, and use its exported `CdpConnection` only for protocol-level work).
 
 ### Build System
 
 Panels and workers are built **on demand** — when you navigate to a panel URL or
 create a worker instance, the build system compiles an explicit semantic or
-content build source with esbuild. A protected publication can notify build
-subscribers, which recompute affected effective versions as derived
-projections. Publication itself does not run or certify those builds.
+content build source with esbuild. A protected publication validates the
+affected build units and their transitive reverse dependents before advancing
+main; later build/activation work remains a derived projection of that exact
+published state.
 
 ## Architecture at a Glance
 

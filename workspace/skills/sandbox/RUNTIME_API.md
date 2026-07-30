@@ -2,6 +2,19 @@
 
 Credentials are URL-bound and may only be used through host-mediated egress.
 
+`services`, `hosts`, and `runtime` are portable `@workspace/runtime` exports:
+they are the same caller-scoped clients in panels, workers, Durable Objects,
+and eval—not eval-only ambient helpers. `services` supplies dynamic access to
+live service methods, `hosts` supplies owner-scoped attached-host access, and
+`runtime` is the typed lifecycle/supervision client.
+
+`gatewayFetch` is deliberately gateway-origin scoped. It accepts a relative
+path or an absolute URL on the configured gateway origin and rejects a
+cross-origin URL before a gateway credential can be sent. Use
+`credentials.fetch` for external HTTP. The shared `fs` API has no implicit
+deadline: an operation runs until it settles unless its owner passes an
+`AbortSignal`; optional settled-operation telemetry is observational only.
+
 ## Panel Runtime Surface
 
 In panel component code, the host-injected `panel` object has two identity
@@ -9,7 +22,7 @@ layers: `panel.slotId` is the stable visible panel slot and is the correct
 identity for panel-tree operations and PubSub/channel clients;
 `panel.entityId`/`rpc.selfId` identify the current live runtime entity and can
 change when the panel navigates or reopens. `panel` is not a portable export
-from `@vibestudio/runtime` and must not be imported in server-side eval. Eval,
+from `@workspace/runtime` and must not be imported in server-side eval. Eval,
 workers, and Durable Objects operate on visible panels through `getParent()`,
 `openPanel()`, `getPanelHandle()`, and the `PanelHandle` values returned by
 `panelTree`.
@@ -31,24 +44,25 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibestudio service routes. |
-| `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
-| `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@vibestudio/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
+| `gatewayFetch` | value |  | Gateway-origin fetch helper. It accepts relative paths and absolute URLs on the configured gateway origin, then authenticates that request; cross-origin targets are rejected. Use credentials.fetch for external egress. |
+| `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
 | `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `summarizeStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
 | `browserData` | namespace | `getBrowserEnvironment`, `listImportHosts`, `listImportSources`, `previewImport`, `startImport`, `cancelImport`, `getImportJob`, `listImportJobs`, `listOpenTabs`, `openTabsAsPanels`, `getSitePreferences`, `setSiteZoom`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getFormFillSuggestions`, `addFormFillValue`, `updateFormFillValue`, `markFormFillValueUsed`, `deleteFormFillValue`, `clearFormFillValues`, `getSearchEngines`, `setDefaultEngine`, `applyCookieMutations`, `getCookieSnapshot`, `getCookiesForOrigin`, `clearCookiesForOrigin`, `clearAllCookies`, `endBrowserSession`, `getCookieSiteSummary`, `flushCookieProjection`, `getCookieProjectionDiagnostics`, `listDownloads`, `listDownloadRecords`, `upsertDownloadRecord`, `pauseDownload`, `resumeDownload`, `cancelDownload`, `openDownload`, `revealDownload`, `putPageFavicon`, `getPageFavicon`, `exportBookmarks`, `exportPasswords`, `exportCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
-| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `commitMapping`, `importProject`, `pushTemplateContribution`, `publishTemplate` | Typed external Git operations routed through the workspace's configured gitInterop provider. Import and pull create unpublished semantic candidates; only ordinary VCS integration and explicit publication advance protected main. Declarations carry logical credential names resolved by the host, while credential-free remotes are anonymous-first. Pull dry-runs use isolated temporary state and do not mutate managed Git, semantic state, or the remote. |
+| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `commitMapping`, `importProject` | Typed external Git operations routed through the workspace's configured gitInterop provider. Import and pull create unpublished semantic candidates; only ordinary VCS integration and explicit publication advance protected main. Declarations carry logical credential names resolved by the host, while credential-free remotes are anonymous-first. Pull dry-runs use isolated temporary state and do not mutate managed Git, semantic state, or the remote. |
 | `vcs` | namespace | `edit`, `move`, `copy`, `integrate`, `revert`, `commit`, `discard`, `importSnapshot`, `registerExternalDelta`, `supersedeExternalDelta`, `finalizeExternalDelta`, `push`, `status`, `compare`, `inspect`, `neighbors`, `history`, `blame`, `readMemory`, `resolveRepository`, `readFile`, `listDirectory`, `listFiles` | Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, directly walkable provenance, and atomic external-snapshot acknowledgements containing the committed event/application/work-unit/repository/snapshot tuple. |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryEvents`, `appendChannelEnvelope`, `appendChannelEnvelopeWithRegistryMutation`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `diagnoseInvocation`, `inspectChannelRoster`, `inspectAgentHealth`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
+| `gad` | namespace | `status`, `ensureBlob`, `listUserNotificationsForMe`, `acknowledgeUserNotification`, `putUserNotification`, `deleteUserNotification`, `getTrajectoryBranchHead`, `listTrajectoryBranches`, `listTrajectoryInvocations`, `listTrajectoryApprovals`, `listChannelEnvelopes`, `listTrajectoryEvents`, `appendChannelEnvelope`, `listMessageTypes`, `getMessageType`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `readChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `diagnoseInvocation`, `inspectChannelRoster`, `inspectAgentHealth`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` | Typed access to the workspace's canonical Graph and Data store: parameterized SQL, trajectory/channel lineage, integrity diagnostics, provenance, and bounded channel-envelope paging. |
 | `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree`, `delete`, `list`, `putBytes`, `getBytes`, `readText` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/readText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. readText is a portable alias of getText and both return string \| null. Runtime-only putBytes(Uint8Array \| ArrayBuffer) and getBytes(digest) losslessly bridge the wire's base64 representation; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` | Ergonomic owner-scoped webhook lifecycle, identical in panels, workers, DOs, and agent eval: createSubscription(request), listSubscriptions(), rotateSecret(subscriptionId, secret?), and revokeSubscription(subscriptionId). Each subscription has an explicit maxBodyBytes budget: relay defaults to its 1,500,000-byte transport ceiling, while direct defaults to the operator-configured host ceiling (16 MiB by default). Delivery events currently include rawBodyBase64, so the host ceiling also bounds that in-memory expansion. Agent eval delegates ownership and target-source checks to its host-verified owning runtime. Secrets are redacted from listings. |
-| `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
-| `approvals` | namespace | `request`, `revoke`, `list` |  |
+| `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
-| `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `units`, `recurring`, `heartbeats`, `hostTargets`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
+| `services` | value |  | Portable dynamic service namespace. Rich runtime clients are available by name; other services dispatch through the caller-scoped main service boundary. The same client is available in panels, workers, Durable Objects, and eval. |
+| `hosts` | value |  | Portable owner-scoped attached-host access for development sessions. |
+| `runtime` | value |  | Portable typed runtime lifecycle and supervision client for the current workspace context. |
+| `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `applyPreparedConfig`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `recurring`, `heartbeats`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
 | `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
-| `listPanels` | value |  |  |
 | `getPanelHandle` | value |  |  |
-| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create. |
+| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
 | `Rpc` | value |  | RPC helpers namespace export. |
 | `z` | value |  | Zod export. |
 | `defineContract` | value |  |  |
@@ -89,7 +103,7 @@ approvals, and private repo retries, see
 
 The context filesystem surface is the same from eval, panels, workers, and
 Durable Objects. In eval, `fs` is injected; portable code imports `fs` from
-`@vibestudio/runtime`. Use `await help("fs")` for the authoritative live method
+`@workspace/runtime`. Use `await help("fs")` for the authoritative live method
 list and `await help("fs.<method>")` for its arguments and examples.
 
 `lstat()`, `readlink()`, and `realpath()` inspect symbolic links.
@@ -102,30 +116,33 @@ absent; use `copyFile()` when the destination must be tracked workspace source.
 
 ## Current Workspace
 
-Import `workspace` from `@vibestudio/runtime` to inspect the current workspace
-and its registered runtime units:
+Use `workspace` for semantic workspace metadata, `build.listUnits()` for
+declared source/build readiness, and `runtime.supervision` for exact live
+executions:
 
 ```ts
-import { contextId, workspace } from "@vibestudio/runtime";
+import { contextId, runtime, workspace } from "@workspace/runtime";
 
 const active = await workspace.getActive();
-const units = await workspace.units.list();
+const units = await build.listUnits();
+const live = await runtime.supervision.list();
 
 console.log({ contextId, active });
-console.log(
-  "Unit sample:",
-  units.slice(0, 5).map((unit) => unit.id)
-);
+console.log({ declared: units.slice(0, 5), live: live.slice(0, 5) });
 ```
 
 `workspace.getActive()` returns the current workspace id. Use
-`workspace.units.*` for source unit inspection, diagnostics, logs, versions,
-restart, and rollback. Server-wide multi-workspace catalog operations belong to
-the human shell or CLI's stable hub session and are intentionally absent from
-runtime eval; the current-workspace APIs above remain available.
+`build.listUnits()` for declared units and immutable build status. Live
+operations require an exact identity returned by `runtime.supervision.list()`:
+use `describe(identity)`, `health(identity)`, `logs(identity)`, or
+`restart(identity)`. Release history is separately addressed by
+`{ kind, releaseId }` through `versions(release)` and `rollback(release,
+options)`. Never substitute a package name or source path for either identity.
+Server-wide multi-workspace catalog operations belong to the human shell or
+CLI's stable hub session and are intentionally absent from runtime eval.
 
 Workspace host logs are exposed through the service catalog, not as an
-`@vibestudio/runtime` namespace. Use `services.serverLog.tail/query/stats` in
+`@workspace/runtime` namespace. Use `services.serverLog.tail/query/stats` in
 eval, or raw RPC calls such as
 `rpc.call("main", "serverLog.query", [{ level: "warn", limit: 100 }])`.
 Live following uses
@@ -171,7 +188,7 @@ for discovering other workspaces from eval.
 Use `notifications.show()` for host chrome notifications:
 
 ```ts
-import { notifications } from "@vibestudio/runtime";
+import { notifications } from "@workspace/runtime";
 
 const id = await notifications.show({
   type: "info",
@@ -190,7 +207,7 @@ The portable `webhooks` namespace is the ergonomic lifecycle API in panel,
 worker, DO, and agent eval environments:
 
 ```ts
-import { webhooks } from "@vibestudio/runtime";
+import { webhooks } from "@workspace/runtime";
 
 const self = await agent.describe();
 const created = await webhooks.createSubscription({
@@ -324,7 +341,7 @@ Resolve the service by protocol or name, optionally pass an object key for a
 partitioned database, then call the DO target:
 
 ```ts
-import { rpc, workers } from "@vibestudio/runtime";
+import { rpc, workers } from "@workspace/runtime";
 
 const store = await workers.resolveService("example.todos.v1", "project-123");
 if (store.kind !== "durable-object") throw new Error("Expected DO service");
@@ -333,15 +350,16 @@ await rpc.call(store.targetId, "upsertTodo", [{ title: "Ship the app" }]);
 const rows = await rpc.call(store.targetId, "listTodos", []);
 ```
 
-The worker must also admit the caller in two places: the manifest service
-`policy.allowed` gate and each exposed DO method's `@rpc({ callers })` gate.
+The worker must also admit the caller in two places: the live service
+`authority.principals` gate and each exposed DO method's
+`@rpc({ principals, effect, tier, sensitivity })` receiver policy.
 See [workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#durable-object-backed-app-databases)
 for the schema, declaration, partition-key, and testing recipe.
 
 ## Unified Panel Handles
 
 Use `panelTree` and `PanelHandle` from panels, workers, and DOs. In panel
-code, `panelTree` is imported directly from `@vibestudio/runtime`; it is not
+code, `panelTree` is imported directly from `@workspace/runtime`; it is not
 `workspace.panelTree`:
 
 > **Headless tree root:** a genuinely headless eval has a tree but no initial
@@ -353,21 +371,23 @@ code, `panelTree` is imported directly from `@vibestudio/runtime`; it is not
 > null, and do not use the truthiness of the compatibility `parent` handle.
 
 ```ts
-import { panelTree, openPanel } from "@vibestudio/runtime";
+import { panelTree, openPanel } from "@workspace/runtime";
 
 const created = await openPanel("https://example.com", { focus: true });
 const same = panelTree.get(created.id);
 const parent = panelTree.self().parent();
 const parentObservation = parent ? await parent.observe() : null;
-const roots = await panelTree.roots();
-
-// One authoritative recursive scope. Re-read after structural mutations and
-// compare revision rather than maintaining a parallel tree.
-const scope = await panelTree.subtree(created.id);
-const browserLeaves = scope.leaves.filter((node) => node.handle.kind === "browser");
-
-const all = await panelTree.list();
-const existing = all.find((handle) => handle.source === "panels/spectrolite");
+const roots = await panelTree.page({
+  group: { kind: "roots", ownerUserId: null },
+  limit: 100,
+});
+const children = await panelTree.page({
+  group: { kind: "children", parentSlotId: created.id },
+  limit: 100,
+});
+const existing = (await panelTree.search({ query: "spectrolite", limit: 20 })).hits.find(
+  ({ entry }) => entry.handle.source === "panels/spectrolite"
+)?.entry.handle;
 const byKnownSlot = panelTree.get("panel-slot-id");
 const before = await byKnownSlot.observe(); // exact attempt and provenance
 await byKnownSlot.setTitle("Semantic panel title", { explicit: true });
@@ -386,7 +406,7 @@ contexts, notes, and bounded child-panel automation, read the co-located
 
 In server-side eval, `panelTree.self()` is the EvalDO runtime, not the visible
 chat panel. Use `parent`/`getParent()` for the owner agent's nearest visible
-panel ancestor, and use `panelTree.list()/roots()/children()` to inspect the
+panel ancestor, and use bounded `panelTree.page()`/`panelTree.search()` reads to inspect the
 visible panel tree the user is talking about. If you need the chat attached to a
 parent or sibling panel, read that target panel's state args:
 
@@ -394,10 +414,9 @@ For the complete root/child verification and cleanup pattern, see
 `EVAL.md#eval-perspective`.
 
 ```ts
-import { gad, panelTree, rpc, workers } from "@vibestudio/runtime";
+import { gad, panelTree, rpc, workers } from "@workspace/runtime";
 
-const panels = await panelTree.list();
-const target = panels.find((panel) => panel.id === "panel-slot-id");
+const target = panelTree.get("panel-slot-id");
 const stateArgs = target ? await target.stateArgs.get<Record<string, unknown>>() : {};
 const channelId = String(stateArgs.channelName ?? stateArgs.channelId ?? "");
 
@@ -456,18 +475,18 @@ the sole positive readiness answer. `snapshot()` returns
 `{ panelId, attemptId, runtimeEntityId, buildKey, capturedAt, document }`.
 
 `same.cdp.page()` returns the canonical Playwright-style page driven by our
-workerd-native CDP client (`@vibestudio/cdp-client`). It is the single
+workerd-native CDP client (`@workspace/cdp-client`). It is the single
 browser-automation surface — there is no separate compatibility tier,
 and you do not import or install any `playwright*` package. The page exposes
 locators (`page.locator`, `page.getByRole`, `page.getByText`, `page.getByLabel`,
 …), auto-waiting actions (`click`, `fill`, `check`, `selectOption`, …), reads
 (`innerText`, `count`, `isVisible`, `getAttribute`, …), and page-level methods
 (`goto`, `screenshot`, `waitForSelector`, `evaluate`, …). For protocol-level
-work, `import { CdpConnection } from "@vibestudio/cdp-client"` and connect with
+work, `import { CdpConnection } from "@workspace/cdp-client"` and connect with
 `(await same.cdp.getCdpEndpoint())`. There is no second page-acquisition API.
 
 `openPanel`/`panelTree`/`PanelHandle` are part of the portable runtime surface
-from `@vibestudio/runtime`; they work from server-side eval, panels, workers, and
+from `@workspace/runtime`; they work from server-side eval, panels, workers, and
 DOs. The `handle.cdp.*` automation is workerd-native and runs over a WebSocket
 to the panel's CDP endpoint, so eval can open or discover a panel and drive its
 browser target directly.
@@ -480,98 +499,27 @@ stage/code/provenance. Call `handle.diagnose()` for one bounded observation,
 console/lifecycle history, and ready document. A target held by a mobile/non-CDP
 host rejects CDP access.
 
-## Userland Approval Prompts
+## Userland-owned capabilities
 
-Use `approvals.request()` only when custom userland code exposes a shared resource
-to other panels, workers, DOs, or extensions and needs a user decision that
-Vibestudio cannot represent as a built-in permission. The shell verifies the
-issuer identity (`callerId`/`callerKind`) and shows the user a trusted consent
-prompt for that custom resource.
+There is no portable `approvals` namespace. A workspace provider protects a
+custom resource by declaring it in the exact package manifest's
+`vibestudio.authority.provides` and binding the receiving `@rpc` method to that
+unit-local name with a literal `userland-capability` effect. The host derives
+the receiver resource and runs the trusted acquisition flow before provider
+code executes.
 
-Do **not** call `approvals.request()` for ordinary actions the caller can already
-perform: context filesystem reads/writes/removes, eval work, panel operations,
-browser automation, git/runtime APIs, external opens, credential use, and other
-host-mediated capabilities are already protected by Vibestudio's outer permission
-systems where needed.
-
-```ts
-import { approvals } from "@vibestudio/runtime";
-
-const result = await approvals.request({
-  subject: {
-    id: "team-x:calendar-write",
-    label: "Team X calendar write access",
-  },
-  title: "Allow calendar writes?",
-  summary: "A custom calendar service wants to let this caller create Team X events.",
-  warning: "Only allow this for teams you administer.",
-  details: [
-    { label: "Team", value: "Team X" },
-    { label: "Operation", value: "Create calendar events" },
-  ],
-});
-
-if (result.kind === "choice" && result.choice === "allow") {
-  // Continue with the gated action.
-}
-```
-
-By default the prompt shows **Allow once**, **Allow this session**, **Trust this version**, and **Deny**. Positive choices return `choice: "allow"`; deny returns `choice: "deny"`.
-
-For a custom prompt, opt into `promptOptions: "choices"` and supply options.
-If you omit `options`, the host shows a simple allow/deny prompt.
-
-```ts
-const result = await approvals.request({
-  subject: { id: "team-x:calendar-write", label: "Team X calendar write access" },
-  title: "Allow calendar writes?",
-  promptOptions: "choices",
-  options: [
-    { value: "allow", label: "Allow", tone: "primary" },
-    { value: "deny", label: "Deny", tone: "danger" },
-  ],
-});
-
-if (result.kind === "choice" && result.choice === "allow") {
-  // Continue with the gated action.
-}
-```
-
-Decision caching is server-managed. Scoped prompts remember session and version
-choices according to the selected scope. Custom `choices` prompts remember every
-non-dismiss choice for the verified issuer and `subject.id`; the next identical
-request resolves immediately with the stored choice and no prompt. Dismissal is
-not remembered.
-
-```ts
-// This is only the current caller's saved custom-resource choices.
-const savedChoices = await approvals.list();
-await approvals.revoke("team-x:calendar-write");
-```
-
-`approvals.list()` is not the workspace permission inventory. When the user asks
-which permissions or grants are active across the workspace, call the trusted
-host service instead:
+Use the normal permission inventory when the user asks which grants are active:
 
 ```ts
 const grants = await rpc.call("main", "permissions.list", []);
 ```
 
-That inventory includes active capability, custom-choice, credential-use, and
-browser-site grants. Use `permissions.listAgentProfiles` for each agent's
-human-readable standing authority and locks.
-
-Use stable, provider-owned `subject.id` values such as
-`team-x:calendar-write`. IDs must be 1-128 chars, use only
-letters/numbers/`._:/-`, and cannot start with `shell:`, `server:`,
-`system:`, or `@`. Option values must be unique, 1-40 chars, and use only
-letters/numbers/`_-`; `dismiss` is reserved.
-
-Do not use `approvals.request()` as a general confirmation dialog or a defensive
-wrapper around actions the agent/runtime can already take. For host capabilities
-that already have a Vibestudio permission flow, use `openExternal()`,
-`credentials.*`, `git.*`, `vcs.*`, or the relevant runtime API so the host can apply the
-right trust scope and audit model.
+Use `permissions.listAgentProfiles` for each agent's human-readable standing
+authority and locks. Do not add advisory prompts around `openExternal()`,
+`credentials.*`, `git.*`, `vcs.*`, panel operations, or other host-mediated
+APIs; their receivers already apply the correct scope and audit model. The
+[capabilities skill](../capabilities/SKILL.md) documents complete
+receiver-object and opaque-handle provider patterns.
 
 ## Workspace VCS operations
 

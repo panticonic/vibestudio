@@ -54,7 +54,7 @@ Use direct link buttons in the UI:
 ```tsx
 import { Button, Flex, Text } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
-import { openPanel, openExternal } from "@vibestudio/runtime";
+import { openPanel, openExternal } from "@workspace/runtime";
 
 export default function SetupStep() {
   const url = "https://console.cloud.google.com/apis/credentials";

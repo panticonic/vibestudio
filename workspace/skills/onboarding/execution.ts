@@ -1,4 +1,4 @@
-import { callMain, openPanel } from "@vibestudio/runtime";
+import { callMain, openPanel } from "@workspace/runtime";
 import {
   resolveOnboardingSelection,
   resolveTemplateSelection,

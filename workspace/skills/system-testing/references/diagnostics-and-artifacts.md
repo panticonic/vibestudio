@@ -78,10 +78,12 @@ authoritative surface:
 
 - explicit build/typecheck diagnostics for context-local compile or type
   failures;
-- the publication result for ancestry, integration, authorization, approval,
-  or atomic-ref failures;
+- the publication result for the affected-unit build/typecheck gate and for
+  ancestry, integration, authorization, approval, or atomic-ref failures;
 - post-publication build events for derived projection failures;
-- `workspace.units.diagnostics(name)` for running unit state, errors, and logs;
+- `build.listUnits()` for declared source/build readiness, followed by
+  `runtime.supervision.health(identity)` and `logs(identity)` for the exact live
+  entity identity returned by `runtime.supervision.list()`;
 - the agent debug port for an open turn with no completion, tool call, or
   `turn.closed` event;
 - joined suspension diagnostics for tool projection/effect mismatches;
@@ -93,9 +95,10 @@ authoritative surface:
 - server logs for host dispatch, workerd supervision, reconnect, or startup
   behavior.
 
-Do not infer that a successful publication certifies a build. Correlate each
-explicit or post-publication build with its exact semantic event or application
-state. When
+Successful publication certifies only the affected candidate build/typecheck
+closure that the protected gate evaluated. Correlate that gate's structured
+diagnostics, and every later explicit or post-publication build, with its exact
+semantic event or application state. When
 activation fails, verify the failed artifact remained inactive and the previous
 runnable artifact stayed selected.
 

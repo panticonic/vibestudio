@@ -85,10 +85,9 @@ export const panelTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
-      "Exercise opening the base chat panel as a child panel using the documented @vibestudio/runtime panel APIs only. Do not inspect guessed internal source paths. Get a screenshot, retrieve host-captured console logs from the running panel, and run JavaScript in the child panel through handle.cdp.page(). Finish with PANEL_OPEN_OK and handle=<panel-id>.",
+      "Open the base chat panel as a child, make sure it is really running by inspecting its screenshot and console, and evaluate a small JavaScript expression in it. Clean up anything temporary you had to create.",
     validate: (result) => {
       const base = checkedWithField(result, ["PANEL_OPEN_OK"], "handle");
       return base.passed ? requireCreatePanelEvidence(result) : base;
@@ -98,8 +97,19 @@ export const panelTests: TestCase[] = [
     name: "browser-panel",
     description: "Create and navigate a browser panel",
     category: "panels",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "inspect-browser-panel",
+          capability: { kind: "exact", key: "panel.inspect" },
+          resource: { kind: "exact", key: "panel.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+    },
     prompt:
-      "Exercise opening a browser panel for https://example.com/ using openPanel(), then navigate that same browser panel to https://example.org/ with the documented CDP automation API. Reuse the same handle and page; do not open replacement panels or inspect guessed internal source paths. Take a screenshot and run JavaScript in the browser panel. Finish with PANEL_BROWSER_OK, PANEL_NAVIGATE_OK, PANEL_SCREENSHOT_OK, PANEL_EVAL_OK, url=<current-url>, and final-marker.",
+      "Open https://example.com/ in a browser panel, inspect it, then navigate that same panel to https://example.org/ and confirm the final page works. Clean up anything temporary you had to create.",
     validate: (result) =>
       checkedWithField(
         result,
@@ -117,8 +127,19 @@ export const panelTests: TestCase[] = [
     name: "panel-tree-navigation",
     description: "Walk the panel tree and navigate a child panel through the tree surface",
     category: "panels",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "inspect-tree-panel",
+          capability: { kind: "exact", key: "panel.inspect" },
+          resource: { kind: "exact", key: "panel.inspect" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+    },
     prompt:
-      "Open a child browser panel for https://example.com/, then explore the panel tree around yourself: identify your own node, confirm the child appears among your children, navigate the child to https://example.org/ through the tree surface, and close it afterward so nothing is left open. Finish with PANEL_TREE_OK, children=<count>, navigated=<final-url>, and closed.",
+      "Open https://example.com/ as a child browser panel, use the panel tree to find and navigate it to https://example.org/, then close it so nothing is left open.",
     validate: (result) => {
       const base = checkedWithNumericField(result, ["PANEL_TREE_OK", "closed"], "children");
       if (!base.passed) return base;
@@ -129,8 +150,7 @@ export const panelTests: TestCase[] = [
     name: "panel-list-sources",
     description: "List visible panel handles through the runtime panel API",
     category: "panels",
-    prompt:
-      "Exercise listing currently available panels via the documented runtime panel APIs. Finish with PANEL_SOURCES_OK and count=<number>.",
+    prompt: "Which panels are available to open in this workspace?",
     validate: (result) => checkedWithNumericField(result, ["PANEL_SOURCES_OK"], "count"),
   },
 ];

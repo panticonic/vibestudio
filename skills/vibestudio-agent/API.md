@@ -114,6 +114,7 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
+| `build.listUnits` | List declared executable source units and their build readiness. This is not a process list: use runtime.supervision.list for exact live entities. |
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
 | `build.getBuildMetadata` | Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. |
@@ -121,7 +122,6 @@ Authority principals: `code`, `host`, `user`
 | `build.getEffectiveVersion` | Effective version (content-derived identity) of a workspace unit, or null if unknown. |
 | `build.inspectBuildProvenance` | Resolve a workspace build unit (by name, relative path, or basename) and report its effective version, immutable build keys, and cached artifact metadata. Reports ambiguity when a basename matches multiple units. |
 | `build.listRecentBuildEvents` | List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path. |
-| `build.doctorExtension` | Inspect an extension manifest, dependency routing, cached metadata, and smoke/build status. |
 | `build.recompute` | Rediscover the package graph, recompute every unit's effective version, rebuild any changed buildable units, and return the set of changed/added/removed units. |
 | `build.gc` | Inspect authoritative execution retention using host-owned roots without mutating artifacts or source content. Destructive collection is private to the coordinated host epoch. |
 | `build.inspectExecution` | Explain one immutable execution identity, its authoritative owners, and whether its artifact and source closure remain reconstructible. |
@@ -169,39 +169,6 @@ Authority principals: `code`, `host`, `user`
 | `credentials.proxyGitHttp` | Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded. |
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
-
-## `development`
-
-Exact semantic development sessions and reviewed private build execution
-
-Authority principals: `code`, `host`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `development.openSession` | Fork the caller's exact semantic working state. Semantic mode stays in the control plane; native-tool mode launches the selected reviewed local tool in a private owned terminal and tree. |
-| `development.getSession` | Read an owned development session. |
-| `development.listSessions` | Page development sessions owned by the caller in stable newest-first order. |
-| `development.closeSession` | Close a development session idempotently while retaining its semantic child context. |
-| `development.destroySession` | Close a development session and destroy its owned semantic child context. Active runs are refused. |
-| `development.retrySessionCleanup` | Retry the previously requested destruction of a session's owned semantic child context. |
-| `development.keepSessionRepair` | Keep a session repair record without performing cleanup. Read the session to inspect it. |
-| `development.listRecipes` | List the reviewed build recipes. No method accepts a command line. |
-| `development.listNativeTools` | List reviewed native development tools with live executor availability and an actionable unavailable reason. |
-| `development.start` | Build one exact semantic snapshot in a private root. A caller-owned runId is the sole start idempotency key. |
-| `development.get` | Read one owned development run. |
-| `development.list` | Page owned development runs with stable newest-first cursors and optional session/state filters. |
-| `development.events` | Page bounded durable run events. Subscribe to development:run-event for live delivery. |
-| `development.stop` | Stop an owned build process and record exact cleanup outcome. |
-| `development.retry` | Retry a failed exact build from its retained snapshot under the same native-execution authority contract. |
-| `development.keepRunRepair` | Keep a run repair record. Read the run to inspect it. |
-| `development.forceRetire` | Abandon a failed run and remove only execution effects whose ownership is proven. |
-| `development.forceRetireSession` | Abandon a broken session after attempting cleanup of its proven-owned semantic context. |
-| `development.checkpoint` | Freeze an owned native tool, import one exact external snapshot into the development child, and resume the tool. |
-| `development.inspectNative` | Inspect native session ownership, checkpoint, repair, and optionally exact pending-change state. |
-| `development.stopNativeTool` | Stop the exact owned native tool process group while retaining its terminal and writable tree for inspection. |
-| `development.readNativeTerminal` | Read bounded scrollback from the native session's owned terminal. |
-| `development.writeNativeTerminal` | Write interactive input to the native session's owned terminal. |
-| `development.resizeNativeTerminal` | Resize the native session's owned terminal. |
 
 ## `developmentClientExecutor`
 
@@ -261,7 +228,7 @@ Authority principals: `code`, `host`, `user`
 | `eval.dispose` | Permanently release one owner-scoped eval kernel and erase its scope, run records, loaded modules, runtime image, and entity registration. Use this for explicitly finite eval scopes; ordinary notebooks remain durable until disposed. |
 | `eval.readScopeTextPage` | Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly. |
 | `eval.deleteScopeValue` | Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging. |
-| `eval.cancel` | Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so evaluated-execution authority remains valid for teardown. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |
+| `eval.cancel` | Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so the eval history and its owned cleanup remain one trust unit with valid teardown authority. Owned cleanup is awaited to real settlement and preserves other runs and scope. An unowned, non-cooperative guest run may trigger bounded recovery, which cancels all non-terminal runs, resets shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false. |
 
 ## `events`
 
@@ -331,29 +298,6 @@ Authority principals: `code`, `user`
 |--------|-------------|
 | `gateway.fetch` | Loopback-fetch a panel asset from the server's own gateway and stream the Response back over the pipe's bulk channel (a streaming method). A request body streams IN over the same channel (stream-open bodyStreamId → ctx.body). |
 
-## `gitInterop`
-
-External Git interop: declared remotes and remote project imports
-
-Authority principals: `code`, `host`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `gitInterop.setSharedRemote` | Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibestudio.yml, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments. |
-| `gitInterop.removeSharedRemote` | Remove a named shared Git remote declaration for a workspace unit from meta/vibestudio.yml, sync the repo's git config, and queue immediate provider reconciliation; may prompt for capability approval. |
-| `gitInterop.setUpstream` | Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL. |
-| `gitInterop.removeUpstream` | Remove upstream tracking for a workspace repo from meta/vibestudio.yml, then queue immediate provider reconciliation; may prompt for capability approval. |
-| `gitInterop.detachUpstream` | Atomically remove upstream tracking (and optionally the declared remote) for a workspace repo in one config write and one approval, then queue immediate provider reconciliation; may prompt for capability approval. |
-| `gitInterop.setAutoPush` | Toggle optional outgoing Git push for future exports of already-published protected main, preserving the upstream's exact credential mode, persisting the change to meta/vibestudio.yml, and queueing immediate provider reconciliation; this never publishes import candidates and may prompt for capability approval. |
-| `gitInterop.upstreamStatus` | Observe the declared remote and return external Git upstream status for tracked repos, including integration-required candidate coordinates. Relationship, counts, remoteBranchExists, and observedAt describe only the observation made by this call and are absent when it fails. Arguments are positional: call `git.upstreamStatus([imported.path])`, not `git.upstreamStatus([[imported.path]])`. The configured gitInterop provider performs all Git/network work. |
-| `gitInterop.pushUpstream` | Export protected main, observe the declared remote, and return a typed push outcome through the configured gitInterop provider; refuse while an external snapshot candidate requires semantic integration. A forced update returns bounded overwrite evidence: related history has an exact count, while unrelated history has count null because no relative commit count exists. |
-| `gitInterop.pullUpstream` | Fetch a declared upstream and import its exact snapshot as a semantic candidate. With dryRun true, export and fetch only inside an isolated temporary checkout and mutate no managed Git, bridge, semantic, or remote state. A missing configured remote branch is reported explicitly as remoteBranchExists false with zero counts. Reconcile and publish an imported candidate only through vcs.compare, incremental vcs.integrate, vcs.commit, and vcs.push. |
-| `gitInterop.publishRepo` | Resolve exactly one GitHub credential (explicit credentialId, or the sole active GitHub credential; refuse ambiguity), resolve the destination owner from explicit organization, persisted credential target, or authenticated user, preflight live account and publish permissions, create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider. |
-| `gitInterop.commitMapping` | Return the semantic-event↔Git commit mapping for a repo's checkout, read from Vibestudio-Event trailers (newest first). |
-| `gitInterop.importProject` | Clone an external Git project, record its remote/upstream config, and return the semantic candidate plus identity-joined evidence from the same atomic semantic import. The import does not publish protected main. The returned semanticEvidence includes the external snapshot source URI, revision, digest, and target repository IDs; the provenance tool can independently inspect the same returned IDs. Check the same repo with the positional call `git.upstreamStatus([imported.path])` to distinguish the unpublished integration-required candidate from protected main and outgoing Git publication, and report that same candidate event ID with the path and publication state. Use the ordinary VCS integration path when publication is intended. |
-| `gitInterop.pushTemplateContribution` | Export selected repositories from one exact protected-main event and push one collision-safe template contribution branch through the configured gitInterop provider. |
-| `gitInterop.publishTemplate` | Create a provider repository and publish selected repositories from one exact protected-main event with one generated portable template manifest and immutable version tag. |
-
 ## `governance`
 
 Host governance log — approval provenance + membership events (read-only)
@@ -385,24 +329,6 @@ Authority principals: `code`, `host`, `user`
 | `mirror.targets` | Return repository content projections for a context's exact working head. Each {repoPath,stateHash} is a content-only projector target, never ancestry or a semantic revision. Stream its immutable tree through `objects`. |
 | `mirror.objects` | Stream one content-only repository tree as bounded pages of {path,mode,content,size}. Agent callers may read only states currently reachable from their host-bound context; no prior `targets` call is required. A stateHash never grants workspace history or provenance. Page with `next` until absent and optionally restrict to paths. |
 
-## `mission`
-
-Content-addressed charters for recurring and unattended agents
-
-Authority principals: `host`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `mission.list` | List durable automation charters and their approval state. |
-| `mission.get` | Read one durable automation charter. |
-| `mission.listRuns` | List the durable run timeline for one visible mission. |
-| `mission.createDraft` | Create an inert mission draft; this grants and schedules nothing. |
-| `mission.edit` | Edit a mission; charter changes lapse its active authority. |
-| `mission.requestReview` | Open the canonical approval-queue review for an inert mission closure. |
-| `mission.pause` | Pause an active mission without changing its charter. |
-| `mission.resume` | Resume a paused mission only if its approved closure still matches. |
-| `mission.retire` | Retire a mission permanently and revoke its standing allows. |
-
 ## `notification`
 
 Push notifications to the shell chrome area
@@ -424,10 +350,6 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `panelCdp.getCdpEndpoint` | Return a single-use CDP WebSocket endpoint for an approved panel target. |
-| `panelCdp.navigate` | Navigate an approved browser panel target through its active CDP host. |
-| `panelCdp.reload` | Reload an approved panel target through its active CDP host. |
-| `panelCdp.goBack` | Drive browser history back on an approved panel target. |
-| `panelCdp.goForward` | Drive browser history forward on an approved panel target. |
 | `panelCdp.stop` | Stop loading an approved panel target through its active CDP host. |
 | `panelCdp.consoleHistory` | Read console history from an approved panel target's active CDP host. |
 | `panelCdp.screenshot` | Capture a screenshot of an approved panel target through its active CDP host (force-paints hidden/unslotted panels). Returns base64 image data + mime type; no CDP WebSocket client needed. |
@@ -456,49 +378,14 @@ Authority principals: `host`, `user`
 | `panelRuntime.registerClient` | Register (or refresh) a panel-hosting client session so it can be assigned runtime leases. |
 | `panelRuntime.unregisterClient` | Unregister a client session by id, releasing any leases it held and reassigning default CDP hosts as needed. |
 | `panelRuntime.getSnapshot` | Get the current lease snapshot (version + all active panel runtime leases). |
+| `panelRuntime.observeSlot` | Observe the active runtime lease and latest host report for one panel slot. |
 | `panelRuntime.acquire` | Acquire the runtime lease for a panel entity. Succeeds for the current holder or an unleased entity; otherwise returns acquired:false with the existing lease. |
 | `panelRuntime.takeOver` | Forcibly take over a panel entity's runtime lease, revoking and closing any conflicting holder's connection. |
+| `panelRuntime.handoffSlot` | Move an existing slot lease from its previous runtime entity to the exact entity currently committed in workspace topology. |
+| `panelRuntime.ensureSlot` | Ensure that the current runtime entity for a slot has a presentation host lease. |
+| `panelRuntime.unloadSlot` | Release the active presentation lease for a panel slot while preserving its runtime entity and topology. |
 | `panelRuntime.release` | Release the lease for a panel entity held by the given connection id. No-op unless the connection matches the current holder. |
 | `panelRuntime.reportView` | Report the current page and boot observation for a leased panel from a host without an inspection transport. |
-
-## `panelTree`
-
-Server-mediated panel tree handles and control operations
-
-Authority principals: `code`, `host`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `panelTree.list` | List the children of a panel (or the root panels when the parent id is null/omitted). |
-| `panelTree.roots` | List all root-level panels in the tree. |
-| `panelTree.getTreeSnapshot` | Return a full snapshot of the panel tree (revision plus root panels). |
-| `panelTree.getSubtree` | Return one revisioned recursive panel subtree rooted at the requested stable slot id, or null when that slot is not active. |
-| `panelTree.attachInitialPanels` | Authenticated-owner attach boundary: reconcile that owner's configured initial panels once and return the authoritative tree snapshot. |
-| `panelTree.getFocusedPanelId` | Return the id of the currently focused panel, or null if none is focused. |
-| `panelTree.create` | Internal structural primitive: durably create an explicitly declared code or external-document panel and return its initial observation while boot continues. Application callers use openPanel, which waits for boot readiness. |
-| `panelTree.focus` | Focus a panel and return only after its current attempt is boot-ready; throws the canonical structured failure otherwise. |
-| `panelTree.observe` | Return the canonical current panel attempt, including exact provenance, host/boot state, and structured failure. |
-| `panelTree.diagnose` | Return one bounded diagnostic packet with the canonical observation, host lifecycle/console history, and a document capture when ready. |
-| `panelTree.getStateArgs` | Return the validated state-args currently bound to a panel. |
-| `panelTree.setStateArgs` | Merge a patch into a panel's ordinary application state (null removes a key); returns the full resulting validated state. contextId is reserved for the panel's host-bound workspace branch and must be changed through explicit panel navigation, never state args. |
-| `panelTree.setTitle` | Set a panel slot's semantic display title without loading its runtime. Explicit titles are preserved across inferred page-title updates. |
-| `panelTree.reload` | Reload a panel's view and return only after that exact attempt is boot-ready; throws the canonical structured failure otherwise. |
-| `panelTree.close` | Close a panel, removing it (and its subtree) from the tree. |
-| `panelTree.archive` | Archive a panel, removing it from the active tree while preserving its history. |
-| `panelTree.unload` | Unload a panel's runtime/view to free resources while keeping the panel in the tree. |
-| `panelTree.movePanel` | Reparent and/or reposition a panel among its siblings (drag-and-drop move). |
-| `panelTree.navigate` | Transactionally navigate to a prepared runtime and return only after the new attempt is boot-ready. |
-| `panelTree.navigateHistory` | Move a panel backward (-1) or forward (1) through its navigation history, returning the resulting panel descriptor or null. |
-| `panelTree.takeOver` | Take over a panel's runtime lease for the calling client, focusing it on this host. |
-| `panelTree.openDevTools` | Open developer tools for a panel, optionally docked to a side or detached. |
-| `panelTree.rebuildPanel` | Transactionally replace the current runtime from source and return only after the new attempt is boot-ready. |
-| `panelTree.updatePanelState` | Update a panel's live navigation state (url, page title, loading/back/forward flags) from the rendering surface. |
-| `panelTree.snapshot` | Wait for the current panel attempt to become boot-ready, then capture a provenance-bearing readable document; throws the canonical structured failure otherwise. |
-| `panelTree.callAgent` | Invoke a panel's in-process agent method (e.g. _agent.snapshot/_agent.tree/_agent.setMode) with optional arguments. |
-| `panelTree.metadata` | Return lightweight runtime-handle metadata for a panel id, or null if it does not exist. |
-| `panelTree.getCollapsedIds` | Return the ids of panels that are currently collapsed in the tree UI. |
-| `panelTree.setCollapsed` | Set whether a panel is collapsed in the tree UI. |
-| `panelTree.expandIds` | Expand (un-collapse) a set of panels in the tree UI. |
 
 ## `permissions`
 
@@ -514,18 +401,6 @@ Authority principals: `code`, `host`, `user`
 | `permissions.safetyStatus` | Read the live emergency authority state and the work it can immediately interrupt. |
 | `permissions.updateAgentProfile` | Pause or resume an agent, revoke all of its authority, or change one lasting authority setting. |
 | `permissions.setWorkspaceAuthorityLock` | Engage or release the emergency workspace lock for every agent's protected authority. |
-
-## `phoneProvisioning`
-
-Account-scoped proxy to phone capabilities on connected desktop clients
-
-Authority principals: `code`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `phoneProvisioning.providers` | List account-scoped desktop capability providers that can access phones attached to them. |
-| `phoneProvisioning.devices` | Discover Android and iOS devices through the selected desktop, including readiness and compatible app state. |
-| `phoneProvisioning.provision` | Install when needed, immediately pair through the selected desktop, and wait for the new device to join the current account. |
 
 ## `presence`
 
@@ -559,16 +434,30 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `runtime.createEntity` | Create a runtime entity (panel, app, worker, DO, or session) and commit its durable identity. Omitted contextId inherits the verified caller's context; root callers without one mint a fresh context. A canonical key is an immutable identity and never silently switches source, context, or effective code version. Reuses or reactivates only a compatible row. Retirement does not release that identity; replacing an instance or launching edited disposable code requires a fresh key. Returns the entity handle (id + runtime targetId). |
+| `runtime.reserveEntity` | Reserve a code-backed entity's stable durable identity and context without waiting for its immutable runtime image. Omitted contextId deterministically creates a fresh lifecycle-owned context; an explicit contextId shares that existing context. Reserved entities are non-executable until activateReservedEntity completes. |
+| `runtime.activateReservedEntity` | Prepare and atomically activate the immutable runtime image for a previously reserved code-backed entity. |
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
-| `runtime.listEntities` | List exact live runtime instances (id, kind, source, key, contextId, title, createdAt). For running workers use kind='worker'; workspace.units.list provides aggregate status per source rather than instance ids. |
+| `runtime.listEntities` | List exact live runtime instances (id, kind, source, key, contextId, title, createdAt). For declared source and build readiness use build.listUnits. |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
 | `runtime.listContexts` | List durable semantic workspace contexts, optionally restricted to an exact id prefix. This is domain-neutral workflow discovery; context contents remain subject to their ordinary VCS read authority. |
 | `runtime.createContext` | Create a full logical semantic workspace context. When invoked by a context-scoped runtime, the new context is recorded as that exact runtime entity's lifecycle child, making ownership, initialization authority, and teardown walkable instead of leaving an ownerless context island. Root host callers create root contexts. The state machine initializes one exact committed event and event/application working head over the whole workspace; later semantic operations advance that working head atomically. Use vcs.status for compact ancestry and integration orientation, then page repository and work membership through focused VCS inspectors. |
 | `runtime.cloneContext` | Clone a context's durable state—every worker/DO store plus its exact committed event and event/application working head—into a fresh isolated context. Immutable semantic history and authored facts are shared by identity, not copied into a parallel snapshot history. Returns the new contextId and source-to-clone entity/context maps. With `recursive`, the whole lifecycle subtree is cloned (never following lineage edges); with `targetKey`, retry returns the same child. The caller performs per-entity rewiring such as fork-log re-rooting on the returned clones. |
 | `runtime.destroyContext` | Retire every entity in a context and delete its folder + VCS state. With `recursive` (the default when lifecycle children exist), post-order teardown of the LIFECYCLE subtree only — never crossing a lineage (fork) edge. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context. |
+| `runtime.forkSemanticContext` | Fork the caller runtime's semantic context into one exact owned child context without materializing a host checkout. |
+| `runtime.dropSemanticContext` | Drop one exact semantic-only context and remove its generic lifecycle ownership record. |
 | `runtime.listOwnedContexts` | List the contexts owned by a context via the relationship registry. `kind` scopes to 'lifecycle' (subagent children) or 'lineage' (fork provenance); omit to list both. Returns { contexts: [...] }. |
 | `runtime.recordContextEdge` | Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead. |
 | `runtime.createSubagentContext` | Create a subagent's child context from a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's committed event and exact event/application working head while retaining provenance lineage, ensure its projection directory, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes context lifecycle and registry operations; callers must not hand-roll this. |
+| `runtime.supervision.list` | List supervised executable entities through their exact driver identities. |
+| `runtime.supervision.describe` | Describe one supervised entity, including immutable artifact identity and supported facets. |
+| `runtime.supervision.health` | Read bounded health, failures, logs, and build events for one supervised entity. |
+| `runtime.supervision.logs` | Read retained logs for one exact supervised entity. |
+| `runtime.supervision.restart` | Restart one exact supervised entity through its owning driver. |
+| `runtime.supervision.activate` | Activate one exact admitted app or extension release. |
+| `runtime.supervision.prepare` | Prepare an immutable app release from a source ref. |
+| `runtime.supervision.retire` | Retire one exact supervised entity through its owning driver. |
+| `runtime.supervision.versions` | List retained versions for an exact release identity. |
+| `runtime.supervision.rollback` | Roll back an exact release identity to a retained build. |
 
 ## `serverLog`
 
@@ -582,16 +471,6 @@ Authority principals: `code`, `host`, `user`
 | `serverLog.tail` | Return the last N server host log records (default 500) in ascending seq order — the starting snapshot for a live tail; then subscribe to the server-log:append event and dedupe by seq. |
 | `serverLog.stats` | Aggregate stats over the captured server host logs: buffer occupancy, total captured this boot, counts by level, and the top subsystem tags. |
 
-## `settings`
-
-Workspace settings and model roles
-
-Authority principals: `code`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `settings.getData` | Return the resolved settings snapshot, including the central-config model-role map (role → 'provider:model' string). |
-
 ## `shellApproval`
 
 Shell-owned consent approval queue
@@ -603,13 +482,9 @@ Authority principals: `code`, `host`, `user`
 | `shellApproval.resolve` | Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request. |
 | `shellApproval.resolveMissionReview` | Approve an exact pending mission closure with the selected new authority rows, or leave it unapproved. |
 | `shellApproval.resolveBootstrap` | Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval. |
-| `shellApproval.resolveUserland` | Resolve a pending userland approval by selecting one of the presented option values (or 'dismiss'); rejects if the choice was not offered to the user. |
-| `shellApproval.resolveExternalAgent` | Record the user's allow/deny verdict on a pending external-agent tool-use approval, resolving the relayed permission request. |
-| `shellApproval.resolveExternalAgentByRequest` | Record the user's allow/deny verdict on a pending external-agent approval matched by (channelId, requestId, resolveToken) rather than approvalId — the inline conversation card knows the requestId and opaque resolve token, not the internal approvalId. Records a real verdict (unlike the quiet settle-elsewhere path). Returns whether a matching pending approval was resolved. |
 | `shellApproval.submitClientConfig` | Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request. |
 | `shellApproval.submitCredentialInput` | Submit the user-entered credential/secret field values for a pending approval, fulfilling its credential-input request. |
 | `shellApproval.submitSecretInput` | Submit the user-entered secret field values for a pending secret-input approval, fulfilling its feedback-form request. |
-| `shellApproval.getUserlandSealedDetail` | Fetch one bounded human-review detail for a pending userland approval. The digest must name a review-disclosed detail on that approval; sealed-only invocation payloads are never exposed, and content disappears when the request settles. |
 | `shellApproval.listPending` | List the approvals currently awaiting a decision, used to rehydrate the consent approval bar on mount. |
 
 ## `shellPresence`
@@ -621,16 +496,6 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `shellPresence.heartbeat` | Mark the calling shell active and return the current active-shell count. |
-
-## `systemAgent`
-
-Product-owned per-user System Agent conversation lifecycle
-
-Authority principals: `code`, `user`
-
-| Method | Description |
-|--------|-------------|
-| `systemAgent.resolveConversation` | Resolve the current human's product-owned System Agent conversation. User, device, workspace, code version, context, channel, and agent identity are derived by the host; the caller supplies no identity coordinates. |
 
 ## `vcs`
 
@@ -707,8 +572,8 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `workers.listSources` | List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers) |
-| `workers.listServices` | List product-owned and workspace-authored services visible in the caller's live context; workspace rows include the live docs catalog id. In eval import the top-level workers API from @vibestudio/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval. |
-| `workers.resolveService` | Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @vibestudio/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API. |
+| `workers.listServices` | List manifest-declared workspace services visible in the caller's live context; rows include the live docs catalog id. In eval import the top-level workers API from @workspace/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval. |
+| `workers.resolveService` | Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @workspace/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API. |
 | `workers.resolveDurableObject` | Resolve and activate a concrete Durable Object RPC target by source/class/key when no declared workspace service fits. The returned target is a lifecycle handle as well as an RPC address: when the caller owns a disposable object, clear any test data and pass that same target to workers.destroy(...) so its durable storage is retired. |
 
 ## `workspace`
@@ -725,36 +590,18 @@ Authority principals: `code`, `host`, `user`
 | `workspace.validateConfig` | Validate a complete flattened workspace runtime manifest without changing workspace state. |
 | `workspace.setInitPanels` | Replace the set of panels opened when this workspace starts; approval-gated for userland. |
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
+| `workspace.applyPreparedConfig` | Atomically apply a complete validated workspace configuration only when its base digest, result digest, and changed-path scope match. |
 | `workspace.getAgentsMd` | Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent. |
 | `workspace.listSkills` | List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.readSkill` | Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
 | `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |
-| `workspace.units.list` | List installed unit definitions and their aggregate build/runtime health. A worker row can show whether that source has a running instance, but does not enumerate instance ids; use runtime.listEntities({ kind: 'worker' }) or workers.list() for the exact live-instance roster. |
-| `workspace.units.inspector` | Return the devtools inspector URL for a unit by name or source, or null if it has none. |
-| `workspace.units.restart` | Restart a workspace unit through its owning manager. |
-| `workspace.units.logs` | Query retained log records for a unit, optionally filtered by time/sequence cursor, level, and limit. |
-| `workspace.units.diagnostics` | Return combined diagnostics for a unit: current status, recent logs, errors, build events, and buffer capacity. |
-| `workspace.units.versions` | List the active build and retained previous versions for an app unit. This is read-only diagnostics and is available to every workspace caller; rollback remains ownership-restricted. |
-| `workspace.units.rollback` | Roll an app unit back to a previous active build (or a specific build key); userland is restricted to managing its own app. |
-| `workspace.units.bakeAppDist` | Bake an app unit's active approved build into a packaging payload directory; trusted-chrome callers only. |
 | `workspace.recurring.list` | List declarative scheduled jobs from meta/vibestudio.yml with their durable run state (next/last run, failures, backoff). |
 | `workspace.heartbeats.list` | List registered heartbeats with their schedule, channel binding, and run state. |
 | `workspace.heartbeats.runNow` | Trigger a heartbeat tick immediately for the selected heartbeat. |
 | `workspace.heartbeats.pause` | Pause the selected heartbeat so it stops ticking until resumed. |
 | `workspace.heartbeats.resume` | Resume a paused heartbeat so it resumes its schedule. |
-| `workspace.hostTargets.list` | List app candidates selectable as the active app for a host target. |
-| `workspace.hostTargets.getSelection` | Read the active per-workspace selection for a host target along with whether it is still valid. |
-| `workspace.hostTargets.setSelection` | Persist the per-workspace app selection for a host target. |
-| `workspace.hostTargets.clearSelection` | Clear the persisted per-workspace app selection for a host target. |
-| `workspace.hostTargets.versions` | List retained versions for a specific host-target candidate. |
-| `workspace.hostTargets.preparePinnedRef` | Materialize a retained build for a specific ref of a host-target candidate through the build system. |
-| `workspace.hostTargets.launch` | Launch or reload the selected target app in this host, returning a ready/preparing/approval-required/unavailable status. |
-| `workspace.hostTargets.beginLaunch` | Begin an asynchronous launch session for a host target, returning the initial session snapshot. |
-| `workspace.hostTargets.getLaunchSession` | Fetch the current snapshot of a launch session by id, or null if it is unknown. |
-| `workspace.hostTargets.resolveLaunchSessionApproval` | Resolve a pending approval on a launch session by allowing it once or denying it, returning the updated snapshot. |
-| `workspace.hostTargets.cancelLaunchSession` | Cancel an in-flight launch session by id. |
 
 ## `workspace-state`
 
@@ -764,20 +611,24 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `workspace-state.panelTree.snapshot` | Read one revisioned, internally consistent panel-tree reconstruction snapshot. |
-| `workspace-state.slot.list` | List open slots. |
+| `workspace-state.panelTree.rootGroups` | Keyset-page the owner groups that currently contain open root panels. |
+| `workspace-state.panelTree.page` | Read one bounded, newest-first sibling page. |
+| `workspace-state.panelTree.path` | Read the bounded root-to-slot path for one open panel. |
+| `workspace-state.panelTree.detail` | Read the current runtime detail for one open panel without its siblings/history. |
+| `workspace-state.panelTree.search` | Keyset-page full-text title matches with their ancestor breadcrumbs. |
 | `workspace-state.slot.get` | Get a single slot row by id. |
-| `workspace-state.slot.history` | Get the history for a slot. |
+| `workspace-state.slot.historyRelative` | Read the adjacent history entry relative to a slot's current cursor. |
+| `workspace-state.slot.historyEntry` | Read one exact history entry belonging to a slot. |
 | `workspace-state.entity.resolveActive` | Resolve a single active entity record by id. |
 | `workspace-state.entity.resolve` | Resolve an entity record by id, including a preparing reservation. |
 | `workspace-state.slot.resolveByEntity` | Resolve the OPEN slot id whose current entity is the given runtime-entity (nav) id, or null. Durable nav→slot mapping used to nest launches under the owning panel's tree slot. |
 | `workspace-state.slot.create` | Create a new slot row. |
 | `workspace-state.slot.commitPreparedNavigation` | Atomically append, replace, or select history and swap current to a prepared panel incarnation. |
 | `workspace-state.slot.updateCurrentStateArgs` | Mutate the stateArgs for a slot's current history entry. |
-| `workspace-state.slot.setParent` | Reparent a slot. |
-| `workspace-state.slot.setPosition` | Update a slot's position rank. |
-| `workspace-state.slot.move` | Atomically update a slot's parent and position. |
-| `workspace-state.slot.close` | Mark a slot closed. |
+| `workspace-state.slot.move` | Atomically reparent a slot and place it using stable sibling anchors. |
+| `workspace-state.slot.close` | Atomically close a subtree and enqueue its runtime cleanup without materializing descendants. |
+| `workspace-state.slot.closeCleanupPage` | Read one bounded page of durable post-close runtime cleanup work. |
+| `workspace-state.slot.closeCleanupAck` | Acknowledge successfully completed post-close cleanup items. |
 | `workspace-state.panel.search` | FTS5 search over panel entities. |
 | `workspace-state.panel.index` | Upsert a panel's search-metadata row. |
 | `workspace-state.panel.updateTitle` | Update the searchable title for a panel entity. |

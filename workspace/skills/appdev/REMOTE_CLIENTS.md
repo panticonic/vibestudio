@@ -82,7 +82,8 @@ launch it as a supervised app process. A terminal app should:
 The built-in `@workspace-apps/remote-cli` is the canonical terminal app shape:
 it connects as an app principal and lists workspace status. It is declared in
 the template so it is available for debugging, but it stays dormant until the shell UI or
-`workspace.units.restart("@workspace-apps/remote-cli")` starts it.
+`runtime.supervision.activate({ kind: "app", releaseId:
+"@workspace-apps/remote-cli" })` starts it.
 
 Fresh workspaces created from the product template trust their initial declared
 app/extension set during startup. Later meta-state updates, capability changes, source
@@ -134,8 +135,9 @@ When testing pairing or remote-server state without a shell UI:
    presentation carriers for the same invitation fact, not separate invites.
 2. Select a workspace and inspect/resolve approvals through the authenticated
    workspace services. Do not mint a shell principal from a process token.
-3. Use `workspace.units.list/restart/logs/diagnostics` from an authenticated
-   client to inspect build keys, lifecycle state, and runner errors.
+3. Use `build.listUnits()` for declared build readiness. From
+   `runtime.supervision.list({ kind: "app" })`, retain the exact `identity` and
+   use `describe`, `health`, `logs`, or `restart` for that live execution.
 4. From app, panel, worker, or eval contexts, use `serverLog.query/tail/stats`
    (`services.serverLog.*` in eval, raw `rpc.call("main", "serverLog.*", ...)`
    elsewhere) or the `about/server-logs` viewer for host server logs such as

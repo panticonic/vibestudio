@@ -128,9 +128,11 @@ Important behavior:
   `VIBESTUDIO_TERMINAL_APP_RPC_TOKEN`, and
   `VIBESTUDIO_TERMINAL_APP_CONNECTION_ID`.
 - Terminal builds remain available after activation until the host target is
-  launched or `workspace.units.restart(appName)` starts the process.
+  launched or `runtime.supervision.activate({ kind: "app", releaseId: appName })`
+  starts the process.
 - Push updates and rollback replace the process if it is already running.
-- stdout/stderr are available through `workspace.units.logs(appName)`.
+- stdout/stderr are available through `runtime.supervision.logs(identity)` using
+  the exact live app identity returned by `runtime.supervision.list({ kind: "app" })`.
 
 Use terminal apps for trusted CLI clients, remote-server setup helpers, and
 pairing/client-management flows that should run with app capabilities rather

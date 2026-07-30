@@ -33,12 +33,12 @@ The canary migrations all follow the same shape:
 2. **Delete the in-host service**:
    - Remove `src/server/services/<service>.ts` and its test file.
    - Remove the registration in `src/server/index.ts` (or `panelRuntimeRegistration.ts`).
-   - Remove any `ctx.<name>` exposure from `packages/runtime/`.
+   - Remove any `ctx.<name>` exposure from `workspace/packages/runtime/`.
 
-3. **Codemod the consumers** — every `ctx.<name>.<method>(...)` (or `import { <name> } from "@vibestudio/runtime"`) becomes:
+3. **Codemod the consumers** — every `ctx.<name>.<method>(...)` (or `import { <name> } from "@workspace/runtime"`) becomes:
 
    ```ts
-   import { extensions } from "@vibestudio/runtime";
+   import { extensions } from "@workspace/runtime";
    const svc = extensions.use<ApiType>("@workspace-extensions/<service>");
    await svc.<method>(...);
    ```
@@ -50,7 +50,10 @@ The canary migrations all follow the same shape:
 ## What changes for callers
 
 - **API shape** stays the same. The codemod is a search-and-replace of the import + first call segment.
-- **Authorization** moves from `policy.allowed` on the service definition to the extension's own API checks. Use `ctx.approvals.request(...)` only when the extension exposes a custom shared resource whose access should be granted by the user to the original panel/worker. Do not replace ordinary host/runtime permission checks with userland approval prompts.
+- **Authorization** moves from `policy.allowed` to manifest-declared
+  `authority.provides` and per-method `extension.methodAuthority`. The
+  dispatcher enforces the declaration before extension code runs. Host effects
+  still cross their ordinary protected receivers.
 - **First-call latency** picks up the install/approval round trip. After approval the extension stays running; subsequent calls are RPC-fast.
 - **Failure isolation** improves: if the extension crashes, the host respawns it (1/2/4/8/16s backoff). The old in-host service would have brought down the server.
 
@@ -80,7 +83,13 @@ The canary migrations all follow the same shape:
 
 - Wraps a `BrowserDataDO` (a workerd Durable Object) for bookmarks/history/cookies.
 - The extension owns the public API and any shell-only enforcement; the DO still stores the data.
-- Pattern for "extension wraps a DO": declare a workspace service and use `ctx.workers.resolveService(protocol, key)`, then `ctx.rpc.call(targetId, method, ...args)` through unified RPC. Raw product-internal targets require an exact reviewed source/class/key catalog entry; exporting an internal DO class does not expose arbitrary instances.
+- Pattern for "extension wraps a DO": declare a workspace service and use
+  `ctx.workers.resolveService(protocol, key)`, then
+  `ctx.rpc.call(targetId, method, ...args)` through unified RPC. Do not route
+  through any internal target catalog: the manifest-declared service and its
+  exact singleton/provider effective version are the authority and identity
+  boundary. Host-internal DOs are not workspace targets, and exporting a
+  workspace DO class alone does not expose arbitrary instances.
 
 ## Migration checklist
 
@@ -91,5 +100,8 @@ The canary migrations all follow the same shape:
 - [ ] Update every consumer (`ctx.<name>` → `extensions.use<ApiType>(name)`).
 - [ ] Add an integration test that boots a real server.
 - [ ] Declare the extension in the template repository's `meta/template.yml` (`extensions:`).
-- [ ] Confirm `workspace.units.list()` shows the new extension and `lastError` is `null`.
+- [ ] Confirm `build.listUnits()` reports the declared extension as available,
+      then select its exact live identity from
+      `runtime.supervision.list({ kind: "extension" })` and verify
+      `describe(identity).lastError` is `null`.
 - [ ] Document the public API type (`export interface <Name>Api`) so consumers can `extensions.use<NameApi>(...)`.

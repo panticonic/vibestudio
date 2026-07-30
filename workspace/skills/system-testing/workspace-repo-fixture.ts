@@ -1,4 +1,4 @@
-import type { VcsClient } from "@vibestudio/runtime";
+import type { VcsClient } from "@workspace/runtime";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import { serializeSystemTestError } from "./structured-error.js";
 
@@ -762,10 +762,10 @@ function repositorySeedFiles(
               title: `System Test ${repoName}`,
               kind: "worker",
               entry: "index.ts",
-              authority: { requests: [] },
+              authority: { requests: [], provides: [] },
               durable: { classes: [{ className: "FixtureWorkerDO" }] },
             },
-            dependencies: { "@vibestudio/runtime": "workspace:*" },
+            dependencies: { "@workspace/runtime": "workspace:*" },
           },
           null,
           2
@@ -774,7 +774,7 @@ function repositorySeedFiles(
       {
         path: "index.ts",
         content: [
-          'import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";',
+          'import { DurableObjectBase, rpc } from "@workspace/runtime/worker";',
           "",
           "export class FixtureWorkerDO extends DurableObjectBase {",
           "  protected createTables(): void {}",
@@ -782,7 +782,7 @@ function repositorySeedFiles(
           "  // This disposable fixture is addressed directly by source/class/key.",
           "  // Direct resolveDurableObject methods are runtime-intrinsic; declared",
           "  // workspace services instead use workspace-service + resolveService.",
-          '  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })',
+          '  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })',
           "  async inspectProbe(): Promise<unknown> {",
           '    return this.env["SYSTEM_TEST_PROBE"] ?? null;',
           "  }",
@@ -806,9 +806,9 @@ function repositorySeedFiles(
               title: `System Test ${repoName}`,
               kind: "worker",
               entry: "index.ts",
-              authority: { requests: [] },
+              authority: { requests: [], provides: [] },
             },
-            dependencies: { "@vibestudio/runtime": "workspace:*" },
+            dependencies: { "@workspace/runtime": "workspace:*" },
           },
           null,
           2
@@ -817,7 +817,7 @@ function repositorySeedFiles(
       {
         path: "index.ts",
         content: [
-          'import { createWorkerRuntime, handleWorkerRpc, type ExecutionContext, type WorkerEnv } from "@vibestudio/runtime/worker";',
+          'import { createWorkerRuntime, handleWorkerRpc, type ExecutionContext, type WorkerEnv } from "@workspace/runtime/worker";',
           "",
           "let exposedFor: string | null = null;",
           "",
@@ -852,7 +852,7 @@ function repositorySeedFiles(
             vibestudio: {
               title: `System Test ${repoName}`,
               entry: "index.ts",
-              authority: { requests: [] },
+              authority: { requests: [], provides: [] },
               template: "vanilla",
             },
           },

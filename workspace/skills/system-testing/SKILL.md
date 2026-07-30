@@ -136,9 +136,9 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
    platform or documentation defect by teaching the prompt the answer.
 
 Use a named ephemeral developer instance for destructive or publication-heavy
-system testing. Non-`source` instances own a copied workspace and never mirror
-protected publications into the checkout template, so parallel hubs cannot
-seed one another's next bootstrap:
+system testing. Each non-`source` instance acquires its own workspace from the
+exact promoted base-template pin and never publishes back to that upstream, so
+parallel hubs cannot seed one another's next bootstrap:
 
 ```bash
 pnpm server:live --ephemeral --instance system-tests-a
@@ -148,11 +148,11 @@ pnpm cli --instance system-tests-a system-test doctor --approve-startup \
 
 6. Implement the root fix and run focused conventional tests/type checks.
    Restarting the current source server is sufficient for host-code-only
-   changes. Changes under `workspace/` are workspace source: a named
-   `--bootstrap-workspace` deliberately preserves its semantic state and never
-   rereads the checkout template on restart. Stop it and start
+   changes. A named `--bootstrap-workspace` deliberately preserves its acquired
+   semantic state and never reacquires the promoted base pin on restart. Stop
+   it and start
    `pnpm server:live --ephemeral --instance INSTANCE` to test a fresh checkout
-   copied from the current template. The source-server supervisor isolates the
+   acquired from the exact promoted base template pin. The source-server supervisor isolates the
    hub lease, identity, databases, workspace, ports, ready file, CLI device, and
    CLI sessions while reusing profile-owned model configuration and encrypted
    provider credentials. Address that exact hub with
@@ -284,13 +284,12 @@ messages and snapshots remain in `scope.results.results`. Mention recovered
 tool failures even when the final task passed; they can reveal infrastructure
 defects hidden by successful agent recovery.
 
-Ordinary local agent tools cannot hold a turn open forever: the runtime owns a
-30-second default invocation deadline and records a structured
-`tool_execution_timeout` terminal naming the tool and elapsed/deadline values.
-Tools may declare another finite boundary; deliberately long work must use a
-deferred protocol. Treat this terminal as infrastructure evidence and inspect
-the affected invocation. Do not conceal it by increasing the system-test
-deadline or by prompting the agent away from the broken capability.
+Ordinary local agent tools have no implicit wall-clock deadline. They inherit
+explicit cancellation from the owning turn; tools and deferred protocols may
+own deadlines only where those deadlines are part of their semantics. Treat an
+unexpected timeout terminal as infrastructure evidence and inspect the affected
+invocation. Do not conceal it by increasing the system-test deadline or by
+prompting the agent away from the broken capability.
 Structured channel deliveries are independently bounded to 15 seconds per
 attempt and durably retried. A channel alarm waiting longer than that is a
 transport defect: inspect the channel delivery outbox and recipient lifecycle

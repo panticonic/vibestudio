@@ -1,4 +1,4 @@
-import { rpc, workers, workspace } from "@vibestudio/runtime";
+import { rpc, workers } from "@workspace/runtime";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { summarizeEntry, summarizeFailures, type DiagnosticLimits } from "./diagnostics.js";
 import { HeadlessRunner } from "./runner.js";
@@ -217,7 +217,7 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
       });
       publishInBackground("progress", publishProgress("running"));
     },
-    onTestResult: async (entry) => {
+    onTestResult: (entry) => {
       completedEntries.push(entry);
       running.delete(entry.test.name);
       completed.push({
@@ -230,7 +230,10 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
           ? { channelId: entry.execution.provenance.channelId }
           : {}),
       });
-      await publishProgress("running");
+      // Progress is observability, not execution ownership. A malformed or
+      // temporarily unavailable inspector must never abort the remaining
+      // suite after the test itself has already reached a terminal state.
+      publishInBackground("progress", publishProgress("running"));
     },
   });
   let inspectionPublishing = false;
@@ -315,7 +318,7 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   });
   let suite: TestSuiteResult;
   try {
-    suite = await runSelectedByCategory(tester, selected, concurrency);
+    suite = await runSelectedTests(tester, selected, concurrency);
   } catch (error) {
     resolveTerminalRecord();
     throw error;
@@ -454,60 +457,53 @@ export async function systemTestDoctor(expectedModel?: string): Promise<SystemTe
   await capture(
     "agent-worker",
     async () => {
-      const units = await workspace.units.list();
+      const units = (await rpc.call("main", "build.listUnits", [])) as Array<{
+        name: string;
+        status: "available" | "building" | "ready" | "approval-required" | "error";
+        lastError?: string | null;
+      }>;
       const agentUnit = units.find(
         (unit) => unit.name === "workers/agent-worker" || unit.name.includes("agent-worker")
       );
-      if (!agentUnit) throw new Error("workers/agent-worker is not registered");
+      if (!agentUnit) throw new Error("workers/agent-worker is not declared");
+      if (agentUnit.status === "approval-required") {
+        throw new Error("workers/agent-worker is awaiting source approval");
+      }
       if (agentUnit.status === "error") {
         throw new Error(agentUnit.lastError || "workers/agent-worker is in error state");
       }
       return agentUnit;
     },
-    "agent worker is registered"
+    "agent worker source is declared and approved for on-demand activation"
   );
   await capture(
     "required-extensions",
     async () => {
-      type ExtensionStatus = {
-        name?: string;
-        status?: string;
-        lastError?: string | null;
-      };
-      type SourceTreeNode = {
-        path: string;
-        packageInfo?: { name?: string };
-        children?: SourceTreeNode[];
-      };
-      const [extensions, config, tree] = await Promise.all([
-        rpc.call("main", "extensions.list", []) as Promise<ExtensionStatus[]>,
+      const [units, config] = await Promise.all([
+        rpc.call("main", "build.listUnits", []) as Promise<
+          Array<{
+            name: string;
+            kind: string;
+            source: string;
+            status: "available" | "building" | "ready" | "approval-required" | "error";
+            lastError: string | null;
+          }>
+        >,
         rpc.call("main", "workspace.getConfig", []) as Promise<{
           extensions?: Array<{ source: string }>;
         }>,
-        rpc.call("main", "workspace.sourceTree", []) as Promise<{
-          children?: SourceTreeNode[];
-        }>,
       ]);
-      const units = new Map<string, SourceTreeNode>();
-      const visit = (nodes: readonly SourceTreeNode[]): void => {
-        for (const node of nodes) {
-          units.set(node.path, node);
-          visit(node.children ?? []);
-        }
-      };
-      visit(tree.children ?? []);
       const declared = (config.extensions ?? []).map(({ source }) => ({
         source,
-        name: units.get(source)?.packageInfo?.name,
+        unit: units.find((candidate) => candidate.kind === "extension" && candidate.source === source),
       }));
-      const unready = declared.flatMap(({ source, name }) => {
-        if (!name) return [`${source}=missing`];
-        const extension = extensions.find((candidate) => candidate.name === name);
-        return extension?.status === "running" || extension?.status === "available"
+      const unready = declared.flatMap(({ source, unit }) => {
+        if (!unit) return [`${source}=missing`];
+        return unit.status !== "approval-required" && unit.status !== "error"
           ? []
           : [
-              `${name}=${extension?.status ?? "missing"}${
-                extension?.lastError ? ` (${extension.lastError})` : ""
+              `${unit.name}=${unit.status}${
+                unit.lastError ? ` (${unit.lastError})` : ""
               }`,
             ];
       });
@@ -518,10 +514,10 @@ export async function systemTestDoctor(expectedModel?: string): Promise<SystemTe
           )}. Complete the startup unit review before running agentic tests.`
         );
       }
-      return declared.map(({ source, name }) => ({
+      return declared.map(({ source, unit }) => ({
         source,
-        name,
-        status: extensions.find((extension) => extension.name === name)?.status,
+        name: unit?.name,
+        status: unit?.status,
       }));
     },
     "declared workspace extensions are approved and build-ready"
@@ -595,7 +591,11 @@ function summarizeRun(
   status: SystemTestRunSummary["status"]
 ): SystemTestRunSummary {
   const failedTests = suite.results
-    .filter((entry) => !entry.result.passed || Boolean(entry.execution.error))
+    .filter(
+      (entry) =>
+        !isLiveRunningEntry(entry) &&
+        (!entry.result.passed || Boolean(entry.execution.error))
+    )
     .map((entry) => entry.test.name);
   const testsWithUnexpectedToolFailures = suite.results
     .filter((entry) =>
@@ -659,9 +659,11 @@ function suiteFromEntries(
   let toolFailureCount = 0;
   let testsWithToolFailures = 0;
   for (const entry of results) {
-    if (entry.execution.error) errored++;
-    else if (entry.result.passed) passed++;
-    else failed++;
+    if (!isLiveRunningEntry(entry)) {
+      if (entry.execution.error) errored++;
+      else if (entry.result.passed) passed++;
+      else failed++;
+    }
     const failures = (entry.execution.toolFailures ?? []).filter(
       (failure) => failure.expected !== true
     ).length;
@@ -669,7 +671,7 @@ function suiteFromEntries(
     if (failures > 0) testsWithToolFailures++;
   }
   return {
-    total: results.length,
+    total: passed + failed + errored,
     passed,
     failed,
     errored,
@@ -681,41 +683,16 @@ function suiteFromEntries(
   };
 }
 
-async function runSelectedByCategory(
+function isLiveRunningEntry(entry: TestSuiteResultEntry): boolean {
+  return entry.result.reason === "System test is still running" && !entry.execution.error;
+}
+
+async function runSelectedTests(
   tester: TestRunner,
   selected: TestCase[],
   concurrency: number
 ): Promise<TestSuiteResult> {
-  const startedAt = Date.now();
-  const aggregate: TestSuiteResult = {
-    total: 0,
-    passed: 0,
-    failed: 0,
-    errored: 0,
-    toolFailureCount: 0,
-    testsWithToolFailures: 0,
-    skipped: 0,
-    duration: 0,
-    results: [],
-  };
-  const categories = [...new Set(selected.map((test) => test.category))];
-  for (const category of categories) {
-    const tests = selected.filter((test) => test.category === category);
-    const partial = await tester.runSuite(tests, {
-      concurrency: category === "workers" ? 1 : Math.min(concurrency, tests.length),
-    });
-    aggregate.total += partial.total;
-    aggregate.passed += partial.passed;
-    aggregate.failed += partial.failed;
-    aggregate.errored += partial.errored;
-    aggregate.toolFailureCount =
-      (aggregate.toolFailureCount ?? 0) + (partial.toolFailureCount ?? 0);
-    aggregate.testsWithToolFailures =
-      (aggregate.testsWithToolFailures ?? 0) + (partial.testsWithToolFailures ?? 0);
-    aggregate.results.push(...partial.results);
-  }
-  aggregate.duration = Date.now() - startedAt;
-  return aggregate;
+  return tester.runSuite(selected, { concurrency });
 }
 
 function requireEntry(record: SystemTestRunRecord, testName: string): TestSuiteResultEntry {

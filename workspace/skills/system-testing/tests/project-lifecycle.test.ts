@@ -115,7 +115,6 @@ describe("project lifecycle prompts", () => {
           decision: "once",
         },
       ],
-      userland: [],
     });
   });
 

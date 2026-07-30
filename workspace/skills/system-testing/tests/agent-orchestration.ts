@@ -367,19 +367,17 @@ export const agentOrchestrationTests: TestCase[] = [
     authorityPolicy: {
       authority: [
         {
-          ruleId: "fixture-verification-userland-approval",
-          capability: { kind: "exact", key: "user-approval.request" },
-          resource: { kind: "exact", key: "user-approval.request" },
+          ruleId: "fixture-verification-test-execution",
+          capability: {
+            kind: "prefix",
+            prefix: "userland:extensions/test-runner/native.tests.execute#",
+          },
+          resource: {
+            kind: "exact",
+            key: "native.tests:extension:@workspace-extensions/test-runner",
+          },
           tier: "gated",
           decision: "once",
-        },
-      ],
-      userland: [
-        {
-          ruleId: "fixture-verification-workspace-test",
-          subject: { kind: "prefix", prefix: "workspace-test:" },
-          decision: "allow",
-          remember: false,
         },
       ],
     },
@@ -406,26 +404,24 @@ export const agentOrchestrationTests: TestCase[] = [
     validate: validateClaudeSupervision,
   },
   {
-    name: "terminal-extension-custom-approval",
+    name: "terminal-extension-capability-acquisition",
     description:
       "A real shell-extension command receives a scoped test approval and returns bounded argv-mode diagnostics",
     category: "agent-orchestration",
     authorityPolicy: {
       authority: [
         {
-          ruleId: "terminal-userland-approval",
-          capability: { kind: "exact", key: "user-approval.request" },
-          resource: { kind: "exact", key: "user-approval.request" },
+          ruleId: "terminal-native-execution",
+          capability: {
+            kind: "prefix",
+            prefix: "userland:extensions/shell/native.shell.execute#",
+          },
+          resource: {
+            kind: "exact",
+            key: "native.shell:extension:@workspace-extensions/shell",
+          },
           tier: "gated",
           decision: "once",
-        },
-      ],
-      userland: [
-        {
-          ruleId: "terminal-exec-subject",
-          subject: { kind: "prefix", prefix: "user.exec." },
-          decision: "allow",
-          remember: false,
         },
       ],
     },

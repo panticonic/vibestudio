@@ -26,7 +26,7 @@ mutation except `push` advances an exact context working head; `commit` and
 | `vcs.registerExternalDelta` | `context-write` | Register one exact unapplied old-to-new external repository delta. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `ExternalEffectFailed` |
 | `vcs.supersedeExternalDelta` | `context-write` | Retire one active external delta so it can no longer be integrated. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure` |
 | `vcs.finalizeExternalDelta` | `context-write` | Finalize one fully decided external delta and release its dedicated GC roots. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `IntegrationIncomplete` |
-| `vcs.push` | `workspace-write` | Publish one exact already-committed event to protected main. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `WorkingChangesPresent`, `CommandIdReuse`, `ExternalEffectFailed`, `IntegrityFailure` |
+| `vcs.push` | `workspace-write` | Publish one exact already-committed event to protected main. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `WorkingChangesPresent`, `CommandIdReuse`, `ExternalEffectFailed`, `BuildGateFailed`, `IntegrityFailure` |
 | `vcs.status` | `read` | Return context pointers, clean state, main relation, and compact working counts. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure` |
 | `vcs.compare` | `read` | Compare an exact target state with a committed source event or coordinator-owned external delta by semantic change. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure` |
 | `vcs.inspect` | `read` | Inspect one typed semantic node and a bounded preview of its direct adjacency. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure` |
@@ -41,6 +41,7 @@ mutation except `push` advances an exact context working head; `commit` and
 
 ## Typed error codes
 
+- `BuildGateFailed`
 - `CommandIdReuse`
 - `ConflictPresent`
 - `DependencyBlocked`

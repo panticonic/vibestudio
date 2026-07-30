@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   callMain: vi.fn(),
 }));
 
@@ -38,6 +38,7 @@ function dependencies(
         },
       })
     ),
+    hasSkill: vi.fn(async () => true),
     now: () => new Date("2026-07-24T12:00:00.000Z"),
   };
 }
@@ -99,6 +100,29 @@ describe("composeOnboardingSnapshot", () => {
     );
     expect(snapshot.find((entry) => entry.id === "connection.remote-server")?.summary).toContain(
       "local server"
+    );
+  });
+
+  it("advertises mobile as installable until the phone setup owner exists", async () => {
+    const deps = dependencies({
+      "ai-provider": healthy,
+      "google-workspace": healthy,
+      github: healthy,
+      "browser-environment": healthy,
+      "local-models": healthy,
+      "agent-defaults": healthy,
+      "web-search": healthy,
+    });
+    deps.hasSkill = vi.fn(async () => false);
+
+    const snapshot = await composeOnboardingSnapshot({}, deps);
+
+    expect(snapshot.find((entry) => entry.id === "connection.device")).toEqual(
+      expect.objectContaining({
+        state: "not-installed",
+        nextAction: "install",
+        rawStage: "not-installed",
+      })
     );
   });
 

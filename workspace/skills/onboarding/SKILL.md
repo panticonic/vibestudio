@@ -13,16 +13,23 @@ checklist item.
 
 Use the chat panel's `client_eval` tool to statically import
 `composeOnboardingSnapshot` from `@workspace-skills/onboarding`, then return
-`await composeOnboardingSnapshot()` with no arguments. Client eval runs the
-single checked-in composer inside the inviting panel, the shared boundary that
-can reach both workspace owners and the redacted Electron host read.
+`await composeOnboardingSnapshot()` with no arguments. Also read the cached
+verified `TemplateCatalogSnapshot` through the templates skill. Client eval
+runs the base-owned composer inside the inviting panel, the shared boundary
+that can reach workspace owners and the redacted Electron host read.
 
 Render the returned array with `inline_ui` from
-`skills/onboarding/SetupHub.tsx`, passing `{ snapshot }`. The composer reads
+`skills/onboarding/SetupHub.tsx`, passing `{ snapshot, templateCatalog }`. The composer reads
 Google, GitHub, model settings, agent defaults, local models, browser imports,
-and web search directly from their owners. It makes one additional redacted
-`onboardingStatus.read` call for device/workspace/remote topology. A failed
-optional read becomes an honest `unknown` row and does not suppress the rest.
+and web search directly from their owners. It composes device/workspace topology
+from `hubControl.listDevices` and `hubControl.listWorkspaces`, plus the
+client-local route mode. A failed optional read becomes an honest `unknown` row
+and does not suppress the rest. When Google Workspace, GitHub, local-model, or
+mobile/phone-setup owners are absent, their rows are explicitly **Available to
+install**. Their install buttons bind to the exact registry commit and snapshot
+shown in `templateCatalog`; without a verified catalog they route to catalog
+refresh, never to a guessed URL or version. Installing the mobile template
+changes the Devices row back to the ordinary phone setup and pairing workflow.
 
 The opening message is short. The inline setup overview is the first-screen
 information architecture. Do not load or publish an onboarding action bar.
@@ -51,6 +58,10 @@ and shell navigation in the inviting client.
 - `owner-skill`: read `route.ownerSkillPath` and use that owner workflow.
 - `model-settings`: use the model-settings provider/default workflow.
 - `conversation`: explain or begin using the ready capability.
+- `template-catalog`: resolve `target.templateId` against the verified catalog
+  snapshot shown to the user, then pass that entry's exact, commit-bound
+  interaction through `executeTemplateSelection` and the templates skill. Do
+  not synthesize a URL or version and do not invoke an absent owner skill.
 
 Navigation routes return `handled: true`. Owner/model/conversation routes
 return `handled: false` with the authoritative target. Unknown IDs and
@@ -87,6 +98,13 @@ template-composer extension so its approval card decides. The inline component
 must receive a `TemplateCatalogSnapshot` previously read from that extension;
 it never imports catalog data. After the card resolves, render a
 new catalog or status observation; do not mutate the earlier card.
+
+Capabilities owned by optional templates are advertised as installable, not
+ready or configurable. After a successful install, refresh the snapshot:
+runtime owner-skill discovery changes the same row into its ordinary setup or
+use workflow. The optional set for this release is `examples`,
+`google-workspace`, `github`, `local-models`, `mobile`, `news`, and
+`spectrolite`; everything else is base.
 
 ## Product rules
 

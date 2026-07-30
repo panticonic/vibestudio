@@ -117,7 +117,7 @@ async function runOnboardingOpening(
     syntheticPanelUiTools: true,
     additionalSystemPrompt: `
 
-Exercise the shipped first-run onboarding contract. Read skills/onboarding/SKILL.md. On the opening turn, use client_eval with inline TypeScript that statically imports composeOnboardingSnapshot from "@workspace-skills/onboarding" and returns await composeOnboardingSnapshot(). Render the returned array through inline_ui using skills/onboarding/SetupHub.tsx as the file path and snapshot as its prop. Do not load or publish an action bar. Never use server-side eval to compose onboarding state.`,
+Use the shipped onboarding skill to handle this first-run request in the synthetic panel. Keep the overview inline in the conversation rather than publishing a separate action bar.`,
     methods: {
       client_eval: {
         description:
@@ -136,7 +136,7 @@ Exercise the shipped first-run onboarding contract. Read skills/onboarding/SKILL
   try {
     await context.sendAndWait(
       session,
-      "I just opened this workspace for the first time. Show the setup overview, then finish with ONBOARDING_OPENING_OK.",
+      "I just opened this workspace for the first time. Show me the setup overview.",
       "onboarding opening"
     );
   } catch (error) {
@@ -163,7 +163,7 @@ async function runOnboardingStableIdRoute(
   const session = await context.runner.spawn({
     additionalSystemPrompt: `
 
-Onboarding choices arrive as readable text plus a structured interaction object. For kind onboarding-capability, use client_eval with inline TypeScript that statically imports executeOnboardingSelection from "@workspace-skills/onboarding" and calls it with the complete structured interaction. Never infer the target from visible prose and never use server-side eval. Finish the turn with ONBOARDING_ROUTE_OK after the route completes.`,
+Use the shipped onboarding skill to handle the selected structured setup action in the synthetic panel.`,
     methods: {
       client_eval: {
         description:
@@ -222,7 +222,7 @@ async function runOnboardingMobileProvisioningRoute(
   const session = await context.runner.spawn({
     additionalSystemPrompt: `
 
-Exercise the shipped mobile onboarding handoff. Resolve onboarding-capability interactions through client_eval by statically importing executeOnboardingSelection from "@workspace-skills/onboarding" and passing the complete structured interaction. When it returns an owner skill, read that exact skill and follow only its first diagnostic step: call phoneProvisioning.providers through ordinary server-side eval. Do not install or pair a device. Finish with ONBOARDING_MOBILE_ROUTE_OK and report the provider count.`,
+Use the shipped onboarding flow and its owning skill to handle the selected mobile setup action. Inspect available providers, but do not install or pair a device.`,
     methods: {
       client_eval: {
         description:
@@ -281,7 +281,7 @@ export const interactionSurfaceTests: TestCase[] = [
     description: "Compose and publish the checked-in setup overview inside the inviting panel",
     category: "interaction-surfaces",
     prompt:
-      "I just opened this workspace for the first time. Show the setup overview, then finish with ONBOARDING_OPENING_OK.",
+      "I just opened this workspace for the first time. Show me the setup overview.",
     orchestrate: runOnboardingOpening,
     validate: (result) => {
       const tools = requireCompletedTools(result, ["client_eval", "inline_ui"]);
@@ -338,7 +338,7 @@ export const interactionSurfaceTests: TestCase[] = [
     name: "onboarding-stable-id-routing",
     description: "Route an onboarding selection from structured interaction metadata",
     category: "interaction-surfaces",
-    prompt: "Use the selected setup action and finish with ONBOARDING_ROUTE_OK.",
+    prompt: "Use the selected setup action.",
     orchestrate: runOnboardingStableIdRoute,
     validate: (result) => {
       const tools = requireCompletedTools(result, ["client_eval"]);
@@ -383,10 +383,9 @@ export const interactionSurfaceTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
-      "Install Vibestudio on my mobile device using the selected onboarding action, then finish with ONBOARDING_MOBILE_ROUTE_OK.",
+      "Use the selected mobile setup action to tell me how installation would proceed and which providers are available. Do not install or pair anything yet.",
     orchestrate: runOnboardingMobileProvisioningRoute,
     validate: (result) => {
       const tools = requireCompletedTools(result, ["client_eval", "read", "eval"]);
@@ -413,7 +412,8 @@ export const interactionSurfaceTests: TestCase[] = [
         const code = call.arguments?.["code"];
         return (
           typeof code === "string" &&
-          code.includes("phoneProvisioning") &&
+          code.includes("vibestudio.phone-provisioning.v1") &&
+          code.includes("resolveService") &&
           code.includes("providers")
         );
       });
@@ -431,18 +431,18 @@ export const interactionSurfaceTests: TestCase[] = [
     name: "mdx-action-button-message",
     description: "Send a clickable follow-up action",
     category: "interaction-surfaces",
-    prompt: "Send a clickable follow-up action in the message. Include MDX_ACTION_OK.",
+    prompt: "Send me a clickable follow-up action in the message.",
     validate: (result) => agentMessageHasAll(result, ["MDX_ACTION_OK", "ActionButton"]),
   },
   {
     name: "inline-ui-transcript-event",
     description: "Publish an inline UI transcript event from a headless session",
     category: "interaction-surfaces",
-    prompt: "Exercise inline UI output. Finish with INLINE_UI_TRANSCRIPT_OK.",
+    prompt: "Show a small useful inline UI in this conversation.",
     orchestrate: (context) =>
       runWithSyntheticPanelUi(
         context,
-        "Exercise inline UI output. Finish with INLINE_UI_TRANSCRIPT_OK.",
+        "Show a small useful inline UI in this conversation.",
         "inline UI"
       ),
     validate: (result) => {
@@ -461,12 +461,11 @@ export const interactionSurfaceTests: TestCase[] = [
     name: "load-action-bar-transcript-event",
     description: "Publish and clear action-bar transcript events from a headless session",
     category: "interaction-surfaces",
-    prompt:
-      "Exercise loading and clearing an action bar. Finish with ACTION_BAR_TRANSCRIPT_OK and ACTION_BAR_CLEAR_OK.",
+    prompt: "Show a small action bar for this conversation, then clear it.",
     orchestrate: (context) =>
       runWithSyntheticPanelUi(
         context,
-        "Exercise loading and clearing an action bar. Finish with ACTION_BAR_TRANSCRIPT_OK and ACTION_BAR_CLEAR_OK.",
+        "Show a small action bar for this conversation, then clear it.",
         "action bar"
       ),
     validate: (result) => {
@@ -498,7 +497,7 @@ export const interactionSurfaceTests: TestCase[] = [
     description: "Set the conversation title through the supported surface",
     category: "interaction-surfaces",
     prompt:
-      "Give this conversation a short descriptive title through the supported titling surface, then confirm it took effect. Finish with SET_TITLE_OK and title:<the-title>.",
+      "Give this conversation a short descriptive title and confirm it took effect.",
     validate: (result) => {
       const base = finalMessageHasAll(result, ["SET_TITLE_OK", "title:"]);
       if (!base.passed) return base;
@@ -519,7 +518,7 @@ export const interactionSurfaceTests: TestCase[] = [
     description: "Update a published custom message in place and clear its renderer",
     category: "interaction-surfaces",
     prompt:
-      "Publish a small typed custom chat message, then update that same message in place at least once so viewers see the new state, and finally clean up the message type registration you created. Finish with CUSTOM_MESSAGE_UPDATE_OK and cleared, or CUSTOM_MESSAGE_UPDATE_UNAVAILABLE if this context does not support custom messages.",
+      "Publish a small custom chat message, update that same message in place, and then clean up the message type registration. If this context cannot do that, explain why.",
     validate: (result) => {
       const ok = finalMessageHasAll(result, ["CUSTOM_MESSAGE_UPDATE_OK", "cleared"]);
       if (ok.passed) return noIncompleteInvocations(result);
@@ -530,8 +529,7 @@ export const interactionSurfaceTests: TestCase[] = [
     name: "custom-message-publish",
     description: "Publish a custom chat message",
     category: "interaction-surfaces",
-    prompt:
-      "Publish a custom chat message if this context supports it. Finish with CUSTOM_MESSAGE_OK or CUSTOM_MESSAGE_UNAVAILABLE.",
+    prompt: "Publish a small custom chat message if this context supports it.",
     validate: (result) => {
       const ok = finalMessageHasAll(result, ["CUSTOM_MESSAGE_OK"]);
       if (ok.passed) return ok;

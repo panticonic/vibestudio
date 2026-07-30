@@ -48,7 +48,7 @@ Agents read skills by the path shown in the generated skill index, for example
 | [WORKFLOW.md](WORKFLOW.md)               | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                                                   |
 | [PANEL_API.md](PANEL_API.md)             | Runtime panel API reference                                                                                                                                      |
 | [WORKERS.md](WORKERS.md)                 | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
-| [capabilities](../capabilities/SKILL.md) | Explicit requests, dynamic workspace service discovery, host grants, userland approvals, and content provenance                                                  |
+| [capabilities](../capabilities/SKILL.md) | Explicit requests and provided capabilities, dynamic workspace service discovery, host grants, receiver-owned acquisition, and content provenance                |
 | [RPC.md](RPC.md)                         | Typed parent-child contracts                                                                                                                                     |
 | [BROWSER.md](BROWSER.md)                 | Browser automation (Playwright/CDP)                                                                                                                              |
 | [TOOLS.md](TOOLS.md)                     | Agent tools reference                                                                                                                                            |
@@ -73,8 +73,8 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
    edit. Treat that as completion, not as a reason to manufacture a different
    change.
 4. **Use eval only for runtime operations** — project creation, typecheck, tests, launching panels
-5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `services`, `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat` are injected free variables; do **not** `import` them (the engine rejects it). `rpc` and `fs` are injected ambiently **and** importable from `@vibestudio/runtime`. `@vibestudio/runtime` is importable in eval and exposes the same portable surface as panels — including `openPanel`/`listPanels`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
-6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Use `listPanels()` to reuse existing panels instead of opening another copy.
+5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat`/`agent` are injected free variables; do **not** `import` them. `services`, `hosts`, `runtime`, `rpc`, and `fs` are portable runtime bindings: they are available directly in eval and importable from `@workspace/runtime`, with the same semantics in panels and workers. `@workspace/runtime` also exposes `openPanel`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
+6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Use bounded `panelTree.page()`/`search()` reads to reuse existing panels instead of opening another copy.
 7. **Read the capabilities skill before adding authority** — workspace services are resolved from the caller's live semantic context; manifests request but never grant; generated catalogs are not authoring surfaces.
 8. **Eval is a notebook kernel** — `scope` retains live objects across cells while
    the EvalDO's 30-minute idle lease is active. Store a working `PanelHandle` or
@@ -181,7 +181,7 @@ an explicit `ref`; use plain launch for main/pushed code and pin context-local
 code deliberately:
 
 ```tsx
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 const myApp = await openPanel("panels/my-app");
 const local = await openPanel("panels/my-app", {
   contextId: ctx.contextId,
@@ -214,7 +214,7 @@ key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 | Create project              | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `return await createProject({ projectType, name, title })`; retain its exact `publication`, or recover the committed event from structured `scaffold_publication_failed` data without rerunning creation                                                                             |
 | Fork panel                  | `eval` — `import { forkPanel } from "@workspace-skills/workspace-dev"`; return the `dryRun: true` plan, apply the same typed helper with `dryRun: false`, then `const handle = await openPanel(created.created); return { plan, created, observation: await handle.observe(), snapshot: await handle.snapshot() }`. Never claim the fork works from readiness alone. |
 | Fork worker                 | `eval` — `import { forkWorker } from "@workspace-skills/workspace-dev"` then `forkWorker({ from: "workers/source", name: "new-worker", title, dryRun: true })`; pass `classMap` for multi-class workers                                                                                                                                                              |
-| Build app database          | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a manifest service with `policy.allowed`, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).                                                             |
+| Build app database          | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a live service with `authority.principals` and explicit `@rpc` receiver policies, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).                     |
 | Add repo guidance           | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages                                                                                                                                                                                               |
 | Launch panel                | `eval` — `const handle = await openPanel(source)` for pushed/main code, or `openPanel(source, { contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })`for intentional context-local code; return both`await handle.observe()`and`await handle.snapshot()` before reporting success.                                                                             |
 | Inspect panel console       | `eval` — `const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 100 })`; read `history.errors`, `history.entries`, `history.dropped`, and `history.capacity`. The return value is an object, not an array.                                                                                                                                       |
@@ -228,7 +228,7 @@ key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 | Import an external snapshot | Use `vcs.importSnapshot` with a canonical credential-free source URI, exact source revision, and complete repository/file descriptors; the semantic workspace verifies host-observed CAS descriptors, derives the snapshot digest, and atomically returns the committed event/application/work-unit/repository/snapshot evidence                                     |
 
 (`extensions` is a runtime client — the same surface bare, as
-`services.extensions`, or imported from `@vibestudio/runtime`.
+`services.extensions`, or imported from `@workspace/runtime`.
 `use(name).method(...)` is typed sugar; `extensions.invoke(name, method,
 [args])` is the untyped equivalent. Invocation preserves the admitted caller
 and execution-session context in panels, workers, and server-side eval.)
@@ -239,7 +239,7 @@ small local steps; test; commit the complete local application chain; then
 publish the clean committed event. Work needing another commit boundary belongs
 in another context. See [WORKFLOW.md](WORKFLOW.md) for the development loop and the
 [Vibestudio VCS skill](../vibestudio-vcs/SKILL.md) for protocol details.
-| Get workspace config | `eval` — `workspace.getConfig()` |
+| Get workspace config | `eval` — `workspace.getInfo()` and inspect its `config` |
 | Set init panels | `eval` — `workspace.setInitPanels([{ source: "panels/my-app" }])` |
 
 Workspace catalog operations (list/create/delete/select) belong to the human
@@ -247,7 +247,7 @@ shell's stable hub session and are not available from workspace eval.
 
 ## Environment Compatibility
 
-- Panel lifecycle operations (`openPanel`, `listPanels`, `PanelHandle.observe`,
+- Panel lifecycle operations (`openPanel`, bounded `panelTree` reads, `PanelHandle.observe`,
   `rebuild`/`reload`/`close`) are portable across panel, worker, DO, and eval
   contexts; presentation and CDP still require an available host.
 - Project scaffolding (`createProject`), semantic workspace VCS operations,

@@ -99,7 +99,7 @@ describe("workspace unit diagnostics semantic validators", () => {
     expect(
       listTest.validate(
         execution(
-          "const units = await workspace.units.list(); const detail = await workspace.units.diagnostics(units[0].name, { limit: 5, errorLimit: 2 }); return { units: units.length, detail };",
+          "const units = await runtime.supervision.list(); const detail = await runtime.supervision.health(units[0].identity, { limit: 5, errorLimit: 2 }); return { units: units.length, detail };",
           { units: 3, detail: { status: "running" } },
           "There are 3 workspace units available; the representative unit I inspected is running."
         )

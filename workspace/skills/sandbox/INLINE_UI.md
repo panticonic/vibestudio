@@ -62,7 +62,7 @@ state all see the same canonical event.
 ```tsx
 import { Button, Flex, Text } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
-import { openPanel, openExternal } from "@vibestudio/runtime";
+import { openPanel, openExternal } from "@workspace/runtime";
 
 export default function LinkActions({ props = {} }) {
   const url = props.url ?? "https://console.cloud.google.com/apis/credentials";
@@ -93,7 +93,7 @@ below it.
 import { useState } from "react";
 import { Badge, Box, Button, Checkbox, Flex, Text } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
-import { openPanel, openExternal } from "@vibestudio/runtime";
+import { openPanel, openExternal } from "@workspace/runtime";
 
 const steps = [
   ["project", "Create project", "https://console.cloud.google.com/projectcreate"],

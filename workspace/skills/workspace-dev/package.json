@@ -8,7 +8,7 @@
     ".": "./index.ts"
   },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@vibestudio/git": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "svelte": "^5.55.0"

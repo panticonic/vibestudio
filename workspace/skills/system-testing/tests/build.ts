@@ -95,9 +95,9 @@ function validateWorkspaceImport(result: TestExecutionResult) {
 export const buildTests: TestCase[] = [
   {
     name: "build-workspace-package",
-    description: "Build a workspace package and verify success",
+    description: "Build and type-check a workspace unit and verify success",
     category: "build",
-    prompt: "Build a small existing workspace UI unit and tell me whether it succeeded.",
+    prompt: "Build and type-check a small existing workspace UI unit and tell me whether it succeeded, including any diagnostics you observed.",
     validate: validateWorkspaceBuild,
   },
   {
@@ -114,7 +114,6 @@ export const buildTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
       "Load a small pure-JavaScript dependency from npm in the sandbox and demonstrate that it works.",

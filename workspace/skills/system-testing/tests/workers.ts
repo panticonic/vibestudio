@@ -404,7 +404,7 @@ export const workerTests: TestCase[] = [
     category: "workers",
     prompt: "Which workers can I start here?",
     validate: (result) => {
-      const base = lifecycleEvidence(result, [["workers.listSources"], ["workspace.units.list"]]);
+      const base = lifecycleEvidence(result, [["workers.listSources"], ["build.listUnits"]]);
       if (!base.passed) return base;
       const returnedRows = walkArrays(base.evidence.evalValues).some((value) => value.length > 0);
       const loggedRows = base.evidence.calls.some((call) => {
@@ -448,7 +448,7 @@ export const workerTests: TestCase[] = [
       const base = lifecycleEvidence(result, [
         ["workers.list"],
         ["runtime.listEntities"],
-        ["workspace.units.list"],
+        ["runtime.supervision.list"],
       ]);
       return base.passed && walkArrays(base.evidence.evalValues).length > 0
         ? { passed: true, reason: undefined }
@@ -595,7 +595,6 @@ export const workerTests: TestCase[] = [
             decision: "once",
           },
         ],
-        userland: [],
       };
     },
     prompt:
@@ -620,7 +619,6 @@ export const workerTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
       "Have the disposable worker in this task consume one of the small workspace services already visible in its context through the normal installed-unit path, prove the result, and keep everything local.",

@@ -17,15 +17,15 @@ from panels, workers, and extensions:
 
 ## Files
 
-| Document                               | Content                                                                               |
-| -------------------------------------- | ------------------------------------------------------------------------------------- |
-| [AUTHORING.md](AUTHORING.md)           | Package layout, manifest shape, source paths, dependencies, and declaration rules     |
-| [TARGETS.md](TARGETS.md)               | Electron, React Native, and terminal target contracts                                 |
-| [CAPABILITIES.md](CAPABILITIES.md)     | Capability declarations and what each app capability unlocks                          |
+| Document                               | Content                                                                                         |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [AUTHORING.md](AUTHORING.md)           | Package layout, manifest shape, source paths, dependencies, and declaration rules               |
+| [TARGETS.md](TARGETS.md)               | Electron, React Native, and terminal target contracts                                           |
+| [CAPABILITIES.md](CAPABILITIES.md)     | Capability declarations and what each app capability unlocks                                    |
 | [DEV_LOOP.md](DEV_LOOP.md)             | Semantic source, explicit context checks, publication, approval, reload, and debugging workflow |
-| [MOBILE.md](MOBILE.md)                 | Native mobile host bootstrap, pairing, principal grants, and RN build artifacts       |
-| [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md) | Server pairing, remote shells, terminal-client direction, and credential model        |
-| [TESTING.md](TESTING.md)               | Focused checks and smoke scenarios for app changes                                    |
+| [MOBILE.md](MOBILE.md)                 | Native mobile host bootstrap, pairing, principal grants, and RN build artifacts                 |
+| [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md) | Server pairing, remote shells, terminal-client direction, and credential model                  |
+| [TESTING.md](TESTING.md)               | Focused checks and smoke scenarios for app changes                                              |
 
 ## Critical Rules
 
@@ -38,19 +38,22 @@ from panels, workers, and extensions:
    [vibestudio-vcs](../vibestudio-vcs/SKILL.md) before changing it. Author exact
    working intent, build or test the returned working head, commit the complete
    local application chain, and publish through `vcs.push`. Explicit checks are
-   advisory; push validates semantic ancestry/integration, obtains approval,
-   and atomically advances protected refs. Do not reconstruct the workflow from
+   fast local feedback; push validates semantic ancestry/integration, reruns
+   the exact-candidate build/typecheck gate, obtains approval, and atomically
+   advances protected refs. Do not reconstruct the workflow from
    filesystem dirtiness, paths, or repository state hashes.
 5. Electron shell apps that manage panel layout must declare `panel-hosting`.
 6. React Native workspace apps are loaded by the shipped native host bootstrap;
    clean-install pairing must work before the workspace app bundle is available.
 7. Terminal apps run as supervised Node processes only after they are selected
-   for launch or explicitly restarted through `workspace.units.restart(appName)`.
+   for launch or explicitly activated through
+   `runtime.supervision.activate({ kind: "app", releaseId: appName })`.
 8. Apps that need durable shared data should call a manifest-declared worker
    Durable Object service. The app itself does not get a generic workspace SQL
    database; use `workers.resolveService(...)` + `rpc.call(...)` against narrow
-   DO methods, and include `app` in both the service `policy.allowed` and the
-   DO method `@rpc({ callers })` where appropriate.
+   DO methods. Admit the relevant authenticated principal families in both the
+   service's `authority.principals` and each DO method's
+   `@rpc({ principals, effect, tier, sensitivity })` policy.
 
 ## Quick Start
 

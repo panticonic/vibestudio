@@ -26,8 +26,8 @@
  *   await revokeSearchProviderCredential(creds[0].id);
  */
 
-import { credentials, openExternal, openPanel } from "@vibestudio/runtime";
-import type { RequestCredentialInputRequest, StoredCredentialSummary } from "@vibestudio/runtime";
+import { credentials, openExternal, openPanel } from "@workspace/runtime";
+import type { RequestCredentialInputRequest, StoredCredentialSummary } from "@workspace/runtime";
 
 type RuntimeCredentials = typeof credentials;
 
@@ -88,7 +88,7 @@ function getCredentialRuntime(): RuntimeCredentials {
   const api = credentials as Partial<RuntimeCredentials> | undefined;
   if (!api) {
     throw new Error(
-      "Vibestudio credential runtime is unavailable: @vibestudio/runtime did not export credentials.",
+      "Vibestudio credential runtime is unavailable: @workspace/runtime did not export credentials.",
     );
   }
   for (const method of ["requestCredentialInput", "listStoredCredentials", "revokeCredential"] as const) {

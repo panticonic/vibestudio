@@ -29,8 +29,10 @@ top-level `await`, `return`, or the trailing IIFE so failures reach the caller.
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rpc.call(method, args)`                 | Raw RPC: `await rpc.call("vcs.status", [{ contextId: ctx.contextId }])`                                                                                                                                                             |
 | `rpc.callTarget(targetId, method, args)` | Call a runtime entity (DO/worker) by target id, e.g. after `workers.resolveService`: `const svc = await rpc.call("workers.resolveService", ["vibestudio.testkit-driver.v1", null]); await rpc.callTarget(svc.targetId, "ping", [])` |
-| `services`                               | Proxy over rpc: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])`                                                                                                                                          |
+| `services`                               | Portable dynamic service namespace: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])`. It is the same client exposed by `@workspace/runtime` to panels, workers, and eval.                              |
 | `fs`                                     | Context-bound fs service — the session contextId is injected as the first arg: `await fs.readdir("/")`, `await fs.grep("TODO", {})`                                                                                                 |
+| `runtime`                                | Portable typed runtime lifecycle and supervision client for the current workspace context.                                                                                                                                            |
+| `hosts`                                  | Portable owner-scoped attached-host access for development sessions.                                                                                                                                                                   |
 | `ctx`                                    | `{contextId, sessionId, workspaceId, serverUrl}`                                                                                                                                                                                    |
 | `scope`                                  | Persistent REPL scope (see below): `scope.results = data` survives across runs                                                                                                                                                      |
 | `help()`                                 | `await help()` lists services + import guidance; `await help("vcs")` describes one service                                                                                                                                          |
@@ -73,10 +75,14 @@ vibestudio eval run --imports '{"lodash":"npm:4","@workspace/gad":"latest"}' -e 
   subpath exports (e.g. `{"@workspace/testkit/profiling":"latest"}`). They
   are browser-targeted builds — packages depending on panel/worker runtime
   globals may not work in the eval sandbox.
+- The Node-style filesystem aliases `fs`, `fs/promises`, `node:fs`, and
+  `node:fs/promises` resolve to this same context-bound `fs` object. They are
+  convenience import forms, not host Node access. Other Node internals,
+  including `node:async_hooks`, are not guest imports.
 
 ## Importing the workspace runtime
 
-`import { … } from "@vibestudio/runtime"` resolves to the SAME portable surface a
+`import { … } from "@workspace/runtime"` resolves to the SAME portable surface a
 panel or worker gets — no imports map entry needed. The full list is in
 `await help()`; the portable members are:
 
@@ -89,8 +95,10 @@ import {
   credentials,
   webhooks,
   extensions,
-  approvals,
   notifications,
+  services,
+  hosts,
+  runtime,
   callMain,
   parent,
   getParent,
@@ -109,12 +117,24 @@ import {
   fs,
   id,
   contextId,
-} from "@vibestudio/runtime";
+} from "@workspace/runtime";
 ```
 
 - `callMain("svc.method", ...args)` is sugar for `rpc.call("main", "svc.method", args)`.
-- `approvals.request/revoke/list` — the only approval API (the old top-level
-  `requestApproval`/`revokeApproval`/`listApprovals` no longer exist).
+- `services`, `hosts`, and `runtime` are ordinary portable runtime exports,
+  not EvalDO-only helpers. You can import them for code intended to run in a
+  panel, worker, Durable Object, or eval session.
+- `gatewayFetch` is for Vibestudio gateway routes: it accepts `/path` and an
+  absolute URL on the configured gateway origin, but rejects a different
+  origin. Use `credentials.fetch(externalUrl, init, options?)` for external
+  HTTP; that is the portable credentialed-egress API.
+- `fs` has no implicit 15-second (or other) RPC deadline. A filesystem call
+  runs until it settles unless its owning execution supplies an `AbortSignal`.
+  Latency telemetry is observational only.
+- There is no advisory approval API. Workspace providers protect their own
+  resources with manifest-declared `authority.provides` capabilities and
+  literal receiver effects; host-mediated runtime APIs acquire their own
+  authority at the receiver boundary.
 - `parent` / `getParent()` resolve the owning panel of the eval session (the
   agent's launch parent when an agent runs the eval), or a no-panel handle when
   there is none.

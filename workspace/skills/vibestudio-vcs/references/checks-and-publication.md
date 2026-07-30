@@ -11,15 +11,18 @@ should discover the same live `build.getBuildReport` service schema.
 
 Do not mint semantic identities from build keys or content digests. After a
 repair, build the new context state again and keep VCS orientation through
-`vcs.status`. A successful check is useful evidence, but it neither authorizes
-publication nor becomes an ancestor, integration decision, or approval.
+`vcs.status`. The local check is deliberately not authority, but it is the
+fast path for consuming the same structured diagnostics the publication gate
+will enforce.
 
 ## Publish through VCS
 
 `vcs.push` is the only protected publication operation. It accepts an exact
 clean committed event and the exact main event observed by `status`. Push
-validates semantic ancestry and integration completeness, obtains the required
-approval, and atomically advances the protected refs through a durable effect.
+validates semantic ancestry and integration completeness, runs the
+candidate-state build/typecheck gate for changed units and their transitive
+reverse dependents, obtains the required approval, and atomically advances the
+protected refs through a durable effect.
 
 Publication protects semantic history as well as bytes. If the committed event
 preserves every repository byte, approval still names the exact previous and
@@ -27,15 +30,18 @@ new semantic events and main advances. An exact replay of an already-applied
 publication does not prompt again; a generic retry or host operation cannot
 manufacture publication authority.
 
-Publication does not create a source event and does not run or certify a build.
-An ancestry, integration, authorization, approval, or atomic-ref failure
-advances no protected ref.
+Publication does not create a source event. A build/typecheck, ancestry,
+integration, authorization, approval, or atomic-ref failure advances no
+protected ref.
 
 Handle refusals by typed code:
 
 - compare and integrate when main advanced or ancestry diverged;
 - stop for required authorization or approval;
-- preserve integrity and host-effect diagnostics.
+- preserve integrity and host-effect diagnostics;
+- for a build/typecheck refusal, consume every diagnostic, repair the cited
+  source, rerun the exact-context report, commit the repaired chain, and push
+  the new exact committed event.
 
 ## Treat post-publication builds as projections
 

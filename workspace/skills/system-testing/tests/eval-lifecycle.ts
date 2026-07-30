@@ -614,7 +614,6 @@ export const evalLifecycleTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
       "Using exactly one eval call, invoke services.permissions.list() and return its structured result. Set authority to read-only and pregranted-only with exactly one request: capability permissions.read and exact resource permissions.read. A supplied requests list is the exact allowlist. Do not make any other tool call.",
@@ -635,7 +634,6 @@ export const evalLifecycleTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
       "Using exactly one eval call, attempt services.permissions.list() under authority { requests: [], approvals: 'pregranted-only' }. The empty requests list denies every protected operation. Catch the operation error inside eval and return exactly { denied: true, message: String(error) }; do not ask for approval and do not make any other tool call.",
@@ -655,7 +653,6 @@ export const evalLifecycleTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
       "Using exactly one eval call, set authority approvals:'prompt' with preauthorize exactly [{ service:'permissions', method:'list', args:[] }], then invoke services.permissions.list() and return its structured result. Do not make any other tool call.",
@@ -667,6 +664,7 @@ export const evalLifecycleTests: TestCase[] = [
     category: "eval-lifecycle",
     prompt: "Harness-orchestrated durable eval event pagination check.",
     orchestrate: orchestrateEventPages,
+    validation: "harness",
     validate: validateEventPages,
   },
   {
@@ -676,6 +674,7 @@ export const evalLifecycleTests: TestCase[] = [
     category: "eval-lifecycle",
     prompt: "Harness-orchestrated exact agent-vessel crash and durable eval replay check.",
     orchestrate: orchestrateAgentReplay,
+    validation: "harness",
     validate: validateAgentReplay,
   },
   {
@@ -708,6 +707,7 @@ export const evalLifecycleTests: TestCase[] = [
     category: "eval-lifecycle",
     prompt: "Harness-orchestrated asynchronous eval cancellation check.",
     orchestrate: orchestrateCancellation,
+    validation: "harness",
     validate: validateCancellation,
   },
 ];

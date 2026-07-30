@@ -6,7 +6,7 @@ Type-safe parent-child communication using contracts.
 
 ```typescript
 // panels/editor/contract.ts
-import { z, defineContract } from "@vibestudio/runtime";
+import { z, defineContract } from "@workspace/runtime";
 
 export interface EditorApi {
   getContent(): Promise<string>;
@@ -42,7 +42,7 @@ export const editorContract = defineContract({
 
 ```tsx
 import { useEffect, useState } from "react";
-import { rpc, getParentWithContract } from "@vibestudio/runtime";
+import { rpc, getParentWithContract } from "@workspace/runtime";
 import { editorContract } from "./contract.js";
 
 const parent = getParentWithContract(editorContract);
@@ -77,7 +77,7 @@ export default function Editor() {
 
 ```tsx
 import { useState } from "react";
-import { buildPanelLink } from "@vibestudio/runtime";
+import { buildPanelLink } from "@workspace/runtime";
 import { editorContract } from "@workspace-panels/editor/contract";
 
 export default function IDE() {

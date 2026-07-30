@@ -1,4 +1,4 @@
-import { contextId, fs, vcs } from "@vibestudio/runtime";
+import { contextId, fs, vcs } from "@workspace/runtime";
 import {
   PROJECT_TYPES,
   assertProjectIdentity,
@@ -449,7 +449,7 @@ export async function createProject(params: {
           entry: "index.ts",
           ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
           dependencies: {
-            "@vibestudio/runtime": "workspace:*",
+            "@workspace/runtime": "workspace:*",
             "@workspace/svelte": "workspace:*",
             svelte: "^5.0.0",
           },
@@ -506,12 +506,12 @@ export async function createProject(params: {
             "react/jsx-runtime",
             "react/jsx-dev-runtime",
             "@radix-ui/themes",
-            "@vibestudio/runtime",
+            "@workspace/runtime",
             "@workspace/react",
             "@workspace/ui/panel",
           ],
           dependencies: {
-            "@vibestudio/runtime": "workspace:*",
+            "@workspace/runtime": "workspace:*",
             "@workspace/react": "workspace:*",
             "@workspace/ui": "workspace:*",
             "@radix-ui/themes": "^3.2.1",
@@ -613,7 +613,7 @@ function ${toPascalCase(name)}Content() {
           entry: "index.ts",
           durableClasses: [className],
           dependencies: {
-            "@vibestudio/runtime": "workspace:*",
+            "@workspace/runtime": "workspace:*",
             "@workspace/agentic-do": "workspace:*",
             "@workspace/harness": "workspace:*",
           },
@@ -672,7 +672,7 @@ export class ${className} extends AgentWorkerBase {
 
         files[`${workerFileName}.test.ts`] = `import { describe, it, expect } from "vitest";
 import type { ChannelEvent } from "@workspace/harness";
-import { createTestDO } from "@vibestudio/runtime/worker";
+import { createTestDO } from "@workspace/runtime/worker";
 import { ${className} } from "./${workerFileName}.js";
 
 function makeEvent(overrides: Partial<ChannelEvent> = {}): ChannelEvent {
@@ -709,10 +709,10 @@ describe("${className}", () => {
           name,
           title,
           entry: "index.ts",
-          dependencies: { "@vibestudio/runtime": "workspace:*" },
+          dependencies: { "@workspace/runtime": "workspace:*" },
         });
-        files["index.ts"] = `import { createWorkerRuntime } from "@vibestudio/runtime/worker";
-import type { WorkerEnv, ExecutionContext } from "@vibestudio/runtime/worker";
+        files["index.ts"] = `import { createWorkerRuntime } from "@workspace/runtime/worker";
+import type { WorkerEnv, ExecutionContext } from "@workspace/runtime/worker";
 
 export default {
   async fetch(request: Request, env: WorkerEnv, _ctx: ExecutionContext) {

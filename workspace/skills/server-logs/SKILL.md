@@ -10,8 +10,8 @@ RPC, panel runtime, workerd supervision, third-party output — everything that
 goes through `console.*`, which includes every `createDevLogger` subsystem)
 into a per-boot ring buffer with structured metadata, and exposes it through
 the read-only **`serverLog`** service. This is the host-process complement to
-per-unit logs (`workspace.units.logs`, which cover _your_ panels/extensions/
-workers): use `serverLog` when you need to see what the **server itself** is
+exact-entity logs (`runtime.supervision.logs(identity)`, which cover _your_
+panels/extensions/workers): use `serverLog` when you need to see what the **server itself** is
 doing — why a build failed to schedule, what happened around a crash or
 reconnect, when the idle-exit fired, and so on.
 

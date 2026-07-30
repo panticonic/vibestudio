@@ -52,16 +52,17 @@ Treat source history and provenance as one small, walkable graph.
   not select tiers or keywords. Answer from it when it is conclusive. Use its
   copyable `provenance({ target })` continuation only when deeper context can
   change the answer or action.
-- Use `vcs.listDirectory` when only immediate visible names are needed. It
-  returns stable entry identities and each name's exact provenance without
-  walking descendant files; use `vcs.listFiles` for an explicit repository
-  manifest walk. Inside an agent, both are compact `vcs({ operation: ... })`
-  operations that accept workspace paths.
+- Inside an agent, browse ordinary paths with `ls`, `find`, and `read`. Those
+  tools share the same context-scoped filesystem as injected JavaScript `fs`
+  and resolve semantic working state and repository boundaries in the
+  background. Direct runtime clients may use `vcs.listDirectory` or
+  `vcs.listFiles` when code explicitly needs semantic entry identities or a
+  paged flat repository manifest.
 
 ## Use the shortest workflow
 
 Inside a workspace agent, use the compact `vcs` tool for `status`,
-`listDirectory`, `listFiles`, typed-root `inspect`/`neighbors`, `compare`,
+typed-root `inspect`/`neighbors`, `compare`,
 one-step `integrate`, `revert`, whole-chain `commit` or `discard`,
 path-friendly `blame`, and `push`. Its input is
 always `{ operation: ... }`; it is not the lower-level `vcs.*` service client. Use the
@@ -77,19 +78,10 @@ make a direct operation appear agent-authored.
 
 1. Call `vcs({ operation: "status" })`. The tool binds the current context and
    returns `workingHead`, `committed`, and `mainEventId` in its details.
-   `vcs({ operation: "listDirectory", path: "projects" })` lists one directory
-   at that exact current working head; inside eval, the equivalent typed method
-   is `vcs.listDirectory({ state, path })`.
-   `vcs({ operation: "listFiles", path: "projects/example" })` lists the exact
-   manifest of one repository; the direct service equivalent first resolves
-   that repository and then calls `vcs.listFiles({ state, repositoryId, limit })`.
-   Each compact manifest entry includes its full workspace path and a complete
-   typed file root in both text and structured `roots`; pass that root unchanged
-   to `inspect`/`neighbors`, or pass the workspace path to compact `blame`.
-   The workspace root is a directory, not a repository: list it with
-   `vcs({ operation: "listDirectory", path: "" })`, then pass one returned
-   repository path to `listFiles`. Walk any exact typed graph root returned in
-   details with `vcs({ operation: "inspect", root })` or
+   Browse paths with `ls`, `find`, and `read`; inside eval use the injected
+   `fs` package. The filesystem layer resolves the exact live working state in
+   the background. Walk exact typed graph roots returned by semantic operations
+   with `vcs({ operation: "inspect", root })` or
    `vcs({ operation: "neighbors", root, after })`; copy the root unchanged.
 2. Read or list managed files at that exact state. Keep repository and file IDs
    returned by the service.
@@ -108,9 +100,12 @@ make a direct operation appear agent-authored.
    signal. Never adopt a change classified as `actionable/conflicting`; author
    the truthful merged target result, then reconcile it with path-based exact
    evidence as shown in [compare and integrate](references/compare-and-integrate.md).
-5. Run relevant typechecks, tests, or explicit context builds while the work
-   remains local. These checks are advisory observations, not publication
-   authority.
+5. Run the relevant exact-context build report while the work remains local.
+   Treat its structured typecheck diagnostics as the primary repair packet:
+   fix the cited file/position, rerun the same check, and repeat until it is
+   clean. The protected-main gate repeats this check against the exact
+   candidate state and its affected dependency closure, so a local check is
+   fast feedback while the push gate is the authoritative final check.
 6. Call `vcs({ operation: "commit", message })` to commit the complete local chain. Commit derives
    every integration source from the chain's recorded decisions, so several
    subagent integrations can become one multi-parent event. If an agent tool
@@ -120,8 +115,10 @@ make a direct operation appear agent-authored.
    the complete local chain is unwanted instead, call `vcs({ operation: "discard" })`; it derives the
    live head and command identity exactly like the other compact mutations.
 7. Call `vcs({ operation: "push" })` only when the user wants the clean committed event published.
-   Push validates semantic ancestry and integration, obtains approval, and
-   atomically advances protected refs. It neither runs nor certifies a build.
+   Push validates semantic ancestry and integration, runs the exact-candidate
+   build/typecheck gate, obtains approval, and atomically advances protected
+   refs. A typecheck or build failure is a publication refusal; inspect its
+   diagnostics, repair locally, recommit, and retry from the new exact event.
 
 Every mutation carries a globally unique `commandId` and an exact expected
 basis. Agent tools derive both from the current invocation and live context;
@@ -147,7 +144,7 @@ Use `await help("vcs")` for a compact live method index, then
 `await help("vcs.edit")` (or the exact method needed) for its full schema. The generated
 [public contract](references/public-contract.md). Do not guess methods or copy
 request schemas into operational prose. In eval or runtime code, import
-`{ contextId, vcs }` from `@vibestudio/runtime` and call
+`{ contextId, vcs }` from `@workspace/runtime` and call
 `vcs.status({ contextId })`, `vcs.edit(request)`, and the other methods directly.
 Do not drop to raw `rpc.call("main", "vcs.*", [request])` when this client is
 available. The public surface is:
@@ -186,9 +183,8 @@ registerExternalDelta  supersedeExternalDelta  finalizeExternalDelta
   `finalizeExternalDelta` are public protocol methods so userland coordinators
   can own this lifecycle; ordinary task agents must not call them. Eventual
   publication remains coordinator-owned.
-- Read [checks and publication](references/checks-and-publication.md) for
-  advisory checks against the current context and the protected publication
-  boundary.
+- Read [checks and publication](references/checks-and-publication.md) for the
+  local diagnostic loop and the protected publication gate.
 - Read [typed recovery](references/typed-recovery.md) after a refusal, stale
   basis, or lost response.
 - Read [worked scenarios](references/scenarios.md) for end-to-end examples.

@@ -10,7 +10,7 @@ const runtimeMock = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@vibestudio/runtime", () => runtimeMock);
+vi.mock("@workspace/runtime", () => runtimeMock);
 
 import {
   openSearchProviderSignup,

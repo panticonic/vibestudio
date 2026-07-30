@@ -135,6 +135,17 @@ export const webhookTests: TestCase[] = [
     name: "webhook-subscription-lifecycle",
     description: "Create, list, rotate, and revoke a webhook subscription",
     category: "webhooks",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "manage-temporary-webhook",
+          capability: { kind: "exact", key: "webhooks.manage" },
+          resource: { kind: "exact", key: "webhooks.manage" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+    },
     prompt:
       "Exercise a harmless temporary webhook subscription end to end: create it, confirm it is listed, rotate its secret, revoke it, and verify cleanup. If this deployment cannot support the test, explain the concrete blocker instead of pretending it succeeded.",
     validate: lifecycleChecked,
@@ -143,6 +154,17 @@ export const webhookTests: TestCase[] = [
     name: "webhook-list-bounded",
     description: "List current webhook subscriptions",
     category: "webhooks",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "list-webhooks",
+          capability: { kind: "exact", key: "webhooks.manage" },
+          resource: { kind: "exact", key: "webhooks.manage" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+    },
     prompt:
       "How many webhook subscriptions are currently registered in this workspace? Zero is a valid answer; keep the report bounded.",
     validate: listChecked,

@@ -188,19 +188,17 @@ export const agenticRuntimeTests: TestCase[] = [
     authorityPolicy: {
       authority: [
         {
-          ruleId: "workspace-test-runner-approval",
-          capability: { kind: "exact", key: "user-approval.request" },
-          resource: { kind: "exact", key: "user-approval.request" },
+          ruleId: "workspace-test-runner-execution",
+          capability: {
+            kind: "prefix",
+            prefix: "userland:extensions/test-runner/native.tests.execute#",
+          },
+          resource: {
+            kind: "exact",
+            key: "native.tests:extension:@workspace-extensions/test-runner",
+          },
           tier: "gated",
           decision: "once",
-        },
-      ],
-      userland: [
-        {
-          ruleId: "workspace-test-runner-subject",
-          subject: { kind: "prefix", prefix: "workspace-test:" },
-          decision: "allow",
-          remember: false,
         },
       ],
     },

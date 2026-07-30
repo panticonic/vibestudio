@@ -150,7 +150,7 @@ describe("smoke validators", () => {
             status: "complete",
             isError: false,
             arguments: {
-              code: 'import * as runtime from "@vibestudio/runtime"; return Object.keys(runtime)',
+              code: 'import * as runtime from "@workspace/runtime"; return Object.keys(runtime)',
             },
             result: { details: { success: true, returnValue: ["workers", "rpc"] } },
           },

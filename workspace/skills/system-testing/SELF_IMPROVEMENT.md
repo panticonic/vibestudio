@@ -26,8 +26,9 @@ Concretely:
 Only after the infrastructure is solid should you adjust skills or test prompts.
 The test agent should be able to accomplish any task with minimal hints — if it
 can't, the platform has a bug. Keep system-test prompts as vague as possible:
-state the user-visible goal and final marker, not the API mechanics, object
-shapes, or workaround steps the docs are supposed to teach.
+state only the user-visible goal and real constraints, not markers, API
+mechanics, object shapes, evidence fields, or workaround steps the docs are
+supposed to teach.
 
 ## Phase 1: Run Tests
 
@@ -335,10 +336,12 @@ durable terminality and provenance. For an out-of-band or cross-channel probe,
 use the channel DO's bounded `inspectAgent` path described in
 `docs/agent-debug-port.md`.
 
-VCS publication is semantic ancestry/integration validation, approval, and an
-atomic protected-ref update; it does not run or certify a build. Invoke an
-explicit build against the test context when build confidence is part of the
-test. If a failure appears on the state-triggered post-publication build path,
+VCS publication is semantic ancestry/integration validation, the exact
+candidate build/typecheck gate, approval, and an atomic protected-ref update.
+Invoke an explicit build against the test context for fast feedback before
+publication. If the push returns `BuildGateFailed`, consume its complete
+structured diagnostic list, repair the cited source, recommit, and retry from
+fresh status. If a failure appears on the state-triggered post-publication build path,
 inspect the build event buffer before repairing source:
 
 For fixture-backed tests, publication and teardown authority come from the
@@ -425,14 +428,14 @@ For each failure, determine the root cause category and act accordingly:
 
 | Symptom                       | Likely files                                                                                                                                                                                   |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| fs operation failed           | `src/server/services/fsService.ts`, `packages/runtime/src/panel/fs.ts`                                                                                                               |
-| DO storage operation failed   | `src/server/internalDOs/*`, `packages/runtime/src/worker/durable-base.ts`                                                                                                            |
-| Semantic VCS operation failed | `packages/service-schemas/src/vcs.ts`, `src/server/services/vcsService.ts`, `packages/semantic-control-plane/src/semanticVcs*`, `packages/runtime/src/shared/vcsClient.ts` |
-| external Git operation failed | `packages/git/src/client.ts`, `src/server/services/gitInteropService.ts`                                                                                                                       |
+| fs operation failed           | `src/server/services/fsService.ts`, `workspace/packages/runtime/src/panel/fs.ts`                                                                                                               |
+| DO storage operation failed   | `src/server/internalDOs/*`, `workspace/packages/runtime/src/worker/durable-base.ts`                                                                                                            |
+| Semantic VCS operation failed | `packages/service-schemas/src/vcs.ts`, `src/server/services/vcsService.ts`, `workspace/workers/workspace-source/semanticVcs*`, `workspace/packages/runtime/src/shared/vcsClient.ts` |
+| external Git operation failed | `packages/git/src/client.ts`, `workspace/extensions/git-bridge/upstream.ts`                                                                                                                       |
 | Build failed                  | `src/server/buildV2/`, `build.mjs`                                                                                                                                                             |
-| Worker/DO issue               | `src/server/services/workerService.ts`, `packages/runtime/src/worker/`                                                                                                               |
+| Worker/DO issue               | `src/server/services/workerService.ts`, `workspace/packages/runtime/src/worker/`                                                                                                               |
 | Panel lifecycle               | `src/main/panelOrchestrator.ts`, `src/server/services/bridgeService.ts`                                                                                                                        |
-| Credential/OAuth error        | `src/server/services/credentialService.ts`, `packages/runtime/src/shared/credentials.ts`                                                                                             |
+| Credential/OAuth error        | `src/server/services/credentialService.ts`, `workspace/packages/runtime/src/shared/credentials.ts`                                                                                             |
 | Harness crash                 | `workspace/packages/harness/src/entry.ts`, `src/server/harnessManager.ts`                                                                                                                      |
 | PubSub issue                  | `workspace/packages/pubsub/src/`, `workspace/workers/pubsub-channel/`                                                                                                                          |
 | Skill import                  | `src/server/buildV2/`, package.json exports                                                                                                                                                    |
@@ -562,7 +565,7 @@ eval({
 ```typescript
 const branchName = `fix/system-test-${failedTestName}`;
 import { GitClient } from "@vibestudio/git";
-import { credentials, fs } from "@vibestudio/runtime";
+import { credentials, fs } from "@workspace/runtime";
 const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
 await externalGit.createBranch({ dir: scope.checkoutDir, name: branchName });
 await externalGit.checkout(scope.checkoutDir, branchName);
@@ -598,14 +601,16 @@ For workspace-owned source, publication is a semantic protocol:
 4. Commit the complete local application chain, adding the integrated source
    event as a parent when applicable.
 5. Run explicit checks against the context when the repair needs build or type
-   confidence; their diagnostics are advisory and move no ref.
+   confidence; they are fast feedback and move no ref. The protected push
+   repeats the affected-unit gate and is authoritative for publication.
 6. Push the exact clean committed event against the main event you observed.
-7. Treat ancestry, integration, authorization, approval, or atomic-ref failure
-   as a typed no-write result. Repair the cause and continue from newly observed
+7. Treat build-gate, ancestry, integration, authorization, approval, or
+   atomic-ref failure as a typed no-write result. Repair the cause and continue from newly observed
    state.
-8. Inspect post-publication build and activation projections separately. A
-   failed activation must retain the previous runnable artifact while the
-   published source remains on `main`.
+8. Inspect post-publication build and activation projections separately. The
+   push gate has already certified the affected candidate units; a later
+   projection failure must still retain the previous runnable artifact while
+   the published source remains on `main`.
 
 Fresh scaffolds and forks must return `preflight.ok === true` before their
 publication evidence is accepted. If commit succeeded and publication failed,

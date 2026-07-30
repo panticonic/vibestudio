@@ -1,5 +1,4 @@
-import { callMain } from "@vibestudio/runtime";
-import type { OnboardingHostTopologySnapshot } from "@vibestudio/service-schemas/onboardingStatus";
+import { callMain, gatewayConfig } from "@workspace/runtime";
 import {
   onboardingCatalog,
   type OnboardingRole,
@@ -9,6 +8,23 @@ import {
   type SetupPresentationState,
 } from "./catalog";
 import { createStatusAdapters, type CapabilityOnboardingStatusAdapter } from "./status";
+
+interface OnboardingHostTopologySnapshot {
+  devices: {
+    availability: "available" | "unknown";
+    pairedDeviceCount: number;
+    thisDevicePaired: boolean;
+  };
+  remote: {
+    availability: "available" | "unknown";
+    route: "local" | "remote";
+    workspaceCount: number;
+  };
+}
+
+interface SkillCatalogEntry {
+  skillPath: string;
+}
 
 export interface SetupCapabilitySnapshot {
   id: string;
@@ -30,7 +46,45 @@ export interface ComposeOnboardingSnapshotOptions {
 export interface OnboardingSnapshotDependencies {
   adapters?: Readonly<Record<string, CapabilityOnboardingStatusAdapter>>;
   readHostTopology?: () => Promise<OnboardingHostTopologySnapshot>;
+  hasSkill?: (skillPath: string) => Promise<boolean>;
   now?: () => Date;
+}
+
+function currentConnectionRoute(): "local" | "remote" {
+  try {
+    const hostname = new URL(gatewayConfig.serverUrl).hostname;
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+      ? "local"
+      : "remote";
+  } catch {
+    return "remote";
+  }
+}
+
+async function readHostTopology(): Promise<OnboardingHostTopologySnapshot> {
+  const [devices, workspaces] = await Promise.allSettled([
+    callMain<{ devices: unknown[] }>("hubControl.listDevices"),
+    callMain<unknown[]>("hubControl.listWorkspaces"),
+  ]);
+  const deviceList = devices.status === "fulfilled" ? devices.value.devices : null;
+  const workspaceList = workspaces.status === "fulfilled" ? workspaces.value : null;
+  return {
+    devices: {
+      availability: deviceList ? "available" : "unknown",
+      pairedDeviceCount: deviceList?.length ?? 0,
+      thisDevicePaired: deviceList !== null && deviceList.length > 0,
+    },
+    remote: {
+      availability: workspaceList ? "available" : "unknown",
+      route: currentConnectionRoute(),
+      workspaceCount: workspaceList?.length ?? 0,
+    },
+  };
+}
+
+async function hasSkill(skillPath: string): Promise<boolean> {
+  const entries = await callMain<SkillCatalogEntry[]>("workspace.listSkills");
+  return entries.some((entry) => entry.skillPath === skillPath);
 }
 
 function nextAction(
@@ -47,6 +101,7 @@ function nextAction(
     return role === "migration" && actions.setup ? "setup" : undefined;
   }
   if (state === "using-defaults" && actions.change) return "change";
+  if (state === "not-installed" && actions.install) return "install";
   if (state === "unavailable") return undefined;
   if (actions.setup) return "setup";
   if (actions.change) return "change";
@@ -75,6 +130,7 @@ function unknownSnapshot(
 
 function hostSnapshots(
   host: OnboardingHostTopologySnapshot,
+  mobileInstalled: boolean,
   observedAt: string
 ): SetupCapabilitySnapshot[] {
   const device = onboardingCatalog.find((entry) => entry.id === "connection.device")!;
@@ -82,8 +138,19 @@ function hostSnapshots(
   const deviceActions = device.actions ?? {};
   const remoteActions = remote.actions ?? {};
 
-  const deviceSnapshot: SetupCapabilitySnapshot =
-    host.devices.availability === "unknown"
+  const deviceSnapshot: SetupCapabilitySnapshot = !mobileInstalled
+    ? {
+        id: device.id,
+        state: "not-installed",
+        summary: "Mobile support is available to install for this workspace.",
+        scope: device.scope,
+        tier: device.tier,
+        attention: "none",
+        nextAction: "install",
+        rawStage: "not-installed",
+        observedAt,
+      }
+    : host.devices.availability === "unknown"
       ? unknownSnapshot(device.id, device.scope, device.tier, observedAt, deviceActions)
       : {
           id: device.id,
@@ -157,11 +224,11 @@ export async function composeOnboardingSnapshot(
 
   let host: SetupCapabilitySnapshot[];
   try {
-    const topology = await (
-      dependencies.readHostTopology ??
-      (() => callMain<OnboardingHostTopologySnapshot>("onboardingStatus.read"))
-    )();
-    host = hostSnapshots(topology, observedAt);
+    const [topology, mobileInstalled] = await Promise.all([
+      (dependencies.readHostTopology ?? readHostTopology)(),
+      (dependencies.hasSkill ?? hasSkill)("skills/phone-setup/SKILL.md"),
+    ]);
+    host = hostSnapshots(topology, mobileInstalled, observedAt);
   } catch {
     host = onboardingCatalog
       .filter((entry) => entry.setup && entry.tier === "host-topology")

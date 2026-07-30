@@ -1,6 +1,6 @@
 # Panel API
 
-Import panel APIs from `@vibestudio/runtime`. The same portable surface works in
+Import panel APIs from `@workspace/runtime`. The same portable surface works in
 panels, workers, Durable Objects, and server-side eval.
 
 ## The completion contract
@@ -34,7 +34,7 @@ unhandled rejections, missing assets, and incomplete runtime configuration as
 failures.
 
 ```ts
-import { openPanel, PanelOperationError } from "@vibestudio/runtime";
+import { openPanel, PanelOperationError } from "@workspace/runtime";
 
 try {
   const panel = await openPanel("panels/my-app", {
@@ -59,19 +59,37 @@ try {
 ```ts
 panelTree.self(): PanelHandle
 panelTree.get(id): PanelHandle
-panelTree.list(): Promise<PanelHandle[]>
-panelTree.roots(): Promise<PanelHandle[]>
-panelTree.children(id): Promise<PanelHandle[]>
+panelTree.rootGroups(input?): Promise<PanelTreeRootGroupPage>
+panelTree.page(input): Promise<PanelRuntimeTreePage>
+panelTree.path(id): Promise<PanelRuntimeTreePath | null>
+panelTree.search(input): Promise<PanelRuntimeTreeSearchPage>
 panelTree.parent(id): PanelHandle | null
 panelTree.navigate(id, source, opts?): Promise<PanelObservation>
 openPanel(source, opts?): Promise<PanelHandle>
 ```
 
 `self()` and `get()` are synchronous handle factories; they do no I/O.
-`list()`, `roots()`, and `children()` return handles hydrated from a fresh tree
-read. The scalar fields `id`, `title`, `source`, `kind`, and `parentId` are the
-handle’s last observed descriptor. Use `observe()` whenever correctness depends
-on live runtime state.
+Use bounded `rootGroups()`, `page()`, `path()`, and `search()` reads for large
+histories. There are deliberately no whole-tree or whole-sibling convenience
+reads. Continue from `nextCursor` only while the page revision is unchanged;
+restart the group from its first page after a revision change. The scalar fields
+`id`, `title`, `source`, `kind`, and `parentId` are the handle’s last observed
+descriptor. Use `observe()` whenever correctness depends on live runtime state.
+
+```ts
+let cursor: string | undefined;
+do {
+  const page = await panelTree.page({
+    group: { kind: "children", parentSlotId },
+    ...(cursor ? { cursor } : {}),
+    limit: 100,
+  });
+  for (const { node, handle } of page.entries) {
+    console.log(node.childCount, handle.id, handle.title);
+  }
+  cursor = page.nextCursor ?? undefined;
+} while (cursor);
+```
 
 `openPanel(source)` uses main/pushed code. To run unpublished context code, pass
 both the intended storage context and explicit code ref:
@@ -286,9 +304,10 @@ separate `warnings` array. Filter warnings with
 
 `diagnose()` is safe for a failed attempt: it returns the canonical failure and
 whatever bounded host evidence exists instead of requiring a successful
-snapshot first. `workspace.units.diagnostics(source)` reads bounded historical
-unit health, build events, and errors; it does **not** request a new build and
-must not be used as proof that the current working source compiles. Use
+snapshot first. For a live runtime entity, use its exact
+`{ kind, entityId }` identity with `runtime.supervision.health(identity)` or
+`runtime.supervision.logs(identity)`; these reads do **not** request a new build
+and must not be used as proof that the current working source compiles. Use
 `services.build.getBuildReport(source, \`ctx:${ctx.contextId}\`)` for that
 structured compile/build check. Read server logs only when the panel packet
 shows the failure is below the lifecycle boundary.
@@ -298,7 +317,7 @@ shows the failure is below the lifecycle boundary.
 Inside a panel:
 
 ```ts
-import { panel } from "@vibestudio/runtime";
+import { panel } from "@workspace/runtime";
 
 const initial = panel.stateArgs.get();
 await panel.stateArgs.set({ theme: "dark" });

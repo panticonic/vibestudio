@@ -3,7 +3,8 @@
 Use one runtime concept: `PanelHandle`. `openPanel(source, options)` opens both
 workspace panels and URLs and returns a handle. Opening a panel is a structural
 tree mutation and may prompt on first use for the requester entity and
-parent/root target. `listPanels()` rediscovers existing handles.
+parent/root target. Use bounded `panelTree.page()`/`panelTree.search()` reads
+to rediscover existing handles.
 
 ## Semantic workspace development
 
@@ -16,7 +17,9 @@ The lifecycle is:
 1. Call `vcs.status` and keep the returned committed event and working head.
 2. Author through `edit`/`write` or the managed VCS edit surface. Each
    user-visible intent becomes a work unit and one local application.
-3. Typecheck, test, or build against that context's current materialization.
+3. Run the exact-context build report against that context's current
+   materialization. Use its structured typecheck diagnostics as the repair
+   loop; tests and runtime checks are additional evidence.
 4. If main or another source advanced, compare the exact source event. Adopt,
    reconcile, or decline useful changes through small `vcs.integrate` steps and
    run checks between them.
@@ -90,16 +93,19 @@ canonical path.
    behavior change should be one coherent work unit even when it crosses
    repository views.
 
-3. Keep the returned working head, then typecheck, test, or build that context.
+3. Keep the returned working head, then run the exact-context build report.
    For panels, `services.build.getBuildReport(source,
-\`ctx:${ctx.contextId}\`)`requests the canonical structured build.`workspace.units.diagnostics(source)` only reads historical health/log
-   records and does not compile the working source. Build results create no
-   semantic event and grant no publication authority.
+\`ctx:${ctx.contextId}\`)`requests the canonical structured build.
+  `runtime.supervision.health(identity)` only reads the exact live entity's
+   health/log records and does not compile the working source. Read every error in the
+   report, repair its cited file/line/column, and rerun until it is clean.
+   The push gate repeats the report on the exact candidate state; it is
+   authoritative, while this local report is the fast feedback loop.
 
 4. Compare with current main before committing or publishing:
 
 ```ts
-import { vcs } from "@vibestudio/runtime";
+import { vcs } from "@workspace/runtime";
 
 const status = await vcs.status();
 const comparison = await vcs.compare({
@@ -140,10 +146,12 @@ context before authoring it. Use `vcs.revert` for a deliberate counteraction or
 
 6. Publish only after the context is clean and the intended event passes its
    ordinary checks. If current main advanced, compare and integrate it locally,
-   commit the resulting complete chain, then retry publication. An ancestry,
-   integration, authorization, approval, or atomic-ref rejection moves no
-   protected pointer. A later build or activation failure leaves publication in
-   place and retains the previous runnable artifact.
+   commit the resulting complete chain, then retry publication. The protected
+   push gate rechecks the exact candidate build/typecheck state before approval;
+   a failure returns diagnostics and moves no protected pointer. Repair, make
+   a new local application, commit it, and retry from that exact event. A
+   later post-publication projection or activation failure leaves publication
+   in place and retains the previous runnable artifact.
 
 Every semantic context mutation includes `expectedWorkingHead` and a `commandId`.
 When a response is lost, retry the identical request with the same command ID.
@@ -154,7 +162,7 @@ new command ID. Follow the typed discriminant, not prose.
    context build when the API supports it:
 
 ```ts
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 
 const myApp = await openPanel("panels/my-app", { focus: true });
 scope.myAppPanel = myApp;
@@ -188,7 +196,7 @@ ref-capable launch/navigation path.
 8. Iterate visually with the same panel identity:
 
 ```ts
-import { getPanelHandle } from "@vibestudio/runtime";
+import { getPanelHandle } from "@workspace/runtime";
 
 const myApp = scope.myAppPanel ?? getPanelHandle(scope.myAppPanelId);
 scope.myAppPanel = myApp;
@@ -246,26 +254,27 @@ await scope.myApp.setMode("fixture");
 
 ## Managing child panels
 
-Use `listPanels()` from agent eval to inspect the current tree. Use
-`handle.children()` for a fresh child list and close stale children explicitly.
+Use bounded `panelTree.rootGroups()` and `panelTree.page()` reads from agent
+eval. Close stale children explicitly; do not materialize the entire tree.
 
 ```ts
-import { listPanels } from "@vibestudio/runtime";
+import { panelTree } from "@workspace/runtime";
 
-const roots = await listPanels();
-for (const panel of roots) {
-  console.log(panel.id, panel.kind, panel.source);
+const page = await panelTree.page({
+  group: { kind: "children", parentSlotId: scope.myApp.id },
+  limit: 100,
+});
+for (const { handle } of page.entries) {
+  console.log(handle.id, handle.kind, handle.source);
 }
-
-const children = await scope.myApp.children();
-await children[0]?.close();
+await page.entries[0]?.handle.close();
 ```
 
 Reuse an existing handle instead of opening duplicates. Scalar handle fields
 are last-observed descriptors; call `handle.observe()` whenever live state
 matters. Across warm eval cells, keep the handle in `scope`; keep its stable ID
 beside it for cold recovery. After an explicit kernel restart, rediscover a
-lost handle with `getPanelHandle(id)` or `listPanels()`. Close temporary
+lost handle with `getPanelHandle(id)`. Close temporary
 inspection, browser, diagnostic, and child panels in `finally`.
 
 ## Browser panels
@@ -273,7 +282,7 @@ inspection, browser, diagnostic, and child panels in `finally`.
 URLs also use `openPanel`:
 
 ```ts
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 
 const sitePanel = await openPanel("https://example.com", { focus: true });
 try {
@@ -307,7 +316,8 @@ ready phase as success.
 
 For runtime failures, choose the narrowest log surface first:
 `handle.diagnose()` for the canonical observation plus bounded renderer evidence,
-`workspace.units.diagnostics(name)` for unit state, and `serverLog` for host
+`runtime.supervision.health(identity)` for exact live-entity state, and
+`serverLog` for host
 behavior. See [server logs](../server-logs/SKILL.md).
 
 Tie every verification result to its exact build/state provenance. If the

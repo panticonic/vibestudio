@@ -368,7 +368,7 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Demonstrate semantic optimistic concurrency in the disposable project: retain one exact working-head basis, advance the context with a different change, submit a new VCS edit against the retained stale basis, observe the typed refusal and unchanged state, then retry from a fresh basis with a fresh command identity. Explain whether the rejected command had any effect.",
+      "Show that the disposable project recovers safely when one edit races with another change. Explain what happened and whether the rejected work had any effect.",
     validate: (result) => {
       const base = checked(result, ["vcs.edit"]);
       if (!base.passed) return base;
@@ -381,7 +381,7 @@ export const vcsAdvancedTests: TestCase[] = [
     category: "vcs-advanced",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Demonstrate semantic command idempotency in the disposable project as if the first response were lost: retain one exact VCS edit request, submit it twice unchanged, and show that both terminals name the same application, work unit, and change. Those equal canonical terminals are the proof; stop without a deeper history walk.",
+      "Show that retrying the same project edit after a lost response is safe and does not duplicate the work. Explain what you verified.",
     validate: (result) => {
       const base = checked(result, ["vcs.edit"]);
       return base.passed ? requireCommandIdempotencyEvidence(result) : base;

@@ -272,7 +272,7 @@ await chat.updateCustomMessage(messageId, { status: "sent" });
 
 ## chat.rpc
 
-Full RPC bridge to all server and main-process services. Same as `rpc` from `@vibestudio/runtime`, but available in components that don't import the runtime.
+Full RPC bridge to all server and main-process services. Same as `rpc` from `@workspace/runtime`, but available in components that don't import the runtime.
 
 ```typescript
 // Filesystem
@@ -291,7 +291,7 @@ const rows = await chat.rpc.call(store.targetId, "listTodos", []);
 const build = await chat.rpc.call("main", "build.getBuild", ["panels/my-app"]);
 
 // Browser data (panel/component runtime; resolves the manifest-declared broker)
-import { browserData } from "@vibestudio/runtime";
+import { browserData } from "@workspace/runtime";
 const importHosts = await browserData.listImportHosts();
 
 // Workers (running worker instances)

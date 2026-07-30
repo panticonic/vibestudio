@@ -46,12 +46,13 @@ publication and refuse to push while the context is dirty. Then call
 observed main event, and invocation-bound command ID. Direct clients call
 `vcs.push` with those exact fields.
 
-Push validates event ancestry and integration completeness, obtains protected
-publication approval, and atomically advances protected refs through one
-durable effect. It authors no new source history and does not run or certify a
-build. Run checks explicitly against the context before publication when they
-are useful. A semantic, approval, authorization, or atomic-ref refusal advances
-nothing.
+Push validates event ancestry and integration completeness, runs the exact
+candidate build/typecheck gate for the changed units and their transitive
+reverse dependents, obtains protected publication approval, and atomically
+advances protected refs through one durable effect. It authors no new source
+history. Run the same exact-context report explicitly before publication when
+it is useful for faster feedback. A semantic, build-gate, approval,
+authorization, or atomic-ref refusal advances nothing.
 
 A content-identical committed event is still a real semantic-main advance and
 still requires approval. Expect an event-level approval rather than a fabricated

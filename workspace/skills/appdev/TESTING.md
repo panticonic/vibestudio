@@ -92,8 +92,9 @@ Verify:
 - terminal target builds a Node ESM primary artifact
 - `apps:available` includes `launchMode: "terminal-process"`
 - status is `available` before launch and `running` after the runner starts it
-- `workspace.units.restart(appName)` starts or replaces the process
-- stdout/stderr are visible through `workspace.units.logs(appName)`
+- `runtime.supervision.activate({ kind: "app", releaseId: appName })` starts an
+  available process; `restart(identity)` replaces an exact live process
+- stdout/stderr are visible through `runtime.supervision.logs(identity)`
 - rollback switches to a retained terminal build and returns the app to
   `available` or `running` according to whether the process is launched
 

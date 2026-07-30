@@ -5,7 +5,7 @@ import {
   credentials,
   extensions,
   type StoredCredentialSummary,
-} from "@vibestudio/runtime";
+} from "@workspace/runtime";
 import {
   MODEL_SETTINGS_SERVICE_PROTOCOL,
   type ModelSettingsSnapshot,
@@ -181,7 +181,7 @@ export function createDefaultStatusDependencies(): OnboardingStatusDependencies 
 
 function unavailable(summary: string, rawStage: string): CapabilityOnboardingStatusResult {
   return {
-    state: "unavailable",
+    state: rawStage === "not-installed" ? "not-installed" : "unavailable",
     summary,
     attention: "none",
     rawStage,
@@ -439,7 +439,9 @@ export function createStatusAdapters(
     "ai-provider": async () => aiProviderResult(await deps.modelSettings()),
     "agent-defaults": async () => agentDefaultsResult(await deps.modelSettings()),
     "local-models": async () =>
-      localModelsResult(await deps.localModelsStatus(), await deps.localModelsList()),
+      (await deps.hasSkill("skills/local-models/SKILL.md"))
+        ? localModelsResult(await deps.localModelsStatus(), await deps.localModelsList())
+        : unavailable("Local models are not installed in this workspace.", "not-installed"),
     "browser-environment": async () => browserImportResult(await deps.browserImportJobs()),
     "web-search": async () => {
       if (!(await deps.hasSkill("skills/web-research/SKILL.md"))) {

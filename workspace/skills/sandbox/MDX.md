@@ -56,7 +56,7 @@ Markdown links are clickable in Vibestudio panels.
 
 - HTTPS links open browser panels.
 - Workspace panel navigation should use `buildPanelLink` from
-  `@vibestudio/runtime` inside panel code.
+  `@workspace/runtime` inside panel code.
 - Workflow UI should offer both `openPanel(url, { focus: true })` and
   approval-gated `openExternal(url)` when the user may need their normal browser
   profile.

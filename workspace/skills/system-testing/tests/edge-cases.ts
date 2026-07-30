@@ -210,7 +210,6 @@ export const edgeCaseTests: TestCase[] = [
           decision: "once",
         },
       ],
-      userland: [],
     },
     prompt:
       "Check that a nonexistent package import fails clearly without preventing later sandbox work.",

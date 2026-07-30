@@ -81,15 +81,17 @@ what compromised client code can request.
 ## App Databases
 
 There is no app capability that grants a generic workspace SQL database. Use a
-worker Durable Object service for app data: the service's `policy.allowed` must
-include `app`, and each DO method must also include `app` in
-`@rpc({ callers: [...] })` if app callers should invoke it. Keep the DO methods
+worker Durable Object service for app data: the service's
+`authority.principals` must include the authenticated principal families that
+may resolve it, and each DO method must declare matching
+`@rpc({ principals, effect, tier, sensitivity })` receiver policy. Keep the DO methods
 app-shaped (`listItems`, `saveSettings`, `appendEvent`) rather than exposing
 raw SQL to trusted client renderers.
 
-If the DO exposes a shared or sensitive resource to other principals, add a
-custom userland approval inside the DO method with `approvals.request(...)`.
-Ordinary private app rows do not need an approval prompt.
+If the DO exposes a shared or sensitive resource to other principals, declare a
+receiver-owned capability in its package manifest and bind the `@rpc` method to
+that capability. The host evaluates it before entering the method. Ordinary
+private app rows do not need an approval prompt.
 
 ## React Native Capabilities
 

@@ -11,17 +11,16 @@ host review inputs that must remain explicit.
    derive it.
 2. Declare the receiver contract on the service definition: admitted principal kinds,
    relationship/resource derivation, sensitivity, and effect.
-3. Assign the reviewed tier in
-   `packages/shared/src/authority/tierTable.ts`. Tier is static method semantics:
-   open, gated, or critical. Do not infer it from current callers.
-4. Map the method to a semantic capability in
-   `packages/shared/src/authority/hostMethodCapabilities.ts`. Several transport
+3. Assign the reviewed tier on that same method schema. Tier is static method
+   semantics: open, gated, or critical. Do not infer it from current callers.
+4. Map the method to a semantic capability on the method schema. Several transport
    methods may intentionally share one user decision.
-5. For every promptable static host method, add plain-language copy to
-   `packages/shared/src/authority/hostCapabilityPresentations.ts`. Write what the
-   user allows, not the RPC verb. Use `{requesterKind}` only for the panel, worker,
-   app, extension, or agent kind; display identity and immutable authority identity
-   are separate fields.
+5. For every promptable static host method, add plain-language `presentation` copy
+   on the method schema. Write what the user allows, not the RPC verb. Use
+   `{requesterKind}` only for the panel, worker, app, extension, or agent kind;
+   display identity and immutable authority identity are separate fields. The
+   read-only projection is
+   `packages/shared/src/authority/hostAuthorityCatalog.generated.ts`.
 6. Implement the handler without accepting authority facts from arguments. Preserve
    the verified caller and authorization context on downstream calls.
 7. Update the explicit receiver-review input in
@@ -56,7 +55,7 @@ service declaration; live docs and resolution consume that same declaration.
 Static census generation is valid for shipped host methods. Workspace-built services
 and intra-workspace capabilities stay context-relative: declare them in the semantic
 workspace, discover them through live docs, and resolve them through the live service
-registry. Never regenerate a product catalog to approve workspace code.
+registry. Never regenerate a static host catalog to approve workspace code.
 
 ## Change a mission
 

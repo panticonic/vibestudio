@@ -15,7 +15,7 @@ source/
     chat/               ← Default chat panel
     my-panel/           ← User-created panel
   packages/             ← Shared libraries
-    runtime/            ← @vibestudio/runtime
+    runtime/            ← @workspace/runtime
     my-lib/
       SKILL.md          ← Repo-specific agent guidance for this package
   skills/               ← Cross-repo agent skill packages
@@ -147,17 +147,22 @@ For branch-aware declarations, import approvals, startup auto-import, and
 credentialed private repo retries, see
 [EXTERNAL_GIT_PROJECTS.md](EXTERNAL_GIT_PROJECTS.md).
 
-## Template vs Live Workspace
+## Base template vs live workspace
 
-The `workspace/` directory in the Vibestudio source repo is a **template**, never used directly as a live workspace. When a workspace is created:
+A live workspace is created from the promoted base template's exact Git pin;
+the Vibestudio host does not contain a fallback copy of workspace source.
 
-1. Source directories are copied from the template into `~/.config/vibestudio/workspaces/{name}/source/`
-2. Source directories are admitted by exact `vcs.importSnapshot` work units
-   with explicit repository/file identities, one external snapshot tuple per
-   source, and ordinary repository/file changes
-3. State directories are scaffolded fresh
+1. The host acquires and verifies the configured base URL, ref, commit, and
+   snapshot.
+2. It imports those repositories through exact `vcs.importSnapshot` work units
+   with explicit repository and file identities.
+3. It builds and activates the base manifest, including the manifest-declared
+   `gad.workspace` source provider.
+4. The template composer adopts the byte-identical base on first run and
+   publishes the composition lock. Optional templates then use the same
+   inspect, build, approval, and protected-publication path.
 
-In dev mode (`pnpm dev`), an ephemeral workspace is created from the template
-each run. Workspace events published to `main` in that generated workspace
-are mirrored back into the checked-in `workspace/` template, so accepted source
-changes made during a dev session persist into the source checkout.
+A fresh development or system-test instance performs this same base acquisition
+and bootstrap. Editing a live workspace changes that workspace's semantic
+source; publishing or suggesting those changes is explicit and never mirrors
+them into a host checkout.

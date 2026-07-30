@@ -34,7 +34,7 @@ vi.mock("@workspace/agentic-session", () => ({
   HeadlessSession: { createWithAgent: mocks.createWithAgent },
 }));
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   gad: mocks.gad,
   blobstore: mocks.blobstore,
   rpc: mocks.rpc,
@@ -265,6 +265,8 @@ describe("HeadlessRunner", () => {
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("most straightforward supported approach");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("If that documented approach fails, stop");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("When reporting a failure");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Task completed.");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Task not completed.");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("exact error or unexpected result");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("there is no initial visible panel ancestor");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("create an owned root panel explicitly");
@@ -430,7 +432,7 @@ describe("HeadlessRunner", () => {
               capability: { kind: "exact", key: "workspace-service:gad.workspace" },
               resource: {
                 kind: "exact",
-                key: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+                key: "do:workers/workspace-source:GadWorkspaceDO:workspace",
               },
               tier: "gated",
               decision: "once",
@@ -456,7 +458,6 @@ describe("HeadlessRunner", () => {
               decision: "once",
             },
           ],
-          userland: [],
           unexpectedPrompts: "fail",
         },
       },

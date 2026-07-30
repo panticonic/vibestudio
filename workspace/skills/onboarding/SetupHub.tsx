@@ -6,16 +6,19 @@ import {
   ReloadIcon,
 } from "@radix-ui/react-icons";
 import { useState } from "react";
+import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
 import {
   onboardingCatalog,
   type OnboardingCapabilityDefinition,
   type SetupAction,
 } from "./catalog";
+import { templateBrowseInteraction, templateCatalogInteraction } from "./routing";
 import type { SetupCapabilitySnapshot } from "./snapshot";
 
 interface SetupHubProps {
   props: {
     snapshot?: SetupCapabilitySnapshot[];
+    templateCatalog?: TemplateCatalogSnapshot;
   };
   chat: {
     send: (content: string, options?: { metadata?: Record<string, unknown> }) => Promise<unknown>;
@@ -30,6 +33,7 @@ const statePresentation = {
   "not-configured": { label: "Not configured", color: "gray" },
   "in-progress": { label: "In progress", color: "blue" },
   "needs-attention": { label: "Needs attention", color: "red" },
+  "not-installed": { label: "Available to install", color: "blue" },
   unavailable: { label: "Unavailable", color: "orange" },
   unknown: { label: "Unknown", color: "gray" },
 } as const;
@@ -60,6 +64,10 @@ const scopeLabels = {
 
 function readableAction(definition: OnboardingCapabilityDefinition, action: SetupAction): string {
   return `${actionLabels[action]} ${definition.title}`;
+}
+
+function actionLabel(definition: OnboardingCapabilityDefinition, action: SetupAction): string {
+  return action === "install" && definition.templateId ? "Install template" : actionLabels[action];
 }
 
 function formatObservation(iso: string): { label: string; stale: boolean } {
@@ -161,17 +169,19 @@ function SetupRow({
             >
               {pending === `${definition.id}:${snapshot.nextAction}`
                 ? "Sending…"
-                : actionLabels[snapshot.nextAction]}
+                : actionLabel(definition, snapshot.nextAction)}
             </Button>
           ) : null}
-          {definition.actions?.install ? (
+          {definition.actions?.install && snapshot.nextAction !== "install" ? (
             <Button
               size="1"
               variant="soft"
               disabled={pending !== null}
               onClick={() => onAction(definition, "install")}
             >
-              {pending === `${definition.id}:install` ? "Sending…" : actionLabels.install}
+              {pending === `${definition.id}:install`
+                ? "Sending…"
+                : actionLabel(definition, "install")}
             </Button>
           ) : null}
         </Flex>
@@ -206,6 +216,33 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
       });
     } catch {
       setError(`Couldn't send “${readableAction(definition, action)}”. Try again.`);
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function installTemplate(definition: OnboardingCapabilityDefinition) {
+    const templateId = definition.templateId;
+    if (!templateId) return sendInteraction(definition, "install");
+    const catalog = props.templateCatalog;
+    const entry = catalog?.entries.find((candidate) => candidate.id === templateId);
+    const interaction =
+      catalog && entry
+        ? templateCatalogInteraction(
+            entry.id,
+            catalog.coordinates.commit,
+            catalog.coordinates.snapshot
+          )
+        : templateBrowseInteraction();
+    setPending(`${definition.id}:install`);
+    setError(null);
+    try {
+      await chat.send(
+        entry ? `Install ${entry.name} for ${definition.title}` : `Find ${definition.title}`,
+        { metadata: { interaction } }
+      );
+    } catch {
+      setError(`Couldn't start installation for ${definition.title}. Try again.`);
     } finally {
       setPending(null);
     }
@@ -327,7 +364,11 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
                 definition={definition}
                 snapshot={byId.get(definition.id)!}
                 pending={pending}
-                onAction={(entry, action) => void sendInteraction(entry, action)}
+                onAction={(entry, action) =>
+                  void (action === "install"
+                    ? installTemplate(entry)
+                    : sendInteraction(entry, action))
+                }
               />
             ))}
           </Flex>

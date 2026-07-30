@@ -14,7 +14,6 @@ export const mobileTests: TestCase[] = [
     category: "mobile",
     resources: ["mobile:android-device"],
     authorityPolicy: {
-      userland: [],
       authority: [
         {
           ruleId: "onboarding-desktop-mobile-discovery",
@@ -42,9 +41,11 @@ export const mobileTests: TestCase[] = [
       if (!base.passed) return base;
       const exercised = requireCodeOperations(base.evidence.evalCode, [
         [
-          "phoneProvisioning.providers",
-          "phoneProvisioning.devices",
-          "phoneProvisioning.provision",
+          "vibestudio.phone-provisioning.v1",
+          "resolveService",
+          "\"providers\"",
+          "\"devices\"",
+          "\"provision\"",
           "extensions.invoke",
           "mobile-debug",
           "verifyWorkspaceReady",
@@ -109,19 +110,17 @@ export const mobileTests: TestCase[] = [
     authorityPolicy: {
       authority: [
         {
-          ruleId: "mobile-extension-userland-approval",
-          capability: { kind: "exact", key: "user-approval.request" },
-          resource: { kind: "exact", key: "user-approval.request" },
+          ruleId: "mobile-native-execution",
+          capability: {
+            kind: "prefix",
+            prefix: "userland:extensions/mobile-debug/native.mobile.execute#",
+          },
+          resource: {
+            kind: "exact",
+            key: "native.mobile:extension:@workspace-extensions/mobile-debug",
+          },
           tier: "gated",
           decision: "once",
-        },
-      ],
-      userland: [
-        {
-          ruleId: "mobile-install-subject",
-          subject: { kind: "prefix", prefix: "mobile.install." },
-          decision: "allow",
-          remember: false,
         },
       ],
     },

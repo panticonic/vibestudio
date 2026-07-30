@@ -19,15 +19,17 @@ update. Builds are separate source projections.
 4. Commit the complete local application chain. Split unrelated work into a
    different context instead of staging a subset.
 5. Push the clean committed event through the protected publication boundary.
-   An ancestry, integration, authorization, approval, or atomic-ref failure
-   advances no protected ref.
+   The boundary reruns the exact-candidate build/typecheck gate before
+   approval. Consume any structured refusal diagnostics, repair, recommit, and
+   retry; no failed check advances a protected ref.
 6. Let the post-publication build projection derive the app artifact. Approve
    the app install/update/source-change prompt if the trusted identity changed.
 7. Use the target-specific update prompt to adopt a successful new build, or
    keep the currently loaded build until you are ready.
 
-An explicit check returns structured diagnostics but has no ref authority. A
-stale or diverged publication must return to exact comparison, deliberate
+An explicit check returns structured diagnostics but has no ref authority. It
+is the fast repair loop; the push gate repeats it against the exact candidate.
+A stale or diverged publication must return to exact comparison, deliberate
 semantic integration, whole-chain commit, and protected publication: observe
 current `main`, compare exact state nodes, adopt/reconcile/decline incoming
 changes in local steps, commit the complete chain, and retry publication.
@@ -81,12 +83,14 @@ already-loaded clients:
   when rollback history exists
 - terminal apps restart automatically when they are already running; otherwise
   the new trusted build remains available until the host target is launched or
-  `workspace.units.restart(appName)` starts it
+  `runtime.supervision.activate({ kind: "app", releaseId: appName })` starts it
 
-Clients can call `workspace.units.versions(appName)` to inspect the current and
-previous builds, and `workspace.units.rollback(appName, { buildKey? })` to
-switch the app back to a previous trusted build. Omitting `buildKey` rolls back
-to the most recent previous version.
+Clients can call
+`runtime.supervision.versions({ kind: "app", releaseId: appName })` to inspect
+the current and previous builds, and
+`runtime.supervision.rollback({ kind: "app", releaseId: appName }, { buildKey? })`
+to switch the app back to a previous trusted build. Omitting `buildKey` rolls
+back to the most recent previous version.
 
 The workspace target picker also supports pinning a host target to a retained
 build or to a specific commit/ref. Use this when the latest desktop, mobile, or
@@ -178,11 +182,12 @@ testing against local Miniflare/coturn instead.
 For terminal apps:
 
 - Expect `apps:available` with `launchMode: "terminal-process"`.
-- Use `workspace.units.restart(appName)` to start or restart an available
-  terminal app.
+- Use `runtime.supervision.activate({ kind: "app", releaseId: appName })` to
+  start an available terminal app. Restart an already-live process only with
+  the exact identity returned by `runtime.supervision.list({ kind: "app" })`.
 - Expect `available` when the build is trusted but no process is running, and
   `running` when the runner has spawned the process.
-- Inspect stdout/stderr with `workspace.units.logs(appName)`.
+- Inspect stdout/stderr with `runtime.supervision.logs(identity)`.
 - Inspect host runner/reconcile failures with `serverLog.query` (eval:
   `services.serverLog.query(...)`; app/panel/worker:
   `rpc.call("main", "serverLog.query", [{ ... }])`) or the
@@ -199,8 +204,9 @@ provided RPC grant, and handles shutdown messages from the runner.
 Headless clients authenticate as paired users; there is no operator-token path
 that mints a synthetic human shell. Pair the CLI with the root invite on first
 boot, select a workspace, and use the normal typed services from that session.
-From app, panel, worker, or eval contexts, use `workspace.units.*` for the app
-process and `serverLog.*` for the host server. In eval, `services.serverLog.*`
+From app, panel, worker, or eval contexts, use `runtime.supervision.*` with an
+exact entity or release identity for the app process and `serverLog.*` for the
+host server. In eval, `services.serverLog.*`
 is the convenience client; elsewhere use `rpc.call("main", "serverLog.query",
 [{ ... }])`. `serverLog.query/tail/stats` is read-only and supports live
 following through `server-log:append`; humans can open `about/server-logs`.

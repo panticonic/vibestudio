@@ -160,13 +160,13 @@ The general pattern: store a URL-bound credential once, then fetch through the
 runtime credential proxy.
 
 The `credentials.fetch(url, init, { credentialId })` wrapper (which returns a
-`Response`) is part of the portable runtime surface from `@vibestudio/runtime`;
+`Response`) is part of the portable runtime surface from `@workspace/runtime`;
 it works from server-side eval, panels, workers, and DOs. In eval, import
-`credentials` from `@vibestudio/runtime` and use `credentials.fetch` for external
+`credentials` from `@workspace/runtime` and use `credentials.fetch` for external
 requests that need stored credentials:
 
 ```tsx
-import { credentials } from "@vibestudio/runtime";
+import { credentials } from "@workspace/runtime";
 
 const credential = await credentials.store({
   label: "Notion",
@@ -194,72 +194,26 @@ See [RUNTIME_API.md](RUNTIME_API.md) for the full runtime surface. Works with an
 configured provider; check
 `await credentials.listStoredCredentials()` to see what's available.
 
-## Request Access to a Custom Userland Resource
+## Protect a Custom Userland Resource
 
-Use `approvals.request()` only when custom userland code owns a shared resource
-and needs to grant another panel, worker, DO, or extension access to it. Vibestudio
-verifies the issuer, shows the user a shell consent prompt, and manages any
-remembered decision for the same issuer and stable `subject.id`.
+The portable runtime has no advisory `approvals` namespace. A provider protects
+its resource declaratively:
 
-Do not use this for normal agent work such as creating, editing, appending, or
-removing files in the caller's context. The outer runtime/host permission model
-already protects sensitive filesystem, browser, credential, git, and panel
-operations where approval is required.
+1. Add a user-facing capability definition to the provider package's
+   `vibestudio.authority.provides`.
+2. Bind the receiving `@rpc` method to that unit-local capability with a literal
+   `userland-capability` effect.
+3. Let the host derive the exact receiver resource and run the ordinary trusted
+   acquisition flow before provider code executes.
 
-`approvals.request`/`approvals.revoke` come from the portable runtime surface
-(`@vibestudio/runtime`) and bind to the live caller's verified issuer identity.
-They work from server-side eval, panels, workers, and DOs:
-
-```tsx
-import { approvals } from "@vibestudio/runtime";
-
-const decision = await approvals.request({
-  subject: { id: "demo-report-service:send", label: "Report sending service" },
-  title: "Allow report service access?",
-  summary:
-    "A custom report service wants to let this caller send reports through its shared backend.",
-});
-
-console.log(decision);
-```
-
-The default prompt lets the user allow once, allow for the current session,
-trust the current code version, or deny. If you need a custom choice set, opt
-into `promptOptions: "choices"`:
-
-```tsx
-import { approvals } from "@vibestudio/runtime";
-
-const decision = await approvals.request({
-  subject: { id: "demo-report-service:send", label: "Report sending service" },
-  title: "Allow report service access?",
-  summary:
-    "A custom report service wants to let this caller send reports through its shared backend.",
-  promptOptions: "choices",
-  options: [
-    { value: "allow", label: "Send", tone: "primary" },
-    { value: "deny", label: "Cancel", tone: "danger" },
-  ],
-});
-
-console.log(decision);
-```
-
-If the user dismisses the prompt, the result is `{ kind: "dismissed" }` and no
-grant is stored. To forget a stored decision:
-
-```tsx
-import { approvals } from "@vibestudio/runtime";
-await approvals.revoke("demo-report-service:send");
-```
-
-Do not use this for credentials, external browser opens, git writes, or project
-imports; those built-in APIs have their own trust scopes. See
-[RUNTIME_API.md](RUNTIME_API.md#userland-approval-prompts) for the full contract.
+Do not add a second prompt around filesystem, browser, credential, Git, panel,
+or other host-mediated operations. Those APIs already acquire their own host
+capabilities. See the [capabilities skill](../capabilities/SKILL.md) for complete
+receiver-object and opaque-handle examples.
 
 ## Browser data (cookies/passwords/bookmarks/history/tabs)
 
-`browserData` from `@vibestudio/runtime` is a **panel/component runtime**
+`browserData` from `@workspace/runtime` is a **panel/component runtime**
 capability: it invokes the manifest-selected `browserData` provider namespace,
 whose extension only accepts **shell** callers. It does not resolve or invoke an
 extension package directly. Server-side eval (caller kind `server`) cannot use
@@ -267,7 +221,7 @@ it — run browser-data work from panel code or an
 `inline_ui`/`feedback_custom` component:
 
 ```tsx
-import { browserData } from "@vibestudio/runtime";
+import { browserData } from "@workspace/runtime";
 
 const hosts = await browserData.listImportHosts();
 const host = hosts.find((candidate) => candidate.connected);
@@ -312,7 +266,7 @@ inline_ui({
   code: `
 import { useState, useEffect } from "react";
 import { Button, Flex, Text, Table, TextField } from "@radix-ui/themes";
-import { browserData } from "@vibestudio/runtime";
+import { browserData } from "@workspace/runtime";
 
 export default function CookieManager({ props, chat }) {
   const [cookies, setCookies] = useState([]);
@@ -381,7 +335,7 @@ inline_ui({
   code: `
 import { useCallback, useEffect, useState } from "react";
 import { Button, Flex, Text, Table, TextField } from "@radix-ui/themes";
-import { rpc, workers } from "@vibestudio/runtime";
+import { rpc, workers } from "@workspace/runtime";
 
 export default function TodoStoreView({ props = {} }) {
   const protocol = props.protocol || "example.todos.v1";
@@ -460,8 +414,8 @@ cookie-import recipe still runs from panel code or an
 `inline_ui`/`feedback_custom` component:
 
 ```tsx
-import { openPanel } from "@vibestudio/runtime";
-import { browserData } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
+import { browserData } from "@workspace/runtime";
 
 // Open the site in a browser panel
 const handle = await openPanel("https://github.com");

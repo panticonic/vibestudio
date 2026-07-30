@@ -868,7 +868,6 @@ const DEVELOPMENT_AUTHORITY = {
       decision: "once" as const,
     },
   ],
-  userland: [],
 };
 
 const HARNESS_PROMPT =
@@ -951,7 +950,6 @@ export const selfDevelopmentTests: TestCase[] = [
           decision: "once" as const,
         },
       ],
-      userland: [],
     },
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,

@@ -8,7 +8,7 @@ description: Inspect active workspace permission grants and design, declare, dis
 Read this skill before adding a host-service effect, a worker or Durable Object API,
 an authority request, or a workspace-owned approval flow.
 
-When changing host enforcement, mission closure, seeded product authority, or the
+When changing host enforcement, mission closure, static host authority, or the
 System Agent boundary, also read
 [`references/authority-implementation-checklist.md`](references/authority-implementation-checklist.md).
 It names the review inputs and tests that must move together.
@@ -22,15 +22,16 @@ It names the review inputs and tests that must move together.
 3. A host **grant or fresh approval** authorizes an eligible request. Open methods do
    not need a grant; gated methods intersect requests with grants; critical methods
    require a fresh approval for every exercise.
-4. A workspace service's **userland approval** answers a policy question owned by
-   that service. It cannot authorize host effects such as egress, credential use,
-   protected publication, or external browser opens.
+4. A workspace service's **provided capability** protects a resource the service
+   owns. The receiver declares and enforces it before provider code runs; downstream
+   host effects such as egress, credential use, protected publication, or external
+   browser opens still acquire their own host capabilities independently.
 
 Never turn discovery, a build, generated documentation, a static code census, or an
 observed invocation into a grant. Generated authority ledgers are review/audit evidence
 only; editing or regenerating one is not capability approval. Workspace code admission
 comes from a human decision over the exact sealed version and manifest, not a generated
-product catalog.
+static host catalog.
 
 ## Inspecting and changing live decisions
 
@@ -41,36 +42,18 @@ workspace:
 const inventory = await rpc.call("main", "permissions.list", []);
 ```
 
-Use the portable `approvals` API only for a custom shared-resource decision owned by
-the current panel, worker, DO, extension, or admitted agent eval. The ordinary
-request/verify/forget lifecycle is one eval:
+Do not ask for a decision from inside provider code. Declare the resource in
+`vibestudio.authority.provides` and bind the receiving `@rpc` method to its local
+capability. The host derives the exact receiver resource, evaluates the canonical
+grant store, and presents the normal approval card before entering the method.
 
-```ts
-import { approvals } from "@vibestudio/runtime";
-
-const subject = {
-  id: "example-service:harmless-resource",
-  label: "Example service harmless resource",
-};
-const before = await approvals.list();
-const decision = await approvals.request({
-  subject,
-  title: "Allow access to this custom resource?",
-  summary: "The example service wants to use its own shared resource.",
-});
-const afterApprove = await approvals.list();
-const removed = await approvals.revoke(subject.id);
-const afterRevoke = await approvals.list();
-return { subjectId: subject.id, before, decision, afterApprove, removed, afterRevoke };
-```
-
-`approvals.list()` contains only saved custom-resource choices for the verified
-caller. It is not the workspace permission inventory. `approvals.revoke(...)` takes
-the original `subject.id` string, not the whole subject object. A remembered allow
-or deny appears after `request`; revoking it removes that saved decision so the next
-identical request can ask again. Stable subject ids are provider-owned identifiers;
-they may contain letters, numbers, `. _ : / -`, but may not start with `shell:`,
-`server:`, `system:`, or `@`.
+For prepared provider state, declare a handle-producing method and return
+`prepareOpaqueHandle(selector, presentation)`. The host replaces that preparation
+with an unguessable handle. A consuming method declares
+`resource: { kind: "opaque-handle", argument: 0 }`; it receives the private selector
+only after the host has checked the handle's workspace, capability definition,
+provider, logical receiver, and resource type. A handle identifies a resource but
+never authorizes it.
 
 ## Dynamic workspace capabilities
 
@@ -100,7 +83,7 @@ order after editing a provider:
 4. Inside eval, use only the documented runtime exports:
 
 ```ts
-import { workers, rpc } from "@vibestudio/runtime";
+import { workers, rpc } from "@workspace/runtime";
 const service = await workers.resolveService("example.protocol.v1");
 if (service.kind !== "durable-object") throw new Error("Expected a Durable Object service");
 return rpc.call(service.targetId, "methodName", []);
@@ -108,7 +91,7 @@ return rpc.call(service.targetId, "methodName", []);
 
 Import only runtime values that the eval actually uses. TypeScript's `type`
 keyword is a modifier for a real imported type name, not an export named
-`type`; never write `import { workers, type } from "@vibestudio/runtime"`.
+`type`; never write `import { workers, type } from "@workspace/runtime"`.
 
 There is no polling delay in this sequence. A docs result is the read-after-edit
 proof that the current semantic context can build and describe the declaration;
@@ -118,7 +101,7 @@ absence is a concrete authoring diagnostic, not eventual success to wait for.
   source, user-facing title/action/description, principals, and transport.
 - Use the agent tools `docs_search` / `docs_open` to inspect the live
   caller-visible contract before starting an eval. These are tool names, not
-  `@vibestudio/runtime` exports. Inside eval, consume the result through the
+  `@workspace/runtime` exports. Inside eval, consume the result through the
   documented `workers.*` and `rpc.*` runtime APIs. Service and API docs are
   generated from the same exact declaration set used for resolution. Never
   reference `docs` from eval code.
@@ -139,8 +122,8 @@ absence is a concrete authoring diagnostic, not eventual success to wait for.
   context and exact provider effective version. A declaration visible in another
   context does not authorize or resolve in this one.
 
-Do not add workspace service names to a generated product catalog. Static reviewed
-censuses are appropriate for static host/product capabilities; workspace-built units
+Do not add workspace service names to a generated host catalog. Static reviewed
+censuses are appropriate for static host capabilities; workspace-built units
 must remain live, context-relative declarations.
 
 The provider method roster and source signatures in live docs are derived during the
@@ -169,10 +152,13 @@ The shortest authoring loop is:
 `workspace-service` describes a declared service boundary, not every method on
 every workspace Durable Object. A disposable object intentionally addressed by
 source/class/key through `workers.resolveDurableObject(...)` instead declares
-`effect: { kind: "runtime-intrinsic" }`. The two routes fail closed when mixed:
-a raw target cannot exercise a receiver method declared as a workspace service,
-and changing the receiver effect merely to bypass a missing service declaration
-is not an authority fix. Add the live service declaration and use
+`effect: { kind: "open" }`; it has no service-declaration admission boundary.
+A manifest-declared service may also expose an open method: the live service
+declaration supplies the separate `workspace-service:<name>` target requirement.
+Provider-owned protected methods instead use
+`effect: { kind: "userland-capability", ... }` backed by the same package's
+`authority.provides`. Never change a protected method to open merely to bypass a
+missing service declaration. Add the live declaration and use
 `resolveService(...)`, or keep the object explicitly lifecycle-owned and direct.
 
 ### Installed provider/consumer recipe
@@ -188,14 +174,14 @@ or edit `meta/vibestudio.yml` merely to demonstrate consumption.
 Provider receiver (`workers/local-greeting/index.ts`):
 
 ```ts
-import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 
 export class LocalGreetingDO extends DurableObjectBase {
   protected createTables(): void {}
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -235,6 +221,7 @@ Unknown fields and malformed entries are always rejected.
 {
   "vibestudio": {
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "workspace-service:local-greeting",
@@ -256,7 +243,7 @@ import {
   handleWorkerRpc,
   type ExecutionContext,
   type WorkerEnv,
-} from "@vibestudio/runtime/worker";
+} from "@workspace/runtime/worker";
 
 let exposedFor: string | null = null;
 
@@ -289,7 +276,7 @@ normal typed lifecycle. This complete eval shape keeps the build selector,
 runtime context, RPC target, and cleanup aligned:
 
 ```ts
-import { contextId, rpc, workers } from "@vibestudio/runtime";
+import { contextId, rpc, workers } from "@workspace/runtime";
 
 const source = "workers/local-consumer";
 const report = await services.build.getBuildReport(source, `ctx:${contextId}`);
@@ -425,18 +412,21 @@ unused request: the live semantic context supplies the declaration and exact pro
 EV later. Installed units may not request `workspace-service:*`; evaluated sessions
 select exact live services and cannot turn a wildcard into authority.
 
-## Userland-owned approval
+## Userland-owned capabilities
 
-Use `userlandApproval` only when workspace code owns the policy question, such as
-whether a subject may use a custom service. Supply a stable choice and exact subject;
-the host binds the issuer to the calling code identity and persists the decision in
-the unified authority grant store. Session decisions survive host restart and expire
-with the authority session; version decisions bind to the issuer repository and exact
-effective version.
+When a workspace service owns a protected resource, declare that capability in the
+provider manifest's `authority.provides` list and bind each protected method through
+extension `methodAuthority` or the Durable Object's `@rpc` effect. Use the receiver
+object for simple resources. For prepared state, declare
+`produces: { kind: "opaque-handle", capability: "<local-name>" }`, return
+`prepareOpaqueHandle(selector, { title, detail? })`, and bind the consumer with
+`resource: { kind: "opaque-handle", argument: <index> }`.
+The dispatcher enforces the declaration before provider code runs and routes missing
+authority through the same trusted acquisition UI used by host capabilities.
 
-Do not use userland approval as a proxy for credentials, network access, filesystem
-authority, protected-main publication, panel control, or another host capability.
-Those effects must pass their ordinary receiver and host grant checks as well.
+Never add an advisory prompt inside provider code. Credentials, network access,
+filesystem authority, protected-main publication, panel control, and other host
+effects must still cross their own independently protected receivers.
 
 ## Content integrity
 

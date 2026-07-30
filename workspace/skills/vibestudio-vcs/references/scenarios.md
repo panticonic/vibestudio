@@ -55,9 +55,11 @@ or rebuild a path from stale bytes.
 ## Publish verified work
 
 Confirm the context is clean and its committed event includes the intended
-local chain. Run the relevant explicit context checks for advisory confidence,
-then call `push` with the exact committed and observed main events. Handle
-ancestry, integration, authorization, approval, and atomic-ref refusals by
-typed code. Inspect post-publication build and activation projections
-separately; a failed activation must leave the previous runnable artifact in
-place.
+local chain. Run the relevant exact-context checks for fast feedback, then call
+`push` with the exact committed and observed main events. Push repeats the
+affected-unit build/typecheck gate, so handle `BuildGateFailed` by consuming
+all structured diagnostics, repairing the cited source, recommitting, and
+retrying from freshly observed state. Handle ancestry, integration,
+authorization, approval, and atomic-refusal refusals by typed code. Inspect
+post-publication build and activation projections separately; a failed
+activation must leave the previous runnable artifact in place.

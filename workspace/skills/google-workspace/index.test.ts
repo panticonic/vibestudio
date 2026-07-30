@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { StoredCredentialSummary } from "@vibestudio/runtime";
+import type { StoredCredentialSummary } from "@workspace/runtime";
 
 const runtimeMock = vi.hoisted(() => ({
   credentials: {
@@ -12,7 +12,7 @@ const runtimeMock = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@vibestudio/runtime", () => runtimeMock);
+vi.mock("@workspace/runtime", () => runtimeMock);
 
 import {
   configureGoogleOAuthClient,

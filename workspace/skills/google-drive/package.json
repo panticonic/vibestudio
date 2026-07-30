@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@workspace/integrations": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace-skills/google-workspace": "workspace:*"
   }
 }

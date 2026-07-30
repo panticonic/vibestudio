@@ -6,13 +6,13 @@ panels, including chat panels, are application surfaces: inspect them when
 debugging that app, but do not use them as disposable web pages.
 
 > **Where this runs.** `openPanel`, `panelTree`, and `getPanelHandle` are part
-> of the portable runtime surface from `@vibestudio/runtime`; they work from
+> of the portable runtime surface from `@workspace/runtime`; they work from
 > server-side eval, panels, workers, and DOs. The workerd-native CDP client is
 > workerd-native and runs over a WebSocket to the panel's CDP endpoint, so a
 > browser panel opened from eval can be driven there directly. The "Inline UI:
 > Browser Control Panel" example below shows the panel/component
 > shape; the `eval` snippets show the same page API. (`browserData` from
-> `@vibestudio/runtime` is shell-only and not reachable from server-side eval.)
+> `@workspace/runtime` is shell-only and not reachable from server-side eval.)
 
 ## Open Once, Reuse Across Calls (component refs)
 
@@ -71,26 +71,33 @@ own UI. For arbitrary URLs, login flows, scraping, or browser navigation, use
 `openPanel(url)` and hold that browser handle in your component's state.
 
 ```ts
-import { panelTree } from "@vibestudio/runtime";
+import { panelTree } from "@workspace/runtime";
 
 // panelTree is top-level; workspace.panelTree is not available.
-const panels = await panelTree.list();
-const target = panels.find((handle) => handle.source === "panels/spectrolite");
+const result = await panelTree.search({ query: "spectrolite", limit: 20 });
+const target = result.hits
+  .map(({ entry }) => entry.handle)
+  .find((handle) => handle.source === "panels/spectrolite");
 if (!target) throw new Error("target panel not found");
 
 const page = await target.cdp.page();
 console.log(await page.title());
 ```
 
-For a collection or any recursive container, take one revisioned subtree
-snapshot instead of recursively issuing `children()` calls:
+For a collection or any recursive container, traverse only the needed sibling
+groups with a bounded work queue:
 
 ```ts
-const scope = await panelTree.subtree(collectionRootId);
-const browserTargets = scope.descendants.filter((node) => node.handle.kind === "browser");
+const firstPage = await panelTree.page({
+  group: { kind: "children", parentSlotId: collectionRootId },
+  limit: 100,
+});
+const browserTargets = firstPage.entries
+  .map(({ handle }) => handle)
+  .filter((handle) => handle.kind === "browser");
 ```
 
-Refresh the snapshot after tree mutations. Imported browser targets may be
+Restart affected groups from the first page after tree mutations. Imported browser targets may be
 deferred; acquiring CDP materializes them, so automate mass imports with
 bounded concurrency rather than an unbounded `Promise.all`.
 
@@ -101,7 +108,7 @@ grouping, semantic titles, notes, and orchestration-context rules.
 With a known slot id:
 
 ```ts
-import { panelTree } from "@vibestudio/runtime";
+import { panelTree } from "@workspace/runtime";
 
 const handle = panelTree.get("panel-slot-id");
 const observation = await handle.observe(); // exact attempt, host state, and provenance
@@ -146,11 +153,11 @@ Browser handles and CDP pages are live objects tied to the panel runtime; they
 cannot be persisted (the eval `scope` is server-side in your `EvalDO`, and a
 panel/component's own state is lost on re-mount or panel reload). What you can
 persist is the panel **id** (a string). Re-acquire a handle from a known id with
-`getPanelHandle` (or rediscover via `panelTree.list()`) from panel/component
+`getPanelHandle` (or rediscover via bounded `panelTree.page()`/`search()`) from panel/component
 code, then reconnect the CDP page:
 
 ```tsx
-import { getPanelHandle } from "@vibestudio/runtime";
+import { getPanelHandle } from "@workspace/runtime";
 
 const handle = getPanelHandle(savedBrowserId); // panel id survives as a plain string
 const page = await handle.cdp.page();
@@ -165,7 +172,7 @@ handle persisting.
 
 Obtain a `page` from a panel handle, then use the methods below.
 `handle.cdp.page()` returns the canonical Playwright-style page driven by our
-workerd-native CDP client (`@vibestudio/cdp-client`). It is the single
+workerd-native CDP client (`@workspace/cdp-client`). It is the single
 browser-automation surface — there is no separate compatibility tier
 to choose, and you do not import or install any `playwright*` package.
 
@@ -174,7 +181,7 @@ const browser = await openPanel("https://example.com");
 const page = await browser.cdp.page();
 ```
 
-`handle.cdp.page()` loads the standalone `@vibestudio/cdp-client`
+`handle.cdp.page()` loads the standalone `@workspace/cdp-client`
 internally; do not import that package directly for ordinary page work. There is
 no second page-acquisition API.
 
@@ -366,7 +373,7 @@ host directly (including hidden or unslotted panels) and returns base64 plus the
 actual media metadata:
 
 ```typescript
-import { blobstore } from "@vibestudio/runtime";
+import { blobstore } from "@workspace/runtime";
 
 const shot = await handle.cdp.screenshot({ format: "png" });
 const stored = await blobstore.putBase64(shot.data); // exactly one base64 argument
@@ -435,7 +442,7 @@ For raw CDP, connect to the panel's CDP endpoint and drive the protocol
 directly:
 
 ```ts
-import { CdpConnection } from "@vibestudio/cdp-client";
+import { CdpConnection } from "@workspace/cdp-client";
 
 const endpoint = await handle.cdp.getCdpEndpoint(); // { wsEndpoint, token }
 const c = await CdpConnection.connect(endpoint.wsEndpoint, endpoint.token);
@@ -475,7 +482,7 @@ eval once you hold the handle.
 ### Multi-Step Workflow: Scrape + Process
 
 ```tsx
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 
 // Open and navigate
 const browser = await openPanel("https://news.ycombinator.com");
@@ -498,7 +505,7 @@ console.log("Top 5:", JSON.stringify(top5, null, 2));
 ### Login Flow
 
 ```tsx
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 
 const browser = await openPanel("https://example.com/login");
 const page = await browser.cdp.page();
@@ -517,8 +524,8 @@ console.log("Dashboard:", dashboardData);
 ### Combined: Import Cookies + Authenticate
 
 ```tsx
-import { openPanel } from "@vibestudio/runtime";
-import { browserData } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
+import { browserData } from "@workspace/runtime";
 
 // Step 1: Import cookies from an opaque Chrome source on a trusted host.
 const hosts = await browserData.listImportHosts();
@@ -558,7 +565,7 @@ inline_ui({
   code: `
 import { useState, useRef } from "react";
 import { Button, Flex, Text, TextField, Box, Badge } from "@radix-ui/themes";
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 
 export default function BrowserController({ props, chat }) {
   const [url, setUrl] = useState(props.startUrl || "https://example.com");

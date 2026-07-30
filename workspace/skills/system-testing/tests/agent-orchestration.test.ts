@@ -82,7 +82,7 @@ const fixtureLaunchConfig = {
 
 describe("agent orchestration validators", () => {
   const terminal = agentOrchestrationTests.find(
-    ({ name }) => name === "terminal-extension-custom-approval"
+    ({ name }) => name === "terminal-extension-capability-acquisition"
   )!;
   const claude = agentOrchestrationTests.find(
     ({ name }) => name === "claude-subagent-readonly-diagnostic"
@@ -287,23 +287,21 @@ describe("agent orchestration validators", () => {
     });
   });
 
-  it("declares only the canonical digest-scoped workspace verification approval", () => {
+  it("declares only the canonical test-runner capability acquisition", () => {
     expect(fixtureFanout.authorityPolicy).toEqual({
       authority: [
         {
-          ruleId: "fixture-verification-userland-approval",
-          capability: { kind: "exact", key: "user-approval.request" },
-          resource: { kind: "exact", key: "user-approval.request" },
+          ruleId: "fixture-verification-test-execution",
+          capability: {
+            kind: "prefix",
+            prefix: "userland:extensions/test-runner/native.tests.execute#",
+          },
+          resource: {
+            kind: "exact",
+            key: "native.tests:extension:@workspace-extensions/test-runner",
+          },
           tier: "gated",
           decision: "once",
-        },
-      ],
-      userland: [
-        {
-          ruleId: "fixture-verification-workspace-test",
-          subject: { kind: "prefix", prefix: "workspace-test:" },
-          decision: "allow",
-          remember: false,
         },
       ],
     });

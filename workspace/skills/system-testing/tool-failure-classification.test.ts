@@ -53,6 +53,7 @@ describe("tool failure classification", () => {
   it("keeps safe typed VCS refusals diagnostic-only", () => {
     expect(isSafeVcsDomainRejection("vcs", "WorkingChangesPresent")).toBe(true);
     expect(isSafeVcsDomainRejection("vcs", "RevisionChanged")).toBe(true);
+    expect(isSafeVcsDomainRejection("vcs", "BuildGateFailed")).toBe(true);
     expect(isSafeVcsDomainRejection("commit", "RevisionChanged")).toBe(false);
     expect(isSafeVcsDomainRejection("vcs", "InvalidReference")).toBe(true);
   });

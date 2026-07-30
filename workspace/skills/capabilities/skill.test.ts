@@ -16,8 +16,9 @@ describe("capabilities skill", () => {
       "`workspace-service` describes a declared service boundary, not every method"
     );
     expect(markdown).toContain("`workers.resolveDurableObject(...)` instead declares");
-    expect(markdown).toContain('`effect: { kind: "runtime-intrinsic" }`');
-    expect(markdown).toContain("fail closed when mixed");
+    expect(markdown).toContain('`effect: { kind: "open" }`');
+    expect(markdown).toContain("separate `workspace-service:<name>` target requirement");
+    expect(markdown).toContain('`effect: { kind: "userland-capability", ... }`');
   });
 
   it("keeps the installed-consumer manifest recipe accepted by the runtime parser", () => {
@@ -35,7 +36,7 @@ describe("capabilities skill", () => {
         "capabilities skill installed-consumer recipe"
       )
     ).not.toThrow();
-    expect(section).toContain('import { contextId, rpc, workers } from "@vibestudio/runtime"');
+    expect(section).toContain('import { contextId, rpc, workers } from "@workspace/runtime"');
     expect(section).toContain("services.build.getBuildReport(source, `ctx:${contextId}`)");
     expect(section).toContain('report.status !== "ok"');
     expect(section).toContain("workers.create(source");
@@ -53,7 +54,9 @@ describe("capabilities skill", () => {
     expect(markdown).toContain("it does not approve\n  itself");
     expect(markdown).toContain("activation must not ask the same question again");
     expect(markdown).toContain("Added capabilities are shown first");
-    expect(markdown).toContain("Direct installed-code capabilities render as shared authority rows");
+    expect(markdown).toContain(
+      "Direct installed-code capabilities render as shared authority rows"
+    );
     expect(markdown).toContain("Evaluated code is not part of that version's authority");
     expect(markdown).toContain("no session-duration source-change bypass exists");
   });
@@ -95,7 +98,7 @@ describe("capabilities skill", () => {
       "utf8"
     );
     expect(markdown).toContain("references/authority-implementation-checklist.md");
-    expect(checklist).toContain("hostCapabilityPresentations.ts");
+    expect(checklist).toContain("hostAuthorityCatalog.generated.ts");
     expect(checklist).toContain("runtime-authority-review.json");
     expect(checklist).toContain("Regenerating derived ledgers is not");
     expect(checklist).toContain("desktop and mobile clients call the same typed lifecycle service");

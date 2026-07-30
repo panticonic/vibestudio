@@ -58,7 +58,7 @@ when the pattern is an intentional valid regex.
 
 ```
 Grep({ pattern: "useState", path: "panels/my-app" })
-Grep({ pattern: "openPanel(", path: "packages/runtime" })
+Grep({ pattern: "openPanel(", path: "workspace/packages/runtime" })
 Grep({ pattern: "import.*runtime", path: "panels/my-app", literal: false })
 ```
 
@@ -84,15 +84,12 @@ durably retried delivery attempt; they are not RPC operation deadlines. The
 logical filesystem operation, eval run, system-test run, and durable delivery
 remain alive under caller cancellation or durable state respectively.
 
-Every ordinary in-process agent tool also has a runtime-owned 30-second
-wall-clock boundary, including tool-registry and host-RPC work before the
-tool's own implementation settles. A timeout returns an
-`agent-tool-failure.v1` terminal with
-`code: "tool_execution_timeout"`, the exact `tool.<name>` operation,
-invocation/command causality, and `{ tool, timeoutMs, elapsedMs }` evidence.
-It also aborts the tool's child signal. Never encode intentionally unbounded
-work as an ordinary tool: use a deferred protocol such as `eval`, whose run
-owns its explicit `timeoutMs` and delivers its result asynchronously.
+Ordinary in-process agent tools have no implicit wall-clock deadline. They run
+for as long as their work requires and receive cancellation only when the
+owning agent turn is explicitly cancelled. A tool or deferred protocol may own
+an explicit deadline when that deadline is part of its semantics; for example,
+`eval` accepts an opt-in `timeoutMs` and delivers long-running results
+asynchronously.
 
 Channel trajectory terminals and other structured envelopes use a durable
 delivery outbox with a 15-second transport attempt deadline. An unavailable
@@ -117,10 +114,10 @@ Supported types: `panel`, `package`, `skill`, `project`, `worker`. Each scaffold
 The scaffold runs the semantic development loop for you: it authors one
 coherent lifecycle work unit, commits the complete local chain from the exact
 working head, and publishes the resulting event through semantic
-ancestry/integration validation, approval, and an atomic protected-ref update.
-It does not make a build guarantee: post-publication build and activation are
-separate projections, and failed activation retains the previous runnable
-artifact.
+ancestry/integration validation, the affected-unit build/typecheck gate,
+approval, and an atomic protected-ref update. Post-publication build and
+activation remain separate projections, and failed activation retains the
+previous runnable artifact.
 Follow-up `edit`/`write` changes remain context-local until you commit the
 complete chain and choose to publish it.
 
@@ -246,7 +243,7 @@ lost scope keys. In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
 raw service catalog methods through `rpc.call("<svc>.<method>", [args])`. Use
 rich runtime bindings (`workers`, `vcs`, `fs`, etc.) directly for normal
 workspace operations; `services.<svc>` is convenience sugar for non-colliding
-service names. Do **not** import the injected names from `@vibestudio/runtime`.
+service names. Do **not** import the injected names from `@workspace/runtime`.
 
 **IMPORTANT:**
 
@@ -267,7 +264,7 @@ to import `./index.ts`, use its directory or a distinct filename such as
 
 ### Panel APIs
 
-`openPanel`/`listPanels`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@vibestudio/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
+`openPanel`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@workspace/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
 
 | API                              | Description                                                                                           |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -317,7 +314,7 @@ extension that isn't declared yet, edit `meta/vibestudio.yml`.
 Extension methods normally use unary RPC and must return JSON-serializable values. If an extension method returns a `Response` or `ReadableStream`, declare it when creating the client so the runtime uses streaming RPC end-to-end. Streaming `Response`/`ReadableStream` methods need the panel-runtime typed client (`extensions.use`), so this runs in panel/component code, not server-side eval:
 
 ```tsx
-import { extensions } from "@vibestudio/runtime";
+import { extensions } from "@workspace/runtime";
 
 type ShellApi = {
   attach(sessionId: string): Promise<Response>;
@@ -370,12 +367,11 @@ The request fields are `command`, `args`, `cwd`, `env`, `shell`, `timeoutMs`,
 string as aliases. The result is `{ exitCode, stdout, stderr, durationMs,
 timedOut?, truncated? }`.
 
-`exec` always creates a userland approval subject in the dynamic
-`user.exec.*` namespace. The attributed panel, worker, DO, or agent eval
-remains the approval principal even though the native extension performs the
-spawn. A call that waits instead of returning an approval choice is an
-attribution/approval propagation defect; do not work around it with a
-temporary panel or an unapproved process path.
+`exec` is protected by the shell extension's manifest-declared
+`native.shell.execute` capability. The attributed panel, worker, DO, or agent
+eval remains the authority principal even though the native extension performs
+the spawn. A call that cannot acquire authority is an attribution/propagation
+defect; do not work around it with a temporary panel or another process path.
 
 **Pre-injected** (use directly, do NOT import):
 
@@ -430,12 +426,13 @@ semantic working state. Omit `ref` to follow the owning context. Pass
 `ref: "main"` only when intentionally pinning protected main, or another exact
 selector when deliberately testing a different semantic state.
 
-Launch/list/retire: `workers.create(source, { key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `workers.list()` lists live regular worker **instances**; `workers.destroy(handleOrId)` retires one. `workspace.units.list()` is the unified **registered-unit/build-health** view (workers, panels, apps, extensions, jobs), so it is also the right answer to workspace-level questions such as “which worker units are running/available?”—but it does not replace instance handles. Discover sources with `workers.listSources()`; use each row's `entry` instead of guessing `index.ts`. The raw `runtime.createEntity/listEntities/retireEntity` methods are the canonical entity-lifecycle lower layer, not redundant aliases for `workspace.units`. A successful create proves `env` configuration was accepted, while value observation requires a narrow worker endpoint/RPC for a named non-secret probe. The `workers` binding also exposes service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`. Prefer `resolveService(...)`; raw resolution can address workspace worker DO classes, while product-internal DOs require an exact reviewed source/class/key and cannot be discovered by guessing. To duplicate or tear down a whole context's durable state (every DO's storage + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability; the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for details.
+Launch/list/retire: `workers.create(source, { key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `workers.list()` lists live regular worker **instances**; `workers.destroy(handleOrId)` retires one. `build.listUnits()` is the declared-source/build-readiness view, while `runtime.supervision.list()` returns exact live driver identities; neither replaces worker instance handles. Discover sources with `workers.listSources()` and use each row's `entry` instead of guessing `index.ts`. The raw `runtime.createEntity/listEntities/retireEntity` methods are the canonical entity-lifecycle lower layer. A successful create proves `env` configuration was accepted, while value observation requires a narrow worker endpoint/RPC for a named non-secret probe. The `workers` binding also exposes service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`. Prefer `resolveService(...)`; raw resolution can address workspace worker DO classes, while host-internal DOs are not workspace targets and cannot be discovered by guessing. To duplicate or tear down a whole context's durable state (every DO's storage + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability; the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for details.
 
 For app data, prefer a Durable Object service over eval `db` or ad hoc files:
-the DO owns SQLite through `this.sql`, the manifest service declares
-`policy.allowed`, and callers use `workers.resolveService(protocol, objectKey?)`
-plus `rpc.call(targetId, method, args)`. See
+the DO owns SQLite through `this.sql`, the live service declaration sets
+`authority.principals`, and each method declares its `@rpc` receiver policy.
+Callers use `workers.resolveService(protocol, objectKey?)` plus
+`rpc.call(targetId, method, args)`. See
 [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).
 
 #### Semantic workspace version control
@@ -458,7 +455,7 @@ Core routing:
 | Compare committed work       | `vcs.compare` from an exact target state to one source event                                                                                                                         |
 | Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                                                                              |
 | Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                                                                                           |
-| Publish committed work       | `vcs.push` advances protected main to one exact committed event                                                                                                                      |
+| Publish committed work       | `vcs.push` gates the affected build/typecheck closure, then advances protected main to one exact committed event                                                                     |
 | Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                                                                                     |
 | Move managed identities      | `vcs.move` preserves file or repository identity                                                                                                                                     |
 | Copy managed content         | `vcs.copy` mints file identity and records immediate copy provenance                                                                                                                 |
@@ -535,9 +532,10 @@ eval({ code: `
 })
 ```
 
-This advisory check neither creates a semantic event nor publishes source.
-Fix the reported files through managed edits, then request a new report for
-the same context.
+This local check neither creates a semantic event nor publishes source. It is
+the fast repair loop used before commit; the protected push gate repeats the
+same check against the exact candidate. Fix every reported file through
+managed edits, then request a new report for the same context.
 
 #### @workspace-extensions/typecheck-service (alternative)
 
@@ -585,7 +583,7 @@ await services.extensions.invoke("@workspace-extensions/test-runner", "run", [{
 ### Browser Data
 
 ```typescript
-import { browserData } from "@vibestudio/runtime";
+import { browserData } from "@workspace/runtime";
 ```
 
 Core method groups:
@@ -616,7 +614,7 @@ browser window; pass `destination: "caller"` to attach it to the invoking panel.
 
 ```
 eval({ code: `
-  import { browserData } from "@vibestudio/runtime";
+  import { browserData } from "@workspace/runtime";
   const hosts = await browserData.listImportHosts();
   for (const host of hosts) {
     console.log(host.displayName, await browserData.listImportSources(host.hostId));
@@ -629,7 +627,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@vibestudio/runtime";
+  import { browserData } from "@workspace/runtime";
   const hosts = await browserData.listImportHosts();
   const host = hosts.find(h => h.connected);
   if (!host) { console.log("No import host connected"); return; }
@@ -650,7 +648,7 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { browserData } from "@vibestudio/runtime";
+  import { browserData } from "@workspace/runtime";
   const bookmarks = await browserData.searchBookmarks("github");
   console.log("Found", bookmarks.length, "bookmarks");
   const html = await browserData.exportBookmarks("html");
@@ -669,7 +667,7 @@ You can drive panel lifecycle from eval, panel code, or an
 #### First launch
 
 ```tsx
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 // Opens the main/pushed build. Plain openPanel() does not infer code provenance
 // from your contextId; pass { ref: `ctx:${contextId}` } when intended.
 const handle = await openPanel("panels/my-app");
@@ -686,7 +684,7 @@ content for the same `panelId`, `attemptId`, `runtimeEntityId`, and `buildKey`.
 #### Rebuild after edits
 
 ```tsx
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 // Rebuilds the panel's current build ref: explicit ref if the panel was pinned,
 // otherwise main. It does not infer ctx:<contextId> from the panel context.
 const handle = await openPanel("panels/my-app");

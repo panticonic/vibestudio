@@ -84,7 +84,7 @@ connectivity.
 - Existing host invite: pair one root device from the service's startup link,
   then mint every later user/device invite from that authenticated device.
 - Desktop to attached phone: use the onboarding **Install on phone** action.
-  Its `phoneProvisioning.provision` transaction installs only when needed,
+  Its resolved `vibestudio.phone-provisioning.v1` builtin transaction installs only when needed,
   delivers a same-account invite through the connected desktop, and waits for
   the phone's durable device identity. The invite secret never enters the
   agent's transcript. If trusted desktop provisioning is unavailable, open the

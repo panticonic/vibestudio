@@ -65,7 +65,7 @@ Use `git.importProject()` when you want to add the config declaration, clone the
 repo, and create its first semantic `vcs.importSnapshot` candidate:
 
 ```ts
-import { git } from "@vibestudio/runtime";
+import { git } from "@workspace/runtime";
 
 const imported = await git.importProject({
   path: "projects/upstream",

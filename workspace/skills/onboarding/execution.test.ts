@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   callMain: vi.fn(),
   openPanel: vi.fn(),
 }));
@@ -52,7 +52,11 @@ describe("executeOnboardingSelection", () => {
   });
 
   it("returns template selections to the userland composer workflow", () => {
-    const interaction = templateCatalogInteraction("base-dev-tools", "2026-07-29.3");
+    const interaction = templateCatalogInteraction(
+      "base-dev-tools",
+      "1".repeat(40),
+      `v1-sha256:${"2".repeat(64)}`
+    );
     expect(executeTemplateSelection(interaction)).toEqual({
       handled: false,
       target: { via: "template-composer" },

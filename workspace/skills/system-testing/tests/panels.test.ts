@@ -16,7 +16,6 @@ describe("create-panel validation", () => {
           decision: "once",
         },
       ],
-      userland: [],
     });
   });
 

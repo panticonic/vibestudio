@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   listUnits: vi.fn(),
 }));
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   rpc: { call: mocks.rpcCall },
   workers: { resolveService: mocks.resolveService },
   workspace: { units: { list: mocks.listUnits } },
@@ -128,6 +128,17 @@ describe("system-testing CLI-neutral API", () => {
     mocks.listUnits.mockResolvedValue([{ name: "workers/agent-worker", status: "running" }]);
     mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
       const method = args[1];
+      if (method === "build.listUnits") {
+        return [
+          {
+            name: "workers/agent-worker",
+            kind: "worker",
+            source: "workers/agent-worker",
+            status: "available",
+            lastError: null,
+          },
+        ];
+      }
       if (method === "inspectModels") return { models };
       if (method === "extensions.list") {
         return [
@@ -211,8 +222,23 @@ describe("system-testing CLI-neutral API", () => {
           models: [{ ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } }],
         };
       }
-      if (method === "extensions.list") {
-        return [{ name: "@workspace-extensions/shell", status: "pending-approval" }];
+      if (method === "build.listUnits") {
+        return [
+          {
+            name: "workers/agent-worker",
+            kind: "worker",
+            source: "workers/agent-worker",
+            status: "available",
+            lastError: null,
+          },
+          {
+            name: "@workspace-extensions/shell",
+            kind: "extension",
+            source: "extensions/shell",
+            status: "approval-required",
+            lastError: null,
+          },
+        ];
       }
       if (method === "workspace.getConfig") {
         return { extensions: [{ source: "extensions/shell" }] };
@@ -240,7 +266,7 @@ describe("system-testing CLI-neutral API", () => {
     expect(result.ok).toBe(false);
     expect(result.checks.find((check) => check.name === "required-extensions")).toMatchObject({
       ok: false,
-      detail: expect.stringContaining("@workspace-extensions/shell=pending-approval"),
+      detail: expect.stringContaining("@workspace-extensions/shell=approval-required"),
     });
   });
 
@@ -250,8 +276,14 @@ describe("system-testing CLI-neutral API", () => {
     ]);
     const priorImplementation = mocks.rpcCall.getMockImplementation();
     mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
-      if (args[1] === "extensions.list") {
-        return [
+      if (args[1] === "build.listUnits") {
+        return [{
+          name: "workers/agent-worker",
+          kind: "worker",
+          source: "workers/agent-worker",
+          status: "available",
+          lastError: null,
+        }, ...[
           "browser-data",
           "claude-code",
           "file-tools",
@@ -263,8 +295,11 @@ describe("system-testing CLI-neutral API", () => {
           "typecheck-service",
         ].map((name) => ({
           name: `@workspace-extensions/${name}`,
-          status: name === "shell" ? "running" : "available",
-        }));
+          kind: "extension",
+          source: `extensions/${name}`,
+          status: name === "shell" ? "ready" : "available",
+          lastError: null,
+        }))];
       }
       if (args[1] === "workspace.getConfig") {
         return {
@@ -621,7 +656,15 @@ describe("system-testing CLI-neutral API", () => {
         { testName: "alphabet", snapshot: snapshot("alphabet") },
       ] as never);
       const onInspectionUpdate = vi.fn(
-        async (_record: { suite: { results: unknown[] } }) => undefined
+        async (_record: {
+          suite: { results: unknown[] };
+          summary: {
+            total: number;
+            failed: number;
+            errored: number;
+            failedTests: string[];
+          };
+        }) => undefined
       );
 
       const running = runSystemTests({
@@ -664,6 +707,12 @@ describe("system-testing CLI-neutral API", () => {
           (entry) => entry.test.name
         )
       ).toEqual(["alpha", "alphabet"]);
+      expect(heartbeat!.summary).toMatchObject({
+        total: 1,
+        failed: 1,
+        errored: 0,
+        failedTests: ["alpha"],
+      });
 
       resolveSuite({
         total: 0,
@@ -752,7 +801,7 @@ describe("system-testing CLI-neutral API", () => {
     expect(mocks.runSuite).not.toHaveBeenCalled();
   });
 
-  it("caps the workers category at one concurrent agent", async () => {
+  it("keeps global concurrency available when worker tests are selected", async () => {
     mocks.runSuite.mockResolvedValue({
       total: 1,
       passed: 1,
@@ -771,7 +820,7 @@ describe("system-testing CLI-neutral API", () => {
     });
 
     expect(mocks.runSuite).toHaveBeenCalledWith([expect.objectContaining({ name: "worker-one" })], {
-      concurrency: 1,
+      concurrency: 8,
     });
   });
 

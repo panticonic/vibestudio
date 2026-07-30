@@ -59,9 +59,10 @@ code.
 
 1. **Narrow host boundary.** The host does only what _must_ be trusted:
    identity, permission decisions, credential injection, protected `main`
-   refs, builds, disk projection, network egress. The semantic control plane is
-   a product-sealed internal DO bundle behind that boundary, not a manifest
-   unit. Everything else — including the agent runtime itself — is userland and
+   refs, builds, disk projection, network egress. Workspace Source is an ordinary
+   manifest-declared workspace service at `vibestudio/internal`
+   (`@workspace-vibestudio/internal`); the host knows only its finite
+   protocol. Everything else — including the agent runtime itself — is userland and
    can be rebuilt, forked, or replaced without touching the trusted core.
 2. **Trust is declared, not positional.** A workspace unit is trusted because its
    declared package identity was approved through an elevated flow, not
@@ -82,14 +83,15 @@ code.
    ledger or claims database. Approval remains authorization owned by its
    permission gate, not a competing history.
 5. **One semantic authority, narrow effect adapters.** The content store owns
-   immutable bytes/trees, the semantic control plane owns semantic graph facts
-   plus context committed-event and working-head pointers, and the publication
+   immutable bytes/trees, the manifest-declared Workspace Source service owns
+   semantic graph facts plus context committed-event and working-head pointers,
+   and the publication
    gate owns approval plus atomic protected-ref updates. File projection, Git
    interop, and builds consume semantic state; none forms a parallel history.
    Protected `main` advances only when the committed event has valid ancestry
-   and integration facts and publication is approved. Builds are explicit
-   advisory checks or post-publication projections, never publication
-   authority. Runtime activation rejects a bad projection and retains the
+   and integration facts, the exact candidate build/typecheck gate passes, and
+   publication is approved. Local builds are fast feedback; post-publication
+   builds are derived projections and cannot authorize publication. Runtime activation rejects a bad projection and retains the
    previous runnable artifact.
 6. **Tokens authenticate; grants authorize.** A runtime token only says who
    is calling. Every sensitive action passes a server-side permission gate

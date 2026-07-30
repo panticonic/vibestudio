@@ -85,7 +85,7 @@ export const unitDiagnosticsTests: TestCase[] = [
     validate: (result) =>
       semanticUnitInspection(
         result,
-        [/workspace\.units\.list/iu, /workspace\.units\.(?:diagnostics|inspector)/iu],
+        [/runtime\.supervision\.list/iu, /runtime\.supervision\.(?:describe|health)/iu],
         [/unit/iu, /running|available|status/iu, /\d/u]
       ),
   },
@@ -98,7 +98,7 @@ export const unitDiagnosticsTests: TestCase[] = [
     validate: (result) =>
       semanticUnitInspection(
         result,
-        [/workspace\.units\.diagnostics/iu, /\b(?:limit|errorLimit)\s*:/u],
+        [/runtime\.supervision\.health/iu, /\b(?:limit|errorLimit)\s*:/u],
         [/log/iu, /error/iu, /\d/u]
       ),
   },
@@ -111,7 +111,7 @@ export const unitDiagnosticsTests: TestCase[] = [
     validate: (result) =>
       semanticUnitInspection(
         result,
-        [/workspace\.units\.versions/iu],
+        [/build\.listUnits/iu, /runtime\.supervision\.versions/iu],
         [/version/iu, /active|current/iu, /\d/u]
       ),
   },

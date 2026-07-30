@@ -32,7 +32,7 @@ perspective:
   and pass that handle's id as `parentId` when opening the child:
 
   ```ts
-  import { openPanel } from "@vibestudio/runtime";
+  import { openPanel } from "@workspace/runtime";
 
   const inherited = await getParent();
   const root = inherited ?? (await openPanel("about/new", { parentId: null }));
@@ -50,7 +50,8 @@ perspective:
   ```
 
 - When the user points at "this panel", "the parent panel", or another visible
-  panel, inspect the visible tree with `panelTree.list()/roots()/children()`,
+  panel, inspect the visible tree with bounded `panelTree.page()` or
+  `panelTree.search()` reads,
   choose the target panel, and read `await target.stateArgs.get()` to find its
   `channelName`/`channelId` before running channel diagnostics.
 
@@ -204,12 +205,10 @@ workspace BuildStore root set.
 
 ## Injected Variables
 
-These are available in eval code. `services`, `hosts`, `ctx`, `scope`, `scopes`, `db`,
-`help`, `chat`, and `agent` are eval-only ambient variables. `rpc` and `fs` are
-the same portable bindings used by panels/workers; use them ambiently or import
-them from `@vibestudio/runtime`. Eval also accepts importing an available ambient
-helper from `@vibestudio/runtime` as a compatibility form; it resolves to the
-same live binding rather than shadowing it.
+These are available in eval code. `scope`, `scopes`, `db`, `ctx`, `help`, `chat`,
+and `agent` are eval-context ambient variables. `rpc`, `fs`, `services`, and
+`hosts` are the same portable bindings used by panels/workers; use them
+ambiently or import them from `@workspace/runtime`.
 
 | Variable                           | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -404,25 +403,25 @@ auto-resolution (workspace), then brought in with a normal `import`. Both static
 per-object require, which is isolated per owner (your loaded modules never leak
 to another agent's EvalDO sharing the same isolate).
 
-Do NOT import the **ambient-only** globals (`services`, `hosts`, `scope`, `scopes`, `db`,
-`ctx`, `help`, `chat`) — they are injected free variables, not module exports,
+Do NOT import the **ambient-only** globals (`scope`, `scopes`, `db`, `ctx`, `help`,
+`chat`) — they are injected free variables, not module exports,
 and the eval engine rejects importing them.
 
 `rpc` and `fs` are the exception: they are injected ambiently (the table above)
-**and** re-exported by `@vibestudio/runtime`, so importing them is allowed and
-gives the full portable client. `import { rpc } from "@vibestudio/runtime"` is the
+**and** re-exported by `@workspace/runtime`, so importing them is allowed and
+gives the full portable client. `import { rpc } from "@workspace/runtime"` is the
 3-arg `rpc.call(targetId, method, args)` client (the ambient `rpc` is 2-arg sugar
-over the server); `import { fs } from "@vibestudio/runtime"` is the same
+over the server); `import { fs } from "@workspace/runtime"` is the same
 context-scoped fs.
 
 ### Importing the runtime surface
 
-`@vibestudio/runtime` is importable in eval and exposes the **same portable
+`@workspace/runtime` is importable in eval and exposes the **same portable
 surface** as panels and workers — so the same code runs on any target:
 
 ```
 eval({ code: `
-  import { vcs, workspace, gad, credentials, openPanel, panelTree } from "@vibestudio/runtime";
+  import { vcs, workspace, gad, credentials, openPanel, panelTree } from "@workspace/runtime";
   const status = await vcs.status({ contextId: ctx.contextId });
   console.log("Exact working state:", status.workingHead);
 ` })
@@ -431,7 +430,7 @@ eval({ code: `
 Importable members: `id`, `contextId`, `rpc`, `fs`, `gad`, `blobstore`,
 `workspace`, `credentials`, `git`, `vcs`, `webhooks`, `extensions`, `approvals`,
 `notifications`, `workers`, `doTargetId`, `createDurableObjectServiceClient`,
-`gatewayConfig`, `gatewayFetch`, `openExternal`, `openPanel`, `listPanels`,
+`gatewayConfig`, `gatewayFetch`, `openExternal`, `openPanel`,
 `getPanelHandle`, `panelTree`. (`gatewayFetch` in eval is **gateway-relative
 only** — use `credentials.fetch` for external requests.)
 
@@ -439,11 +438,11 @@ only** — use `credentials.fetch` for external requests.)
 
 Drive a live panel's browser target over CDP — full commands **and** events —
 from eval. Get an endpoint from a panel handle, then connect with
-`CdpConnection` from `@vibestudio/cdp-client`:
+`CdpConnection` from `@workspace/cdp-client`:
 
 ```
 eval({ code: `
-  import { CdpConnection } from "@vibestudio/cdp-client";
+  import { CdpConnection } from "@workspace/cdp-client";
   const handle = getPanelHandle("<panelSlotId>");
   const { wsEndpoint, token } = await handle.cdp.getCdpEndpoint();
   const cdp = await CdpConnection.connect(wsEndpoint, token);
@@ -456,9 +455,9 @@ eval({ code: `
 
 ### Workspace packages — auto-resolved
 
-Workspace packages (`@workspace/*`, `@workspace-skills/*`, `@vibestudio/*`) are
-**automatically built and loaded** when you import them. Just write the import —
-no `imports` parameter needed:
+Workspace packages (`@workspace/*`, `@workspace-skills/*`) and platform SDK
+packages (`@vibestudio/*`) are **automatically built and loaded** when you
+import them. Just write the import — no `imports` parameter needed:
 
 ```
 eval({ code: `
@@ -703,7 +702,7 @@ worker Durable Object and use its `this.sql`, then declare it as a userland
 service and call it over RPC:
 
 ```ts
-import { rpc, workers } from "@vibestudio/runtime";
+import { rpc, workers } from "@workspace/runtime";
 
 const store = await workers.resolveService("example.todos.v1", "project-123");
 if (store.kind !== "durable-object") throw new Error("Expected DO service");
@@ -976,7 +975,7 @@ return its digest, byte count, and a small head sample. Keep full objects in
 `scope` only for short-lived interactive follow-up.
 
 The blobstore is a curated runtime binding — reach it as `services.blobstore`
-(equivalently `import { blobstore } from "@vibestudio/runtime"`, or a raw
+(equivalently `import { blobstore } from "@workspace/runtime"`, or a raw
 `rpc.call("main", "blobstore.<method>", [...])`). Read/write methods
 (`putText`/`putBase64`/`getText`/`readText`/`getRange`/`grep`/…) work from agent eval; the
 admin methods (`delete`/`list`) are server-only. Raw calls

@@ -226,7 +226,11 @@ describe("reduced VCS agentic catalog", () => {
         invocation(
           "recover",
           "eval",
-          "await vcs.edit({ ...request, expectedWorkingHead: fresh, commandId: newCommand });",
+          [
+            "const advance = await vcs.edit(advanceRequest);",
+            "try { await vcs.edit(staleRequest); } catch (error) { refusal = { code: error.code }; }",
+            "const retry = await vcs.edit(freshRequest);",
+          ].join("\n"),
           {
             staleAttempt: {
               commandId: "command:stale",
@@ -519,11 +523,13 @@ describe("reduced VCS agentic catalog", () => {
       )
     ).toEqual({ passed: true, reason: undefined });
 
-    const duplicate = structuredClone(proof);
-    duplicate.retry.applicationId = "application:duplicate";
-    duplicate.retry.workingHead.applicationId = "application:duplicate";
-    duplicate.status.workingCounts = { applications: 2, workUnits: 2, changes: 2 };
-    expect(test.validate(execution(final, [call(duplicate)])).passed).toBe(false);
+    const oneSubmission = invocation(
+      "one-submission",
+      "eval",
+      "const first = await vcs.edit(request);",
+      { details: { returnValue: proof } }
+    );
+    expect(test.validate(execution(final, [oneSubmission])).passed).toBe(false);
     expect(test.validate(execution("", [call(proof)])).passed).toBe(false);
   });
 

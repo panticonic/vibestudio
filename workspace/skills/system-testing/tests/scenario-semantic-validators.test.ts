@@ -605,7 +605,7 @@ describe("workspace semantic validators", () => {
     expect(
       scenario(workspaceTests, "list-workspace-units").validate(
         execution("The catalog contains the current panel and worker units.", [
-          { code: "return workspace.units.list();", returnValue: [{ id: "panel-1" }] },
+          { code: "return build.listUnits();", returnValue: [{ id: "panel-1" }] },
         ])
       ).passed
     ).toBe(true);
@@ -620,7 +620,7 @@ describe("workspace semantic validators", () => {
       scenario(workspaceTests, "get-config").validate(
         execution("The workspace uses a local origin and main context.", [
           {
-            code: "return workspace.getConfig();",
+            code: "return workspace.getInfo();",
             returnValue: { origin: "local", context: "main" },
           },
         ])
@@ -632,7 +632,7 @@ describe("workspace semantic validators", () => {
     expect(
       scenario(workspaceTests, "get-config").validate(
         execution("It has a rich and valid configuration.", [
-          { code: "return workspace.getConfig();", returnValue: {} },
+          { code: "return workspace.getInfo();", returnValue: {} },
         ])
       ).passed
     ).toBe(false);
@@ -898,7 +898,7 @@ describe("extension semantic validators", () => {
   it("requires registry rows for extension discovery", () => {
     const result = execution("Two workspace extensions are currently available.", [
       {
-        code: 'return rpc.call("main", "extensions.list", []);',
+        code: "return (await build.listUnits()).filter((unit) => unit.kind === 'extension');",
         returnValue: [{ name: "typecheck" }, { name: "test-runner" }],
       },
     ]);
@@ -920,7 +920,7 @@ describe("extension semantic validators", () => {
   it("joins registry discovery and a successful structured invocation", () => {
     const result = execution("The read-only method returned a structured status record.", [
       {
-        code: 'const entries = await rpc.call("main", "extensions.list", []); return { entries, value: await services.extensions.invoke(entries[0].name, "status", []) };',
+        code: "const entries = (await build.listUnits()).filter((unit) => unit.kind === 'extension'); return { entries, value: await services.extensions.invoke(entries[0].name, \"status\", []) };",
         returnValue: { entries: [{ name: "probe" }], value: { status: "ready" } },
       },
     ]);

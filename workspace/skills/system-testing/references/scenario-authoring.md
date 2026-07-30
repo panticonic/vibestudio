@@ -2,41 +2,32 @@
 
 ## Test a user goal
 
-Write prompts at the user's level: state the desired outcome, constraints that
-would be known to the user, and concise final evidence fields. Do not prescribe
-the exact method sequence, response schema, error branch, or workaround. The
-agent must discover the relevant skill and demonstrate that the documented
-system is usable.
+Write prompts at the user's level: state the desired outcome and constraints
+that would be known to the user. Do not prescribe final evidence fields, an
+exact method sequence, response schema, error branch, or workaround. The agent
+must discover the relevant skill and demonstrate that the documented system is
+usable.
 
 Good prompts expose documentation and ergonomics defects. Answer-bearing
 prompts hide them.
 
-## Validate effects and trajectory
+## Judge the agent; diagnose the trajectory
 
-Use a final marker only as bounded reporting evidence. Pair it with semantic
-validation of the durable effect and invocation trajectory whenever the
-capability mutates state.
+An agentic case passes when the agent completes the user task and reports that
+outcome. Do not duplicate the implementation in a mechanical validator or
+require markers, ceremonial fields, redundant observations, exact object
+layouts, or one preferred tool choreography.
 
-A strong validator checks:
+The harness records tool failures independently from task completion. Review
+failed calls (including caught eval failures), retries, unusually long
+trajectories, cleanup errors, and runtime diagnostics even when the agent
+ultimately succeeds. These are ergonomics findings: inspect the full trajectory
+and repair the platform, documentation, or tool surface that made the sensible
+path difficult.
 
-- no invocation remains incomplete;
-- required durable effects exist at the identity returned by the operation;
-- expected negative operations failed with the correct typed discriminant;
-- no legacy or out-of-scope mutation path was used;
-- cleanup retired an unpublished task context or counteracted the task's exact
-  published work without disturbing sibling work;
-- final prose accurately reports the observed state.
-
-The runner gives validators a canonical, fully materialized evidence view:
-content-addressed invocation requests/results are hydrated at validation time.
-Validators therefore inspect the typed result directly and never branch on a
-`vibestudio.blob-ref.v1` carrier. The durable run record remains bounded and
-keeps those payloads by reference; missing referenced evidence is a harness
-error, not a semantic validation failure.
-
-Do not make validators lenient merely because an agent found a workaround. If
-the workaround violates the intended abstraction, classify and repair the
-platform or docs.
+Keep exact schema/effect assertions in `@workspace/testkit`. A system-test case
+may opt into exact validation only when it is explicitly a deterministic or
+wire-protocol probe rather than a model-judgment task.
 
 ## Isolate tests
 
@@ -96,33 +87,26 @@ The runner, not individual scenarios, owns the execution policy: the chosen
 model, `approvalLevel: 2`, and disabled fallback are mandatory case facts.
 They follow the host-attested context through trusted infrastructure and apply
 to every downstream agent created there. `TestCase.authorityPolicy` only
-describes expected capability/userland decisions and cannot override the
+describes expected capability decisions and cannot override the
 execution model.
 
-The canonical workspace test runner uses the digest-bearing
-`workspace-test:<digest>` subject. A scenario that intentionally runs focused
-workspace verification must declare both the gated `user-approval.request`
-authority capability and a `{ kind: "prefix", prefix: "workspace-test:" }`
-userland rule. Do not broaden that rule to other workspace operations or
-replace it with blanket auto-approval.
+The canonical workspace test runner exposes the provider capability
+`native.tests.execute`. A scenario that intentionally runs focused workspace
+verification must declare the exact provider capability prefix (including the
+provider path and definition-digest separator) and the test-runner receiver
+resource. Do not broaden either namespace or replace it with blanket
+auto-approval.
 
-Validators for corrective workflows must fold the latest successful state by
-stable identity. An earlier `needs-decision`, failed build report, or guarded
-close remains useful trajectory evidence, but it must not override a later
-resolved integration, passing verification, or successful close. Conversely,
-do not accept “structured output” alone: inspect its semantic success fields
-and the final causal effect. Do not require one ceremonial property name such
-as `ok`: a focused verifier may return positive coverage counts together with
-domain checks such as `allParsed: true`. Accept equivalent structured proof
-only when it contains positive coverage and affirmative checks, and reject any
-failed status, non-zero diagnostics, or false verification check. This keeps
-validators semantic without teaching prompts a harness-specific response
-shape.
+For corrective workflows, inspect the complete trajectory rather than folding
+it through a bespoke response schema. An earlier `needs-decision`, failed build
+report, or guarded close remains useful ergonomics evidence even when a later
+integration, verification, or close succeeds.
 
 ## Semantic VCS scenarios
 
-VCS scenarios are protocol tests, not API-recitation tests. Before authoring
-them, read `../../vibestudio-vcs/SKILL.md` and the relevant references.
+VCS scenarios are user tasks that exercise protocol behavior, not
+API-recitation tests. Before authoring them, read
+`../../vibestudio-vcs/SKILL.md` and the relevant references.
 
 Cover these distinct invariants:
 
@@ -131,6 +115,9 @@ Cover these distinct invariants:
 - incoming changes are incorporated through small local decisions until the
   source event is accounted for, then committed with that source parent;
 - push publishes one exact clean event against one observed main event;
+- protected push rechecks the affected build/typecheck closure; a deliberate
+  `BuildGateFailed` case must inspect every returned diagnostic, prove that no
+  ref advanced, repair the cited source, recommit, and retry;
 - move preserves file identity while copy mints identity and records ancestry;
 - revert creates counteracting changes instead of erasing history;
 - provenance walks directly among content, changes, work, commands, events,

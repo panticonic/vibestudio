@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   browserData: {
     listImportJobs: vi.fn(async () => []),
   },
@@ -500,7 +500,7 @@ describe("semantic system-test validators", () => {
             name: "eval",
             arguments: {
               code: [
-                'import { extensions } from "@vibestudio/runtime";',
+                'import { extensions } from "@workspace/runtime";',
                 'return extensions.invoke("@workspace-extensions/test-runner", "run", [{',
                 '  target: "extensions/test-runner",',
                 '  fileFilter: "index.test.ts",',
@@ -518,26 +518,24 @@ describe("semantic system-test validators", () => {
     ).toEqual({ passed: true, reason: undefined });
   });
 
-  it("pregrants only the workspace-test subject for the test-runner scenario", () => {
+  it("pregrants only the test-runner provider capability for the scenario", () => {
     const test = agenticRuntimeTests.find(
       (candidate) => candidate.name === "workspace-test-runner-extension"
     )!;
     expect(test.authorityPolicy).toEqual({
       authority: [
         {
-          ruleId: "workspace-test-runner-approval",
-          capability: { kind: "exact", key: "user-approval.request" },
-          resource: { kind: "exact", key: "user-approval.request" },
+          ruleId: "workspace-test-runner-execution",
+          capability: {
+            kind: "prefix",
+            prefix: "userland:extensions/test-runner/native.tests.execute#",
+          },
+          resource: {
+            kind: "exact",
+            key: "native.tests:extension:@workspace-extensions/test-runner",
+          },
           tier: "gated",
           decision: "once",
-        },
-      ],
-      userland: [
-        {
-          ruleId: "workspace-test-runner-subject",
-          subject: { kind: "prefix", prefix: "workspace-test:" },
-          decision: "allow",
-          remember: false,
         },
       ],
     });

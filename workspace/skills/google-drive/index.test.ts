@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { StoredCredentialSummary } from "@vibestudio/runtime";
+import type { StoredCredentialSummary } from "@workspace/runtime";
 
 const runtimeMock = vi.hoisted(() => ({
   credentials: {
@@ -17,7 +17,7 @@ const driveClientMock = vi.hoisted(() => ({
   createDriveClient: vi.fn(),
 }));
 
-vi.mock("@vibestudio/runtime", () => runtimeMock);
+vi.mock("@workspace/runtime", () => runtimeMock);
 vi.mock("@workspace-skills/google-workspace", () => googleWorkspaceMock);
 vi.mock("@workspace/integrations", () => driveClientMock);
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   browserData: {},
   callMain: vi.fn(),
   createDurableObjectServiceClient: vi.fn(() => ({ call: vi.fn() })),
@@ -139,7 +139,7 @@ describe("onboarding status adapters", () => {
       hasSkill: vi.fn(async (path) => path !== "skills/google-workspace/SKILL.md"),
     });
     await expect(createStatusAdapters(deps)["google-workspace"]!()).resolves.toEqual({
-      state: "unavailable",
+      state: "not-installed",
       summary: "Google Workspace is not installed in this workspace.",
       attention: "none",
       rawStage: "not-installed",

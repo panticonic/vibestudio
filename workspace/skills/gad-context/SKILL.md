@@ -120,8 +120,8 @@ around awaited calls before reading a property:
 For another visible panel's chat:
 
 ```ts
-const target = (await panelTree.list()).find((panel) => panel.id === "panel-slot-id");
-const args = target ? await target.stateArgs.get<Record<string, unknown>>() : {};
+const target = panelTree.get("panel-slot-id");
+const args = await target.stateArgs.get<Record<string, unknown>>();
 const channelId = String(args.channelName ?? args.channelId ?? "");
 const health = await gad.inspectAgentHealth({ channelId, limit: 50 });
 ```

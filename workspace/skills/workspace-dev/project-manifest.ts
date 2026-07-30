@@ -133,7 +133,7 @@ export function buildProjectManifest(input: BuildProjectManifestInput): Record<s
       title: input.title,
       entry: input.entry,
       ...(input.exposeModules ? { exposeModules: [...input.exposeModules] } : {}),
-      authority: { requests: [] },
+      authority: { requests: [], provides: [] },
       ...(input.template ? { template: input.template } : {}),
       ...(input.durableClasses
         ? {

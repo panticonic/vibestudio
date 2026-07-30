@@ -67,6 +67,7 @@ export function deterministicTestCases(suites: Suite[] = allSuites()): TestCase[
       "```",
       "Then reply with exactly the JSON the eval returned (the summary object) in a fenced code block.",
     ].join("\n"),
+    validation: "harness",
     validate: (result) => validateDeterministicSummary(result.messages),
   }));
 }

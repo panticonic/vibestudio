@@ -52,20 +52,24 @@ describe("onboarding selection routing", () => {
     );
   });
 
-  it("routes mobile installation through the phone setup owner workflow", () => {
+  it("routes mobile installation through the verified template catalog", () => {
     expect(
       resolveOnboardingSelection(onboardingInteraction("connection.device", "install"))
     ).toEqual(
       expect.objectContaining({
         action: "install",
         ownerSkillPath: "skills/phone-setup/SKILL.md",
-        target: { via: "owner-skill" },
+        target: { via: "template-catalog", templateId: "mobile" },
       })
     );
   });
 
   it("routes catalog and pasted addresses by typed template interactions", () => {
-    const catalog = templateCatalogInteraction("news-agent-and-panel", "2026-07-29.3");
+    const catalog = templateCatalogInteraction(
+      "news-agent-and-panel",
+      "a".repeat(40),
+      `v1-sha256:${"b".repeat(64)}`
+    );
     expect(resolveTemplateSelection(catalog)).toEqual({
       target: { via: "template-composer" },
       interaction: catalog,
@@ -76,8 +80,12 @@ describe("onboarding selection routing", () => {
     });
     expect(() =>
       resolveTemplateSelection({
-        ...templateCatalogInteraction("retired", "2026-07-29.3"),
-        registryRevision: "",
+        ...templateCatalogInteraction(
+          "retired",
+          "a".repeat(40),
+          `v1-sha256:${"b".repeat(64)}`
+        ),
+        registryCommit: "",
       })
     ).toThrow("Template add selection is invalid");
   });

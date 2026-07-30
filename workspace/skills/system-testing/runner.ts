@@ -4,7 +4,7 @@ import {
   type SessionSnapshot,
 } from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { blobstore, gad, rpc, vcs } from "@vibestudio/runtime";
+import { blobstore, gad, rpc, vcs } from "@workspace/runtime";
 import { SYSTEM_TEST_AGENT_MODEL, systemTestModelRoute } from "./config.js";
 import { systemTestFailure } from "./structured-error.js";
 import {
@@ -17,7 +17,7 @@ import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/
 import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import type { AttachedHostApprovalAuditEvent } from "@vibestudio/service-schemas/attachedHosts";
 import type { TestAuthorityPolicy } from "./types.js";
-import type { BlobReader } from "@vibestudio/agentic-protocol";
+import type { BlobReader } from "@workspace/agentic-protocol";
 
 // This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
 // uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.
@@ -30,7 +30,7 @@ Your job is to exercise the documented path honestly, not to make the test pass 
 
 When a task depends on Vibestudio behavior, use the relevant docs or skill files to choose the most straightforward supported approach.
 
-Treat the request like a normal user's request. Route from the Available skills index to the closest user-facing skill before doing a broad source search. Do not inspect \`skills/system-testing\`, its test definitions, validators, marker strings, or captured artifacts to reverse-engineer what the test expects; those are harness implementation, not product documentation. Any requested uppercase marker tokens are output bookkeeping only: emit them in the final answer when appropriate, but never search the workspace or docs for them.
+Treat the request like a normal user's request. Route from the Available skills index to the closest user-facing skill before doing a broad source search. Do not inspect \`skills/system-testing\`, its test definitions, validators, marker strings, or captured artifacts to reverse-engineer what the test expects; those are harness implementation, not product documentation.
 
 This session is genuinely headless: there is no initial visible panel ancestor. The panel tree still works. If a task needs an actual child panel and getParent() is null, follow the documented headless tree pattern: create an owned root panel explicitly, create the requested panel with that root's id as parentId, and close the temporary root to clean the subtree.
 
@@ -42,7 +42,10 @@ Use file-loaded eval for substantive multi-line or multi-file eval work. Do not 
 
 Keep evidence bounded. Report summaries, counts, ids, byte lengths, exact error messages, the final agent message, the validation reason, and the relevant tool call statuses/errors. Do not paste large raw payloads, full database rows, full channel envelopes, image data, or secrets.
 
-Every final response should be concise, include the requested marker tokens exactly when applicable, and mention any problems encountered while setting up or running the test. Never just refer to files or artifacts; describe what the evidence shows and include the concrete mismatch/error in the response.`;
+Every final response should be concise and begin with exactly one of these status markers:
+\`Task completed.\`
+\`Task not completed.\`
+The summary may continue on that line or the next. Summarize what you verified and mention any problems or retries encountered along the way. For an incomplete task, include the concrete mismatch or error. Never just refer to files or artifacts; describe what the evidence shows.`;
 
 export type { WorkspaceRepoFixtureCleanup, WorkspaceRepoFixtureState };
 
@@ -298,7 +301,7 @@ export class HeadlessRunner {
             capability: { kind: "exact", key: "workspace-service:gad.workspace" },
             resource: {
               kind: "exact",
-              key: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+              key: "do:workers/workspace-source:GadWorkspaceDO:workspace",
             },
             tier: "gated",
             decision: "once",
@@ -316,7 +319,6 @@ export class HeadlessRunner {
           ...fixturePublicationAuthority(workspaceRepoFixture),
           ...(authorityPolicy?.authority ?? []),
         ],
-        userland: [...(authorityPolicy?.userland ?? [])],
         unexpectedPrompts: "fail",
       }
     );

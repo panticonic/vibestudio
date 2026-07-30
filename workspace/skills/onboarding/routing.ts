@@ -24,7 +24,8 @@ export interface TemplateCatalogInteraction {
   kind: typeof TEMPLATE_ADD_INTERACTION_KIND;
   targetId: string;
   catalogId: string;
-  registryRevision: string;
+  registryCommit: string;
+  registrySnapshot: string;
 }
 
 export interface TemplateUrlInteraction {
@@ -78,14 +79,16 @@ export function onboardingInteraction(
 
 export function templateCatalogInteraction(
   catalogId: string,
-  registryRevision: string
+  registryCommit: string,
+  registrySnapshot: string
 ): TemplateCatalogInteraction {
   return {
     source: TEMPLATE_INTERACTION_SOURCE,
     kind: TEMPLATE_ADD_INTERACTION_KIND,
     targetId: catalogId,
     catalogId,
-    registryRevision,
+    registryCommit,
+    registrySnapshot,
   };
 }
 
@@ -142,14 +145,17 @@ export function resolveTemplateSelection(interaction: unknown): ResolvedTemplate
       typeof value["catalogId"] === "string" &&
       value["catalogId"].trim() &&
       value["targetId"] === value["catalogId"] &&
-      typeof value["registryRevision"] === "string" &&
-      value["registryRevision"].trim()
+      typeof value["registryCommit"] === "string" &&
+      /^[0-9a-f]{40}$/u.test(value["registryCommit"]) &&
+      typeof value["registrySnapshot"] === "string" &&
+      /^v1-sha256:[0-9a-f]{64}$/u.test(value["registrySnapshot"])
     ) {
       return {
         target: { via: "template-composer" },
         interaction: templateCatalogInteraction(
           value["catalogId"],
-          value["registryRevision"]
+          value["registryCommit"],
+          value["registrySnapshot"]
         ),
       };
     }

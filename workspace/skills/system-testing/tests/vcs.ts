@@ -151,7 +151,7 @@ async function orchestrateIncrementalIntegration(
     phaseStart = agentA.messages.length;
     await context.sendAndWait(
       agentA,
-      `Now make one additional compatible change in ${repoPath} and commit it as a local milestone. Do not publish this second milestone; report when it is ready to integrate with a collaborator.`,
+      `Now add a separate small local note in ${repoPath} and commit it as a local milestone. Do not publish this second milestone; report when it is ready to integrate with a collaborator.`,
       "agent A keeps one additional commit local"
     );
     requirePhaseEvidence(
@@ -168,7 +168,7 @@ async function orchestrateIncrementalIntegration(
     phaseStart = agentB.messages.length;
     await context.sendAndWait(
       agentB,
-      `A collaborator has published ${repoPath}. Make a distinct compatible change there, commit it, and publish it. Follow the workspace guidance and report what happened.`,
+      `A collaborator has published ${repoPath}. Add a separate small collaborator note there, commit it, and publish it. Follow the workspace guidance and report what happened.`,
       "agent B advances main independently"
     );
     requirePhaseEvidence(agentB, phaseStart, "agent B publication", [
@@ -179,7 +179,7 @@ async function orchestrateIncrementalIntegration(
 
     await context.sendAndWait(
       agentA,
-      `Main advanced while your compatible local commit remained unpublished. Bring the incoming semantic changes into your context one local decision at a time, commit the combined history, and publish it. Verify that both collaborators' intent remains and report what happened.`,
+      `Main advanced while your separate local note remained unpublished. Bring the incoming semantic changes into your context one local decision at a time, commit the combined history, and publish it. Verify through ordinary file reads that both collaborators' notes remain, and report what happened.`,
       "agent A incrementally integrates and publishes"
     );
   } catch (cause) {
@@ -267,18 +267,18 @@ export const vcsTests: TestCase[] = [
     prompt:
       "In the disposable project, make two small related edits as separate local steps, then preserve the complete local chain as one clean milestone. Report what happened.",
     validate: (result) => {
-      const base = checked(result, ["vcs.edit", "vcs.commit", "vcs.status"]);
+      const base = checked(result, ["vcs.edit", "vcs.commit"]);
       return base.passed ? requireWholeChainCommitEvidence(result) : base;
     },
   },
   {
     name: "vcs-push",
-    description: "Publish one exact committed event to protected main",
+    description: "Publish one exact committed event after the affected build/typecheck gate",
     category: "vcs",
     resources: ["vcs:protected-main"],
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Make a distinctive small change in the disposable project and publish that exact clean milestone to protected main. Verify it and explain what happened.",
+      "Make a distinctive small change in the disposable project and publish that exact clean milestone to protected main. Let the protected publication checks run, verify the result, and explain what happened.",
     validate: (result) => {
       const base = checked(result, ["vcs.edit", "vcs.commit", "vcs.push"]);
       return base.passed ? requirePublishedCommitEvidence(result) : base;

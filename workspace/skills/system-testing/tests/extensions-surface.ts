@@ -41,7 +41,7 @@ export const extensionSurfaceTests: TestCase[] = [
     category: "extensions",
     prompt: "Which extensions are available in this workspace?",
     validate: (result) => {
-      const base = extensionEvidence(result, [["extensions.list"]]);
+      const base = extensionEvidence(result, [["build.listUnits"]]);
       if (!base.passed) return base;
       return walkArrays(base.evidence.evalValues).some((entries) => entries.length > 0)
         ? { passed: true, reason: undefined }
@@ -75,7 +75,7 @@ export const extensionSurfaceTests: TestCase[] = [
     prompt:
       "Use an available extension for a harmless read-only operation and summarize its structured result.",
     validate: (result) => {
-      const base = extensionEvidence(result, [["extensions.list", "extensions.invoke"]]);
+      const base = extensionEvidence(result, [["build.listUnits", "extensions.invoke"]]);
       if (!base.passed) return base;
       return hasInvocationResult(base.evidence.evalValues)
         ? { passed: true, reason: undefined }

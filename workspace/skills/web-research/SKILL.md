@@ -184,13 +184,13 @@ require login, or apps that need client-side rendering, route the
 fetch through a real browser panel instead:
 
 `openPanel`/`panelTree` are part of the portable runtime surface from
-`@vibestudio/runtime`; they work from server-side eval, panels, workers, and DOs.
+`@workspace/runtime`; they work from server-side eval, panels, workers, and DOs.
 The `handle.cdp.page()` automation is workerd-native and runs over a
 WebSocket to the panel's CDP endpoint, so a browser panel opened from eval can be
 driven there directly:
 
 ```tsx
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 import { htmlToReadableMarkdown } from "@workspace/harness/web-extract";
 
 const browser = await openPanel("https://example.com/article");

@@ -24,7 +24,7 @@ export const workspaceTests: TestCase[] = [
     prompt:
       "Use the live runtime workspace API to inspect this workspace's source or registered unit catalog, then summarize what is visible.",
     validate: (result) => {
-      const base = workspaceEvidence(result, [["workspace.sourceTree"], ["workspace.units.list"]]);
+      const base = workspaceEvidence(result, [["workspace.sourceTree"], ["build.listUnits"]]);
       if (!base.passed) return base;
       return walkArrays(base.evidence.evalValues).length > 0 ||
         walkRecords(base.evidence.evalValues).length > 0
@@ -56,7 +56,7 @@ export const workspaceTests: TestCase[] = [
     prompt:
       "Use the live runtime workspace API to inspect the active workspace configuration and summarize a couple of concrete facts.",
     validate: (result) => {
-      const base = workspaceEvidence(result, [["workspace.getConfig"]]);
+      const base = workspaceEvidence(result, [["workspace.getInfo"]]);
       if (!base.passed) return base;
       return walkRecords(base.evidence.evalValues).some((record) => Object.keys(record).length >= 2)
         ? { passed: true, reason: undefined }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "@workspace/agentic-core";
-import { TestRunner } from "./test-runner.js";
+import { TestRunner, validateAgentCompletionReport } from "./test-runner.js";
+import type { TestExecutionResult } from "./types.js";
 import type { HeadlessRunner } from "./runner.js";
 import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "./types.js";
 
@@ -126,6 +127,7 @@ describe("TestRunner", () => {
       category: "test",
       description: "timeout",
       prompt: "hang",
+      validation: "harness" as const,
       validate: () => ({ passed: true }),
     });
 
@@ -193,6 +195,7 @@ describe("TestRunner", () => {
       category: "test",
       description: "fetch failed",
       prompt: "trigger fetch",
+      validation: "harness" as const,
       validate: () => ({ passed: true }),
     });
 
@@ -230,6 +233,7 @@ describe("TestRunner", () => {
       description: "typed fixture setup failure",
       prompt: "use the fixture",
       workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+      validation: "harness" as const,
       validate: () => ({ passed: true }),
     });
 
@@ -407,6 +411,7 @@ describe("TestRunner", () => {
         category: "test",
         description: "tool error recovery",
         prompt: "trigger recovery",
+        validation: "harness" as const,
         validate: () => ({ passed: true }),
       },
     ]);
@@ -415,7 +420,7 @@ describe("TestRunner", () => {
       passed: 1,
       failed: 0,
       errored: 0,
-      toolFailureCount: 1,
+      toolFailureCount: 3,
       testsWithToolFailures: 1,
     });
     expect(suite.results[0]!.execution.error).toBeUndefined();
@@ -429,13 +434,11 @@ describe("TestRunner", () => {
         }),
         expect.objectContaining({
           name: "vcs",
-          expected: true,
           classification: "domain-rejection",
           terminalReasonCode: "WorkingChangesPresent",
         }),
         expect.objectContaining({
           name: "eval",
-          expected: true,
           classification: "guest-code-failure",
           terminalReasonCode: "guest_execution_failed",
           failureKind: "user-code",
@@ -450,21 +453,21 @@ describe("TestRunner", () => {
         description: "intentional tool error recovery",
         prompt: "trigger recovery",
         expectedToolFailures: [{ name: "eval", errorIncludes: "missingVar" }],
+        validation: "harness" as const,
         validate: () => ({ passed: true }),
       },
     ]);
 
     expect(expectedSuite).toMatchObject({
       passed: 1,
-      toolFailureCount: 0,
-      testsWithToolFailures: 0,
+      toolFailureCount: 2,
+      testsWithToolFailures: 1,
     });
     expect(expectedSuite.results[0]!.execution.toolFailures).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "eval", expected: true }),
         expect.objectContaining({
           name: "vcs",
-          expected: true,
           classification: "domain-rejection",
         }),
       ])
@@ -525,6 +528,7 @@ describe("TestRunner", () => {
           snapshot: target.snapshot(),
         };
       },
+      validation: "harness" as const,
       validate: (value) => ({
         passed: value.messages.some((message) => message.content === "ORCHESTRATED_OK"),
       }),
@@ -583,6 +587,7 @@ describe("TestRunner", () => {
             snapshot: target.snapshot(),
           };
         },
+        validation: "harness" as const,
         validate: () => ({ passed: true }),
       });
 
@@ -648,6 +653,7 @@ describe("TestRunner", () => {
       description: name,
       prompt: name,
       ...(resources ? { resources } : {}),
+      validation: "harness" as const,
       validate: () => ({ passed: true }),
     });
 
@@ -731,6 +737,7 @@ describe("TestRunner", () => {
       description: name,
       prompt: name,
       workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+      validation: "harness" as const,
       validate: () => ({ passed: true }),
     });
     const unrelatedTest: TestCase = {
@@ -738,6 +745,7 @@ describe("TestRunner", () => {
       category: "test",
       description: "unrelated",
       prompt: "unrelated",
+      validation: "harness" as const,
       validate: () => ({ passed: true }),
     };
 
@@ -828,6 +836,7 @@ describe("TestRunner", () => {
         description: "cancelled fixture",
         prompt: "wait forever",
         workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+        validation: "harness" as const,
         validate: () => ({ passed: true }),
       },
     ]);
@@ -912,6 +921,7 @@ describe("TestRunner", () => {
       description: "fixture lifecycle",
       prompt: "create a project",
       workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+      validation: "harness" as const,
       validate: () => ({ passed: true }),
     });
 
@@ -1016,10 +1026,74 @@ describe("TestRunner", () => {
       category: "test",
       description: "fallback",
       prompt: "continue",
+      validation: "harness" as const,
       validate: () => ({ passed: true }),
     });
 
     expect(result.passed).toBe(true);
     expect(execution.modelExecutionEvidence).toEqual(evidence);
+  });
+});
+
+describe("validateAgentCompletionReport", () => {
+  const execution = (final: string): TestExecutionResult =>
+    ({
+      duration: 1,
+      messages: [
+        {
+          id: "user",
+          senderId: "user",
+          kind: "message",
+          contentType: "text",
+          content: "Exercise file handles.",
+          complete: true,
+        },
+        {
+          id: "agent",
+          senderId: "agent",
+          kind: "message",
+          contentType: "text",
+          content: final,
+          complete: true,
+        },
+      ],
+    }) as TestExecutionResult;
+
+  it("trusts an explicit completed status despite scoped caveats", () => {
+    expect(
+      validateAgentCompletionReport(
+        execution(
+          "Task completed.\n\nAll requested lifecycle behavior was verified.\n\nWhat I could not verify: automatic cleanup after a process crash."
+        )
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts a summary immediately after the completed status marker", () => {
+    expect(
+      validateAgentCompletionReport(
+        execution("Task completed. I verified a full write/read round-trip.")
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("trusts an explicit incomplete status", () => {
+    expect(
+      validateAgentCompletionReport(
+        execution("Task not completed.\n\nThe documented operation returned an infrastructure error.")
+      )
+    ).toMatchObject({
+      passed: false,
+      reason: expect.stringContaining("did not complete"),
+    });
+  });
+
+  it("rejects an ambiguous report instead of guessing from prose", () => {
+    expect(
+      validateAgentCompletionReport(execution("All requested lifecycle behavior was verified."))
+    ).toMatchObject({
+      passed: false,
+      reason: expect.stringContaining("required"),
+    });
   });
 });

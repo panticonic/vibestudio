@@ -18,7 +18,6 @@ describe("build npm package validation", () => {
           decision: "once",
         },
       ],
-      userland: [],
     });
   });
 

@@ -13,12 +13,13 @@ physical action that is actually needed, then rediscover.
 This is the end-user workflow for a phone attached to a connected desktop. For
 repository development against an emulator or a developer device, use
 `extensions/mobile-debug/SKILL.md` instead. The two workflows share the mobile
-installer but have different ownership: `phoneProvisioning` runs on the user's
-connected desktop, while `mobile-debug` runs on the development host.
+installer but have different ownership: the `vibestudio.phone-provisioning.v1`
+builtin routes work through the user's connected desktop, while `mobile-debug`
+runs on the development host.
 
 The agent may be running on a remote server. Never assume adb, Xcode, or the
-phone is present beside the agent. `phoneProvisioning` securely routes discovery
-and provisioning to a desktop connected under the requesting user's account.
+phone is present beside the agent. The builtin securely routes discovery and
+provisioning to a desktop connected under the requesting user's account.
 
 ## User experience
 
@@ -40,21 +41,21 @@ This skill is documentation, not an importable code package. From ordinary
 server-side eval, call the services through the injected portable RPC client:
 
 ```ts
-const providers = await rpc.call("main", "phoneProvisioning.providers", []);
-const discovery = await rpc.call("main", "phoneProvisioning.devices", [
+const phone = await workers.resolveService("vibestudio.phone-provisioning.v1");
+const providers = await rpc.call(phone.targetId, "providers", []);
+const discovery = await rpc.call(phone.targetId, "devices", [
   { providerId: providers[0]?.providerId },
 ]);
 return { providers, discovery };
 ```
 
 Use ordinary eval exactly as shown. Do not add an eval-level `authority`
-override such as `approvals: "pregranted-only"`: the host-service grant is
-scoped and enforced by the `phoneProvisioning` RPC itself, while a fresh
+override such as `approvals: "pregranted-only"`: the builtin receiver grant is
+scoped and enforced by the resolved service itself, while a fresh
 pregranted-only eval run is intentionally forbidden from acquiring it.
 
-Use the same `rpc.call("main", METHOD, ARGS)` form for
-`phoneProvisioning.provision`. Do not import `@workspace-skills/phone-setup`;
-no such runtime package exists.
+Reuse `phone.targetId` for `providers`, `devices`, and `provision`. Do not
+import `@workspace-skills/phone-setup`; no such runtime package exists.
 
 ## Authority contract
 
@@ -68,13 +69,13 @@ defect and must not be retried.
 
 ## Workflow
 
-1. Call `phoneProvisioning.providers`.
+1. Resolve `vibestudio.phone-provisioning.v1`, then call its `providers` method.
 2. If no provider is returned, say: “I need the Vibestudio desktop app that the
    phone is plugged into to be open and connected to this same server.” Ask the
    user to open that desktop app and keep it running, then retry discovery once
    they confirm. This is a desktop-connectivity problem, not a phone problem;
    do not send them into developer settings yet.
-3. Call `phoneProvisioning.devices` for each provider. If one ready phone exists,
+3. Call the resolved service's `devices` method for each provider. If one ready phone exists,
    select it. If none is ready, use the relevant guided setup below and
    rediscover after the user's next action.
 4. Ask the user to choose only when multiple providers or ready phones exist.
@@ -85,7 +86,7 @@ defect and must not be retried.
    result may be needed because only the agent has the typed provisioning
    tools. If those tools become panel-callable, replace the feedback handoff
    with a persistent inline component that invokes them directly.
-5. Call `phoneProvisioning.provision` once with the selected provider, platform,
+5. Call the resolved service's `provision` method once with the selected provider, platform,
    device, and `mode: "auto"`. This is the transaction boundary: the connected
    desktop skips a compatible install, otherwise resolves `auto` to a local
    build when it owns a source checkout or to the version-matched release in a
