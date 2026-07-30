@@ -1,6 +1,6 @@
 /** Discover present `projects/*` repositories by walking the semantic state. */
 
-import { contextId, vcs } from "@vibestudio/runtime";
+import { contextId, vcs } from "@workspace/runtime";
 
 export interface VaultEntry {
   name: string;

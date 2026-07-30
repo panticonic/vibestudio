@@ -50,7 +50,7 @@ import {
   type AgenticEvent,
   type ChannelEnvelope,
   type ChannelViewState,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import { z } from "zod";
 import {
   createHeadlessAgentContext,

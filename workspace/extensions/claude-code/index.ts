@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
 import * as path from "node:path";
-import type { ExtensionContext, UserlandApprovalRequest } from "@vibestudio/extension";
+import type { ExtensionContext } from "@vibestudio/extension";
 import {
   assertClaudeCodeVersion,
   claudeLaunchProfile,
@@ -233,37 +233,6 @@ declare module "@vibestudio/extension" {
   interface WorkspaceExtensions {
     "@workspace-extensions/claude-code": PublicApi;
   }
-}
-
-function buildLaunchApproval(input: {
-  channelId: string;
-  contextId: string;
-  argv: string[];
-}): UserlandApprovalRequest {
-  return {
-    subject: {
-      id: `claude-code.launch.${input.channelId}`,
-      label: `Start Claude Code in ${input.channelId}`,
-    },
-    title: "Start a Claude Code agent",
-    summary: [
-      "Start a Claude Code session in this conversation.",
-      "It can read and change files, run commands, and use tools",
-      "— each action will ask for your approval.",
-    ].join(" "),
-    warning: "The agent can act on your behalf in this conversation and its workspace.",
-    details: [
-      { label: "Conversation", value: input.channelId },
-      { label: "Working in", value: input.contextId },
-      { label: "Command", value: `\`\`\`sh\n${input.argv.join(" ")}\n\`\`\``, format: "markdown" },
-    ],
-    severity: "dangerous",
-    defaultAction: "deny",
-    options: [
-      { value: "allow", label: "Start", tone: "primary" },
-      { value: "deny", label: "Cancel", tone: "danger" },
-    ],
-  };
 }
 
 export async function activate(ctx: ExtensionContext) {
@@ -630,36 +599,13 @@ export async function activate(ctx: ExtensionContext) {
   }): Promise<PrepareResult> {
     const { channelId } = input;
     if (!channelId) throw error("EINVAL", "prepare requires a channelId");
+    const priorForChannel = await readJson<LaunchRecord>(channelKey(channelId));
     // 1. Context is the channel's context — never create a channel.
     const contextId = await resolveContextFromChannel(channelId);
 
-    const priorForChannel = await readJson<LaunchRecord>(channelKey(channelId));
-    const isFirstPrepare = priorForChannel === null;
-
-    // 2. Approval gate on the FIRST prepare for this channel only. A subagent
-    //    launch skips it: the parent agent's spawn (depth/fan-out gated) is the
-    //    authorization, and the caller is a headless `do`/`worker` that cannot
-    //    answer an interactive prompt anyway. This runs before runtime/context
-    //    side effects so denial leaves no launch artifacts.
-    if (isFirstPrepare && !input.subagent) {
-      const argvPreview = [
-        "claude",
-        "--channels",
-        "server:vibestudio",
-        "--dangerously-load-development-channels",
-      ];
-      const choice = await ctx.approvals.request(
-        buildLaunchApproval({ channelId, contextId, argv: argvPreview })
-      );
-      if (choice.kind === "uncallable") {
-        throw error("ENOCALLER", "Claude Code launch requires an interactive caller");
-      }
-      if (choice.kind === "dismissed" || choice.choice !== "allow") {
-        throw error("EACCES", "Claude Code launch denied by user");
-      }
-    }
-
-    // 3. Ensure the runtime session entity (idempotent by canonical key) and
+    // The development/runtime receivers independently enforce the launch and
+    // context effects before they occur.
+    // 2. Ensure the runtime session entity (idempotent by canonical key) and
     //    eagerly materialize the context folder.
     const sessionHandle = await ctx.rpc.call<{ id: string; contextId?: string }>(
       "main",
@@ -699,11 +645,8 @@ export async function activate(ctx: ExtensionContext) {
 
     // 5. Mint the agent credential (rotate on re-prepare so a stale token is
     //    revoked). Bound to entity + host-derived context + channel.
-    const priorLaunch = priorForChannel
-      ? await readJson<LaunchRecord>(launchKey(priorForChannel.launchId))
-      : null;
-    if (priorLaunch?.agentId) {
-      await ctx.rpc.call("main", "auth.revokeAgentCredential", priorLaunch.agentId);
+    if (priorForChannel?.agentId) {
+      await ctx.rpc.call("main", "auth.revokeAgentCredential", priorForChannel.agentId);
     }
     const credential = await ctx.rpc.call<{ agentId: string; agentToken: string }>(
       "main",

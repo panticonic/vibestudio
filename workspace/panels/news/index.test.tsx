@@ -9,7 +9,7 @@ const fixture = vi.hoisted(() => ({
   never: new Promise<never>(() => {}),
 }));
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   contextId: "ctx-news-test",
   createDurableObjectServiceClient: () => ({ call: async () => null }),
   openPanel: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock("@vibestudio/runtime", () => ({
   },
 }));
 
-vi.mock("@vibestudio/runtime/internal/diagnostics", () => ({ recoveryCoordinator: {} }));
+vi.mock("@workspace/runtime/internal/diagnostics", () => ({ recoveryCoordinator: {} }));
 
 vi.mock("@workspace/react", async () => {
   const actual = await vi.importActual<typeof import("@workspace/react")>("@workspace/react");

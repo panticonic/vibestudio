@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
-    "@vibestudio/agentic-protocol": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",

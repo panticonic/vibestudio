@@ -30,13 +30,10 @@ import type {
   PendingCredentialInputApproval,
   PendingSecretInputApproval,
   PendingDeviceCodeApproval,
-  PendingExternalAgentApproval,
   PendingUnitBatchApproval,
-  PendingUserlandApproval,
   UnitBatchEntry,
-  UserlandApprovalOption,
 } from "@vibestudio/shared/approvals";
-import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/capabilityDomains";
+import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/authorityDomains";
 import { authorityRowKey } from "@vibestudio/shared/authority/authorityRowDiff";
 import {
   parseApprovalMarkdown,
@@ -82,7 +79,6 @@ import {
   ChevronRight,
   ExternalLink,
   Globe,
-  Info,
   LayoutPanelTop,
   Lock,
   Settings2,
@@ -96,10 +92,6 @@ import { Badge } from "./ui/primitives";
 import { Toast } from "./Toast";
 
 type CallerInfo = ApprovalCallerPresentation;
-
-function prettifyId(callerId: string): string {
-  return callerId.replace(/^(do-service:|do:|worker:|panel:)/, "");
-}
 
 function resolveCallerInfo(approval: PendingApproval): CallerInfo {
   return getApprovalCallerPresentation(approval);
@@ -117,9 +109,6 @@ export interface ApprovalSheetProps {
     values: Record<string, string>
   ) => Promise<void> | void;
   onSubmitSecretInput: (approvalId: string, values: Record<string, string>) => Promise<void> | void;
-  onResolveUserland: (approvalId: string, choice: string | "dismiss") => Promise<void> | void;
-  onFetchUserlandSealedDetail: (approvalId: string, digest: string) => Promise<string | null>;
-  onResolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") => Promise<void> | void;
   onResolveMissionReview: (
     approvalId: string,
     resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }
@@ -137,8 +126,6 @@ type PendingAction =
   | "submit-client-config"
   | "submit-credential-input"
   | "submit-secret-input"
-  | `userland:${string}`
-  | `external-agent:${"allow" | "deny"}`
   | "mission-review-approve"
   | "mission-review-dismiss";
 
@@ -150,9 +137,6 @@ export function ApprovalSheet({
   onSubmitClientConfig,
   onSubmitCredentialInput,
   onSubmitSecretInput,
-  onResolveUserland,
-  onFetchUserlandSealedDetail,
-  onResolveExternalAgent,
   onResolveMissionReview,
   onNavigateToPanel,
 }: ApprovalSheetProps) {
@@ -421,9 +405,6 @@ export function ApprovalSheet({
                 {copy.summary ? <ApprovalMarkdown source={copy.summary} tone="muted" /> : null}
                 {copy.warning ? <WarningBand message={copy.warning} /> : null}
                 {current.kind === "device-code" ? <DeviceCodePanel approval={current} /> : null}
-                {current.kind === "external-agent" ? (
-                  <ExternalAgentPanel approval={current} />
-                ) : null}
                 {current.kind === "mission-review" ? (
                   <MissionReviewPanel
                     approval={current}
@@ -480,11 +461,7 @@ export function ApprovalSheet({
                   caller={callerInfo}
                   open={detailsOpen}
                   onToggle={() => setDetailsOpen((open) => !open)}
-                  onFetchUserlandSealedDetail={onFetchUserlandSealedDetail}
                 />
-                {current.kind === "userland" ? (
-                  <RememberedHint approval={current} caller={callerInfo} />
-                ) : null}
               </ScrollView>
 
               <View
@@ -531,27 +508,6 @@ export function ApprovalSheet({
                       )
                     }
                     onDeny={() => runAction("deny", () => onResolve(current.approvalId, "deny"))}
-                  />
-                ) : current.kind === "userland" ? (
-                  <UserlandActions
-                    approval={current}
-                    busy={isBusy}
-                    pendingAction={pendingAction}
-                    onChoose={(choice) =>
-                      runAction(`userland:${choice}`, () =>
-                        onResolveUserland(current.approvalId, choice)
-                      )
-                    }
-                  />
-                ) : current.kind === "external-agent" ? (
-                  <ExternalAgentActions
-                    busy={isBusy}
-                    pendingAction={pendingAction}
-                    onDecide={(behavior) =>
-                      runAction(`external-agent:${behavior}`, () =>
-                        onResolveExternalAgent(current.approvalId, behavior)
-                      )
-                    }
                   />
                 ) : current.kind === "device-code" ? (
                   <DeviceCodeActions
@@ -781,12 +737,6 @@ function getCategoryIcon(approval: PendingApproval): IconComponent {
     approval.kind === "secret-input"
   )
     return Settings2;
-  if (approval.kind === "userland")
-    return approval.callerKind === "worker"
-      ? Workflow
-      : approval.callerKind === "panel"
-        ? LayoutPanelTop
-        : Settings2;
   if (approval.kind === "device-code") return ExternalLink;
   return Lock;
 }
@@ -1009,13 +959,11 @@ function ApprovalDetails({
   caller,
   open,
   onToggle,
-  onFetchUserlandSealedDetail,
 }: {
   approval: PendingApproval;
   caller: CallerInfo;
   open: boolean;
   onToggle: () => void;
-  onFetchUserlandSealedDetail: (approvalId: string, digest: string) => Promise<string | null>;
 }) {
   const colors = useAtomValue(themeColorsAtom);
   return (
@@ -1085,13 +1033,6 @@ function ApprovalDetails({
             <CredentialInputDetails approval={approval} />
           ) : approval.kind === "secret-input" ? (
             <SecretInputDetails approval={approval} />
-          ) : approval.kind === "userland" ? (
-            <UserlandDetails
-              approval={approval}
-              onFetchSealedDetail={onFetchUserlandSealedDetail}
-            />
-          ) : approval.kind === "external-agent" ? (
-            <ExternalAgentDetails approval={approval} />
           ) : approval.kind === "device-code" ? (
             <DeviceCodeDetails approval={approval} />
           ) : approval.kind === "unit-batch" ? (
@@ -1261,164 +1202,6 @@ function BrowserPermissionDetails({ approval }: { approval: PendingBrowserPermis
       <DetailRow icon={Lock} label="Permissions" value={approval.capabilities.join(", ")} code />
       <DetailRow icon={Settings2} label="Device" value={approval.deviceLabel} code />
     </>
-  );
-}
-
-function UserlandDetails({
-  approval,
-  onFetchSealedDetail,
-}: {
-  approval: PendingUserlandApproval;
-  onFetchSealedDetail: (approvalId: string, digest: string) => Promise<string | null>;
-}) {
-  const issuer = approval.issuer;
-  const showIssuer =
-    issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId);
-
-  return (
-    <>
-      {showIssuer && issuer ? (
-        <DetailRow
-          icon={User}
-          label="Asked by"
-          value={`${issuer.kind} · ${issuer.label ?? prettifyId(issuer.id)}`}
-          code
-        />
-      ) : null}
-      <DetailRow icon={Lock} label="Subject" value={approval.subject.id} code />
-      {approval.subject.label ? (
-        <DetailRow icon={Lock} label="Label" value={approval.subject.label} code />
-      ) : null}
-      {(approval.details ?? []).map((detail) => (
-        <DetailRow
-          key={detail.label}
-          icon={Lock}
-          label={detail.label}
-          value={detail.value}
-          code={!detail.format}
-          format={detail.format}
-        />
-      ))}
-      {(approval.sealedDetails ?? [])
-        .filter((detail) => (detail.disclosure ?? "review") === "review")
-        .map((detail) => (
-          <SealedUserlandReviewDetail
-            key={`sealed:${detail.digest}`}
-            approvalId={approval.approvalId}
-            detail={detail}
-            onFetch={onFetchSealedDetail}
-          />
-        ))}
-    </>
-  );
-}
-
-function SealedUserlandReviewDetail({
-  approvalId,
-  detail,
-  onFetch,
-}: {
-  approvalId: string;
-  detail: NonNullable<PendingUserlandApproval["sealedDetails"]>[number];
-  onFetch: (approvalId: string, digest: string) => Promise<string | null>;
-}) {
-  const colors = useAtomValue(themeColorsAtom);
-  const [state, setState] = useState<
-    | { kind: "hidden" }
-    | { kind: "loading" }
-    | { kind: "content"; content: string }
-    | { kind: "error"; message: string }
-  >({ kind: "hidden" });
-  const requestGeneration = useRef(0);
-
-  useEffect(() => {
-    requestGeneration.current += 1;
-    setState({ kind: "hidden" });
-  }, [approvalId, detail.digest]);
-
-  const reveal = () => {
-    const generation = ++requestGeneration.current;
-    setState({ kind: "loading" });
-    void onFetch(approvalId, detail.digest)
-      .then((content) => {
-        if (generation !== requestGeneration.current) return;
-        setState(
-          content === null
-            ? { kind: "error", message: "This request is no longer available." }
-            : { kind: "content", content }
-        );
-      })
-      .catch((error: unknown) => {
-        if (generation !== requestGeneration.current) return;
-        setState({
-          kind: "error",
-          message: error instanceof Error ? error.message : "Content unavailable",
-        });
-      });
-  };
-
-  return (
-    <View style={styles.detailRow}>
-      <Lock size={14} color={colors.textSecondary} />
-      <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>{detail.label}</Text>
-      <View style={styles.detailValueColumn}>
-        {state.kind === "content" ? (
-          <Text
-            style={[
-              styles.detailValue,
-              styles.codeText,
-              { color: colors.text, backgroundColor: colors.codeBackground },
-            ]}
-          >
-            {state.content}
-          </Text>
-        ) : (
-          <>
-            <Text
-              accessibilityRole={state.kind === "error" ? "alert" : undefined}
-              style={[
-                styles.detailValue,
-                { color: state.kind === "error" ? colors.danger : colors.textSecondary },
-              ]}
-            >
-              {state.kind === "loading"
-                ? "Loading…"
-                : state.kind === "error"
-                  ? state.message
-                  : `Hidden until revealed · ${detail.byteLength.toLocaleString()} bytes`}
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{
-                disabled: state.kind === "loading",
-                busy: state.kind === "loading",
-              }}
-              disabled={state.kind === "loading"}
-              onPress={reveal}
-              style={({ pressed }) => [
-                styles.sealedDetailReveal,
-                { borderColor: colors.border },
-                pressed ? styles.pressed : null,
-              ]}
-            >
-              <Text style={[styles.detailValue, { color: colors.primary }]}>
-                {state.kind === "error" ? "Retry" : "Reveal content"}
-              </Text>
-            </Pressable>
-          </>
-        )}
-        <Text
-          selectable
-          style={[
-            styles.detailValueSecondary,
-            styles.codeText,
-            { color: colors.textSecondary, backgroundColor: colors.codeBackground },
-          ]}
-        >
-          sha256:{detail.digest}
-        </Text>
-      </View>
-    </View>
   );
 }
 
@@ -1659,78 +1442,6 @@ function DeviceCodeActions({
         testID="approval-action-device-cancel"
       />
     </View>
-  );
-}
-
-function ExternalAgentPanel({ approval }: { approval: PendingExternalAgentApproval }) {
-  const colors = useAtomValue(themeColorsAtom);
-  if (!approval.preview) return null;
-  return (
-    <View
-      style={[
-        styles.issuerPanel,
-        { backgroundColor: colors.surfaceSunken, borderColor: colors.borderSubtle },
-      ]}
-    >
-      <Text style={[styles.helperText, { color: colors.textSecondary }]}>Tool input:</Text>
-      <Text
-        selectable
-        style={[
-          styles.markdownCodeBlock,
-          { color: colors.text, backgroundColor: colors.codeBackground },
-        ]}
-      >
-        {approval.preview}
-      </Text>
-    </View>
-  );
-}
-
-function ExternalAgentActions({
-  busy,
-  pendingAction,
-  onDecide,
-}: {
-  busy: boolean;
-  pendingAction: PendingAction | null;
-  onDecide: (behavior: "allow" | "deny") => void;
-}) {
-  return (
-    <View style={styles.actionRow}>
-      <DecisionButton
-        label={HOST_APPROVAL_COPY.externalAgent.allow}
-        description={HOST_APPROVAL_COPY.externalAgent.allowDescription}
-        variant="primary"
-        disabled={busy}
-        loading={pendingAction === "external-agent:allow"}
-        onPress={() => onDecide("allow")}
-        testID="approval-action-allow"
-      />
-      <DecisionButton
-        label={HOST_APPROVAL_COPY.externalAgent.deny}
-        description={HOST_APPROVAL_COPY.externalAgent.denyDescription}
-        variant="danger"
-        disabled={busy}
-        loading={pendingAction === "external-agent:deny"}
-        icon={XCircle}
-        onPress={() => onDecide("deny")}
-        testID="approval-action-deny"
-      />
-    </View>
-  );
-}
-
-function ExternalAgentDetails({ approval }: { approval: PendingExternalAgentApproval }) {
-  return (
-    <>
-      <DetailRow icon={Settings2} label="Tool" value={approval.operationName} code />
-      <DetailRow icon={Lock} label="Capability" value={approval.capability} code />
-      <DetailRow icon={User} label="Agent" value={approval.entityId} code />
-      {approval.description ? (
-        <DetailRow icon={Settings2} label="Request" value={approval.description} />
-      ) : null}
-      <DetailRow icon={Lock} label="Request id" value={approval.requestId} code />
-    </>
   );
 }
 
@@ -2260,59 +1971,6 @@ function InputApprovalActions({
   );
 }
 
-function UserlandActions({
-  approval,
-  busy,
-  pendingAction,
-  onChoose,
-}: {
-  approval: PendingUserlandApproval;
-  busy: boolean;
-  pendingAction: PendingAction | null;
-  onChoose: (choice: string) => void;
-}) {
-  return (
-    <View style={styles.userlandActionWrap}>
-      {approval.options.map((option) => (
-        <UserlandButton
-          key={option.value}
-          option={option}
-          disabled={busy}
-          loading={pendingAction === `userland:${option.value}`}
-          onPress={() => onChoose(option.value)}
-        />
-      ))}
-    </View>
-  );
-}
-
-function UserlandButton({
-  option,
-  disabled,
-  loading,
-  onPress,
-}: {
-  option: UserlandApprovalOption;
-  disabled: boolean;
-  loading: boolean;
-  onPress: () => void;
-}) {
-  const variant: ButtonVariant =
-    option.tone === "primary" ? "primary" : option.tone === "danger" ? "danger" : "surface";
-  return (
-    <DecisionButton
-      label={option.label}
-      description={option.description ?? option.label}
-      variant={variant}
-      disabled={disabled}
-      loading={loading}
-      icon={option.tone === "danger" ? XCircle : CheckCircle2}
-      onPress={onPress}
-      testID={`approval-userland-${option.value}`}
-    />
-  );
-}
-
 function DecisionButton({
   label,
   description,
@@ -2399,26 +2057,6 @@ function buttonStyle(
     button: { backgroundColor: colors.background, borderColor: colors.border },
     text: { color: colors.text },
   };
-}
-
-function RememberedHint({
-  approval,
-  caller,
-}: {
-  approval: PendingUserlandApproval;
-  caller: CallerInfo;
-}) {
-  const colors = useAtomValue(themeColorsAtom);
-  return (
-    <View style={styles.rememberedHint}>
-      <Info size={14} color={colors.textSecondary} />
-      <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-        {approval.promptOptions === "scoped"
-          ? HOST_APPROVAL_COPY.chrome.scopedChoiceHint
-          : HOST_APPROVAL_COPY.chrome.rememberedForRequesterHint(caller.kindLabel, caller.label)}
-      </Text>
-    </View>
-  );
 }
 
 const styles = StyleSheet.create({
@@ -2769,11 +2407,6 @@ const styles = StyleSheet.create({
   },
   actionRow: {
     flexDirection: "row",
-    gap: spacing.sm,
-  },
-  userlandActionWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
     gap: spacing.sm,
   },
   decisionButton: {

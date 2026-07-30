@@ -9,7 +9,7 @@ import {
   type AgenticEvent,
   type BlockId,
   type MessageId,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import type { IncomingEvent, PubSubClient } from "@workspace/pubsub";
 
 import { useChannelMessages, type UseChannelMessagesResult } from "./useChannelMessages";

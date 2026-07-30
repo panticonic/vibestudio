@@ -98,7 +98,7 @@ export {
 } from "./protocol-schemas.js";
 
 // JSON Schema to Zod conversion (canonical home: agentic-protocol)
-export { jsonSchemaToZod, jsonSchemaToZodRawShape, isRecord } from "@vibestudio/agentic-protocol";
+export { jsonSchemaToZod, jsonSchemaToZodRawShape, isRecord } from "@workspace/agentic-protocol";
 
 // Image processing utilities
 export {

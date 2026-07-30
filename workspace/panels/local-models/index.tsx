@@ -45,7 +45,7 @@ import {
 } from "@radix-ui/react-icons";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useAppTheme } from "@workspace/ui/panel";
-import { extensions } from "@vibestudio/runtime";
+import { extensions } from "@workspace/runtime";
 
 const EXTENSION = "@workspace-extensions/local-models";
 const POLL_MS = 2500;

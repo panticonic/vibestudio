@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { Box, Flex, Tabs, Text, Theme } from "@radix-ui/themes";
 import "@radix-ui/themes/styles.css";
 import "@workspace/ui/tokens.css";
-import { panel } from "@vibestudio/runtime";
+import { panel } from "@workspace/runtime";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { ImportSourceRail, type ImportSourceSelection } from "./components/ImportSourceRail";
 import { MigrateTab } from "./components/MigrateTab";

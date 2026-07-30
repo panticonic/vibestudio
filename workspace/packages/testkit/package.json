@@ -9,7 +9,7 @@
     "./profiling": "./src/profile-core.ts"
   },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*",
-    "@vibestudio/cdp-client": "workspace:*"
+    "@workspace/runtime": "workspace:*",
+    "@workspace/cdp-client": "workspace:*"
   }
 }

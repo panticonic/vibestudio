@@ -10,7 +10,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   type AgenticEvent,
   type ParticipantRef,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import type { Command, Incoming, StepContext } from "./commands.js";
 import {
   derivePendingEffects,
@@ -35,7 +35,7 @@ import type {
   OpenTurn,
   SessionEntry,
 } from "./state.js";
-import type { LogEnvelope } from "@vibestudio/agentic-protocol";
+import type { LogEnvelope } from "@workspace/agentic-protocol";
 
 export interface StepOutput {
   append: AppendItem[];

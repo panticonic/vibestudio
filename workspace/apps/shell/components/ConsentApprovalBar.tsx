@@ -29,7 +29,6 @@ import {
   getDiffReviewPayload,
   highestPendingTone,
   resolveCallerInfo,
-  sealedDetailPayloadHashes,
   type ApprovalCardIntent,
   type ApprovalTone,
   type BlobResult,
@@ -151,8 +150,7 @@ export function ConsentApprovalBar() {
   const currentCaller = current ? resolveCallerInfo(current) : null;
   const diffReview = current ? getDiffReviewPayload(current) : null;
   const diffHashes = diffReview ? diffReviewPayloadHashes(diffReview) : new Set<string>();
-  const sealedHashes = current ? sealedDetailPayloadHashes(current) : new Set<string>();
-  const payloadHashes = new Set([...diffHashes, ...sealedHashes]);
+  const payloadHashes = diffHashes;
 
   useEffect(() => {
     setDecisionError((error) => (error && error.approvalId !== current?.approvalId ? null : error));
@@ -181,10 +179,8 @@ export function ConsentApprovalBar() {
       });
     }
     inFlightBlobsRef.current.add(hash);
-    const content = sealedHashes.has(hash)
-      ? shellApproval.getUserlandSealedDetail(current.approvalId, hash)
-      : blobstore.getText(hash);
-    void content
+    void blobstore
+      .getText(hash)
       .then((text) =>
         setBlobResults((prev) => ({ ...prev, [hash]: text == null ? { missing: true } : { text } }))
       )
@@ -273,16 +269,6 @@ export function ConsentApprovalBar() {
     if (current?.kind !== "secret-input") return;
     runApprovalAction(current, () => shellApproval.submitSecretInput(current.approvalId, values));
   };
-  const resolveUserland = (choice: string) => {
-    if (current?.kind !== "userland") return;
-    runApprovalAction(current, () => shellApproval.resolveUserland(current.approvalId, choice));
-  };
-  const resolveExternalAgent = (behavior: "allow" | "deny") => {
-    if (current?.kind !== "external-agent") return;
-    runApprovalAction(current, () =>
-      shellApproval.resolveExternalAgent(current.approvalId, behavior)
-    );
-  };
   const resolveMissionReview = (
     resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }
   ) => {
@@ -312,20 +298,31 @@ export function ConsentApprovalBar() {
     const stateArgs = { diffTarget: target };
     void (async () => {
       try {
-        const [snapshot, profile] = await Promise.all([
-          panel.getTreeSnapshot(),
-          account.getProfile().catch(() => null),
-        ]);
+        const profile = await account.getProfile().catch(() => null);
         // Reusing a colleague's panel changes their live navigation state. Only
         // reuse within the acting account's owner group; if identity is
         // temporarily unavailable, creating a fresh panel is the safe action.
-        const ownRoots = profile
-          ? (snapshot.forest.find((group) => group.owner === profile.userId)?.rootPanels ?? [])
-          : [];
-        const existing = findGadBrowserPanel(ownRoots);
-        if (existing) {
-          await panel.navigate(existing.id, GAD_BROWSER_SOURCE, { stateArgs });
-          navigateToId(existing.id);
+        let existingId: string | null = null;
+        let cursor: string | undefined;
+        while (profile && !existingId) {
+          const page = await panel.getTreePage({
+            group: { kind: "roots", ownerUserId: profile.userId },
+            ...(cursor ? { cursor } : {}),
+            limit: 100,
+          });
+          for (const node of page.nodes) {
+            const observation = await panel.observe(node.slotId);
+            if (observation.source === GAD_BROWSER_SOURCE) {
+              existingId = node.slotId;
+              break;
+            }
+          }
+          cursor = page.nextCursor ?? undefined;
+          if (!cursor) break;
+        }
+        if (existingId) {
+          await panel.navigate(existingId, GAD_BROWSER_SOURCE, { stateArgs });
+          navigateToId(existingId);
         } else {
           await panel.createPanel(GAD_BROWSER_SOURCE, { stateArgs });
         }
@@ -367,12 +364,6 @@ export function ConsentApprovalBar() {
         return;
       case "submit-secret-input":
         submitSecretInput(intent.values);
-        return;
-      case "resolve-userland":
-        resolveUserland(intent.choice);
-        return;
-      case "resolve-external-agent":
-        resolveExternalAgent(intent.behavior);
         return;
       case "resolve-mission-review":
         resolveMissionReview(intent.resolution);

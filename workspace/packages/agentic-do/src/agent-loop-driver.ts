@@ -37,18 +37,19 @@ import {
   type LogEnvelope,
   type MessageModelPayload,
   type ParticipantRef,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import { channelTrajectoryFor, logIdForChannel } from "@vibestudio/trajectory-identity";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import {
   EffectOutbox,
+  ensureOutboxSchema,
   maxAttempts,
   outboxExternalId,
   parseOutboxExternalId,
   type OutboxRow,
 } from "./effect-outbox.js";
-import { FoldCache, type GadPort } from "./fold-cache.js";
+import { ensureFoldCacheSchema, FoldCache, type GadPort } from "./fold-cache.js";
 import {
   executorFor,
   type EffectExecutor,
@@ -353,6 +354,14 @@ function ensureModelExecutionAttemptSchema(sql: SqlStorage): void {
   `);
 }
 
+/** Install every table the loop driver may use before the DO schema is sealed. */
+export function ensureAgentLoopDriverSchema(sql: SqlStorage): void {
+  ensureOutboxSchema(sql);
+  ensureFoldCacheSchema(sql);
+  ensureScheduledModelResumeSchema(sql);
+  ensureModelExecutionAttemptSchema(sql);
+}
+
 function mapScheduledModelResumeRow(row: Record<string, unknown>): ScheduledModelResumeRow {
   return {
     channelId: String(row["channel_id"]),
@@ -392,9 +401,8 @@ export class AgentLoopDriver {
   private activationReleased = false;
 
   constructor(private readonly deps: DriverDeps) {
+    ensureAgentLoopDriverSchema(deps.sql);
     this.outbox = new EffectOutbox(deps.sql);
-    ensureScheduledModelResumeSchema(deps.sql);
-    ensureModelExecutionAttemptSchema(deps.sql);
     this.foldCache = new FoldCache(deps.sql, deps.gad);
   }
 

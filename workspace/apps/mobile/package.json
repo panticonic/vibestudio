@@ -20,6 +20,7 @@
       ]
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "account-providers.configure",
@@ -283,15 +284,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "workspace-host.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -310,16 +302,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "workspace-units.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-units.publish",
+          "capability": "workspace-service:workspace.state",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -370,6 +353,24 @@
             "prefix": ""
           },
           "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
           "evidence": "intentional-broad"
         },
         {

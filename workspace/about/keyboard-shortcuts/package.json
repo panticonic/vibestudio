@@ -8,6 +8,7 @@
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "agent.credentials.manage",
@@ -38,15 +39,6 @@
         },
         {
           "capability": "subagents.create",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "user-approval.request",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -87,7 +79,7 @@
   "dependencies": {
     "@workspace/react": "workspace:*",
     "@workspace/about-shared": "workspace:*",
-    "@vibestudio/runtime": "workspace:*"
+    "@workspace/runtime": "workspace:*"
   },
   "type": "module"
 }

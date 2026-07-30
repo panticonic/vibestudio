@@ -18,11 +18,12 @@
       "icon": "✦"
     },
     "exposeModules": [
-      "@vibestudio/runtime",
+      "@workspace/runtime",
       "@workspace/pubsub",
       "zod"
     ],
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "accounts.connect",
@@ -35,15 +36,6 @@
         },
         {
           "capability": "agent.credentials.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "automations.register",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -97,15 +89,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -131,6 +114,15 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ]
     }
@@ -140,7 +132,7 @@
     "@workspace/harness": "workspace:*",
     "@workspace/pi-core": "workspace:*",
     "@workspace/pubsub": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "zod": "^3.24.0"
   },
   "devDependencies": {

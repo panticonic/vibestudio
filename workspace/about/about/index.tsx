@@ -16,7 +16,7 @@ import {
   Callout,
   Spinner,
 } from "@radix-ui/themes";
-import { rpc } from "@vibestudio/runtime";
+import { rpc } from "@workspace/runtime";
 import { useIsMobile, usePaletteCommands } from "@workspace/react";
 import { AboutThemeRoot, BrandMark } from "@workspace/about-shared/ui";
 import type { AppInfo } from "@workspace/about-shared/types";

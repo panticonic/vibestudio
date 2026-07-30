@@ -23,7 +23,7 @@ import {
   invocationFailedPayload,
   type AgenticEvent,
   type InvocationId,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 
 const hookState = vi.hoisted(() => {
   const scrollElement = {

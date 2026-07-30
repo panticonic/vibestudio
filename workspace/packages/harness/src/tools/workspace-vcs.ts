@@ -72,35 +72,6 @@ const workspaceVcsSchema = Type.Union([
   Type.Object({ operation: Type.Literal("status") }, { additionalProperties: false }),
   Type.Object(
     {
-      operation: Type.Literal("listDirectory"),
-      path: Type.String({
-        description:
-          "Workspace directory path at the current exact working state. Use an empty string for the workspace root.",
-      }),
-      after: Type.Optional(Type.String()),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      operation: Type.Literal("listFiles"),
-      path: Type.String({
-        description:
-          "Workspace path of one exact repository whose file manifest to list. The workspace root is not a repository; discover roots with listDirectory.",
-      }),
-      prefix: Type.Optional(
-        Type.String({
-          description: "Optional repository-relative path prefix.",
-        })
-      ),
-      after: Type.Optional(Type.String()),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
       operation: Type.Literal("inspect"),
       root: semanticRootSchema,
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
@@ -238,8 +209,6 @@ const workspaceVcsSchema = Type.Union([
 
 export type WorkspaceVcsToolInput =
   | { operation: "status" }
-  | { operation: "listDirectory"; path: string; after?: string; limit?: number }
-  | { operation: "listFiles"; path: string; prefix?: string; after?: string; limit?: number }
   | { operation: "inspect"; root: VcsSemanticNodeRef; limit?: number }
   | { operation: "neighbors"; root: VcsSemanticNodeRef; after?: string; limit?: number }
   | {
@@ -279,8 +248,6 @@ export interface WorkspaceVcsToolDetails {
 export type ToolWorkflowVcs = Pick<
   ToolVcs,
   | "status"
-  | "listDirectory"
-  | "listFiles"
   | "inspect"
   | "neighbors"
   | "compare"
@@ -349,7 +316,7 @@ export function createWorkspaceVcsTool(
     name: "vcs",
     label: "vcs",
     description:
-      "Orient, browse an exact working-state directory or repository manifest, walk typed semantic roots with inspect/neighbors, compare, incrementally integrate, revert, commit, discard, blame, or push the semantic workspace. Edits, moves, and copies have dedicated path-friendly tools.",
+      "Inspect and change semantic workspace history: status, typed-root inspect/neighbors, compare, incrementally integrate, revert, commit, discard, blame, or push. Browse and edit ordinary paths with the dedicated filesystem tools.",
     parameters: workspaceVcsSchema,
     execute: async (
       _toolCallId,
@@ -371,77 +338,6 @@ export function createWorkspaceVcsTool(
             `${result.workingCounts.changes} changes).`,
           result
         );
-      }
-
-      if (command.operation === "listDirectory") {
-        const state = await resolveToolWorkingState(vcs, context);
-        const path = toVcsPath(command.path, cwd);
-        const result = await vcs.listDirectory({
-          state,
-          path,
-          ...(command.after ? { cursor: command.after } : {}),
-          limit: command.limit ?? 100,
-        });
-        if (!result) {
-          return resultOf(
-            command.operation,
-            `No semantic directory exists at ${path || "the workspace root"}`,
-            null
-          );
-        }
-        const lines = result.entries.map(
-          (entry) =>
-            `${entry.kind} ${entry.path} · ${entry.identity}` +
-            (entry.repositoryRoot ? " · repository root" : "")
-        );
-        if (result.nextCursor) {
-          lines.push(`More entries: rerun listDirectory with after=${result.nextCursor}`);
-        }
-        return resultOf(
-          command.operation,
-          lines.join("\n") || `No entries under ${path || "the workspace root"}`,
-          result
-        );
-      }
-
-      if (command.operation === "listFiles") {
-        const state = await resolveToolWorkingState(vcs, context);
-        const repoPath = toVcsPath(command.path, cwd);
-        const repository = await resolveToolRepository(vcs, state, repoPath);
-        const result = await vcs.listFiles({
-          state,
-          repositoryId: repository.repositoryId,
-          ...(command.prefix ? { prefix: command.prefix } : {}),
-          ...(command.after ? { cursor: command.after } : {}),
-          limit: command.limit ?? 100,
-        });
-        const roots = result.files.map(
-          (file): VcsSemanticNodeRef => ({
-            kind: "file",
-            state,
-            repositoryId: repository.repositoryId,
-            fileId: file.fileId,
-          })
-        );
-        const lines = result.files.map((file, index) => {
-          const workspacePath = `${repository.repoPath}/${file.path}`;
-          return (
-            `${workspacePath} · root ${JSON.stringify(roots[index])} · ` +
-            `${file.contentHash} · authored by ${file.authoredChangeId}`
-          );
-        });
-        if (result.nextCursor) {
-          lines.push(`More files: rerun listFiles with after=${result.nextCursor}`);
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: lines.join("\n") || `No files in repository ${repository.repoPath}`,
-            },
-          ],
-          details: { operation: command.operation, result, roots },
-        };
       }
 
       if (command.operation === "inspect") {

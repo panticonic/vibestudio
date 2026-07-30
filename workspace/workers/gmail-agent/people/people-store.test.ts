@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createInMemorySql } from "@vibestudio/runtime/worker/test-utils";
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import { createInMemorySql } from "@workspace/runtime/worker/test-utils";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import { createGmailTables } from "../schema.js";
 import { PeopleStore } from "./people-store.js";
 

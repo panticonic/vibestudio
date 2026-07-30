@@ -14,7 +14,7 @@ describe("ChannelLog paging", () => {
 
   it("returns bounded forward pages under one stable reconnect watermark", async () => {
     const seqs = Array.from({ length: 1_201 }, (_, index) => index + 1);
-    const targetId = "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
+    const targetId = "do:workers/workspace-source:GadWorkspaceDO:workspace";
     const calls: Array<[target: string, method: string, args: unknown[]]> = [];
     const rpc: ConstructorParameters<typeof ChannelLog>[0] = {
       async call<T = unknown>(target: string, method: string, args: unknown[]): Promise<T> {
@@ -24,7 +24,7 @@ describe("ChannelLog paging", () => {
             kind: "durable-object",
             source: "vibestudio/internal",
             className: "GadWorkspaceDO",
-            objectKey: "workspace-semantic-control-plane",
+            objectKey: "workspace",
             targetId,
           } as T;
         }

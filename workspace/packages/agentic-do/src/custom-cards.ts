@@ -26,8 +26,8 @@ import {
   type AgenticEvent,
   type CustomMessageDisplayMode,
   type MessageId,
-} from "@vibestudio/agentic-protocol";
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+} from "@workspace/agentic-protocol";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import type { ChannelClient } from "./channel-client.js";
 
 export class CardValidationError extends Error {
@@ -92,11 +92,11 @@ export class CardManager {
   private readonly typeCache = new Map<string, MessageTypeInfo>();
 
   constructor(private readonly deps: CardManagerDeps) {
-    this.createTables();
+    CardManager.createTables(deps.sql);
   }
 
-  private createTables(): void {
-    this.deps.sql.exec(`
+  static createTables(sql: SqlStorage): void {
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS custom_cards (
         natural_key TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
@@ -106,7 +106,7 @@ export class CardManager {
         created_at INTEGER NOT NULL
       )
     `);
-    this.deps.sql.exec(
+    sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_custom_cards_message ON custom_cards(message_id)`
     );
   }

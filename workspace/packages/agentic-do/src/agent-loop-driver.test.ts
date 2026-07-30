@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { GadWorkspaceDO } from "@workspace-workers/workspace-source";
 import {
   ids,
   askUserPolicy,
@@ -12,7 +12,7 @@ import {
 } from "@workspace/agent-loop";
 import { AgentLoopDriver, type DriverDeps } from "./agent-loop-driver.js";
 import type { ChannelCallPort, EffectExecutor, EphemeralEmit } from "./effect-executors/index.js";
-import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
+import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { summarizeTurn } from "./agent-vessel.js";
 
@@ -206,16 +206,26 @@ function promptIncoming(envelopeId = "env-1", content = "hello", metadata?: Agen
   };
 }
 
-async function logKinds(gad: { call: <T>(m: string, ...a: unknown[]) => Promise<T> }) {
-  const rows = await gad.call<{ rows: Array<{ payload_kind: string }> }>(
-    "query",
+async function logKinds(gad: {
+  sql: { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } };
+}) {
+  const rows = gad.sql.exec(
     `SELECT payload_kind FROM log_events
      WHERE log_id = '${LOG_ID}'
        AND envelope_id NOT LIKE 'sys:prompt-artifacts:%'
-     ORDER BY seq`,
-    []
+     ORDER BY seq`
   );
-  return rows.rows.map((row) => row.payload_kind);
+  return rows.toArray().map((row) => String(row["payload_kind"]));
+}
+
+function inspectSql<TResult>(
+  gad: {
+    sql: { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } };
+  },
+  query: string,
+  bindings: unknown[] = []
+): TResult {
+  return { rows: gad.sql.exec(query, ...bindings).toArray() } as TResult;
 }
 
 const textReply = (text: string): EffectOutcome => ({
@@ -562,15 +572,11 @@ describe("AgentLoopDriver", () => {
     await alarm;
 
     const turnId = ids.turnId(CHANNEL, "env-retire-after-interrupt", "agent:self");
-    const rows = await harness.gad.call<{ rows: Array<{ envelope_id: string }> }>(
-      "query",
-      `SELECT envelope_id FROM log_events
+    const rows = inspectSql<{ rows: Array<{ envelope_id: string }> }>(harness.gad, `SELECT envelope_id FROM log_events
        WHERE log_id = '${LOG_ID}'
          AND payload_kind = 'system.event'
          AND envelope_id LIKE '%:interrupt:%'
-       ORDER BY seq`,
-      []
-    );
+       ORDER BY seq`);
     expect(rows.rows.map((row) => row.envelope_id)).toEqual([
       ids.interruptEvent(turnId, "user_interrupted"),
       ids.interruptEvent(turnId, "channel_unsubscribe"),
@@ -817,11 +823,7 @@ describe("AgentLoopDriver", () => {
     await harness.driver.handleIncoming(CHANNEL, promptIncoming());
     await settle(harness.driver);
 
-    const rows = await harness.gad.call<{ rows: Array<{ actor_json: string }> }>(
-      "query",
-      `SELECT actor_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'turn.opened' ORDER BY seq`,
-      []
-    );
+    const rows = inspectSql<{ rows: Array<{ actor_json: string }> }>(harness.gad, `SELECT actor_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'turn.opened' ORDER BY seq`);
     expect(rows.rows).toHaveLength(1);
     expect(JSON.parse(rows.rows[0]!.actor_json)).toEqual({
       kind: "agent",
@@ -840,11 +842,7 @@ describe("AgentLoopDriver", () => {
     await harness.driver.handleIncoming(CHANNEL, promptIncoming());
     await settle(harness.driver);
 
-    const rows = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.completed' ORDER BY seq`,
-      []
-    );
+    const rows = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(harness.gad, `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.completed' ORDER BY seq`);
     const assistantCompleted = rows.rows
       .map((row) => JSON.parse(row.payload_ref_json) as Record<string, unknown>)
       .find((payload) => payload["role"] === "assistant");
@@ -921,13 +919,9 @@ describe("AgentLoopDriver", () => {
         transportCallId: ids.transportCallId("tc-ask"),
       },
     ]);
-    const terminalRows = await harness.gad.call<{
+    const terminalRows = inspectSql<{
       rows: Array<{ envelope_id: string }>;
-    }>(
-      "query",
-      `SELECT envelope_id FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'invocation.completed'`,
-      []
-    );
+    }>(harness.gad, `SELECT envelope_id FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'invocation.completed'`);
     expect(terminalRows.rows).toEqual([{ envelope_id: ids.invocationTerminal("tc-ask") }]);
   });
 
@@ -1079,11 +1073,7 @@ describe("AgentLoopDriver", () => {
     ]);
     // outbox drained; channel log got the published events
     expect(harness.driver.outbox.all()).toHaveLength(0);
-    const channelRows = await harness.gad.call<{ rows: Array<{ cnt: number }> }>(
-      "query",
-      `SELECT COUNT(*) AS cnt FROM log_events WHERE log_id = '${CHANNEL}'`,
-      []
-    );
+    const channelRows = inspectSql<{ rows: Array<{ cnt: number }> }>(harness.gad, `SELECT COUNT(*) AS cnt FROM log_events WHERE log_id = '${CHANNEL}'`);
     expect(channelRows.rows[0]!.cnt).toBeGreaterThan(0);
     expect(harness.broadcasts.length).toBeGreaterThan(0);
     expect(harness.broadcasts.every((item) => item.channelId === CHANNEL)).toBe(true);
@@ -1332,21 +1322,13 @@ describe("AgentLoopDriver", () => {
       "system.event",
       "turn.waiting",
     ]);
-    const failedRows = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`,
-      []
-    );
+    const failedRows = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(harness.gad, `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`);
     expect(JSON.parse(failedRows.rows[0]!.payload_ref_json)).toMatchObject({
       reason: "model_credential_reconnect_required",
       recoverable: true,
       code: "auth_or_credentials",
     });
-    const waitingRows = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'turn.waiting'`,
-      []
-    );
+    const waitingRows = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(harness.gad, `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'turn.waiting'`);
     expect(JSON.parse(waitingRows.rows[0]!.payload_ref_json)).toMatchObject({
       reason: "model_credential_reconnect_required",
       summary: "Waiting for model credential reconnect",
@@ -1408,19 +1390,11 @@ describe("AgentLoopDriver", () => {
     expect(harness.channelPublishes).not.toContainEqual(
       expect.objectContaining({ payloadKind: CREDENTIAL_CONNECT_PAYLOAD_KIND })
     );
-    const notices = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'system.event' ORDER BY seq`,
-      []
-    );
+    const notices = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(harness.gad, `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'system.event' ORDER BY seq`);
     expect(notices.rows.map((row) => JSON.parse(row.payload_ref_json))).toContainEqual(
       expect.objectContaining({ kind: "model.fallback_continued" })
     );
-    const starts = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.started' ORDER BY seq`,
-      []
-    );
+    const starts = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(harness.gad, `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.started' ORDER BY seq`);
     expect(JSON.parse(starts.rows.at(-1)!.payload_ref_json).modelRequest).toMatchObject({
       provider: "local",
       model: "lfm2.5-1.2b",
@@ -1703,11 +1677,7 @@ describe("AgentLoopDriver", () => {
 
     await expect(harness.driver.wake(CHANNEL)).resolves.toBeUndefined();
 
-    const rows = await gad.call<{ rows: Array<{ envelope_id: string }> }>(
-      "query",
-      `SELECT envelope_id FROM log_events WHERE log_id = '${LOG_ID}' ORDER BY seq`,
-      []
-    );
+    const rows = inspectSql<{ rows: Array<{ envelope_id: string }> }>(gad, `SELECT envelope_id FROM log_events WHERE log_id = '${LOG_ID}' ORDER BY seq`);
     const localEnvelopeIds = rows.rows.map((row) => row.envelope_id);
     expect(localEnvelopeIds).toContain(ids.messageTerminal(childMessageId));
     expect(localEnvelopeIds).toContain(ids.messageStarted(ids.messageId(childTurnId, 1)));
@@ -1796,11 +1766,7 @@ describe("AgentLoopDriver", () => {
       "message.failed",
       "turn.waiting",
     ]);
-    const failedRows = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`,
-      []
-    );
+    const failedRows = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(harness.gad, `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`);
     expect(JSON.parse(failedRows.rows[0]!.payload_ref_json)).toMatchObject({
       reason:
         "The usage limit has been reached for GPT-5.3 Codex-Spark. Try again after Jun 15, 2026 at 6:35 PM UTC.",
@@ -1862,11 +1828,7 @@ describe("AgentLoopDriver", () => {
       "message.failed",
       "turn.waiting",
     ]);
-    const failedRows = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`,
-      []
-    );
+    const failedRows = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(harness.gad, `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`);
     expect(JSON.parse(failedRows.rows[0]!.payload_ref_json)).toMatchObject({
       code: "usage_limit_terminal",
       resetAt: "2026-06-15T18:35:01.000Z",
@@ -1900,11 +1862,7 @@ describe("AgentLoopDriver", () => {
       "message.failed",
       "turn.closed",
     ]);
-    const failedRows = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`,
-      []
-    );
+    const failedRows = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(harness.gad, `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`);
     expect(JSON.parse(failedRows.rows[0]!.payload_ref_json)).toMatchObject({
       reason: rawInvalidToolSchemaError(),
       recoverable: false,
@@ -2156,10 +2114,9 @@ describe("AgentLoopDriver", () => {
     const kindsAfterFirst = await logKinds(harness.gad);
     await expect(driver.deliverEffectOutcome(effectId, toolOk)).resolves.toBe(false); // duplicate
     expect(await logKinds(harness.gad)).toEqual(kindsAfterFirst);
-    const terminals = await harness.gad.call<{ rows: Array<{ cnt: number }> }>(
-      "query",
-      `SELECT COUNT(*) AS cnt FROM log_events WHERE envelope_id = '${ids.invocationTerminal("tc-1")}'`,
-      []
+    const terminals = inspectSql<{ rows: Array<{ cnt: number }> }>(
+      harness.gad,
+      `SELECT COUNT(*) AS cnt FROM log_events WHERE envelope_id = '${ids.invocationTerminal("tc-1")}'`
     );
     expect(terminals.rows[0]!.cnt).toBe(1);
   });
@@ -2223,14 +2180,10 @@ describe("AgentLoopDriver", () => {
     await settle(harness.driver);
 
     expect(await logKinds(harness.gad)).toContain("system.compaction_recorded");
-    const failures = await harness.gad.call<{
+    const failures = inspectSql<{
       rows: Array<{ payload_ref_json: string }>;
-    }>(
-      "query",
-      `SELECT payload_ref_json FROM log_events
-        WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`,
-      []
-    );
+    }>(harness.gad, `SELECT payload_ref_json FROM log_events
+        WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.failed'`);
     expect(failures.rows.map((row) => JSON.parse(row.payload_ref_json))).toContainEqual({
       protocol: expect.any(String),
       reason: expect.any(String),

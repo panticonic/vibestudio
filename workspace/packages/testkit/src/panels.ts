@@ -6,8 +6,8 @@
  * Reads use the boot-ready, provenance-bearing snapshot path;
  * direct CDP is for input, viewport emulation and layout measurement.
  */
-import { openPanel as runtimeOpenPanel, panelTree } from "@vibestudio/runtime";
-import type { OpenPanelOptions as RuntimeOpenPanelOptions, PanelHandle } from "@vibestudio/runtime";
+import { openPanel as runtimeOpenPanel, panelTree } from "@workspace/runtime";
+import type { OpenPanelOptions as RuntimeOpenPanelOptions, PanelHandle } from "@workspace/runtime";
 import { activeTestContext } from "./run.js";
 import { withCdpSession } from "./cdp.js";
 import { TestAssertionError } from "./expect.js";

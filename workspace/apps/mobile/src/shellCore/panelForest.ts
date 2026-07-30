@@ -1,6 +1,21 @@
-import type { Panel, PanelTreeSnapshot } from "@vibestudio/shared/types";
+export interface MobilePanelTreeNode {
+  id: string;
+  title: string;
+  parentId: string | null;
+  owner: string | null;
+  childCount: number;
+  childrenLoadedCount?: number;
+  childrenHaveMore?: boolean;
+  children: MobilePanelTreeNode[];
+}
 
-export type MobilePanelForestGroup = PanelTreeSnapshot["forest"][number];
+export interface MobilePanelTreeGroup {
+  owner: string;
+  rootCount: number;
+  rootLoadedCount?: number;
+  rootsHaveMore?: boolean;
+  rootPanels: MobilePanelTreeNode[];
+}
 
 export interface MobileOwnerProfile {
   userId: string;
@@ -11,42 +26,31 @@ export interface MobileOwnerProfile {
 }
 
 export type MobilePanelForestRow =
-  | {
-      kind: "owner";
-      owner: string;
-      label: string;
-      color?: string;
-    }
+  | { kind: "owner"; owner: string; label: string; color?: string }
   | {
       kind: "panel";
-      panel: Panel;
+      panel: MobilePanelTreeNode;
       depth: number;
       isCollapsed: boolean;
+    }
+  | {
+      kind: "load-more";
+      groupKey: string;
+      parentSlotId: string | null;
+      ownerUserId?: string | null;
+      depth: number;
+      remaining: number;
     };
 
 export function orderMobilePanelForest(
-  forest: readonly MobilePanelForestGroup[],
+  groups: readonly MobilePanelTreeGroup[],
   selfUserId: string | null
-): MobilePanelForestGroup[] {
-  if (!selfUserId) return [...forest];
-  const own = forest.filter((group) => group.owner === selfUserId);
-  return own.length === 0
-    ? [...forest]
-    : [...own, ...forest.filter((group) => group.owner !== selfUserId)];
-}
-
-export function mobilePanelRoots(forest: readonly MobilePanelForestGroup[]): Panel[] {
-  return forest.flatMap((group) => group.rootPanels);
-}
-
-export function preferredMobileRoot(
-  forest: readonly MobilePanelForestGroup[],
-  selfUserId: string | null
-): Panel | null {
-  return (
-    orderMobilePanelForest(forest, selfUserId).find((group) => group.rootPanels.length > 0)
-      ?.rootPanels[0] ?? null
-  );
+): MobilePanelTreeGroup[] {
+  if (!selfUserId) return [...groups];
+  return [
+    ...groups.filter((group) => group.owner === selfUserId),
+    ...groups.filter((group) => group.owner !== selfUserId),
+  ];
 }
 
 function ownerLabel(
@@ -54,38 +58,65 @@ function ownerLabel(
   selfUserId: string | null,
   profile: MobileOwnerProfile | undefined
 ): string {
-  if (owner === "") return "Workspace panels";
+  if (!owner) return "Workspace panels";
   if (owner === selfUserId) return "Your panels";
   if (profile) {
     const label = profile.displayName || `@${profile.handle}`;
     return profile.revoked ? `${label} (revoked)` : label;
   }
-  const suffix = owner.length > 10 ? `${owner.slice(0, 6)}…${owner.slice(-4)}` : owner;
-  return `Member ${suffix}`;
+  return `Member ${owner.length > 10 ? `${owner.slice(0, 6)}…${owner.slice(-4)}` : owner}`;
 }
 
-function flattenGroup(
-  panels: readonly Panel[],
+function appendNodes(
+  nodes: readonly MobilePanelTreeNode[],
+  totalCount: number,
+  loadedCount: number,
+  hasMore: boolean,
   collapsedIds: ReadonlySet<string>,
   depth: number,
-  rows: MobilePanelForestRow[]
+  rows: MobilePanelForestRow[],
+  groupKey: string,
+  parentSlotId: string | null,
+  ownerUserId?: string | null
 ): void {
-  for (const panel of panels) {
+  for (const panel of nodes) {
     const isCollapsed = collapsedIds.has(panel.id);
     rows.push({ kind: "panel", panel, depth, isCollapsed });
-    if (!isCollapsed) flattenGroup(panel.children, collapsedIds, depth + 1, rows);
+    if (!isCollapsed && panel.childCount > 0) {
+      appendNodes(
+        panel.children,
+        panel.childCount,
+        panel.childrenLoadedCount ?? panel.children.length,
+        panel.childrenHaveMore ?? panel.children.length < panel.childCount,
+        collapsedIds,
+        depth + 1,
+        rows,
+        `children:${panel.id}`,
+        panel.id
+      );
+    }
+  }
+  if (hasMore) {
+    rows.push({
+      kind: "load-more",
+      groupKey,
+      parentSlotId,
+      ...(ownerUserId !== undefined ? { ownerUserId } : {}),
+      depth,
+      remaining: Math.max(0, totalCount - loadedCount),
+    });
   }
 }
 
 export function buildMobilePanelForestRows(
-  forest: readonly MobilePanelForestGroup[],
+  groups: readonly MobilePanelTreeGroup[],
   collapsedIds: ReadonlySet<string>,
   selfUserId: string | null,
   profiles: ReadonlyMap<string, MobileOwnerProfile>
 ): MobilePanelForestRow[] {
   const rows: MobilePanelForestRow[] = [];
-  for (const group of orderMobilePanelForest(forest, selfUserId)) {
-    if (group.rootPanels.length === 0) continue;
+  for (const group of orderMobilePanelForest(groups, selfUserId)) {
+    if (group.rootCount === 0) continue;
     const profile = profiles.get(group.owner);
     rows.push({
       kind: "owner",
@@ -93,7 +124,18 @@ export function buildMobilePanelForestRows(
       label: ownerLabel(group.owner, selfUserId, profile),
       ...(profile?.color ? { color: profile.color } : {}),
     });
-    flattenGroup(group.rootPanels, collapsedIds, 0, rows);
+    appendNodes(
+      group.rootPanels,
+      group.rootCount,
+      group.rootLoadedCount ?? group.rootPanels.length,
+      group.rootsHaveMore ?? group.rootPanels.length < group.rootCount,
+      collapsedIds,
+      0,
+      rows,
+      `roots:${group.owner}`,
+      null,
+      group.owner || null
+    );
   }
   return rows;
 }

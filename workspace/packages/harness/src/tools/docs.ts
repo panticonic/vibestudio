@@ -298,14 +298,14 @@ export function renderEntry(entry: CatalogEntry): string {
           `Eval/raw RPC call:\n${rpcExample}\n\n` +
             "The portable `rpc.call(target, method, args)` form addresses this service; normal caller, authority, and session-admission checks still apply. " +
             "The `services.<name>` convenience binding may be an ergonomic runtime client when " +
-            "the service name also exists in `@vibestudio/runtime`."
+            "the service name also exists in `@workspace/runtime`."
         );
       }
     } else if (entry.surface === "runtime") {
       const [namespace] = entry.qualifiedName.split(".");
       if (namespace && entry.qualifiedName.includes(".")) {
         parts.push(
-          `Eval/runtime call:\nimport { ${namespace} } from "@vibestudio/runtime";\n` +
+          `Eval/runtime call:\nimport { ${namespace} } from "@workspace/runtime";\n` +
             `await ${entry.qualifiedName}(...);`
         );
       }
@@ -346,9 +346,9 @@ export function renderEntry(entry: CatalogEntry): string {
           : JSON.stringify(protocol);
       parts.push(
         "Finish docs_search/docs_open as agent tools before eval; `docs`, `docs.search`, and `docs.open` are not eval globals or runtime exports.\n\n" +
-          "This is a live workspace service, not a host-dispatcher service. Do not pass it to `host_authority_next_action`; resolve and call it through the runtime below, where its receiver declaration and installed-unit authority are enforced.\n\n" +
+          "This is a live workspace service. Resolve and call it directly through the runtime below; its receiver declaration and installed-unit authority are enforced by that call.\n\n" +
           "Eval-side service resolution and proof (public exports only):\n" +
-          'import { workers, rpc } from "@vibestudio/runtime";\n' +
+          'import { workers, rpc } from "@workspace/runtime";\n' +
           factoryObjectKey +
           `const service = await workers.resolveService(${resolutionArgs});\n` +
           callExample +

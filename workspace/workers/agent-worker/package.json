@@ -18,11 +18,12 @@
       "icon": "💬"
     },
     "exposeModules": [
-      "@vibestudio/runtime",
+      "@workspace/runtime",
       "@workspace/pubsub",
       "zod"
     ],
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "accounts.connect",
@@ -35,15 +36,6 @@
         },
         {
           "capability": "agent.credentials.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "automations.register",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -104,42 +96,6 @@
           },
           "tier": "gated",
           "evidence": "exact"
-        },
-        {
-          "capability": "git.project.import",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "git.publish",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "git.pull",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "git.remotes.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
         },
         {
           "capability": "internal-model-runtime.use",
@@ -205,15 +161,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-main-advance",
           "resource": {
             "kind": "prefix",
@@ -248,19 +195,28 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ]
     }
   },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@vibestudio/agentic-protocol": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
     "vitest": "^3.2.2"
   }
 }

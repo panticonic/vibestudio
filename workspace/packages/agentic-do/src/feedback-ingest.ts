@@ -11,8 +11,8 @@
  *   the note into it instead.
  */
 
-import type { SqlStorage } from "@vibestudio/runtime/worker";
-import type { UiFeedbackPayload } from "@vibestudio/agentic-protocol";
+import type { SqlStorage } from "@workspace/runtime/worker";
+import type { UiFeedbackPayload } from "@workspace/agentic-protocol";
 
 const DEDUPE_TTL_MS = 10 * 60 * 1000;
 const MAX_PENDING_PER_CHANNEL = 20;
@@ -22,17 +22,17 @@ export class FeedbackIngest {
     private readonly sql: SqlStorage,
     private readonly now: () => number = () => Date.now()
   ) {
-    this.createTables();
+    FeedbackIngest.createTables(sql);
   }
 
-  private createTables(): void {
-    this.sql.exec(`
+  static createTables(sql: SqlStorage): void {
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS feedback_seen (
         occurrence_key TEXT PRIMARY KEY,
         created_at INTEGER NOT NULL
       )
     `);
-    this.sql.exec(`
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS pending_feedback (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         channel_id TEXT NOT NULL,

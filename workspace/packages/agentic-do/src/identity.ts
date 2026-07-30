@@ -5,7 +5,7 @@
  * Detects workerd restarts by comparing session IDs.
  */
 
-import type { SqlStorage, DORef } from "@vibestudio/runtime/worker";
+import type { SqlStorage, DORef } from "@workspace/runtime/worker";
 
 export class DOIdentity {
   private _ref: DORef | null = null;
@@ -14,13 +14,17 @@ export class DOIdentity {
 
   constructor(private sql: SqlStorage) {}
 
-  createTables(): void {
-    this.sql.exec(`
+  static createTables(sql: SqlStorage): void {
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS do_identity (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )
     `);
+  }
+
+  createTables(): void {
+    DOIdentity.createTables(this.sql);
   }
 
   /**

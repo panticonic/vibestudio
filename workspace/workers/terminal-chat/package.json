@@ -17,9 +17,10 @@
     },
     "persistent": true,
     "exposeModules": [
-      "@vibestudio/runtime"
+      "@workspace/runtime"
     ],
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "accounts.connect",
@@ -76,15 +77,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -117,7 +109,7 @@
   "dependencies": {
     "@vibestudio/shared": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/agentic-session": "workspace:*",
     "@workspace/terminal-shim": "workspace:*",
     "@workspace/terminal-host-protocol": "workspace:*",

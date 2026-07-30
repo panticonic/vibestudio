@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
-import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@vibestudio/agentic-protocol";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
 import { readChannelSubscriptionRecords } from "@workspace/pubsub";
 
-import { LinkedAgentWorker, LINKED_PERMISSION_TIMEOUT_MS } from "./linked-agent-worker.js";
+import { LinkedAgentWorker } from "./linked-agent-worker.js";
 import * as workerEntry from "./index.js";
 
 const ENTITY = "session-entity-1";
@@ -24,8 +24,6 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   readonly gadCalls: Array<{ method: string; args: Record<string, unknown> }> = [];
   readonly published: Array<{ event: unknown }> = [];
   readonly signals: Array<{ event: unknown }> = [];
-  /** Pending workspace-approval resolvers, keyed by requestId. */
-  readonly approvalResolvers = new Map<string, (verdict: { behavior: string }) => void>();
   /** onSubagentComplete relays to the parent vessel. */
   readonly parentCompletions: Array<{ target: string; payload: Record<string, unknown> }> = [];
   failLogAppend = false;
@@ -43,15 +41,6 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
     if (method === "onSubagentComplete") {
       this.parentCompletions.push({ target, payload: (args[0] ?? {}) as Record<string, unknown> });
       return undefined;
-    }
-    if (target === "main" && method === "userlandApproval.requestExternal") {
-      const req = (args[0] ?? {}) as { requestId?: string };
-      return await new Promise((resolve) => {
-        this.approvalResolvers.set(String(req.requestId), (verdict) => resolve(verdict));
-      });
-    }
-    if (target === "main" && method === "userlandApproval.settleExternal") {
-      return { settled: true };
     }
     if (target === "main" && method === "contextIntegrity.ingest") {
       return { class: "internal", latchEpoch: 0, externalKeys: [] };
@@ -169,24 +158,12 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
     ).bridgeStream?.controller.desiredSize;
   }
 
-  permissionRows(): Array<Record<string, unknown>> {
-    return this.sql.exec(`SELECT * FROM linked_permissions`).toArray();
-  }
-
   appendedEvents(): Array<Record<string, unknown>> {
     return this.gadCalls
       .filter((call) => call.method === "appendLogEvent")
       .flatMap((call) => call.args["events"] as Array<Record<string, unknown>>);
   }
 
-  shrinkPermissionDeadlines(at: number) {
-    this.sql.exec(`UPDATE linked_permissions SET deadline_at = ?`, at);
-  }
-
-  async fireLinkedAlarm(now: number) {
-    // The alarm source is registered privately; drive the handler directly.
-    await (this as unknown as { linkedAlarm(now: number): Promise<void> }).linkedAlarm(now);
-  }
 }
 
 type BridgeAck = {
@@ -290,13 +267,6 @@ function completedMessageEvent(opts: {
     },
     ...(opts.annotations ? { annotations: opts.annotations } : {}),
   };
-}
-
-function permissionPendingSignals(worker: TestableLinkedAgentWorker): Array<{ event: unknown }> {
-  return worker.signals.filter((signal) => {
-    const event = signal.event as { payload?: Record<string, unknown> };
-    return event.payload?.["kind"] === "linked-agent.permission_pending";
-  });
 }
 
 describe("LinkedAgentWorker", () => {
@@ -650,137 +620,26 @@ describe("LinkedAgentWorker", () => {
     expect(payload["saliency"]).toBeUndefined();
   });
 
-  it("auto-denies a pending permission on timeout and keeps first-verdict-wins", async () => {
+  it("relays an admitted exact permission invocation without a provider-side approval path", async () => {
     const worker = await makeWorker();
     const bridge = await openTestBridge(worker);
 
-    await worker.requestPermission({
+    await expect(worker.requestPermission({
       requestId: "req-1",
       toolName: "Bash",
       description: "run npm install",
       inputPreview: "npm install",
-    });
-    expect(worker.permissionRows()[0]!["status"]).toBe("pending");
-    // The conversation sees the pending relay as an ephemeral signal.
-    expect(worker.signals).toHaveLength(1);
-
-    // Permission expiry is the alarm's only responsibility. Bridge liveness is
-    // owned entirely by its response resource.
-    const soon = Date.now() + 1_000;
-    worker.shrinkPermissionDeadlines(soon);
-    await worker.fireLinkedAlarm(soon + 500);
-    expect(worker.permissionRows()[0]!["status"]).toBe("deny");
+    })).resolves.toEqual({ ok: true, pending: false });
     const verdict = await nextBridgePayload(bridge);
-    expect(verdict).toMatchObject({ kind: "permission", behavior: "deny" });
-
-    // A late workspace verdict must not double-settle.
-    worker.approvalResolvers.get("req-1")?.({ behavior: "allow" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(worker.permissionRows()[0]!["status"]).toBe("deny");
-  });
-
-  it("labels approval requests with the bridge-provided permission capability", async () => {
-    const worker = await makeWorker();
-    await openTestBridge(worker, {
-      bridge: "bridge-1",
-      agentKind: "codex",
-      permissionCapability: "codex.tool",
+    expect(verdict).toMatchObject({
+      kind: "permission",
+      requestId: "req-1",
+      behavior: "allow",
+      reason: "workspace-authority",
     });
-
-    await worker.requestPermission({ requestId: "req-capability", toolName: "Shell" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const request = worker.rpcCall.mock.calls.find(
-      (call) => call[1] === "userlandApproval.requestExternal"
+    expect(worker.rpcCall.mock.calls.some((call) => call[1].startsWith("userlandApproval."))).toBe(
+      false
     );
-    const payload = (request?.[2] as unknown[] | undefined)?.[0] as
-      | Record<string, unknown>
-      | undefined;
-    expect(payload?.["capability"]).toBe("codex.tool");
-  });
-
-  it("dedupes repeated permission request ids without creating another approval card", async () => {
-    const worker = await makeWorker();
-    const bridge = await openTestBridge(worker);
-
-    await worker.requestPermission({ requestId: "req-dupe", toolName: "Bash" });
-    const repeat = await worker.requestPermission({ requestId: "req-dupe", toolName: "Bash" });
-
-    expect(repeat).toEqual({ ok: true, pending: true });
-    expect(worker.permissionRows()).toHaveLength(1);
-    expect(permissionPendingSignals(worker)).toHaveLength(1);
-    expect(
-      worker.rpcCall.mock.calls.filter((call) => call[1] === "userlandApproval.requestExternal")
-    ).toHaveLength(1);
-
-    worker.approvalResolvers.get("req-dupe")?.({ behavior: "allow" });
-    expect(await nextBridgePayload(bridge)).toMatchObject({
-      kind: "permission",
-      requestId: "req-dupe",
-      behavior: "allow",
-    });
-
-    const afterSettle = await worker.requestPermission({ requestId: "req-dupe", toolName: "Bash" });
-    expect(afterSettle).toEqual({ ok: true, pending: false });
-    expect(permissionPendingSignals(worker)).toHaveLength(1);
-    expect(await nextBridgePayload(bridge)).toMatchObject({
-      kind: "permission",
-      requestId: "req-dupe",
-      behavior: "allow",
-      reason: "duplicate-settled",
-    });
-  });
-
-  it("resolves a relayed permission as answered-at-terminal when the tool proceeds", async () => {
-    const worker = await makeWorker();
-    await openTestBridge(worker);
-    await worker.requestPermission({ requestId: "req-2", toolName: "Bash" });
-
-    await worker.ingestHookEvent({
-      sessionId: "s-1",
-      seq: 10,
-      event: { hook: "PreToolUse", toolName: "Bash", toolUseId: "tu-9" },
-    });
-    expect(worker.permissionRows()[0]!["status"]).toBe("terminal-answered");
-    // The terminal already answered, so the workspace approval is withdrawn.
-    expect(
-      worker.rpcCall.mock.calls.some((call) => {
-        const arg = (call[2] as unknown[] | undefined)?.[0] as { requestId?: string } | undefined;
-        return call[1] === "userlandApproval.settleExternal" && arg?.requestId === "req-2";
-      })
-    ).toBe(true);
-  });
-
-  it("only withdraws the oldest pending permission for a matching terminal tool event", async () => {
-    const worker = await makeWorker();
-    await openTestBridge(worker);
-    await worker.requestPermission({ requestId: "req-a", toolName: "Bash" });
-    await worker.requestPermission({ requestId: "req-b", toolName: "Bash" });
-
-    await worker.ingestHookEvent({
-      sessionId: "s-1",
-      seq: 10,
-      event: { hook: "PreToolUse", toolName: "Bash", toolUseId: "tu-9" },
-    });
-
-    const rows = worker
-      .permissionRows()
-      .sort((a, b) => String(a["request_id"]).localeCompare(String(b["request_id"])));
-    expect(rows.map((row) => [row["request_id"], row["status"]])).toEqual([
-      ["req-a", "terminal-answered"],
-      ["req-b", "pending"],
-    ]);
-    const withdrawn = worker.rpcCall.mock.calls.filter((call) => {
-      const arg = (call[2] as unknown[] | undefined)?.[0] as { requestId?: string } | undefined;
-      return call[1] === "userlandApproval.settleExternal" && arg?.requestId;
-    });
-    expect(
-      withdrawn.map((call) => ((call[2] as unknown[])[0] as { requestId: string }).requestId)
-    ).toEqual(["req-a"]);
-
-    worker.approvalResolvers.get("req-a")?.({ behavior: "allow" });
-    worker.approvalResolvers.get("req-b")?.({ behavior: "deny" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it("relays prompt/interrupt/status methods and fails closed when detached", async () => {

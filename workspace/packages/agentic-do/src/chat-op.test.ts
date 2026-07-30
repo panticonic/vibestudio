@@ -11,8 +11,8 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
-import type { LifecyclePrepareInput, LifecycleResumeInput } from "@vibestudio/runtime/worker";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import type { LifecyclePrepareInput, LifecycleResumeInput } from "@workspace/runtime/worker";
 import { ids } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { rpc, type RpcClient } from "@vibestudio/rpc";
@@ -20,7 +20,7 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   type AgenticEvent,
   type ParticipantRef,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import type { RpcChannelMessage } from "@workspace/pubsub";
@@ -133,7 +133,7 @@ class TestVessel extends AgentVesselBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -925,16 +925,16 @@ describe("AgentVesselBase activation-local inspection", () => {
     expect(hydrateLoop).not.toHaveBeenCalled();
   });
 
-  it("does not create reconstructible loop storage while inspecting an unused activation", async () => {
+  it("does not populate reconstructible loop storage while inspecting an unused activation", async () => {
     const vessel = await makeVessel();
     vessel.callerKindForTest = "do";
     vessel.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
 
-    expect(vessel.hasEffectOutboxTableForTest()).toBe(false);
+    expect(vessel.hasEffectOutboxTableForTest()).toBe(true);
     await expect(vessel.readAgentInspection(CHANNEL, "getDebugState")).resolves.toMatchObject({
       result: { loops: { [CHANNEL]: { loaded: false } }, outbox: [] },
     });
-    expect(vessel.hasEffectOutboxTableForTest()).toBe(false);
+    expect(vessel.hasEffectOutboxTableForTest()).toBe(true);
   });
 
   it("rejects inspection calls from anything except a channel DO or the server", async () => {

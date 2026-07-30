@@ -5,7 +5,7 @@
  */
 
 import { mount } from "svelte";
-import { panel } from "@vibestudio/runtime";
+import { panel } from "@workspace/runtime";
 
 export interface AutoMountConfig {
   rootId?: string;

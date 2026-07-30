@@ -1,4 +1,4 @@
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import type { GmailThreadCardState } from "@workspace/gmail/card-types";
 import type { failureResult } from "./errors.js";
 import type { GmailHandlers } from "./agent/handlers.js";

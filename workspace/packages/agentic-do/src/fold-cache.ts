@@ -5,7 +5,7 @@
  * identical behavior.
  */
 
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import {
   applyEvent,
   initialAgentState,
@@ -13,7 +13,7 @@ import {
   type AgentLoopConfig,
   type AgentState,
 } from "@workspace/agent-loop";
-import type { LogEnvelope } from "@vibestudio/agentic-protocol";
+import type { LogEnvelope } from "@workspace/agentic-protocol";
 
 export interface GadPort {
   call<T = unknown>(method: string, args: Record<string, unknown>): Promise<T>;

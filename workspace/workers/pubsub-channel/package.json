@@ -13,6 +13,56 @@
       ]
     },
     "authority": {
+      "provides": [
+        {
+          "name": "channel.admin",
+          "title": "Administer conversation",
+          "action": "change this conversation's administration settings",
+          "tier": "gated",
+          "sensitivity": "admin",
+          "resourceType": "channel",
+          "presentation": {
+            "domain": "sharing",
+            "verb": "manage"
+          },
+          "grantScopes": [
+            "once",
+            "task",
+            "session",
+            "version"
+          ]
+        },
+        {
+          "name": "channel.archive",
+          "title": "Archive conversation",
+          "action": "archive this conversation",
+          "tier": "critical",
+          "sensitivity": "destructive",
+          "resourceType": "channel",
+          "presentation": {
+            "domain": "sharing",
+            "verb": "manage"
+          },
+          "grantScopes": [
+            "once"
+          ]
+        },
+        {
+          "name": "channel.members.remove",
+          "title": "Remove conversation member",
+          "action": "remove a member from this conversation",
+          "tier": "critical",
+          "sensitivity": "destructive",
+          "resourceType": "channel",
+          "presentation": {
+            "domain": "sharing",
+            "verb": "manage"
+          },
+          "grantScopes": [
+            "once"
+          ]
+        }
+      ],
       "requests": [
         {
           "capability": "agent.credentials.manage",
@@ -69,15 +119,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -111,14 +152,16 @@
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/shared": "workspace:*",
-    "@vibestudio/agentic-protocol": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",
     "@workspace/channel-policies": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@workspace-workers/workspace-source": "workspace:*",
+    "@panticonic/builtin": "workspace:*",
     "vitest": "^3.2.2"
   }
 }

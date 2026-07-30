@@ -9,7 +9,7 @@ import type { SuiteRunResult, TestCaseResult } from "./run.js";
 
 // Lazy: keeps summarize() importable outside a live runtime (vitest).
 async function getFs() {
-  const runtime = await import("@vibestudio/runtime");
+  const runtime = await import("@workspace/runtime");
   return runtime.fs;
 }
 

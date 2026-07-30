@@ -29,15 +29,8 @@ import {
   Pencil1Icon,
   ReloadIcon,
 } from "@radix-ui/react-icons";
-import {
-  contextId,
-  panel,
-  panelTree,
-  rpc,
-  type PanelSubtreeNode,
-  type PanelSubtreeSnapshot,
-} from "@vibestudio/runtime";
-import { recoveryCoordinator } from "@vibestudio/runtime/internal/diagnostics";
+import { contextId, panel, panelTree, rpc, type PanelHandle } from "@workspace/runtime";
+import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { createPanelSandboxConfig, launchAgentIntoChannel } from "@workspace/agentic-core";
 import type { AgenticChatHandle } from "@workspace/agentic-chat";
@@ -54,7 +47,7 @@ import {
 import "@radix-ui/themes/styles.css";
 import "@workspace/agentic-chat/styles.css";
 import "@workspace/ui/tokens.css";
-import { pruneNotes, withMemberNote, type CollectionStateArgs } from "./collection";
+import { withMemberNote, type CollectionStateArgs } from "./collection";
 import "./style.css";
 
 const AgenticChat = lazy(() =>
@@ -67,8 +60,55 @@ function requireContextId(value: string | undefined): string {
   return resolved;
 }
 
-function nodeLabel(node: PanelSubtreeNode): string {
+interface CollectionTreeNode {
+  handle: PanelHandle;
+  depth: number;
+  childCount: number;
+}
+
+interface CollectionStoredNode {
+  handle: PanelHandle;
+  parentSlotId: string;
+  childCount: number;
+}
+
+interface CollectionPendingPage {
+  parentSlotId: string;
+  cursor?: string;
+}
+
+interface CollectionTreeState {
+  revision: number;
+  nodes: CollectionStoredNode[];
+  pending: CollectionPendingPage[];
+}
+
+function nodeLabel(node: CollectionTreeNode): string {
   return node.handle.title || node.handle.source;
+}
+
+function flattenCollectionNodes(
+  rootPanelId: string,
+  nodes: readonly CollectionStoredNode[]
+): CollectionTreeNode[] {
+  const children = new Map<string, CollectionStoredNode[]>();
+  for (const node of nodes) {
+    const siblings = children.get(node.parentSlotId) ?? [];
+    siblings.push(node);
+    children.set(node.parentSlotId, siblings);
+  }
+  const flattened: CollectionTreeNode[] = [];
+  const visited = new Set<string>();
+  const visit = (parentSlotId: string, depth: number) => {
+    for (const node of children.get(parentSlotId) ?? []) {
+      if (visited.has(node.handle.id)) continue;
+      visited.add(node.handle.id);
+      flattened.push({ handle: node.handle, childCount: node.childCount, depth });
+      visit(node.handle.id, depth + 1);
+    }
+  };
+  visit(rootPanelId, 1);
+  return flattened;
 }
 
 function errorMessage(cause: unknown): string {
@@ -109,7 +149,8 @@ export default function CollectionPanel() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [note, setNote] = useState(stateArgs.note ?? "");
   const [notes, setNotes] = useState<Record<string, string>>(stateArgs.notes ?? {});
-  const [tree, setTree] = useState<PanelSubtreeSnapshot | null>(null);
+  const [tree, setTree] = useState<CollectionTreeState | null>(null);
+  const [loadingMembers, setLoadingMembers] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const [agentReady, setAgentReady] = useState(false);
@@ -161,11 +202,29 @@ export default function CollectionPanel() {
     if (refreshInFlight.current) return refreshInFlight.current;
     const pending = (async () => {
       try {
-        const [next, persisted] = await Promise.all([
-          panelTree.subtree(panel.slotId),
+        const [page, persisted] = await Promise.all([
+          panelTree.page({
+            group: { kind: "children", parentSlotId: panel.slotId },
+            limit: 50,
+          }),
           panelTree.get(panel.slotId).stateArgs.get<CollectionStateArgs>(),
         ]);
-        setTree((current) => (current?.revision === next.revision ? current : next));
+        const nodes = page.entries.map((entry) => ({
+          handle: entry.handle,
+          parentSlotId: panel.slotId,
+          childCount: entry.node.childCount,
+        }));
+        const pending: CollectionPendingPage[] = [
+          ...(page.nextCursor ? [{ parentSlotId: panel.slotId, cursor: page.nextCursor }] : []),
+          ...page.entries
+            .filter((entry) => entry.node.childCount > 0)
+            .map((entry) => ({ parentSlotId: entry.node.slotId })),
+        ];
+        setTree((current) =>
+          current?.revision === page.revision
+            ? current
+            : { revision: page.revision, nodes, pending }
+        );
         const persistedNotes = persisted.notes ?? {};
         setNotes((current) =>
           JSON.stringify(current) === JSON.stringify(persistedNotes) ? current : persistedNotes
@@ -188,6 +247,61 @@ export default function CollectionPanel() {
     return pending;
   }, []);
 
+  const loadMoreMembers = useCallback(async () => {
+    const task = tree?.pending[0];
+    if (!task || loadingMembers || (tree?.nodes.length ?? 0) >= 500) return;
+    setLoadingMembers(true);
+    try {
+      const page = await panelTree.page({
+        group: { kind: "children", parentSlotId: task.parentSlotId },
+        ...(task.cursor ? { cursor: task.cursor } : {}),
+        limit: 50,
+      });
+      if (page.revision !== tree.revision) {
+        await refresh();
+        return;
+      }
+      setTree((current) => {
+        if (!current || current.revision !== page.revision || current.pending[0] !== task) {
+          return current;
+        }
+        const room = Math.max(0, 500 - current.nodes.length);
+        const entries = page.entries.slice(0, room);
+        return {
+          revision: page.revision,
+          nodes: [
+            ...current.nodes,
+            ...entries.map((entry) => ({
+              handle: entry.handle,
+              parentSlotId: task.parentSlotId,
+              childCount: entry.node.childCount,
+            })),
+          ],
+          pending: [
+            ...current.pending.slice(1),
+            ...(page.nextCursor
+              ? [
+                  {
+                    parentSlotId: task.parentSlotId,
+                    cursor: page.nextCursor,
+                  },
+                ]
+              : []),
+            ...entries
+              .filter((entry) => entry.node.childCount > 0)
+              .map((entry) => ({
+                parentSlotId: entry.node.slotId,
+              })),
+          ],
+        };
+      });
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setLoadingMembers(false);
+    }
+  }, [loadingMembers, refresh, tree]);
+
   useEffect(() => {
     void refresh();
     const unsubscribe = panel.onChildCreated(() => void refresh());
@@ -202,38 +316,10 @@ export default function CollectionPanel() {
     return () => clearInterval(timer);
   }, [refresh]);
 
-  const descendants = tree?.descendants ?? [];
-
-  // Notes are scoped to this collection root and may target any recursive
-  // descendant. Moving within the subtree therefore preserves them.
-  const prunedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!tree) return;
-    const ids = descendants.map((node) => node.handle.id);
-    const key = `${ids.slice().sort().join(",")}\0${Object.keys(notes).sort().join(",")}`;
-    if (prunedFor.current === key) return;
-    let cancelled = false;
-    void panelTree
-      .get(panel.slotId)
-      .stateArgs.get<CollectionStateArgs>()
-      .then(async (persisted) => {
-        const current = persisted.notes ?? {};
-        const next = pruneNotes(current, ids);
-        if (Object.keys(next).length !== Object.keys(current).length) {
-          await persist({ notes: next });
-        }
-        if (!cancelled) {
-          prunedFor.current = key;
-          setNotes(next);
-        }
-      })
-      .catch((cause) => {
-        if (!cancelled) setError(errorMessage(cause));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [descendants, notes, persist, tree]);
+  const descendants = useMemo(
+    () => flattenCollectionNodes(panel.slotId, tree?.nodes ?? []),
+    [tree, panel.slotId]
+  );
 
   const systemPrompt = useMemo(
     () => buildCollectionAgentSystemPrompt({ rootPanelId: panel.slotId, title }),
@@ -321,7 +407,7 @@ export default function CollectionPanel() {
     }
   }, []);
 
-  const investigate = (node?: PanelSubtreeNode) => {
+  const investigate = (node?: CollectionTreeNode) => {
     const message = node
       ? `Focus on panel \`${node.handle.id}\` ("${nodeLabel(node)}") within this collection. Refresh the recursive scope, inspect it in context, and help me understand or improve it.`
       : "Refresh this collection's recursive scope, inspect its current organization and panel state, and suggest or perform the most useful cleanup. Preserve intentional structure and explain any material changes.";
@@ -382,7 +468,7 @@ export default function CollectionPanel() {
               </IconButton>
               {tree ? (
                 <Badge color="gray" title={`Tree revision ${tree.revision}`}>
-                  {tree.descendants.length} panels
+                  {tree.nodes.length} loaded
                 </Badge>
               ) : null}
             </Flex>
@@ -445,7 +531,7 @@ export default function CollectionPanel() {
             </Flex>
 
             {!tree ? <Spinner size="2" /> : null}
-            {tree?.descendants.length === 0 ? (
+            {tree?.nodes.length === 0 ? (
               <Card>
                 <Text size="2" color="gray">
                   Nothing collected yet. Child panels appear here recursively and are immediately
@@ -466,9 +552,9 @@ export default function CollectionPanel() {
                       <Text as="div" size="2" weight="medium" truncate>
                         {nodeLabel(node)}
                       </Text>
-                      {node.children.length > 0 ? (
+                      {node.childCount > 0 ? (
                         <Badge size="1" color="iris">
-                          {node.children.length}
+                          {node.childCount}
                         </Badge>
                       ) : null}
                     </Flex>
@@ -515,6 +601,20 @@ export default function CollectionPanel() {
                 />
               </Card>
             ))}
+            {tree && tree.pending.length > 0 ? (
+              <Button
+                size="1"
+                variant="ghost"
+                disabled={loadingMembers || tree.nodes.length >= 500}
+                onClick={() => void loadMoreMembers()}
+              >
+                {tree.nodes.length >= 500
+                  ? "500-panel view limit reached"
+                  : loadingMembers
+                    ? "Loading…"
+                    : "Load more panels"}
+              </Button>
+            ) : null}
           </Flex>
 
           <Box className="collection-chat">

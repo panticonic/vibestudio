@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RpcCaller } from "@vibestudio/rpc";
-import { createCredentialClient, type StoredCredentialSummary } from "@vibestudio/runtime/credentials";
+import { createCredentialClient, type StoredCredentialSummary } from "@workspace/runtime/credentials";
 import { createDriveClient } from "./drive.js";
 
 function makeMockEnv(

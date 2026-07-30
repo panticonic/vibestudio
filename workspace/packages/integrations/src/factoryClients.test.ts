@@ -2,7 +2,7 @@ import type { RpcCaller } from "@vibestudio/rpc";
 import {
   createCredentialClient,
   type StoredCredentialSummary,
-} from "@vibestudio/runtime/credentials";
+} from "@workspace/runtime/credentials";
 import { createGitHubClient, resolveGitHubPublishOperation } from "./github.js";
 import { createGmailClient } from "@workspace/gmail";
 import { createCalendarClient } from "./calendar.js";

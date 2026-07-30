@@ -35,8 +35,8 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /**
  * The single app-level command palette (Cmd/Ctrl+K). Shows GLOBAL shell
  * commands (run locally) plus the commands each panel contributes over the
- * runtime bridge (`palette.list()`), dispatching a chosen panel command back to
- * its owner (`palette.run()`).
+ * attributed panel↔shell events, dispatching a chosen panel command directly
+ * back to its owner.
  *
  * NOTE: the window `keydown` reaches the shell only while shell chrome is
  * focused; a menu accelerator emitting `open-command-palette` (wired in

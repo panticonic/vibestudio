@@ -7,7 +7,7 @@
  * app restarts" outside test is intentionally NOT ported — it restarts the
  * host this suite runs in.
  */
-import { panelTree } from "@vibestudio/runtime";
+import { panelTree } from "@workspace/runtime";
 import { suite } from "../run.js";
 import { expect } from "../expect.js";
 import { openPanel, panelText, waitFor } from "../panels.js";
@@ -18,22 +18,20 @@ export const TARGET_PANEL_SOURCE = "panels/chat";
 
 export const panelLifecycle = suite("panel-lifecycle", { timeoutMs: 60_000 })
   .test("panel tree is queryable and entries carry ids and titles", async () => {
-    const panels = await panelTree.list();
-    expect(panels.length, "panel count").toBeGreaterThanOrEqual(1);
-    for (const panel of panels) {
-      expect(typeof panel.id, `panel id of ${panel.title}`).toBe("string");
-      expect(panel.id.length, "panel id length").toBeGreaterThan(0);
-      expect(typeof panel.title, `panel title of ${panel.id}`).toBe("string");
-    }
+    const groups = await panelTree.rootGroups({ limit: 1 });
+    expect(groups.groups.length, "owner group count").toBeGreaterThanOrEqual(1);
+    const page = await panelTree.page({
+      group: { kind: "roots", ownerUserId: groups.groups[0]!.ownerUserId },
+      limit: 1,
+    });
+    expect(page.entries.length, "panel count").toBeGreaterThanOrEqual(1);
+    expect(typeof page.entries[0]!.node.slotId, "panel id").toBe("string");
+    expect(typeof page.entries[0]!.node.title, "panel title").toBe("string");
   })
   .test("opening a panel adds it to the tree as a child", async (t) => {
     const handle = await openPanel(TARGET_PANEL_SOURCE);
     t.defer(() => handle.close().then(() => undefined));
-    const panels = await panelTree.list();
-    expect(
-      panels.some((panel) => panel.id === handle.id),
-      "opened panel present in tree"
-    ).toBeTruthy();
+    expect((await panelTree.path(handle.id)) !== null, "opened panel present").toBeTruthy();
   })
   .test("opened panel reports loaded and yields a readable snapshot", async (t) => {
     const handle = await openPanel(TARGET_PANEL_SOURCE);
@@ -49,8 +47,7 @@ export const panelLifecycle = suite("panel-lifecycle", { timeoutMs: 60_000 })
     await handle.close();
     await waitFor(
       async () => {
-        const panels = await panelTree.list();
-        return panels.every((panel) => panel.id !== handle.id) || undefined;
+        return (await panelTree.path(handle.id)) === null || undefined;
       },
       { label: "panel removed from tree" }
     );

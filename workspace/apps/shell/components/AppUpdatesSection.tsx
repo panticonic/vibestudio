@@ -1,20 +1,22 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Callout, Code, Flex, Table, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import { app, notification, workspaceUnits } from "../shell/client";
+import { app, notification, supervisedUnits } from "../shell/client";
 import { useShellEvent } from "../shell/useShellEvent";
 
 type PendingUpdate = Awaited<ReturnType<typeof app.listPendingUpdates>>[number];
-type WorkspaceUnit = Awaited<ReturnType<typeof workspaceUnits.list>>[number];
-type WorkspaceUnitDiagnostics = Awaited<ReturnType<typeof workspaceUnits.diagnostics>>;
+type SupervisedUnit = Awaited<ReturnType<typeof supervisedUnits.list>>[number];
+type ReleaseVersions = Awaited<ReturnType<typeof supervisedUnits.versions>>;
+type AppUnit = SupervisedUnit & { versions: ReleaseVersions };
+type UnitHealth = Awaited<ReturnType<typeof supervisedUnits.health>>;
 
 export function AppUpdatesSection() {
   const [pending, setPending] = useState<PendingUpdate[]>([]);
-  const [apps, setApps] = useState<WorkspaceUnit[]>([]);
+  const [apps, setApps] = useState<AppUnit[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedDiagnostics, setExpandedDiagnostics] = useState<
-    Record<string, WorkspaceUnitDiagnostics>
+    Record<string, UnitHealth>
   >({});
 
   const load = useCallback(async () => {
@@ -22,10 +24,18 @@ export function AppUpdatesSection() {
       setError(null);
       const [pendingUpdates, units] = await Promise.all([
         app.listPendingUpdates(),
-        workspaceUnits.list(),
+        supervisedUnits.list(),
       ]);
       setPending(pendingUpdates);
-      setApps(units.filter((unit) => unit.kind === "app"));
+      const appUnits = units.filter((unit) => unit.identity.kind === "app");
+      setApps(
+        await Promise.all(
+          appUnits.map(async (unit) => ({
+            ...unit,
+            versions: await supervisedUnits.versions(unit.identity.entityId),
+          }))
+        )
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -77,7 +87,7 @@ export function AppUpdatesSection() {
     setBusy(`rollback:${appId}:${buildKey ?? "latest"}`);
     try {
       setError(null);
-      await workspaceUnits.rollback(appId, { buildKey });
+      await supervisedUnits.rollback(appId, { buildKey });
       await load();
       void notification.show({
         type: "success",
@@ -97,7 +107,7 @@ export function AppUpdatesSection() {
     setBusy(`restart:${appId}`);
     try {
       setError(null);
-      await workspaceUnits.restart(appId);
+      await supervisedUnits.restart({ kind: "app", entityId: appId });
       await load();
       await loadDiagnostics(appId);
     } catch (err) {
@@ -111,7 +121,10 @@ export function AppUpdatesSection() {
     setBusy(`diagnostics:${appId}`);
     try {
       setError(null);
-      const diagnostics = await workspaceUnits.diagnostics(appId, { limit: 80, errorLimit: 20 });
+      const diagnostics = await supervisedUnits.health(
+        { kind: "app", entityId: appId },
+        { limit: 80, errorLimit: 20 }
+      );
       setExpandedDiagnostics((current) => ({ ...current, [appId]: diagnostics }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -165,41 +178,42 @@ export function AppUpdatesSection() {
         </Table.Header>
         <Table.Body>
           {apps.map((unit) => {
-            const pendingUpdate = pendingByApp.get(unit.name);
-            const latestPrevious = unit.previousVersions?.[0];
-            const diagnostics = expandedDiagnostics[unit.name];
+            const appId = unit.identity.entityId;
+            const pendingUpdate = pendingByApp.get(appId);
+            const latestPrevious = unit.versions.previous[0];
+            const diagnostics = expandedDiagnostics[appId];
             return (
-              <Fragment key={unit.name}>
+              <Fragment key={appId}>
                 <Table.Row>
                   <Table.Cell>
                     <Flex direction="column" gap="1">
-                      <Text size="2">{unit.displayName ?? unit.name}</Text>
+                      <Text size="2">{unit.displayName ?? appId}</Text>
                       <Code size="1">{unit.source}</Code>
                     </Flex>
                   </Table.Cell>
-                  <Table.Cell>{unit.target ?? "unknown"}</Table.Cell>
+                  <Table.Cell>{unit.identity.kind}</Table.Cell>
                   <Table.Cell>
                     <Flex direction="column" gap="1">
                       <Badge color={statusColor(unit.status)}>{unit.status}</Badge>
                       {pendingUpdate ? <Badge color="blue">pending desktop update</Badge> : null}
                       {unit.lastError ? (
                         <Text size="1" color="red">
-                          {formatError(unit.lastError, unit.lastErrorDetails)}
+                          {unit.lastError}
                         </Text>
                       ) : null}
                     </Flex>
                   </Table.Cell>
                   <Table.Cell>
-                    <Code size="1">{shortBuild(unit.activeBundleKey)}</Code>
+                    <Code size="1">{shortBuild(unit.artifact.buildKey)}</Code>
                   </Table.Cell>
                   <Table.Cell>
                     <Flex direction="column" gap="1">
                       <Text size="1" color="gray">
-                        {unit.previousVersions?.length ?? 0}/{unit.rollbackRetentionLimit ?? 5}{" "}
+                        {unit.versions.previous.length}/{unit.versions.retentionLimit}{" "}
                         retained
                       </Text>
                       {latestPrevious ? (
-                        <Code size="1">{shortBuild(latestPrevious.activeBundleKey)}</Code>
+                        <Code size="1">{shortBuild(latestPrevious.buildKey)}</Code>
                       ) : null}
                     </Flex>
                   </Table.Cell>
@@ -208,27 +222,25 @@ export function AppUpdatesSection() {
                       {pendingUpdate ? (
                         <Button
                           size="1"
-                          disabled={busy === `apply:${unit.name}`}
-                          onClick={() => void loadUpdate(unit.name)}
+                          disabled={busy === `apply:${appId}`}
+                          onClick={() => void loadUpdate(appId)}
                         >
                           Load
                         </Button>
                       ) : null}
-                      {unit.target === "terminal" ? (
-                        <Button
-                          size="1"
-                          variant="soft"
-                          disabled={busy === `restart:${unit.name}` || !unit.activeBundleKey}
-                          onClick={() => void restart(unit.name)}
-                        >
-                          {unit.status === "running" ? "Restart" : "Start"}
-                        </Button>
-                      ) : null}
+                      <Button
+                        size="1"
+                        variant="soft"
+                        disabled={busy === `restart:${appId}` || !unit.artifact.buildKey}
+                        onClick={() => void restart(appId)}
+                      >
+                        Restart
+                      </Button>
                       <Button
                         size="1"
                         variant="ghost"
-                        disabled={busy === `diagnostics:${unit.name}`}
-                        onClick={() => void toggleDiagnostics(unit.name)}
+                        disabled={busy === `diagnostics:${appId}`}
+                        onClick={() => void toggleDiagnostics(appId)}
                       >
                         Diagnostics
                       </Button>
@@ -236,8 +248,8 @@ export function AppUpdatesSection() {
                         <Button
                           size="1"
                           variant="soft"
-                          disabled={busy?.startsWith(`rollback:${unit.name}:`) ?? false}
-                          onClick={() => void rollback(unit.name)}
+                          disabled={busy?.startsWith(`rollback:${appId}:`) ?? false}
+                          onClick={() => void rollback(appId)}
                         >
                           Roll back
                         </Button>
@@ -246,28 +258,9 @@ export function AppUpdatesSection() {
                   </Table.Cell>
                 </Table.Row>
                 {diagnostics ? (
-                  <Table.Row key={`${unit.name}:diagnostics`}>
+                  <Table.Row key={`${appId}:diagnostics`}>
                     <Table.Cell colSpan={6}>
                       <Flex direction="column" gap="2">
-                        {diagnostics.builds.length > 0 ? (
-                          <Flex direction="column" gap="1">
-                            <Text size="1" weight="medium">
-                              Builds
-                            </Text>
-                            {diagnostics.builds.map((row) => (
-                              <Text
-                                as="div"
-                                size="1"
-                                color={row.type === "build-error" ? "red" : "gray"}
-                                key={`${row.timestamp}:${row.type}:${row.buildKey ?? row.error ?? ""}`}
-                              >
-                                <Code size="1">{row.type}</Code>{" "}
-                                {row.buildKey ? <Code size="1">{shortBuild(row.buildKey)}</Code> : null}{" "}
-                                {row.error ?? ""}
-                              </Text>
-                            ))}
-                          </Flex>
-                        ) : null}
                         {diagnostics.errors.length > 0 ? (
                           <Flex direction="column" gap="1">
                             <Text size="1" weight="medium" color="red">
@@ -339,14 +332,4 @@ function statusColor(status: string): "green" | "red" | "amber" | "blue" | "gray
   if (status === "pending-approval") return "amber";
   if (status === "building") return "blue";
   return "gray";
-}
-
-function formatError(message: string, details: unknown): string {
-  if (!details || typeof details !== "object") return message;
-  const phase = (details as { phase?: unknown }).phase;
-  const target = (details as { target?: unknown }).target;
-  const suffix = [phase, target]
-    .filter((value): value is string => typeof value === "string")
-    .join(", ");
-  return suffix ? `${message} (${suffix})` : message;
 }

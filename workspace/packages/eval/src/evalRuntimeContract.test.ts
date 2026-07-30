@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { RpcClient } from "@vibestudio/rpc";
 import { executeSandbox } from "./sandbox.js";
-import { createHostedRuntime, type RuntimeHost } from "@vibestudio/runtime/hosted";
-import * as portableHelpers from "@vibestudio/runtime/portable";
+import { createHostedRuntime, type RuntimeHost } from "@workspace/runtime/hosted";
+import * as portableHelpers from "@workspace/runtime/portable";
 import {
   evalImportableSurface,
   EVAL_AMBIENT_ONLY,
@@ -10,9 +10,9 @@ import {
 
 /**
  * Surface contract the EvalDO depends on: the eval engine resolves
- * `import {…} from "@vibestudio/runtime"` to the SAME `createHostedRuntime` object
+ * `import {…} from "@workspace/runtime"` to the SAME `createHostedRuntime` object
  * injected ambiently, rejects importing the ambient-only names, and resolves
- * `@vibestudio/cdp-client`. This is the unit-level proxy for the live e2e — it
+ * `@workspace/cdp-client`. This is the unit-level proxy for the live e2e — it
  * exercises the real engine + the real hosted runtime, just not inside a running
  * workerd DO.
  */
@@ -41,7 +41,6 @@ function fakeHost(): RuntimeHost {
     gatewayFetch: async () => new Response(),
     panelRuntime: {
       openPanel: async () => ({}) as never,
-      listPanels: async () => [],
       getPanelHandle: () => ({}) as never,
       panelTree: {} as never,
     },
@@ -57,10 +56,10 @@ class FakeCdpConnection {}
 function evalEnv() {
   const rt = createHostedRuntime(fakeHost());
   const moduleMap: Record<string, unknown> = {
-    // Eval's `@vibestudio/runtime` = hosted instance + pure authoring helpers
+    // Eval's `@workspace/runtime` = hosted instance + pure authoring helpers
     // (mirrors EvalDO.runLocked, so panel/worker/eval expose the same helpers).
-    "@vibestudio/runtime": { ...rt, ...portableHelpers },
-    "@vibestudio/cdp-client": { CdpConnection: FakeCdpConnection },
+    "@workspace/runtime": { ...rt, ...portableHelpers },
+    "@workspace/cdp-client": { CdpConnection: FakeCdpConnection },
   };
   const bindings: Record<string, unknown> = {
     ...rt,
@@ -97,7 +96,7 @@ describe("eval runtime surface contract", () => {
 
   it("import { openPanel } resolves to a function === the ambient binding", async () => {
     const result = await run(
-      `import { openPanel as imp } from "@vibestudio/runtime";
+      `import { openPanel as imp } from "@workspace/runtime";
        return typeof imp === "function" && imp === openPanel;`
     );
     expect(result.success).toBe(true);
@@ -105,7 +104,7 @@ describe("eval runtime surface contract", () => {
   });
 
   it("rejects importing an ambient-only name (db is PRE_INJECTED)", async () => {
-    const result = await run(`import { db } from "@vibestudio/runtime"; return db;`);
+    const result = await run(`import { db } from "@workspace/runtime"; return db;`);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/injected|ambient|pre-inject/i);
   });
@@ -118,9 +117,9 @@ describe("eval runtime surface contract", () => {
     expect(result.returnValue).toBe("object,object,object,object,k");
   });
 
-  it("resolves import { CdpConnection } from @vibestudio/cdp-client", async () => {
+  it("resolves import { CdpConnection } from @workspace/cdp-client", async () => {
     const result = await run(
-      `import { CdpConnection } from "@vibestudio/cdp-client"; return typeof CdpConnection;`
+      `import { CdpConnection } from "@workspace/cdp-client"; return typeof CdpConnection;`
     );
     expect(result.success).toBe(true);
     expect(result.returnValue).toBe("function");
@@ -128,7 +127,7 @@ describe("eval runtime surface contract", () => {
 
   it("imported gad === ambient gad (one shared surface, not a copy)", async () => {
     const result = await run(
-      `import { gad as importedGad } from "@vibestudio/runtime"; return importedGad === gad;`
+      `import { gad as importedGad } from "@workspace/runtime"; return importedGad === gad;`
     );
     expect(result.success).toBe(true);
     expect(result.returnValue).toBe(true);
@@ -136,7 +135,7 @@ describe("eval runtime surface contract", () => {
 
   it("imports the pure authoring helpers (z/defineContract/journal) like panel/worker", async () => {
     const result = await run(
-      `import { z, defineContract, journal } from "@vibestudio/runtime";
+      `import { z, defineContract, journal } from "@workspace/runtime";
        return [typeof z?.string, typeof defineContract, typeof journal?.Journal].join(",");`
     );
     expect(result.success).toBe(true);

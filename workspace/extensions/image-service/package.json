@@ -10,9 +10,27 @@
     "extension": {
       "activationEvents": [
         "onInvoke"
-      ]
+      ],
+      "methodAuthority": {
+        "resize": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "convert": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "detectMimeType": {
+          "effect": {
+            "kind": "open"
+          }
+        }
+      }
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "context.boundary",

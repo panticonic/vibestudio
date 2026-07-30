@@ -10,9 +10,9 @@
  * deterministically.
  */
 
-import type { SqlStorage } from "@vibestudio/runtime/worker";
-import type { AgenticEvent } from "@vibestudio/agentic-protocol";
-import { assertExactSqlTableSchema } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
+import type { AgenticEvent } from "@workspace/agentic-protocol";
+import { assertExactSqlTableSchema } from "@workspace/runtime/worker";
 
 export type SubagentRunStatus =
   | "starting"
@@ -254,8 +254,8 @@ function exactEnum<const Value extends string>(
 export class SubagentRunStore {
   constructor(private sql: SqlStorage) {}
 
-  createTables(): void {
-    this.sql.exec(`
+  static createTables(sql: SqlStorage): void {
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS subagent_runs (
         run_id TEXT PRIMARY KEY,
         task_channel_id TEXT NOT NULL,
@@ -277,7 +277,7 @@ export class SubagentRunStore {
         external_generation_id TEXT
       )
     `);
-    assertExactSqlTableSchema(this.sql, {
+    assertExactSqlTableSchema(sql, {
       table: "subagent_runs",
       columns: [
         ["run_id", "TEXT", false],
@@ -301,7 +301,7 @@ export class SubagentRunStore {
       ],
       primaryKey: ["run_id"],
     });
-    this.sql.exec(`
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS subagent_progress_outbox (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         idempotency_key TEXT NOT NULL UNIQUE,
@@ -316,7 +316,7 @@ export class SubagentRunStore {
         created_at INTEGER NOT NULL
       )
     `);
-    assertExactSqlTableSchema(this.sql, {
+    assertExactSqlTableSchema(sql, {
       table: "subagent_progress_outbox",
       columns: [
         ["sequence", "INTEGER", false],
@@ -333,10 +333,14 @@ export class SubagentRunStore {
       ],
       primaryKey: ["sequence"],
     });
-    this.sql.exec(`
+    sql.exec(`
       CREATE INDEX IF NOT EXISTS subagent_progress_outbox_run_sequence
       ON subagent_progress_outbox (run_id, sequence)
     `);
+  }
+
+  createTables(): void {
+    SubagentRunStore.createTables(this.sql);
   }
 
   /** Idempotent insert — a re-driven spawn (same runId) is a no-op. */

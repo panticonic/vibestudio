@@ -16,7 +16,7 @@
     "@workspace/integrations": "workspace:*",
     "@workspace-skills/agents": "workspace:*",
     "@workspace-skills/google-workspace": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "react": "^19.2.0"
   },
   "devDependencies": {

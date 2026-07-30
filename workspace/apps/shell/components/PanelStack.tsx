@@ -421,14 +421,14 @@ export const PanelStack = memo(function PanelStack({
   );
 
   const navigatePanelHistory = useCallback(
-    (panelId: string, delta: -1 | 1): Promise<unknown> => {
-      const targetPanel = panelMap.get(panelId);
-      if (targetPanel && isBrowserPanelSource(getCurrentSnapshot(targetPanel).source)) {
+    async (panelId: string, delta: -1 | 1): Promise<unknown> => {
+      const chrome = await panelService.getChromeState(panelId);
+      if (chrome.kind === "browser") {
         return delta === -1 ? view.browserGoBack(panelId) : view.browserGoForward(panelId);
       }
       return panelService.navigateHistory(panelId, delta);
     },
-    [panelMap]
+    []
   );
 
   const createChildForPanel = useCallback(
@@ -846,14 +846,12 @@ export const PanelStack = memo(function PanelStack({
                       ...common,
                       title: location.title,
                       slug: location.slug,
-                      name: location.name,
                       focus: location.focus ?? true,
                     })
                   : panelService.createPanel(location.source, {
                       ...common,
                       title: location.title,
                       slug: location.slug,
-                      name: location.name,
                       isRoot: true,
                       focus: location.focus ?? true,
                     }));
@@ -980,14 +978,12 @@ export const PanelStack = memo(function PanelStack({
                     ...common,
                     title: location.title,
                     slug: location.slug,
-                    name: location.name,
                     focus: location.focus ?? true,
                   })
                 : panelService.createPanel(location.source, {
                     ...common,
                     title: location.title,
                     slug: location.slug,
-                    name: location.name,
                     isRoot: true,
                     focus: location.focus ?? true,
                   }));
@@ -1290,6 +1286,11 @@ export const PanelStack = memo(function PanelStack({
     <Flex
       direction="column"
       gap="0"
+      data-shell-layout-columns={layout.columns.length}
+      data-shell-layout-restored={restored ? "true" : "false"}
+      data-shell-layout-visible-panels={visiblePanelIds.join(",")}
+      data-shell-layout-root-panels={rootPanels.map((panel) => panel.id).join(",")}
+      data-shell-layout-resident-columns={residentColumnIds.join(",")}
       style={{ flex: "1 1 0", minHeight: 0, minWidth: 0 }}
       ref={containerRef}
     >

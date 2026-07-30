@@ -1,10 +1,10 @@
 /**
  * Chat-panel agent lifecycle helpers that drive the runtime over RPC. Extracted
- * from the panel component so they're unit-testable with a mocked `@vibestudio/runtime`
+ * from the panel component so they're unit-testable with a mocked `@workspace/runtime`
  * rpc (the panel-rpc harness), independent of the React/UI surface.
  */
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { rpc } from "@vibestudio/runtime";
+import { rpc } from "@workspace/runtime";
 import {
   createAgentEntity,
   launchAgentIntoChannel,

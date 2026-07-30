@@ -114,32 +114,14 @@ const secretInput: PendingApproval = {
   fields: [{ name: "password", label: "Sudo password", type: "secret", required: true }],
 };
 
-const userland: PendingApproval = {
+const genericApproval: PendingApproval = {
   ...base,
-  kind: "userland",
-  subject: { id: "team-x:foo", label: "Foo" },
-  title: "Allow foo?",
-  summary: "Team X is requesting access to foo.",
+  kind: "capability",
+  capability: "context.boundary",
+  title: "Open another workspace branch",
+  description: "This action affects another workspace branch.",
+  resource: { type: "context", label: "Workspace branch", value: "Agent X" },
   details: [{ label: "Reason", value: "continue work" }],
-  promptOptions: "choices",
-  options: [
-    { value: "allow", label: "Allow", tone: "primary" },
-    { value: "deny", label: "Deny", tone: "danger" },
-    { value: "later", label: "Later", tone: "neutral" },
-  ],
-};
-
-const externalAgent: PendingApproval = {
-  ...base,
-  callerId: "do:workers/linked:LinkedAgentWorker:entity-1",
-  callerKind: "do",
-  kind: "external-agent",
-  entityId: "entity-1",
-  capability: "claude-code.tool",
-  operationName: "Bash",
-  description: "Runs a shell command in the project.",
-  preview: "npm install",
-  requestId: "req-1",
 };
 
 const deviceCode: PendingApproval = {
@@ -173,6 +155,7 @@ const unitBatch: PendingApproval = {
       ev: "ev-mobile",
       capabilities: ["panel-hosting"],
       authority: {
+        provides: [],
         requests: [
           {
             capability: "push.send",
@@ -239,9 +222,6 @@ function renderSheet(
     onSubmitClientConfig: jest.fn(async () => undefined),
     onSubmitCredentialInput: jest.fn(async () => undefined),
     onSubmitSecretInput: jest.fn(async () => undefined),
-    onResolveUserland: jest.fn(async () => undefined),
-    onFetchUserlandSealedDetail: jest.fn(async () => null),
-    onResolveExternalAgent: jest.fn(async () => undefined),
     onResolveMissionReview: jest.fn(async () => undefined),
     ...overrides,
   };
@@ -252,7 +232,7 @@ function renderSheet(
 describe("ApprovalSheet", () => {
   it("presents one accessible modal summary that remains usable with long localized copy", () => {
     const localized = {
-      ...userland,
+      ...genericApproval,
       title:
         "Autoriser l’ouverture de cette adresse particulièrement longue dans le navigateur sécurisé",
       summary:
@@ -273,7 +253,7 @@ describe("ApprovalSheet", () => {
     [clientConfig, "Set up Google Calendar"],
     [credentialInput, "Add Acme API"],
     [secretInput, "Enter sudo password"],
-    [userland, "Allow foo?"],
+    [genericApproval, "Open another workspace branch"],
     [deviceCode, "Sign in to GitHub"],
     [unitBatch, "Start 1 extension and 1 app"],
     [browserPermission, "Allow camera and microphone on https://meet.example.com?"],
@@ -289,11 +269,11 @@ describe("ApprovalSheet", () => {
 
     fireEvent.press(getByTestId("unit-review-app-mobile"));
     expect(getByText("+ Publishing & sending")).toBeTruthy();
-    expect(getByText("send notifications — anything in this workspace")).toBeTruthy();
-    expect(queryByText("view your account profile — anything in this workspace")).toBeNull();
+    expect(getByText("send a notification — anything in this workspace")).toBeTruthy();
+    expect(queryByText("view an account profile — anything in this workspace")).toBeNull();
 
     fireEvent.press(getByText("1 unchanged permission"));
-    expect(getByText("view your account profile — anything in this workspace")).toBeTruthy();
+    expect(getByText("view an account profile — anything in this workspace")).toBeTruthy();
   });
 
   it.each(["once", "session", "version", "deny"] as const)(
@@ -417,95 +397,10 @@ describe("ApprovalSheet", () => {
         onSubmitClientConfig={jest.fn()}
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
-        onResolveUserland={jest.fn()}
-        onFetchUserlandSealedDetail={jest.fn(async () => null)}
-        onResolveExternalAgent={jest.fn()}
         onResolveMissionReview={jest.fn()}
       />
     );
     expect(queryByText("The sign-in domain differs from the service domain.")).toBeNull();
-  });
-
-  it("resolves an external-agent tool prompt and renders its preview", async () => {
-    const onResolveExternalAgent = jest.fn(async () => undefined);
-    const { getByText, getByTestId } = renderSheet(externalAgent, { onResolveExternalAgent });
-
-    expect(getByText("Bash")).toBeTruthy();
-    expect(getByText("npm install")).toBeTruthy();
-
-    fireEvent.press(getByTestId("approval-action-allow"));
-    await waitFor(() => expect(onResolveExternalAgent).toHaveBeenCalledWith("approval-1", "allow"));
-  });
-
-  it("resolves userland options and renders verified issuer chrome", async () => {
-    const onResolveUserland = jest.fn(async () => undefined);
-    const { getByText, getByTestId } = renderSheet(userland, { onResolveUserland });
-
-    expect(getByText("background task")).toBeTruthy();
-    expect(getByText(/Remembered for background task/)).toBeTruthy();
-
-    fireEvent.press(getByTestId("approval-userland-allow"));
-    await waitFor(() => expect(onResolveUserland).toHaveBeenCalledWith("approval-1", "allow"));
-  });
-
-  it("reveals sealed userland review detail only when the user asks", async () => {
-    const suffix = "dangerous-mobile-suffix-after-one-thousand";
-    const content = `${"x".repeat(1_100)}${suffix}`;
-    const digest = "b".repeat(64);
-    const onFetchUserlandSealedDetail = jest.fn(async () => content);
-    const approval: PendingApproval = {
-      ...userland,
-      sealedDetails: [
-        { label: "Complete execution plan", digest, byteLength: content.length, format: "code" },
-      ],
-    };
-    const { getByText } = renderSheet(approval, { onFetchUserlandSealedDetail });
-
-    fireEvent.press(getByText("Request details"));
-    expect(onFetchUserlandSealedDetail).not.toHaveBeenCalled();
-    fireEvent.press(getByText("Reveal content"));
-    await waitFor(() =>
-      expect(onFetchUserlandSealedDetail).toHaveBeenCalledWith("approval-1", digest)
-    );
-    expect(getByText(content)).toBeTruthy();
-    expect(getByText(`sha256:${digest}`)).toBeTruthy();
-  });
-
-  it("hides sealed-only content and lets an unavailable review detail retry", async () => {
-    const reviewDigest = "c".repeat(64);
-    const exactDigest = "d".repeat(64);
-    const onFetchUserlandSealedDetail = jest
-      .fn<Promise<string | null>, [string, string]>()
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce("reviewed input");
-    const approval: PendingApproval = {
-      ...userland,
-      sealedDetails: [
-        {
-          label: "Command and input",
-          digest: reviewDigest,
-          byteLength: 20,
-          disclosure: "review",
-        },
-        {
-          label: "Exact execution seal",
-          digest: exactDigest,
-          byteLength: 1_000,
-          disclosure: "sealed-only",
-        },
-      ],
-    };
-    const { getByText, queryByText } = renderSheet(approval, {
-      onFetchUserlandSealedDetail,
-    });
-
-    fireEvent.press(getByText("Request details"));
-    expect(queryByText("Exact execution seal")).toBeNull();
-    fireEvent.press(getByText("Reveal content"));
-    await waitFor(() => expect(getByText("This request is no longer available.")).toBeTruthy());
-    fireEvent.press(getByText("Retry"));
-    await waitFor(() => expect(getByText("reviewed input")).toBeTruthy());
-    expect(onFetchUserlandSealedDetail).toHaveBeenCalledTimes(2);
   });
 
   it("renders the caller chip with the kind icon and label", () => {
@@ -530,11 +425,10 @@ describe("ApprovalSheet", () => {
       callerId: "panel:abc",
       callerKind: "panel",
       callerTitle: "Spectrolite",
-      kind: "userland",
-      subject: { id: "subj-1", label: "Foo" },
-      title: "Allow foo?",
-      promptOptions: "choices",
-      options: [{ value: "allow", label: "Allow", tone: "primary" }],
+      kind: "capability",
+      capability: "context.boundary",
+      title: "Open another workspace branch",
+      resource: { type: "context", label: "Workspace branch", value: "Agent X" },
     };
     const onNavigateToPanel = jest.fn();
     const { getByTestId } = renderSheet(titledPanel, { onNavigateToPanel });
@@ -546,11 +440,10 @@ describe("ApprovalSheet", () => {
     const a: PendingApproval = {
       ...base,
       approvalId: "a1",
-      kind: "userland",
-      subject: { id: "s-1" },
+      kind: "capability",
+      capability: "context.boundary",
       title: "First request",
-      promptOptions: "choices",
-      options: [{ value: "ok", label: "OK", tone: "primary" }],
+      resource: { type: "context", label: "Workspace branch", value: "Agent X" },
     };
     const b: PendingApproval = { ...a, approvalId: "a2", title: "Second request" };
     const c: PendingApproval = { ...a, approvalId: "a3", title: "Third request" };
@@ -562,14 +455,6 @@ describe("ApprovalSheet", () => {
     expect(getByText("2 / 3")).toBeTruthy();
     fireEvent.press(getByTestId("approval-queue-prev"));
     expect(getByText("First request")).toBeTruthy();
-  });
-
-  it("uses userland tone variants", () => {
-    const { getByTestId } = renderSheet(userland);
-
-    expect(getByTestId("approval-userland-allow").props.accessibilityLabel).toContain("Allow");
-    expect(getByTestId("approval-userland-deny").props.accessibilityLabel).toContain("Deny");
-    expect(getByTestId("approval-userland-later").props.accessibilityLabel).toContain("Later");
   });
 
   it("renders device-code approvals and lets the user cancel waiting", async () => {
@@ -650,13 +535,13 @@ describe("ApprovalSheet", () => {
     );
   });
 
-  it("minimizes from backdrop without denying the pending userland request", async () => {
-    const onResolveUserland = jest.fn(async () => undefined);
-    const { getByTestId, getByText } = renderSheet(userland, { onResolveUserland });
+  it("minimizes from backdrop without denying the pending request", async () => {
+    const onResolve = jest.fn(async () => undefined);
+    const { getByTestId, getByText } = renderSheet(genericApproval, { onResolve });
 
     fireEvent.press(getByTestId("approval-backdrop"));
 
-    expect(onResolveUserland).not.toHaveBeenCalled();
+    expect(onResolve).not.toHaveBeenCalled();
     expect(getByText("Approval waiting · Review")).toBeTruthy();
   });
 
@@ -671,9 +556,6 @@ describe("ApprovalSheet", () => {
         onSubmitClientConfig={jest.fn()}
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
-        onResolveUserland={jest.fn()}
-        onFetchUserlandSealedDetail={jest.fn(async () => null)}
-        onResolveExternalAgent={jest.fn()}
         onResolveMissionReview={jest.fn()}
       />
     );

@@ -1,4 +1,4 @@
-import type { AgenticEvent, InvocationOutcome, ParticipantRef } from "@vibestudio/agentic-protocol";
+import type { AgenticEvent, InvocationOutcome, ParticipantRef } from "@workspace/agentic-protocol";
 import { conversationV1Policy } from "./conversation-v1.js";
 
 /** Minimal durable-envelope view a policy folds over. Pure data. */

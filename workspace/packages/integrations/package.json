@@ -15,6 +15,6 @@
   },
   "dependencies": {
     "@vibestudio/credential-client": "workspace:*",
-    "@vibestudio/runtime": "workspace:*"
+    "@workspace/runtime": "workspace:*"
   }
 }

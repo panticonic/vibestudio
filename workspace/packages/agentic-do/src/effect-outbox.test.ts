@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createInMemorySql, createTestDO } from "@vibestudio/runtime/worker/test-utils";
-import type { SqlStorage } from "@vibestudio/runtime/worker";
-import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
+import { createInMemorySql, createTestDO } from "@workspace/runtime/worker/test-utils";
+import type { SqlStorage } from "@workspace/runtime/worker";
+import { GadWorkspaceDO } from "@workspace-workers/workspace-source";
 import { EffectOutbox } from "./effect-outbox.js";
 import type { EffectDescriptor } from "@workspace/agent-loop";
 

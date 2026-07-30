@@ -1,85 +1,72 @@
-/**
- * PanelTreeContext - Stores panel tree from main process events.
- *
- * This context eliminates the race condition between main process DB writes
- * and renderer DB reads by using the event payload directly instead of querying
- * the database.
- *
- * The panel tree is sent with the `panel-tree-updated` event from the main process.
- * All navigation data (ancestors, siblings, descendants) is derived synchronously
- * from this in-memory tree.
- */
-
 import {
   createContext,
-  useContext,
-  useState,
   useCallback,
-  useMemo,
+  useContext,
   useEffect,
+  useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { useShellEvent } from "../useShellEvent.js";
-import { panel as panelService } from "../client.js";
-import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../../state/appModeAtoms.js";
-import { coercePanelTreeUpdate } from "./panelTreeRevision.js";
-import { useCurrentAccountProfile } from "./useAccountProfiles.js";
+import { PanelTreeCache } from "@vibestudio/shell-core/panelTreeCache";
+import type { PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
-  Panel,
-  PanelSummary,
-  PanelAncestor,
+  PanelTreeGroup,
+  PanelTreeNode,
+  PanelTreePlacementHint,
+  PanelTreeSearchPage,
+} from "@vibestudio/shared/panel/treeIndex";
+import type {
   DescendantSiblingGroup,
-  PanelNavigationState,
+  PanelAncestor,
   PanelArtifacts,
-  PanelTreeSnapshot,
+  PanelExplicitState,
+  PanelNavigationState,
+  PanelSnapshot,
+  PanelSummary,
 } from "@vibestudio/shared/types";
-import { getPanelContextId, getPanelSource } from "@vibestudio/shared/panel/accessors";
-import { assertPresent } from "../../utils/assertPresent";
+import { panel } from "../client.js";
+import { useShellEvent } from "../useShellEvent.js";
+import { useDirectShellEvent } from "../useDirectShellEvent.js";
+import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../../state/appModeAtoms.js";
+import { useCurrentAccountProfile } from "./useAccountProfiles.js";
 
-// Re-export types for consumers
-export type { PanelSummary, PanelAncestor, DescendantSiblingGroup };
+export type { DescendantSiblingGroup, PanelAncestor, PanelSummary };
 
-/**
- * One owner's group of root panels within the forest (WP3). `owner` is a
- * userId used for attribution/grouping only — never a security token. The
- * empty string groups unowned/system-seeded roots.
- */
-export type PanelForestGroup = PanelTreeSnapshot["forest"][number];
+export interface PanelTreeViewNode {
+  id: string;
+  title: string;
+  owner: string | null;
+  parentId: string | null;
+  childCount: number;
+  children: PanelTreeViewNode[];
+  /** Whether the first bounded child page has been queried. */
+  childrenLoaded?: boolean;
+  childrenLoadedCount?: number;
+  childrenHasMore?: boolean;
+  selectedChildId: string | null;
+  placement?: PanelTreePlacementHint;
+}
 
-// ============================================================================
-// Types
-// ============================================================================
-
-/**
- * Full panel data including type-specific fields.
- */
 export interface FullPanel {
   id: string;
   title: string;
   contextId: string;
+  buildKey?: string | null;
   parentId: string | null;
   position: number;
   selectedChildId: string | null;
-  snapshot: Panel["snapshot"];
-  history?: Panel["history"];
-  state?: Panel["state"];
-  navigation?: PanelNavigationState;
+  snapshot: PanelSnapshot;
   artifacts: PanelArtifacts;
+  state?: PanelExplicitState;
+  navigation?: PanelNavigationState;
   path?: string;
   sourceRepo?: string;
   injectHostThemeVariables?: boolean;
+  hostViewRevision?: number;
 }
 
-// ============================================================================
-// Tree Utilities
-// ============================================================================
-
-/**
- * Flattened panel item for sortable tree operations.
- * Contains the panel plus its tree position metadata.
- */
 export interface FlattenedPanel {
   id: string;
   parentId: string | null;
@@ -89,22 +76,15 @@ export interface FlattenedPanel {
   collapsed: boolean;
 }
 
-/**
- * Flatten the tree into a sorted list for sortable operations.
- * Collapsed nodes have their children excluded.
- * Uses mutation for O(n) performance instead of O(n²) spread operations.
- */
 export function flattenTree(
-  panels: Panel[],
+  panels: readonly PanelTreeViewNode[],
   collapsedIds: Set<string>,
   parentId: string | null = null,
   depth = 0,
   result: FlattenedPanel[] = []
 ): FlattenedPanel[] {
-  for (let index = 0; index < panels.length; index++) {
-    const panel = assertPresent(panels[index]);
-    const isCollapsed = collapsedIds.has(panel.id);
-
+  panels.forEach((panel, index) => {
+    const collapsed = collapsedIds.has(panel.id);
     result.push({
       id: panel.id,
       parentId,
@@ -113,25 +93,30 @@ export function flattenTree(
       panel: {
         id: panel.id,
         title: panel.title,
-        childCount: panel.children.length,
-        buildState: panel.artifacts?.buildState,
+        childCount: panel.childCount,
         position: index,
-        favicon: panel.navigation?.favicon,
       },
-      collapsed: isCollapsed,
+      collapsed,
     });
-
-    if (!isCollapsed && panel.children.length > 0) {
-      flattenTree(panel.children, collapsedIds, panel.id, depth + 1, result);
-    }
-  }
+    if (!collapsed) flattenTree(panel.children, collapsedIds, panel.id, depth + 1, result);
+  });
   return result;
 }
 
-/**
- * Calculate the projected depth and parent for a drag operation.
- * Based on horizontal offset from drag start position.
- */
+export function findParentAtDepth(
+  items: FlattenedPanel[],
+  fromIndex: number,
+  targetDepth: number
+): string | null {
+  if (targetDepth === 0) return null;
+  for (let index = fromIndex - 1; index >= 0; index--) {
+    const item = items[index];
+    if (item?.depth === targetDepth - 1) return item.id;
+    if (item && item.depth < targetDepth - 1) return item.parentId;
+  }
+  return null;
+}
+
 export function getProjection(
   items: FlattenedPanel[],
   activeId: string,
@@ -139,630 +124,513 @@ export function getProjection(
   dragOffset: number,
   indentationWidth: number
 ): { depth: number; parentId: string | null } {
-  const overItemIndex = items.findIndex((item) => item.id === overId);
-  const activeItemIndex = items.findIndex((item) => item.id === activeId);
-
-  if (overItemIndex === -1 || activeItemIndex === -1) {
-    return { depth: 0, parentId: null };
-  }
-
-  const activeItem = assertPresent(items[activeItemIndex]);
-  const overItem = assertPresent(items[overItemIndex]);
-
-  // Check if dragging up to immediate preceding sibling
-  // In this case, we want to allow nesting under the over item
-  const isDraggingUpToImmediatePreceding =
-    activeItemIndex > overItemIndex && overItemIndex === activeItemIndex - 1;
-
-  // Calculate what would be previous/next WITHOUT array copy
-  // This avoids O(n) allocation on every drag move (~60fps)
-  let previousItem: FlattenedPanel | undefined;
-  let nextItem: FlattenedPanel | undefined;
-
-  if (activeItemIndex < overItemIndex) {
-    // Item moves down: after removal, indices shift down by 1
-    previousItem = items[overItemIndex];
-    nextItem = items[overItemIndex + 1];
-  } else if (activeItemIndex > overItemIndex) {
-    // Item moves up: removal doesn't affect indices before overItemIndex
-    previousItem = items[overItemIndex - 1];
-    nextItem = items[overItemIndex];
-  } else {
-    // Same position (shouldn't happen but handle gracefully)
-    previousItem = items[overItemIndex - 1];
-    nextItem = items[overItemIndex + 1];
-  }
-
-  // Calculate drag depth from horizontal offset
-  const dragDepth = Math.round(dragOffset / indentationWidth);
-  const projectedDepth = activeItem.depth + dragDepth;
-
-  // Max depth = previous item's depth + 1 (can become child of previous)
-  // Special case: when dragging up to immediate preceding sibling with rightward offset,
-  // allow nesting under that sibling (overItem becomes potential parent)
-  let maxDepth = previousItem ? previousItem.depth + 1 : 0;
-  if (isDraggingUpToImmediatePreceding && dragOffset > 0) {
-    // When dragging right while hovering over immediate preceding sibling,
-    // allow becoming a child of that sibling
-    maxDepth = Math.max(maxDepth, overItem.depth + 1);
-  }
-
-  // Min depth = next item's depth (can't be shallower than next sibling)
-  // But if we're becoming a child of the over item, we don't have this constraint
-  let minDepth = nextItem ? nextItem.depth : 0;
-  if (isDraggingUpToImmediatePreceding && projectedDepth > overItem.depth) {
-    // When nesting under the over item, we're inserting as its child,
-    // not between it and its existing children
-    minDepth = 0;
-  }
-
-  // For in-place depth changes, only allow unindenting if we're the last sibling.
-  // Unindenting a middle sibling would leave subsequent siblings orphaned.
-  if (activeItemIndex === overItemIndex) {
-    if (nextItem && nextItem.parentId === activeItem.parentId) {
-      // There's a sibling after us - can't unindent past current depth
-      minDepth = Math.max(minDepth, activeItem.depth);
-    }
-  }
-
-  // Clamp projected depth
-  let depth = projectedDepth;
-  if (projectedDepth >= maxDepth) {
-    depth = maxDepth;
-  } else if (projectedDepth < minDepth) {
-    depth = minDepth;
-  }
-
-  // Calculate parent ID based on final depth
-  const parentId = getParentId();
-
-  return { depth, parentId };
-
-  function getParentId(): string | null {
-    if (depth === 0 || !previousItem) {
-      // Special case: nesting under immediate preceding sibling
-      if (isDraggingUpToImmediatePreceding && depth > overItem.depth) {
-        return overItem.id;
-      }
-      return null;
-    }
-
-    if (depth === previousItem.depth) {
-      // Same level as previous - share parent
-      return previousItem.parentId;
-    }
-
-    if (depth > previousItem.depth) {
-      // Deeper than previous - previous is the parent
-      // But check if we should nest under overItem instead
-      if (isDraggingUpToImmediatePreceding && depth === overItem.depth + 1) {
-        return overItem.id;
-      }
-      return previousItem.id;
-    }
-
-    // Shallower than previous - find ancestor at this depth using backward scan
-    // When moving down, we need to include overItemIndex in the scan and skip activeItemIndex
-    // When moving up, scan from overItemIndex - 1 (activeItemIndex is above scan range)
-    const scanStart = activeItemIndex < overItemIndex ? overItemIndex : overItemIndex - 1;
-    for (let i = scanStart; i >= 0; i--) {
-      if (i === activeItemIndex) continue; // Skip the item being dragged
-      const item = items[i];
-      if (!item) continue;
-      if (item.depth === depth) {
-        return item.parentId;
-      }
-    }
-
-    return null;
-  }
+  const activeIndex = items.findIndex((item) => item.id === activeId);
+  const overIndex = items.findIndex((item) => item.id === overId);
+  if (activeIndex < 0 || overIndex < 0) return { depth: 0, parentId: null };
+  const active = items[activeIndex]!;
+  const previous = activeIndex < overIndex ? items[overIndex] : items[Math.max(0, overIndex - 1)];
+  const next = activeIndex < overIndex ? items[overIndex + 1] : items[overIndex];
+  const desired = active.depth + Math.round(dragOffset / indentationWidth);
+  const maxDepth = previous ? previous.depth + 1 : 0;
+  const minDepth = next?.depth ?? 0;
+  const depth = Math.max(minDepth, Math.min(desired, maxDepth));
+  if (depth === 0) return { depth, parentId: null };
+  if (previous && depth > previous.depth) return { depth, parentId: previous.id };
+  if (previous && depth === previous.depth) return { depth, parentId: previous.parentId };
+  return { depth, parentId: findParentAtDepth(items, overIndex + 1, depth) };
 }
 
-/**
- * Remove children of specified items from the flattened list.
- * Used to exclude descendants of dragged items.
- */
 export function removeChildrenOf(items: FlattenedPanel[], ids: string[]): FlattenedPanel[] {
-  const excludeParentIds = new Set(ids);
-
+  const excluded = new Set(ids);
   return items.filter((item) => {
-    if (item.parentId && excludeParentIds.has(item.parentId)) {
-      excludeParentIds.add(item.id);
+    if (item.parentId && excluded.has(item.parentId)) {
+      excluded.add(item.id);
       return false;
     }
     return true;
   });
 }
 
-/**
- * Build flat maps for O(1) lookup of panels and their parent IDs.
- */
-function buildPanelMaps(panels: Panel[]): {
-  panelMap: Map<string, Panel>;
-  parentMap: Map<string, string | null>;
-} {
-  const panelMap = new Map<string, Panel>();
-  const parentMap = new Map<string, string | null>();
-
-  function traverse(panel: Panel, parentId: string | null): void {
-    panelMap.set(panel.id, panel);
-    parentMap.set(panel.id, parentId);
-    for (const child of panel.children) {
-      traverse(child, panel.id);
-    }
-  }
-
-  for (const root of panels) {
-    traverse(root, null);
-  }
-
-  return { panelMap, parentMap };
-}
-
-/**
- * Find parent ID for a given depth by walking backwards through items.
- * Used by both getProjection and endZoneProjection.
- */
-export function findParentAtDepth(
-  items: FlattenedPanel[],
-  fromIndex: number,
-  targetDepth: number
-): string | null {
-  if (targetDepth === 0) return null;
-
-  for (let i = fromIndex - 1; i >= 0; i--) {
-    const item = items[i];
-    if (!item) continue;
-    if (item.depth === targetDepth - 1) {
-      return item.id;
-    }
-    if (item.depth < targetDepth - 1) {
-      return item.parentId;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Convert Panel to PanelSummary.
- */
-function panelToSummary(panel: Panel, position: number): PanelSummary {
-  return {
-    id: panel.id,
-    title: panel.title,
-    childCount: panel.children.length,
-    buildState: panel.artifacts?.buildState,
-    position,
-    favicon: panel.navigation?.favicon,
-  };
-}
-
-/**
- * Convert Panel to FullPanel with resolved parent ID.
- */
-function panelToFull(panel: Panel, parentId: string | null, position: number): FullPanel {
-  const source = getPanelSource(panel);
-
-  return {
-    id: panel.id,
-    title: panel.title,
-    contextId: getPanelContextId(panel),
-    parentId,
-    position,
-    selectedChildId: panel.selectedChildId ?? null,
-    snapshot: panel.snapshot,
-    history: panel.history,
-    state: panel.state,
-    navigation: panel.navigation,
-    artifacts: panel.artifacts ?? {},
-    path: source,
-    sourceRepo: source,
-    injectHostThemeVariables: true,
-  };
-}
-
-/**
- * Order forest groups own-first: the local user's group leads, everyone
- * else's stays in snapshot (first-appearance) order below — mutual
- * inspectability, not isolation. With no known self, snapshot order stands.
- */
-export function orderForestGroups(
-  forest: PanelForestGroup[],
-  selfUserId: string | null
-): PanelForestGroup[] {
-  if (!selfUserId) return forest;
-  const own = forest.filter((group) => group.owner === selfUserId);
-  if (own.length === 0) return forest;
-  return [...own, ...forest.filter((group) => group.owner !== selfUserId)];
-}
-
-/** Compare authoritative and host-mirror topology without mixing their
- * independent revision counters or runtime-only panel fields. */
-function panelForestShape(snapshot: PanelTreeSnapshot): string {
-  const nodeShape = (panel: Panel): unknown => [
-    panel.id,
-    panel.owner ?? null,
-    panel.children.map(nodeShape),
-  ];
-  return JSON.stringify(
-    snapshot.forest.map((group) => [group.owner, group.rootPanels.map(nodeShape)])
-  );
-}
-
-// ============================================================================
-// Context
-// ============================================================================
-
 interface PanelTreeContextValue {
-  /** Every owner's root panels, derived from the canonical forest, own-first. */
-  allRootPanels: Panel[];
-  /** Owner-grouped forest (own group first when the local user is known) */
-  forest: PanelForestGroup[];
-  /** The verified local account id, used for own-first ordering and band labels. */
-  selfUserId: string | null;
-  /** A visible diagnostic can be rendered while owner personalization is unavailable. */
-  selfIdentityError: string | null;
-  /** Startup/recovery failure from the authoritative panel-tree read. */
-  treeLoadError: string | null;
-  /** Retry the authoritative panel-tree read without remounting the shell. */
-  refreshTree: () => Promise<void>;
-  /** Flat map of all panels for O(1) lookup */
-  panelMap: Map<string, Panel>;
-  /** Flat map of panel ID to parent ID for O(1) parent lookup */
+  allRootPanels: PanelTreeViewNode[];
+  panelMap: Map<string, PanelTreeViewNode>;
   parentMap: Map<string, string | null>;
-  /** Whether the tree has been initialized (received at least one event) */
+  ownerGroups: Array<{
+    owner: string;
+    rootCount: number;
+    rootLoadedCount?: number;
+    rootsHaveMore?: boolean;
+    rootPanels: PanelTreeViewNode[];
+  }>;
+  selfUserId: string | null;
+  selfIdentityError: string | null;
+  treeLoadError: string | null;
   initialized: boolean;
+  refreshing: boolean;
+  treeRevision: number;
+  refreshTree(): Promise<void>;
+  loadChildren(panelId: string): Promise<void>;
+  loadSelectionPath(panelId: string, maxDepth: number): Promise<void>;
+  loadMore(group: PanelTreeGroup): Promise<void>;
+  loadMoreRootGroups(): Promise<void>;
+  hasMoreRootGroups: boolean;
+  search(query: string, cursor?: string): Promise<PanelTreeSearchPage>;
 }
 
 const PanelTreeContext = createContext<PanelTreeContextValue | null>(null);
 
 function usePanelTreeContext(): PanelTreeContextValue {
-  const context = useContext(PanelTreeContext);
-  if (!context) {
-    throw new Error("usePanelTreeContext must be used within a PanelTreeProvider");
-  }
-  return context;
+  const value = useContext(PanelTreeContext);
+  if (!value) throw new Error("usePanelTreeContext must be used within a PanelTreeProvider");
+  return value;
 }
 
-/**
- * Hook to access the raw panel tree and panel map.
- * Used by PanelDndContext for drag-and-drop operations.
- */
 export function usePanelTree(): PanelTreeContextValue {
   return usePanelTreeContext();
 }
 
-// ============================================================================
-// Provider
-// ============================================================================
-
-interface PanelTreeProviderProps {
-  children: ReactNode;
+function nodeTree(
+  node: PanelTreeNode,
+  cache: PanelTreeCache,
+  seen: Set<string>,
+  localSelectedChildren: ReadonlyMap<string, string | null>
+): PanelTreeViewNode {
+  if (seen.has(node.slotId)) {
+    throw new Error(`Panel tree cycle detected at ${node.slotId}`);
+  }
+  const nextSeen = new Set(seen).add(node.slotId);
+  const group = { kind: "children" as const, parentSlotId: node.slotId };
+  const cachedChildren = cache.getGroup(group);
+  const children = cachedChildren?.nodes ?? [];
+  return {
+    id: node.slotId,
+    title: node.title,
+    owner: node.ownerUserId,
+    parentId: node.parentSlotId,
+    childCount: node.childCount,
+    children: children.map((child) => nodeTree(child, cache, nextSeen, localSelectedChildren)),
+    childrenLoaded: cachedChildren !== null,
+    childrenLoadedCount: cachedChildren?.loadedCount ?? 0,
+    childrenHasMore: cachedChildren?.nextCursor !== null && cachedChildren !== null,
+    selectedChildId: localSelectedChildren.has(node.slotId)
+      ? (localSelectedChildren.get(node.slotId) ?? null)
+      : (children[0]?.slotId ?? null),
+    ...(node.placement ? { placement: node.placement } : {}),
+  };
 }
 
-export function PanelTreeProvider({ children }: PanelTreeProviderProps) {
-  const [rawForest, setRawForest] = useState<PanelForestGroup[]>([]);
-  const [treeInitialized, setTreeInitialized] = useState(false);
-  const [ownerTreeAttached, setOwnerTreeAttached] = useState(false);
-  const [treeLoadError, setTreeLoadError] = useState<string | null>(null);
+export function PanelTreeProvider({ children }: { children: ReactNode }) {
   const currentAccount = useCurrentAccountProfile();
   const selfUserId = currentAccount.profile?.userId ?? null;
-  const latestRevisionRef = useRef<number>(0);
-  const treeRefreshSeqRef = useRef(0);
+  const [, rerender] = useState(0);
+  const [treeLoadError, setTreeLoadError] = useState<string | null>(null);
+  const [initialized, setInitialized] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [localSelectedChildren, setLocalSelectedChildren] = useState<Map<string, string | null>>(
+    () => new Map()
+  );
+  const refreshingRef = useRef(false);
+  const refreshSequenceRef = useRef(0);
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const pinMutationSeq = useAtomValue(pinMutationSeqAtom);
-  const pinMutationSeqRef = useRef(pinMutationSeq);
-  useEffect(() => {
-    pinMutationSeqRef.current = pinMutationSeq;
-  }, [pinMutationSeq]);
+  const pinSeq = useRef(pinMutationSeq);
+  pinSeq.current = pinMutationSeq;
+  const cacheRef = useRef<PanelTreeCache | null>(null);
+  cacheRef.current ??= new PanelTreeCache(
+    {
+      rootGroups: (input) => panel.getRootGroups(input),
+      page: (input) => panel.getTreePage(input),
+      path: (slotId) => panel.getTreePath(slotId),
+      search: (input) => panel.searchTree(input),
+    },
+    { pageSize: 50, maxGroups: 64, maxNodes: 2_000, maxPaths: 128 }
+  );
+  const cache = cacheRef.current;
 
-  // Seed/reconcile the client-local pin mirror from the main process source of
-  // truth. Run on every applied snapshot, not just the first: named-panel slot
-  // ids are deterministic and reused after remove+recreate, so a one-time seed
-  // would leave a stale 📌. The call is cheap (a small string array).
-  const reconcilePins = useCallback(() => {
-    const seqAtDispatch = pinMutationSeqRef.current;
-    panelService
-      .listPinnedPanelIds()
-      .then((ids) => {
-        // A local toggle since dispatch means our optimistic state is newer than
-        // this response — discard it so a stale reconcile can't revert the pin.
-        if (pinMutationSeqRef.current !== seqAtDispatch) return;
-        setPinnedPanelIds(new Set(ids));
-      })
-      .catch((error) => console.warn("[PanelTreeContext] Failed to reconcile pins:", error));
+  useEffect(() => cache.subscribe(() => rerender((value) => value + 1)), [cache]);
+
+  const reconcilePins = useCallback(async () => {
+    const dispatchedAt = pinSeq.current;
+    const ids = await panel.listPinnedPanelIds();
+    if (pinSeq.current === dispatchedAt) setPinnedPanelIds(new Set(ids));
   }, [setPinnedPanelIds]);
 
-  const applyTreeSnapshot = useCallback(
-    (snapshot: PanelTreeSnapshot): boolean => {
-      if (snapshot.revision < latestRevisionRef.current) {
-        return false;
+  const refreshTree = useCallback(
+    async (invalidatedGroups: readonly PanelTreeGroup[] = []) => {
+      const sequence = ++refreshSequenceRef.current;
+      refreshingRef.current = true;
+      setRefreshing(true);
+      try {
+        const groups = await cache.loadRootGroups(true);
+        await Promise.all([
+          ...groups.groups.map((group) =>
+            cache.loadFirst({ kind: "roots", ownerUserId: group.ownerUserId })
+          ),
+          ...invalidatedGroups.map((group) => cache.loadFirst(group)),
+        ]);
+        await reconcilePins();
+        setTreeLoadError(null);
+        setInitialized(true);
+      } catch (error) {
+        setTreeLoadError(error instanceof Error ? error.message : String(error));
+        setInitialized(true);
+      } finally {
+        if (refreshSequenceRef.current === sequence) {
+          refreshingRef.current = false;
+          setRefreshing(false);
+        }
       }
-      latestRevisionRef.current = snapshot.revision;
-      setRawForest(snapshot.forest);
-      setTreeInitialized(true);
-      reconcilePins();
-      return true;
     },
-    [reconcilePins]
+    [cache, reconcilePins]
   );
 
-  // Handle panel tree updates from main process
-  const handleTreeUpdate = useCallback(
-    (data: unknown) => {
-      const snapshot = coercePanelTreeUpdate(data, latestRevisionRef.current);
-      if (!snapshot) {
-        console.error("[PanelTreeContext] Invalid tree data received:", data);
-        return;
-      }
-      applyTreeSnapshot(snapshot);
-    },
-    [applyTreeSnapshot]
-  );
-
-  // Subscribe to panel-tree-updated events
-  useShellEvent("panel-tree-updated", handleTreeUpdate);
-
-  // Trigger the authenticated account's first-attach seed on the server, then
-  // consume the corresponding LOCAL host mirror. Server and local registries
-  // have independent revision counters, so applying the server snapshot here
-  // would make later valid local events look stale.
-  const refreshTree = useCallback(async () => {
-    const seq = ++treeRefreshSeqRef.current;
-    try {
-      let expectedShape = panelForestShape(await panelService.ensureOwnerTree());
-      for (let attempt = 0; attempt < 40; attempt++) {
-        if (seq !== treeRefreshSeqRef.current) return;
-        const localSnapshot = await panelService.getTreeSnapshot();
-        if (panelForestShape(localSnapshot) === expectedShape) {
-          if (seq !== treeRefreshSeqRef.current) return;
-          applyTreeSnapshot(localSnapshot);
-          setOwnerTreeAttached(true);
-          setTreeLoadError(null);
-          return;
-        }
-        // Another teammate may mutate the tree during startup. Rebase the
-        // expected topology once rather than waiting forever for an obsolete
-        // exact echo.
-        if (attempt === 19) {
-          expectedShape = panelForestShape(await panelService.ensureOwnerTree());
-        }
-        await new Promise<void>((resolve) => setTimeout(resolve, 25));
-      }
-      throw new Error("Timed out while synchronizing the panel forest to this device");
-    } catch (error) {
-      if (seq !== treeRefreshSeqRef.current) return;
-      setTreeLoadError(error instanceof Error ? error.message : String(error));
-    }
-  }, [applyTreeSnapshot]);
   useEffect(() => {
     void refreshTree();
-    return () => {
-      treeRefreshSeqRef.current += 1;
-    };
   }, [refreshTree]);
 
-  // Own-first group ordering, then the flat root list every existing tree
-  // consumer (DnD flatten, navigation hooks) operates on. Group boundaries
-  // stay recoverable from `forest` for owner-band rendering.
-  const forest = useMemo(() => orderForestGroups(rawForest, selfUserId), [rawForest, selfUserId]);
-  const allRootPanels = useMemo(() => forest.flatMap((group) => group.rootPanels), [forest]);
-  const initialized = treeInitialized && ownerTreeAttached && currentAccount.settled;
-
-  // Build panel maps for efficient lookups
-  const { panelMap, parentMap } = useMemo(() => buildPanelMaps(allRootPanels), [allRootPanels]);
-
-  const value = useMemo<PanelTreeContextValue>(
-    () => ({
-      allRootPanels,
-      forest,
-      selfUserId,
-      selfIdentityError: currentAccount.error,
-      treeLoadError,
-      refreshTree,
-      panelMap,
-      parentMap,
-      initialized,
-    }),
-    [
-      allRootPanels,
-      forest,
-      selfUserId,
-      currentAccount.error,
-      treeLoadError,
-      refreshTree,
-      panelMap,
-      parentMap,
-      initialized,
-    ]
+  useShellEvent(
+    "panel-tree-invalidated",
+    useCallback(
+      (event) => {
+        // Cache invalidation emits synchronously. Publish the refresh
+        // transaction before that emission so consumers never interpret the
+        // deliberately stale/missing query page as a durable tree deletion.
+        refreshingRef.current = true;
+        setRefreshing(true);
+        const invalidatedGroups = cache.invalidate(event);
+        void refreshTree(invalidatedGroups);
+      },
+      [cache, refreshTree]
+    )
+  );
+  useDirectShellEvent(
+    "panel-presentation-changed",
+    useCallback((event) => {
+      void Promise.all(
+        event.panelIds.map(async (panelId) => ({
+          panelId,
+          presentation: await panel.getPresentation(panelId),
+        }))
+      )
+        .then((updates) => {
+          setLocalSelectedChildren((current) => {
+            const next = new Map(current);
+            for (const { panelId, presentation } of updates) {
+              next.set(panelId, presentation?.selectedChildId ?? null);
+            }
+            return next;
+          });
+        })
+        .catch(() => {});
+    }, [])
   );
 
+  const loadChildren = useCallback(
+    async (panelId: string) => {
+      await cache.loadFirst({ kind: "children", parentSlotId: panelId as PanelSlotId });
+    },
+    [cache]
+  );
+  const loadSelectionPath = useCallback(
+    async (panelId: string, maxDepth: number) => {
+      const selections = new Map<string, string | null>();
+      let currentId: string | null = panelId;
+      for (let depth = 0; currentId && depth < maxDepth; depth++) {
+        const presentation = await panel.getPresentation(currentId);
+        const selectedChildId = presentation?.selectedChildId ?? null;
+        selections.set(currentId, selectedChildId);
+        if (!selectedChildId) break;
+
+        const group = {
+          kind: "children" as const,
+          parentSlotId: currentId as PanelSlotId,
+        };
+        let page = await cache.loadFirst(group);
+        while (!page.nodes.some((node) => node.slotId === selectedChildId) && page.nextCursor) {
+          page = await cache.loadMore(group);
+        }
+        if (!page.nodes.some((node) => node.slotId === selectedChildId)) break;
+        currentId = selectedChildId;
+      }
+      setLocalSelectedChildren((current) => {
+        const next = new Map(current);
+        for (const [parentId, selectedChildId] of selections) {
+          next.set(parentId, selectedChildId);
+        }
+        return next;
+      });
+    },
+    [cache]
+  );
+  const loadMore = useCallback(
+    async (group: PanelTreeGroup) => {
+      await cache.loadMore(group);
+    },
+    [cache]
+  );
+  const loadMoreRootGroups = useCallback(async () => {
+    const groups = await cache.loadRootGroups(false);
+    await Promise.all(
+      groups.groups.map((owner) => {
+        const group = { kind: "roots" as const, ownerUserId: owner.ownerUserId };
+        return cache.getGroup(group) ? Promise.resolve() : cache.loadFirst(group);
+      })
+    );
+  }, [cache]);
+  const search = useCallback(
+    (query: string, cursor?: string) =>
+      cache.search({ query, ...(cursor ? { cursor } : {}), limit: 50 }),
+    [cache]
+  );
+
+  const rootGroups = cache.getRootGroups().groups;
+  const orderedGroups = useMemo(() => {
+    const groups = [...rootGroups];
+    if (!selfUserId) return groups;
+    return [
+      ...groups.filter((group) => group.ownerUserId === selfUserId),
+      ...groups.filter((group) => group.ownerUserId !== selfUserId),
+    ];
+  }, [rootGroups, selfUserId]);
+  const ownerGroups = orderedGroups.map((owner) => {
+    const group = { kind: "roots" as const, ownerUserId: owner.ownerUserId };
+    return {
+      owner: owner.ownerUserId ?? "",
+      rootCount: owner.rootCount,
+      rootLoadedCount: cache.getGroup(group)?.loadedCount ?? 0,
+      rootsHaveMore: cache.getGroup(group)?.nextCursor !== null && cache.getGroup(group) !== null,
+      rootPanels: (cache.getGroup(group)?.nodes ?? []).map((node) =>
+        nodeTree(node, cache, new Set(), localSelectedChildren)
+      ),
+    };
+  });
+  useEffect(() => {
+    const retained: PanelTreeGroup[] = orderedGroups.map((owner) => ({
+      kind: "roots",
+      ownerUserId: owner.ownerUserId,
+    }));
+    const visit = (node: PanelTreeViewNode) => {
+      if (node.childCount > 0 && node.children.length > 0) {
+        retained.push({ kind: "children", parentSlotId: node.id });
+        node.children.forEach(visit);
+      }
+    };
+    ownerGroups.forEach((owner) => owner.rootPanels.forEach(visit));
+    cache.retainGroups(retained);
+  }, [cache, orderedGroups, ownerGroups]);
+  const allRootPanels = ownerGroups.flatMap((group) => group.rootPanels);
+  const { panelMap, parentMap } = useMemo(() => {
+    const panels = new Map<string, PanelTreeViewNode>();
+    const parents = new Map<string, string | null>();
+    const visit = (node: PanelTreeViewNode) => {
+      panels.set(node.id, node);
+      parents.set(node.id, node.parentId);
+      node.children.forEach(visit);
+    };
+    allRootPanels.forEach(visit);
+    return { panelMap: panels, parentMap: parents };
+  }, [allRootPanels]);
+
+  const value: PanelTreeContextValue = {
+    allRootPanels,
+    panelMap,
+    parentMap,
+    ownerGroups,
+    selfUserId,
+    selfIdentityError: currentAccount.error,
+    treeLoadError,
+    initialized: initialized && currentAccount.settled,
+    refreshing: refreshingRef.current || refreshing,
+    treeRevision: cache.getRevision(),
+    refreshTree,
+    loadChildren,
+    loadSelectionPath,
+    loadMore,
+    loadMoreRootGroups,
+    hasMoreRootGroups: cache.getRootGroups().nextCursor !== null,
+    search,
+  };
   return <PanelTreeContext.Provider value={value}>{children}</PanelTreeContext.Provider>;
 }
 
-// ============================================================================
-// Hooks - Synchronous navigation data derived from in-memory tree
-// ============================================================================
-
-/**
- * Get root panels.
- */
-export function useRootPanels(): {
-  panels: PanelSummary[];
-  loading: boolean;
-} {
-  const { allRootPanels, initialized } = usePanelTreeContext();
-
-  const panels = useMemo(
-    () => allRootPanels.map((panel, index) => panelToSummary(panel, index)),
-    [allRootPanels]
-  );
-
-  return { panels, loading: !initialized };
+function summary(node: PanelTreeViewNode, position: number): PanelSummary {
+  return {
+    id: node.id,
+    title: node.title,
+    childCount: node.childCount,
+    position,
+  };
 }
 
-/**
- * Get a panel by ID with full details.
- */
+export function useRootPanels(): { panels: PanelSummary[]; loading: boolean } {
+  const { allRootPanels, initialized } = usePanelTreeContext();
+  return {
+    panels: allRootPanels.map(summary),
+    loading: !initialized,
+  };
+}
+
 export function useFullPanel(panelId: string | null): {
   panel: FullPanel | null;
   loading: boolean;
 } {
-  const { allRootPanels, panelMap, parentMap, initialized } = usePanelTreeContext();
-
-  const panel = useMemo(() => {
-    if (!panelId) return null;
-
-    const found = panelMap.get(panelId);
-    if (!found) return null;
-
-    const parentId = parentMap.get(panelId) ?? null;
-
-    // Find position among siblings
-    let position = 0;
-    if (parentId) {
-      const parent = panelMap.get(parentId);
-      if (parent) {
-        position = parent.children.findIndex((c) => c.id === panelId);
-      }
-    } else {
-      position = allRootPanels.findIndex((root) => root.id === panelId);
+  const [value, setValue] = useState<FullPanel | null>(null);
+  const [loading, setLoading] = useState(Boolean(panelId));
+  const applyPresentation = useCallback(
+    (presentation: Awaited<ReturnType<typeof panel.getPresentation>>) => {
+      if (!presentation || presentation.id !== panelId) return;
+      const source = presentation.snapshot.source;
+      setValue({
+        id: presentation.id,
+        title: presentation.title,
+        contextId: presentation.snapshot.contextId,
+        buildKey: presentation.buildKey,
+        parentId: presentation.parentId,
+        position: presentation.position,
+        selectedChildId: presentation.selectedChildId ?? null,
+        snapshot: presentation.snapshot,
+        artifacts: presentation.artifacts,
+        state: presentation.state,
+        navigation: presentation.navigation,
+        path: source,
+        sourceRepo: source,
+        injectHostThemeVariables: true,
+        hostViewRevision: presentation.hostViewRevision,
+      });
+      setLoading(false);
+    },
+    [panelId]
+  );
+  useDirectShellEvent(
+    "panel-presentation-changed",
+    useCallback(
+      (event) => {
+        if (!panelId || !event.panelIds.includes(panelId)) return;
+        void panel
+          .getPresentation(panelId)
+          .then(applyPresentation)
+          .catch(() => {});
+      },
+      [applyPresentation, panelId]
+    )
+  );
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    if (!panelId) {
+      setValue(null);
+      setLoading(false);
+      return;
     }
-
-    return panelToFull(found, parentId, position);
-  }, [allRootPanels, panelMap, parentMap, panelId]);
-
-  return { panel, loading: !initialized };
+    setLoading(true);
+    const refreshUntilTerminal = async () => {
+      try {
+        const presentation = await panel.getPresentation(panelId);
+        if (cancelled) return;
+        if (!presentation) {
+          timer = window.setTimeout(refreshUntilTerminal, 250);
+          return;
+        }
+        applyPresentation(presentation);
+        const buildState = presentation.artifacts.buildState;
+        if (buildState !== "ready" && buildState !== "error") {
+          timer = window.setTimeout(refreshUntilTerminal, 250);
+        }
+      } catch {
+        if (!cancelled) timer = window.setTimeout(refreshUntilTerminal, 1_000);
+      }
+    };
+    void refreshUntilTerminal();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [applyPresentation, panelId]);
+  return { panel: value, loading };
 }
 
-/**
- * Get siblings of a panel (including the panel itself).
- */
 export function useSiblings(panelId: string | null): {
   siblings: PanelSummary[];
   loading: boolean;
 } {
-  const { allRootPanels, panelMap, parentMap, initialized } = usePanelTreeContext();
-
-  const siblings = useMemo(() => {
-    if (!panelId) return [];
-
-    const parentId = parentMap.get(panelId) ?? null;
-
-    if (!parentId) {
-      // Panel is a root - siblings are all roots
-      return allRootPanels.map((panel, index) => panelToSummary(panel, index));
-    }
-
-    const parent = panelMap.get(parentId);
-    if (!parent) return [];
-
-    return parent.children.map((child, index) => panelToSummary(child, index));
-  }, [allRootPanels, panelMap, parentMap, panelId]);
-
-  return { siblings, loading: !initialized };
+  const { panelMap, parentMap, allRootPanels, loadChildren, initialized } = usePanelTreeContext();
+  const parentId = panelId ? (parentMap.get(panelId) ?? null) : null;
+  useEffect(() => {
+    if (parentId) void loadChildren(parentId);
+  }, [loadChildren, parentId]);
+  const siblings = parentId ? (panelMap.get(parentId)?.children ?? []) : allRootPanels;
+  return { siblings: siblings.map(summary), loading: !initialized };
 }
 
-/**
- * Get ancestors of a panel (for breadcrumb navigation).
- * Returns ancestors from root to immediate parent (root first).
- */
 export function useAncestors(panelId: string | null): {
   ancestors: PanelAncestor[];
   loading: boolean;
 } {
-  const { panelMap, parentMap, initialized } = usePanelTreeContext();
-
-  const ancestors = useMemo(() => {
-    if (!panelId) return [];
-
-    const result: PanelAncestor[] = [];
-    let currentId: string | null = panelId;
-    let depth = 0;
-
-    // Walk up the tree to collect ancestors using O(1) parentMap lookups
-    while (currentId) {
-      const parentId: string | null = parentMap.get(currentId) ?? null;
-      if (!parentId) break;
-
-      const parent = panelMap.get(parentId);
-      if (!parent) break;
-
-      depth++;
-      result.unshift({
-        id: parent.id,
-        title: parent.title,
-        depth,
-      });
-
-      currentId = parentId;
+  const [ancestors, setAncestors] = useState<PanelAncestor[]>([]);
+  const [loading, setLoading] = useState(Boolean(panelId));
+  useEffect(() => {
+    let cancelled = false;
+    if (!panelId) {
+      setAncestors([]);
+      setLoading(false);
+      return;
     }
-
-    // Renumber depths from root (highest number = closest to root)
-    const maxDepth = result.length;
-    return result.map((a, index) => ({
-      ...a,
-      depth: maxDepth - index,
-    }));
-  }, [panelMap, parentMap, panelId]);
-
-  return { ancestors, loading: !initialized };
+    setLoading(true);
+    void panel
+      .getTreePath(panelId)
+      .then((path) => {
+        if (cancelled) return;
+        const nodes = path?.nodes.slice(0, -1) ?? [];
+        setAncestors(
+          nodes.map((node, index) => ({
+            id: node.slotId,
+            title: node.title,
+            depth: nodes.length - index,
+          }))
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [panelId]);
+  return { ancestors, loading };
 }
 
-/** Maximum depth to traverse when building descendant sibling groups for breadcrumbs */
 export const DEFAULT_DESCENDANT_DEPTH = 3;
 
-/**
- * Get sibling groups along the selected descendant path.
- * For each level, returns all siblings with the selected one marked.
- * This enables breadcrumb rendering where users can switch between siblings.
- */
 export function useDescendantSiblingGroups(
   panelId: string | null,
-  maxDepth: number = DEFAULT_DESCENDANT_DEPTH
-): {
-  groups: DescendantSiblingGroup[];
-  loading: boolean;
-} {
-  const { panelMap, initialized } = usePanelTreeContext();
-
-  const groups = useMemo(() => {
-    if (!panelId) return [];
-
-    const result: DescendantSiblingGroup[] = [];
-    let currentPanel = panelMap.get(panelId);
-    let depth = 0;
-
-    // Walk down the selected path
-    while (currentPanel && depth < maxDepth) {
-      const selectedChildId = currentPanel.selectedChildId ?? currentPanel.children[0]?.id;
-      if (!selectedChildId) break;
-
-      // Check if selected child exists
-      const selectedChild = panelMap.get(selectedChildId);
-      if (!selectedChild) break;
-
-      depth++;
-
-      // Get all siblings (children of current panel)
-      const siblings = currentPanel.children.map((child, index) => panelToSummary(child, index));
-
-      result.push({
-        depth,
-        parentId: currentPanel.id,
-        selectedId: selectedChildId,
-        siblings,
-      });
-
-      // Move to the selected child
-      currentPanel = selectedChild;
+  maxDepth = DEFAULT_DESCENDANT_DEPTH
+): { groups: DescendantSiblingGroup[]; loading: boolean } {
+  const { panelMap, initialized, loadSelectionPath } = usePanelTreeContext();
+  const selectionPathKey = (() => {
+    const path: Array<string | null> = [];
+    let node = panelId ? panelMap.get(panelId) : undefined;
+    for (let depth = 0; node && depth < maxDepth; depth++) {
+      path.push(node.id, node.selectedChildId);
+      node = node.selectedChildId ? panelMap.get(node.selectedChildId) : undefined;
     }
+    return path.join("\0");
+  })();
+  useEffect(() => {
+    if (panelId) void loadSelectionPath(panelId, maxDepth).catch(() => {});
+  }, [loadSelectionPath, maxDepth, panelId, selectionPathKey]);
 
-    return result;
-  }, [panelMap, panelId, maxDepth]);
-
+  const groups: DescendantSiblingGroup[] = [];
+  let current = panelId ? panelMap.get(panelId) : undefined;
+  for (let depth = 1; current && depth <= maxDepth && current.children.length > 0; depth++) {
+    const selectedId = current.selectedChildId;
+    if (!selectedId) break;
+    groups.push({
+      depth,
+      parentId: current.id,
+      selectedId,
+      siblings: current.children.map(summary),
+    });
+    current = panelMap.get(selectedId);
+  }
   return { groups, loading: !initialized };
 }
-
-export type { Panel };

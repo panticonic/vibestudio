@@ -9,8 +9,8 @@
  * docs/local-models-extension-design.md §6.1/§7.1/§8).
  */
 
-import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";
-import type { WorkspaceConfig } from "@vibestudio/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import type { WorkspaceConfig } from "@workspace/runtime/worker";
 import {
   DEFAULT_AGENT_MODEL_REF,
   LOCAL_FALLBACK_MODEL_REF,
@@ -304,7 +304,7 @@ export class ModelSettingsDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code", "session", "mission"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -314,7 +314,7 @@ export class ModelSettingsDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code", "session", "mission"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -328,7 +328,7 @@ export class ModelSettingsDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code", "session", "mission"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -338,7 +338,7 @@ export class ModelSettingsDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code", "session", "mission"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -365,7 +365,7 @@ export class ModelSettingsDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })

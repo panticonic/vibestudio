@@ -39,7 +39,7 @@ import {
   workspace,
   type VcsSemanticNodeRef,
   type VcsStateNodeRef,
-} from "@vibestudio/runtime";
+} from "@workspace/runtime";
 import type {
   GitPullUpstreamResult,
   GitUpstreamState,
@@ -946,27 +946,24 @@ function App() {
     try {
       const [nextStatus, nextBranches] = await Promise.all([
         gad.status(),
-        gad.query("SELECT * FROM trajectory_branches ORDER BY updated_at DESC"),
+        gad.listTrajectoryBranches({ limit: 200 }),
       ]);
       const semanticStatus = await vcs.status({ contextId });
       const nextFiles = await listSemanticFiles(semanticStatus.workingHead);
       setStatus(nextStatus as unknown as Row[]);
-      setBranches(nextBranches.rows);
+      setBranches(nextBranches);
       setFiles(nextFiles);
-      const branchId = (selectedBranchId ?? asText(nextBranches.rows[0]?.["branch_id"])) || null;
+      const branchId = (selectedBranchId ?? asText(nextBranches[0]?.["branch_id"])) || null;
       setSelectedBranchId(branchId);
       if (branchId) {
         const [nextEvents, nextInvocations, nextEnvelopes] = await Promise.all([
           gad.listTrajectoryEvents({ branchId, limit: 200 }),
-          gad.query(
-            "SELECT * FROM trajectory_invocations WHERE branch_id = ? ORDER BY updated_at DESC",
-            [branchId]
-          ),
-          gad.query("SELECT * FROM channel_envelopes ORDER BY channel_id, seq LIMIT 200"),
+          gad.listTrajectoryInvocations({ branchId, limit: 200 }),
+          gad.listChannelEnvelopes({ limit: 200 }),
         ]);
         setEvents(nextEvents as unknown as Row[]);
-        setInvocations(nextInvocations.rows);
-        setEnvelopes(nextEnvelopes.rows);
+        setInvocations(nextInvocations);
+        setEnvelopes(nextEnvelopes);
       } else {
         setEvents([]);
         setInvocations([]);
@@ -992,15 +989,7 @@ function App() {
     setGovGadError(null);
     setGovHostError(null);
     const [approvalsResult, hostResult] = await Promise.allSettled([
-      Promise.resolve().then(() =>
-        gad.query(
-          `SELECT approval_id, invocation_id, status, requested_by_json, resolved_by_json,
-                log_id, head, requested_event_id, resolved_event_id, updated_at
-           FROM trajectory_approvals
-          ORDER BY updated_at DESC
-          LIMIT 200`
-        )
-      ),
+      Promise.resolve().then(() => gad.listTrajectoryApprovals({ limit: 200 })),
       Promise.resolve()
         .then(() => workspace.getInfo())
         .then((info) => fetchHostGovernance(info.config.id)),
@@ -1008,7 +997,7 @@ function App() {
     if (seq !== governanceLoadSeq.current) return;
 
     if (approvalsResult.status === "fulfilled") {
-      setGovApprovals(approvalsResult.value.rows);
+      setGovApprovals(approvalsResult.value);
     } else {
       setGovGadError(
         approvalsResult.reason instanceof Error
@@ -1260,14 +1249,9 @@ function App() {
         .listTrajectoryEvents({ branchId: selectedBranchId, limit: 200 })
         .then((rows) => setEvents(rows as unknown as Row[])),
       gad
-        .query(
-          "SELECT * FROM trajectory_invocations WHERE branch_id = ? ORDER BY updated_at DESC",
-          [selectedBranchId]
-        )
-        .then((result) => setInvocations(result.rows)),
-      gad
-        .query("SELECT * FROM channel_envelopes ORDER BY channel_id, seq LIMIT 200")
-        .then((result) => setEnvelopes(result.rows)),
+        .listTrajectoryInvocations({ branchId: selectedBranchId, limit: 200 })
+        .then(setInvocations),
+      gad.listChannelEnvelopes({ limit: 200 }).then(setEnvelopes),
     ]).catch((err) => {
       setOperationFailed(true);
       setOperationStatus(

@@ -22,8 +22,7 @@ import {
   DurableObjectBase,
   type DurableObjectContext,
   type DurableObjectServiceClient,
-  type UserlandApprovalChoice,
-} from "@vibestudio/runtime/worker";
+} from "@workspace/runtime/worker";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import type { ChannelEvent } from "@workspace/harness";
 import {
@@ -71,7 +70,7 @@ import {
   type LogEnvelope,
   type MessageBlockInput,
   type ParticipantRef,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import {
   participantMetadataSchema,
   participantIsAgentVessel,
@@ -276,19 +275,6 @@ function scrubUserParticipantMetadata(metadata: Record<string, unknown>): Record
 }
 
 const AGENT_INSPECTION_TIMEOUT_MS = 5_000;
-
-function stableShortHash(input: string): string {
-  let h1 = 0xdeadbeef ^ input.length;
-  let h2 = 0x41c6ce57 ^ input.length;
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return `${(h2 >>> 0).toString(36).padStart(7, "0")}${(h1 >>> 0).toString(36).padStart(7, "0")}`;
-}
 
 interface AgentInspectionResult {
   participantId: string;
@@ -611,13 +597,6 @@ export class PubSubChannel extends DurableObjectBase {
     `);
   }
 
-  protected override schemaProductionBaseline() {
-    return {
-      version: PUBSUB_CHANNEL_SCHEMA_BASELINE,
-      name: "pubsub-channel-v118",
-    } as const;
-  }
-
   // ── Wiring ────────────────────────────────────────────────────────────────
 
   private get broadcastDeps(): BroadcastDeps {
@@ -859,7 +838,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Adopt this concrete channel's durable queues for one server generation. */
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -871,7 +850,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -913,7 +892,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -1084,7 +1063,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -1240,7 +1219,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -1339,7 +1318,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -1881,9 +1860,13 @@ export class PubSubChannel extends DurableObjectBase {
    * roster row. Status is server-derived from real activity and session count. */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
-    tier: "open",
-    sensitivity: "read",
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.admin",
+      resource: { kind: "receiver-object" },
+    },
+    tier: "gated",
+    sensitivity: "admin",
   })
   async getChannelPresence(): Promise<{ entries: ChannelPresenceEntry[]; generatedAt: number }> {
     const generatedAt = Date.now();
@@ -1946,7 +1929,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2172,7 +2155,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "semantic", capability: "channel.admin" },
+    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -2188,7 +2171,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2204,7 +2187,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2281,7 +2264,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2350,7 +2333,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2408,7 +2391,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Policy fold state (replaces getConversationState — WS2 §4.4). */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -2463,7 +2446,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2483,7 +2466,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Mark a message as errored (durable `error` channel event). */
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2509,7 +2492,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -2522,7 +2505,7 @@ export class PubSubChannel extends DurableObjectBase {
    * lineage-aware lookup used by panels, agents, and diagnostic evals. */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -2533,7 +2516,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Send a non-durable signal message. */
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2562,7 +2545,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Replace a participant's metadata entirely. */
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2574,7 +2557,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "semantic", capability: "channel.admin" },
+    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -2605,7 +2588,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2617,7 +2600,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "semantic", capability: "channel.admin" },
+    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -2643,7 +2626,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Get all participants with DO identity when available. */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -2707,7 +2690,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2817,7 +2800,7 @@ export class PubSubChannel extends DurableObjectBase {
    *  themselves; mutual trust means anyone may, no ACL). History stays visible. */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "semantic", capability: "channel.members.remove" },
+    effect: { kind: "userland-capability", capability: "channel.members.remove", resource: { kind: "receiver-object" } },
     tier: "critical",
     sensitivity: "destructive",
   })
@@ -2849,7 +2832,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** List this channel's durable members (WP7 §3). Ordered by add time. */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -2881,7 +2864,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -2898,7 +2881,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Remove the calling user's invite from the canonical workspace inbox. */
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3022,7 +3005,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3032,7 +3015,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3047,7 +3030,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3087,7 +3070,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3112,7 +3095,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3125,7 +3108,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3135,7 +3118,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3145,7 +3128,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3167,7 +3150,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3211,7 +3194,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3243,7 +3226,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3253,7 +3236,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "semantic", capability: "channel.admin" },
+    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -3273,7 +3256,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3286,16 +3269,19 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
-    tier: "open",
-    sensitivity: "read",
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.admin",
+      resource: { kind: "receiver-object" },
+    },
+    tier: "gated",
+    sensitivity: "admin",
   })
   async inspectAgent(
     participantId: string,
     methodName = "getDebugState"
   ): Promise<AgentInspectionResult> {
     this.assertSupportedAgentInspectionMethod(methodName);
-    await this.requireAgentInspectionApproval(participantId, methodName);
     return this.inspectAgentReadOnly(participantId, methodName);
   }
 
@@ -3307,46 +3293,6 @@ export class PubSubChannel extends DurableObjectBase {
       `inspectAgent: unsupported method ${methodName}; expected one of ` +
         AGENT_INSPECTION_METHODS.join(", ")
     );
-  }
-
-  private async requireAgentInspectionApproval(
-    participantId: string,
-    methodName: string
-  ): Promise<void> {
-    const caller = this.caller;
-    const callerId = caller?.callerId ?? "unknown";
-    const callerKind = caller?.callerKind ?? "unknown";
-    const subjectHash = stableShortHash(`${callerKind}:${callerId}:${participantId}:${methodName}`);
-    const decision = await this.rpc.call<UserlandApprovalChoice>(
-      "main",
-      "userlandApproval.request",
-      [
-        {
-          subject: {
-            id: `channel.inspectAgent:${subjectHash}`,
-            label: `View ${methodName}`,
-          },
-          title: "View agent details",
-          summary:
-            "Read behind-the-scenes information about an agent, even if it's not active in this conversation.",
-          warning:
-            "This may include the agent's settings, queued work, and how it's currently operating.",
-          severity: "standard",
-          defaultAction: "deny",
-          details: [
-            { label: "Requested by", value: `${callerKind} ${callerId}` },
-            { label: "Conversation", value: this.objectKey },
-            { label: "Agent", value: participantId },
-            { label: "Looking at", value: methodName },
-          ],
-        },
-      ]
-    );
-    if (decision.kind === "choice" && decision.choice === "allow") return;
-    if (decision.kind === "choice" && decision.choice === "once") return;
-    if (decision.kind === "choice" && decision.choice === "session") return;
-    if (decision.kind === "choice" && decision.choice === "version") return;
-    throw new Error(`inspectAgent approval denied for ${methodName} on ${participantId}`);
   }
 
   private async inspectAgentReadOnly(
@@ -3403,7 +3349,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "semantic", capability: "channel.admin" },
+    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -3447,7 +3393,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3466,7 +3412,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3534,7 +3480,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3594,7 +3540,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3605,7 +3551,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3787,7 +3733,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3803,7 +3749,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3867,7 +3813,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4186,7 +4132,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Rename a direct child fork (durable `channel.fork_renamed` on this log). */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4208,7 +4154,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Archive a direct child fork (durable `channel.fork_archived` latch). */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "semantic", capability: "channel.archive" },
+    effect: { kind: "userland-capability", capability: "channel.archive", resource: { kind: "receiver-object" } },
     tier: "critical",
     sensitivity: "destructive",
   })
@@ -4238,7 +4184,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -4305,7 +4251,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4385,7 +4331,7 @@ export class PubSubChannel extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4473,7 +4419,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4498,7 +4444,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4510,7 +4456,7 @@ export class PubSubChannel extends DurableObjectBase {
   /** Relay point for a head advance reported up the chain from a descendant. */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4568,7 +4514,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "workspace-service" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })

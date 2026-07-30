@@ -20,7 +20,7 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   CREDENTIAL_CONNECT_PAYLOAD_KIND,
   type AgenticEvent,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import type { z } from "zod";
 
 export interface AgentBuildError {

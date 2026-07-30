@@ -1,6 +1,6 @@
 import React from "react";
 import { render, Box, Text, type Instance } from "ink";
-import { rpc, DurableObjectBase } from "@vibestudio/runtime/worker";
+import { rpc, DurableObjectBase } from "@workspace/runtime/worker";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import { HeadlessSession } from "@workspace/agentic-session";
 import { createInkTerminalSession, type InkTerminalSession } from "@workspace/terminal-shim";
@@ -50,7 +50,7 @@ export class TerminalChatWorker extends DurableObjectBase {
 
   protected createTables(): void {}
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async [SESSION_METHODS.start](args: StartTerminalSessionArgs): Promise<void> {
     this.ensureReady();
     this.hostPrincipalId = args.hostPrincipalId;
@@ -124,23 +124,23 @@ export class TerminalChatWorker extends DurableObjectBase {
     }
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async [SESSION_METHODS.onInput](event: TerminalInputEvent): Promise<void> {
     this.session?.emitInput(decodeInputData(event));
   }
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async [SESSION_METHODS.onResize](event: TerminalResizeEvent): Promise<void> {
     this.session?.emitResize(event.size);
   }
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async [SESSION_METHODS.onFocus](): Promise<void> {}
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async [SESSION_METHODS.onBlur](): Promise<void> {}
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async [SESSION_METHODS.repaint](): Promise<void> {
     if (this.vm) this.instance?.rerender(this.renderTree());
   }
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "destructive" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "destructive" })
   async [SESSION_METHODS.onClose](): Promise<void> {
     this.active = false;
     this.vm?.dispose();

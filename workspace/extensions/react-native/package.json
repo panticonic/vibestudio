@@ -19,9 +19,22 @@
         "buildTargets": [
           "react-native"
         ]
+      },
+      "methodAuthority": {
+        "build": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "buildArtifact": {
+          "effect": {
+            "kind": "open"
+          }
+        }
       }
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "context.boundary",

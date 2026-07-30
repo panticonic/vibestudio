@@ -14,8 +14,8 @@
  * durably and presence shows the agent offline.
  */
 
-import type { DurableObjectContext } from "@vibestudio/runtime/worker";
-import { rpc } from "@vibestudio/runtime/worker";
+import type { DurableObjectContext } from "@workspace/runtime/worker";
+import { rpc } from "@workspace/runtime/worker";
 import { AgentWorkerBase } from "@workspace/agentic-do";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import {
@@ -25,7 +25,7 @@ import {
   invocationCompletedPayload,
   invocationFailedPayload,
   type AgenticEvent,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import { ids } from "@workspace/agent-loop";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentTool } from "@workspace/pi-core";
@@ -36,16 +36,12 @@ import {
   enqueueChannelSubscriptionBytes,
 } from "@workspace/pubsub";
 
-/** A pending permission with no verdict auto-denies after this long. */
-export const LINKED_PERMISSION_TIMEOUT_MS = 120_000;
-
 const COMPLETED_KEY = "linked:completed";
 const PRIMARY_CHANNEL_KEY = "linked:primaryChannelId";
 const ACK_SEQ_KEY = "linked:ackSeq";
 const PROCESSED_SEQ_KEY = "linked:processedSeq";
 const OPEN_TURN_KEY = "linked:openTurn";
 const SESSION_KEY = "linked:session";
-const ALARM_SOURCE = "linked-agent";
 const BRIDGE_REPLAY_PAGE_SIZE = 64;
 
 export interface LinkedAttachment {
@@ -129,14 +125,6 @@ function isExternallyFedInput(event: ChannelEvent): boolean {
   );
 }
 
-function permissionCapabilityFromSession(sessionInfo: Record<string, unknown> | undefined): string {
-  const explicit = sessionInfo?.["permissionCapability"];
-  if (typeof explicit === "string" && explicit.trim().length > 0) return explicit;
-  const agentKind = sessionInfo?.["agentKind"];
-  if (typeof agentKind === "string" && agentKind.trim().length > 0) return `${agentKind}.tool`;
-  return "linked-agent.tool";
-}
-
 export class LinkedAgentWorker extends AgentWorkerBase {
   static override schemaVersion = AgentWorkerBase.schemaVersion;
   private bridgeStream: LinkedBridgeStream | null = null;
@@ -154,28 +142,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       )
     `);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS linked_permissions (
-        request_id TEXT PRIMARY KEY,
-        tool_name TEXT NOT NULL,
-        description TEXT,
-        preview TEXT,
-        status TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        deadline_at INTEGER NOT NULL
-      )
-    `);
-    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS linked_hook_seqs (
         session_id TEXT NOT NULL,
         seq INTEGER NOT NULL,
         PRIMARY KEY (session_id, seq)
       )
     `);
-    this.registerAgentAlarmSource({
-      id: ALARM_SOURCE,
-      nextWakeAt: () => this.linkedNextWakeAt(),
-      fire: async (now) => this.linkedAlarm(now),
-    });
   }
 
   // ── Identity & participant surface ─────────────────────────────────────────
@@ -290,7 +262,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -378,7 +350,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -401,9 +373,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     } catch {
       // Already terminal.
     }
-    await this.closeOpenTurn(`bridge detached (${reason})`, false);
-    // No consumer for verdicts anymore — pending permissions fail closed.
-    await this.denyPendingPermissions(`bridge detached (${reason})`);
+    await this.closeOpenTurn(`bridge detached (${reason})`);
     await this.refreshPresence();
   }
 
@@ -430,27 +400,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
           err instanceof Error ? err.message : err
         );
       }
-    }
-  }
-
-  private linkedNextWakeAt(): number | null {
-    const row = this.sql
-      .exec(`SELECT MIN(deadline_at) AS due FROM linked_permissions WHERE status = 'pending'`)
-      .toArray()[0];
-    const due = row?.["due"];
-    return typeof due === "number" ? due : null;
-  }
-
-  private async linkedAlarm(now: number): Promise<void> {
-    const expired = this.sql
-      .exec(
-        `SELECT request_id FROM linked_permissions WHERE status = 'pending' AND deadline_at <= ?`,
-        now
-      )
-      .toArray()
-      .map((row) => String(row["request_id"]));
-    for (const requestId of expired) {
-      await this.settlePermission(requestId, "deny", "timeout");
     }
   }
 
@@ -645,7 +594,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -687,7 +636,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -713,7 +662,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
    */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -750,7 +699,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
    */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -781,7 +730,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -865,7 +814,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -919,7 +868,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         const existing = this.openTurn();
         if (existing?.turnKey === event.turnKey) break;
         if (existing && existing.turnKey !== event.turnKey) {
-          await this.closeOpenTurn("new terminal prompt submitted", true);
+          await this.closeOpenTurn("new terminal prompt submitted");
         }
         this.setStateValue(OPEN_TURN_KEY, JSON.stringify({ turnId, turnKey: event.turnKey }));
         const messageId = `lm:${turnId}:user`;
@@ -950,9 +899,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       }
       case "PreToolUse": {
         const invocationId = `linv:${sessionId}:${event.toolUseId}`;
-        // Terminal answered a relayed permission prompt for this tool: the tool
-        // proceeded, so the workspace approval resolves as answered-at-terminal.
-        await this.resolvePermissionAnsweredAtTerminal(event.toolName);
         await this.appendTrajectory(channelId, [
           {
             envelopeId: ids.invocationStart(invocationId),
@@ -1049,9 +995,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         const processed = this.ackSeq();
         this.setStateValue(PROCESSED_SEQ_KEY, String(processed));
         this.sql.exec(`DELETE FROM linked_bridge_queue WHERE seq <= ?`, processed);
-        // A turn closed with relayed permission verdicts unconsumed: the local
-        // human answered at the terminal — no dangling approval cards.
-        await this.resolvePermissionAnsweredAtTerminal(null);
         break;
       }
       case "SessionEnd": {
@@ -1169,10 +1112,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     };
   }
 
-  private async closeOpenTurn(
-    reason: string,
-    resolvePendingPermissionsAtTerminal: boolean
-  ): Promise<void> {
+  private async closeOpenTurn(reason: string): Promise<void> {
     const open = this.openTurn();
     if (!open) return;
     const channelId = this.primaryChannelId();
@@ -1187,9 +1127,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         publish: true,
       },
     ]);
-    if (resolvePendingPermissionsAtTerminal) {
-      await this.resolvePermissionAnsweredAtTerminal(null);
-    }
   }
 
   private async appendTrajectory(channelId: string, items: TrajectoryItem[]): Promise<void> {
@@ -1234,8 +1171,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
-    tier: "open",
+    effect: {
+      kind: "userland-capability",
+      capability: "external-tool.execute",
+      resource: { kind: "receiver-object" },
+    },
+    tier: "gated",
     sensitivity: "write",
   })
   async requestPermission(opts: {
@@ -1250,239 +1191,13 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     if (!requestId || !toolName) {
       throw new Error("requestPermission requires requestId and toolName");
     }
-    const now = Date.now();
-    const resolveToken = crypto.randomUUID();
-    const inserted = this.sql
-      .exec(
-        `INSERT OR IGNORE INTO linked_permissions
-           (request_id, tool_name, description, preview, status, created_at, deadline_at)
-         VALUES (?, ?, ?, ?, 'pending', ?, ?)
-         RETURNING request_id`,
-        requestId,
-        toolName,
-        opts.description ?? null,
-        opts.inputPreview ?? null,
-        now,
-        now + LINKED_PERMISSION_TIMEOUT_MS
-      )
-      .toArray();
-    if (inserted.length === 0) {
-      const existing = this.sql
-        .exec(`SELECT status FROM linked_permissions WHERE request_id = ?`, requestId)
-        .toArray()[0] as { status?: string } | undefined;
-      const status = existing?.status;
-      if (status === "allow" || status === "deny") {
-        this.emitToBridge({
-          kind: "permission",
-          requestId,
-          behavior: status,
-          reason: "duplicate-settled",
-        });
-      }
-      return { ok: true, pending: status === "pending" };
-    }
-    this.scheduleAgentAlarm(ALARM_SOURCE, now + LINKED_PERMISSION_TIMEOUT_MS);
-    this.publishPermissionSignal(
+    this.emitToBridge({
+      kind: "permission",
       requestId,
-      resolveToken,
-      toolName,
-      opts.description,
-      opts.inputPreview
-    );
-    const resolve = this.resolvePermissionViaApprovals(
-      requestId,
-      resolveToken,
-      toolName,
-      opts.description,
-      opts.inputPreview
-    ).catch(() => {});
-    this.ctx.waitUntil?.(resolve);
-    return { ok: true, pending: true };
-  }
-
-  /** Conversation-side surfacing of the pending relay: an ephemeral signal the
-   *  chat UI renders as "Claude Code wants to run X" (W6 owns the card). */
-  private publishPermissionSignal(
-    requestId: string,
-    resolveToken: string,
-    toolName: string,
-    description?: string,
-    preview?: string
-  ): void {
-    const channelId = this.primaryChannelId();
-    if (!channelId) return;
-    const participantId = this.subscriptions.getParticipantId(channelId);
-    if (!participantId) return;
-    const event = {
-      kind: "system.event",
-      actor: this.selfRef(channelId),
-      payload: {
-        protocol: AGENTIC_PROTOCOL_VERSION,
-        kind: "linked-agent.permission_pending",
-        summary: `Claude Code wants to: ${toolName}`,
-        // `channelId` lets the chat card call
-        // `shellApproval.resolveExternalAgentByRequest({ channelId, requestId, resolveToken }, …)`
-        // without knowing the internal approvalId (W6 §7.3).
-        details: { channelId, requestId, resolveToken, toolName, description, preview },
-      },
-      createdAt: new Date().toISOString(),
-    } as unknown as AgenticEvent;
-    void this.createChannelClient(channelId)
-      .sendSignalEvent(participantId, AGENTIC_EVENT_PAYLOAD_KIND, event)
-      .catch(() => {});
-  }
-
-  /** Companion to {@link publishPermissionSignal}: an ephemeral signal telling
-   *  the chat UI to clear the pending permission card, published at EVERY settle
-   *  site (verdict push, terminal-answered, auto-deny, detach-deny) so a card
-   *  resolved on any surface clears everywhere. Signals are ephemeral, so a panel
-   *  reload naturally drops stale pending cards (W6 §7.3). */
-  private publishPermissionSettledSignal(
-    requestId: string,
-    behavior: "allow" | "deny" | undefined,
-    settledBy: string
-  ): void {
-    const channelId = this.primaryChannelId();
-    if (!channelId) return;
-    const participantId = this.subscriptions.getParticipantId(channelId);
-    if (!participantId) return;
-    const event = {
-      kind: "system.event",
-      actor: this.selfRef(channelId),
-      payload: {
-        protocol: AGENTIC_PROTOCOL_VERSION,
-        kind: "linked-agent.permission_settled",
-        summary: "Claude Code permission settled",
-        details: {
-          channelId,
-          requestId,
-          ...(behavior ? { behavior } : {}),
-          settledBy,
-        },
-      },
-      createdAt: new Date().toISOString(),
-    } as unknown as AgenticEvent;
-    void this.createChannelClient(channelId)
-      .sendSignalEvent(participantId, AGENTIC_EVENT_PAYLOAD_KIND, event)
-      .catch(() => {});
-  }
-
-  private async resolvePermissionViaApprovals(
-    requestId: string,
-    resolveToken: string,
-    toolName: string,
-    description?: string,
-    preview?: string
-  ): Promise<void> {
-    let behavior: "allow" | "deny" = "deny";
-    let reason = "approval-request-failed";
-    const channelId = this.primaryChannelId();
-    if (!channelId) {
-      await this.settlePermission(requestId, behavior, "no-channel");
-      return;
-    }
-    try {
-      // Pinned W6 contract (plan §7.3): a first-class workspace approval filed
-      // by the vessel; resolves to { behavior: "allow" | "deny" }.
-      const verdict = await this.rpc.call<{ behavior?: string }>(
-        "main",
-        "userlandApproval.requestExternal",
-        [
-          {
-            channelId,
-            capability: permissionCapabilityFromSession(this.attachment()?.sessionInfo),
-            operation: toolName,
-            description: description ?? `Claude Code wants to use: ${toolName}`,
-            ...(preview !== undefined ? { preview } : {}),
-            requestId,
-            resolveToken,
-          },
-        ]
-      );
-      behavior = verdict?.behavior === "allow" ? "allow" : "deny";
-      reason = "workspace-approval";
-    } catch (err) {
-      console.warn(
-        `[LinkedAgent] workspace approval for ${requestId} failed (deny):`,
-        err instanceof Error ? err.message : err
-      );
-    }
-    await this.settlePermission(requestId, behavior, reason);
-  }
-
-  /** First verdict wins; later verdicts (timeout racing the approval, terminal
-   *  answer racing the workspace card) are no-ops. */
-  private async settlePermission(
-    requestId: string,
-    behavior: "allow" | "deny",
-    reason: string
-  ): Promise<void> {
-    const updated = this.sql
-      .exec(
-        `UPDATE linked_permissions SET status = ? WHERE request_id = ? AND status = 'pending'
-         RETURNING request_id`,
-        behavior,
-        requestId
-      )
-      .toArray();
-    if (updated.length === 0) return;
-    this.emitToBridge({ kind: "permission", requestId, behavior, reason });
-    this.publishPermissionSettledSignal(requestId, behavior, reason);
-  }
-
-  /** §7.5 race cleanup: the terminal human answered (tool proceeded, or the
-   *  turn closed with the relay verdict unconsumed) — resolve the workspace
-   *  approval card instead of leaving it dangling. A tool event consumes only
-   *  the oldest pending request for that tool; `toolName === null` sweeps every
-   *  pending request at the turn boundary. */
-  private async resolvePermissionAnsweredAtTerminal(toolName: string | null): Promise<void> {
-    const rows = this.sql
-      .exec(
-        toolName === null
-          ? `UPDATE linked_permissions SET status = 'terminal-answered'
-             WHERE status = 'pending' RETURNING request_id`
-          : `UPDATE linked_permissions SET status = 'terminal-answered'
-             WHERE request_id = (
-               SELECT request_id FROM linked_permissions
-               WHERE status = 'pending' AND tool_name = ?
-               ORDER BY created_at, request_id
-               LIMIT 1
-             )
-             RETURNING request_id`,
-        ...(toolName === null ? [] : [toolName])
-      )
-      .toArray();
-    for (const row of rows) {
-      const requestId = String(row["request_id"]);
-      await this.withdrawWorkspaceApproval(requestId);
-      this.publishPermissionSettledSignal(requestId, undefined, "terminal-answered");
-    }
-  }
-
-  /** Withdraw the workspace approval card for a relayed permission whose verdict
-   *  was settled elsewhere — answered at the terminal, or the bridge detached.
-   *  Quiet: the card disappears without recording a deny (plan §7.5). This is the
-   *  single integration point for the W6 `settleExternal` approvals contract. */
-  private async withdrawWorkspaceApproval(requestId: string): Promise<void> {
-    const channelId = this.primaryChannelId();
-    if (!channelId) return;
-    await this.rpc
-      .call("main", "userlandApproval.settleExternal", [{ channelId, requestId }])
-      .catch(() => {});
-  }
-
-  private async denyPendingPermissions(reason: string): Promise<void> {
-    const rows = this.sql
-      .exec(
-        `UPDATE linked_permissions SET status = 'deny' WHERE status = 'pending' RETURNING request_id`
-      )
-      .toArray();
-    for (const row of rows) {
-      const requestId = String(row["request_id"]);
-      await this.withdrawWorkspaceApproval(requestId);
-      this.publishPermissionSettledSignal(requestId, "deny", "detached");
-    }
-    void reason;
+      behavior: "allow",
+      reason: "workspace-authority",
+    });
+    return { ok: true, pending: false };
   }
 
   // ── Fork hygiene ───────────────────────────────────────────────────────────
@@ -1503,9 +1218,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     this.setStateValue(SESSION_KEY, "");
     this.setStateValue(PRIMARY_CHANNEL_KEY, ctx.newChannelId);
     this.sql.exec(`DELETE FROM linked_bridge_queue`);
-    this.sql.exec(`DELETE FROM linked_permissions`);
     this.sql.exec(`DELETE FROM linked_hook_seqs`);
-    this.clearAgentAlarm(ALARM_SOURCE);
   }
 }
 

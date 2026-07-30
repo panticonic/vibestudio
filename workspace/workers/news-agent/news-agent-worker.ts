@@ -6,9 +6,9 @@ import {
   type AgentToolExecutionContext,
   type RespondPolicy,
 } from "@workspace/agentic-do";
-import { rpc } from "@vibestudio/runtime/worker";
-import type { DurableObjectContext } from "@vibestudio/runtime/worker";
-import type { ActorRef } from "@vibestudio/agentic-protocol";
+import { rpc } from "@workspace/runtime/worker";
+import type { DurableObjectContext } from "@workspace/runtime/worker";
+import type { ActorRef } from "@workspace/agentic-protocol";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
@@ -105,16 +105,7 @@ function nextBriefingRunAt(now: number, intervalMs: number, atMinutes?: number):
 }
 
 export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
-  // Version 8 is the first supported production shape. Earlier experimental
-  // layouts have no proven lossless translation and are rejected intact.
   static override schemaVersion = NEWS_AGENT_SCHEMA_BASELINE;
-
-  protected override schemaProductionBaseline() {
-    return {
-      version: NEWS_AGENT_SCHEMA_BASELINE,
-      name: "news-agent-v8",
-    } as const;
-  }
 
   private readonly syncEngine: NewsSyncEngine;
   private readonly scheduler: RecurringScheduler;
@@ -483,7 +474,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   /** Entry point for workspace-level `recurring:` jobs (vibestudio.yml). */
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })

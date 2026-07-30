@@ -4,13 +4,13 @@
  */
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import * as runtime from "@vibestudio/runtime";
-import { Rpc } from "@vibestudio/runtime";
-import type { PanelHandle, PaletteCommand } from "@vibestudio/runtime";
+import * as runtime from "@workspace/runtime";
+import { Rpc } from "@workspace/runtime";
+import type { PanelHandle, PaletteCommand } from "@workspace/runtime";
 
 /**
  * Get the panel API object.
- * This is the same as importing from @vibestudio/runtime directly, but as a hook for consistency.
+ * This is the same as importing from @workspace/runtime directly, but as a hook for consistency.
  *
  * @example
  * ```tsx
@@ -331,9 +331,9 @@ export function useAgentState(key: string, value: unknown): void {
  * via `runtime.panel.stateArgs.set()` (or by another panel).
  *
  * This is the React-bound replacement for the former
- * `runtime.panel.stateArgs.use` / `@vibestudio/runtime` `useStateArgs`, which was
- * moved here to keep `@vibestudio/runtime` framework-neutral. The non-reactive
- * `get`/`set` helpers remain in `@vibestudio/runtime`.
+ * `runtime.panel.stateArgs.use` / `@workspace/runtime` `useStateArgs`, which was
+ * moved here to keep `@workspace/runtime` framework-neutral. The non-reactive
+ * `get`/`set` helpers remain in `@workspace/runtime`.
  *
  * @example
  * ```tsx

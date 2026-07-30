@@ -37,13 +37,13 @@ describe("collection orchestration", () => {
     });
   });
 
-  it("binds the resident agent to a live recursive scope instead of a copied roster", () => {
+  it("binds the resident agent to bounded live tree pages instead of a copied roster", () => {
     const prompt = buildCollectionAgentSystemPrompt({
       rootPanelId: "panel:tree/imported",
       title: "Imported tabs",
     });
-    expect(prompt).toContain('panelTree.subtree("panel:tree/imported")');
-    expect(prompt).toContain("scope.revision");
+    expect(prompt).toContain('parentSlotId: "panel:tree/imported"');
+    expect(prompt).toContain("page.revision");
     expect(prompt).toContain("movePanel");
     expect(prompt).toContain("about/collection/SKILL.md");
     expect(prompt).not.toContain("Panels in this collection");

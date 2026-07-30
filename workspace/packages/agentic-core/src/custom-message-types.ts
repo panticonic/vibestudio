@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { jsonSchemaToZod } from "@vibestudio/agentic-protocol";
+import { jsonSchemaToZod } from "@workspace/agentic-protocol";
 import { compileModule, type CompileComponentOptions } from "@workspace/eval";
 
 export interface CustomMessageComponentProps {

@@ -21,9 +21,17 @@
             "resolvePrimaryChannel"
           ]
         }
+      },
+      "methodAuthority": {
+        "adaptLaunch": {
+          "effect": {
+            "kind": "open"
+          }
+        }
       }
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "agent.credentials.manage",
@@ -54,15 +62,6 @@
         },
         {
           "capability": "subagents.create",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "user-approval.request",
           "resource": {
             "kind": "prefix",
             "prefix": ""

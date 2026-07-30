@@ -1,12 +1,12 @@
 /**
- * Svelte-idiomatic stores wrapping @vibestudio/runtime APIs.
+ * Svelte-idiomatic stores wrapping @workspace/runtime APIs.
  * These provide reactive state management for Svelte panels.
  */
 
 import { derived, readable } from "svelte/store";
-import { panel } from "@vibestudio/runtime";
-import * as runtime from "@vibestudio/runtime";
-import type { ThemeConfig } from "@vibestudio/runtime";
+import { panel } from "@workspace/runtime";
+import * as runtime from "@workspace/runtime";
+import type { ThemeConfig } from "@workspace/runtime";
 
 /** Reactive theme store — updates when the host theme changes. */
 export const theme = readable(panel.getTheme(), (set) => {
@@ -68,7 +68,7 @@ export const connectionError = readable<{ code: number; reason: string; source?:
  * Reactive state-args store — reflects the panel's current state args.
  *
  * Initializes from the current snapshot via `getStateArgs()` (exposed by
- * @vibestudio/runtime as `panel.stateArgs.get`) and updates whenever the host
+ * @workspace/runtime as `panel.stateArgs.get`) and updates whenever the host
  * dispatches the `vibestudio:stateArgsChanged` CustomEvent, whose `.detail` is the
  * new args object. This is the Svelte-store analogue of React's `useStateArgs`.
  */
@@ -81,7 +81,7 @@ export const stateArgs = readable<Record<string, unknown>>(panel.stateArgs.get()
 });
 
 /**
- * Update this panel's state args. Re-exported from @vibestudio/runtime
+ * Update this panel's state args. Re-exported from @workspace/runtime
  * (`panel.stateArgs.set`, i.e. `setStateArgs`) for convenience — pairs with the
  * `stateArgs` store, which reflects the resulting changes.
  */

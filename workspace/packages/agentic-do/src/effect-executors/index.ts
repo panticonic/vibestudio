@@ -1,4 +1,4 @@
-import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
+import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 /**
  * Effect executors (WS1 §2.4) — the impure edge of the event-sourced harness.
  *

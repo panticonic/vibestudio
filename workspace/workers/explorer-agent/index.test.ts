@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import type { RpcClient } from "@vibestudio/rpc";

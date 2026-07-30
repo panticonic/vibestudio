@@ -6,7 +6,7 @@
  * agent method roster.
  */
 
-import { createRpcFs, type DurableObjectContext } from "@vibestudio/runtime/worker";
+import { createRpcFs, type DurableObjectContext } from "@workspace/runtime/worker";
 import {
   createEditTool,
   createFindTool,
@@ -22,7 +22,6 @@ import {
   createEvalTool,
   createDocsSearchTool,
   createDocsOpenTool,
-  createHostAuthorityNextActionTool,
   createWorkspaceServiceTool,
   createWebTools,
   createToolVcs,
@@ -329,9 +328,6 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         toolRpc.call<T>("main", method, methodArgs)
       ),
       createDocsOpenTool(<T>(method: string, methodArgs: unknown[]) =>
-        toolRpc.call<T>("main", method, methodArgs)
-      ),
-      createHostAuthorityNextActionTool(<T>(method: string, methodArgs: unknown[]) =>
         toolRpc.call<T>("main", method, methodArgs)
       ),
       createWorkspaceServiceTool(vcs, mutationContext, {
@@ -751,7 +747,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
 
   protected override getModelCredentialTokenClaims(
     providerId: string,
-    credential: import("@vibestudio/runtime/credentials").StoredCredentialSummary
+    credential: import("@workspace/runtime/credentials").StoredCredentialSummary
   ): Record<string, unknown> {
     if (providerId !== "openai-codex") return {};
     const accountId =

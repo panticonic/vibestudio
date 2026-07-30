@@ -12,7 +12,7 @@
  * Long-press opens the themed action sheet with per-command descriptions.
  */
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -26,7 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { useDrawerStatus } from "@react-navigation/drawer";
 import { useAtomValue, useSetAtom } from "jotai";
-import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
+import { panelTreeRevisionAtom, shellClientAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { connectionStatusAtom } from "../state/connectionAtoms";
 import { activePanelIdAtom, pinnedPanelIdsAtom } from "../state/navigationAtoms";
@@ -35,14 +35,13 @@ import { showActionSheetAtom, type ActionSheetItem } from "../state/actionSheetA
 import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PanelTreeItem, type FlatPanelItem } from "./PanelTreeItem";
 import { VibestudioLogo } from "./VibestudioLogo";
-import type { Panel } from "@vibestudio/shared/types";
-import { buildPanelChromeState, isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
-import { getAvailablePanelCommands, type PanelCommandId } from "@vibestudio/shared/panelCommands";
-import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
+import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
+import { type PanelCommandId } from "@vibestudio/shared/panelCommands";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
 import {
   buildMobilePanelForestRows,
-  mobilePanelRoots,
+  type MobilePanelTreeGroup,
+  type MobilePanelTreeNode,
   type MobilePanelForestRow,
 } from "../shellCore/panelForest";
 import { useVisibleAccountProfiles } from "../hooks/useVisibleAccountProfiles";
@@ -76,7 +75,7 @@ const COMMAND_PRESENTATION: Partial<
   archive: { icon: Archive, description: "Remove from the tree (recoverable on desktop)" },
 };
 
-function findPanelById(panels: Panel[], panelId: string): Panel | null {
+function findPanelById(panels: MobilePanelTreeNode[], panelId: string): MobilePanelTreeNode | null {
   for (const panel of panels) {
     if (panel.id === panelId) return panel;
     const child = findPanelById(panel.children, panelId);
@@ -89,8 +88,8 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const pushToast = useSetAtom(pushToastAtom);
   const showActionSheet = useSetAtom(showActionSheetAtom);
   const shellClient = useAtomValue(shellClientAtom);
-  const panelForest = useAtomValue(panelForestAtom);
-  const setPanelForest = useSetAtom(panelForestAtom);
+  const panelTreeRevision = useAtomValue(panelTreeRevisionAtom);
+  const setPanelTreeRevision = useSetAtom(panelTreeRevisionAtom);
   const colors = useAtomValue(themeColorsAtom);
   const connectionStatus = useAtomValue(connectionStatusAtom);
   const activePanelId = useAtomValue(activePanelIdAtom);
@@ -101,40 +100,176 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
-
-  const panelRoots = useMemo(() => mobilePanelRoots(panelForest.forest), [panelForest]);
-  const ownerIds = useMemo(
-    () => panelForest.forest.map((group) => group.owner).filter(Boolean),
-    [panelForest]
+  const [searchResults, setSearchResults] = useState<MobilePanelTreeNode[]>([]);
+  const [searchCursor, setSearchCursor] = useState<string | null>(null);
+  const [loadingIndexPage, setLoadingIndexPage] = useState(false);
+  const [loadingGroupKey, setLoadingGroupKey] = useState<string | null>(null);
+  const [cacheVersion, setCacheVersion] = useState(0);
+  useEffect(
+    () => shellClient?.panels.treeCache.subscribe(() => setCacheVersion((value) => value + 1)),
+    [shellClient]
   );
+  const groups = useMemo<MobilePanelTreeGroup[]>(() => {
+    if (!shellClient) return [];
+    const cache = shellClient.panels.treeCache;
+    const branch = (
+      node: import("@vibestudio/shared/panel/treeIndex").PanelTreeNode
+    ): MobilePanelTreeNode => {
+      const children = cache.getGroup({ kind: "children", parentSlotId: node.slotId })?.nodes ?? [];
+      const childGroup = cache.getGroup({ kind: "children", parentSlotId: node.slotId });
+      return {
+        id: node.slotId,
+        title: node.title,
+        parentId: node.parentSlotId,
+        owner: node.ownerUserId,
+        childCount: node.childCount,
+        childrenLoadedCount: childGroup?.loadedCount ?? 0,
+        childrenHaveMore: childGroup?.nextCursor !== null && childGroup !== null,
+        children: children.map(branch),
+      };
+    };
+    return cache.getRootGroups().groups.map((group) => ({
+      owner: group.ownerUserId ?? "",
+      rootCount: group.rootCount,
+      rootLoadedCount:
+        cache.getGroup({ kind: "roots", ownerUserId: group.ownerUserId })?.loadedCount ?? 0,
+      rootsHaveMore:
+        cache.getGroup({ kind: "roots", ownerUserId: group.ownerUserId })?.nextCursor !== null &&
+        cache.getGroup({ kind: "roots", ownerUserId: group.ownerUserId }) !== null,
+      rootPanels: (
+        cache.getGroup({ kind: "roots", ownerUserId: group.ownerUserId })?.nodes ?? []
+      ).map(branch),
+    }));
+  }, [cacheVersion, panelTreeRevision, shellClient]);
+  useEffect(() => {
+    if (!shellClient) return;
+    const retained: import("@vibestudio/shared/panel/treeIndex").PanelTreeGroup[] = groups.map(
+      (group) => ({
+        kind: "roots",
+        ownerUserId: group.owner || null,
+      })
+    );
+    const visit = (node: MobilePanelTreeNode) => {
+      if (node.childCount > 0 && node.children.length > 0) {
+        retained.push({ kind: "children", parentSlotId: node.id });
+        node.children.forEach(visit);
+      }
+    };
+    groups.forEach((group) => group.rootPanels.forEach(visit));
+    shellClient.panels.treeCache.retainGroups(retained);
+  }, [groups, shellClient]);
+  const panelRoots = useMemo(() => groups.flatMap((group) => group.rootPanels), [groups]);
+  const ownerIds = useMemo(() => groups.map((group) => group.owner).filter(Boolean), [groups]);
   const ownerProfiles = useVisibleAccountProfiles(shellClient, ownerIds, drawerVisible);
 
   // Build the collapsed set from the shell client's registry
   const collapsedIds = useMemo(() => {
     if (!shellClient) return new Set<string>();
     return new Set(shellClient.panels.getCollapsedIds());
-  }, [shellClient, panelForest]);
+  }, [shellClient, panelTreeRevision]);
 
   const forestRows = useMemo(
     () =>
       buildMobilePanelForestRows(
-        panelForest.forest,
+        groups,
         collapsedIds,
         shellClient?.currentUserId ?? null,
         ownerProfiles
       ),
-    [collapsedIds, ownerProfiles, panelForest, shellClient]
+    [collapsedIds, groups, ownerProfiles, shellClient]
   );
 
   const trimmedQuery = query.trim().toLowerCase();
+  useEffect(() => {
+    if (!shellClient || !trimmedQuery) {
+      setSearchResults([]);
+      setSearchCursor(null);
+      return;
+    }
+    setSearchResults([]);
+    setSearchCursor(null);
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void shellClient.panels.treeCache
+        .search({ query: trimmedQuery, limit: 100 })
+        .then((results) => {
+          if (!cancelled) {
+            setSearchResults(
+              results.hits.map(({ node, ancestors, ancestorsTruncated }) => ({
+                id: node.slotId,
+                title:
+                  ancestors.length > 0
+                    ? `${ancestorsTruncated ? "… › " : ""}${ancestors
+                        .map((ancestor) => ancestor.title)
+                        .join(" › ")} › ${node.title}`
+                    : node.title,
+                parentId: node.parentSlotId,
+                owner: node.ownerUserId,
+                childCount: node.childCount,
+                children: [],
+              }))
+            );
+            setSearchCursor(results.nextCursor);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setSearchResults([]);
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [panelTreeRevision, shellClient, trimmedQuery]);
+
+  const handleLoadMoreIndex = useCallback(async () => {
+    if (!shellClient || loadingIndexPage) return;
+    setLoadingIndexPage(true);
+    try {
+      if (trimmedQuery && searchCursor) {
+        const results = await shellClient.panels.treeCache.search({
+          query: trimmedQuery,
+          cursor: searchCursor,
+          limit: 100,
+        });
+        const seen = new Set(searchResults.map((panel) => panel.id));
+        const additions = results.hits
+          .filter(({ node }) => !seen.has(node.slotId))
+          .map(({ node, ancestors, ancestorsTruncated }) => ({
+            id: node.slotId,
+            title:
+              ancestors.length > 0
+                ? `${ancestorsTruncated ? "… › " : ""}${ancestors
+                    .map((ancestor) => ancestor.title)
+                    .join(" › ")} › ${node.title}`
+                : node.title,
+            parentId: node.parentSlotId,
+            owner: node.ownerUserId,
+            childCount: node.childCount,
+            children: [],
+          }))
+          .slice(0, Math.max(0, 500 - searchResults.length));
+        const next = [...searchResults, ...additions];
+        setSearchResults(next);
+        setSearchCursor(next.length >= 500 ? null : results.nextCursor);
+      } else if (!trimmedQuery && shellClient.panels.treeCache.getRootGroups().nextCursor) {
+        await shellClient.panels.treeCache.loadRootGroups(false);
+      }
+    } finally {
+      setLoadingIndexPage(false);
+    }
+  }, [loadingIndexPage, searchCursor, searchResults, shellClient, trimmedQuery]);
 
   // Search collapses the hierarchy into a flat match list; otherwise prepend a
   // "Pinned" band above the owner-grouped forest.
   const flatItems = useMemo<MobilePanelForestRow[]>(() => {
     if (trimmedQuery) {
-      return forestRows.filter(
-        (row) => row.kind === "panel" && row.panel.title.toLowerCase().includes(trimmedQuery)
-      );
+      return searchResults.map((panel) => ({
+        kind: "panel" as const,
+        panel,
+        depth: 0,
+        isCollapsed: true,
+      }));
     }
     if (pinnedPanelIds.size === 0) return forestRows;
     const pinnedRows = forestRows.filter(
@@ -146,7 +281,30 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       ...pinnedRows.map((row) => ({ ...row, depth: 0, isCollapsed: true })),
       ...forestRows,
     ] as MobilePanelForestRow[];
-  }, [colors.primary, forestRows, pinnedPanelIds, trimmedQuery]);
+  }, [colors.primary, forestRows, pinnedPanelIds, searchResults, trimmedQuery]);
+
+  const handleLoadMore = useCallback(
+    async (row: Extract<MobilePanelForestRow, { kind: "load-more" }>) => {
+      if (!shellClient || loadingGroupKey) return;
+      setLoadingGroupKey(row.groupKey);
+      try {
+        await shellClient.panels.treeCache.loadMore(
+          row.parentSlotId === null
+            ? { kind: "roots", ownerUserId: row.ownerUserId ?? null }
+            : { kind: "children", parentSlotId: row.parentSlotId as never }
+        );
+      } catch (error) {
+        pushToast({
+          title: "Could not load older panels",
+          message: error instanceof Error ? error.message : "Try again.",
+          tone: "danger",
+        });
+      } finally {
+        setLoadingGroupKey(null);
+      }
+    },
+    [loadingGroupKey, pushToast, shellClient]
+  );
 
   const handleRefresh = useCallback(async () => {
     if (!shellClient) return;
@@ -154,8 +312,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     try {
       // Re-init forces a fresh fetch from the server
       await shellClient.panels.refresh();
-      // Update the atom so the UI re-renders with the new tree
-      setPanelForest(shellClient.panels.getTreeSnapshot());
+      setPanelTreeRevision(shellClient.panels.treeCache.getRevision());
     } catch (error) {
       pushToast({
         title: "Could not refresh panels",
@@ -165,7 +322,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     } finally {
       setRefreshing(false);
     }
-  }, [pushToast, shellClient, setPanelForest]);
+  }, [pushToast, shellClient, setPanelTreeRevision]);
 
   const handlePanelPress = useCallback(
     (panelId: string) => {
@@ -178,6 +335,12 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     (panelId: string, collapsed: boolean) => {
       if (!shellClient) return;
       void shellClient.panels.setCollapsed(panelId, collapsed);
+      if (!collapsed) {
+        void shellClient.panels.treeCache.loadFirst({
+          kind: "children",
+          parentSlotId: panelId as never,
+        });
+      }
     },
     [shellClient]
   );
@@ -216,53 +379,39 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const performPanelCommand = useCallback(
     (command: PanelCommandId, panelId: string) => {
       if (!shellClient) return;
-      const panel = findPanelById(panelRoots, panelId);
-      if (!panel) return;
-      const snapshot = getCurrentSnapshot(panel);
 
       switch (command) {
         case "toggle-pin":
           togglePanelPin(panelId);
           return;
         case "copy-address":
-          copyToClipboard(snapshot.source);
-          pushToast({ title: "Address copied", message: snapshot.source, tone: "success" });
+          void shellClient.panels.observe(panelId).then((observation) => {
+            copyToClipboard(observation.source);
+            pushToast({
+              title: "Address copied",
+              message: observation.source,
+              tone: "success",
+            });
+          });
           return;
-        case "open-external": {
-          const url =
-            snapshot.resolvedUrl ??
-            (isBrowserPanelSource(snapshot.source)
-              ? snapshot.source.slice("browser:".length)
-              : null);
-          if (url && /^https?:\/\//i.test(url)) void openExternalUrl(url);
+        case "open-external":
+          void shellClient.panels.observe(panelId).then((observation) => {
+            if (!isBrowserPanelSource(observation.source)) return;
+            const url = observation.source.slice("browser:".length);
+            if (/^https?:\/\//i.test(url)) void openExternalUrl(url);
+          });
           return;
-        }
         case "duplicate":
-          if (isBrowserPanelSource(snapshot.source)) {
-            void shellClient.panels
-              .createBrowserUrlPanel(null, snapshot.source.slice("browser:".length), {
-                focus: true,
-              })
-              .then((result) => onSelectPanel(result.id))
-              .catch((error: unknown) =>
-                pushToast({
-                  title: "Could not duplicate panel",
-                  message: error instanceof Error ? error.message : "Try again.",
-                  tone: "danger",
-                })
-              );
-          } else {
-            void shellClient.panels
-              .createRootPanel(snapshot.source)
-              .then((result) => onSelectPanel(result.id))
-              .catch((error: unknown) =>
-                pushToast({
-                  title: "Could not duplicate panel",
-                  message: error instanceof Error ? error.message : "Try again.",
-                  tone: "danger",
-                })
-              );
-          }
+          void shellClient.panels.observe(panelId).then((observation) => {
+            const create = isBrowserPanelSource(observation.source)
+              ? shellClient.panels.createBrowserUrlPanel(
+                  null,
+                  observation.source.slice("browser:".length),
+                  { focus: true }
+                )
+              : shellClient.panels.createRootPanel(observation.source);
+            return create.then((result) => onSelectPanel(result.id));
+          });
           return;
         case "archive":
           void shellClient.panels
@@ -280,7 +429,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           onSelectPanel(panelId);
       }
     },
-    [onSelectPanel, panelRoots, pushToast, shellClient, togglePanelPin]
+    [onSelectPanel, pushToast, shellClient, togglePanelPin]
   );
 
   const handlePanelLongPress = useCallback(
@@ -288,10 +437,13 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       const panel = findPanelById(panelRoots, panelId);
       if (!panel) return;
       const isPinned = pinnedPanelIds.has(panelId);
-      const commands = getAvailablePanelCommands(
-        { chrome: buildPanelChromeState({ panel }), isPinned },
-        ["copy-address", "open-external", "duplicate", "toggle-pin", "archive"]
-      );
+      const commands: Array<{ id: PanelCommandId; label: string }> = [
+        { id: "copy-address", label: "Copy address" },
+        { id: "open-external", label: "Open externally" },
+        { id: "duplicate", label: "Duplicate" },
+        { id: "toggle-pin", label: isPinned ? "Unpin" : "Pin" },
+        { id: "archive", label: "Archive" },
+      ];
       const items: ActionSheetItem[] = commands.map((command) => {
         const presentation = COMMAND_PRESENTATION[command.id];
         return {
@@ -304,7 +456,6 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       });
       showActionSheet({
         title: panel.title,
-        subtitle: getCurrentSnapshot(panel).source,
         items,
         onSelect: (id) => performPanelCommand(id as PanelCommandId, panelId),
       });
@@ -328,6 +479,23 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
               {item.label}
             </Text>
           </View>
+        );
+      }
+      if (item.kind === "load-more") {
+        return (
+          <Pressable
+            onPress={() => void handleLoadMore(item)}
+            disabled={loadingGroupKey !== null}
+            accessibilityRole="button"
+            accessibilityLabel={`Load older panels (${item.remaining} remaining)`}
+            style={[styles.loadMore, { paddingLeft: spacing.lg + item.depth * 18 }]}
+          >
+            <Text style={[type.caption, { color: colors.primary }]}>
+              {loadingGroupKey === item.groupKey
+                ? "Loading…"
+                : `Load older panels (${item.remaining})`}
+            </Text>
+          </Pressable>
         );
       }
       const panelItem: FlatPanelItem = {
@@ -358,6 +526,8 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       handlePanelLongPress,
       handleToggleCollapse,
       handleArchive,
+      handleLoadMore,
+      loadingGroupKey,
       trimmedQuery,
     ]
   );
@@ -366,7 +536,9 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     (item: MobilePanelForestRow, index: number) =>
       item.kind === "owner"
         ? `owner:${item.owner || "workspace"}`
-        : `panel:${item.panel.id}:${index}`,
+        : item.kind === "load-more"
+          ? `more:${item.groupKey}`
+          : `panel:${item.panel.id}:${index}`,
     []
   );
 
@@ -449,6 +621,28 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           contentContainerStyle={styles.listContent}
           style={styles.list}
           keyboardShouldPersistTaps="handled"
+          ListFooterComponent={
+            (
+              trimmedQuery
+                ? searchCursor !== null
+                : Boolean(shellClient?.panels.treeCache.getRootGroups().nextCursor)
+            ) ? (
+              <Pressable
+                onPress={() => void handleLoadMoreIndex()}
+                disabled={loadingIndexPage}
+                style={styles.loadMore}
+                accessibilityRole="button"
+              >
+                <Text style={[type.caption, { color: colors.primary }]}>
+                  {loadingIndexPage
+                    ? "Loading…"
+                    : trimmedQuery
+                      ? "Load more matches"
+                      : "Load more panel owners"}
+                </Text>
+              </Pressable>
+            ) : null
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -530,6 +724,11 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
+  },
+  loadMore: {
+    minHeight: 42,
+    justifyContent: "center",
+    paddingRight: spacing.lg,
   },
   listContent: {
     padding: spacing.sm,

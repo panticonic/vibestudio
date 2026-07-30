@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inferAttachmentMimeType, readSayAttachments } from "./say-attachments.js";
+import { readSayAttachments } from "./say-attachments.js";
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 
@@ -12,21 +12,6 @@ function makeFs(files: Record<string, string | Uint8Array>) {
     },
   };
 }
-
-describe("inferAttachmentMimeType", () => {
-  it("maps image extensions case-insensitively", () => {
-    expect(inferAttachmentMimeType("/shots/page.PNG")).toBe("image/png");
-    expect(inferAttachmentMimeType("a/b.jpeg")).toBe("image/jpeg");
-    expect(inferAttachmentMimeType("b.jpg")).toBe("image/jpeg");
-    expect(inferAttachmentMimeType("c.webp")).toBe("image/webp");
-    expect(inferAttachmentMimeType("d.gif")).toBe("image/gif");
-  });
-
-  it("rejects non-image and extension-less paths with the supported list", () => {
-    expect(() => inferAttachmentMimeType("/notes/report.pdf")).toThrow(/supported/i);
-    expect(() => inferAttachmentMimeType("/bin/screenshot")).toThrow(/supported/i);
-  });
-});
 
 describe("readSayAttachments", () => {
   it("reads image files into base64 channel attachments", async () => {
@@ -60,6 +45,14 @@ describe("readSayAttachments", () => {
     expect(attachments[0]?.mimeType).toBe("image/png");
   });
 
+  it("rejects extension-labeled bytes that are not a supported image", async () => {
+    await expect(
+      readSayAttachments(makeFs({ "/shots/page.png": new Uint8Array([1, 2, 3]) }), [
+        "/shots/page.png",
+      ])
+    ).rejects.toThrow(/unsupported file content/i);
+  });
+
   it("wraps fs errors with the offending path", async () => {
     const fs = makeFs({});
     await expect(readSayAttachments(fs, ["/missing.png"])).rejects.toThrow(
@@ -73,7 +66,9 @@ describe("readSayAttachments", () => {
   });
 
   it("rejects oversized attachments via the shared validation", async () => {
-    const fs = makeFs({ "/huge.png": new Uint8Array(16 * 1024 * 1024) });
+    const oversizedPng = new Uint8Array(16 * 1024 * 1024);
+    oversizedPng.set(PNG_BYTES);
+    const fs = makeFs({ "/huge.png": oversizedPng });
     await expect(readSayAttachments(fs, ["/huge.png"])).rejects.toThrow(/too large/i);
   });
 

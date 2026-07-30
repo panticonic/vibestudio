@@ -193,14 +193,12 @@ function PanelAppContent() {
                     ...common,
                     title: location.title,
                     slug: location.slug,
-                    name: location.name,
                     focus: location.focus ?? true,
                   })
                 : await panel.createPanel(location.source, {
                     ...common,
                     title: location.title,
                     slug: location.slug,
-                    name: location.name,
                     isRoot: true,
                 focus: location.focus ?? true,
               });

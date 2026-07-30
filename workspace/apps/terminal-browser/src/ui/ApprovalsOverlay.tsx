@@ -20,8 +20,6 @@ function summarize(a: PendingApproval): { title: string; detail: string } {
       return { title: `${a.title} · ${caller}`, detail: a.capability };
     case "credential":
       return { title: `Credential · ${a.credentialLabel}`, detail: caller };
-    case "userland":
-      return { title: `${a.title} · ${caller}`, detail: a.summary ?? "" };
     default:
       return { title: `${a.kind} · ${caller}`, detail: a.effectiveVersion ?? "" };
   }

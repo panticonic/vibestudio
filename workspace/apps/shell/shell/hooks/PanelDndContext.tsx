@@ -51,6 +51,19 @@ import {
   findParentAtDepth,
   type FlattenedPanel,
 } from "./PanelTreeContext.js";
+
+function placementAt(
+  siblings: readonly { id: string }[],
+  targetPosition: number,
+  movedPanelId: string
+): { beforePanelId?: string; afterPanelId?: string } {
+  const remaining = siblings.filter((panel) => panel.id !== movedPanelId);
+  const index = Math.max(0, Math.min(targetPosition, remaining.length));
+  return {
+    ...(remaining[index - 1] ? { beforePanelId: remaining[index - 1]!.id } : {}),
+    ...(remaining[index] ? { afterPanelId: remaining[index]!.id } : {}),
+  };
+}
 import { assertPresent } from "../../utils/assertPresent";
 import { dispatchLayoutDrop, parseLayoutDropId } from "../../layout/dropTargets";
 
@@ -164,7 +177,7 @@ interface PanelDndProviderProps {
 }
 
 export function PanelDndProvider({ children }: PanelDndProviderProps) {
-  const { allRootPanels, panelMap } = usePanelTree();
+  const { allRootPanels, panelMap, loadChildren } = usePanelTree();
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -189,6 +202,20 @@ export function PanelDndProvider({ children }: PanelDndProviderProps) {
     () => flattenTree(allRootPanels, collapsedIds),
     [allRootPanels, collapsedIds]
   );
+
+  // Expanded nodes render their first bounded child page automatically.
+  // Creation can change a previously childless node into a parent; without
+  // this transition the tree would know the child count but keep rendering an
+  // unqueried empty page until the user collapsed and re-expanded the row.
+  useEffect(() => {
+    for (const item of flattenedItems) {
+      if (item.collapsed) continue;
+      const node = panelMap.get(item.id);
+      if (node && node.childCount > 0 && node.childrenLoaded === false) {
+        void loadChildren(node.id);
+      }
+    }
+  }, [flattenedItems, loadChildren, panelMap]);
 
   // Refs for stable callbacks (avoids re-creating indentPanel/unindentPanel on every tree update)
   const flattenedItemsRef = useRef(flattenedItems);
@@ -305,36 +332,44 @@ export function PanelDndProvider({ children }: PanelDndProviderProps) {
     })
   );
 
-  const toggleCollapse = useCallback((panelId: string) => {
-    setCollapsedIds((prev) => {
-      const next = new Set(prev);
-      const nowCollapsed = !next.has(panelId);
-      if (nowCollapsed) {
-        next.add(panelId);
-      } else {
-        next.delete(panelId);
-      }
-      // Fire-and-forget persist
-      void panelService
-        .setCollapsed(panelId, nowCollapsed)
-        .catch((err: unknown) => console.warn("[PanelDndContext] setCollapsed failed:", err));
-      return next;
-    });
-  }, []);
+  const toggleCollapse = useCallback(
+    (panelId: string) => {
+      setCollapsedIds((prev) => {
+        const next = new Set(prev);
+        const nowCollapsed = !next.has(panelId);
+        if (nowCollapsed) {
+          next.add(panelId);
+        } else {
+          next.delete(panelId);
+          void loadChildren(panelId);
+        }
+        // Fire-and-forget persist
+        void panelService
+          .setCollapsed(panelId, nowCollapsed)
+          .catch((err: unknown) => console.warn("[PanelDndContext] setCollapsed failed:", err));
+        return next;
+      });
+    },
+    [loadChildren]
+  );
 
-  const expandIds = useCallback((ids: string[]) => {
-    setCollapsedIds((prev) => {
-      const next = new Set(prev);
-      for (const id of ids) {
-        next.delete(id);
-      }
-      // Fire-and-forget persist
-      void panelService
-        .expandIds(ids)
-        .catch((err: unknown) => console.warn("[PanelDndContext] expandIds failed:", err));
-      return next;
-    });
-  }, []);
+  const expandIds = useCallback(
+    (ids: string[]) => {
+      setCollapsedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) {
+          next.delete(id);
+          void loadChildren(id);
+        }
+        // Fire-and-forget persist
+        void panelService
+          .expandIds(ids)
+          .catch((err: unknown) => console.warn("[PanelDndContext] expandIds failed:", err));
+        return next;
+      });
+    },
+    [loadChildren]
+  );
 
   const indentPanel = useCallback(async (panelId: string) => {
     const items = flattenedItemsRef.current;
@@ -354,7 +389,7 @@ export function PanelDndProvider({ children }: PanelDndProviderProps) {
     await panelService.movePanel({
       panelId,
       newParentId: prevItem.id,
-      targetPosition,
+      ...placementAt(newParent?.children ?? [], targetPosition, panelId),
     });
   }, []);
 
@@ -385,7 +420,7 @@ export function PanelDndProvider({ children }: PanelDndProviderProps) {
     await panelService.movePanel({
       panelId,
       newParentId: grandparentId,
-      targetPosition,
+      ...placementAt(siblings, targetPosition, panelId),
     });
   }, []);
 
@@ -507,7 +542,7 @@ export function PanelDndProvider({ children }: PanelDndProviderProps) {
           await panelService.movePanel({
             panelId: draggedId,
             newParentId,
-            targetPosition: siblings.length,
+            ...placementAt(siblings, siblings.length, draggedId),
           });
           return;
         }
@@ -575,7 +610,11 @@ export function PanelDndProvider({ children }: PanelDndProviderProps) {
         await panelService.movePanel({
           panelId: draggedId,
           newParentId,
-          targetPosition: Math.max(0, targetPosition),
+          ...placementAt(
+            getSiblings(newParentId, draggedId),
+            Math.max(0, targetPosition),
+            draggedId
+          ),
         });
       } catch (error) {
         console.error("[PanelDndContext] Failed to move panel", {

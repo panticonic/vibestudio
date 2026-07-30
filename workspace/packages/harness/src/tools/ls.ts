@@ -10,7 +10,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
-import { AgentToolFailureError, agentToolFailureFromUnknown } from "@vibestudio/agentic-protocol";
+import { AgentToolFailureError, agentToolFailureFromUnknown } from "@workspace/agentic-protocol";
 import { resolveToCwd } from "./path-utils.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead, type TruncationResult } from "./truncate.js";
 

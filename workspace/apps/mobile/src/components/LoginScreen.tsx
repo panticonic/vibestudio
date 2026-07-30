@@ -30,7 +30,7 @@ import {
   pairingIdentityAtom,
 } from "../state/authAtoms";
 import { connectionStatusAtom } from "../state/connectionAtoms";
-import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
+import { panelTreeRevisionAtom, shellClientAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { VibestudioLogo } from "./VibestudioLogo";
 
@@ -56,7 +56,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   const setConnectionStatus = useSetAtom(connectionStatusAtom);
   const setPairingIdentity = useSetAtom(pairingIdentityAtom);
   const setShellClient = useSetAtom(shellClientAtom);
-  const setPanelForest = useSetAtom(panelForestAtom);
+  const setPanelTreeRevision = useSetAtom(panelTreeRevisionAtom);
   const authLoading = useAtomValue(authLoadingAtom);
   const authError = useAtomValue(authErrorAtom);
   const [connectionPhase, setConnectionPhase] = React.useState("Reading saved pairing…");
@@ -170,8 +170,8 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
               setConnectionPhase("Preparing the mobile workspace…");
             }
           },
-          onTreeUpdated: (snapshot) => {
-            setPanelForest(snapshot);
+          onTreeInvalidated: (event) => {
+            setPanelTreeRevision(event.revision);
           },
         });
         pendingClient = client;
@@ -241,7 +241,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     setAuthLoading,
     setAuthenticated,
     setConnectionStatus,
-    setPanelForest,
+    setPanelTreeRevision,
     setServerUrlAtom,
     setShellClient,
     setPairingIdentity,

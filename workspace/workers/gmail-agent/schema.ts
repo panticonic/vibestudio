@@ -1,4 +1,4 @@
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 
 export function createGmailTables(sql: SqlStorage): void {
   sql.exec(`

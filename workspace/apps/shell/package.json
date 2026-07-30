@@ -18,6 +18,7 @@
       ]
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "account.profile.read",
@@ -155,15 +156,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "extensions.reload",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "external.open",
           "resource": {
             "kind": "prefix",
@@ -263,7 +255,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "settings.read",
+          "capability": "runtime.supervision.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -282,24 +274,6 @@
         },
         {
           "capability": "window-management",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-host.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-panels.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -335,16 +309,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "workspace-units.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-units.publish",
+          "capability": "workspace-service:workspace.state",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -395,6 +360,24 @@
             "prefix": ""
           },
           "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
           "evidence": "intentional-broad"
         },
         {
@@ -469,6 +452,7 @@
     "@tanstack/react-virtual": "^3.13.0",
     "@workspace/ui": "workspace:*",
     "@workspace/react": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/template-registry": "workspace:*",
     "jotai": "^2.14.0",
     "qrcode-terminal": "^0.12.0",

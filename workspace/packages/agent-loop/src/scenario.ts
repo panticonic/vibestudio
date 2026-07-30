@@ -5,7 +5,7 @@
  * like the driver would.
  */
 
-import type { LogEnvelope } from "@vibestudio/agentic-protocol";
+import type { LogEnvelope } from "@workspace/agentic-protocol";
 import type { Incoming, StepContext } from "./commands.js";
 import {
   derivePendingEffects,

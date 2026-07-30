@@ -1,8 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
-import type { WebhookDeliveryEvent } from "@vibestudio/runtime/worker";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import type { WebhookDeliveryEvent } from "@workspace/runtime/worker";
 import {
   GmailApiError,
   type GmailClient,
@@ -10,7 +10,7 @@ import {
   type GmailThread,
 } from "@workspace/gmail";
 import { fakeGmailClient } from "@workspace/gmail/test-utils";
-import { AGENTIC_EVENT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 import { AgentWorkerBase } from "@workspace/agentic-do";
 import { ids } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
@@ -173,7 +173,7 @@ class TestGmailAgentWorker extends GmailAgentWorker {
           kind: "durable-object",
           source: "vibestudio/internal",
           className: "GadWorkspaceDO",
-          objectKey: "workspace-semantic-control-plane",
+          objectKey: "workspace",
           targetId: "do:gad:test",
         };
       }

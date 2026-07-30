@@ -5,7 +5,7 @@
  * Owns the `subscriptions` table.
  */
 
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import type { ChannelSubscriptionConfig } from "@workspace/agentic-core";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
@@ -42,8 +42,8 @@ export class SubscriptionManager {
     private onRecovered?: (subscription: RecoveredChannelSubscription) => Promise<void>
   ) {}
 
-  createTables(): void {
-    this.sql.exec(`
+  static createTables(sql: SqlStorage): void {
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS subscriptions (
         channel_id TEXT PRIMARY KEY,
         context_id TEXT NOT NULL,
@@ -52,6 +52,10 @@ export class SubscriptionManager {
         participant_id TEXT
       )
     `);
+  }
+
+  createTables(): void {
+    SubscriptionManager.createTables(this.sql);
   }
 
   /** Build the participant ID from the DO's identity. */

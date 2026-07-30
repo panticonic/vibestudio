@@ -1237,7 +1237,7 @@ export async function executeSandbox(
     throwIfAborted(signal);
     let normalizedCode = normalizeAgentEvalCode(code);
     // (#1) Fail loudly if pre-injected globals are imported from the runtime.
-    const ambientCompatModule = moduleMap["@vibestudio/runtime"];
+    const ambientCompatModule = moduleMap["@workspace/runtime"];
     const ambientCompatExports =
       ambientCompatModule && typeof ambientCompatModule === "object"
         ? (ambientCompatModule as Record<string, unknown>)
@@ -1455,7 +1455,7 @@ export async function executeSandbox(
       tracking.enter(trackingContext);
     }
 
-    const runtimeModule = transformed.requires.includes("@vibestudio/runtime")
+    const runtimeModule = transformed.requires.includes("@workspace/runtime")
       ? tryRequireRuntimeModule(requireFn)
       : null;
     const journal = createRuntimeJournal(runtimeModule);
@@ -1548,7 +1548,7 @@ export async function executeSandbox(
 
 function tryRequireRuntimeModule(requireFn: (id: string) => unknown): any | null {
   try {
-    return requireFn("@vibestudio/runtime") as any;
+    return requireFn("@workspace/runtime") as any;
   } catch {
     return null;
   }
@@ -1584,34 +1584,7 @@ async function renderPanelJournalFooter(
         return String(entry.type ?? "panel operation");
     }
   });
-  const tree =
-    typeof runtimeModule?.listPanels === "function"
-      ? formatPanelTree(await runtimeModule.listPanels())
-      : [];
-  return [
-    "[panel] Operations:",
-    ...operations.map((line: string) => `- ${line}`),
-    ...(tree.length ? ["[panel] Tree:", ...tree] : []),
-  ].join("\n");
-}
-
-function formatPanelTree(handles: any[]): string[] {
-  const byParent = new Map<string | null, any[]>();
-  for (const handle of handles) {
-    const parentId = typeof handle?.parentId === "string" ? handle.parentId : null;
-    const list = byParent.get(parentId) ?? [];
-    list.push(handle);
-    byParent.set(parentId, list);
-  }
-  const lines: string[] = [];
-  const visit = (handle: any, depth: number) => {
-    lines.push(
-      `${"  ".repeat(depth)}- #${handle.id} ${handle.kind ?? "panel"} ${handle.source ?? ""}`.trimEnd()
-    );
-    for (const child of byParent.get(handle.id) ?? []) visit(child, depth + 1);
-  };
-  for (const root of byParent.get(null) ?? handles) visit(root, 0);
-  return lines;
+  return ["[panel] Operations:", ...operations.map((line: string) => `- ${line}`)].join("\n");
 }
 
 // =============================================================================

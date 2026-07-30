@@ -9,7 +9,7 @@
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";
-import type { MessageBlockInput, ParticipantRef } from "@vibestudio/agentic-protocol";
+import type { MessageBlockInput, ParticipantRef } from "@workspace/agentic-protocol";
 
 export interface DORef {
   source: string;

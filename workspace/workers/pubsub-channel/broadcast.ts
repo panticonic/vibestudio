@@ -7,7 +7,7 @@
  * envelope shape over ordered RPC calls.
  */
 
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import type { ChannelEvent } from "@workspace/harness";
 import { participantIsAgentVessel, type BroadcastEnvelope } from "./types.js";
 import type { RpcChannelMessage, RpcSignalMessage } from "@workspace/pubsub";

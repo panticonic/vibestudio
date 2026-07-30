@@ -14,7 +14,7 @@ import {
   invocationCancelledPayload,
   invocationCompletedPayload,
   invocationFailedPayload,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { z } from "zod";

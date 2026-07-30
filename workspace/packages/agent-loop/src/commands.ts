@@ -4,7 +4,7 @@
  * effect failures.
  */
 
-import type { LogEnvelope, MessageBlockInput, ParticipantRef } from "@vibestudio/agentic-protocol";
+import type { LogEnvelope, MessageBlockInput, ParticipantRef } from "@workspace/agentic-protocol";
 import type { AgentLoopConfig, AgentTurnMetadata } from "./state.js";
 import type { EffectKind } from "./effects.js";
 

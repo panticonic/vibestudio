@@ -50,42 +50,42 @@ describe("parseStaticImports", () => {
 
   it("ignores import-looking text in comments, strings, and templates", () => {
     const imports = parseStaticImports(`
-      // import { scope } from "@vibestudio/runtime";
+      // import { scope } from "@workspace/runtime";
       /* import { missing } from "@workspace-skills/system-testing"; */
-      const a = 'import { chat } from "@vibestudio/runtime"';
+      const a = 'import { chat } from "@workspace/runtime"';
       const b = \`export { nope } from "@workspace/nope"\`;
-      import { contextId } from "@vibestudio/runtime";
+      import { contextId } from "@workspace/runtime";
     `);
 
-    expect(imports.map((imp) => imp.specifier)).toEqual(["@vibestudio/runtime"]);
+    expect(imports.map((imp) => imp.specifier)).toEqual(["@workspace/runtime"]);
     expect(imports[0]?.named).toEqual(["contextId"]);
   });
 
   it("ignores dynamic import and import.meta", () => {
     const imports = parseStaticImports(`
-      await import("@vibestudio/runtime");
+      await import("@workspace/runtime");
       console.log(import.meta.url);
-      import { rpc } from "@vibestudio/runtime";
+      import { rpc } from "@workspace/runtime";
     `);
 
     expect(imports).toHaveLength(1);
-    expect(imports[0]).toMatchObject({ specifier: "@vibestudio/runtime", named: ["rpc"] });
+    expect(imports[0]).toMatchObject({ specifier: "@workspace/runtime", named: ["rpc"] });
   });
 });
 
 describe("assertNoPreInjectedImports (#1)", () => {
-  it("throws when a pre-injected global is imported from @vibestudio/runtime", () => {
+  it("throws when a pre-injected global is imported from @workspace/runtime", () => {
     expect(() =>
-      assertNoPreInjectedImports(`import { scopes } from "@vibestudio/runtime";`)
+      assertNoPreInjectedImports(`import { scopes } from "@workspace/runtime";`)
     ).toThrow(/pre-injected/i);
     expect(() =>
-      assertNoPreInjectedImports(`import { contextId, scope } from "@vibestudio/runtime";`)
+      assertNoPreInjectedImports(`import { contextId, scope } from "@workspace/runtime";`)
     ).toThrow(/scope/);
   });
 
   it("allows an ambient compatibility import when the live runtime module exports it", () => {
     expect(() =>
-      assertNoPreInjectedImports(`import { help } from "@vibestudio/runtime";`, {
+      assertNoPreInjectedImports(`import { help } from "@workspace/runtime";`, {
         help: async () => ({}),
       })
     ).not.toThrow();
@@ -94,20 +94,20 @@ describe("assertNoPreInjectedImports (#1)", () => {
   it("allows legitimate runtime imports and ambient usage", () => {
     expect(() =>
       assertNoPreInjectedImports(
-        `import { contextId, rpc } from "@vibestudio/runtime";\nawait scopes.push();`
+        `import { contextId, rpc } from "@workspace/runtime";\nawait scopes.push();`
       )
     ).not.toThrow();
     // type-only import of a same-named symbol is erased, not an offender
     expect(() =>
-      assertNoPreInjectedImports(`import type { scope } from "@vibestudio/runtime";`)
+      assertNoPreInjectedImports(`import type { scope } from "@workspace/runtime";`)
     ).not.toThrow();
   });
 
   it("does not reject code samples mentioning pre-injected imports", () => {
     expect(() =>
       assertNoPreInjectedImports(`
-      // import { scopes } from "@vibestudio/runtime";
-      const docs = "import { scope } from '@vibestudio/runtime'";
+      // import { scopes } from "@workspace/runtime";
+      const docs = "import { scope } from '@workspace/runtime'";
       await scopes.push();
     `)
     ).not.toThrow();
@@ -118,7 +118,7 @@ describe("assertNamedExportsExist (#2)", () => {
   const resolve = (spec: string) =>
     spec === "@workspace-skills/system-testing"
       ? { allTests: () => [], reportStage: () => {}, default: {} }
-      : spec === "@vibestudio/runtime"
+      : spec === "@workspace/runtime"
         ? { contextId: "x", rpc: {} }
         : undefined;
 

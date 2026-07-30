@@ -5,7 +5,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   invocationCompletedPayload,
   type AgenticEvent,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

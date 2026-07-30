@@ -19,7 +19,7 @@ vi.mock("./client.js", () => ({
 import { useShellEvent } from "./useShellEvent";
 
 function Probe({ onUpdate }: { onUpdate: (payload: unknown) => void }) {
-  useShellEvent("panel-tree-updated", onUpdate as never);
+  useShellEvent("panel-tree-invalidated", onUpdate as never);
   return null;
 }
 

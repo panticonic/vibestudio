@@ -9,6 +9,7 @@
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "account.profile.update",
@@ -74,15 +75,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -99,13 +91,40 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:workspace.state",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ]
     }
   },
   "dependencies": {
     "@workspace/react": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/collection-orchestration": "workspace:*",

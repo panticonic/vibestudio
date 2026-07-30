@@ -8,6 +8,7 @@
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "adblock.manage",
@@ -55,15 +56,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -95,7 +87,7 @@
   },
   "dependencies": {
     "@workspace/react": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/about-shared": "workspace:*"
   },
   "type": "module"

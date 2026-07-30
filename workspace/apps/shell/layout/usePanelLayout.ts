@@ -11,7 +11,12 @@ import {
   type LayoutAction,
   type LayoutEnv,
 } from "./placementEngine";
-import { fallbackCandidatesFor, minWidthOfPanel, nearestVisibleRelativePane } from "./treeEnv";
+import {
+  fallbackCandidatesFor,
+  minWidthOfPanel,
+  nearestVisibleRelativePane,
+  observedPanelDeletions,
+} from "./treeEnv";
 import { mintColumnId, mintPaneId, PANE_VERTICAL_CHROME_HEIGHT } from "./types";
 import type { PanelLayout, PersistedLayout } from "./types";
 
@@ -56,7 +61,7 @@ export function usePanelLayout(
   viewportWidth: number,
   viewportHeight: number
 ): UsePanelLayoutResult {
-  const { panelMap, parentMap, initialized } = usePanelTree();
+  const { panelMap, parentMap, initialized, refreshing } = usePanelTree();
   const { panels: rootPanels, loading: rootLoading } = useRootPanels();
 
   const [layout, setLayout] = useState<PanelLayout>(EMPTY_LAYOUT);
@@ -67,7 +72,9 @@ export function usePanelLayout(
 
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
-  const mapsRef = useRef({ panelMap, parentMap });
+  const latestMapsRef = useRef({ panelMap, parentMap });
+  latestMapsRef.current = { panelMap, parentMap };
+  const reconcileMapsRef = useRef({ panelMap, parentMap });
   const rootPanelsRef = useRef(rootPanels);
   rootPanelsRef.current = rootPanels;
 
@@ -77,10 +84,10 @@ export function usePanelLayout(
       viewportHeight,
       paneChromeHeight: PANE_VERTICAL_CHROME_HEIGHT,
       firstRootPanelId: () => rootPanelsRef.current[0]?.id ?? null,
-      minWidthOf: (panelId) => minWidthOfPanel(mapsRef.current, panelId),
+      minWidthOf: (panelId) => minWidthOfPanel(latestMapsRef.current, panelId),
       treeRelation: () => "none",
       nearestVisibleRelative: (panelId, current) =>
-        nearestVisibleRelativePane(mapsRef.current, panelId, current),
+        nearestVisibleRelativePane(latestMapsRef.current, panelId, current),
     }),
     [viewportWidth, viewportHeight]
   );
@@ -169,7 +176,7 @@ export function usePanelLayout(
     if (restored || rootLoading || !initialized) return;
     let cancelled = false;
     void (async () => {
-      const existingIds = new Set(mapsRef.current.panelMap.keys());
+      const existingIds = new Set(latestMapsRef.current.panelMap.keys());
       let next: PanelLayout | null = null;
       try {
         const blob = await panelService.getPanelLayout();
@@ -205,6 +212,24 @@ export function usePanelLayout(
     };
   }, [restored, rootLoading, initialized, schedulePersist]);
 
+  // The placement model's invariant is that a restored layout is empty iff the
+  // workspace has no roots. Query-first discovery may lag presentation or
+  // briefly reconcile an older projection, so enforce that invariant whenever
+  // the first authoritative root is available.
+  useEffect(() => {
+    if (!restored || layout.columns.length > 0) return;
+    const seedId = rootPanels[0]?.id;
+    if (!seedId) return;
+    setLayout((current) => {
+      if (current.columns.length > 0) return current;
+      const next = seedLayout(seedId);
+      layoutRef.current = next;
+      setLayoutEpoch((epoch) => epoch + 1);
+      schedulePersist();
+      return next;
+    });
+  }, [restored, layout.columns.length, rootPanels, schedulePersist]);
+
   // Persist layout focus so restore can seed from it (W3: the focused pane's
   // panel is the successor of the old single focused panel).
   const focusedPanelId = useMemo(() => {
@@ -228,10 +253,20 @@ export function usePanelLayout(
   // fallback candidates come from the topology as it was before the update.
   const reconcileTimerRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!restored) return;
-    const previousMaps = mapsRef.current;
-    const casualties = visiblePanelIds.filter((panelId) => !panelMap.has(panelId));
-    mapsRef.current = { panelMap, parentMap };
+    if (!restored || refreshing) {
+      if (reconcileTimerRef.current !== null) {
+        window.clearTimeout(reconcileTimerRef.current);
+        reconcileTimerRef.current = null;
+      }
+      return;
+    }
+    const previousMaps = reconcileMapsRef.current;
+    // Presentation and query-first discovery are independent streams. A
+    // panel-created event can place a durable slot before this client's
+    // bounded tree projection has observed it; absence is only evidence of
+    // deletion when the panel was present in the preceding projection.
+    const casualties = observedPanelDeletions(visiblePanelIds, previousMaps, { panelMap });
+    reconcileMapsRef.current = { panelMap, parentMap };
     if (casualties.length === 0) return;
     const removed = casualties.map((panelId) => ({
       panelId,
@@ -243,7 +278,7 @@ export function usePanelLayout(
       // Re-check against the *latest* tree: a creation race may have re-added.
       const stillGone = removed.filter(
         (entry) =>
-          !mapsRef.current.panelMap.has(entry.panelId) &&
+          !reconcileMapsRef.current.panelMap.has(entry.panelId) &&
           paneForPanel(layoutRef.current, entry.panelId) !== null
       );
       if (stillGone.length === 0) return;
@@ -252,12 +287,12 @@ export function usePanelLayout(
         removed: stillGone.map((entry) => ({
           panelId: entry.panelId,
           fallbackCandidates: entry.fallbackCandidates.filter((candidateId) =>
-            mapsRef.current.panelMap.has(candidateId)
+            reconcileMapsRef.current.panelMap.has(candidateId)
           ),
         })),
       });
     }, DELETED_PANEL_DEBOUNCE_MS);
-  }, [restored, visiblePanelIds, panelMap, parentMap, dispatch]);
+  }, [restored, refreshing, visiblePanelIds, panelMap, parentMap, dispatch]);
   useEffect(
     () => () => {
       if (reconcileTimerRef.current !== null) window.clearTimeout(reconcileTimerRef.current);

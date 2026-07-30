@@ -3,10 +3,10 @@
  * `dist/core/tools/grep.js`.
  *
  * The upstream tool spawns ripgrep via `child_process.spawn`. workerd has
- * neither `child_process` nor any native binary, so active agent runs first
- * delegate to the Node-side `@workspace-extensions/file-tools` extension. If
- * that extension is unavailable, this file falls back to walking the
- * directory tree through `RuntimeFs` and applying the regex itself. The
+ * neither `child_process` nor any native binary, so active agent runs route
+ * through the context-scoped host filesystem service. Environments without
+ * that service fall back to walking the same `RuntimeFs` and applying the
+ * regex locally. The
  * schema, details type, and output formatting match the upstream tool so
  * chat-UI renderers don't have to special-case either backend.
  *
@@ -17,19 +17,11 @@
 
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
-import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import type { RpcCaller } from "@vibestudio/rpc";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
-import {
-  describeOptionalExtensionFallback,
-  invokeOptionalExtension,
-  isOptionalExtensionAbort,
-  isOptionalExtensionTimeout,
-  isOptionalExtensionUnavailable,
-} from "./optional-extension.js";
 import {
   DEFAULT_MAX_BYTES,
   formatSize,
@@ -176,13 +168,6 @@ const grepSchema = Type.Object({
 
 export type GrepToolInput = Static<typeof grepSchema>;
 
-const FILE_TOOLS_EXTENSION = "@workspace-extensions/file-tools";
-
-interface GrepToolResult {
-  content: (TextContent | ImageContent)[];
-  details: GrepToolDetails | undefined;
-}
-
 export interface GrepToolDetails {
   type?: "console";
   content?: string;
@@ -198,8 +183,6 @@ export interface GrepToolDetails {
 
 export interface GrepToolDeps {
   rpc?: RpcCaller;
-  /** Test/embedding override; production always uses the shared finite default. */
-  optionalExtensionTimeoutMs?: number;
 }
 
 const DEFAULT_LIMIT = 100;
@@ -256,75 +239,9 @@ export function createGrepTool(
         throw new Error("Operation aborted");
       }
 
-      let extensionFallback: string | undefined;
-      if (deps?.rpc) {
-        try {
-          const request = {
-            pattern,
-            path: searchDir,
-            cwd,
-            glob,
-            ignoreCase,
-            literal: literalSearch,
-            context,
-            limit,
-          };
-          let result: GrepToolResult;
-          try {
-            result = await invokeOptionalExtension<GrepToolResult>({
-              rpc: deps.rpc,
-              extension: FILE_TOOLS_EXTENSION,
-              method: "grep",
-              args: [request],
-              signal,
-              ...(deps.optionalExtensionTimeoutMs === undefined
-                ? {}
-                : { timeoutMs: deps.optionalExtensionTimeoutMs }),
-            });
-          } catch (error) {
-            if (literalSearch || !isInvalidRegexError(error)) throw error;
-            literalSearch = true;
-            patternFallback = "literal";
-            result = await invokeOptionalExtension<GrepToolResult>({
-              rpc: deps.rpc,
-              extension: FILE_TOOLS_EXTENSION,
-              method: "grep",
-              args: [{ ...request, literal: true }],
-              signal,
-              ...(deps.optionalExtensionTimeoutMs === undefined
-                ? {}
-                : { timeoutMs: deps.optionalExtensionTimeoutMs }),
-            });
-          }
-          return patternFallback
-            ? { ...result, details: { ...(result.details ?? {}), patternFallback } }
-            : result;
-        } catch (err) {
-          if (isOptionalExtensionAbort(err)) throw err;
-          if (
-            !isOptionalExtensionUnavailable(err, FILE_TOOLS_EXTENSION) &&
-            !isOptionalExtensionTimeout(err) &&
-            !isMissingSearchPathError(err)
-          ) {
-            throw err;
-          }
-          extensionFallback = describeOptionalExtensionFallback(err, "file-tools", "grep");
-          if (onUpdate) {
-            onUpdate({
-              content: [],
-              details: {
-                type: "console",
-                content: `${extensionFallback}; falling back to the host fs service`,
-              },
-            });
-          }
-        }
-      }
-
-      // The extension is optional. Prefer the host fs service before the
-      // workerd file-by-file walker: it searches the same context boundary but
-      // can use the host's native ripgrep path and avoids thousands of RPC
-      // reads for a workspace-wide query.
+      // Prefer the context-scoped host fs service before the workerd
+      // file-by-file walker. It uses the same filesystem contract as injected
+      // `fs`, but can use native search without a second extension lifecycle.
       if (deps?.rpc) {
         try {
           let serviceLiteral = literalSearch;
@@ -377,7 +294,6 @@ export function createGrepTool(
             details: {
               engine: "fs-service",
               ...(patternFallback ? { patternFallback } : {}),
-              ...(extensionFallback ? { extensionFallback } : {}),
               ...(result.truncated ? { matchLimitReached: result.matchCount } : {}),
             },
           };
@@ -412,7 +328,6 @@ export function createGrepTool(
             engine: "runtime-fs",
             missingSearchPath: displayPath,
             ...(patternFallback ? { patternFallback } : {}),
-            ...(extensionFallback ? { extensionFallback } : {}),
           },
         };
       }
@@ -536,14 +451,12 @@ export function createGrepTool(
       if (matchCount === 0) {
         return {
           content: [{ type: "text", text: "No matches found" }],
-          details:
-            patternFallback || extensionFallback
-              ? {
-                  engine: "runtime-fs" as const,
-                  ...(patternFallback ? { patternFallback } : {}),
-                  ...(extensionFallback ? { extensionFallback } : {}),
-                }
-              : undefined,
+          details: patternFallback
+            ? {
+                engine: "runtime-fs" as const,
+                patternFallback,
+              }
+            : undefined,
         };
       }
 
@@ -552,7 +465,6 @@ export function createGrepTool(
       let output = truncation.content;
       const details: GrepToolDetails = { engine: "runtime-fs" };
       if (patternFallback) details.patternFallback = patternFallback;
-      if (extensionFallback) details.extensionFallback = extensionFallback;
       const notices: string[] = [];
 
       if (matchLimitReached) {
@@ -582,11 +494,6 @@ export function createGrepTool(
       };
     },
   };
-}
-
-function isMissingSearchPathError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /\b(?:ENOENT|path not found|no such file)\b/iu.test(message);
 }
 
 /**

@@ -9,35 +9,46 @@ Use this skill when a collection panel asks you to inspect, automate, title,
 group, move, or otherwise supervise its child panels.
 
 The collection system prompt supplies a stable `rootPanelId`. That id defines
-the scope; a list of panel ids in chat does not. Always read a fresh recursive
-snapshot before acting:
+the scope; a list of panel ids in chat does not. Traverse only the sibling
+groups needed for the task, one bounded page at a time:
 
 ```ts
-import { panelTree } from "@vibestudio/runtime";
+import { panelTree } from "@workspace/runtime";
 
-const scope = await panelTree.subtree(rootPanelId);
-console.log({
-  revision: scope.revision,
-  panels: scope.descendants.map(({ handle, depth, children }) => ({
-    id: handle.id,
-    title: handle.title,
-    source: handle.source,
-    kind: handle.kind,
-    depth,
-    childCount: children.length,
-  })),
-});
+const pending = [rootPanelId];
+const workLimit = 500;
+let visited = 0;
+while (pending.length && visited < workLimit) {
+  const parentSlotId = pending.shift()!;
+  let cursor: string | undefined;
+  let revision: number | undefined;
+  do {
+    const page = await panelTree.page({
+      group: { kind: "children", parentSlotId },
+      ...(cursor ? { cursor } : {}),
+      limit: 100,
+    });
+    if (revision !== undefined && page.revision !== revision) {
+      throw new Error("Panel tree changed during traversal; restart from the first page");
+    }
+    revision = page.revision;
+    for (const { node, handle } of page.entries) {
+      console.log(handle.id, handle.title, node.childCount);
+      if (node.childCount > 0) pending.push(handle.id);
+      if (++visited >= workLimit) break;
+    }
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor && visited < workLimit);
+}
 ```
 
-`scope.nodes` is pre-order and includes the collection root.
-`scope.descendants` excludes it. `scope.leaves` means structurally childless,
-not necessarily browser panels; filter on `node.handle.kind === "browser"` when
-you need browser targets.
-
-The snapshot is immutable. After a create, move, close, or batch rename, call
-`panelTree.subtree(rootPanelId)` again. Compare `revision` to detect changes
-made by the user, another agent, or another client. Never maintain a parallel
-tree in eval state.
+Choose an explicit work limit appropriate to the request; ask for narrower
+scope instead of silently crossing it. `node.childCount === 0` means
+structurally childless, not necessarily a browser panel. After a create, move,
+close, or batch rename, restart affected sibling groups at their first page.
+Compare `revision` between pages to detect changes made by the user, another
+agent, or another client. Never maintain a parallel complete tree in eval
+state.
 
 ## Titles and notes
 
@@ -75,11 +86,11 @@ Create a nested collection only for a stable, useful concept—not merely
 because several URLs share a hostname:
 
 ```ts
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 
 const group = await openPanel("about/collection", {
   parentId: rootPanelId,
-  contextId: scope.root.handle.contextId,
+  contextId: panelTree.get(rootPanelId).contextId,
   title: "Release engineering",
   focus: false,
   stateArgs: {

@@ -2,21 +2,35 @@
 // tree queries (§4). All walks stay inside one owner's tree by construction —
 // parent/child links never cross owner boundaries (§4.8).
 
-import type { Panel } from "@vibestudio/shared/types";
+import type { PanelTreeViewNode } from "../shell/hooks/PanelTreeContext";
 import { MIN_COLUMN_WIDTH } from "./types";
 import type { PanelLayout, PanelPlacementHint } from "./types";
 import { paneForPanel } from "./placementEngine";
 
 export interface TreeMaps {
-  panelMap: Map<string, Panel>;
+  panelMap: Map<string, PanelTreeViewNode>;
   parentMap: Map<string, string | null>;
 }
 
+/**
+ * A query-first projection can lag a presentation event. Treat absence as a
+ * deletion only after the panel has appeared in a preceding projection.
+ */
+export function observedPanelDeletions(
+  visiblePanelIds: readonly string[],
+  previous: Pick<TreeMaps, "panelMap">,
+  current: Pick<TreeMaps, "panelMap">
+): string[] {
+  return visiblePanelIds.filter(
+    (panelId) => previous.panelMap.has(panelId) && !current.panelMap.has(panelId)
+  );
+}
+
 /** The resolved placement hint the server persists on PanelSnapshot (W4). */
-export function placementHintOf(panel: Panel | undefined): PanelPlacementHint | undefined {
-  if (!panel) return undefined;
-  const snapshot = panel.snapshot as { placement?: PanelPlacementHint } | undefined;
-  return snapshot?.placement;
+export function placementHintOf(
+  panel: PanelTreeViewNode | undefined
+): PanelPlacementHint | undefined {
+  return panel?.placement;
 }
 
 export function minWidthOfPanel(maps: TreeMaps, panelId: string): number {
@@ -40,9 +54,9 @@ export function nearestVisibleRelativePane(
   // Descendants, breadth-first so nearer generations win.
   const root = maps.panelMap.get(panelId);
   if (root) {
-    const queue: Panel[] = [...root.children];
+    const queue: PanelTreeViewNode[] = [...root.children];
     while (queue.length > 0) {
-      const nextGeneration: Panel[] = [];
+      const nextGeneration: PanelTreeViewNode[] = [];
       for (const candidate of queue) {
         const pane = paneForPanel(layout, candidate.id);
         if (pane) return pane.pane.id;
@@ -63,9 +77,7 @@ export function nearestVisibleRelativePane(
 
   // Siblings (same parent, any order).
   const parentId = maps.parentMap.get(panelId) ?? null;
-  const siblings = parentId
-    ? (maps.panelMap.get(parentId)?.children ?? [])
-    : [];
+  const siblings = parentId ? (maps.panelMap.get(parentId)?.children ?? []) : [];
   for (const sibling of siblings) {
     if (sibling.id === panelId) continue;
     const pane = paneForPanel(layout, sibling.id);

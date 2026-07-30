@@ -3,6 +3,8 @@ import { Box, Button, Flex, Text } from "@radix-ui/themes";
 
 import { view, type NativePanelSlotBounds, type NativePanelSlotSyncResult } from "../shell/client";
 
+let nextBindingIncarnation = 0;
+
 interface PanelSurfaceProps {
   nativeSlotId: string;
   panelId: string;
@@ -43,6 +45,9 @@ export function PanelSurface({
   onPointerDown,
 }: PanelSurfaceProps) {
   const elementRef = useRef<HTMLDivElement | null>(null);
+  const [bindingId] = useState(
+    () => `panel-surface-${Date.now().toString(36)}-${++nextBindingIncarnation}`
+  );
   const boundRef = useRef(false);
   const bindingKeyRef = useRef<string | undefined>(bindingKey);
   const lastBoundsRef = useRef<NativePanelSlotBounds | null>(null);
@@ -94,9 +99,9 @@ export function PanelSurface({
     boundRef.current = false;
     lastBoundsRef.current = null;
     void view
-      .clearNativePanelSlot({ nativeSlotId })
+      .clearNativePanelSlot({ nativeSlotId, bindingId })
       .catch((err: unknown) => console.warn("[PanelSurface] clear failed:", err));
-  }, [nativeSlotId]);
+  }, [bindingId, nativeSlotId]);
 
   const syncSlot = useCallback(() => {
     const bounds = readBounds(elementRef.current);
@@ -106,7 +111,7 @@ export function PanelSurface({
       boundRef.current = true;
       lastBoundsRef.current = bounds;
       void view
-        .bindNativePanelSlot({ nativeSlotId, panelId, bounds, focused })
+        .bindNativePanelSlot({ nativeSlotId, bindingId, panelId, bounds, focused })
         .then(() => {
           retryAttemptRef.current = 0;
           setAttachError(null);
@@ -128,10 +133,10 @@ export function PanelSurface({
     if (sameBounds(lastBoundsRef.current, bounds)) return;
     lastBoundsRef.current = bounds;
     void view
-      .updateNativePanelSlot({ nativeSlotId, bounds })
+      .updateNativePanelSlot({ nativeSlotId, bindingId, bounds })
       .then(handleUpdateResult)
       .catch((err: unknown) => console.warn("[PanelSurface] bounds update failed:", err));
-  }, [focused, handleUpdateResult, nativeSlotId, panelId, scheduleRetry]);
+  }, [bindingId, focused, handleUpdateResult, nativeSlotId, panelId, scheduleRetry]);
 
   syncSlotRef.current = syncSlot;
 
@@ -172,7 +177,10 @@ export function PanelSurface({
   }, [bindingKey, scheduleSync]);
 
   useLayoutEffect(() => {
-    scheduleSync();
+    // The first slot claim is an ownership transition, not an animation.
+    // Measure and issue it in the commit layout phase so panel presentation
+    // never depends on a future animation frame being scheduled.
+    syncSlot();
     const el = elementRef.current;
     if (!el) return;
 
@@ -185,7 +193,7 @@ export function PanelSurface({
       resizeObserver?.disconnect();
       window.removeEventListener("resize", scheduleSync);
     };
-  }, [scheduleSync]);
+  }, [scheduleSync, syncSlot]);
 
   useEffect(() => {
     if (!boundRef.current) {
@@ -193,10 +201,10 @@ export function PanelSurface({
       return;
     }
     void view
-      .updateNativePanelSlot({ nativeSlotId, focused })
+      .updateNativePanelSlot({ nativeSlotId, bindingId, focused })
       .then(handleUpdateResult)
       .catch((err: unknown) => console.warn("[PanelSurface] focus update failed:", err));
-  }, [focused, handleUpdateResult, nativeSlotId, scheduleSync]);
+  }, [bindingId, focused, handleUpdateResult, nativeSlotId, scheduleSync]);
 
   useEffect(() => clearSlot, [clearSlot]);
 

@@ -10,6 +10,7 @@
       "entry": "index.ts"
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "automations.control",
@@ -31,33 +32,6 @@
         },
         {
           "capability": "context.materialize",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-host.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-units.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "workspace-units.publish",
           "resource": {
             "kind": "prefix",
             "prefix": ""

@@ -15,7 +15,7 @@ import {
   type PolicyAppendDraft,
   type PolicyEnvelopeView,
 } from "@workspace/channel-policies";
-import type { LogEnvelope } from "@vibestudio/agentic-protocol";
+import type { LogEnvelope } from "@workspace/agentic-protocol";
 import type { ChannelLog } from "./log-store.js";
 
 export interface PolicyHostDeps {

@@ -10,9 +10,37 @@
     "extension": {
       "activationEvents": [
         "onInvoke"
-      ]
+      ],
+      "methodAuthority": {
+        "checkPanel": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "check": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "getTypeInfo": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "getCompletions": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "getBrowserTypeDefinitions": {
+          "effect": {
+            "kind": "open"
+          }
+        }
+      }
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "context.boundary",

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { defaultTerminalState } from "./migrateState.js";
+import { defaultTerminalState } from "./terminalState.js";
 import { restoreTerminalState } from "./restore.js";
 import type { SessionInfo, ShellApi, TerminalState } from "./types.js";
 import { VSCODE_SHELL_INTEGRATION_META_KEY } from "./vscodeShellIntegrationMeta.js";

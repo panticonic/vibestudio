@@ -23,20 +23,18 @@ import {
   StopIcon,
   TrashIcon,
 } from "@radix-ui/react-icons";
-import { contextId, openPanel, rpc, vcs } from "@vibestudio/runtime";
+import { contextId, git, openPanel, rpc, vcs } from "@workspace/runtime";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createDurableObjectServiceClient } from "@vibestudio/shared/workspaceServiceRpc";
 import {
-  developmentMethods,
+  developmentBuiltinMethods,
   type DevelopmentRun,
   type DevelopmentRunEvent,
   type DevelopmentSession,
   type DevelopmentTarget,
 } from "@vibestudio/service-schemas/development";
-import {
-  gitInteropMethods,
-  type GitImportedWorkspaceRepo,
-} from "@vibestudio/service-schemas/gitInterop";
+import type { GitImportedWorkspaceRepo } from "@vibestudio/service-schemas/gitInterop";
 import {
   permissionsMethods,
   type SavedPermissionGrant,
@@ -58,15 +56,14 @@ import {
   VIBESTUDIO_PROJECT,
 } from "./model.js";
 
+const developmentReceiver = createDurableObjectServiceClient(
+  rpc,
+  "vibestudio.development.v1"
+);
 const development = createTypedServiceClient(
   "development",
-  developmentMethods,
-  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
-);
-const gitInterop = createTypedServiceClient(
-  "gitInterop",
-  gitInteropMethods,
-  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+  developmentBuiltinMethods,
+  (_service, method, args) => developmentReceiver.call(method, ...args)
 );
 const permissions = createTypedServiceClient(
   "permissions",
@@ -343,7 +340,7 @@ export default function DevelopmentPanel() {
 
   const adoptSource = () =>
     invoke("adopt", async () => {
-      const imported = await gitInterop.importProject({
+      const imported = await git.importProject({
         path: VIBESTUDIO_PROJECT.path,
         remote: VIBESTUDIO_PROJECT.remote,
       });

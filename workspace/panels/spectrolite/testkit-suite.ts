@@ -1,6 +1,6 @@
 /** Spectrolite's in-system UI and semantic-context collaboration suite. */
 
-import { contextId, vcs } from "@vibestudio/runtime";
+import { contextId, vcs } from "@workspace/runtime";
 import {
   evalInPanel,
   expect,

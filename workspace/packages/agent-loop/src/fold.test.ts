@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LogEnvelope } from "@vibestudio/agentic-protocol";
+import type { LogEnvelope } from "@workspace/agentic-protocol";
 import { applyEvent } from "./fold.js";
 import { buildModelContext } from "./context.js";
 import {

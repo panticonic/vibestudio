@@ -29,7 +29,7 @@ import {
   ChevronDownIcon,
   ReloadIcon,
 } from "@radix-ui/react-icons";
-import { rpc } from "@vibestudio/runtime";
+import { rpc } from "@workspace/runtime";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { useIsMobile, usePaletteCommands } from "@workspace/react";
 import { AboutThemeRoot } from "@workspace/about-shared/ui";

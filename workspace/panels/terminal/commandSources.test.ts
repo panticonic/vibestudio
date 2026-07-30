@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadCommandSuggestions } from "./commandSources.js";
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   fs: {
     readFile: vi.fn(),
   },
@@ -9,12 +9,12 @@ vi.mock("@vibestudio/runtime", () => ({
 
 describe("command sources", () => {
   beforeEach(async () => {
-    const { fs } = await import("@vibestudio/runtime");
+    const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockReset();
   });
 
   it("loads custom commands and quotes shell-sensitive args", async () => {
-    const { fs } = await import("@vibestudio/runtime");
+    const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
       if (path.endsWith("/.snug/commands.json")) {
         return JSON.stringify({
@@ -39,7 +39,7 @@ describe("command sources", () => {
   });
 
   it("preserves custom command split direction as the launcher default target", async () => {
-    const { fs } = await import("@vibestudio/runtime");
+    const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
       if (path.endsWith("/.snug/commands.json")) {
         return JSON.stringify({
@@ -64,7 +64,7 @@ describe("command sources", () => {
   });
 
   it("honors custom command openInNewPane as a launcher target hint", async () => {
-    const { fs } = await import("@vibestudio/runtime");
+    const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
       if (path.endsWith("/.snug/commands.json")) {
         return JSON.stringify({
@@ -90,7 +90,7 @@ describe("command sources", () => {
   });
 
   it("loads package scripts from the focused cwd", async () => {
-    const { fs } = await import("@vibestudio/runtime");
+    const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
       if (path === "/repo/package.json") return JSON.stringify({ scripts: { dev: "vite" } });
       throw new Error("missing");
@@ -107,7 +107,7 @@ describe("command sources", () => {
   });
 
   it("discovers project commands from parent directories", async () => {
-    const { fs } = await import("@vibestudio/runtime");
+    const { fs } = await import("@workspace/runtime");
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
       if (path === "/repo/.snug/commands.json") {
         return JSON.stringify({ commands: [{ id: "lint", label: "Lint", command: "pnpm", args: ["lint"] }] });
@@ -158,7 +158,7 @@ describe("command sources", () => {
   });
 
   it("keeps large project command sets for the virtualized launcher", async () => {
-    const { fs } = await import("@vibestudio/runtime");
+    const { fs } = await import("@workspace/runtime");
     const scripts = Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`task:${index}`, "echo ok"]));
     vi.mocked(fs.readFile).mockImplementation(async (path: string) => {
       if (path === "/repo/package.json") return JSON.stringify({ scripts });

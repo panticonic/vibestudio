@@ -1,4 +1,4 @@
-import type { MessageTier } from "@vibestudio/agentic-protocol";
+import type { MessageTier } from "@workspace/agentic-protocol";
 
 export interface SandboxSendOptions {
   idempotencyKey?: string;

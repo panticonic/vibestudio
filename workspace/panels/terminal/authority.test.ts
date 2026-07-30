@@ -14,4 +14,20 @@ describe("terminal panel authority", () => {
       evidence: "intentional-broad",
     });
   });
+
+  it("declares the shell extension capability used to create terminal sessions", () => {
+    expect(
+      manifest.vibestudio.authority.requests.find(
+        (request) => request.capability === "userland:extensions/shell/native.shell.execute#*"
+      )
+    ).toEqual({
+      capability: "userland:extensions/shell/native.shell.execute#*",
+      resource: {
+        kind: "exact",
+        key: "native.shell:extension:@workspace-extensions/shell",
+      },
+      tier: "gated",
+      evidence: "bounded-dynamic",
+    });
+  });
 });

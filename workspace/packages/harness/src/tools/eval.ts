@@ -18,9 +18,9 @@ const evalCommonSchema = {
     Type.Object(
       {
         effects: Type.Optional(
-          Type.Union([Type.Literal("mutable"), Type.Literal("read-only")], {
+          Type.Union([Type.Literal("read-write"), Type.Literal("read-only")], {
             description:
-              'Use "read-only" to block every mutation in this run; omit for ordinary mutable work.',
+              'Use "read-only" to block every mutation in this run; omit for ordinary read-write work.',
           })
         ),
         approvals: Type.Optional(
@@ -60,7 +60,7 @@ const evalCommonSchema = {
       {
         additionalProperties: false,
         description:
-          "Optional per-run authority attenuation. Omitted requests adapt to admitted authority; supplied requests are the exact allowlist. pregranted-only never opens an approval card; read-only is enforced at the canonical dispatcher.",
+          "Optional per-run authority attenuation. Omitted requests adapt to admitted authority; supplied requests are the exact allowlist. pregranted-only never opens an approval card; effects selects ordinary read-write execution or dispatcher-enforced read-only execution.",
       }
     )
   ),
@@ -99,44 +99,32 @@ const evalCommonSchema = {
   ),
 };
 
-const evalSchema = Type.Union(
-  [
-    Type.Object(
-      {
-        ...evalCommonSchema,
-        code: Type.String({
-          description: "TypeScript/JavaScript to execute in the sandbox.",
-        }),
-        path: Type.Optional(
-          Type.String({
-            description:
-              "Optional context-relative directory or virtual filename hint for inline code; it does not execute that file. Relative imports resolve from the hint, so do not use src/index.ts when the inline code imports ./index.ts (use src/eval-check.ts or src/ instead).",
-          })
-        ),
-        sourcePath: Type.Optional(
-          Type.String({
-            description:
-              "Optional context-relative virtual filename for inline code; relative imports resolve from it. The virtual file is the importer, so it cannot import itself.",
-          })
-        ),
-      },
-      { additionalProperties: false }
-    ),
-    Type.Object(
-      {
-        ...evalCommonSchema,
-        path: Type.String({
-          description: "Context-relative .ts/.tsx file to execute instead of inline code.",
-        }),
-        sourcePath: Type.Optional(Type.Never()),
-        code: Type.Optional(Type.Never()),
-      },
-      { additionalProperties: false }
-    ),
-  ],
+const evalSchema = Type.Object(
   {
+    code: Type.Optional(
+      Type.String({
+        description:
+          "TypeScript/JavaScript to execute. Provide this or path at the top level.",
+      })
+    ),
+    path: Type.Optional(
+      Type.String({
+        description:
+          "Without code, a context-relative file to execute. With code, only a virtual importer path/hint for relative imports.",
+      })
+    ),
+    sourcePath: Type.Optional(
+      Type.String({
+        description:
+          "Optional context-relative virtual filename for inline code. The virtual file is the importer, so it cannot import itself.",
+      })
+    ),
+    ...evalCommonSchema,
+  },
+  {
+    additionalProperties: false,
     description:
-      "Execute inline code or a context-relative file. With code, sourcePath/path is only a virtual importer hint and does not load that file; without code, path executes the file.",
+      "Execute inline code or a context-relative file. Supply exactly one of top-level code or path for ordinary use. Authority, timeoutMs, reset, syntax, and imports are independent top-level options.",
   }
 );
 

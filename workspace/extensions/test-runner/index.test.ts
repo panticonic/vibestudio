@@ -23,11 +23,6 @@ interface CallerInfo {
   chainContextId?: string;
 }
 
-type ApprovalChoice =
-  | { kind: "choice"; choice: string }
-  | { kind: "dismissed" }
-  | { kind: "uncallable"; reason: "no-user-context" };
-
 function makeWorkspace() {
   const source = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-test-runner-source-"));
   const contextProjections = fs.mkdtempSync(
@@ -37,13 +32,6 @@ function makeWorkspace() {
 }
 
 function makeCtx(workspace = makeWorkspace(), caller: CallerInfo = {}) {
-  const approval = vi.fn(
-    async (_req: { subject: { id: string } }): Promise<ApprovalChoice> => ({
-      kind: "choice",
-      choice: "once",
-    })
-  );
-  const revoke = vi.fn(async () => true);
   const ensureMaterialized = vi.fn(async (_scope: string | string[] | "all") => {});
   const ctx = {
     workspace: {
@@ -65,10 +53,9 @@ function makeCtx(workspace = makeWorkspace(), caller: CallerInfo = {}) {
         ...(caller.chainContextId ? { chainCaller: { contextId: caller.chainContextId } } : {}),
       }),
     },
-    approvals: { request: approval, revoke },
     log: { info: vi.fn() },
   };
-  return { ctx, approval, revoke, ensureMaterialized };
+  return { ctx, ensureMaterialized };
 }
 
 describe("@workspace-extensions/test-runner", () => {
@@ -93,14 +80,13 @@ describe("@workspace-extensions/test-runner", () => {
     cleanup.push(workspace.source, workspace.contextProjections);
     const target = path.join(workspace.contextProjections, "ctx-1", "packages", "tool");
     fs.mkdirSync(target, { recursive: true });
-    const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
+    const { ctx } = makeCtx(workspace, { chainContextId: "ctx-1" });
     const api = await activate(ctx);
 
     const result = await api.run("packages/tool");
 
     expect(result.summary).toContain("No test files found");
     expect(result.contextId).toBe("ctx-1");
-    expect(approval).toHaveBeenCalledTimes(1);
     expect(ctx.fs.ensureMaterialized).toHaveBeenCalledWith("packages/tool");
     expect(mockStartVitest).toHaveBeenCalledWith(
       "test",
@@ -135,14 +121,14 @@ describe("@workspace-extensions/test-runner", () => {
     );
   });
 
-  it("rejects path traversal before requesting approval", async () => {
+  it("rejects path traversal before materialization", async () => {
     const workspace = makeWorkspace();
     cleanup.push(workspace.source, workspace.contextProjections);
-    const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
+    const { ctx, ensureMaterialized } = makeCtx(workspace, { chainContextId: "ctx-1" });
     const api = await activate(ctx);
 
     await expect(api.run("../secret")).rejects.toThrow("Target must not contain parent traversal");
-    expect(approval).not.toHaveBeenCalled();
+    expect(ensureMaterialized).not.toHaveBeenCalled();
     expect(mockStartVitest).not.toHaveBeenCalled();
   });
 
@@ -180,41 +166,13 @@ describe("@workspace-extensions/test-runner", () => {
     );
   });
 
-  it("stops when approval is denied", async () => {
+  it("ignores the retired caller-supplied approve flag", async () => {
     const workspace = makeWorkspace();
     cleanup.push(workspace.source, workspace.contextProjections);
     fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "packages", "tool"), {
       recursive: true,
     });
-    const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
-    approval.mockResolvedValue({ kind: "choice", choice: "deny" });
-    const api = await activate(ctx);
-
-    await expect(api.run("packages/tool")).rejects.toThrow("denied");
-    expect(mockStartVitest).not.toHaveBeenCalled();
-  });
-
-  it("stops when approval is dismissed", async () => {
-    const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contextProjections);
-    fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "packages", "tool"), {
-      recursive: true,
-    });
-    const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
-    approval.mockResolvedValue({ kind: "dismissed" });
-    const api = await activate(ctx);
-
-    await expect(api.run("packages/tool")).rejects.toThrow("denied");
-    expect(mockStartVitest).not.toHaveBeenCalled();
-  });
-
-  it("routes through approval even if an untyped caller passes approve false", async () => {
-    const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contextProjections);
-    fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "packages", "tool"), {
-      recursive: true,
-    });
-    const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
+    const { ctx } = makeCtx(workspace, { chainContextId: "ctx-1" });
     const api = await activate(ctx);
 
     await api.run({
@@ -222,26 +180,7 @@ describe("@workspace-extensions/test-runner", () => {
       approve: false,
     } as unknown as Parameters<typeof api.run>[0]);
 
-    expect(approval).toHaveBeenCalledTimes(1);
-    expect(approval.mock.calls[0]?.[0]).not.toHaveProperty("options");
     expect(mockStartVitest).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses a stable scoped approval subject so the approval service can honor remember choices", async () => {
-    const workspace = makeWorkspace();
-    cleanup.push(workspace.source, workspace.contextProjections);
-    fs.mkdirSync(path.join(workspace.contextProjections, "ctx-1", "packages", "tool"), {
-      recursive: true,
-    });
-    const { ctx, approval } = makeCtx(workspace, { chainContextId: "ctx-1" });
-    const api = await activate(ctx);
-
-    await api.run("packages/tool");
-    await api.run("packages/tool");
-
-    expect(approval).toHaveBeenCalledTimes(2);
-    expect(approval.mock.calls[0]?.[0].subject.id).toBe(approval.mock.calls[1]?.[0].subject.id);
-    expect(approval.mock.calls[0]?.[0]).not.toHaveProperty("promptOptions");
   });
 
   it("formats passing and failing test results", async () => {

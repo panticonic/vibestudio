@@ -6,7 +6,7 @@
  * runner build and issues the explicit test policy for its nested runs. No
  * session, shell, or arbitrary eval can impersonate that execution identity.
  */
-import { DurableObjectBase, rpc } from "@vibestudio/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 import { anyOf, methodCapability, relationship } from "@vibestudio/shared/authorization";
 import {
   createEvalExecutor,
@@ -195,7 +195,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
 
   @rpc({
     requires: SYSTEM_TEST_OPERATOR,
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -211,7 +211,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
 
   @rpc({
     requires: SYSTEM_TEST_OPERATOR,
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -230,7 +230,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
 
   @rpc({
     requires: SYSTEM_TEST_OPERATOR,
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -291,7 +291,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
 
   @rpc({
     requires: SYSTEM_TEST_OPERATOR,
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -313,7 +313,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
 
   @rpc({
     requires: SYSTEM_TEST_OPERATOR,
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -335,7 +335,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
 
   @rpc({
     requires: SYSTEM_TEST_OPERATOR,
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -351,7 +351,7 @@ export class SystemTestRunnerDO extends DurableObjectBase {
 
   @rpc({
     requires: SYSTEM_TEST_OPERATOR,
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })

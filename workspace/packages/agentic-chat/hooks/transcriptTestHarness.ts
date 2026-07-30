@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -10,15 +10,15 @@ import {
   type BlockId,
   type InvocationId,
   type MessageId,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
-import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
+import { GadWorkspaceDO } from "@workspace-workers/workspace-source";
 import { PubSubChannel } from "../../../workers/pubsub-channel/channel-do.js";
 
 export const TRANSCRIPT_TEST_CHANNEL_ID = "transcript-pipeline";
 export const TRANSCRIPT_TEST_CHANNEL_TARGET = `do:workers/pubsub-channel:PubSubChannel:${TRANSCRIPT_TEST_CHANNEL_ID}`;
 export const TRANSCRIPT_TEST_GAD_TARGET =
-  "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
+  "do:workers/workspace-source:GadWorkspaceDO:workspace";
 
 function setRpcCaller(
   instance: PubSubChannel,
@@ -33,7 +33,7 @@ function setRpcCaller(
 export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNEL_ID) {
   const channelTarget = `do:workers/pubsub-channel:PubSubChannel:${channelId}`;
   const gad = await createTestDO(GadWorkspaceDO, {
-    __objectKey: "workspace-semantic-control-plane",
+    __objectKey: "workspace",
   });
   const channel = await createTestDO(PubSubChannel, { __objectKey: channelId });
   const listeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -58,7 +58,7 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
           kind: "durable-object",
           source: "vibestudio/internal",
           className: "GadWorkspaceDO",
-          objectKey: "workspace-semantic-control-plane",
+          objectKey: "workspace",
           targetId: TRANSCRIPT_TEST_GAD_TARGET,
         };
       }

@@ -14,7 +14,7 @@
 import { useEffect, useState } from "react";
 import { Box, Flex, ScrollArea, Text } from "@radix-ui/themes";
 import { Link2Icon } from "@radix-ui/react-icons";
-import { blobstore } from "@vibestudio/runtime";
+import { blobstore } from "@workspace/runtime";
 import { findBacklinks, type Backlink, type BacklinkReader } from "../state/backlinks";
 import { useApp, useAppState } from "../app/context";
 

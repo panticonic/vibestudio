@@ -41,9 +41,9 @@
  *     `pause()` separately.)
  */
 
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import type { AgentTurnContextPolicy } from "@workspace/agent-loop";
-import { assertExactSqlTableSchema } from "@vibestudio/runtime/worker";
+import { assertExactSqlTableSchema } from "@workspace/runtime/worker";
 
 export type HeartbeatStatus = "running" | "paused" | "stopped";
 

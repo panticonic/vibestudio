@@ -12,7 +12,7 @@ Your file root IS the workspace root. Top-level directories: `about/`, `apps/`, 
   `skills/workspace-dev/SKILL.md`, then its linked `WORKERS.md`.** Those are the
   canonical lifecycle, SQLite, manifest-service, and cleanup patterns. Do not
   source-scan unrelated workers to reverse-engineer the platform contract.
-- **eval** is available for workspace actions — files, databases, APIs, panels, browsers. Use static imports (not dynamic await import()). `chat`, `scope`, `scopes`, and `help` are pre-injected; use them directly and do not import them from `@vibestudio/runtime`. Import `contextId` from `@vibestudio/runtime`. Every eval result includes a `[scope]` summary showing current keys.
+- **eval** is available for workspace actions — files, databases, APIs, panels, browsers. Use static imports (not dynamic await import()). `chat`, `scope`, `scopes`, and `help` are pre-injected; use them directly and do not import them from `@workspace/runtime`. Import `contextId` from `@workspace/runtime`. Every eval result includes a `[scope]` summary showing current keys.
 - Quick patterns: `fs.readFile(path)` / `fs.writeFile(path, data)` for files;
   `readFile` and `writeFile` are not top-level runtime exports.
   `this.sql.exec("SELECT ...")` inside a Durable Object for databases (db is a
@@ -75,29 +75,45 @@ After publication, build and runtime systems consume `main` as derived projectio
 Every workspace unit (panel, worker, DO, extension, app) feeds a per-unit diagnostics store. When a post-publication projection or running unit fails — a build cannot be produced, a worker will not start, or a panel renderer crashes — query it here instead of guessing:
 
 ```js
-import { workspace } from "@vibestudio/runtime";
+import { runtime } from "@workspace/runtime";
 
-// One-stop health check: unit status + lastError, error ring, log tail,
-// and recent build events (build-error entries carry the esbuild message).
-const diag = await workspace.units.diagnostics("workers/my-worker");
-// → { unit: { status, lastError, ... }, errors: [...], logs: [...], builds: [...] }
+// Declared source and immutable build readiness (not a process list):
+const units = await build.listUnits();
 
-// Just the log tail (level: "debug"|"info"|"warn"|"error", since: epoch ms):
-const logs = await workspace.units.logs("panels/my-panel", { level: "warn", limit: 50 });
+// Live execution is addressed by the exact driver identity returned from list().
+const live = await runtime.supervision.list({ kind: "worker" });
+const worker = live.find((entry) => entry.source === "workers/my-worker");
+if (!worker) throw new Error("Worker is not live");
 
-// All units with status at a glance (status "error" + lastError for failed workers):
-const units = await workspace.units.list();
+// One-stop health check: current entity, errors, retained logs, and dropped counts.
+const diag = await runtime.supervision.health(worker.identity, {
+  level: "warn",
+  limit: 50,
+  errorLimit: 20,
+});
+const logs = await runtime.supervision.logs(worker.identity, {
+  level: "warn",
+  limit: 50,
+});
 ```
 
-Accepts either the package name or the workspace-relative source path (`workers/foo`, `panels/bar`). What's captured per kind:
+Never synthesize `{ kind, entityId }` from a package name or source path. Use
+the exact `identity` returned by `runtime.supervision.list()` or
+`describe()`. What's captured per kind:
 
 - **Workers / DOs** — `console.*` output, plus lifecycle events (started, updated, _failed to start_ with the error message).
 - **Panels** — console warnings/errors and lifecycle failures (renderer crash, load failure) forwarded from the shell. Full console history for a _running_ panel is available via the panel CDP host (`consoleHistory` host command).
-- **All kinds** — state-triggered build events in `diag.builds`; `diag.builds[].diagnostics` carries structured `{ source, severity, file, line, column, message }` entries rather than an opaque blob.
+- **All kinds** — exact active artifact identity plus bounded health, error, and
+  log projections. Use the explicit build report for source diagnostics.
 
 From a terminal, the same data is available via the external-agent CLI: `vibestudio agent diag UNIT` and `vibestudio agent logs UNIT [--level error]`. For whether context-local source builds, run an explicit build or typecheck against that context. Use diagnostics for post-publication projection and runtime state.
 
-Debugging order: for context-local build/type confidence, run an explicit check and inspect its structured result. After publication, use `units.diagnostics` → `builds` for projection failure → `errors` for activation/runtime failure → `units.logs` for surrounding context. Confirm that a failed activation retained the previous runnable artifact.
+Debugging order: for context-local build/type confidence, run an explicit check
+and inspect its structured result. After publication, use `build.listUnits()` for
+declared build readiness, then `runtime.supervision.list()` →
+`runtime.supervision.health(identity)` → `runtime.supervision.logs(identity)`
+for the exact live execution. Confirm that a failed activation retained the
+previous runnable artifact.
 
 ## Web tools
 

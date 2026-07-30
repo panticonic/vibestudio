@@ -42,7 +42,7 @@ import {
   type CredentialAccessGrantSummary,
   type CredentialAccessSubjectSummary,
   type ManagedCredentialSummary,
-} from "@vibestudio/runtime";
+} from "@workspace/runtime";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
 
 type CredentialStatus = {
@@ -487,8 +487,14 @@ function CredentialsPage() {
       const managed = await credentials.inspectStoredCredentials();
       setItems(managed);
       const [savedPasswords, neverSave, savedFormFill] = await Promise.allSettled([
-        rpc.call<BrowserPasswordSummary[]>("main", "autofill.listSavedPasswords", []),
-        rpc.call<string[]>("main", "autofill.listNeverSaveOrigins", []),
+        browserData.getPasswords().then((rows) =>
+          rows.map((row) => ({
+            id: row.id,
+            origin: row.origin_url,
+            username: row.username,
+          }))
+        ),
+        browserData.getNeverSavePasswordOrigins(),
         Promise.all(
           FORM_FILL_TYPES.map((type) => browserData.getFormFillSuggestions({ type, limit: 100 }))
         ).then((groups) => {
@@ -590,7 +596,7 @@ function CredentialsPage() {
     if (!window.confirm(`Delete the saved password for ${entry.username} on ${entry.origin}?`))
       return;
     try {
-      await rpc.call("main", "autofill.deleteSavedPassword", [entry.id]);
+      await browserData.deletePassword(entry.id);
       setBrowserPasswords((current) => current.filter((item) => item.id !== entry.id));
     } catch (err) {
       setError(
@@ -601,7 +607,7 @@ function CredentialsPage() {
 
   const allowPasswordSavesAgain = useCallback(async (origin: string) => {
     try {
-      await rpc.call("main", "autofill.removeNeverSaveOrigin", [origin]);
+      await browserData.removeNeverSavePassword(origin);
       setNeverSaveOrigins((current) => current.filter((item) => item !== origin));
     } catch (err) {
       setError(

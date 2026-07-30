@@ -12,11 +12,12 @@
       "react/jsx-dev-runtime",
       "@radix-ui/themes",
       "@radix-ui/react-icons",
-      "@vibestudio/runtime",
+      "@workspace/runtime",
       "@workspace/react",
       "@workspace/ui"
     ],
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "agent.credentials.manage",
@@ -46,33 +47,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "git.publish",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "git.pull",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "git.remotes.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "governance.read",
           "resource": {
             "kind": "prefix",
@@ -83,15 +57,6 @@
         },
         {
           "capability": "subagents.create",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "user-approval.request",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -132,7 +97,7 @@
   "dependencies": {
     "@vibestudio/git": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@radix-ui/themes": "^3.2.1",

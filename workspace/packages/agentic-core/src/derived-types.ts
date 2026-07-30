@@ -15,7 +15,7 @@ import type {
   MessageModelPayload,
   MessageTier,
   TurnReasonCode,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
 
 export type SandboxSource = { type: "code"; code: string } | { type: "file"; path: string };

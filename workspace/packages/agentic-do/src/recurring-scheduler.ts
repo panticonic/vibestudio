@@ -17,7 +17,7 @@
  *   // in alarm():        return this.scheduler.onAlarm(Date.now(), (jobId, channelId) => this.runJob(jobId, channelId))
  */
 
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 
 export interface RecurringJob {
   jobId: string;

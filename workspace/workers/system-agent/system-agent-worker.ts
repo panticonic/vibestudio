@@ -1,7 +1,7 @@
 import { AgentWorkerBase, type AgentToolExecutionContext } from "@workspace/agentic-do";
 import { createEvalTool, type ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
-import { createRpcFs } from "@vibestudio/runtime/worker";
+import { createRpcFs } from "@workspace/runtime/worker";
 import { SYSTEM_AGENT_EVAL_GUIDE, SYSTEM_AGENT_PROMPT } from "./prompts.js";
 
 const SYSTEM_AGENT_PARTICIPANT_METHOD_NAMES = [

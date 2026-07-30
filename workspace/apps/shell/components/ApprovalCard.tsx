@@ -5,7 +5,7 @@
  * its host, which performs the actual `shellApproval.*` calls. Secret-input
  * values stay local and are only emitted on submit.
  */
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { ComponentProps, CSSProperties, KeyboardEvent, ReactNode } from "react";
 import {
   Badge,
@@ -45,10 +45,8 @@ import type {
   PendingSecretInputApproval,
   PendingClientConfigApproval,
   PendingDeviceCodeApproval,
-  PendingExternalAgentApproval,
   PendingMissionReviewApproval,
   PendingUnitBatchApproval,
-  PendingUserlandApproval,
 } from "@vibestudio/shared/approvals";
 import {
   formatAccount,
@@ -66,7 +64,7 @@ import {
 import type { ApprovalDecision } from "@vibestudio/shared/approvals";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import { unitKindLabel } from "@vibestudio/shared/bootstrapLaunchGate";
-import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/capabilityDomains";
+import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/authorityDomains";
 import { authorityRowKey } from "@vibestudio/shared/authority/authorityRowDiff";
 import {
   parseApprovalMarkdown,
@@ -138,12 +136,7 @@ export function ApprovalCard({
       emitForApproval({ type: "browse", dir: "next" });
     } else if (key === "d") {
       event.preventDefault();
-      if (approval.kind === "external-agent") {
-        emitForApproval({ type: "resolve-external-agent", behavior: "deny" });
-      } else if (approval.kind === "userland") {
-        const deny = approval.options.find((option) => option.value === "deny");
-        if (deny) emitForApproval({ type: "resolve-userland", choice: deny.value });
-      } else if (approval.kind === "browser-permission") {
+      if (approval.kind === "browser-permission") {
         // Browser permission decisions have no one-shot "deny": dismissing
         // denies only this request, while "block" is the explicit durable act.
         emitForApproval({ type: "decide", decision: "dismiss" });
@@ -163,12 +156,6 @@ export function ApprovalCard({
         emitForApproval({ type: "submit-credential-input", values: secretConfigValues });
       } else if (approval.kind === "secret-input") {
         emitForApproval({ type: "submit-secret-input", values: secretConfigValues });
-      } else if (approval.kind === "external-agent") {
-        emitForApproval({ type: "resolve-external-agent", behavior: "allow" });
-      } else if (approval.kind === "userland") {
-        const primary =
-          approval.options.find((option) => option.tone === "primary") ?? approval.options[0];
-        if (primary) emitForApproval({ type: "resolve-userland", choice: primary.value });
       } else if (approval.kind === "mission-review") {
         emitForApproval({
           type: "resolve-mission-review",
@@ -213,15 +200,6 @@ export function ApprovalCard({
         }
         onDeny={() => emitForApproval({ type: "decide", decision: "deny" })}
         onDismiss={() => emitForApproval({ type: "decide", decision: "dismiss" })}
-      />
-    ) : approval.kind === "userland" ? (
-      <UserlandApprovalActions
-        approval={approval}
-        onChoose={(choice) => emitForApproval({ type: "resolve-userland", choice })}
-      />
-    ) : approval.kind === "external-agent" ? (
-      <ExternalAgentActions
-        onDecide={(behavior) => emitForApproval({ type: "resolve-external-agent", behavior })}
       />
     ) : approval.kind === "device-code" ? (
       <DeviceCodeActions onCancel={() => emitForApproval({ type: "device-cancel" })} />
@@ -397,14 +375,6 @@ export function ApprovalCard({
               />
             ) : null}
 
-            {approval.kind === "userland" && approval.sealedDetails?.length && fetchContent ? (
-              <SealedApprovalDetails
-                approvalId={approval.approvalId}
-                details={approval.sealedDetails}
-                fetchContent={fetchContent}
-              />
-            ) : null}
-
             {approval.kind === "mission-review" ? (
               <MissionReviewBody
                 approval={approval}
@@ -460,7 +430,6 @@ export function ApprovalCard({
               defaultOpen={shouldOpenApprovalDetails(approval)}
             />
             {approval.kind === "device-code" ? <DeviceCodeBody approval={approval} /> : null}
-            {approval.kind === "external-agent" ? <ExternalAgentBody approval={approval} /> : null}
             {approval.kind === "client-config" ||
             approval.kind === "credential-input" ||
             approval.kind === "secret-input" ? (
@@ -509,132 +478,6 @@ export function ApprovalCard({
         ) : null}
       </fieldset>
     </div>
-  );
-}
-
-function SealedApprovalDetails({
-  approvalId,
-  details,
-  fetchContent,
-}: {
-  approvalId: string;
-  details: NonNullable<PendingUserlandApproval["sealedDetails"]>;
-  fetchContent: DiffContentFetcher;
-}) {
-  const reviewDetails = details.filter((detail) => (detail.disclosure ?? "review") === "review");
-  const [contents, setContents] = useState<Record<string, string>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState<Set<string>>(new Set());
-  const nextRequestId = useRef(0);
-  const activeRequests = useRef<Record<string, number>>({});
-
-  useEffect(() => {
-    activeRequests.current = {};
-    setContents({});
-    setErrors({});
-    setLoading(new Set());
-  }, [approvalId]);
-
-  const reveal = (digest: string) => {
-    const requestId = ++nextRequestId.current;
-    activeRequests.current[digest] = requestId;
-    setLoading((current) => new Set(current).add(digest));
-    setErrors((current) => {
-      const next = { ...current };
-      delete next[digest];
-      return next;
-    });
-    void fetchContent(digest)
-      .then((content) => {
-        if (requestId !== activeRequests.current[digest]) return;
-        const text = typeof content === "string" ? content : new TextDecoder().decode(content);
-        setContents((current) => ({ ...current, [digest]: text }));
-      })
-      .catch((error: unknown) => {
-        if (requestId !== activeRequests.current[digest]) return;
-        setErrors((current) => ({
-          ...current,
-          [digest]: error instanceof Error ? error.message : "Content unavailable",
-        }));
-      })
-      .finally(() => {
-        if (requestId !== activeRequests.current[digest]) return;
-        setLoading((current) => {
-          const next = new Set(current);
-          next.delete(digest);
-          return next;
-        });
-      });
-  };
-
-  if (reviewDetails.length === 0) return null;
-
-  return (
-    <details className="approval-details">
-      <summary>
-        <ChevronDownIcon className="approval-details-chevron" width={13} height={13} />
-        Inspect request content
-      </summary>
-      <Flex direction="column" gap="2" pt="2">
-        {reviewDetails.map((detail) => {
-          const content = contents[detail.digest];
-          const detailError = errors[detail.digest];
-          const detailLoading = loading.has(detail.digest);
-          return (
-            <Box key={detail.digest}>
-              <Flex align="center" gap="2" mb="1" wrap="wrap">
-                <Text size="1" weight="medium">
-                  {detail.label}
-                </Text>
-                <Text size="1" color="gray">
-                  {detail.byteLength.toLocaleString()} bytes · sha256:{detail.digest}
-                </Text>
-              </Flex>
-              {content !== undefined ? (
-                <Code
-                  size="1"
-                  style={{
-                    display: "block",
-                    maxHeight: 360,
-                    overflow: "auto",
-                    padding: 8,
-                    whiteSpace: "pre-wrap",
-                    overflowWrap: "anywhere",
-                    userSelect: "text",
-                  }}
-                >
-                  {content}
-                </Code>
-              ) : (
-                <Flex direction="column" align="start" gap="1">
-                  {detailError ? (
-                    <Text size="1" color="red" role="alert">
-                      Content unavailable: {detailError}
-                    </Text>
-                  ) : (
-                    <Text size="1" color="gray">
-                      Hidden until you choose to reveal it. It may contain sensitive request input.
-                    </Text>
-                  )}
-                  <Button
-                    size="1"
-                    variant="soft"
-                    disabled={detailLoading}
-                    onClick={() => reveal(detail.digest)}
-                  >
-                    {detailLoading
-                      ? "Loading…"
-                      : detailError
-                        ? `Retry ${detail.label}`
-                        : `Reveal ${detail.label}`}
-                  </Button>
-                </Flex>
-              )}
-            </Box>
-          );
-        })}
-      </Flex>
-    </details>
   );
 }
 
@@ -739,7 +582,6 @@ export function ApprovalKindIcon({
   if (approval.kind === "device-code") return <ExternalLinkIcon width={size} height={size} />;
   if (approval.kind === "capability") return <GlobeIcon width={size} height={size} />;
   if (approval.kind === "browser-permission") return <GlobeIcon width={size} height={size} />;
-  if (approval.kind === "external-agent") return <PersonIcon width={size} height={size} />;
   if (approval.kind === "client-config" || approval.kind === "credential-input")
     return <GearIcon width={size} height={size} />;
   return <LockClosedIcon width={size} height={size} />;
@@ -1249,135 +1091,6 @@ function CredentialInputActions({
   );
 }
 
-function UserlandApprovalActions({
-  approval,
-  onChoose,
-}: {
-  approval: PendingUserlandApproval;
-  onChoose: (choice: string) => void;
-}) {
-  const oneTimeOption =
-    approval.promptOptions === "scoped"
-      ? null
-      : (approval.options.find((option) => option.tone === "primary") ??
-        approval.options.find((option) => option.tone !== "danger") ??
-        null);
-  return (
-    <Flex direction="column" align="end" gap="1">
-      <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
-        {approval.options.map((option) => (
-          <DecisionButton
-            key={option.value}
-            label={option.label}
-            description={option.description ?? option.label}
-            color={option.tone === "danger" ? "red" : option.tone === "primary" ? "sky" : undefined}
-            variant={option.tone === "primary" ? "solid" : "surface"}
-            icon={option.tone === "danger" ? <CrossCircledIcon /> : <CheckCircledIcon />}
-            onClick={() => onChoose(option.value)}
-          />
-        ))}
-        {oneTimeOption ? (
-          <DecisionButton
-            label={HOST_APPROVAL_COPY.chrome.onlyThisTime}
-            description={HOST_APPROVAL_COPY.chrome.onlyThisTimeDescription}
-            variant="surface"
-            icon={<CheckCircledIcon />}
-            onClick={() => onChoose(`once:${oneTimeOption.value}`)}
-          />
-        ) : null}
-        <Tooltip content={HOST_APPROVAL_COPY.chrome.dismiss}>
-          <IconButton size="1" variant="ghost" color="gray" onClick={() => onChoose("dismiss")}>
-            <Cross2Icon />
-          </IconButton>
-        </Tooltip>
-      </Flex>
-      <Text size="1" color="gray">
-        {approval.promptOptions === "scoped"
-          ? HOST_APPROVAL_COPY.chrome.scopedChoiceHint
-          : HOST_APPROVAL_COPY.chrome.rememberedChoiceHint}
-      </Text>
-    </Flex>
-  );
-}
-
-function ExternalAgentActions({ onDecide }: { onDecide: (behavior: "allow" | "deny") => void }) {
-  return (
-    <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
-      <DecisionButton
-        label={HOST_APPROVAL_COPY.externalAgent.allow}
-        description={HOST_APPROVAL_COPY.externalAgent.allowDescription}
-        color="sky"
-        variant="solid"
-        onClick={() => onDecide("allow")}
-      />
-      <DecisionButton
-        label={HOST_APPROVAL_COPY.externalAgent.deny}
-        description={HOST_APPROVAL_COPY.externalAgent.denyDescription}
-        color="red"
-        icon={<CrossCircledIcon />}
-        onClick={() => onDecide("deny")}
-      />
-    </Flex>
-  );
-}
-
-function ExternalAgentBody({ approval }: { approval: PendingExternalAgentApproval }) {
-  if (!approval.preview) return null;
-  return (
-    <pre
-      style={{
-        margin: "4px 0 0",
-        maxWidth: "100%",
-        maxHeight: 220,
-        overflow: "auto",
-        borderRadius: 6,
-        padding: "8px 10px",
-        background: "var(--gray-a3)",
-        fontSize: 12,
-        lineHeight: 1.45,
-        whiteSpace: "pre-wrap",
-        overflowWrap: "anywhere",
-      }}
-    >
-      <code>{approval.preview}</code>
-    </pre>
-  );
-}
-
-function ExternalAgentDetails({ approval }: { approval: PendingExternalAgentApproval }) {
-  return (
-    <>
-      <Detail
-        icon={<GearIcon />}
-        label="Tool"
-        value={<InlineCode>{approval.operationName}</InlineCode>}
-      />
-      <Detail
-        icon={<LockClosedIcon />}
-        label="Capability"
-        value={<InlineCode>{approval.capability}</InlineCode>}
-      />
-      <Detail icon={<PersonIcon />} label="Agent" value={<IdCode value={approval.entityId} />} />
-      {approval.description ? (
-        <Detail
-          icon={<GearIcon />}
-          label="Request"
-          value={
-            <Text size="1" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
-              {approval.description}
-            </Text>
-          }
-        />
-      ) : null}
-      <Detail
-        icon={<LockClosedIcon />}
-        label="Request id"
-        value={<IdCode value={approval.requestId} />}
-      />
-    </>
-  );
-}
-
 function DecisionButton({
   label,
   description,
@@ -1527,10 +1240,6 @@ function ApprovalDetails({
           <ClientConfigDetails approval={approval} />
         ) : approval.kind === "credential-input" ? (
           <CredentialInputDetails approval={approval} />
-        ) : approval.kind === "userland" ? (
-          <UserlandDetails approval={approval} />
-        ) : approval.kind === "external-agent" ? (
-          <ExternalAgentDetails approval={approval} />
         ) : approval.kind === "device-code" ? (
           <DeviceCodeDetails approval={approval} />
         ) : approval.kind === "unit-batch" ? (
@@ -2218,67 +1927,6 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
           </details>
         );
       })}
-    </>
-  );
-}
-
-function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
-  const issuer = approval.issuer;
-  const showIssuer =
-    issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId);
-  return (
-    <>
-      {showIssuer && issuer ? (
-        <Detail
-          icon={<PersonIcon />}
-          label="Asked by"
-          value={
-            <Flex align="center" gap="2" wrap="wrap">
-              <InlineCode>
-                {issuer.kind} · {issuer.label ?? prettifyId(issuer.id)}
-              </InlineCode>
-              <Tooltip content={`Full id — click to select: ${issuer.id}`}>
-                <Code
-                  size="1"
-                  variant="soft"
-                  color="gray"
-                  style={{ cursor: "text", userSelect: "all" }}
-                >
-                  {truncateId(issuer.id)}
-                </Code>
-              </Tooltip>
-            </Flex>
-          }
-        />
-      ) : null}
-      <Detail
-        icon={<LockClosedIcon />}
-        label="Subject"
-        value={<IdCode value={approval.subject.id} />}
-      />
-      {approval.subject.label ? (
-        <Detail
-          icon={<LockClosedIcon />}
-          label="Label"
-          value={<InlineCode>{approval.subject.label}</InlineCode>}
-        />
-      ) : null}
-      {(approval.details ?? []).map((detail) => (
-        <Detail
-          key={detail.label}
-          icon={<LockClosedIcon />}
-          label={detail.label}
-          value={<FormattedDetailValue value={detail.value} format={detail.format} />}
-        />
-      ))}
-      {(approval.positiveEvidence ?? []).map((detail) => (
-        <Detail
-          key={`evidence:${detail.label}`}
-          icon={<CheckCircledIcon />}
-          label={detail.label}
-          value={<FormattedDetailValue value={detail.value} format={detail.format} />}
-        />
-      ))}
     </>
   );
 }

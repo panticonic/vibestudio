@@ -1,28 +1,14 @@
 import { readFile, stat, mkdtemp, mkdir } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionContext, UserlandApprovalRequest } from "@vibestudio/extension";
-import { userlandApprovalRequestSchema } from "@vibestudio/shared/approvals";
+import type { ExtensionContext } from "@vibestudio/extension";
 import { activate } from "./index.js";
 import type { SessionInfoEvent } from "./types.js";
 
 async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "allow") {
   const root = await mkdtemp(join(tmpdir(), "vibestudio-shell-test-"));
-  const approvals = Array.isArray(approval) ? [...approval] : undefined;
-  const request = vi.fn(async (req: UserlandApprovalRequest) => ({
-    kind: "choice" as const,
-    choice: approvals?.shift() ?? approval,
-    ...(req.sealedDetails?.length
-      ? {
-          sealedDetails: req.sealedDetails.map((detail) => ({
-            digest: createHash("sha256").update(detail.content, "utf8").digest("hex"),
-            content: detail.content,
-          })),
-        }
-      : {}),
-  }));
+  void approval;
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   // Materialize a per-context folder on demand, mirroring the host capability.
   const ensureContextFolder = vi.fn(async (contextId: string) => {
@@ -51,7 +37,6 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
       ensureContextFolder,
     },
     invocation: { current: invocationCurrent },
-    approvals: { request, revoke: vi.fn(), list: vi.fn() },
     extensions: {
       invoke,
       invokeProvider,
@@ -66,7 +51,6 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
   } as unknown as ExtensionContext;
   return {
     api: await activate(ctx),
-    request,
     root,
     log,
     ensureContextFolder,
@@ -78,51 +62,11 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
 }
 
 describe("@workspace-extensions/shell", () => {
-  it("rejects cwd escapes before requesting approval", async () => {
-    const { api, request } = await makeApi();
+  it("rejects cwd escapes before execution", async () => {
+    const { api } = await makeApi();
     await expect(
       api.exec({ intent: { kind: "argv", executable: "pwd" }, cwd: "../../" })
     ).rejects.toMatchObject({ code: "EACCES" });
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("maps denied exec approval to EACCES before spawning", async () => {
-    const { api, request } = await makeApi("deny");
-    await expect(
-      api.exec({
-        intent: { kind: "argv", executable: "node", args: ["-e", "console.log('nope')"] },
-      })
-    ).rejects.toMatchObject({ code: "EACCES" });
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("bounds long exec approval copy to userland approval schema limits", async () => {
-    const { api, request } = await makeApi("allow");
-    await expect(
-      api.exec({
-        intent: {
-          kind: "argv",
-          executable: "node",
-          args: ["-e", "", "x".repeat(600)],
-        },
-      })
-    ).resolves.toMatchObject({ exitCode: 0 });
-
-    const approval = request.mock.calls[0]![0];
-    expect(approval.subject.label).toBeDefined();
-    expect(approval.summary).toBeDefined();
-    // Validate against the authoritative schema so its field bounds can't
-    // drift from hand-copied numbers here.
-    expect(() => userlandApprovalRequestSchema.parse(approval)).not.toThrow();
-  });
-
-  it("maps denied open approval to EACCES before spawning a session", async () => {
-    const { api, request } = await makeApi("deny");
-    await expect(
-      api.open({ command: "node", args: ["-e", "console.log('nope')"] })
-    ).rejects.toMatchObject({ code: "EACCES" });
-    expect(await api.list()).toEqual([]);
-    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("keeps generated shell-integration paths out of the session label", async () => {
@@ -139,8 +83,8 @@ describe("@workspace-extensions/shell", () => {
     await api.dispose(sessionId);
   });
 
-  it("runs approved argv-style exec without invoking a shell", async () => {
-    const { api, request } = await makeApi("allow");
+  it("runs argv-style exec without invoking a shell", async () => {
+    const { api } = await makeApi("allow");
     const result = await api.exec({
       intent: {
         kind: "argv",
@@ -150,173 +94,13 @@ describe("@workspace-extensions/shell", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("hello;not-a-shell");
-    const sealedPlan = request.mock.calls[0]![0].sealedDetails?.find(
-      (detail) => detail.disclosure === "sealed-only"
-    )?.content;
-    expect(sealedPlan).toContain('"hello;not-a-shell"');
-  });
-
-  it("makes sealed stdin visible on deliberate review without exposing it in prompt chrome", async () => {
-    const { api, request } = await makeApi("allow");
-    const stdin = "sensitive-input;still-data";
-    const result = await api.exec({
-      intent: {
-        kind: "argv",
-        executable: "node",
-        args: ["-e", "process.stdin.pipe(process.stdout)"],
-      },
-      stdin,
-    });
-
-    expect(result.stdout).toBe(stdin);
-    const approval = request.mock.calls[0]![0];
-    expect(approval.summary).toContain("Standard input:");
-    expect(approval.summary).not.toContain(stdin);
-    expect(approval.details?.map((detail) => detail.value).join("\n")).not.toContain(stdin);
-    expect(
-      approval.sealedDetails?.find((detail) => detail.disclosure === "review")?.content
-    ).toContain(stdin);
-    expect(
-      approval.sealedDetails?.find((detail) => detail.disclosure === "sealed-only")?.content
-    ).toContain(stdin);
-
-    await api.exec({
-      intent: {
-        kind: "argv",
-        executable: "node",
-        args: ["-e", "process.stdin.pipe(process.stdout)"],
-      },
-      stdin: `${stdin}-changed`,
-    });
-    expect(request.mock.calls[1]![0].subject.id).not.toBe(approval.subject.id);
-  });
-
-  it("executes and approves exact script bytes without reconstructing them from argv", async () => {
-    const { api, request } = await makeApi("allow");
-    const script = "printf 'first '; printf '%s' 'second;still-data'";
-    const result = await api.exec({ intent: { kind: "script", script } });
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe("first second;still-data");
-    expect(request.mock.calls[0]![0]).toMatchObject({
-      warning: expect.stringContaining("sealed script"),
-      sealedDetails: expect.arrayContaining([
-        expect.objectContaining({
-          label: "Command and input",
-          content: expect.stringContaining(script),
-          disclosure: "review",
-        }),
-        expect.objectContaining({
-          label: "Exact execution seal",
-          content: expect.stringContaining(script),
-          disclosure: "sealed-only",
-        }),
-      ]),
-    });
-  });
-
-  it("seals, returns, and executes a complete script with a dangerous suffix past 1,000 chars", async () => {
-    const { api, request } = await makeApi("allow");
-    const dangerousSuffix = "printf '%s' 'reviewed-dangerous-suffix'";
-    const script = `${"#".repeat(1_200)}\n${dangerousSuffix}`;
-    const result = await api.exec({ intent: { kind: "script", script } });
-
-    expect(result.stdout).toBe("reviewed-dangerous-suffix");
-    const approval = request.mock.calls[0]![0];
-    const content = approval.sealedDetails?.find(
-      (detail) => detail.disclosure === "sealed-only"
-    )?.content;
-    expect(content).toContain(dangerousSuffix);
-    expect(content?.length).toBeGreaterThan(1_000);
-    const digest = createHash("sha256").update(content!, "utf8").digest("hex");
-    expect(approval.details).toContainEqual(
-      expect.objectContaining({ label: "Plan digest", value: `sha256:${digest}` })
-    );
-  });
-
-  it("binds resolved cwd and exact effective environment into the approval subject", async () => {
-    const { api, request, root } = await makeApi("allow");
-    await mkdir(join(root, "nested"));
-    await api.exec({
-      intent: {
-        kind: "argv",
-        executable: "node",
-        args: ["-e", "process.stdout.write(process.env.EXEC_MODE ?? '')"],
-      },
-    });
-    const first = request.mock.calls[0]![0];
-    expect(first.details?.some((detail) => detail.label === "Environment overrides")).toBe(false);
-    expect(first.details).toContainEqual(
-      expect.objectContaining({
-        label: "Environment profile",
-        value: expect.stringMatching(/revision [0-9a-f]{12}$/),
-      })
-    );
-
-    await api.exec({
-      intent: {
-        kind: "argv",
-        executable: "node",
-        args: ["-e", "process.stdout.write(process.env.EXEC_MODE ?? '')"],
-      },
-      cwd: "nested",
-    });
-    const second = request.mock.calls[1]![0];
-    expect(second.subject.id).not.toBe(first.subject.id);
-    expect(second.details).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ label: "Folder", value: join(root, "nested") }),
-      ])
-    );
-
-    const thirdResult = await api.exec({
-      intent: {
-        kind: "argv",
-        executable: "node",
-        args: ["-e", "process.stdout.write(process.env.EXEC_MODE ?? '')"],
-      },
-      cwd: "nested",
-      env: { EXEC_MODE: "reviewed-value" },
-    });
-    const third = request.mock.calls[2]![0];
-
-    expect(thirdResult.stdout).toBe("reviewed-value");
-    expect(third.subject.id).not.toBe(second.subject.id);
-    expect(third.details).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ label: "Folder", value: join(root, "nested") }),
-        expect.objectContaining({
-          label: "Environment overrides",
-          value: "EXEC_MODE · values sealed, not displayed",
-        }),
-      ])
-    );
-    expect(third.details?.map((detail) => detail.value).join("\n")).not.toContain("reviewed-value");
-
-    await api.exec({
-      intent: {
-        kind: "argv",
-        executable: "node",
-        args: ["-e", "process.stdout.write(process.env.EXEC_MODE ?? '')"],
-      },
-      cwd: "nested",
-      env: { EXEC_MODE: "reviewed-value" },
-      timeoutMs: 60_000,
-      maxOutputBytes: 2 * 1024 * 1024,
-    });
-    const resourceAdjusted = request.mock.calls[3]![0];
-    expect(resourceAdjusted.subject.id).toBe(third.subject.id);
-    expect(
-      resourceAdjusted.sealedDetails?.find((detail) => detail.disclosure === "sealed-only")?.content
-    ).not.toBe(third.sealedDetails?.find((detail) => detail.disclosure === "sealed-only")?.content);
   });
 
   it("rejects the removed command/args/shell exec shape", async () => {
-    const { api, request } = await makeApi("allow");
+    const { api } = await makeApi("allow");
     await expect(
       api.exec({ command: "echo", args: ["legacy"], shell: true } as never)
     ).rejects.toThrow();
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("stashes scratch files inside the workspace with a hard size cap", async () => {
@@ -589,8 +373,8 @@ describe("@workspace-extensions/shell", () => {
     expect(scrollback.text).not.toContain("1337;snug");
   });
 
-  it("routes snug split through approved shell open and tags spawned sessions", async () => {
-    const { api, log } = await makeApi("allow");
+  it("routes snug split through receiver-admitted shell open and tags spawned sessions", async () => {
+    const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
       args: ["-lc", "snug split right --command 'printf child'"],
@@ -603,10 +387,6 @@ describe("@workspace-extensions/shell", () => {
       direction: "row",
     });
     expect(child?.command.argv.join(" ")).toContain("printf child");
-    expect(log.info).toHaveBeenCalledWith(
-      "snug category-c decision",
-      expect.objectContaining({ action: "split", decision: "allow" })
-    );
   });
 
   it("routes approved snug open into a trusted session metadata handoff", async () => {
@@ -649,27 +429,8 @@ describe("@workspace-extensions/shell", () => {
     expect(info.command.cwd).toBe(join(root, ".context-projections", "v5", "ctx-1"));
   });
 
-  it("approval-gates attaching to an existing context before materializing it", async () => {
-    const { api, request, ensureContextFolder } = await makeApi("deny");
-    await expect(
-      api.open({
-        command: "node",
-        args: ["-e", "process.exit(0)"],
-        contextId: "ctx-existing",
-      })
-    ).rejects.toMatchObject({ code: "EACCES" });
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls[0]![0]).toMatchObject({
-      title: "Work with files from another part of your project",
-      subject: { label: "ctx-existing" },
-    });
-    expect(ensureContextFolder).not.toHaveBeenCalled();
-    expect(await api.list()).toEqual([]);
-  });
-
-  it("uses shell-created fresh context tokens without an extra attach prompt", async () => {
-    const { api, request, ensureContextFolder, rpcCall } = await makeApi("allow");
+  it("uses shell-created context tokens for the newly created context", async () => {
+    const { api, ensureContextFolder, rpcCall } = await makeApi("allow");
     rpcCall.mockImplementation(async (_target: string, method: string) => {
       if (method === "runtime.createEntity") return { id: "entity-new", contextId: "ctx-new" };
       if (method === "runtime.resolveContext") return "ctx-new";
@@ -695,12 +456,10 @@ describe("@workspace-extensions/shell", () => {
     await api.awaitExit(sessionId);
 
     expect(ensureContextFolder).toHaveBeenCalledWith("ctx-new");
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls[0]![0]).toMatchObject({ title: "Open a terminal" });
   });
 
-  it("does not prompt again once the caller already has a session attached to the context", async () => {
-    const { api, request } = await makeApi(["allow", "allow", "allow"]);
+  it("supports multiple sessions attached to the same context", async () => {
+    const { api } = await makeApi(["allow", "allow", "allow"]);
     const first = await api.open({
       command: "node",
       args: ["-e", "setTimeout(() => {}, 5000)"],
@@ -715,11 +474,6 @@ describe("@workspace-extensions/shell", () => {
     await api.kill(first.sessionId, "SIGTERM");
     await api.awaitExit(first.sessionId);
     await api.awaitExit(second.sessionId);
-    expect(request.mock.calls.map((call) => call[0].title)).toEqual([
-      "Work with files from another part of your project",
-      "Open a terminal",
-      "Open a terminal",
-    ]);
   });
 
   it("invokes a registered launch-adapter handler for context sessions and applies rewrites", async () => {
@@ -790,29 +544,6 @@ describe("@workspace-extensions/shell", () => {
     expect(invoke.mock.calls.filter((call) => call[1] === "release")).toHaveLength(1);
   });
 
-  it("runs launch cleanup when approval rejects after preparation", async () => {
-    const { api, invoke, invocationCurrent } = await makeApi(["allow", "deny"]);
-    invoke.mockResolvedValueOnce({
-      argv: ["node", "-e", "process.exit(0)"],
-      cleanup: { method: "release", args: [{ entityId: "entity-denied" }] },
-    });
-    invocationCurrent.mockReturnValueOnce({
-      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
-    });
-    await api.registerLaunchAdapter({
-      id: "test:claude-denied",
-      match: { pattern: "\\bclaude\\b" },
-      handler: { extension: "@workspace-extensions/claude-code", method: "adaptLaunch" },
-    });
-
-    await expect(
-      api.open({ command: "node", args: ["claude"], contextId: "ctx-denied" })
-    ).rejects.toThrow();
-    expect(invoke).toHaveBeenCalledWith("@workspace-extensions/claude-code", "release", [
-      { entityId: "entity-denied" },
-    ]);
-  });
-
   it("does not run launch-adapter handlers for non-context sessions", async () => {
     const { api, invoke, invocationCurrent } = await makeApi("allow");
     invocationCurrent.mockReturnValueOnce({
@@ -856,28 +587,6 @@ describe("@workspace-extensions/shell", () => {
     );
   });
 
-  it("approval-gates snug open before creating an open-url handoff", async () => {
-    const { api, request, log } = await makeApi(["allow", "deny"]);
-    const { sessionId } = await api.open({
-      command: "/bin/sh",
-      args: ["-lc", "snug open --url https://blocked.example.test || true"],
-    });
-    await api.awaitExit(sessionId);
-    const scrollback = await api.getScrollback(sessionId);
-
-    expect(request).toHaveBeenCalledTimes(2);
-    const urlApproval = (request.mock.calls[1] as unknown[] | undefined)?.[0];
-    expect(urlApproval).toMatchObject({
-      title: "Open a link",
-      subject: { label: "https://blocked.example.test" },
-    });
-    await expect(api.getMeta(sessionId, "snugOpenUrl")).resolves.toBeUndefined();
-    expect(scrollback.text).toContain("shell.open denied by user");
-    expect(log.info).toHaveBeenCalledWith(
-      "snug category-c decision",
-      expect.objectContaining({ action: "open-url", decision: "deny" })
-    );
-  });
 });
 
 const readerBuffers = new WeakMap<ReadableStreamDefaultReader<Uint8Array>, string>();

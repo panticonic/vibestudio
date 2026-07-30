@@ -9,7 +9,7 @@ import {
 } from "@radix-ui/react-icons";
 import { useEffect, useRef, useState } from "react";
 import { useIsMobile } from "@workspace/react/responsive";
-import { SCRATCH_BUFFER_MAX_TEXT_BYTES } from "./migrateState.js";
+import { SCRATCH_BUFFER_MAX_TEXT_BYTES } from "./terminalState.js";
 import type { ScratchBuffer } from "./types.js";
 
 const COMMIT_DEBOUNCE_MS = 500;

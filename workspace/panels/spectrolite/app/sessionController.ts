@@ -18,8 +18,8 @@
  */
 
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
-import { rpc, panel } from "@vibestudio/runtime";
-import { recoveryCoordinator } from "@vibestudio/runtime/internal/diagnostics";
+import { rpc, panel } from "@workspace/runtime";
+import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import type { ChatParticipantMetadata } from "@workspace/agentic-core";
 import type { Store } from "./store";
 import type { ChannelMessage, RosterAgent, SpectroliteState } from "./state";

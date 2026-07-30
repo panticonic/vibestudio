@@ -12,7 +12,7 @@ The extension brings bundled-capable dependencies and reports engine status.
 ## Fast Path
 
 ```ts
-import { extensions } from "@vibestudio/runtime";
+import { extensions } from "@workspace/runtime";
 
 const pdf = extensions.use("@workspace-extensions/pdf-ingest");
 const result = await pdf.ingest(toPdfExtensionBytes(fileBytes), {

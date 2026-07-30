@@ -5,13 +5,13 @@ import {
   type RespondPolicy,
 } from "@workspace/agentic-do";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { rpc } from "@vibestudio/runtime/worker";
-import type { DurableObjectContext, WebhookDeliveryEvent } from "@vibestudio/runtime/worker";
+import { rpc } from "@workspace/runtime/worker";
+import type { DurableObjectContext, WebhookDeliveryEvent } from "@workspace/runtime/worker";
 import {
   AGENTIC_PROTOCOL_VERSION,
   type ActorRef,
   type AgenticEvent,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import { createGmailClient, type GmailClient, type GmailThread } from "@workspace/gmail";
 import type { GmailAttentionPrefs, GmailSetupState } from "@workspace/gmail/card-types";
 import {
@@ -105,16 +105,7 @@ interface GmailPushTarget {
 }
 
 export class GmailAgentWorker extends AgentWorkerBase {
-  // Version 7 is the first supported production shape. Earlier experimental
-  // layouts have no proven lossless translation and are rejected intact.
   static override schemaVersion = GMAIL_AGENT_SCHEMA_BASELINE;
-
-  protected override schemaProductionBaseline() {
-    return {
-      version: GMAIL_AGENT_SCHEMA_BASELINE,
-      name: "gmail-agent-v7",
-    } as const;
-  }
 
   private gmailClients = new Map<string, GmailClient>();
   private recoveredChannels = new Set<string>();
@@ -556,7 +547,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * server has already verified and decoded the Cloud Pub/Sub envelope; Gmail
    * interpretation and fanout stay here.
    */
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async onWebhookDelivery(event: WebhookDeliveryEvent): Promise<{ synced: string[] }> {
     if (event.payload.type !== "cloud-pubsub") return { synced: [] };
     const data = record(event.payload.dataJson);
@@ -593,7 +584,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { synced: [...synced] };
   }
 
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   registerPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -620,7 +611,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { registered: true };
   }
 
-  @rpc({ principals: ["code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   unregisterPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -658,7 +649,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * Sync every channel bound to that address now; the follow-up alarm runs
    * the triage/wake pipeline.
    */
-  @rpc({ principals: ["host", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async onGmailPushNotification(payload: { emailAddress: string; historyId: string }): Promise<{
     synced: string[];
   }> {
@@ -802,13 +793,13 @@ export class GmailAgentWorker extends AgentWorkerBase {
     }
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "read" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
   async getAttentionPrefs(channelId: string): Promise<GmailAttentionPrefs> {
     this.assertSubscribedChannel(channelId);
     return this.handlers.getAttentionPrefs(channelId);
   }
 
-  @rpc({ principals: ["host", "user", "code"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host", "user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async setAttentionPrefs(
     channelId: string,
     args: unknown

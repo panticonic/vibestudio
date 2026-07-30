@@ -41,7 +41,7 @@ import { Box, Card, Code, Flex, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon, Pencil1Icon } from "@radix-ui/react-icons";
 import { compileComponent } from "@workspace/eval";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
-import { rpc } from "@vibestudio/runtime";
+import { rpc } from "@workspace/runtime";
 import { mdxComponents } from "@workspace/agentic-chat";
 import { nodeToMdxSource } from "./mdastSerialize";
 import { WikiLink as SpectroliteWikiLink } from "./components";

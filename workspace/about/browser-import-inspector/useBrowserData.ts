@@ -9,7 +9,7 @@
  * UI can render an inline "approval required" affordance instead of crashing.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { browserData } from "@vibestudio/runtime";
+import { browserData } from "@workspace/runtime";
 import { type AsyncState, classifyError } from "./format";
 
 export { browserData };

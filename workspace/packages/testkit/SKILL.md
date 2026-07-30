@@ -83,7 +83,8 @@ Key facts:
 ## Panel automation
 
 - `openPanel(source, { stateArgs? })` / `withPanel(source, fn)` (boot-ready; auto-close)
-- Existing panels: pass a `panelTree.list/roots/children/get` handle; do not
+- Existing panels: obtain handles through bounded `panelTree.page`,
+  `panelTree.search`, or addressed `panelTree.get`; do not
   call `handle.close`, `handle.navigate`, or `handle.reload` unless that is the
   test.
 - `panelText(h)` / `waitForText(h, text)` — approval-free readable snapshot path (agent API with accessibility-tree fallback)

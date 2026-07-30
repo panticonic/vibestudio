@@ -14,9 +14,131 @@
       "streamingMethods": [
         "logcat",
         "shell"
-      ]
+      ],
+      "methodAuthority": {
+        "doctor": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "listDevices": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "listIosSimulators": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "buildAndroid": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "installAndroid": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "native.mobile.execute",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "installIos": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "native.mobile.execute",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "launchAndroid": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "launchIos": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "clearAndroidApp": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "native.mobile.execute",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "adbReverse": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "screenshot": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "screenshotIos": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "verify": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "verifyWorkspaceReady": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "logcat": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "logsIos": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "shell": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "native.mobile.execute",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        }
+      }
     },
     "authority": {
+      "provides": [
+        {
+          "name": "native.mobile.execute",
+          "title": "Change a mobile runtime",
+          "action": "run a build, install, reset, or device command",
+          "tier": "gated",
+          "sensitivity": "write",
+          "resourceType": "native.mobile",
+          "presentation": {
+            "domain": "people",
+            "verb": "manage"
+          },
+          "grantScopes": [
+            "once",
+            "task",
+            "session"
+          ]
+        }
+      ],
       "requests": [
         {
           "capability": "context.boundary",
@@ -25,15 +147,6 @@
             "prefix": ""
           },
           "tier": "critical",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
           "evidence": "intentional-broad"
         }
       ]

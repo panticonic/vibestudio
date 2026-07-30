@@ -114,7 +114,7 @@ export interface ChannelConfig {
 /** Presence event payload stored in messages table. */
 export interface PresencePayload {
   action: "join" | "leave" | "update";
-  ref: import("@vibestudio/agentic-protocol").ParticipantRef;
+  ref: import("@workspace/agentic-protocol").ParticipantRef;
   metadata: Record<string, unknown>;
   leaveReason?: "graceful" | "disconnect" | "replaced";
 }

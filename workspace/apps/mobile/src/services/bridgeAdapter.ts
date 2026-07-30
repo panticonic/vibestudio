@@ -40,11 +40,6 @@ export function createBridgeAdapter(deps: {
    */
   getPanelLease: (panelId: string) => PanelLease | undefined;
 }) {
-  // Tree mutations from hosted webviews route through the single server
-  // authority (panelTree); the mirror updates reactively via the broadcast.
-  const callPanelTree = <T = unknown>(method: string, callArgs: unknown[]): Promise<T> =>
-    deps.transport.call("main", `panelTree.${method}`, callArgs) as Promise<T>;
-
   // Panel RPC relay. A panel's RpcClient rides this postMessage bridge: it sends
   // RPC envelopes via `postEnvelope` and receives them via `onEnvelope` (delivered
   // by `deliverToPanel`). Each panel gets its OWN grant-authenticated "panel"
@@ -186,14 +181,15 @@ export function createBridgeAdapter(deps: {
               stateArgs?: Record<string, unknown>;
             }?,
           ];
-          const created = await callPanelTree<{ id: string; title: string; kind: string }>(
-            "create",
-            [source, { parentId: panelId, name: options?.name, stateArgs: options?.stateArgs }]
-          );
+          const created = await deps.panelManager.create(source, {
+            parentId: slotId,
+            title: options?.name,
+            stateArgs: options?.stateArgs,
+          });
           if (options?.focus !== false) {
-            deps.callbacks.navigateToPanel(created.id);
+            deps.callbacks.navigateToPanel(created.panelId);
           }
-          return { id: created.id, title: created.title, kind: created.kind };
+          return { id: created.panelId, title: created.title, kind: "workspace" };
         }
         case "openExternal": {
           const [url, options] = args as [string, OpenExternalOptions?];

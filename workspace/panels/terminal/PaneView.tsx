@@ -9,7 +9,7 @@ import {
   TextField,
 } from "@radix-ui/themes";
 import { ArrowDownIcon } from "@radix-ui/react-icons";
-import { extensions, notifications, openExternal, openPanel } from "@vibestudio/runtime";
+import { extensions, notifications, openExternal, openPanel } from "@workspace/runtime";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { DropOverlay } from "./DropOverlay.js";

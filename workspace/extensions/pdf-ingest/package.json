@@ -11,9 +11,37 @@
       "activationEvents": [
         "onInvoke"
       ],
-      "dependencyMode": "external"
+      "dependencyMode": "external",
+      "methodAuthority": {
+        "engines": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "probe": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "ingest": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "renderPage": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "readArtifact": {
+          "effect": {
+            "kind": "open"
+          }
+        }
+      }
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "context.boundary",

@@ -42,8 +42,6 @@ export type ApprovalCardIntentBody =
   | { type: "submit-client-config"; values: Record<string, string> }
   | { type: "submit-credential-input"; values: Record<string, string> }
   | { type: "submit-secret-input"; values: Record<string, string> }
-  | { type: "resolve-userland"; choice: string }
-  | { type: "resolve-external-agent"; behavior: "allow" | "deny" }
   | { type: "device-cancel" }
   | { type: "minimize" }
   | { type: "browse"; dir: "prev" | "next" }
@@ -127,17 +125,6 @@ export function diffReviewPayloadHashes(entries: DiffReviewEntry[]): Set<string>
     }
   }
   return hashes;
-}
-
-/** Human-review detail hashes the trusted card may fetch for this exact prompt. */
-export function sealedDetailPayloadHashes(approval: PendingApproval): Set<string> {
-  return new Set(
-    approval.kind === "userland"
-      ? (approval.sealedDetails ?? [])
-          .filter((detail) => (detail.disclosure ?? "review") === "review")
-          .map((detail) => detail.digest)
-      : []
-  );
 }
 
 export function basename(path: string): string {

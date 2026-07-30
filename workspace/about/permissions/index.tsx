@@ -17,7 +17,7 @@ import {
   ResetIcon,
   TrashIcon,
 } from "@radix-ui/react-icons";
-import { panel, rpc } from "@vibestudio/runtime";
+import { panel, rpc, workers } from "@workspace/runtime";
 import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/ui";
 
 export interface SavedPermissionGrant {
@@ -89,7 +89,7 @@ type MissionRecord = {
   name: string;
   revision: number;
   state: "draft" | "active" | "needs-reapproval" | "paused" | "retired";
-  closureDigest: string;
+  revisionDigest: string;
   updatedAt: number;
   charter: {
     taskSpec: string;
@@ -112,19 +112,32 @@ type MissionRunRecord = {
   finishedAt?: number;
   outcome?: string;
 };
-type WorkspaceUnitStatus = {
+
+let missionsTargetPromise: Promise<string> | null = null;
+
+function callMissions<T>(method: string, args: unknown[]): Promise<T> {
+  missionsTargetPromise ??= workers
+    .resolveService("vibestudio.missions.v1")
+    .then((service) => {
+      if (service.kind !== "durable-object") {
+        throw new Error("The missions service must be a durable object");
+      }
+      return service.targetId;
+    });
+  return missionsTargetPromise.then((targetId) => rpc.call<T>(targetId, method, args));
+}
+type BuildUnitCatalogEntry = {
   name: string;
   kind: "panel" | "worker" | "extension" | "app";
-  isAgent?: boolean;
+  isAgent: boolean;
   source: string;
-  displayName?: string;
-  status: "running" | "stopped" | "error" | "pending-approval" | "building" | "available";
-  version?: string;
-  ev?: string | null;
-  activeEv?: string | null;
-  pendingApproval?: { kind: string; submittedAt: number } | null;
-  lastError?: string | null;
-  authorityRows?: AuthorityRow[];
+  displayName: string;
+  status: "available" | "building" | "ready" | "approval-required" | "error";
+  effectiveVersion: string | null;
+  activeBuildKey: string | null;
+  pendingApproval: { kind: string; submittedAt: number } | null;
+  lastError: string | null;
+  authorityRows: AuthorityRow[];
 };
 type AuthorityRow = {
   capability: string;
@@ -304,7 +317,7 @@ function DomainPivot({
 }: {
   domain: DomainId;
   profiles: AgentAuthorityProfile[];
-  units: WorkspaceUnitStatus[];
+  units: BuildUnitCatalogEntry[];
   changingId: string | null;
   onChange(request: Record<string, unknown>): void;
 }) {
@@ -655,7 +668,7 @@ function CatalogCard({
   unit,
   profile,
 }: {
-  unit: WorkspaceUnitStatus;
+  unit: BuildUnitCatalogEntry;
   profile?: AgentAuthorityProfile;
 }) {
   const kind =
@@ -667,7 +680,7 @@ function CatalogCard({
           ? "Background worker"
           : "Extension";
   const status =
-    unit.status === "pending-approval"
+    unit.status === "approval-required"
       ? "Needs your review"
       : unit.status.charAt(0).toUpperCase() + unit.status.slice(1);
   return (
@@ -675,19 +688,18 @@ function CatalogCard({
       <Flex direction="column" gap="2">
         <Flex justify="between" align="start" gap="3" wrap="wrap">
           <div>
-            <Heading size="3">{unit.displayName ?? unit.name}</Heading>
+            <Heading size="3">{unit.displayName}</Heading>
             <Text size="2" color="gray">
               {kind} · {status}
-              {unit.version ? ` · v${unit.version}` : ""}
             </Text>
           </div>
-          {unit.pendingApproval || unit.status === "pending-approval" ? (
+          {unit.pendingApproval || unit.status === "approval-required" ? (
             <Badge color="amber">Review pending</Badge>
           ) : null}
         </Flex>
         <Text size="1" color="gray">
           {unit.source}
-          {(unit.activeEv ?? unit.ev) ? ` · exact version ${unit.activeEv ?? unit.ev}` : ""}
+          {unit.effectiveVersion ? ` · exact version ${unit.effectiveVersion}` : ""}
         </Text>
         {unit.lastError ? (
           <Callout.Root color="red" size="1">
@@ -697,9 +709,9 @@ function CatalogCard({
         <details>
           <summary>What this {kind.toLowerCase()} can do</summary>
           <Flex direction="column" gap="2" mt="2">
-            {unit.authorityRows?.length ? (
+            {unit.authorityRows.length ? (
               (Object.keys(DOMAIN_COPY) as DomainId[]).map((domain) => {
-                const rows = unit.authorityRows?.filter((row) => row.domain === domain) ?? [];
+                const rows = unit.authorityRows.filter((row) => row.domain === domain);
                 if (rows.length === 0) return null;
                 return (
                   <div key={domain}>
@@ -775,7 +787,7 @@ function PermissionsPage() {
   const [grants, setGrants] = useState<SavedPermissionGrant[]>([]);
   const [profiles, setProfiles] = useState<AgentAuthorityProfile[]>([]);
   const [missions, setMissions] = useState<MissionRecord[]>([]);
-  const [units, setUnits] = useState<WorkspaceUnitStatus[]>([]);
+  const [units, setUnits] = useState<BuildUnitCatalogEntry[]>([]);
   const [decisions, setDecisions] = useState<GovernanceDecision[]>([]);
   const [missionRuns, setMissionRuns] = useState<Record<string, MissionRunRecord[]>>({});
   const [view, setView] = useState<"catalog" | "agents" | "domains" | "missions" | "recent">(
@@ -801,8 +813,8 @@ function PermissionsPage() {
           rpc.call<SavedPermissionGrant[]>("main", "permissions.list", []),
           rpc.call<AgentAuthorityProfile[]>("main", "permissions.listAgentProfiles", []),
           rpc.call<AuthoritySafetyStatus>("main", "permissions.safetyStatus", []),
-          rpc.call<MissionRecord[]>("main", "mission.list", []),
-          rpc.call<WorkspaceUnitStatus[]>("main", "workspace.units.list", []),
+          callMissions<MissionRecord[]>("list", []),
+          rpc.call<BuildUnitCatalogEntry[]>("main", "build.listUnits", []),
           rpc.call<GovernanceDecision[]>("main", "governance.list", [
             { filter: { recordKind: "approval" }, limit: 100 },
           ]),
@@ -818,7 +830,7 @@ function PermissionsPage() {
           await Promise.all(
             nextMissions.map(async (mission) => [
               mission.missionId,
-              await rpc.call<MissionRunRecord[]>("main", "mission.listRuns", [mission.missionId]),
+              await callMissions<MissionRunRecord[]>("listRuns", [mission.missionId]),
             ])
           )
         )
@@ -835,7 +847,7 @@ function PermissionsPage() {
       setRevokingId(mission.missionId);
       setError(null);
       try {
-        await rpc.call("main", `mission.${action}`, [mission.missionId]);
+        await callMissions(action, [mission.missionId]);
         await load();
       } catch (err) {
         setError(

@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@vibestudio/rpc": "workspace:*",
-    "@vibestudio/agentic-protocol": "workspace:*"
+    "@workspace/agentic-protocol": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^3.2.2"

@@ -17,28 +17,29 @@ import {
   type AccountProfileUpdate,
 } from "@vibestudio/service-schemas/account";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
+import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import { menuMethods, type PanelContextPresentation } from "@vibestudio/service-schemas/menu";
 import { notificationMethods } from "@vibestudio/service-schemas/notification";
-import { panelMethods } from "@vibestudio/service-schemas/panel";
-import { panelTreeMethods } from "@vibestudio/service-schemas/panelTree";
-import { paletteMethods } from "@vibestudio/service-schemas/palette";
+import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
+import { createPanelRuntime } from "@workspace/runtime/panel-runtime";
 import {
   remoteCredMethods,
   type RemoteCredCurrent as RemoteCredCurrentContract,
 } from "@vibestudio/service-schemas/remoteCred";
-import { settingsMethods } from "@vibestudio/service-schemas/settings";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { shellPresenceMethods } from "@vibestudio/service-schemas/shellPresence";
-import {
-  systemAgentMethods,
-  type SystemAgentConversation,
-} from "@vibestudio/service-schemas/systemAgent";
 import { autofillMethods } from "@vibestudio/service-schemas/autofill";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
+import { buildMethods } from "@vibestudio/service-schemas/build";
 import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { viewMethods } from "@vibestudio/service-schemas/view";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import {
+  runtimeMethods,
+  type RuntimeSupervisionEntityKey,
+} from "@vibestudio/service-schemas/runtime";
+import { workspaceStateMethods } from "@vibestudio/service-schemas/workspaceState";
 import type {
   TemplateExactPin,
   TemplateInspection,
@@ -75,6 +76,13 @@ import {
 import type { ConnectPairing } from "@vibestudio/shared/connect";
 import type { PanelLocation } from "@vibestudio/shared/panelLocation";
 import type { PanelPlacementHint } from "@vibestudio/shared/types";
+import { decodePanelStateArgs } from "@vibestudio/shared/panelStateArgs";
+import {
+  browserUrlFromPanelSource,
+  getSharedBrowserAddressOptions,
+  getSharedPanelAddressOptions,
+  type BrowserHistoryAddressRow,
+} from "@vibestudio/shared/panelChrome";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
 // Type for the shell transport bridge injected by the preload script
@@ -109,6 +117,9 @@ const rpc: RpcClient = createRpcClient({
   callerKind: "shell",
   transport,
 });
+export const hostLaunch = new HostLaunchClient((service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
 const shellApprovalClient = createTypedServiceClient(
   "shellApproval",
   shellApprovalMethods,
@@ -117,11 +128,6 @@ const shellApprovalClient = createTypedServiceClient(
 const shellPresenceClient = createTypedServiceClient(
   "shellPresence",
   shellPresenceMethods,
-  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
-);
-const systemAgentClient = createTypedServiceClient(
-  "systemAgent",
-  systemAgentMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const appClient = createTypedServiceClient("app", appMethods, (service, method, args) =>
@@ -149,17 +155,16 @@ const browserEnvironmentClient = createTypedServiceClient(
 const menuClient = createTypedServiceClient("menu", menuMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
-const panelClient = createTypedServiceClient("panel", panelMethods, (service, method, args) =>
-  rpc.call("main", `${service}.${method}`, args)
-);
-const panelTreeClient = createTypedServiceClient(
-  "panelTree",
-  panelTreeMethods,
-  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
-);
-const paletteClient = createTypedServiceClient("palette", paletteMethods, (service, method, args) =>
-  rpc.call("main", `${service}.${method}`, args)
-);
+const productPanelRuntime = createPanelRuntime({ rpc });
+const focusPanel = async (panelId: string): Promise<PanelFocusResult> => {
+  await productPanelRuntime.panelTree.get(panelId).focus();
+  return {
+    panelId,
+    status: "loaded",
+    focused: true,
+    loaded: true,
+  };
+};
 const notificationClient = createTypedServiceClient(
   "notification",
   notificationMethods,
@@ -175,17 +180,30 @@ const autofillClient = createTypedServiceClient(
   autofillMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
-const settingsClient = createTypedServiceClient(
-  "settings",
-  settingsMethods,
-  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
-);
 const viewClient = createTypedServiceClient("view", viewMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
 const workspaceClient = createTypedServiceClient(
   "workspace",
   workspaceMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const runtimeClient = createTypedServiceClient(
+  "runtime",
+  runtimeMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const buildClient = createTypedServiceClient("build", buildMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const workspaceStateClient = createTypedServiceClient(
+  "workspace-state",
+  workspaceStateMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const panelRuntimeClient = createTypedServiceClient(
+  "panelRuntime",
+  panelRuntimeMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const vcsClient = createTypedServiceClient("vcs", vcsMethods, (service, method, args) =>
@@ -215,18 +233,11 @@ import type {
   ThemeMode,
   ThemeAppearance,
   ThemeConfig,
+  PanelFocusResult,
   MovePanelRequest,
   PaletteCommand,
-  Panel,
-  PanelTreeSnapshot,
 } from "@vibestudio/shared/types";
 import type { BrowserNavigationIntent } from "@vibestudio/shared/panelCommands";
-import type {
-  HostTarget,
-  HostTargetCandidate,
-  HostTargetSelection,
-  HostTargetSelectionInput,
-} from "@vibestudio/shared/hostTargets";
 // =============================================================================
 // App Service
 // =============================================================================
@@ -240,69 +251,123 @@ export const app = {
   applyUpdate: (appId: string) => appClient.applyUpdate(appId),
   listPendingUpdates: () => appClient.listPendingUpdates(),
 };
+
+async function collectBrowserSessionRows(): Promise<BrowserHistoryAddressRow[]> {
+  const profile = await accountClient.getProfile();
+  if (!profile?.userId) return [];
+  const rows: BrowserHistoryAddressRow[] = [];
+  const groups: Array<Parameters<typeof workspaceStateClient.panelTree.page>[0]["group"]> = [
+    { kind: "roots", ownerUserId: profile.userId },
+  ];
+  while (groups.length > 0) {
+    const group = groups.shift()!;
+    let cursor: string | undefined;
+    do {
+      const page = await workspaceStateClient.panelTree.page({
+        group,
+        ...(cursor ? { cursor } : {}),
+        limit: 200,
+      });
+      for (const node of page.nodes) {
+        if (node.childCount > 0) {
+          groups.push({ kind: "children", parentSlotId: node.slotId });
+        }
+        const sourceUrl = node.source ? browserUrlFromPanelSource(node.source) : null;
+        if (!sourceUrl) continue;
+        const chrome = await viewClient.getChromeState(node.slotId).catch(() => null);
+        rows.push({
+          url: chrome?.kind === "browser" ? chrome.resolvedUrl || sourceUrl : sourceUrl,
+          title: chrome?.kind === "browser" ? chrome.title : node.title,
+        });
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+  }
+  return rows;
+}
+
+async function getPanelStateArgs(panelId: string): Promise<Record<string, unknown>> {
+  const detail = await workspaceStateClient.panelTree.detail(panelId);
+  if (!detail) throw new Error(`Panel not found: ${panelId}`);
+  return decodePanelStateArgs(detail.currentHistory.state_args);
+}
+
 // =============================================================================
 // Panel Service
 // =============================================================================
 export const panel = {
-  getTreeSnapshot: () => panelClient.getTreeSnapshot(),
-  /** Authenticated server read that performs per-account first-attach seeding. */
-  ensureOwnerTree: () => panelTreeClient.getTreeSnapshot(),
-  getFocusedPanelId: () => panelClient.getFocusedPanelId(),
-  setFocusedPanelId: (panelId: string) => panelClient.setFocusedPanelId(panelId),
-  focus: (panelId: string) => panelTreeClient.focus(panelId),
+  getRootGroups: (input: Parameters<typeof workspaceStateClient.panelTree.rootGroups>[0]) =>
+    workspaceStateClient.panelTree.rootGroups(input),
+  getTreePage: (input: Parameters<typeof workspaceStateClient.panelTree.page>[0]) =>
+    workspaceStateClient.panelTree.page(input),
+  getTreePath: (panelId: string) => workspaceStateClient.panelTree.path(panelId),
+  searchTree: (input: Parameters<typeof workspaceStateClient.panelTree.search>[0]) =>
+    workspaceStateClient.panelTree.search(input),
+  observe: (panelId: string) => productPanelRuntime.panelTree.get(panelId).observe(),
+  getPresentation: (panelId: string) => viewClient.getPresentation(panelId),
+  getFocusedPanelId: () => viewClient.getFocusedPanelId(),
+  setFocusedPanelId: focusPanel,
+  focus: focusPanel,
   /** Per-device persisted PanelLayout (validated/pruned again shell-side on restore). */
-  getPanelLayout: () => panelClient.getPanelLayout(),
-  savePanelLayout: (layout: Parameters<typeof panelClient.savePanelLayout>[0]) =>
-    panelClient.savePanelLayout(layout),
-  ensureLoaded: (panelId: string) => panelClient.ensureLoaded(panelId),
-  updateTheme: (theme: ThemeAppearance) => panelClient.updateTheme(theme),
-  updateThemeConfig: (config: ThemeConfig) => panelClient.updateThemeConfig(config),
-  openDevTools: (panelId: string) => panelTreeClient.openDevTools(panelId),
-  getChromeState: (panelId: string) => panelClient.getChromeState(panelId),
-  getRuntimeLease: (panelId: string) => panelTreeClient.getRuntimeLease(panelId),
-  takeOver: (panelId: string) => panelClient.takeOver(panelId),
-  togglePin: (panelId: string) => panelClient.togglePin(panelId),
-  listPinnedPanelIds: () => panelClient.listPinnedPanelIds(),
-  getAddressOptions: (source: string) => panelClient.getAddressOptions(source),
-  getBrowserAddressOptions: (query: string) => panelClient.getBrowserAddressOptions(query),
+  getPanelLayout: () => viewClient.getPanelLayout(),
+  savePanelLayout: (layout: Parameters<typeof viewClient.savePanelLayout>[0]) =>
+    viewClient.savePanelLayout(layout),
+  ensureLoaded: focusPanel,
+  updateTheme: (theme: ThemeAppearance) => viewClient.updateTheme(theme),
+  updateThemeConfig: (config: ThemeConfig) => viewClient.updateThemeConfig(config),
+  openDevTools: (panelId: string) => viewClient.openPanelDevTools(panelId),
+  getChromeState: (panelId: string) => viewClient.getChromeState(panelId),
+  getRuntimeLease: async (panelId: string) => {
+    const detail = await workspaceStateClient.panelTree.detail(panelId);
+    if (!detail) return null;
+    const snapshot = await panelRuntimeClient.getSnapshot();
+    return snapshot.leases.find((lease) => lease.runtimeEntityId === detail.entity.id) ?? null;
+  },
+  takeOver: (panelId: string) => productPanelRuntime.panelTree.get(panelId).takeOver(),
+  togglePin: (panelId: string) => viewClient.togglePin(panelId),
+  listPinnedPanelIds: () => viewClient.listPinnedPanelIds(),
+  getAddressOptions: (source: string) =>
+    getSharedPanelAddressOptions({
+      source,
+      repoProvider: { sourceTree: () => workspaceClient.sourceTree() },
+    }),
+  getBrowserAddressOptions: async (query: string) =>
+    getSharedBrowserAddressOptions({
+      query,
+      sessionRows: await collectBrowserSessionRows(),
+      browserData: {
+        searchHistoryForAutocomplete: (value, limit) =>
+          browserDataClient.searchHistoryForAutocomplete(value, limit),
+        getHistory: (input) => browserDataClient.getHistory(input),
+        searchBookmarks: (value) => browserDataClient.searchBookmarks(value),
+        getSearchEngines: () => browserDataClient.getSearchEngines(),
+      },
+    }),
   markBrowserNavigationIntent: (panelId: string, intent: BrowserNavigationIntent) =>
-    panelClient.markBrowserNavigationIntent(panelId, intent),
-  reload: (panelId: string) => panelTreeClient.reload(panelId),
-  reloadView: (panelId: string) => panelClient.reloadView(panelId),
-  forceReloadView: (panelId: string) => panelClient.forceReloadView(panelId),
+    viewClient.markBrowserNavigationIntent(panelId, intent),
+  reload: (panelId: string) => productPanelRuntime.panelTree.get(panelId).reload(),
+  reloadView: (panelId: string) => productPanelRuntime.panelTree.get(panelId).reload(),
+  forceReloadView: (panelId: string) => viewClient.browserForceReload(panelId),
   findInPage: (panelId: string, text: string, options: { forward: boolean; findNext: boolean }) =>
-    panelClient.findInPage(panelId, text, options),
-  stopFindInPage: (panelId: string) => panelClient.stopFindInPage(panelId),
-  getBrowserSiteState: (panelId: string) => panelClient.getBrowserSiteState(panelId),
-  toggleBrowserBookmark: (panelId: string) => panelClient.toggleBrowserBookmark(panelId),
+    viewClient.findInPage(panelId, text, options),
+  stopFindInPage: (panelId: string) => viewClient.stopFindInPage(panelId),
+  getBrowserSiteState: (panelId: string) => viewClient.getBrowserSiteState(panelId),
+  toggleBrowserBookmark: (panelId: string) => viewClient.toggleBrowserBookmark(panelId),
   setBrowserZoom: (panelId: string, zoomFactor: number) =>
-    panelClient.setBrowserZoom(panelId, zoomFactor),
-  clearBrowserSiteData: (panelId: string) => panelClient.clearBrowserSiteData(panelId),
-  printBrowserPage: (panelId: string) => panelClient.printBrowserPage(panelId),
-  saveBrowserPagePdf: (panelId: string) => panelClient.saveBrowserPagePdf(panelId),
-  stopBrowserMedia: (panelId: string) => panelClient.stopBrowserMedia(panelId),
-  rebuildPanel: (panelId: string) => panelTreeClient.rebuildPanel(panelId),
+    viewClient.setBrowserZoom(panelId, zoomFactor),
+  clearBrowserSiteData: (panelId: string) => viewClient.clearBrowserSiteData(panelId),
+  printBrowserPage: (panelId: string) => viewClient.printBrowserPage(panelId),
+  saveBrowserPagePdf: (panelId: string) => viewClient.saveBrowserPagePdf(panelId),
+  stopBrowserMedia: (panelId: string) => viewClient.stopBrowserMedia(panelId),
+  rebuildPanel: (panelId: string) => productPanelRuntime.panelTree.get(panelId).rebuild(),
   navigateHistory: (panelId: string, delta: -1 | 1) =>
-    panelTreeClient.navigateHistory(panelId, delta),
-  unload: (panelId: string) => panelTreeClient.unload(panelId),
-  archive: (panelId: string) => panelTreeClient.archive(panelId),
-  updatePanelState: (
-    panelId: string,
-    state: {
-      url?: string;
-      pageTitle?: string;
-      isLoading?: boolean;
-      canGoBack?: boolean;
-      canGoForward?: boolean;
-    }
-  ) => panelTreeClient.updatePanelState(panelId, state),
-  createAboutPanel: (page: string) =>
-    panelTreeClient.create(
-      { surface: "code", source: `about/${page}` },
-      {
-        focus: true,
-      }
-    ),
+    productPanelRuntime.panelTree.navigateHistory(panelId, delta),
+  unload: (panelId: string) => productPanelRuntime.panelTree.get(panelId).unload(),
+  archive: (panelId: string) => workspaceStateClient.slot.close(panelId),
+  createAboutPanel: async (page: string) => {
+    const handle = await productPanelRuntime.openPanel(`about/${page}`, { focus: true });
+    return { id: handle.id, title: handle.title, kind: handle.kind };
+  },
   /** Create a panel from any source path (not prefixed with "about/"). */
   navigate: (
     panelId: string,
@@ -312,7 +377,10 @@ export const panel = {
       contextId?: string;
       stateArgs?: Record<string, unknown>;
     }
-  ) => panelTreeClient.navigate(panelId, source, options),
+  ) =>
+    productPanelRuntime.panelTree
+      .navigate(panelId, source, options)
+      .then((observation) => ({ id: observation.panelId, title: observation.title })),
   createPanel: (
     source: string,
     options?: {
@@ -327,19 +395,16 @@ export const panel = {
       focus?: boolean;
     }
   ) =>
-    panelTreeClient.create(
-      { surface: "code", source, ...(options?.ref ? { ref: options.ref } : {}) },
-      {
+    productPanelRuntime.openPanel(source, {
         title: options?.title,
         slug: options?.slug,
-        name: options?.name,
         contextId: options?.contextId,
         parentId: options?.isRoot === false ? undefined : null,
         focus: options?.focus ?? true,
         stateArgs: options?.stateArgs,
         placement: options?.placement,
-      }
-    ),
+        ref: options?.ref,
+      }),
   createChild: (
     parentId: string,
     source: string,
@@ -354,19 +419,16 @@ export const panel = {
       placement?: PanelPlacementHint;
     }
   ) =>
-    panelTreeClient.create(
-      { surface: "code", source, ...(options?.ref ? { ref: options.ref } : {}) },
-      {
+    productPanelRuntime.openPanel(source, {
         parentId,
         title: options?.title,
         slug: options?.slug,
-        name: options?.name,
         focus: options?.focus,
         contextId: options?.contextId,
         stateArgs: options?.stateArgs,
         placement: options?.placement,
-      }
-    ),
+        ref: options?.ref,
+      }),
   createBrowser: (
     url: string,
     options?: {
@@ -376,16 +438,12 @@ export const panel = {
       focus?: boolean;
     }
   ) =>
-    panelTreeClient.create(
-      { surface: "external", url },
-      {
+    productPanelRuntime.openPanel(url, {
         parentId: null,
         title: options?.title,
         slug: options?.slug,
-        name: options?.name,
         focus: options?.focus,
-      }
-    ),
+      }),
   createBrowserChild: (
     parentId: string,
     url: string,
@@ -396,30 +454,63 @@ export const panel = {
       focus?: boolean;
     }
   ) =>
-    panelTreeClient.create(
-      { surface: "external", url },
-      {
+    productPanelRuntime.openPanel(url, {
         parentId,
         title: options?.title,
         slug: options?.slug,
-        name: options?.name,
         focus: options?.focus,
-      }
-    ),
-  movePanel: (request: MovePanelRequest) => panelTreeClient.movePanel(request),
-  getCollapsedIds: () => panelTreeClient.getCollapsedIds(),
+      }),
+  movePanel: (request: MovePanelRequest) =>
+    workspaceStateClient.slot.move(request.panelId, request.newParentId, {
+      ...(request.beforePanelId !== undefined ? { beforeSlotId: request.beforePanelId } : {}),
+      ...(request.afterPanelId !== undefined ? { afterSlotId: request.afterPanelId } : {}),
+    }),
+  getCollapsedIds: () => viewClient.getCollapsedPanelIds(),
   setCollapsed: (panelId: string, collapsed: boolean) =>
-    panelTreeClient.setCollapsed(panelId, collapsed),
-  expandIds: (panelIds: string[]) => panelTreeClient.expandIds(panelIds),
+    viewClient.setPanelCollapsed(panelId, collapsed),
+  expandIds: (panelIds: string[]) => viewClient.expandPanelIds(panelIds),
 };
 // =============================================================================
-// Palette Service (chrome lists + dispatches panel-contributed commands)
+// Command palette (shell-local registry over attributed panel ↔ shell events)
 // =============================================================================
+type PanelPaletteContribution = {
+  panelId: string;
+  commands: PaletteCommand[];
+};
+
+const paletteContributions = new Map<string, PaletteCommand[]>();
+const isPaletteCommand = (value: unknown): value is PaletteCommand => {
+  const command = value as Partial<PaletteCommand> | null;
+  return (
+    !!command &&
+    typeof command === "object" &&
+    typeof command.id === "string" &&
+    typeof command.label === "string" &&
+    (command.hint === undefined || typeof command.hint === "string") &&
+    (command.section === undefined || typeof command.section === "string")
+  );
+};
+
+rpc.on("runtime:palette-contribution", ({ caller, payload }) => {
+  if (caller.callerKind !== "panel" && caller.callerKind !== "app") return;
+  const commands = (payload as { commands?: unknown } | null)?.commands;
+  if (!Array.isArray(commands) || !commands.every(isPaletteCommand)) return;
+  const panelId = caller.callerPanelId ?? caller.callerId;
+  if (commands.length === 0) paletteContributions.delete(panelId);
+  else paletteContributions.set(panelId, commands);
+});
+
 export const palette = {
-  register: (commands: PaletteCommand[]) => paletteClient.register(commands),
-  unregister: () => paletteClient.unregister(),
-  list: () => paletteClient.list(),
-  run: (panelId: string, commandId: string) => paletteClient.run(panelId, commandId),
+  list: async (): Promise<PanelPaletteContribution[]> => {
+    const focusedPanelId = await viewClient.getFocusedPanelId().catch(() => null);
+    return [...paletteContributions]
+      .map(([panelId, commands]) => ({ panelId, commands }))
+      .sort((a, b) =>
+        a.panelId === focusedPanelId ? -1 : b.panelId === focusedPanelId ? 1 : 0
+      );
+  },
+  run: (panelId: string, commandId: string) =>
+    rpc.emit(panelId, "runtime:palette-run", { commandId }),
 };
 // =============================================================================
 // View Service
@@ -470,16 +561,18 @@ export const view = {
   setThemeCss: (css: string) => viewClient.setThemeCss(css),
   bindNativePanelSlot: (request: {
     nativeSlotId: string;
+    bindingId: string;
     panelId: string;
     bounds: NativePanelSlotBounds;
     focused?: boolean;
   }) => viewClient.bindNativePanelSlot(request),
   updateNativePanelSlot: (request: {
     nativeSlotId: string;
+    bindingId: string;
     bounds?: NativePanelSlotBounds;
     focused?: boolean;
   }) => viewClient.updateNativePanelSlot(request),
-  clearNativePanelSlot: (request: { nativeSlotId: string }) =>
+  clearNativePanelSlot: (request: { nativeSlotId: string; bindingId: string }) =>
     viewClient.clearNativePanelSlot(request),
   setHostedShellReady: (request: { ready: boolean }) => viewClient.setHostedShellReady(request),
   setShellOverlay: (active: boolean) => viewClient.setShellOverlay(active),
@@ -607,25 +700,6 @@ export const workspace = {
   },
   getActive: () => workspaceClient.getActive(),
   getConfig: () => workspaceClient.getConfig(),
-  hostTargets: {
-    list: (target: HostTarget) => workspaceClient.hostTargets.list(target),
-    getSelection: (target: HostTarget) => workspaceClient.hostTargets.getSelection(target),
-    setSelection: (target: HostTarget, input: HostTargetSelectionInput) =>
-      workspaceClient.hostTargets.setSelection(target, input),
-    clearSelection: (target: HostTarget) => workspaceClient.hostTargets.clearSelection(target),
-    versions: (target: HostTarget, sourceOrName: string) =>
-      workspaceClient.hostTargets.versions(target, sourceOrName),
-    preparePinnedRef: (target: HostTarget, sourceOrName: string, ref: string) =>
-      workspaceClient.hostTargets.preparePinnedRef(target, sourceOrName, ref),
-    launch: (target: HostTarget) => workspaceClient.hostTargets.launch(target),
-    beginLaunch: (target: HostTarget) => workspaceClient.hostTargets.beginLaunch(target),
-    getLaunchSession: (sessionId: string) =>
-      workspaceClient.hostTargets.getLaunchSession(sessionId),
-    resolveLaunchSessionApproval: (sessionId: string, decision: "once" | "deny") =>
-      workspaceClient.hostTargets.resolveLaunchSessionApproval(sessionId, decision),
-    cancelLaunchSession: (sessionId: string) =>
-      workspaceClient.hostTargets.cancelLaunchSession(sessionId),
-  },
 };
 
 // =============================================================================
@@ -736,12 +810,6 @@ export const vcs = {
     }),
 };
 // =============================================================================
-// Settings Service
-// =============================================================================
-export const settings = {
-  getData: () => settingsClient.getData(),
-};
-// =============================================================================
 // Remote credential store
 // =============================================================================
 export interface RemoteCredCurrent {
@@ -841,29 +909,6 @@ async function describeChannelInvite(invite: ChannelInvite): Promise<ShellChanne
   };
 }
 
-function findOwnedChannelPanel(
-  snapshot: PanelTreeSnapshot,
-  owner: string,
-  channelId: string
-): Panel | null {
-  const group = snapshot.forest.find((candidate) => candidate.owner === owner);
-  if (!group) return null;
-  const visit = (panels: Panel[]): Panel | null => {
-    for (const candidate of panels) {
-      if (
-        candidate.snapshot.source === "panels/chat" &&
-        candidate.snapshot.stateArgs?.["channelName"] === channelId
-      ) {
-        return candidate;
-      }
-      const descendant = visit(candidate.children);
-      if (descendant) return descendant;
-    }
-    return null;
-  };
-  return visit(group.rootPanels);
-}
-
 export const userNotifications = {
   /** Read one durable account inbox; never enumerate producer/channel DOs. */
   async list(): Promise<ShellUserNotification[]> {
@@ -924,14 +969,40 @@ export const userNotifications = {
   /** Open the known invited channel in its owning context. Acknowledgement is
    * deliberately separate so a failed panel creation never consumes the invite. */
   async openChannel(channelId: string): Promise<{ id: string }> {
-    const [profile, snapshot] = await Promise.all([
-      account.getProfile(),
-      panelTreeClient.getTreeSnapshot(),
-    ]);
-    const existing = profile ? findOwnedChannelPanel(snapshot, profile.userId, channelId) : null;
-    if (existing) {
-      await panelTreeClient.focus(existing.id);
-      return { id: existing.id };
+    const profile = await account.getProfile();
+    const findInGroup = async (
+      group: Parameters<typeof workspaceStateClient.panelTree.page>[0]["group"]
+    ): Promise<string | null> => {
+      let cursor: string | undefined;
+      do {
+        const page = await workspaceStateClient.panelTree.page({
+          group,
+          ...(cursor ? { cursor } : {}),
+          limit: 100,
+        });
+        for (const node of page.nodes) {
+          const [observation, stateArgs] = await Promise.all([
+            productPanelRuntime.panelTree.get(node.slotId).observe(),
+            getPanelStateArgs(node.slotId),
+          ]);
+          if (observation.source === "panels/chat" && stateArgs["channelName"] === channelId) {
+            return node.slotId;
+          }
+          if (node.childCount > 0) {
+            const nested = await findInGroup({ kind: "children", parentSlotId: node.slotId });
+            if (nested) return nested;
+          }
+        }
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      return null;
+    };
+    const existingId = profile
+      ? await findInGroup({ kind: "roots", ownerUserId: profile.userId })
+      : null;
+    if (existingId) {
+      await productPanelRuntime.panelTree.get(existingId).focus();
+      return { id: existingId };
     }
 
     const service = channelClient(channelId);
@@ -942,24 +1013,15 @@ export const userNotifications = {
     if (!contextId) {
       throw new Error("This conversation is not ready yet. Please try again in a moment.");
     }
-    return panelTreeClient.create(
-      { surface: "code", source: "panels/chat" },
-      {
-        parentId: null,
-        focus: true,
-        contextId,
-        name: config?.title?.trim() || undefined,
-        stateArgs: { channelName: channelId },
-      }
-    );
+    const handle = await productPanelRuntime.openPanel("panels/chat", {
+      parentId: null,
+      focus: true,
+      contextId,
+      title: config?.title?.trim() || undefined,
+      stateArgs: { channelName: channelId },
+    });
+    return { id: handle.id };
   },
-};
-// =============================================================================
-// Product-owned System Agent (same per-user conversation on desktop and mobile)
-// =============================================================================
-export type ShellSystemAgentConversation = SystemAgentConversation;
-export const systemAgent = {
-  resolveConversation: () => systemAgentClient.resolveConversation(),
 };
 // =============================================================================
 // Events Service
@@ -1008,20 +1070,26 @@ export const extensions = {
 export const browserData = browserDataClient;
 export const browserEnvironment = browserEnvironmentClient;
 // =============================================================================
-// Workspace Unit Service
+// Runtime supervision
 // =============================================================================
-export const workspaceUnits = {
-  list: () => workspaceClient.units.list(),
-  versions: (name: string) => workspaceClient.units.versions(name),
-  rollback: (name: string, opts?: { buildKey?: string }) =>
-    workspaceClient.units.rollback(name, opts),
-  restart: (name: string) => workspaceClient.units.restart(name),
+export const supervisedUnits = {
+  list: () => runtimeClient.supervision.list(),
+  versions: (releaseId: string) =>
+    runtimeClient.supervision.versions({ kind: "app", releaseId }),
+  rollback: (releaseId: string, opts?: { buildKey?: string }) =>
+    runtimeClient.supervision.rollback({ kind: "app", releaseId }, opts),
+  restart: (identity: RuntimeSupervisionEntityKey) =>
+    runtimeClient.supervision.restart(identity),
+  activate: (kind: "app" | "extension", releaseId: string) =>
+    runtimeClient.supervision.activate({ kind, releaseId }),
+  prepare: (kind: "app" | "extension", releaseId: string, ref: string) =>
+    runtimeClient.supervision.prepare({ kind, releaseId }, { ref }),
   logs: (
-    name: string,
+    identity: RuntimeSupervisionEntityKey,
     opts?: { since?: number; level?: "debug" | "info" | "warn" | "error"; limit?: number }
-  ) => workspaceClient.units.logs(name, opts),
-  diagnostics: (
-    name: string,
+  ) => runtimeClient.supervision.logs(identity, opts),
+  health: (
+    identity: RuntimeSupervisionEntityKey,
     opts?: {
       since?: number;
       sinceSeq?: number;
@@ -1029,7 +1097,10 @@ export const workspaceUnits = {
       limit?: number;
       errorLimit?: number;
     }
-  ) => workspaceClient.units.diagnostics(name, opts),
+  ) => runtimeClient.supervision.health(identity, opts),
+};
+export const buildUnits = {
+  list: () => buildClient.listUnits(),
 };
 // =============================================================================
 // Shell Approval Service (consent approval queue)
@@ -1045,18 +1116,12 @@ export const shellApproval = {
     approvalId: string,
     resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }
   ) => shellApprovalClient.resolveMissionReview(approvalId, resolution),
-  resolveUserland: (approvalId: string, choice: string | "dismiss") =>
-    shellApprovalClient.resolveUserland(approvalId, choice),
-  resolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") =>
-    shellApprovalClient.resolveExternalAgent(approvalId, behavior),
   submitClientConfig: (approvalId: string, values: Record<string, string>) =>
     shellApprovalClient.submitClientConfig(approvalId, values),
   submitCredentialInput: (approvalId: string, values: Record<string, string>) =>
     shellApprovalClient.submitCredentialInput(approvalId, values),
   submitSecretInput: (approvalId: string, values: Record<string, string>) =>
     shellApprovalClient.submitSecretInput(approvalId, values),
-  getUserlandSealedDetail: (approvalId: string, digest: string) =>
-    shellApprovalClient.getUserlandSealedDetail(approvalId, digest),
   listPending: () => shellApprovalClient.listPending(),
 };
 // =============================================================================

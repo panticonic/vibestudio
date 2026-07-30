@@ -8,6 +8,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@vibestudio/agentic-protocol": "workspace:*"
+    "@workspace/agentic-protocol": "workspace:*"
   }
 }

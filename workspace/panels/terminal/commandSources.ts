@@ -1,4 +1,4 @@
-import { fs } from "@vibestudio/runtime";
+import { fs } from "@workspace/runtime";
 import { customCommandsFileSchema, type CustomCommand } from "./customCommands.js";
 import type { CommandRunTarget } from "./commandLauncherModel.js";
 

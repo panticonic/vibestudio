@@ -11,9 +11,39 @@
       "dependencyMode": "external",
       "activationEvents": [
         "onInvoke"
-      ]
+      ],
+      "methodAuthority": {
+        "run": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "native.tests.execute",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        }
+      }
     },
     "authority": {
+      "provides": [
+        {
+          "name": "native.tests.execute",
+          "title": "Run workspace tests",
+          "action": "execute workspace test code",
+          "tier": "gated",
+          "sensitivity": "write",
+          "resourceType": "native.tests",
+          "presentation": {
+            "domain": "automation",
+            "verb": "act"
+          },
+          "grantScopes": [
+            "once",
+            "task",
+            "session"
+          ]
+        }
+      ],
       "requests": [
         {
           "capability": "context.boundary",
@@ -22,15 +52,6 @@
             "prefix": ""
           },
           "tier": "critical",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
           "evidence": "intentional-broad"
         }
       ]

@@ -23,7 +23,7 @@ import type { PanelWebViewHandle, PanelNavigationEvent } from "./PanelWebView";
 import type { WebViewNavigation } from "react-native-webview/lib/WebViewTypes";
 import type { PanelPageObservation } from "@vibestudio/shared/panel/observation";
 import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
-import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
+import { panelTreeRevisionAtom, shellClientAtom } from "../state/shellClientAtom";
 import { colorSchemeAtom, themeColorsAtom } from "../state/themeAtoms";
 import { approvalDeepLinkAtom } from "../state/approvalDeepLinkAtom";
 import { pushToastAtom } from "../state/toastAtoms";
@@ -31,6 +31,7 @@ import {
   activePanelIdAtom,
   activePanelTitleAtom,
   activePanelParentIdAtom,
+  activePanelMetadataAtom,
   pinnedPanelIdsAtom,
   pinsHydratedAtom,
 } from "../state/navigationAtoms";
@@ -142,8 +143,9 @@ function smokePhase(phase: string, extra?: Record<string, unknown>): void {
 export function MainScreen() {
   const navigation = useNavigation();
   const shellClient = useAtomValue(shellClientAtom);
-  const panelForest = useAtomValue(panelForestAtom);
-  const setPanelForest = useSetAtom(panelForestAtom);
+  const panelTreeRevision = useAtomValue(panelTreeRevisionAtom);
+  const setPanelTreeRevision = useSetAtom(panelTreeRevisionAtom);
+  const setActivePanelMetadata = useSetAtom(activePanelMetadataAtom);
   const setActivePanelId = useSetAtom(activePanelIdAtom);
   const colorScheme = useAtomValue(colorSchemeAtom);
   const currentThemeModeRef = useRef<"light" | "dark">(colorScheme === "light" ? "light" : "dark");
@@ -160,6 +162,32 @@ export function MainScreen() {
   const pinsHydrated = useAtomValue(pinsHydratedAtom);
   const setPinsHydrated = useSetAtom(pinsHydratedAtom);
   const promptedAppUpdatesRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    if (!shellClient || !activePanelId) {
+      setActivePanelMetadata(null);
+      return;
+    }
+    void Promise.all([
+      shellClient.panels.observe(activePanelId),
+      shellClient.panels.getTreePath(activePanelId),
+    ])
+      .then(([observation, path]) => {
+        if (cancelled) return;
+        const target = path?.nodes[path.nodes.length - 1];
+        setActivePanelMetadata({
+          panelId: activePanelId,
+          title: target?.title ?? observation.title,
+          parentId: target?.parentSlotId ?? observation.parentId,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setActivePanelMetadata(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activePanelId, panelTreeRevision, setActivePanelMetadata, shellClient]);
   // Refs mirror the latest values so interval/callback closures read fresh
   // state without re-subscribing.
   const pinnedPanelIdsRef = useRef<Set<string>>(pinnedPanelIds);
@@ -260,13 +288,13 @@ export function MainScreen() {
       setSelectedMobileApp({ source: null, appId: null });
       return;
     }
-    void shellClient.workspaces
-      .getHostTargetSelection("react-native")
-      .then((result) => {
+    void shellClient.hostLaunch
+      .configuredCandidate("react-native")
+      .then((candidate) => {
         if (cancelled) return;
         setSelectedMobileApp({
-          source: result.valid ? (result.selection?.source ?? null) : null,
-          appId: result.valid ? (result.selection?.appId ?? null) : null,
+          source: candidate?.source ?? null,
+          appId: candidate?.name ?? null,
         });
       })
       .catch(() => {
@@ -351,11 +379,11 @@ export function MainScreen() {
   const activePanel = useMemo(() => {
     if (!activePanelId || !shellClient) return null;
     return shellClient.panels.registry.getPanel(activePanelId) ?? null;
-  }, [activePanelId, panelForest, shellClient]);
+  }, [activePanelId, panelTreeRevision, shellClient]);
   const activeRuntimeLease = useMemo(() => {
     if (!activePanelId || !shellClient) return null;
     return shellClient.panels.registry.getRuntimeLease(activePanelId);
-  }, [activePanelId, panelForest, shellClient]);
+  }, [activePanelId, panelTreeRevision, shellClient]);
   const activePanelLoadError = activePanelId ? panelLoadErrors[activePanelId] : null;
   const activePanelLeasedElsewhere = Boolean(
     activeRuntimeLease && activeRuntimeLease.clientSessionId !== shellClient?.credentials.deviceId
@@ -454,7 +482,7 @@ export function MainScreen() {
   );
   const refreshTree = useCallback(() => {
     if (!shellClient) return;
-    setPanelForest(shellClient.panels.getTreeSnapshot());
+    setPanelTreeRevision(shellClient.panels.treeCache.getRevision());
     updateWebViewStack((prev) =>
       prev.filter((entry) => shellClient.panels.registry.getPanel(entry.panelId) !== undefined)
     );
@@ -470,7 +498,7 @@ export function MainScreen() {
       persistPins(next);
       return next;
     });
-  }, [shellClient, setPanelForest, setPinnedPanelIds, persistPins]);
+  }, [shellClient, setPanelTreeRevision, setPinnedPanelIds, persistPins]);
   const applyPendingApprovals = useCallback((pending: PendingApproval[]) => {
     setPendingApprovals(pending);
     const signature = pending
@@ -550,21 +578,6 @@ export function MainScreen() {
     },
     [removeResolvedApproval, shellClient]
   );
-  const resolveUserland = useCallback(
-    async (approvalId: string, choice: string | "dismiss") => {
-      if (!shellClient) throw new Error("Shell client not available");
-      await shellClient.shellApproval.resolveUserland(approvalId, choice);
-      removeResolvedApproval(approvalId);
-    },
-    [removeResolvedApproval, shellClient]
-  );
-  const fetchUserlandSealedDetail = useCallback(
-    async (approvalId: string, digest: string) => {
-      if (!shellClient) throw new Error("Shell client not available");
-      return shellClient.shellApproval.getUserlandSealedDetail(approvalId, digest);
-    },
-    [shellClient]
-  );
   const resolveMissionReview = useCallback(
     async (
       approvalId: string,
@@ -572,14 +585,6 @@ export function MainScreen() {
     ) => {
       if (!shellClient) throw new Error("Shell client not available");
       await shellClient.shellApproval.resolveMissionReview(approvalId, resolution);
-      removeResolvedApproval(approvalId);
-    },
-    [removeResolvedApproval, shellClient]
-  );
-  const resolveExternalAgent = useCallback(
-    async (approvalId: string, behavior: "allow" | "deny") => {
-      if (!shellClient) throw new Error("Shell client not available");
-      await shellClient.shellApproval.resolveExternalAgent(approvalId, behavior);
       removeResolvedApproval(approvalId);
     },
     [removeResolvedApproval, shellClient]
@@ -727,7 +732,7 @@ export function MainScreen() {
     }
   }, [
     hostConfig,
-    panelForest,
+    panelTreeRevision,
     panelMaterializationRetryEpoch,
     panelMaterializationRetryQueue,
     shellClient,
@@ -1060,13 +1065,13 @@ export function MainScreen() {
         return !lease || lease.clientSessionId === shellClient.credentials.deviceId;
       })
     );
-  }, [panelForest, shellClient]);
+  }, [panelTreeRevision, shellClient]);
   useEffect(() => {
     if (!shellClient) return;
     if (activePanelId && shellClient.panels.registry.getPanel(activePanelId)) return;
-    const firstRoot = shellClient.panels.getPreferredRoot();
-    setActivePanelId(firstRoot?.id ?? null);
-  }, [activePanelId, panelForest, setActivePanelId, shellClient]);
+    const firstRootId = shellClient.panels.getPreferredRootId();
+    setActivePanelId(firstRootId);
+  }, [activePanelId, panelTreeRevision, setActivePanelId, shellClient]);
   const handleMenuPress = useCallback(() => {
     navigation.dispatch(DrawerActions.openDrawer());
   }, [navigation]);
@@ -1291,14 +1296,12 @@ export function MainScreen() {
                   ...common,
                   title: location.title,
                   slug: location.slug,
-                  name: location.name,
                   focus: location.focus ?? true,
                 })
               : shellClient.panels.createRootPanel(location.source, {
                   ...common,
                   title: location.title,
                   slug: location.slug,
-                  name: location.name,
                   focus: location.focus ?? true,
                 });
         void operation
@@ -1466,14 +1469,12 @@ export function MainScreen() {
                   ...common,
                   title: location.title,
                   slug: location.slug,
-                  name: location.name,
                   focus: location.focus ?? true,
                 })
               : shellClient.panels.createRootPanel(location.source, {
                   ...common,
                   title: location.title,
                   slug: location.slug,
-                  name: location.name,
                   focus: location.focus ?? true,
                 });
         void created
@@ -1950,10 +1951,7 @@ export function MainScreen() {
         onSubmitClientConfig={submitClientConfig}
         onSubmitCredentialInput={submitCredentialInput}
         onSubmitSecretInput={submitSecretInput}
-        onResolveUserland={resolveUserland}
-        onFetchUserlandSealedDetail={fetchUserlandSealedDetail}
         onResolveMissionReview={resolveMissionReview}
-        onResolveExternalAgent={resolveExternalAgent}
         onNavigateToPanel={activatePanel}
       />
     </View>

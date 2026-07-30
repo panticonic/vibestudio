@@ -6,7 +6,7 @@
  * - Auto-mount utilities for React panels
  * - React panel mounting helpers
  *
- * Use alongside @vibestudio/runtime for full functionality.
+ * Use alongside @workspace/runtime for full functionality.
  */
 
 // Export React-specific functionality only

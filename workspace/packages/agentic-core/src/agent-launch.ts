@@ -1,4 +1,4 @@
-import { AGENTIC_PROTOCOL_VERSION, type AgenticEvent } from "@vibestudio/agentic-protocol";
+import { AGENTIC_PROTOCOL_VERSION, type AgenticEvent } from "@workspace/agentic-protocol";
 import type { RuntimeEntityCreateSpec } from "@vibestudio/shared/runtime/entitySpec";
 import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import {

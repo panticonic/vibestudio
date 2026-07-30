@@ -13,7 +13,6 @@ import {
   type BrowserImportDataType,
   type BrowserImportSelection,
   type BrowserImportStore,
-  type FormFillValueInput,
   type ImportBatch,
   type ImportedBookmark,
   type ImportedCookie,
@@ -22,9 +21,6 @@ import {
   type ImportHostSummary,
   type OpenTabsAsPanelsRequest,
   type OpenTabsAsPanelsResult,
-  type PageFavicon,
-  type RecordHistoryVisitRequest,
-  type UpdateHistoryTitleRequest,
 } from "@vibestudio/browser-data";
 import {
   createCollectionSession,
@@ -34,6 +30,7 @@ import {
   type CollectionSessionDescriptor,
   type CollectionStartupTask,
 } from "@workspace/collection-orchestration";
+import { createPanelRuntime } from "@workspace/runtime/panel-runtime";
 
 interface InvocationLike {
   current(): {
@@ -49,23 +46,8 @@ interface InvocationLike {
   signal?(): AbortSignal | null;
 }
 
-interface UserlandApprovalRequestLike {
-  subject: { id: string; label?: string };
-  title: string;
-  summary?: string;
-  warning?: string;
-  details?: Array<{ label: string; value: string; format?: "plain" | "markdown" | "code" }>;
-  severity?: "standard" | "dangerous";
-  defaultAction?: "allow" | "deny";
-  promptOptions?: "scoped" | "choices";
-}
-
-type UserlandApprovalChoiceLike =
-  | { kind: "choice"; choice: string }
-  | { kind: "dismissed" }
-  | { kind: "uncallable"; reason: string };
-
-interface ResolvedDurableObject {
+interface ResolvedBuiltinService {
+  kind: "durable-object";
   targetId: string;
   objectKey?: string;
 }
@@ -81,16 +63,9 @@ interface ExtensionContextLike {
     ): Promise<Response>;
   };
   workers: {
-    resolveDurableObject(
-      source: string,
-      className: string,
-      objectKey: string
-    ): Promise<ResolvedDurableObject>;
+    resolveService(protocol: string): Promise<ResolvedBuiltinService>;
   };
   invocation: InvocationLike;
-  approvals: {
-    request(req: UserlandApprovalRequestLike): Promise<UserlandApprovalChoiceLike>;
-  };
   log: {
     info(message: string): void;
     warn?(message: string): void;
@@ -103,75 +78,8 @@ interface ExtensionContextLike {
   emit(event: string, payload: unknown): void;
 }
 
-const DO_SOURCE = "vibestudio/internal";
-const DO_CLASS = "BrowserDataDO";
-const DO_RESOLUTION_SENTINEL = "browser-environment";
+const BROWSER_DATA_PROTOCOL = "vibestudio.browser-data.v1";
 const TRUSTED_CALLER_KINDS = new Set(["shell", "server"]);
-
-const GATED_METHODS = new Set([
-  "listImportHosts",
-  "listImportSources",
-  "previewImport",
-  "startImport",
-  "cancelImport",
-  "resumeImport",
-  "listOpenTabs",
-  "openTabsAsPanels",
-  "getPasswords",
-  "getPasswordForSite",
-  "addPassword",
-  "updatePassword",
-  "deletePassword",
-  "getFormFillSuggestions",
-  "addFormFillValue",
-  "updateFormFillValue",
-  "deleteFormFillValue",
-  "clearFormFillValues",
-  "applyCookieMutations",
-  "getCookieSnapshot",
-  "getCookiesForOrigin",
-  "clearCookiesForOrigin",
-  "clearAllCookies",
-  "endBrowserSession",
-  "listDownloads",
-  "listDownloadRecords",
-  "upsertDownloadRecord",
-  "pauseDownload",
-  "resumeDownload",
-  "cancelDownload",
-  "openDownload",
-  "revealDownload",
-  "exportBookmarks",
-  "exportPasswords",
-  "exportCookies",
-  "addBookmark",
-  "updateBookmark",
-  "deleteBookmark",
-  "moveBookmark",
-  "getHistory",
-  "deleteHistoryEntry",
-  "deleteHistoryRange",
-  "clearAllHistory",
-  "recordHistoryVisit",
-  "updateHistoryTitle",
-  "setDefaultEngine",
-  "putPageFavicon",
-]);
-
-const DANGEROUS_METHODS = new Set([
-  "getPasswords",
-  "getPasswordForSite",
-  "getCookieSnapshot",
-  "getCookiesForOrigin",
-  "clearCookiesForOrigin",
-  "clearAllCookies",
-  "endBrowserSession",
-  "deletePassword",
-  "clearFormFillValues",
-  "clearAllHistory",
-  "exportPasswords",
-  "exportCookies",
-]);
 
 function collectionOrchestrationRpc(ctx: ExtensionContextLike): CollectionOrchestrationRpc {
   return {
@@ -180,31 +88,6 @@ function collectionOrchestrationRpc(ctx: ExtensionContextLike): CollectionOrches
     stream: (targetId, method, args, options) => ctx.rpc.stream(targetId, method, args, options),
   };
 }
-
-const METHOD_LABELS: Record<string, string> = {
-  listImportHosts: "Find devices with browser data",
-  listImportSources: "Inspect installed browsers",
-  previewImport: "Review browser data to import",
-  startImport: "Import browser data",
-  cancelImport: "Cancel browser import",
-  resumeImport: "Resume browser import",
-  listOpenTabs: "Inspect open browser tabs",
-  openTabsAsPanels: "Open imported browser tabs",
-  getPasswords: "Read saved passwords",
-  getPasswordForSite: "Fill a saved password",
-  getFormFillSuggestions: "Read saved form-fill values",
-  getCookieSnapshot: "Read browser cookies",
-  getCookiesForOrigin: "Read site cookies",
-  clearCookiesForOrigin: "Clear site data",
-  clearAllCookies: "Clear all browser cookies",
-  endBrowserSession: "End the browser session",
-  listDownloads: "Review browser downloads",
-  listDownloadRecords: "Read canonical browser download metadata",
-  upsertDownloadRecord: "Record canonical browser download metadata",
-  exportBookmarks: "Export bookmarks",
-  exportPasswords: "Export passwords",
-  exportCookies: "Export cookies",
-};
 
 /** Public API surface of this extension. */
 export type Api = Awaited<ReturnType<typeof activate>>;
@@ -239,10 +122,13 @@ export async function activate(ctx: ExtensionContextLike) {
     let pending = resolvedStores.get(cacheKey);
     if (!pending) {
       pending = ctx.workers
-        .resolveDurableObject(DO_SOURCE, DO_CLASS, DO_RESOLUTION_SENTINEL)
+        .resolveService(BROWSER_DATA_PROTOCOL)
         .then((target) => {
+          if (target.kind !== "durable-object") {
+            throw new Error("browser.data did not resolve to a Durable Object");
+          }
           const environmentKey = target.objectKey ?? target.targetId.split(":").at(-1) ?? "";
-          if (!environmentKey || environmentKey === DO_RESOLUTION_SENTINEL) {
+          if (!environmentKey) {
             throw new Error("Server did not derive a browser environment key");
           }
           const identity = {
@@ -387,42 +273,9 @@ export async function activate(ctx: ExtensionContextLike) {
     await ensureDesktopHost(identity);
   };
 
-  const requireApproval = async (method: string): Promise<void> => {
-    const caller = ctx.invocation.current()?.caller;
-    if (caller && TRUSTED_CALLER_KINDS.has(caller.callerKind)) return;
-    if (!caller || caller.callerKind === "http") {
-      throw Object.assign(new Error(`browser-data.${method} requires an interactive caller`), {
-        code: "ENOCALLER",
-      });
-    }
-    const label = METHOD_LABELS[method] ?? humanizeMethod(method);
-    const dangerous = DANGEROUS_METHODS.has(method);
-    const choice = await ctx.approvals.request({
-      subject: { id: `browser-data:${method}`, label },
-      title: `${label}?`,
-      summary: `${caller.callerTitle ?? caller.callerKind} wants to ${label.toLowerCase()}.`,
-      ...(dangerous ? { warning: "This action reads or changes personal browser data." } : {}),
-      details: [{ label: "Requested by", value: caller.callerTitle ?? caller.callerKind }],
-      severity: dangerous ? "dangerous" : "standard",
-      defaultAction: "deny",
-      promptOptions: "scoped",
-    });
-    if (choice.kind === "uncallable") {
-      throw Object.assign(new Error(`browser-data.${method} requires an interactive caller`), {
-        code: "ENOCALLER",
-      });
-    }
-    if (choice.kind === "dismissed" || choice.choice === "deny") {
-      throw Object.assign(new Error(`browser-data.${method} denied by user`), {
-        code: "EACCES",
-      });
-    }
-  };
-
   const guarded =
-    <Args extends unknown[], Result>(method: string, fn: (...args: Args) => Promise<Result>) =>
+    <Args extends unknown[], Result>(_method: string, fn: (...args: Args) => Promise<Result>) =>
     async (...args: Args): Promise<Result> => {
-      if (GATED_METHODS.has(method)) await requireApproval(method);
       return fn(...args);
     };
 
@@ -430,12 +283,6 @@ export async function activate(ctx: ExtensionContextLike) {
     const { identity } = await currentIdentity();
     return callStoreForIdentity<T>(identity, method, ...args);
   };
-  const mutate = async <T>(dataType: string, method: string, ...args: unknown[]): Promise<T> => {
-    const result = await callStore<T>(method, ...args);
-    ctx.emit("data-changed", { dataType });
-    return result;
-  };
-
   const browserData = {
     getBrowserEnvironment: guarded("getBrowserEnvironment", async () => {
       const invocation = ctx.invocation.current();
@@ -537,127 +384,6 @@ export async function activate(ctx: ExtensionContextLike) {
         sourceName,
       });
     }),
-    getSitePreferences: guarded("getSitePreferences", async (origin: string) =>
-      callStore("getSitePreferences", origin)
-    ),
-    setSiteZoom: guarded("setSiteZoom", async (origin: string, zoomFactor: number) =>
-      mutate("sitePreferences", "setSiteZoom", origin, zoomFactor)
-    ),
-
-    getBookmarks: guarded("getBookmarks", async (folderPath?: string) =>
-      callStore("getBookmarks", folderPath ?? "/")
-    ),
-    addBookmark: guarded("addBookmark", async (bookmark: unknown) =>
-      mutate("bookmarks", "addBookmark", bookmark)
-    ),
-    updateBookmark: guarded("updateBookmark", async (id: number, partial: unknown) =>
-      mutate("bookmarks", "updateBookmark", id, partial)
-    ),
-    deleteBookmark: guarded("deleteBookmark", async (id: number) =>
-      mutate("bookmarks", "deleteBookmark", id)
-    ),
-    moveBookmark: guarded(
-      "moveBookmark",
-      async (id: number, folderPath: string, position: number) =>
-        mutate("bookmarks", "moveBookmark", id, folderPath, position)
-    ),
-    searchBookmarks: guarded("searchBookmarks", async (query: string) =>
-      callStore("searchBookmarks", query)
-    ),
-
-    getHistory: guarded("getHistory", async (query: unknown) => callStore("getHistory", query)),
-    deleteHistoryEntry: guarded("deleteHistoryEntry", async (id: number) =>
-      mutate("history", "deleteHistoryEntry", id)
-    ),
-    deleteHistoryRange: guarded("deleteHistoryRange", async (start: number, end: number) =>
-      mutate("history", "deleteHistoryRange", start, end)
-    ),
-    clearAllHistory: guarded("clearAllHistory", async () => mutate("history", "clearAllHistory")),
-    searchHistory: guarded("searchHistory", async (query: string, limit?: number) =>
-      callStore("searchHistory", query, limit)
-    ),
-    searchHistoryForAutocomplete: guarded("searchHistoryForAutocomplete", async (query: unknown) =>
-      callStore("searchHistoryForAutocomplete", query)
-    ),
-    recordHistoryVisit: guarded("recordHistoryVisit", async (request: RecordHistoryVisitRequest) =>
-      mutate("history", "recordHistoryVisit", validateHistoryVisit(request))
-    ),
-    updateHistoryTitle: guarded("updateHistoryTitle", async (request: UpdateHistoryTitleRequest) =>
-      mutate("history", "updateHistoryTitle", validateHistoryTitle(request))
-    ),
-
-    getPasswords: guarded("getPasswords", async () => callStore("getPasswords")),
-    getPasswordForSite: guarded("getPasswordForSite", async (url: string) =>
-      callStore("getPasswordForSite", url)
-    ),
-    addPassword: guarded("addPassword", async (password: unknown) =>
-      mutate("passwords", "addPassword", password)
-    ),
-    updatePassword: guarded("updatePassword", async (id: number, partial: unknown) =>
-      mutate("passwords", "updatePassword", id, partial)
-    ),
-    deletePassword: guarded("deletePassword", async (id: number) =>
-      mutate("passwords", "deletePassword", id)
-    ),
-    updatePasswordLastUsed: guarded("updatePasswordLastUsed", async (id: number) =>
-      mutate("passwords", "updateLastUsed", id)
-    ),
-    addNeverSavePassword: guarded("addNeverSavePassword", async (origin: string) =>
-      mutate("passwords", "addNeverSave", origin)
-    ),
-    isNeverSavePassword: guarded("isNeverSavePassword", async (origin: string) =>
-      callStore("isNeverSave", origin)
-    ),
-    getNeverSavePasswordOrigins: guarded("getNeverSavePasswordOrigins", async () =>
-      callStore("getNeverSaveOrigins")
-    ),
-    removeNeverSavePassword: guarded("removeNeverSavePassword", async (origin: string) =>
-      mutate("passwords", "removeNeverSave", origin)
-    ),
-
-    getFormFillSuggestions: guarded("getFormFillSuggestions", async (query: unknown) =>
-      callStore("getFormFillSuggestions", query)
-    ),
-    addFormFillValue: guarded("addFormFillValue", async (value: FormFillValueInput) =>
-      mutate("formFill", "addFormFillValue", value)
-    ),
-    updateFormFillValue: guarded("updateFormFillValue", async (id: number, partial: unknown) =>
-      mutate("formFill", "updateFormFillValue", id, partial)
-    ),
-    markFormFillValueUsed: guarded("markFormFillValueUsed", async (id: number) =>
-      mutate("formFill", "markFormFillValueUsed", id)
-    ),
-    deleteFormFillValue: guarded("deleteFormFillValue", async (id: number) =>
-      mutate("formFill", "deleteFormFillValue", id)
-    ),
-    clearFormFillValues: guarded("clearFormFillValues", async () =>
-      mutate("formFill", "clearFormFillValues")
-    ),
-
-    getSearchEngines: guarded("getSearchEngines", async () => callStore("getSearchEngines")),
-    setDefaultEngine: guarded("setDefaultEngine", async (id: number) =>
-      mutate("searchEngines", "setDefaultEngine", id)
-    ),
-
-    applyCookieMutations: guarded("applyCookieMutations", async (request: unknown) =>
-      mutate("cookies", "applyCookieMutations", request)
-    ),
-    getCookieSnapshot: guarded("getCookieSnapshot", async (query?: unknown) =>
-      callStore("getCookieSnapshot", query ?? {})
-    ),
-    getCookiesForOrigin: guarded("getCookiesForOrigin", async (origin: string) =>
-      callStore("getCookiesForOrigin", origin)
-    ),
-    clearCookiesForOrigin: guarded("clearCookiesForOrigin", async (origin: string) =>
-      mutate("cookies", "clearCookiesForOrigin", origin)
-    ),
-    clearAllCookies: guarded("clearAllCookies", async () => mutate("cookies", "clearAllCookies")),
-    endBrowserSession: guarded("endBrowserSession", async () =>
-      mutate("cookies", "endBrowserSession")
-    ),
-    getCookieSiteSummary: guarded("getCookieSiteSummary", async (origin: string) =>
-      callStore("getCookieSiteSummary", origin)
-    ),
     flushCookieProjection: guarded("flushCookieProjection", async (origins?: string[]) =>
       ctx.rpc.call("main", "browserEnvironment.flushCookieProjection", origins ?? [])
     ),
@@ -667,33 +393,6 @@ export async function activate(ctx: ExtensionContextLike) {
     listDownloads: guarded("listDownloads", async () =>
       ctx.rpc.call("main", "browserEnvironment.listDownloads")
     ),
-    listDownloadRecords: guarded("listDownloadRecords", async (hostId: string) => {
-      const caller = ctx.invocation.current()?.caller;
-      if (!caller || !TRUSTED_CALLER_KINDS.has(caller.callerKind)) {
-        throw new Error("Canonical download metadata is host-only");
-      }
-      const { identity } = await currentIdentity();
-      const rows = await callStoreForIdentity<Array<Record<string, unknown>>>(
-        identity,
-        "listDownloadRecords",
-        hostId
-      );
-      return rows.map((row) => ({ ...row, environmentKey: identity.environmentKey }));
-    }),
-    upsertDownloadRecord: guarded("upsertDownloadRecord", async (record: unknown) => {
-      const caller = ctx.invocation.current()?.caller;
-      if (!caller || !TRUSTED_CALLER_KINDS.has(caller.callerKind)) {
-        throw new Error("Canonical download metadata is host-only");
-      }
-      if (!record || typeof record !== "object" || Array.isArray(record)) {
-        throw new Error("Download metadata must be an object");
-      }
-      const { identity } = await currentIdentity();
-      await callStoreForIdentity(identity, "upsertDownloadRecord", {
-        ...(record as Record<string, unknown>),
-        environmentKey: identity.environmentKey,
-      });
-    }),
     pauseDownload: guarded("pauseDownload", async (id: string) =>
       ctx.rpc.call("main", "browserEnvironment.pauseDownload", id)
     ),
@@ -708,13 +407,6 @@ export async function activate(ctx: ExtensionContextLike) {
     ),
     revealDownload: guarded("revealDownload", async (id: string) =>
       ctx.rpc.call("main", "browserEnvironment.revealDownload", id)
-    ),
-
-    putPageFavicon: guarded("putPageFavicon", async (favicon: PageFavicon) =>
-      mutate("favicons", "putPageFavicon", favicon)
-    ),
-    getPageFavicon: guarded("getPageFavicon", async (pageUrl: string) =>
-      callStore("getPageFavicon", pageUrl)
     ),
 
     exportBookmarks: guarded("exportBookmarks", async (format: "html" | "json" | "chrome-json") =>
@@ -785,6 +477,16 @@ async function openTabsAsPanels(
     sourceName: string;
   }
 ): Promise<OpenTabsAsPanelsResult> {
+  const panelRuntime = createPanelRuntime({
+    rpc: {
+      call: async <T>(target: string, method: string, args: unknown[]): Promise<T> =>
+        (await ctx.rpc.call(target, method, ...args)) as T,
+      emit: async () => {
+        throw new Error("Browser-data panel composition does not emit target events");
+      },
+      on: () => () => {},
+    },
+  });
   const callerId = parentPanelIdFromInvocation(ctx.invocation.current());
   const panels: Array<{ id: string; title: string; url: string }> = [];
   const collections: Array<{
@@ -815,7 +517,7 @@ async function openTabsAsPanels(
     };
   }
 
-  const createCollection = (
+  const createCollection = async (
     parentId: string | null,
     title: string,
     origin: string,
@@ -823,20 +525,21 @@ async function openTabsAsPanels(
       contextId?: string;
       stateArgs?: Record<string, unknown>;
     } = {}
-  ): Promise<{ id: string; title: string; contextId: string }> =>
-    ctx.rpc.call(
-      "main",
-      "panelTree.create",
-      { surface: "code", source: "about/collection" },
-      {
-        parentId,
-        title,
-        focus: false,
-        initialLoad: "deferred",
-        ...(options.contextId ? { contextId: options.contextId } : {}),
-        stateArgs: { title, origin, ...(options.stateArgs ?? {}) },
-      }
-    );
+  ): Promise<{ id: string; title: string; contextId: string }> => {
+    const panel = await panelRuntime.openPanel("about/collection", {
+      parentId,
+      title,
+      focus: false,
+      ...(options.contextId ? { contextId: options.contextId } : {}),
+      stateArgs: { title, origin, ...(options.stateArgs ?? {}) },
+    });
+    const observation = await panel.observe();
+    return {
+      id: panel.id,
+      title: panel.title ?? title,
+      contextId: observation.contextId,
+    };
+  };
 
   let root: OpenTabsAsPanelsResult["root"];
   let rootOrchestration:
@@ -879,12 +582,8 @@ async function openTabsAsPanels(
       throw new Error("The calling panel is unavailable; choose a new workspace root instead");
     }
     anchorId = callerId;
-    const anchor = await ctx.rpc.call<{ contextId?: string } | null>(
-      "main",
-      "panelTree.metadata",
-      anchorId
-    );
-    orchestrationContextId = anchor?.contextId;
+    const anchor = panelRuntime.getPanelHandle(anchorId);
+    orchestrationContextId = (await anchor.observe()).contextId;
   }
 
   const groups = new Map<string, { title: string; tabs: OpenableTab[] }>();
@@ -907,7 +606,7 @@ async function openTabsAsPanels(
 
   const archiveEmptyContainer = async (id: string, title: string) => {
     try {
-      await ctx.rpc.call("main", "panelTree.archive", id);
+      await panelRuntime.getPanelHandle(id).close();
     } catch (error) {
       skipped.push({
         url: "(collection)",
@@ -949,21 +648,15 @@ async function openTabsAsPanels(
     for (const tab of group.tabs) {
       const title = (tab.title?.trim() || hostnameFromUrl(tab.url) || "Imported Tab").slice(0, 80);
       try {
-        const created = await ctx.rpc.call<{ id: string; title: string }>(
-          "main",
-          "panelTree.create",
-          { surface: "external", url: tab.url },
-          {
+        const created = await panelRuntime.openPanel(tab.url, {
             parentId: panelParentId,
             // A label, not an id: page titles repeat constantly ("New Tab"), and
             // as an id segment they collided.
             title,
             focus: false,
-            initialLoad: "deferred",
             ...(orchestrationContextId ? { contextId: orchestrationContextId } : {}),
-          }
-        );
-        panels.push({ id: created.id, title: created.title, url: tab.url });
+          });
+        panels.push({ id: created.id, title: created.title ?? title, url: tab.url });
         if (collection) collection.panelsOpened += 1;
         if (root) root.panelsOpened += 1;
       } catch (error) {
@@ -1028,35 +721,6 @@ function parentPanelIdFromInvocation(
   return caller && ["panel", "app", "worker", "do"].includes(caller.callerKind) && caller.callerId
     ? caller.callerId
     : undefined;
-}
-
-function validateHistoryVisit(request: RecordHistoryVisitRequest): RecordHistoryVisitRequest {
-  validateHttpUrl(request.url);
-  return {
-    ...request,
-    title: request.title?.trim() || undefined,
-    visitTime: request.visitTime ?? Date.now(),
-    transition: request.transition ?? "link",
-    typed: request.typed === true,
-    source: request.source ?? "vibestudio",
-    panelId: request.panelId?.trim() || undefined,
-  };
-}
-
-function validateHistoryTitle(request: UpdateHistoryTitleRequest): UpdateHistoryTitleRequest {
-  validateHttpUrl(request.url);
-  return {
-    url: request.url,
-    title: request.title.trim(),
-    observedAt: request.observedAt ?? Date.now(),
-  };
-}
-
-function validateHttpUrl(raw: string): void {
-  const url = new URL(raw);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Browser history URL must use http or https");
-  }
 }
 
 function exportBookmarks(
@@ -1157,8 +821,4 @@ function hostnameFromUrl(raw: string): string | null {
   } catch {
     return null;
   }
-}
-
-function humanizeMethod(method: string): string {
-  return method.replace(/([a-z])([A-Z])/g, "$1 $2").toLocaleLowerCase();
 }

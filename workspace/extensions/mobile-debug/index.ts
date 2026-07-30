@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionContext } from "@vibestudio/extension";
-import type { ApprovalDetailFormat } from "@vibestudio/shared/approvals";
 
 export type Api = Awaited<ReturnType<typeof activate>>;
 declare module "@vibestudio/extension" {
@@ -118,20 +117,6 @@ export async function activate(ctx: ExtensionContext) {
         raw?.device ?? null,
       ].filter((value): value is string => !!value);
       const script = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
-      const command = formatCommand(process.execPath, [script, ...args]);
-      await requireApproval(ctx, {
-        id: `mobile.install.${raw?.device ?? "default"}`,
-        title: "Install app on Android device",
-        summary: [
-          "Build and install the app on your connected Android device.",
-          "",
-          markdownShellBlock(command),
-        ].join("\n"),
-        details: [
-          { label: "Command", value: markdownShellBlock(command), format: "markdown" },
-          ...(raw?.device ? [{ label: "Device", value: raw.device }] : []),
-        ],
-      });
       await run(process.execPath, [script, ...args], { cwd: repoRoot });
       return { packageName: defaultPackage };
     },
@@ -154,20 +139,6 @@ export async function activate(ctx: ExtensionContext) {
         raw?.configuration ?? "Debug",
         raw?.launch ? "--launch" : null,
       ].filter((value): value is string => !!value);
-      const command = formatCommand(process.execPath, [script, ...args]);
-      await requireApproval(ctx, {
-        id: `mobile.ios.install.${raw?.device ?? "simulator"}`,
-        title: "Install app on iOS device",
-        summary: [
-          "Build and install the app on your iOS device or simulator.",
-          "",
-          markdownShellBlock(command),
-        ].join("\n"),
-        details: [
-          { label: "Command", value: markdownShellBlock(command), format: "markdown" },
-          ...(raw?.device ? [{ label: "Device", value: raw.device }] : []),
-        ],
-      });
       await run(process.execPath, [script, ...args], { cwd: repoRoot, errorCode: "EBUILD" });
       return { bundleId: process.env["VIBESTUDIO_IOS_BUNDLE_ID"] ?? "app.vibestudio.mobile" };
     },
@@ -199,24 +170,6 @@ export async function activate(ctx: ExtensionContext) {
 
     async clearAndroidApp(raw?: { device?: string; packageName?: string }) {
       const packageName = raw?.packageName ?? defaultPackage;
-      const command = formatCommand(
-        "adb",
-        adbArgs(raw?.device, ["shell", "pm", "clear", packageName])
-      );
-      await requireApproval(ctx, {
-        id: `mobile.clear.${raw?.device ?? "default"}.${packageName}`,
-        title: "Reset app on Android device",
-        summary: [
-          "Clears all the app's saved data. You'll need to sign in again.",
-          "",
-          markdownShellBlock(command),
-        ].join("\n"),
-        details: [
-          { label: "Command", value: markdownShellBlock(command), format: "markdown" },
-          { label: "App", value: packageName },
-          ...(raw?.device ? [{ label: "Device", value: raw.device }] : []),
-        ],
-      });
       await adb(raw?.device, ["shell", "pm", "clear", packageName]);
     },
 
@@ -345,23 +298,6 @@ export async function activate(ctx: ExtensionContext) {
     },
 
     async shell(raw: { device?: string; command: string; args?: string[] }) {
-      const command = formatCommand(
-        "adb",
-        adbArgs(raw.device, ["shell", raw.command, ...(raw.args ?? [])])
-      );
-      await requireApproval(ctx, {
-        id: `mobile.shell.${raw.device ?? "default"}.${raw.command}`,
-        title: "Run a command on Android device",
-        summary: [
-          "Run a command directly on your connected Android device:",
-          "",
-          markdownShellBlock(command),
-        ].join("\n"),
-        details: [
-          { label: "Command", value: markdownShellBlock(command), format: "markdown" },
-          ...(raw.device ? [{ label: "Device", value: raw.device }] : []),
-        ],
-      });
       return streamProcess("adb", adbArgs(raw.device, ["shell", raw.command, ...(raw.args ?? [])]));
     },
   };
@@ -389,56 +325,6 @@ export function workspaceReadinessFromLog(log: string, sinceMs = 0) {
     issues: failure ? [failure] : [],
   };
 }
-
-type ApprovalDetail = { label: string; value: string; format?: ApprovalDetailFormat };
-
-async function requireApproval(
-  ctx: ExtensionContext,
-  raw: {
-    id: string;
-    title: string;
-    summary: string;
-    details?: ApprovalDetail[];
-  }
-) {
-  const choice = await ctx.approvals.request({
-    subject: { id: raw.id.replace(/[^A-Za-z0-9._:/-]/g, "-"), label: raw.title },
-    title: raw.title,
-    summary: truncate(raw.summary, 1000),
-    ...(raw.details?.length
-      ? {
-          details: raw.details.map((detail) => ({
-            ...detail,
-            value: truncate(detail.value, 1000),
-          })),
-        }
-      : {}),
-    severity: "dangerous",
-    defaultAction: "deny",
-    promptOptions: "scoped",
-  });
-  if (choice.kind !== "choice" || choice.choice !== "allow") {
-    throw new MobileDebugError("EACCES", `${raw.title} denied by user`);
-  }
-}
-
-function markdownShellBlock(value: string): string {
-  return `\`\`\`sh\n${truncate(value, 700).replace(/```/g, "'''")}\n\`\`\``;
-}
-
-function formatCommand(command: string, args: string[]): string {
-  return [command, ...args].map(shellQuoteForDisplay).join(" ");
-}
-
-function shellQuoteForDisplay(value: string): string {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function truncate(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 3))}...`;
-}
-
 async function listAdbDevices(): Promise<
   Array<{ serial: string; state: "device" | "unauthorized" | "offline"; model?: string }>
 > {

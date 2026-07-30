@@ -16,25 +16,6 @@ interface AttachmentFs {
     readFile(path: string): Promise<string | Uint8Array>;
 }
 
-const MIME_BY_EXTENSION: Record<string, string> = {
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    webp: "image/webp",
-    gif: "image/gif",
-};
-
-export function inferAttachmentMimeType(path: string): string {
-    const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-    const mimeType = path.includes(".") ? MIME_BY_EXTENSION[extension] : undefined;
-    if (!mimeType) {
-        throw new Error(
-            `say attachment "${path}": unsupported file type — attachments must be images (${SUPPORTED_IMAGE_TYPES.join(", ")})`
-        );
-    }
-    return mimeType;
-}
-
 function sniffImageMimeType(bytes: Uint8Array): string | undefined {
     if (
         bytes.length >= 4 &&
@@ -59,11 +40,13 @@ function sniffImageMimeType(bytes: Uint8Array): string | undefined {
 }
 
 function attachmentMimeType(path: string, bytes: Uint8Array): string {
-    // Scratch helpers such as mkdtemp append uniqueness after the caller's
-    // prefix (`shot.png-abc123`), so a valid generated image does not always
-    // end in its conventional extension. Prefer the content signature; retain
-    // extension inference as a compatibility fallback for existing callers.
-    return sniffImageMimeType(bytes) ?? inferAttachmentMimeType(path);
+    const mimeType = sniffImageMimeType(bytes);
+    if (!mimeType) {
+        throw new Error(
+            `say attachment "${path}": unsupported file content — attachments must be images (${SUPPORTED_IMAGE_TYPES.join(", ")})`
+        );
+    }
+    return mimeType;
 }
 
 export async function readSayAttachments(

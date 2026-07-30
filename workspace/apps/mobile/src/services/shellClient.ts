@@ -1,12 +1,13 @@
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import type { Panel, PanelTreeSnapshot, ThemeAppearance } from "@vibestudio/shared/types";
+import { decodePanelStateArgs } from "@vibestudio/shared/panelStateArgs";
+import type { ThemeAppearance } from "@vibestudio/shared/types";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { Appearance, Platform } from "react-native";
 import { WorkspaceClient } from "@vibestudio/service-schemas/clients/shellWorkspaceClient";
-import { SettingsClient } from "@vibestudio/service-schemas/clients/settingsClient";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import { PanelTreeCache, type PanelTreeQuerySource } from "@vibestudio/shell-core/panelTreeCache";
 import type { RecoveryCoordinator, RecoveryKind } from "@vibestudio/shell-core/recoveryCoordinator";
 import type { PanelManager } from "@vibestudio/shell-core/panelManager";
 import type {
@@ -17,6 +18,7 @@ import type {
   RuntimeLeaseSnapshot,
 } from "@vibestudio/shared/panel/panelLease";
 import type { PanelPageObservation } from "@vibestudio/shared/panel/observation";
+import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import {
   createPanelHostRegistration,
   createPanelRuntimeLeaseRequest,
@@ -45,11 +47,8 @@ import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
 import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { pushMethods } from "@vibestudio/service-schemas/push";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { workspaceStateMethods } from "@vibestudio/service-schemas/workspaceState";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
-import {
-  systemAgentMethods,
-  type SystemAgentConversation,
-} from "@vibestudio/service-schemas/systemAgent";
 import {
   createDurableObjectServiceClient,
   createGadServiceClient,
@@ -59,17 +58,11 @@ import {
   type UserNotificationAcknowledgementResult,
   type UserNotificationListResult,
 } from "@vibestudio/shared/userNotifications";
-import {
-  HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT,
-  isLaunchSessionEventFor,
-} from "@vibestudio/shared/hostTargetLaunchGate";
-import type { HostTargetLaunchSessionSnapshot } from "@vibestudio/shared/hostTargets";
 import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 import {
-  mobilePanelRoots,
-  orderMobilePanelForest,
-  preferredMobileRoot,
-} from "../shellCore/panelForest";
+  HostLaunchClient,
+  type HostLaunchResult,
+} from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import {
   MobileAccountProfileClient,
   type MobileAccountProfile,
@@ -85,7 +78,7 @@ function smokePhase(phase: string, details?: Record<string, unknown>): void {
 
 export interface ShellClientConfig {
   credentials: Credentials;
-  onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
+  onTreeInvalidated?: (event: PanelTreeInvalidation) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
 }
 
@@ -144,6 +137,14 @@ function createWorkspaceRpcClient(transport: MobileRpcClient) {
   );
 }
 
+function createWorkspaceStateRpcClient(transport: MobileRpcClient) {
+  return createTypedServiceClient(
+    "workspace-state",
+    workspaceStateMethods,
+    (service, method, args) => transport.call("main", `${service}.${method}`, args)
+  );
+}
+
 function createHubControlClient(transport: MobileRpcClient) {
   return createTypedServiceClient("hubControl", hubControlMethods, (service, method, args) =>
     transport.call("main", `${service}.${method}`, args)
@@ -155,28 +156,24 @@ type PanelRuntimeClient = ReturnType<typeof createPanelRuntimeClient>;
 type CredentialsClient = ReturnType<typeof createCredentialsClient>;
 type PushClient = ReturnType<typeof createPushClient>;
 type WorkspaceRpcClient = ReturnType<typeof createWorkspaceRpcClient>;
+type WorkspaceStateRpcClient = ReturnType<typeof createWorkspaceStateRpcClient>;
 type WorkspaceInfo = Awaited<ReturnType<WorkspaceClient["getInfo"]>>;
 
 export class MobileHostTargetApprovalRequiredError extends Error {
   readonly approvals: PendingUnitBatchApproval[];
-  readonly launchSession: HostTargetLaunchSessionSnapshot;
 
-  constructor(launchSession: HostTargetLaunchSessionSnapshot) {
-    super(launchSession.message || "Approve the workspace mobile app before opening panels.");
+  constructor(launch: Extract<HostLaunchResult, { status: "approval-required" }>) {
+    super("Approve the workspace mobile app before opening panels.");
     this.name = "MobileHostTargetApprovalRequiredError";
-    this.approvals = launchSession.approvals;
-    this.launchSession = launchSession;
+    this.approvals = launch.approvals;
   }
-}
-
-function formatHostTargetLaunchSession(session: HostTargetLaunchSessionSnapshot): string {
-  return [session.message, session.detail].filter(Boolean).join(" ");
 }
 
 class MobilePanels implements PanelHost {
   private panelManager: PanelManager | null = null;
   private registryInstance: PanelRegistry | null = null;
   private bridgeAdapterInstance: ReturnType<typeof createBridgeAdapter> | null = null;
+  readonly treeCache: PanelTreeCache;
   // Set by the UI (MainScreen) so the panel-RPC relay can push server replies +
   // events into the right panel's webview. A mutable field (not a constructor
   // dep) because the webview refs live in the UI, which mounts after init().
@@ -189,6 +186,7 @@ class MobilePanels implements PanelHost {
   private readonly panelRuntime: PanelRuntimeClient;
   private readonly browserData: BrowserDataClient;
   private readonly workspaceRpc: WorkspaceRpcClient;
+  private readonly workspaceState: WorkspaceStateRpcClient;
   private readonly runtimeConnectionBySlot = new Map<
     string,
     { runtimeEntityId: PanelEntityId; connectionId: string }
@@ -198,7 +196,7 @@ class MobilePanels implements PanelHost {
     private readonly deps: {
       serverUrl: string;
       transport: MobileRpcClient;
-      onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
+      onTreeInvalidated?: (event: PanelTreeInvalidation) => void;
       getSelfUserId: () => string | null;
       navigateToPanel: (panelId: string) => void;
       clientSessionId: string;
@@ -213,31 +211,34 @@ class MobilePanels implements PanelHost {
     });
     this.panelRuntime = createPanelRuntimeClient(this.deps.transport);
     this.workspaceRpc = createWorkspaceRpcClient(this.deps.transport);
+    this.workspaceState = createWorkspaceStateRpcClient(this.deps.transport);
     this.browserData = createBrowserDataClient({
       call: (service: string, method: string, args: unknown[]) =>
         this.deps.transport.call("main", `${service}.${method}`, args),
+    });
+    const source: PanelTreeQuerySource = {
+      rootGroups: (input) => this.workspaceState.panelTree.rootGroups(input),
+      page: (input) => this.workspaceState.panelTree.page(input),
+      path: (slotId) => this.workspaceState.panelTree.path(slotId),
+      search: (input) => this.workspaceState.panelTree.search(input),
+    };
+    this.treeCache = new PanelTreeCache(source, {
+      pageSize: 50,
+      maxGroups: 48,
+      maxNodes: 1_500,
+      maxPaths: 96,
     });
   }
   get registry(): PanelRegistry {
     if (!this.registryInstance) throw new Error("Panels not initialized");
     return this.registryInstance;
   }
-  /**
-   * Tree mutations route through the single server authority (panelTree); the
-   * mobile mirror updates reactively from the panel-tree-updated broadcast (the
-   * UI materializes panels from the tree atom). Mobile connects as a native
-   * `shell:${deviceId}` host, which panelTree's policy allows.
-   */
-  private callPanelTree<T = unknown>(method: string, args: unknown[]): Promise<T> {
-    return this.deps.transport.call("main", `panelTree.${method}`, args) as Promise<T>;
-  }
-  async init(workspaceId: string, _workspaceConfig?: WorkspaceConfig): Promise<void> {
+  async init(workspaceId: string, workspaceConfig?: WorkspaceConfig): Promise<void> {
     if (!this.panelManager) {
       const core = createMobileShellCore({
         workspaceId,
         serverUrl: this.deps.serverUrl,
         transport: this.deps.transport,
-        onTreeUpdated: this.deps.onTreeUpdated,
       });
       this.panelManager = core.panelManager;
       this.registryInstance = core.registry;
@@ -255,77 +256,179 @@ class MobilePanels implements PanelHost {
     const initialTheme = Appearance.getColorScheme() === "light" ? "light" : "dark";
     this.panelManager.setCurrentTheme(initialTheme);
     await this.panelRuntime.registerClient(this.registration);
-    // The server is the sole tree authority and seeds initPanels for the
-    // authenticated owner. Mobile only syncs the canonical forest.
-    await this.panelManager.syncSnapshot();
+    const groups = await this.treeCache.loadRootGroups(true);
+    await Promise.all(
+      groups.groups.map((group) =>
+        this.treeCache.loadFirst({ kind: "roots", ownerUserId: group.ownerUserId })
+      )
+    );
+    const existingSources = new Set(
+      groups.groups.flatMap(
+        (group) =>
+          this.treeCache
+            .getGroup({
+              kind: "roots",
+              ownerUserId: group.ownerUserId,
+            })
+            ?.nodes.flatMap((node) => (node.source ? [node.source] : [])) ?? []
+      )
+    );
+    for (const initial of workspaceConfig?.initPanels ?? []) {
+      if (existingSources.has(initial.source)) continue;
+      await this.panelManager.create(initial.source, {
+        isRoot: true,
+        addAsRoot: true,
+        stateArgs: initial.stateArgs,
+      });
+      existingSources.add(initial.source);
+    }
     await this.syncRuntimeLeases();
-    const firstRoot = this.getPreferredRoot();
+    const ownGroup =
+      groups.groups.find((group) => group.ownerUserId === this.deps.getSelfUserId()) ??
+      groups.groups[0];
+    const firstRoot = ownGroup
+      ? this.treeCache.getGroup({
+          kind: "roots",
+          ownerUserId: ownGroup.ownerUserId,
+        })?.nodes[0]
+      : undefined;
     if (firstRoot) {
-      await this.panelManager.notifyFocused(asPanelSlotId(firstRoot.id));
-      this.deps.navigateToPanel(firstRoot.id);
+      await this.panelManager.notifyFocused(asPanelSlotId(firstRoot.slotId));
+      this.deps.navigateToPanel(firstRoot.slotId);
     }
   }
   async refresh(): Promise<void> {
-    await this.requireManager().syncSnapshot();
+    this.treeCache.clear();
+    const groups = await this.treeCache.loadRootGroups(true);
+    await Promise.all(
+      groups.groups.map((group) =>
+        this.treeCache.loadFirst({ kind: "roots", ownerUserId: group.ownerUserId })
+      )
+    );
     await this.syncRuntimeLeases();
+  }
+  invalidateTree(event: PanelTreeInvalidation): void {
+    this.treeCache.invalidate(event);
+    this.deps.onTreeInvalidated?.(event);
+  }
+  async observe(
+    panelId: string
+  ): Promise<import("@vibestudio/shared/panel/observation").PanelObservation> {
+    const detail = await this.workspaceState.panelTree.detail(panelId);
+    if (!detail) throw new Error(`Panel not found: ${panelId}`);
+    const runtime = await this.panelRuntime.observeSlot(panelId);
+    const options = detail.currentHistory.options
+      ? (JSON.parse(detail.currentHistory.options) as { ref?: string })
+      : {};
+    const boot = runtime.observation?.boot;
+    const phase = !runtime.lease
+      ? ("assigning-host" as const)
+      : !boot || boot.phase === "unavailable" || boot.phase === "loading"
+        ? ("loading" as const)
+        : boot.phase;
+    return {
+      panelId,
+      title: detail.slot.current_entity_title ?? panelId,
+      source: detail.currentHistory.source,
+      kind: detail.currentHistory.source.startsWith("browser:") ? "browser" : "workspace",
+      parentId: detail.slot.parent_slot_id,
+      contextId: detail.currentHistory.context_id,
+      requestedRef: options.ref ?? "latest",
+      runtimeEntityId: detail.entity.id,
+      attemptId: `${detail.entity.id}@${detail.entity.activeBuildKey ?? "pending"}`,
+      effectiveVersion: detail.entity.source.effectiveVersion || null,
+      buildKey: detail.entity.activeBuildKey ?? null,
+      phase,
+      ...(runtime.lease
+        ? {
+            host: {
+              holderLabel: runtime.lease.holderLabel,
+              platform: runtime.lease.platform,
+              supportsInspection: runtime.lease.supportsCdp,
+              view: {
+                exists: runtime.observation !== null,
+                ...(runtime.observation
+                  ? {
+                      url: runtime.observation.url,
+                      loading: runtime.observation.loading,
+                    }
+                  : {}),
+              },
+              boot: boot ?? { phase: "unavailable" as const },
+            },
+          }
+        : {}),
+      updatedAt: boot?.updatedAt ?? Date.now(),
+    };
+  }
+  getTreePath(panelId: string) {
+    return this.treeCache.loadPath(asPanelSlotId(panelId));
+  }
+  queryTreePage(input: import("@vibestudio/shared/panel/treeIndex").PanelTreePageInput) {
+    return this.workspaceState.panelTree.page(input);
+  }
+  async getStateArgs(panelId: string): Promise<Record<string, unknown>> {
+    const detail = await this.workspaceState.panelTree.detail(panelId);
+    if (!detail) throw new Error(`Panel not found: ${panelId}`);
+    return decodePanelStateArgs(detail.currentHistory.state_args);
   }
   async recoverSnapshot(): Promise<void> {
-    await this.requireManager().syncSnapshot();
-    await this.syncRuntimeLeases();
-  }
-  applyTreeSnapshot(snapshot: PanelTreeSnapshot): boolean {
-    const before = new Map(
-      this.registry
-        .listPanels()
-        .map((panel) => [panel.panelId, panel.runtimeEntityId ?? null] as const)
-    );
-    const applied = this.requireManager().applyForestSnapshot(snapshot);
-    const runtimeChanges = this.registry
-      .listPanels()
-      .filter((panel) => before.get(panel.panelId) !== (panel.runtimeEntityId ?? null))
-      .map((panel) => ({
-        panelId: panel.panelId,
-        previousRuntimeEntityId: before.get(panel.panelId) ?? null,
-        runtimeEntityId: panel.runtimeEntityId ?? null,
-      }));
-    if (runtimeChanges.length > 0 || !applied) {
-      smokePhase("workspace-panel-tree-snapshot", {
-        revision: snapshot.revision,
-        applied,
-        runtimeChanges,
-      });
-    }
-    return applied;
-  }
-  getTreeSnapshot(): PanelTreeSnapshot {
-    return this.registry.getPanelTreeSnapshot();
-  }
-  getPreferredRoot() {
-    return preferredMobileRoot(this.getTreeSnapshot().forest, this.deps.getSelfUserId());
+    await this.refresh();
   }
   getCollapsedIds(): string[] {
     return this.registry.getCollapsedIds();
   }
+  getPreferredRootId(): string | null {
+    const groups = this.treeCache.getRootGroups().groups;
+    const preferred =
+      groups.find((group) => group.ownerUserId === this.deps.getSelfUserId()) ?? groups[0];
+    if (!preferred) return null;
+    return (
+      this.treeCache.getGroup({
+        kind: "roots",
+        ownerUserId: preferred.ownerUserId,
+      })?.nodes[0]?.slotId ?? null
+    );
+  }
   async archive(panelId: string): Promise<void> {
-    await this.callPanelTree("archive", [panelId]);
+    await this.requireManager().close(asPanelSlotId(panelId));
   }
   async movePanel(
     panelId: string,
     newParentId: string | null,
-    targetPosition: number
+    placement?: { beforePanelId?: string | null; afterPanelId?: string | null }
   ): Promise<void> {
-    await this.callPanelTree("movePanel", [{ panelId, newParentId, targetPosition }]);
+    await this.requireManager().movePanel(
+      asPanelSlotId(panelId),
+      newParentId ? asPanelSlotId(newParentId) : null,
+      placement
+        ? {
+            beforeSlotId:
+              placement.beforePanelId === null
+                ? null
+                : placement.beforePanelId === undefined
+                  ? undefined
+                  : asPanelSlotId(placement.beforePanelId),
+            afterSlotId:
+              placement.afterPanelId === null
+                ? null
+                : placement.afterPanelId === undefined
+                  ? undefined
+                  : asPanelSlotId(placement.afterPanelId),
+          }
+        : undefined
+    );
   }
   async createAboutPanel(page: string): Promise<{
     id: string;
     title: string;
   }> {
-    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      { surface: "code", source: `about/${page}` },
-      { focus: true },
-    ]);
-    this.deps.navigateToPanel(result.id);
-    return result;
+    const result = await this.requireManager().create(`about/${page}`, {
+      isRoot: true,
+      addAsRoot: true,
+    });
+    this.deps.navigateToPanel(result.panelId);
+    return { id: result.panelId, title: result.title };
   }
   async createFromSource(
     source: string,
@@ -340,18 +443,16 @@ class MobilePanels implements PanelHost {
     id: string;
     title: string;
   }> {
-    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      { surface: "code", source },
-      {
-        title: options?.title,
-        slug: options?.slug,
-        name: options?.name,
-        contextId: options?.contextId,
-        stateArgs: options?.stateArgs,
-      },
-    ]);
-    this.deps.navigateToPanel(result.id);
-    return result;
+    const result = await this.requireManager().create(source, {
+      isRoot: true,
+      addAsRoot: true,
+      title: options?.title,
+      slug: options?.slug,
+      contextId: options?.contextId,
+      stateArgs: options?.stateArgs,
+    });
+    this.deps.navigateToPanel(result.panelId);
+    return { id: result.panelId, title: result.title };
   }
   async focus(panelId: string): Promise<void> {
     await this.requireManager().notifyFocused(asPanelSlotId(panelId));
@@ -373,20 +474,16 @@ class MobilePanels implements PanelHost {
     id: string;
     title: string;
   }> {
-    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      { surface: "code", source, ...(options?.ref ? { ref: options.ref } : {}) },
-      {
-        parentId,
-        title: options?.title,
-        slug: options?.slug,
-        name: options?.name,
-        focus: options?.focus,
-        contextId: options?.contextId,
-        stateArgs: options?.stateArgs,
-      },
-    ]);
-    if (options?.focus !== false) this.deps.navigateToPanel(result.id);
-    return result;
+    const result = await this.requireManager().create(source, {
+      parentId: asPanelSlotId(parentId),
+      title: options?.title,
+      slug: options?.slug,
+      ref: options?.ref,
+      contextId: options?.contextId,
+      stateArgs: options?.stateArgs,
+    });
+    if (options?.focus !== false) this.deps.navigateToPanel(result.panelId);
+    return { id: result.panelId, title: result.title };
   }
   async createBrowserUrlPanel(
     parentId: string | null,
@@ -401,18 +498,13 @@ class MobilePanels implements PanelHost {
     id: string;
     title: string;
   }> {
-    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      { surface: "external", url },
-      {
-        parentId: parentId ?? undefined,
-        title: options?.title,
-        slug: options?.slug,
-        name: options?.name,
-        focus: options?.focus,
-      },
-    ]);
-    if (options?.focus !== false) this.deps.navigateToPanel(result.id);
-    return result;
+    const result = await this.requireManager().createBrowser(
+      parentId ? asPanelSlotId(parentId) : null,
+      url,
+      { title: options?.title, slug: options?.slug }
+    );
+    if (options?.focus !== false) this.deps.navigateToPanel(result.panelId);
+    return { id: result.panelId, title: result.title };
   }
   async createRootPanel(
     source: string,
@@ -429,26 +521,23 @@ class MobilePanels implements PanelHost {
     id: string;
     title: string;
   }> {
-    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
-      { surface: "code", source, ...(options?.ref ? { ref: options.ref } : {}) },
-      {
-        parentId: null,
-        contextId: options?.contextId,
-        title: options?.title,
-        slug: options?.slug,
-        name: options?.name,
-        focus: options?.focus,
-        stateArgs: options?.stateArgs,
-      },
-    ]);
-    if (options?.focus !== false) this.deps.navigateToPanel(result.id);
-    return result;
+    const result = await this.requireManager().create(source, {
+      isRoot: true,
+      addAsRoot: true,
+      ref: options?.ref,
+      contextId: options?.contextId,
+      title: options?.title,
+      slug: options?.slug,
+      stateArgs: options?.stateArgs,
+    });
+    if (options?.focus !== false) this.deps.navigateToPanel(result.panelId);
+    return { id: result.panelId, title: result.title };
   }
   async setCollapsed(panelId: string, collapsed: boolean): Promise<void> {
-    await this.callPanelTree("setCollapsed", [panelId, collapsed]);
+    await this.requireManager().setCollapsed(asPanelSlotId(panelId), collapsed);
   }
   async expandIds(panelIds: string[]): Promise<void> {
-    await this.callPanelTree("expandIds", [panelIds]);
+    await this.requireManager().expandIds(panelIds);
   }
   async notifyFocused(panelId: string): Promise<void> {
     await this.requireManager().notifyFocused(asPanelSlotId(panelId));
@@ -457,14 +546,13 @@ class MobilePanels implements PanelHost {
     panelId: string,
     updates: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    return this.callPanelTree<Record<string, unknown>>("setStateArgs", [panelId, updates]);
+    return this.requireManager().updateStateArgs(asPanelSlotId(panelId), updates);
   }
   async updateTitle(panelId: string, title: string): Promise<void> {
     await this.requireManager().updateTitle(asPanelSlotId(panelId), title);
-    this.emitTreeUpdated();
   }
   async updateBrowserUrl(panelId: string, url: string): Promise<void> {
-    await this.callPanelTree("navigate", [panelId, url, undefined]);
+    await this.requireManager().navigate(asPanelSlotId(panelId), url);
   }
   async navigatePanel(
     panelId: string,
@@ -478,12 +566,8 @@ class MobilePanels implements PanelHost {
     id: string;
     title: string;
   }> {
-    const result = await this.callPanelTree<{ id?: string; title?: string }>("navigate", [
-      panelId,
-      source,
-      options,
-    ]);
-    return { id: result?.id ?? panelId, title: result?.title ?? "" };
+    const result = await this.requireManager().navigate(asPanelSlotId(panelId), source, options);
+    return { id: result.panelId, title: result.title };
   }
   async getAddressOptions(source: string): Promise<PanelAddressOptions> {
     return getSharedPanelAddressOptions({
@@ -496,9 +580,7 @@ class MobilePanels implements PanelHost {
   async getBrowserAddressOptions(query: string): Promise<BrowserAddressOptions> {
     return getSharedBrowserAddressOptions({
       query,
-      panels: mobilePanelRoots(
-        orderMobilePanelForest(this.getTreeSnapshot().forest, this.deps.getSelfUserId())
-      ),
+      panels: this.registry.getRootPanels(),
       browserData: {
         searchHistoryForAutocomplete: (searchQuery, limit) =>
           this.browserData.searchHistoryForAutocomplete(searchQuery, limit),
@@ -647,9 +729,6 @@ class MobilePanels implements PanelHost {
     if (!this.panelManager) throw new Error("Panels not initialized");
     return this.panelManager;
   }
-  private emitTreeUpdated(): void {
-    this.deps.onTreeUpdated?.(this.getTreeSnapshot());
-  }
   private trackRuntimeLease(lease: PanelRuntimeLease): void {
     this.setTrackedRuntimeLease(
       String(lease.slotId),
@@ -703,16 +782,13 @@ export class ShellClient {
   readonly panels: MobilePanels;
   readonly workspaces: WorkspaceClient;
   readonly hubControl: ReturnType<typeof createHubControlClient>;
-  readonly settings: SettingsClient;
   readonly events: EventsClient;
   readonly shellApproval: ShellApprovalClient;
   readonly panelRuntime: PanelRuntimeClient;
   readonly credentialService: CredentialsClient;
   readonly push: PushClient;
+  readonly hostLaunch: HostLaunchClient;
   readonly recovery: RecoveryCoordinator;
-  readonly systemAgent: {
-    resolveConversation(): Promise<SystemAgentConversation>;
-  };
   readonly userNotifications: {
     list(): Promise<UserNotification[]>;
     acknowledge(id: string): Promise<boolean>;
@@ -739,7 +815,6 @@ export class ShellClient {
   private workspaceInfo: WorkspaceInfo | null = null;
   private readonly accountProfileClient: MobileAccountProfileClient;
   private panelsInitialized = false;
-  private hostTargetReadinessEventsSubscribed = false;
   constructor(config: ShellClientConfig) {
     this.credentials = config.credentials;
     this.serverUrl = MOBILE_SERVER_LOOPBACK_ORIGIN;
@@ -764,7 +839,7 @@ export class ShellClient {
     this.panels = new MobilePanels({
       serverUrl: MOBILE_SERVER_LOOPBACK_ORIGIN,
       transport: this.transport,
-      onTreeUpdated: config.onTreeUpdated,
+      onTreeInvalidated: config.onTreeInvalidated,
       getSelfUserId: () => this.currentUserId,
       clientSessionId: config.credentials.deviceId,
       navigateToPanel: (panelId) => {
@@ -797,7 +872,7 @@ export class ShellClient {
           )
         ).acknowledged,
       openChannel: async (channelId) => {
-        const existing = this.findOwnedChannelPanel(channelId);
+        const existing = await this.findOwnedChannelPanel(channelId);
         if (existing) {
           await this.panels.focus(existing.id);
           return { id: existing.id, title: existing.title };
@@ -818,28 +893,20 @@ export class ShellClient {
       },
     };
     this.workspaces = new WorkspaceClient(this.transport);
-    const systemAgentClient = createTypedServiceClient(
-      "systemAgent",
-      systemAgentMethods,
-      (service, method, args) => this.transport.call("main", `${service}.${method}`, args)
-    );
-    this.systemAgent = {
-      resolveConversation: () => systemAgentClient.resolveConversation(),
-    };
     this.hubControl = createHubControlClient(this.transport);
-    this.settings = new SettingsClient(this.transport);
     this.events = new EventsClient(this.transport, this.recovery);
     this.shellApproval = createShellApprovalClient(this.transport);
     this.panelRuntime = createPanelRuntimeClient(this.transport);
     this.credentialService = createCredentialsClient(this.transport);
     this.push = createPushClient(this.transport);
+    this.hostLaunch = new HostLaunchClient((service, method, args) =>
+      this.transport.call("main", `${service}.${method}`, args)
+    );
     this.events.on("panel:runtimeLeaseChanged", (event) => {
       this.panels.handleRuntimeLeaseChanged(event as PanelRuntimeLeaseChangedEvent);
     });
-    // State-bearing full snapshots are self-contained. Apply them directly;
-    // only reconnect, foreground, and explicit recovery need an aggregate read.
-    this.events.on("panel-tree-updated", (event) => {
-      this.panels.applyTreeSnapshot(event as PanelTreeSnapshot);
+    this.events.on("panel-tree-invalidated", (event) => {
+      this.panels.invalidateTree(event as PanelTreeInvalidation);
     });
   }
   async init(): Promise<void> {
@@ -877,27 +944,42 @@ export class ShellClient {
     return this.accountProfileClient.current;
   }
 
-  private findOwnedChannelPanel(channelId: string): Panel | null {
+  private async findOwnedChannelPanel(
+    channelId: string
+  ): Promise<{ id: string; title: string } | null> {
     const userId = this.currentUserId;
     if (!userId) return null;
-    const group = this.panels
-      .getTreeSnapshot()
-      .forest.find((candidate) => candidate.owner === userId);
-    if (!group) return null;
-    const visit = (panels: Panel[]): Panel | null => {
-      for (const panel of panels) {
-        if (
-          panel.snapshot.source === "panels/chat" &&
-          panel.snapshot.stateArgs?.["channelName"] === channelId
-        ) {
-          return panel;
+    const findInGroup = async (
+      group: import("@vibestudio/shared/panel/treeIndex").PanelTreeGroup
+    ): Promise<{ id: string; title: string } | null> => {
+      let cursor: string | undefined;
+      do {
+        const page = await this.panels.queryTreePage({
+          group,
+          ...(cursor ? { cursor } : {}),
+          limit: 100,
+        });
+        for (const node of page.nodes) {
+          const [observation, stateArgs] = await Promise.all([
+            this.panels.observe(node.slotId),
+            this.panels.getStateArgs(node.slotId),
+          ]);
+          if (observation.source === "panels/chat" && stateArgs["channelName"] === channelId) {
+            return { id: node.slotId, title: node.title };
+          }
+          if (node.childCount > 0) {
+            const nested = await findInGroup({
+              kind: "children",
+              parentSlotId: node.slotId,
+            });
+            if (nested) return nested;
+          }
         }
-        const descendant = visit(panel.children);
-        if (descendant) return descendant;
-      }
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
       return null;
     };
-    return visit(group.rootPanels);
+    return findInGroup({ kind: "roots", ownerUserId: userId });
   }
 
   async refreshAccountProfile(): Promise<MobileAccountProfile> {
@@ -929,93 +1011,31 @@ export class ShellClient {
 
   private async ensureReactNativeHostTargetReady(): Promise<void> {
     const deadline = Date.now() + 120_000;
-    let session = await this.workspaces.beginHostTargetLaunch("react-native");
     for (;;) {
-      if (session.status === "ready") {
+      const launch = await this.hostLaunch.launch("react-native");
+      if (launch.status === "ready") {
         smokePhase("workspace-host-target-ready", {
-          target: session.target,
-          appId: session.launch?.status === "ready" ? session.launch.appId : undefined,
-          source: session.launch?.status === "ready" ? session.launch.source : undefined,
+          target: launch.target,
+          appId: launch.entity.identity.entityId,
+          source: launch.entity.source,
         });
         return;
       }
-      if (session.status === "approval-required") {
+      if (launch.status === "approval-required") {
         smokePhase("workspace-host-target-approval-required", {
-          target: session.target,
-          count: session.approvals.length,
+          target: launch.target,
+          count: launch.approvals.length,
         });
-        throw new MobileHostTargetApprovalRequiredError(session);
+        throw new MobileHostTargetApprovalRequiredError(launch);
       }
-      if (session.status === "preparing" || session.status === "starting") {
-        smokePhase("workspace-host-target-preparing", {
-          target: session.target,
-          status: session.status,
-        });
-        const observed = await this.waitForHostTargetLaunchSession(
-          session.sessionId,
-          Math.max(1, deadline - Date.now()),
-          session.updatedAt
-        );
-        if (observed) {
-          session = observed;
-          continue;
-        }
-        const refreshed = await this.workspaces.getHostTargetLaunchSession(session.sessionId);
-        if (refreshed) {
-          session = refreshed;
-          continue;
-        }
-        throw new Error(formatHostTargetLaunchSession(session));
+      if (launch.status === "preparing") {
+        smokePhase("workspace-host-target-preparing", { target: launch.target });
+        if (Date.now() >= deadline) throw new Error(launch.reason);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        continue;
       }
-      throw new Error(formatHostTargetLaunchSession(session));
+      throw new Error(launch.reason);
     }
-  }
-
-  private async waitForHostTargetLaunchSession(
-    sessionId: string,
-    timeoutMs: number,
-    observedUpdatedAt: number
-  ): Promise<HostTargetLaunchSessionSnapshot | null> {
-    const eventNames = [HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT] as const;
-    const needsSubscribe = !this.hostTargetReadinessEventsSubscribed;
-    if (needsSubscribe) this.hostTargetReadinessEventsSubscribed = true;
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let unsubs: Array<() => void> = [];
-    let resolvePending!: (value: HostTargetLaunchSessionSnapshot | null) => void;
-    const pending = new Promise<HostTargetLaunchSessionSnapshot | null>((resolve) => {
-      resolvePending = resolve;
-    });
-    const finish = (value: HostTargetLaunchSessionSnapshot | null) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      for (const unsub of unsubs) unsub();
-      resolvePending(value);
-    };
-    timer = setTimeout(() => finish(null), timeoutMs);
-    unsubs = eventNames.map((name) =>
-      this.events.on(name, (event) => {
-        if (isLaunchSessionEventFor(sessionId, name, event)) finish(event);
-      })
-    );
-    if (needsSubscribe) {
-      await Promise.all(
-        eventNames.map((name) =>
-          this.events.subscribe(name).catch((error) => {
-            console.warn(`[mobile] Failed to subscribe to ${name}:`, error);
-          })
-        )
-      );
-    }
-    // The launch may settle between beginHostTargetLaunch() returning and the
-    // server acknowledging our event subscription. Read once after subscribing
-    // to close that gap; subsequent changes are covered by the live event.
-    const current = await this.workspaces.getHostTargetLaunchSession(sessionId);
-    if (current && current.updatedAt !== observedUpdatedAt) {
-      finish(current);
-    }
-    return await pending;
   }
 
   private async initPanels(info: WorkspaceInfo): Promise<void> {
@@ -1023,7 +1043,7 @@ export class ShellClient {
     await this.panels.init(info.config.id, info.config);
     smokePhase("workspace-panels-initialized");
     await this.events.subscribe("panel:runtimeLeaseChanged");
-    await this.events.subscribe("panel-tree-updated");
+    await this.events.subscribe("panel-tree-invalidated");
     await this.panels.syncRuntimeLeases();
     await drainWorkspaceMutationQueue(this);
     this.registerPanelRecoveryHandlers();

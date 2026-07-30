@@ -77,7 +77,7 @@ describe("createGrepTool", () => {
     expect(result.details).toMatchObject({ patternFallback: "recallKeywords" });
   });
 
-  it("uses the host fs service before walking files when the extension is unavailable", async () => {
+  it("uses the host fs service before walking files", async () => {
     const calls: Array<{ target: string; method: string }> = [];
     const rpc = {
       async call(target: string, method: string) {
@@ -108,7 +108,7 @@ describe("createGrepTool", () => {
     expect(calls).toContainEqual({ target: "main", method: "fs.grep" });
   });
 
-  it("settles a stalled extension call and exposes its host-service fallback", async () => {
+  it("routes directly through the host fs service without invoking an extension", async () => {
     const rpc = {
       call: vi.fn().mockImplementation((_target: string, method: string) => {
         if (method === "extensions.invoke") return new Promise(() => {});
@@ -130,26 +130,17 @@ describe("createGrepTool", () => {
         return Promise.reject(new Error(`Unexpected method: ${method}`));
       }),
     };
-    const onUpdate = vi.fn();
-    const tool = createGrepTool(CWD, new StubFs({ files: {} }), {
-      rpc: rpc as never,
-      optionalExtensionTimeoutMs: 10,
-    });
+    const tool = createGrepTool(CWD, new StubFs({ files: {} }), { rpc: rpc as never });
 
-    const result = await tool.execute("call-1", { pattern: "open(" }, undefined, onUpdate);
+    const result = await tool.execute("call-1", { pattern: "open(" });
 
     expect((result.content[0] as { text: string }).text).toContain("src/a.ts:1: open();");
-    expect(result.details).toMatchObject({
-      engine: "fs-service",
-      extensionFallback: "file-tools grep timed out after 10ms",
-    });
-    expect(onUpdate).toHaveBeenCalledWith({
-      content: [],
-      details: {
-        type: "console",
-        content: "file-tools grep timed out after 10ms; falling back to the host fs service",
-      },
-    });
+    expect(result.details).toMatchObject({ engine: "fs-service" });
+    expect(rpc.call).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "extensions.invoke",
+      expect.anything()
+    );
   });
 
   it("returns 'No matches found' when nothing matches", async () => {

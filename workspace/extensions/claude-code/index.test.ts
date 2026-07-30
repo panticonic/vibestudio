@@ -185,7 +185,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     );
     expect(existsSync(path.join(tmpRoot, "state", "agent-launch"))).toBe(false);
     expect(ctx.workspace.ensureContextFolder).not.toHaveBeenCalled();
-    expect(approvalsRequest).toHaveBeenCalledTimes(1);
+    expect(approvalsRequest).not.toHaveBeenCalled();
     expect(rpcCall.mock.calls.find((c) => c[1] === "auth.mintAgentCredential")?.[2]).toEqual({
       entityId: "session:chan-1",
     });
@@ -215,7 +215,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
       contextId: CONTEXT,
       profile: { executable: "claude" },
     });
-    expect(approvalsRequest).toHaveBeenCalledTimes(1);
+    expect(approvalsRequest).not.toHaveBeenCalled();
     expect(rpcCall).toHaveBeenCalled();
   });
 
@@ -228,8 +228,8 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     // Same session entity reused (deterministic key).
     expect(second.entityId).toBe(first.entityId);
-    // Approval only prompted on the first prepare.
-    expect(approvalsRequest).toHaveBeenCalledTimes(1);
+    // Receiver authority is acquired before invocation; prepare does not prompt inline.
+    expect(approvalsRequest).not.toHaveBeenCalled();
     // The prior credential was revoked and a fresh one minted.
     expect(revoked).toEqual(["agt_1"]);
     expect(second.profile.environment.VIBESTUDIO_AGENT_TOKEN).toBe("agent:agt_2:tok");

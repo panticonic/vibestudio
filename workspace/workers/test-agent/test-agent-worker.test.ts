@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
-import { AGENTIC_EVENT_PAYLOAD_KIND } from "@vibestudio/agentic-protocol";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 
 import { TestAgentWorker } from "./test-agent-worker.js";
 

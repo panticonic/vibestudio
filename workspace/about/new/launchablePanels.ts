@@ -1,4 +1,4 @@
-import type { WorkspaceNode } from "@vibestudio/runtime";
+import type { WorkspaceNode } from "@workspace/runtime";
 
 /** Flatten a workspace tree into the visible entries this panel can launch. */
 export function collectLaunchablePanels(nodes: WorkspaceNode[]): WorkspaceNode[] {

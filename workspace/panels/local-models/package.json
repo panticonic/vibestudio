@@ -12,10 +12,11 @@
       "react/jsx-dev-runtime",
       "@radix-ui/themes",
       "@radix-ui/react-icons",
-      "@vibestudio/runtime",
+      "@workspace/runtime",
       "@workspace/ui"
     ],
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "agent.credentials.manage",
@@ -46,15 +47,6 @@
         },
         {
           "capability": "subagents.create",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "user-approval.request",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -94,7 +86,7 @@
   },
   "dependencies": {
     "@workspace/react": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@radix-ui/themes": "^3.2.1",
     "@radix-ui/react-icons": "^1.3.2",

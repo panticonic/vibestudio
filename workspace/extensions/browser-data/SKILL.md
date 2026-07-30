@@ -5,7 +5,7 @@ description: Import into and manage the user's canonical Vibestudio browser envi
 
 # Browser Environment
 
-Use the `browserData` client from `@vibestudio/runtime`. BrowserDataDO is the
+Use the `browserData` client from `@workspace/runtime`. BrowserDataDO is the
 authority for bookmarks, history, cookies, passwords, structured form-fill
 values, search engines, favicons, import jobs, and download metadata.
 

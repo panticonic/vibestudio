@@ -20,9 +20,9 @@ import {
   type InvocationOutcome,
   type LogEnvelope,
   type ParticipantRef,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import type { ChannelEvent } from "@workspace/harness";
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import type { ChannelCallEventBuilders } from "@workspace/channel-policies";
 import { participantIsAgentVessel, type StoredAttachment } from "./types.js";
 import type { ChannelLog } from "./log-store.js";

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { VaultSemanticVcs, type VaultVcsPort } from "./semanticVcs";
 
-vi.mock("@vibestudio/runtime", () => ({ vcs: {} }));
+vi.mock("@workspace/runtime", () => ({ vcs: {} }));
 
 const committed = { kind: "event" as const, eventId: "event:local" };
 const working = { kind: "application" as const, applicationId: "application:working" };

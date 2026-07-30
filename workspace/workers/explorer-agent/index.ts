@@ -4,7 +4,7 @@ import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import { defaultPolicies } from "@workspace/agent-loop";
 import type { RespondPolicy, StepPolicy } from "@workspace/agent-loop";
-import { rpc } from "@vibestudio/runtime/worker";
+import { rpc } from "@workspace/runtime/worker";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
 import type {
   VcsCompareResult,
@@ -157,7 +157,7 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
    * channel so the agent runs its loop without a user message. Wired via the
    * `vibestudio.yml recurring:` registry (server/harness caller only).
    */
-  @rpc({ principals: ["host"], effect: { kind: "runtime-intrinsic" }, tier: "open", sensitivity: "write" })
+  @rpc({ principals: ["host"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async runScheduledJob(_args: unknown): Promise<{ ok: boolean; channels: number }> {
     const channelIds = this.subscriptions.listChannelIds();
     for (const channelId of channelIds) {

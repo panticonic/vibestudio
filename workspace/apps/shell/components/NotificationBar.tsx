@@ -28,7 +28,7 @@ import {
   extensions,
   notification,
   panel,
-  workspaceUnits,
+  supervisedUnits,
 } from "../shell/client";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import { assertPresent } from "../utils/assertPresent";
@@ -186,12 +186,12 @@ export function NotificationBar() {
               message: `${appId} does not have a pending desktop update.`,
             });
           }
-        } else if (action.command?.type === "app.rollback") {
-          await workspaceUnits.rollback(action.command.appId, {
+        } else if (action.command?.type === "runtime.supervision.rollback") {
+          await supervisedUnits.rollback(action.command.release.releaseId, {
             buildKey: action.command.buildKey,
           });
-        } else if (action.command?.type === "workspace.restartUnit") {
-          await workspaceUnits.restart(action.command.name);
+        } else if (action.command?.type === "runtime.supervision.restart") {
+          await supervisedUnits.restart(action.command.identity);
         }
         if (action.invoke?.kind === "extension") {
           const result = await extensions.invoke(

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -39,26 +38,6 @@ interface ExtensionContextLike {
       caller: { callerId: string; callerKind?: string; contextId?: string };
       chainCaller?: { contextId?: string };
     } | null;
-  };
-  approvals: {
-    request(req: {
-      subject: { id: string; label?: string };
-      title: string;
-      summary?: string;
-      warning?: string;
-      details?: Array<{ label: string; value: string }>;
-      promptOptions?: "scoped" | "choices";
-      options?: Array<{
-        value: string;
-        label: string;
-        description?: string;
-        tone?: "primary" | "danger" | "neutral";
-      }>;
-    }): Promise<
-      | { kind: "choice"; choice: string }
-      | { kind: "dismissed" }
-      | { kind: "uncallable"; reason: "no-user-context" }
-    >;
   };
   log: {
     info(message: string, fields?: Record<string, unknown>): void;
@@ -147,42 +126,6 @@ function ensurePanelSetupFile(): string {
   return setupFile;
 }
 
-async function requestApproval(ctx: ExtensionContextLike, req: TestRunRequest): Promise<void> {
-  const target = req.target.length > 80 ? `${req.target.slice(0, 77)}...` : req.target;
-  const subjectHash = createHash("sha256")
-    .update(
-      JSON.stringify({
-        contextId: req.contextId ?? null,
-        target: req.target,
-        fileFilter: req.fileFilter ?? null,
-        testName: req.testName ?? null,
-      })
-    )
-    .digest("hex")
-    .slice(0, 16);
-  const decision = await ctx.approvals.request({
-    subject: {
-      id: `workspace-test:${subjectHash}`,
-      label: `Run tests: ${target}`,
-    },
-    title: "Run tests",
-    summary: `Run the test files for ${target}.`,
-    warning: "Tests run code on your computer. Only run tests from code you trust.",
-    details: [
-      { label: "Target", value: req.target },
-      ...(req.contextId ? [{ label: "Context", value: req.contextId }] : []),
-      ...(req.fileFilter ? [{ label: "File filter", value: req.fileFilter }] : []),
-      ...(req.testName ? [{ label: "Test name", value: req.testName }] : []),
-    ],
-  });
-  if (decision?.kind === "uncallable") {
-    throw new Error(`Workspace test run cannot request approval: ${decision.reason}`);
-  }
-  if (decision?.kind === "dismissed" || decision?.choice === "deny") {
-    throw new Error("Workspace test run denied");
-  }
-}
-
 function formatErrors(name: string | undefined, errors: readonly unknown[] | undefined): string[] {
   return (errors ?? []).map((error) => {
     const message =
@@ -227,8 +170,6 @@ export async function activate(ctx: ExtensionContextLike) {
       if (!fs.existsSync(targetPath)) {
         throw new Error(`Target does not exist: ${request.target}`);
       }
-
-      await requestApproval(ctx, { ...request, contextId });
 
       const pattern = testPatternFor(targetPath, request.fileFilter);
       const setupFiles = request.target.startsWith("panels/") ? [ensurePanelSetupFile()] : [];

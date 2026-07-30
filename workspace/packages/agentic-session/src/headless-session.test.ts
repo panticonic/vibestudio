@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { HeadlessSession } from "./headless-session.js";
 import type { ChatMessage, ConnectionConfig } from "@workspace/agentic-core";
-import { AGENTIC_EVENT_PAYLOAD_KIND, brandId, type TurnId } from "@vibestudio/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND, brandId, type TurnId } from "@workspace/agentic-protocol";
 import type { MethodDefinition } from "@workspace/pubsub";
 
 function createConfig(): ConnectionConfig {

@@ -11,9 +11,27 @@
       "activationEvents": [
         "onInvoke"
       ],
-      "dependencyMode": "external"
+      "dependencyMode": "external",
+      "methodAuthority": {
+        "grep": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "find": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "read": {
+          "effect": {
+            "kind": "open"
+          }
+        }
+      }
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "context.boundary",

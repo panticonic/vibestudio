@@ -18,11 +18,32 @@
       "icon": "🔗"
     },
     "exposeModules": [
-      "@vibestudio/runtime",
+      "@workspace/runtime",
       "@workspace/pubsub",
       "zod"
     ],
     "authority": {
+      "provides": [
+        {
+          "name": "external-tool.execute",
+          "title": "Run a linked-agent tool",
+          "action": "allow this linked agent to run the requested tool",
+          "description": "The exact tool request came from the attached external agent and is enforced before the linked-agent worker receives it.",
+          "tier": "gated",
+          "sensitivity": "write",
+          "resourceType": "linked-agent",
+          "presentation": {
+            "domain": "automation",
+            "verb": "act"
+          },
+          "grantScopes": [
+            "once",
+            "task",
+            "agent",
+            "session"
+          ]
+        }
+      ],
       "requests": [
         {
           "capability": "accounts.connect",
@@ -44,15 +65,6 @@
         },
         {
           "capability": "approvals.decide",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "automations.register",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -106,15 +118,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -140,15 +143,24 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ]
     }
   },
   "dependencies": {
     "@vibestudio/trajectory-identity": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
-    "@vibestudio/agentic-protocol": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
     "@workspace/agent-loop": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",

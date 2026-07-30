@@ -16,6 +16,21 @@ function terminal(result: EvalRunResult): {
 }
 
 describe("formatEvalResult (shared by the eval tool's execute + the agent's deferred onEvalComplete)", () => {
+  it("presents one flat argument object instead of duplicating options across a union", () => {
+    const tool = createEvalTool(async () => ({ success: true, console: "" }) as never);
+    const schema = tool.parameters as {
+      type?: string;
+      anyOf?: unknown;
+      properties?: Record<string, unknown>;
+    };
+
+    expect(schema.type).toBe("object");
+    expect(schema.anyOf).toBeUndefined();
+    expect(schema.properties).toHaveProperty("code");
+    expect(schema.properties).toHaveProperty("path");
+    expect(schema.properties).toHaveProperty("authority");
+  });
+
   it("makes the JavaScript parser boundary explicit in the model-visible schema", () => {
     const tool = createEvalTool(async () => ({ success: true, console: "" }) as never);
     const schema = JSON.stringify(tool.parameters);
@@ -94,6 +109,18 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     });
 
     expect(Value.Check(tool.parameters, { code: "return 1" })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        code: "return 1",
+        authority: { effects: "read-write" },
+      })
+    ).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        code: "return 1",
+        authority: { effects: "mutable" },
+      })
+    ).toBe(false);
     expect(Value.Check(tool.parameters, { code: "return 1", timeoutMs: 250 })).toBe(true);
     expect(Value.Check(tool.parameters, { code: "return 1", timeoutMs: 0 })).toBe(false);
     expect(Value.Check(tool.parameters, { code: "return 1", timeoutMs: 1.5 })).toBe(false);

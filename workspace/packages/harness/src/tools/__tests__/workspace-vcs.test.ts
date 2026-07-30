@@ -38,47 +38,6 @@ function fixture() {
     ],
     nextCursor: null,
   }));
-  const listDirectory = vi.fn(async (input: Parameters<ToolWorkflowVcs["listDirectory"]>[0]) => ({
-    state: input.state,
-    path: input.path,
-    entries: [
-      {
-        name: "demo",
-        path: "packages/demo",
-        kind: "directory" as const,
-        identity: "directory:demo",
-        repositoryId: "repository:packages/demo",
-        repositoryRoot: true,
-        fileId: null,
-        lineage: {
-          authoredChangeId: null,
-          authoredByWorkUnitId: "work:fixture",
-          contentClass: "external" as const,
-          externalKeys: ["fixture:test"],
-        },
-      },
-    ],
-    nextCursor: null,
-  }));
-  const listFiles = vi.fn(async (input: Parameters<ToolWorkflowVcs["listFiles"]>[0]) => ({
-    state: input.state,
-    repositoryId: input.repositoryId,
-    files: [
-      {
-        fileId: "file:demo",
-        path: "src/index.ts",
-        contentHash: "blob:demo",
-        authoredChangeId: "change:demo",
-        authoredByWorkUnitId: "work:demo",
-        contentClass: "internal" as const,
-        externalKeys: [],
-        mode: 0o644,
-        contentKind: "text" as const,
-        size: 12,
-      },
-    ],
-    nextCursor: null,
-  }));
   const integrate = vi.fn(async (input: Parameters<ToolWorkflowVcs["integrate"]>[0]) => ({
     contextId: input.contextId,
     workUnitId: "work:integration",
@@ -131,8 +90,6 @@ function fixture() {
   }));
   const vcs = {
     status,
-    listDirectory,
-    listFiles,
     compare,
     integrate,
     revert,
@@ -183,8 +140,6 @@ function fixture() {
   return {
     vcs,
     status,
-    listDirectory,
-    listFiles,
     compare,
     integrate,
     discard,
@@ -221,110 +176,20 @@ describe("workspace VCS agent tool", () => {
     });
   });
 
-  it("lists a directory at the exact current working state", async () => {
+  it("leaves filesystem browsing to the dedicated filesystem tools", () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
-      commandId: "command:list",
+      commandId: "command:schema",
+    });
+    const contract = JSON.stringify({
+      description: tool.description,
+      parameters: tool.parameters,
     });
 
-    const listed = await tool.execute("call:list", {
-      operation: "listDirectory",
-      path: "packages",
-    });
-
-    expect(f.listDirectory).toHaveBeenCalledWith({
-      state: f.working,
-      path: "packages",
-      limit: 100,
-    });
-    expect(listed.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("directory packages/demo"),
-    });
-  });
-
-  it("lists a repository manifest from a path at the exact current working state", async () => {
-    const f = fixture();
-    const tool = createWorkspaceVcsTool("/", f.vcs, {
-      contextId: "context:test",
-      commandId: "command:list-files",
-    });
-
-    const listed = await tool.execute("call:list-files", {
-      operation: "listFiles",
-      path: "packages/demo",
-      prefix: "src",
-    });
-
-    expect(f.listFiles).toHaveBeenCalledWith({
-      state: f.working,
-      repositoryId: "repository:packages/demo",
-      prefix: "src",
-      limit: 100,
-    });
-    expect(listed.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining(
-        'packages/demo/src/index.ts · root {"kind":"file","state":{"kind":"application","applicationId":"application:working"},"repositoryId":"repository:packages/demo","fileId":"file:demo"} · blob:demo'
-      ),
-    });
-    expect(listed.details).toMatchObject({
-      roots: [
-        {
-          kind: "file",
-          state: f.working,
-          repositoryId: "repository:packages/demo",
-          fileId: "file:demo",
-        },
-      ],
-    });
-  });
-
-  it("rejects the workspace root as a repository with a typed corrective reference", async () => {
-    const f = fixture();
-    const tool = createWorkspaceVcsTool("/", f.vcs, {
-      contextId: "context:test",
-      commandId: "command:list-root-files",
-    });
-
-    await expect(
-      tool.execute("call:list-root-files", {
-        operation: "listFiles",
-        path: ".",
-      })
-    ).rejects.toMatchObject({
-      code: "InvalidReference",
-      errorData: {
-        code: "InvalidReference",
-        referenceKind: "repository-path",
-        reference: "",
-      },
-    });
-    expect(f.vcs.resolveRepository).not.toHaveBeenCalled();
-  });
-
-  it("returns a typed invalid reference when a repository path is absent", async () => {
-    const f = fixture();
-    vi.mocked(f.vcs.resolveRepository).mockResolvedValueOnce(null);
-    const tool = createWorkspaceVcsTool("/", f.vcs, {
-      contextId: "context:test",
-      commandId: "command:list-missing-files",
-    });
-
-    await expect(
-      tool.execute("call:list-missing-files", {
-        operation: "listFiles",
-        path: "packages/missing",
-      })
-    ).rejects.toMatchObject({
-      code: "InvalidReference",
-      errorData: {
-        code: "InvalidReference",
-        referenceKind: "repository-path",
-        reference: "packages/missing",
-      },
-    });
+    expect(contract).toContain("Browse and edit ordinary paths with the dedicated filesystem tools");
+    expect(contract).not.toContain('"const":"listDirectory"');
+    expect(contract).not.toContain('"const":"listFiles"');
   });
 
   it("inspects and pages exact typed semantic roots without lower-level service fields", async () => {

@@ -24,7 +24,7 @@ vi.mock("../shell/client", () => ({
     reportAction: shellClient.reportAction,
     dismiss: shellClient.dismiss,
   },
-  workspaceUnits: {
+  supervisedUnits: {
     rollback: shellClient.rollback,
     restart: shellClient.restart,
   },

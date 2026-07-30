@@ -5,18 +5,21 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { Theme } from "@radix-ui/themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  PendingCapabilityApproval,
   PendingUnitBatchApproval,
-  PendingUserlandApproval,
 } from "@vibestudio/shared/approvals";
 import type { ApprovalCardIntent } from "./approvalCardModel";
 
 type ListPendingFn = () => Promise<unknown[]>;
+type GetTreePageFn = () => Promise<{
+  revision: number;
+  nodes: Array<{ slotId: string }>;
+  nextCursor: string | null;
+}>;
 const shellClient = vi.hoisted(() => ({
   heartbeat: vi.fn(() => Promise.resolve()),
   listPending: vi.fn<ListPendingFn>(() => Promise.resolve([])),
   resolve: vi.fn(() => Promise.resolve()),
-  resolveUserland: vi.fn(() => Promise.resolve()),
-  getUserlandSealedDetail: vi.fn(() => Promise.resolve<string | null>("sealed-plan-text")),
   submitClientConfig: vi.fn(() => Promise.resolve()),
   submitCredentialInput: vi.fn(() => Promise.resolve()),
   subscribe: vi.fn(() => Promise.resolve()),
@@ -26,8 +29,11 @@ const shellClient = vi.hoisted(() => ({
   getProfile: vi.fn(() =>
     Promise.resolve({ userId: "alice", handle: "alice", displayName: "Alice", role: "member" })
   ),
-  getTreeSnapshot: vi.fn<() => Promise<{ forest: { owner: string; rootPanels: unknown[] }[] }>>(
-    () => Promise.resolve({ forest: [] })
+  getTreePage: vi.fn<GetTreePageFn>(() =>
+    Promise.resolve({ revision: 1, nodes: [], nextCursor: null })
+  ),
+  observe: vi.fn((slotId: string) =>
+    Promise.resolve({ slotId, source: slotId === "gadb" ? "panels/gad-browser" : "panels/chat" })
   ),
   navigate: vi.fn(() => Promise.resolve(null)),
   createPanel: vi.fn(() => Promise.resolve(null)),
@@ -48,8 +54,6 @@ vi.mock("../shell/client", () => ({
   shellApproval: {
     listPending: shellClient.listPending,
     resolve: shellClient.resolve,
-    resolveUserland: shellClient.resolveUserland,
-    getUserlandSealedDetail: shellClient.getUserlandSealedDetail,
     submitClientConfig: shellClient.submitClientConfig,
     submitCredentialInput: shellClient.submitCredentialInput,
   },
@@ -62,7 +66,8 @@ vi.mock("../shell/client", () => ({
   blobstore: { getText: shellClient.getText },
   account: { getProfile: shellClient.getProfile },
   panel: {
-    getTreeSnapshot: shellClient.getTreeSnapshot,
+    getTreePage: shellClient.getTreePage,
+    observe: shellClient.observe,
     navigate: shellClient.navigate,
     createPanel: shellClient.createPanel,
   },
@@ -101,23 +106,23 @@ function emit(intent: ApprovalCardIntent): void {
   });
 }
 
-function userlandApproval(
-  partial: Partial<PendingUserlandApproval> & { approvalId: string; title: string }
-): PendingUserlandApproval {
+function capabilityApproval(
+  partial: Partial<PendingCapabilityApproval> & { approvalId: string; title: string }
+): PendingCapabilityApproval {
   return {
-    kind: "userland",
+    kind: "capability",
     callerId: partial.callerId ?? `panel:${partial.approvalId}`,
     callerKind: partial.callerKind ?? "panel",
     repoPath: partial.repoPath ?? "panels/test",
     effectiveVersion: partial.effectiveVersion ?? "ev",
     requestedAt: partial.requestedAt ?? Date.now(),
     callerTitle: partial.callerTitle,
-    subject: partial.subject ?? { id: "sub-1", label: "Subject" },
+    capability: partial.capability ?? "context.boundary",
     title: partial.title,
-    summary: partial.summary,
-    sealedDetails: partial.sealedDetails,
-    promptOptions: partial.promptOptions ?? "choices",
-    options: partial.options ?? [{ value: "ok", label: "OK", tone: "primary" }],
+    description: partial.description,
+    resource: partial.resource,
+    details: partial.details,
+    diffReview: partial.diffReview,
     approvalId: partial.approvalId,
   };
 }
@@ -215,9 +220,9 @@ describe("ConsentApprovalBar coordinator", () => {
 
   it("drives the overlay with the active approval and queue length", async () => {
     shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "a1", title: "First" }),
-      userlandApproval({ approvalId: "a2", title: "Second" }),
-      userlandApproval({ approvalId: "a3", title: "Third" }),
+      capabilityApproval({ approvalId: "a1", title: "First" }),
+      capabilityApproval({ approvalId: "a2", title: "Second" }),
+      capabilityApproval({ approvalId: "a3", title: "Third" }),
     ]);
     mountBar();
     await waitFor(() => {
@@ -230,7 +235,7 @@ describe("ConsentApprovalBar coordinator", () => {
   it("excludes host-app startup approvals from the runtime overlay", async () => {
     shellClient.listPending.mockResolvedValueOnce([
       hostAppStartupApproval("app-startup"),
-      userlandApproval({ approvalId: "runtime", title: "Runtime approval" }),
+      capabilityApproval({ approvalId: "runtime", title: "Runtime approval" }),
     ]);
     mountBar();
     await waitFor(() => {
@@ -242,7 +247,7 @@ describe("ConsentApprovalBar coordinator", () => {
 
   it("minimizes to a pill on a minimize intent and reopens on click", async () => {
     shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "solo", title: "Lonely", callerTitle: "Chat A" }),
+      capabilityApproval({ approvalId: "solo", title: "Lonely", callerTitle: "Chat A" }),
     ]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
@@ -260,7 +265,7 @@ describe("ConsentApprovalBar coordinator", () => {
   it("resolves and removes an approval on a decide intent", async () => {
     shellClient.resolve.mockImplementation(() => new Promise(() => undefined));
     shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "solo", title: "Lonely" }),
+      capabilityApproval({ approvalId: "solo", title: "Lonely" }),
     ]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
@@ -272,7 +277,7 @@ describe("ConsentApprovalBar coordinator", () => {
 
   it("ignores stale overlay intents for a previously rendered approval", async () => {
     shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "current", title: "Current" }),
+      capabilityApproval({ approvalId: "current", title: "Current" }),
     ]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
@@ -283,9 +288,9 @@ describe("ConsentApprovalBar coordinator", () => {
     expect(overlay.options?.props?.approval?.approvalId).toBe("current");
   });
 
-  function diffApproval(approvalId: string): PendingUserlandApproval & { diffReview: unknown } {
+  function diffApproval(approvalId: string): PendingCapabilityApproval & { diffReview: unknown } {
     return {
-      ...userlandApproval({ approvalId, title: "Publish changes" }),
+      ...capabilityApproval({ approvalId, title: "Publish changes" }),
       diffReview: [
         {
           repoPath: "packages/demo",
@@ -314,7 +319,7 @@ describe("ConsentApprovalBar coordinator", () => {
 
   it("renders as today (no diffReview) when the approval carries no diff payload", async () => {
     shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "plain", title: "Plain" }),
+      capabilityApproval({ approvalId: "plain", title: "Plain" }),
     ]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
@@ -374,54 +379,6 @@ describe("ConsentApprovalBar coordinator", () => {
     expect(shellClient.getText).toHaveBeenCalledTimes(2);
   });
 
-  it("routes sealed approval detail fetches through the queue-owned trusted service", async () => {
-    const digest = "a".repeat(64);
-    shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({
-        approvalId: "sealed",
-        title: "Run a command",
-        sealedDetails: [
-          { label: "Complete execution plan", digest, byteLength: 16, format: "code" },
-        ],
-      }),
-    ]);
-    mountBar();
-    await waitFor(() => expect(overlay.options?.open).toBe(true));
-
-    emit({ type: "fetch-blob", hash: digest, approvalId: "sealed" });
-    await waitFor(() => {
-      expect(shellClient.getUserlandSealedDetail).toHaveBeenCalledWith("sealed", digest);
-      expect(shellClient.getText).not.toHaveBeenCalledWith(digest);
-      const props = overlay.options?.props as { blobResults?: Record<string, unknown> };
-      expect(props.blobResults?.[digest]).toEqual({ text: "sealed-plan-text" });
-    });
-  });
-
-  it("never routes sealed-only invocation payloads into the approval renderer", async () => {
-    const digest = "b".repeat(64);
-    shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({
-        approvalId: "opaque-seal",
-        title: "Run a command",
-        sealedDetails: [
-          {
-            label: "Exact execution seal",
-            digest,
-            byteLength: 16,
-            format: "code",
-            disclosure: "sealed-only",
-          },
-        ],
-      }),
-    ]);
-    mountBar();
-    await waitFor(() => expect(overlay.options?.open).toBe(true));
-
-    emit({ type: "fetch-blob", hash: digest, approvalId: "opaque-seal" });
-    await Promise.resolve();
-    expect(shellClient.getUserlandSealedDetail).not.toHaveBeenCalledWith("opaque-seal", digest);
-  });
-
   const gadTarget = {
     repoPath: "packages/demo",
     path: "logo.png",
@@ -432,7 +389,7 @@ describe("ConsentApprovalBar coordinator", () => {
   };
 
   it("creates a gad-browser panel with the target on an open-in-gad-browser intent", async () => {
-    shellClient.getTreeSnapshot.mockResolvedValueOnce({ forest: [] });
+    shellClient.getTreePage.mockResolvedValueOnce({ revision: 1, nodes: [], nextCursor: null });
     shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
@@ -452,16 +409,10 @@ describe("ConsentApprovalBar coordinator", () => {
   });
 
   it("reuses and focuses an existing gad-browser panel instead of creating one", async () => {
-    shellClient.getTreeSnapshot.mockResolvedValueOnce({
-      forest: [
-        {
-          owner: "alice",
-          rootPanels: [
-            { id: "other", snapshot: { source: "panels/chat" }, children: [] },
-            { id: "gadb", snapshot: { source: "panels/gad-browser" }, children: [] },
-          ],
-        },
-      ],
+    shellClient.getTreePage.mockResolvedValueOnce({
+      revision: 1,
+      nodes: [{ slotId: "other" }, { slotId: "gadb" }],
+      nextCursor: null,
     });
     shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
     mountBar();
@@ -483,16 +434,7 @@ describe("ConsentApprovalBar coordinator", () => {
   });
 
   it("does not navigate another owner's gad-browser panel", async () => {
-    shellClient.getTreeSnapshot.mockResolvedValueOnce({
-      forest: [
-        {
-          owner: "bob",
-          rootPanels: [
-            { id: "bob-gadb", snapshot: { source: "panels/gad-browser" }, children: [] },
-          ],
-        },
-      ],
-    });
+    shellClient.getTreePage.mockResolvedValueOnce({ revision: 1, nodes: [], nextCursor: null });
     shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
@@ -520,7 +462,7 @@ describe("ConsentApprovalBar coordinator", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     shellClient.resolve.mockRejectedValueOnce(new Error("resolve blocked"));
     shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "solo", title: "Lonely" }),
+      capabilityApproval({ approvalId: "solo", title: "Lonely" }),
     ]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));

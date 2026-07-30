@@ -6,12 +6,13 @@ import {
   rpc,
   panel,
   notifications,
+  runtime,
   workspace,
   callMain,
-  type WorkspaceUnitStatus,
-} from "@vibestudio/runtime";
+} from "@workspace/runtime";
+import type { RuntimeSupervisionDescription } from "@vibestudio/service-schemas/runtime";
 
-// Top-level `expose` was removed from @vibestudio/runtime; this is the same
+// Top-level `expose` was removed from @workspace/runtime; this is the same
 // arg-spreading wrapper over the portable `rpc.expose`, kept local to the panel.
 const expose = (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) =>
   rpc.expose(method, (request) => handler(...request.args));
@@ -22,7 +23,7 @@ import { deriveContextOptions, type ContextOption, type LiveEntity } from "./con
 import { documentTitleForPanel } from "./documentTitle.js";
 import { NotificationCenter } from "./NotificationCenter.js";
 import { ScratchOverlay } from "./ScratchOverlay.js";
-import { SCRATCH_BUFFER_MAX_COUNT } from "./migrateState.js";
+import { SCRATCH_BUFFER_MAX_COUNT } from "./terminalState.js";
 import { Settings } from "./Settings.js";
 import { SessionStore, sessionIdsConnectKey, useAllSessions } from "./SessionStore.js";
 import { SplitTree } from "./SplitTree.js";
@@ -36,7 +37,7 @@ import {
   displayChord,
   type KeybindingAction,
 } from "./keybindings.js";
-import { migrateState } from "./migrateState.js";
+import { loadTerminalState } from "./terminalState.js";
 import { findDirectionalPane, type PaneFocusDirection } from "./paneFocus.js";
 import { openPort, openUrl } from "./portClick.js";
 import { restoreTerminalState } from "./restore.js";
@@ -85,7 +86,7 @@ export function TerminalApp() {
   const sessionStore = useMemo(() => new SessionStore(), []);
   const sessions = useAllSessions(sessionStore);
   const [state, setState] = useState<TerminalState>(() =>
-    migrateState(panel.stateArgs.get<TerminalState>())
+    loadTerminalState(panel.stateArgs.get<TerminalState>())
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -441,29 +442,19 @@ export function TerminalApp() {
 
   useEffect(() => {
     let cancelled = false;
-    function pickShellUnit(units: WorkspaceUnitStatus[]) {
+    function pickShellUnit(units: RuntimeSupervisionDescription[]) {
       const match = units.find(
         (unit) =>
-          unit.name === "@workspace-extensions/shell" ||
+          unit.identity.entityId === "@workspace-extensions/shell" ||
           unit.source === "extensions/shell" ||
           unit.source.endsWith("/extensions/shell")
       );
-      if (!cancelled) setShellUnit(match ? normalizeShellUnit(match) : null);
+      if (!cancelled) setShellUnit(match ?? null);
     }
-    void workspace.units
-      .list()
+    void runtime.supervision
+      .list({ kind: "extension" })
       .then(pickShellUnit)
       .catch((error) => console.warn("[TerminalApp] Failed to load shell unit status:", error));
-    (async () => {
-      try {
-        for await (const units of workspace.units.watch()) {
-          if (cancelled) break;
-          pickShellUnit(units);
-        }
-      } catch {
-        // Unit status is advisory; terminal startup still works without it.
-      }
-    })();
     return () => {
       cancelled = true;
     };
@@ -1113,13 +1104,14 @@ function EmptyTerminalState(props: {
   );
 }
 
-type ShellUnitStatus = WorkspaceUnitStatus & {
+type ShellUnitStatus = {
+  status:
+    | RuntimeSupervisionDescription["status"]
+    | "pending-approval"
+    | "building"
+    | "available";
   pendingApproval?: { kind: string; submittedAt: number } | null;
 };
-
-function normalizeShellUnit(unit: WorkspaceUnitStatus): ShellUnitStatus {
-  return unit as ShellUnitStatus;
-}
 
 function markSessionRead(state: TerminalState, sessionId: string): TerminalState {
   const now = Date.now();

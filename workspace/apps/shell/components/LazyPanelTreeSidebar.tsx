@@ -23,6 +23,7 @@ import {
   Cross2Icon,
   CubeIcon,
   DrawingPinFilledIcon,
+  MagnifyingGlassIcon,
   PlusIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Button, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
@@ -40,7 +41,7 @@ import {
   INDENTATION_WIDTH,
   END_DROP_ZONE_ID,
   type FlattenedPanel,
-  type PanelForestGroup,
+  type PanelTreeViewNode,
   type ShellAccountProfile,
   type WorkspacePresenceEntry,
 } from "../shell/hooks/index.js";
@@ -69,6 +70,7 @@ const ROW_PADDING_LEFT = 8;
 /** Fixed-width gutter that holds the expand caret so titles align by depth. */
 const CARET_SLOT = 16;
 const ACTION_BUTTON_SIZE = 18;
+const PANEL_TREE_PAGE_SIZE = 50;
 
 /** Delay before auto-expanding a collapsed item while dragging over it (ms) */
 const AUTO_EXPAND_DELAY_MS = 600;
@@ -335,6 +337,7 @@ interface SortableTreeItemProps {
   isDraggingAny: boolean;
   showIndicatorBelow: boolean;
   isTouch: boolean;
+  isSortable: boolean;
   onSelect: (panelId: string, options?: { openBeside?: boolean }) => void;
   onToggleCollapse: (panelId: string) => void;
   onPanelContextMenu?: (panelId: string, position: { x: number; y: number }) => Promise<void>;
@@ -355,6 +358,7 @@ const SortableTreeItem = memo(
     isDraggingAny,
     showIndicatorBelow,
     isTouch,
+    isSortable,
     onSelect,
     onToggleCollapse,
     onPanelContextMenu,
@@ -380,6 +384,7 @@ const SortableTreeItem = memo(
 
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
       id: panel.id,
+      disabled: !isSortable,
     });
 
     const style: CSSProperties = {
@@ -420,12 +425,12 @@ const SortableTreeItem = memo(
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "ArrowLeft") {
+        if (isSortable && (e.ctrlKey || e.metaKey) && e.key === "ArrowLeft") {
           e.preventDefault();
           onUnindent(panel.id);
           return;
         }
-        if ((e.ctrlKey || e.metaKey) && e.key === "ArrowRight") {
+        if (isSortable && (e.ctrlKey || e.metaKey) && e.key === "ArrowRight") {
           e.preventDefault();
           onIndent(panel.id);
           return;
@@ -465,7 +470,16 @@ const SortableTreeItem = memo(
           }
         }
       },
-      [collapsed, handleSelect, hasChildren, onIndent, onToggleCollapse, onUnindent, panel.id]
+      [
+        collapsed,
+        handleSelect,
+        hasChildren,
+        isSortable,
+        onIndent,
+        onToggleCollapse,
+        onUnindent,
+        panel.id,
+      ]
     );
 
     const handleArchive = useCallback(
@@ -936,7 +950,19 @@ function OwnerBandHeader({
 }
 
 /** A virtualized sidebar row: an owner band header or a sortable panel item. */
-type SidebarRow = { kind: "owner-band"; owner: string } | { kind: "panel"; item: FlattenedPanel };
+type SidebarRow =
+  | { kind: "owner-band"; owner: string }
+  | { kind: "panel"; item: FlattenedPanel }
+  | { kind: "root-groups-more" }
+  | { kind: "search-more" }
+  | {
+      kind: "load-more";
+      groupKey: string;
+      parentSlotId: string | null;
+      ownerUserId?: string | null;
+      depth: number;
+      remaining: number;
+    };
 
 /**
  * Interleave owner band headers into the flattened item list at forest group
@@ -946,29 +972,69 @@ type SidebarRow = { kind: "owner-band"; owner: string } | { kind: "panel"; item:
  */
 function buildSidebarRows(
   flattenedItems: FlattenedPanel[],
-  forest: PanelForestGroup[]
+  forest: Array<{
+    owner: string;
+    rootCount: number;
+    rootLoadedCount?: number;
+    rootsHaveMore?: boolean;
+    rootPanels: PanelTreeViewNode[];
+  }>
 ): SidebarRow[] {
   const populated = forest.filter((group) => group.rootPanels.length > 0);
-  // Owner of each group's roots, keyed by root panel id. Group order matches
-  // the flattened list because the flat tree is forest order flattened.
-  const ownerByRootId = new Map<string, string>();
-  for (const group of populated) {
-    for (const root of group.rootPanels) {
-      ownerByRootId.set(root.id, group.owner);
-    }
-  }
-
+  const itemById = new Map(flattenedItems.map((item) => [item.id, item]));
   const rows: SidebarRow[] = [];
-  let currentOwner: string | null = null;
-  for (const item of flattenedItems) {
-    if (item.depth === 0) {
-      const owner = ownerByRootId.get(item.id);
-      if (owner !== undefined && owner !== currentOwner) {
-        rows.push({ kind: "owner-band", owner });
-        currentOwner = owner;
+
+  const appendGroup = (
+    panels: PanelTreeViewNode[],
+    totalCount: number,
+    loadedCount: number,
+    hasMore: boolean,
+    groupKey: string,
+    parentSlotId: string | null,
+    ownerUserId: string | null | undefined,
+    depth: number
+  ) => {
+    for (const panel of panels) {
+      const item = itemById.get(panel.id);
+      if (!item) continue;
+      rows.push({ kind: "panel", item });
+      if (!item.collapsed && panel.childCount > 0) {
+        appendGroup(
+          panel.children,
+          panel.childCount,
+          panel.childrenLoadedCount ?? panel.children.length,
+          panel.childrenHasMore ?? panel.children.length < panel.childCount,
+          `children:${panel.id}`,
+          panel.id,
+          undefined,
+          depth + 1
+        );
       }
     }
-    rows.push({ kind: "panel", item });
+    if (hasMore) {
+      rows.push({
+        kind: "load-more",
+        groupKey,
+        parentSlotId,
+        ...(ownerUserId !== undefined ? { ownerUserId } : {}),
+        depth,
+        remaining: Math.max(0, totalCount - loadedCount),
+      });
+    }
+  };
+
+  for (const group of populated) {
+    rows.push({ kind: "owner-band", owner: group.owner });
+    appendGroup(
+      group.rootPanels,
+      group.rootCount,
+      group.rootLoadedCount ?? group.rootPanels.length,
+      group.rootsHaveMore ?? group.rootPanels.length < group.rootCount,
+      `roots:${group.owner}`,
+      null,
+      group.owner || null,
+      0
+    );
   }
   return rows;
 }
@@ -999,10 +1065,28 @@ export function LazyPanelTreeSidebar({
   const setWorkspaceChooserOpen = useSetAtom(workspaceChooserDialogOpenAtom);
   const isTouch = useTouchDevice();
 
-  const { forest, selfUserId, selfIdentityError, treeLoadError, refreshTree } = usePanelTree();
+  const {
+    ownerGroups,
+    selfUserId,
+    selfIdentityError,
+    treeLoadError,
+    treeRevision,
+    refreshTree,
+    loadMore,
+    loadMoreRootGroups,
+    hasMoreRootGroups,
+    search,
+  } = usePanelTree();
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<
+    Array<{ id: string; title: string; breadcrumb: string }>
+  >([]);
+  const [searchCursor, setSearchCursor] = useState<string | null>(null);
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [loadingGroupKey, setLoadingGroupKey] = useState<string | null>(null);
   const ownerIds = useMemo(
-    () => forest.map((group) => group.owner).filter((owner) => owner !== ""),
-    [forest]
+    () => ownerGroups.map((group) => group.owner).filter((owner) => owner !== ""),
+    [ownerGroups]
   );
   const ownerProfiles = useAccountProfiles(ownerIds);
   // WP8 §4 workspace presence answers only whether an owner is connected.
@@ -1013,12 +1097,82 @@ export function LazyPanelTreeSidebar({
   const { activeId, overId, projectedDepth, indicatorItemId, showIndicatorBelow } =
     usePanelDndDrag();
 
-  // Per-row connector descriptors (rounded elbows + sibling stems).
-  const guidesById = useMemo(() => buildGuides(flattenedItems), [flattenedItems]);
-
   // Owner bands (WP3): one labelled section per owner group, own group first
   // (ordering happens in PanelTreeContext), others visible & inspectable below.
-  const rows = useMemo(() => buildSidebarRows(flattenedItems, forest), [flattenedItems, forest]);
+  const treeRows = useMemo(
+    () => buildSidebarRows(flattenedItems, ownerGroups),
+    [flattenedItems, ownerGroups]
+  );
+  const trimmedQuery = query.trim();
+  useEffect(() => {
+    if (!trimmedQuery) {
+      setSearchResults([]);
+      setSearchCursor(null);
+      return;
+    }
+    setSearchResults([]);
+    setSearchCursor(null);
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void search(trimmedQuery)
+        .then((results) => {
+          if (!cancelled) {
+            setSearchResults(
+              results.hits.map((hit) => ({
+                id: hit.node.slotId,
+                title: hit.node.title,
+                breadcrumb: [
+                  ...(hit.ancestorsTruncated ? ["…"] : []),
+                  ...hit.ancestors.map((node) => node.title),
+                ].join(" › "),
+              }))
+            );
+            setSearchCursor(results.nextCursor);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setSearchResults([]);
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [search, treeRevision, trimmedQuery]);
+
+  const rows = useMemo<SidebarRow[]>(() => {
+    if (!trimmedQuery) {
+      return hasMoreRootGroups ? [...treeRows, { kind: "root-groups-more" as const }] : treeRows;
+    }
+    const matches: SidebarRow[] = searchResults.map((found) => {
+      return [
+        {
+          kind: "panel" as const,
+          item: {
+            id: found.id,
+            parentId: null,
+            depth: 0,
+            index: 0,
+            panel: {
+              id: found.id,
+              title: found.breadcrumb ? `${found.breadcrumb} › ${found.title}` : found.title,
+              childCount: 0,
+              position: 0,
+            },
+            collapsed: true,
+          },
+        },
+      ][0]!;
+    });
+    if (searchCursor) matches.push({ kind: "search-more" });
+    return matches;
+  }, [hasMoreRootGroups, searchCursor, searchResults, treeRows, trimmedQuery]);
+
+  // Per-row connector descriptors (rounded elbows + sibling stems).
+  const guidesById = useMemo(
+    () => buildGuides(rows.flatMap((row) => (row.kind === "panel" ? [row.item] : []))),
+    [rows]
+  );
 
   // Auto-expand ancestors of selected panel (batched for performance)
   useEffect(() => {
@@ -1063,6 +1217,54 @@ export function LazyPanelTreeSidebar({
     },
     [collapsedIds, expandIds]
   );
+
+  const handleLoadMore = useCallback(
+    async (row: Extract<SidebarRow, { kind: "load-more" }>) => {
+      if (loadingGroupKey) return;
+      setLoadingGroupKey(row.groupKey);
+      try {
+        await loadMore(
+          row.parentSlotId === null
+            ? { kind: "roots", ownerUserId: row.ownerUserId ?? null }
+            : { kind: "children", parentSlotId: row.parentSlotId }
+        );
+      } catch (error) {
+        void notification.show({
+          type: "error",
+          title: "Couldn't load older panels",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        setLoadingGroupKey(null);
+      }
+    },
+    [loadMore, loadingGroupKey]
+  );
+
+  const handleLoadMoreSearch = useCallback(async () => {
+    if (!searchCursor || loadingSearch) return;
+    setLoadingSearch(true);
+    try {
+      const results = await search(trimmedQuery, searchCursor);
+      const seen = new Set(searchResults.map((item) => item.id));
+      const additions = results.hits
+        .filter((hit) => !seen.has(hit.node.slotId))
+        .map((hit) => ({
+          id: hit.node.slotId,
+          title: hit.node.title,
+          breadcrumb: [
+            ...(hit.ancestorsTruncated ? ["…"] : []),
+            ...hit.ancestors.map((node) => node.title),
+          ].join(" › "),
+        }))
+        .slice(0, Math.max(0, 500 - searchResults.length));
+      const next = [...searchResults, ...additions];
+      setSearchResults(next);
+      setSearchCursor(next.length >= 500 ? null : results.nextCursor);
+    } finally {
+      setLoadingSearch(false);
+    }
+  }, [loadingSearch, search, searchCursor, searchResults, trimmedQuery]);
 
   // Scroll container ref for the virtualizer.
   // Uses a plain div with overflow:auto instead of Radix ScrollArea,
@@ -1172,6 +1374,48 @@ export function LazyPanelTreeSidebar({
   return (
     <Flex direction="column" style={{ flex: 1, minHeight: 0 }}>
       {diagnostics}
+      <Flex
+        align="center"
+        gap="1"
+        mx="2"
+        mb="1"
+        px="2"
+        style={{
+          minHeight: 28,
+          borderRadius: 5,
+          background: "var(--gray-a3)",
+          border: "1px solid var(--gray-a5)",
+        }}
+      >
+        <MagnifyingGlassIcon color="var(--gray-9)" />
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          placeholder="Filter panels by title"
+          aria-label="Filter panels by title"
+          style={{
+            minWidth: 0,
+            flex: 1,
+            border: 0,
+            outline: 0,
+            background: "transparent",
+            color: "var(--gray-12)",
+            font: "inherit",
+            fontSize: 12,
+          }}
+        />
+        {query ? (
+          <IconButton
+            size="1"
+            variant="ghost"
+            color="gray"
+            aria-label="Clear panel filter"
+            onClick={() => setQuery("")}
+          >
+            <Cross2Icon />
+          </IconButton>
+        ) : null}
+      </Flex>
       <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         <Box
           p="1"
@@ -1226,6 +1470,68 @@ export function LazyPanelTreeSidebar({
               );
             }
 
+            if (row.kind === "load-more") {
+              return (
+                <Box
+                  key={`__load_more__${row.groupKey}`}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                    paddingLeft: ROW_PADDING_LEFT + row.depth * INDENTATION_WIDTH,
+                  }}
+                >
+                  <Button
+                    size="1"
+                    variant="ghost"
+                    color="gray"
+                    disabled={loadingGroupKey !== null}
+                    onClick={() => void handleLoadMore(row)}
+                    aria-label={`Load ${Math.min(row.remaining, PANEL_TREE_PAGE_SIZE)} older panels`}
+                  >
+                    {loadingGroupKey === row.groupKey
+                      ? "Loading…"
+                      : `Load older panels (${row.remaining})`}
+                  </Button>
+                </Box>
+              );
+            }
+
+            if (row.kind === "root-groups-more" || row.kind === "search-more") {
+              const searchMore = row.kind === "search-more";
+              return (
+                <Box
+                  key={row.kind}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                    paddingLeft: ROW_PADDING_LEFT,
+                  }}
+                >
+                  <Button
+                    size="1"
+                    variant="ghost"
+                    color="gray"
+                    disabled={searchMore ? loadingSearch : loadingGroupKey !== null}
+                    onClick={() =>
+                      searchMore ? void handleLoadMoreSearch() : void loadMoreRootGroups()
+                    }
+                  >
+                    {searchMore && loadingSearch
+                      ? "Loading…"
+                      : searchMore
+                        ? "Load more matches"
+                        : "Load more panel owners"}
+                  </Button>
+                </Box>
+              );
+            }
+
             const item = row.item;
             return (
               <Box
@@ -1248,6 +1554,7 @@ export function LazyPanelTreeSidebar({
                   isDraggingAny={activeId !== null}
                   showIndicatorBelow={showIndicatorBelow}
                   isTouch={isTouch}
+                  isSortable={!trimmedQuery}
                   onSelect={onSelect}
                   onToggleCollapse={toggleCollapse}
                   onPanelContextMenu={onPanelContextMenu}

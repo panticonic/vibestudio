@@ -16,11 +16,12 @@
       "react/jsx-dev-runtime",
       "@radix-ui/themes",
       "@radix-ui/react-icons",
-      "@vibestudio/runtime",
+      "@workspace/runtime",
       "@workspace/react",
       "@workspace/ui"
     ],
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "agent.credentials.manage",
@@ -77,13 +78,13 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
+          "capability": "userland:extensions/shell/native.shell.execute#*",
           "resource": {
-            "kind": "prefix",
-            "prefix": ""
+            "kind": "exact",
+            "key": "native.shell:extension:@workspace-extensions/shell"
           },
           "tier": "gated",
-          "evidence": "intentional-broad"
+          "evidence": "bounded-dynamic"
         },
         {
           "capability": "workspace-service:channel",
@@ -111,13 +112,40 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:workspace.state",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ]
     }
   },
   "dependencies": {
     "@workspace-extensions/shell": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/testkit": "workspace:*",
     "@workspace/ui": "workspace:*",
@@ -140,6 +168,7 @@
     "zod": "^3.22.0"
   },
   "devDependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
     "vitest": "^3.2.2"
   }
 }

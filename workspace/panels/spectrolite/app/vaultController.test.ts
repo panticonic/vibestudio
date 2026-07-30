@@ -9,7 +9,7 @@ const runtimeMocks = vi.hoisted(() => ({
   setStateArgs: vi.fn(async () => undefined),
 }));
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   panel: {
     reopen: runtimeMocks.reopen,
     stateArgs: { get: runtimeMocks.getStateArgs, set: runtimeMocks.setStateArgs },

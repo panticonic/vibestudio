@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO, createTestDirectAuthority } from "@vibestudio/runtime/worker/test-utils";
+import { rpcMethodAuthority } from "@vibestudio/rpc";
+import { createTestDO, createTestDirectAuthority } from "@workspace/runtime/worker/test-utils";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
@@ -8,8 +9,8 @@ import {
   invocationCompletedPayload,
   type AgenticEvent,
   type BlockId,
-} from "@vibestudio/agentic-protocol";
-import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
+} from "@workspace/agentic-protocol";
+import { GadWorkspaceDO } from "@workspace-workers/workspace-source";
 import { PubSubChannel } from "./channel-do.js";
 
 type TestDO<T> = Awaited<ReturnType<typeof createTestDO<T>>>;
@@ -142,9 +143,6 @@ function messageTypeRegisteredEvent(
   typeId: string,
   code = "export default function App() { return null; }"
 ) {
-  // Direct-to-GAD seeds must arrive storage-encoded (the channel DO's encode
-  // path spills payload.source before appending; GAD validates at append).
-  const encoded = JSON.stringify({ type: "code", code });
   return {
     kind: "messageType.registered",
     actor: { kind: "panel", id: "panel:user" },
@@ -152,13 +150,7 @@ function messageTypeRegisteredEvent(
       protocol: AGENTIC_PROTOCOL_VERSION,
       typeId,
       displayMode: "row",
-      source: {
-        protocol: "vibestudio.blob-ref.v1",
-        digest: `source-${typeId}`,
-        size: encoded.length,
-        encoding: "json",
-        originalBytes: encoded.length,
-      },
+      source: { type: "code", code },
     },
     createdAt: new Date().toISOString(),
   };
@@ -181,7 +173,7 @@ async function createGadBackedChannel(
 ) {
   const gad =
     options.gad ??
-    (await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-semantic-control-plane" }));
+    (await createTestDO(GadWorkspaceDO, { __objectKey: "workspace" }));
   const channel = await createTestDO(PubSubChannel, {
     __objectKey: options.channelKey ?? "channel-1",
   });
@@ -189,7 +181,7 @@ async function createGadBackedChannel(
     emitted: options.emitted,
     emittedTargets: options.emittedTargets,
   });
-  const gadTarget = "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
+  const gadTarget = "do:workers/workspace-source:GadWorkspaceDO:workspace";
   const blobs = new Map<string, string>();
   // Inject a mock RPC client. The DO base now holds a ConnectionlessRpcClient
   // ({ client, respond, deliver }) behind the `rpc` getter; pre-setting
@@ -213,7 +205,7 @@ async function createGadBackedChannel(
             kind: "durable-object",
             source: "vibestudio/internal",
             className: "GadWorkspaceDO",
-            objectKey: "workspace-semantic-control-plane",
+            objectKey: "workspace",
             targetId: gadTarget,
           };
         }
@@ -242,29 +234,7 @@ async function createGadBackedChannel(
         }
         if (target === gadTarget) {
           const callerId = `do:workers/pubsub-channel:PubSubChannel:${options.channelKey ?? "channel-1"}`;
-          const internal = gad.instance as unknown as {
-            _currentRpcCallerId: string | null;
-            _currentRpcCallerKind: string | null;
-            _currentVerifiedCaller: unknown;
-          };
-          internal._currentRpcCallerId = callerId;
-          internal._currentRpcCallerKind = "do";
-          internal._currentVerifiedCaller = {
-            callerId,
-            callerKind: "do",
-            authorization: createTestDirectAuthority({
-              callerKind: "do",
-              method,
-              source: "vibestudio/internal",
-              className: "GadWorkspaceDO",
-              objectKey: "workspace-semantic-control-plane",
-            }),
-          };
-          const callable = gad.instance as unknown as Record<
-            string,
-            (...methodArgs: unknown[]) => unknown
-          >;
-          return await callable[method]!(...args);
+          return await gad.callAs({ callerId, callerKind: "do" }, method, ...args);
         }
         throw new Error(`unexpected rpc call ${target}.${method}`);
       }
@@ -464,7 +434,7 @@ describe("PubSubChannel", () => {
   });
 
   it("stamps the sender latch on the durable message and preserves exact outside lineage", async () => {
-    const { instance, gad } = await createGadBackedChannel();
+    const { instance, gad, callAs } = await createGadBackedChannel();
     setRpcCaller(instance, "agent:outside", "agent");
     const caller = (
       instance as unknown as {
@@ -489,7 +459,17 @@ describe("PubSubChannel", () => {
       name: "Outside agent",
       type: "agent",
     });
-    await instance.publish("agent:outside", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+    await callAs(
+      {
+        callerId: "agent:outside",
+        callerKind: "agent",
+        authorization: caller.authorization,
+      },
+      "publish",
+      "agent:outside",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticEvent()
+    );
     const page = await gad.instance.readChannelEnvelopes({ channelId: "channel-1" });
     const envelope = page.items.at(-1);
 
@@ -1037,13 +1017,13 @@ describe("PubSubChannel", () => {
     let appendCalls = 0;
     let blockAppend = false;
     const gad = await createTestDO(GadWorkspaceDO, {
-      __objectKey: "workspace-semantic-control-plane",
+      __objectKey: "workspace",
     });
     const { instance } = await createGadBackedChannel({
       gad,
       rpcCall: async (target, method, args) => {
         if (
-          target === "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane" &&
+          target === "do:workers/workspace-source:GadWorkspaceDO:workspace" &&
           method === "appendLogEvent" &&
           blockAppend
         ) {
@@ -1831,15 +1811,11 @@ describe("PubSubChannel", () => {
     expect(routedMethods).toEqual(["readAgentInspection"]);
   });
 
-  it("allows non-privileged callers to inspect standard read-only agent debug methods after approval", async () => {
+  it("runs an already-admitted inspection without a second advisory approval", async () => {
     const targetPid = "do:workers/agent-worker:AiChatWorker:agent-recently-active";
     const rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
     const { instance } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
-        if (target === "main" && method === "userlandApproval.request") {
-          rpcCalls.push({ target, method, args });
-          return { kind: "choice", choice: "allow" };
-        }
         if (target === targetPid && method === "readAgentInspection") {
           rpcCalls.push({ target, method, args });
           return { result: { settings: { model: "test:model" } } };
@@ -1858,23 +1834,6 @@ describe("PubSubChannel", () => {
     });
     expect(rpcCalls).toEqual([
       {
-        target: "main",
-        method: "userlandApproval.request",
-        args: [
-          expect.objectContaining({
-            subject: expect.objectContaining({
-              id: expect.stringMatching(/^channel\.inspectAgent:/u),
-            }),
-            title: "View agent details",
-            details: expect.arrayContaining([
-              { label: "Requested by", value: "do do:vibestudio/internal:EvalDO:agent-eval" },
-              { label: "Agent", value: targetPid },
-              { label: "Looking at", value: "getAgentSettings" },
-            ]),
-          }),
-        ],
-      },
-      {
         target: targetPid,
         method: "readAgentInspection",
         args: ["channel-1", "getAgentSettings"],
@@ -1882,31 +1841,17 @@ describe("PubSubChannel", () => {
     ]);
   });
 
-  it("denies non-privileged agent inspection when approval is denied", async () => {
-    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-recently-active";
-    const rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
-    const { instance } = await createGadBackedChannel({
-      rpcCall: (target, method, args) => {
-        if (target === "main" && method === "userlandApproval.request") {
-          rpcCalls.push({ target, method, args });
-          return { kind: "choice", choice: "deny" };
-        }
-        if (target === targetPid && method === "onMethodCall") {
-          rpcCalls.push({ target, method, args });
-          return { result: { settings: { model: "test:model" } } };
-        }
-        return undefined;
+  it("declares inspection as a receiver-enforced channel capability", async () => {
+    const { instance } = await createGadBackedChannel();
+    expect(rpcMethodAuthority(instance, "inspectAgent")).toMatchObject({
+      principals: ["host", "user", "code"],
+      effect: {
+        kind: "userland-capability",
+        capability: "channel.admin",
+        resource: { kind: "receiver-object" },
       },
-    });
-
-    setRpcCaller(instance, "panel:user", "panel");
-    await expect(instance.inspectAgent(targetPid, "getAgentSettings")).rejects.toThrow(
-      /approval denied/u
-    );
-    expect(rpcCalls).toHaveLength(1);
-    expect(rpcCalls[0]).toMatchObject({
-      target: "main",
-      method: "userlandApproval.request",
+      tier: "gated",
+      sensitivity: "admin",
     });
   });
 
@@ -2895,13 +2840,13 @@ describe("PubSubChannel", () => {
     const blockStarted = deferred();
     let blockedOnce = false;
     const gad = await createTestDO(GadWorkspaceDO, {
-      __objectKey: "workspace-semantic-control-plane",
+      __objectKey: "workspace",
     });
     const { instance } = await createGadBackedChannel({
       gad,
       rpcCall: async (target, method, args) => {
         if (
-          target === "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane" &&
+          target === "do:workers/workspace-source:GadWorkspaceDO:workspace" &&
           method === "appendLogEvent"
         ) {
           const event = (args[0] as { events?: Array<{ payloadKind?: string; payload?: unknown }> })
@@ -3660,34 +3605,16 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
 
-    await gad.instance.appendChannelEnvelopeWithRegistryMutation({
-      channelId: "channel-1" as never,
-      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
-      payload: messageTypeRegisteredEvent("weather"),
-      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-      registryMutation: {
-        kind: "upsertMessageType",
-        typeId: "weather",
-        row: {
-          displayMode: "row",
-          source: { type: "code", code: "export default function Weather() { return null; }" },
-        },
-      },
-    });
-    await gad.instance.appendChannelEnvelopeWithRegistryMutation({
-      channelId: "channel-1" as never,
-      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
-      payload: messageTypeRegisteredEvent("calendar"),
-      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-      registryMutation: {
-        kind: "upsertMessageType",
-        typeId: "calendar",
-        row: {
-          displayMode: "row",
-          source: { type: "code", code: "export default function Calendar() { return null; }" },
-        },
-      },
-    });
+    await instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      messageTypeRegisteredEvent("weather", "export default function Weather() { return null; }")
+    );
+    await instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      messageTypeRegisteredEvent("calendar", "export default function Calendar() { return null; }")
+    );
 
     await expect(instance.getMessageTypes()).resolves.toEqual([
       expect.objectContaining({ typeId: "calendar" }),
@@ -4208,27 +4135,31 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
     const gate = instance as unknown as {
       inboundCallerDenial(
         method: string,
+        args: readonly unknown[],
         caller: {
           callerId: string;
           callerKind: string;
           authorization?: ReturnType<typeof createTestDirectAuthority>;
-        } | null
+        } | null,
+        authorityAcceptedAt: number
       ): string | null;
     };
     for (const kind of ["panel", "worker", "server", "do", "shell"]) {
       expect(
-        gate.inboundCallerDenial("appendSeed", {
+        gate.inboundCallerDenial("appendSeed", [], {
           callerId: `${kind}:x`,
           callerKind: kind,
           authorization: createTestDirectAuthority({
             callerKind: kind as "panel" | "worker" | "server" | "do" | "shell",
             method: "appendSeed",
+            effect: { kind: "open" },
             capability: "workspace-service:channel",
             targetCapability: "workspace-service:channel",
             targetPrincipals: ["host", "user", "code"],
             objectKey: "channel-1",
           }),
-        })
+        }, Date.now()),
+        kind
       ).toBeNull();
     }
   });

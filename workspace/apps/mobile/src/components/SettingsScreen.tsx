@@ -16,7 +16,7 @@ import {
   mobileWorkspaceSelectionDependencies,
   selectMobileWorkspace,
 } from "../services/workspaceSelection";
-import { panelForestAtom, shellClientAtom } from "../state/shellClientAtom";
+import { panelTreeRevisionAtom, shellClientAtom } from "../state/shellClientAtom";
 import { isAuthenticatedAtom } from "../state/authAtoms";
 import { activePanelIdAtom } from "../state/navigationAtoms";
 import { connectionStatusAtom } from "../state/connectionAtoms";
@@ -46,7 +46,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
   const setShellClient = useSetAtom(shellClientAtom);
   const connectionStatus = useAtomValue(connectionStatusAtom);
   const setAuthenticated = useSetAtom(isAuthenticatedAtom);
-  const setPanelForest = useSetAtom(panelForestAtom);
+  const setPanelTreeRevision = useSetAtom(panelTreeRevisionAtom);
   const setActivePanelId = useSetAtom(activePanelIdAtom);
   const colors = useAtomValue(themeColorsAtom);
   const themePreference = useAtomValue(themePreferenceAtom);
@@ -152,7 +152,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
     // workspace resources. Failure paths above intentionally leave them live.
     shellClient?.dispose();
     setShellClient(null);
-    setPanelForest({ revision: 0, forest: [] });
+    setPanelTreeRevision(0);
     setActivePanelId(null);
     setAuthenticated(false);
   };

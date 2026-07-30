@@ -1,6 +1,6 @@
 /**
  * Pure formatting + error helpers for the Browser Migration & State panel.
- * Kept free of `@vibestudio/runtime` imports so they are unit-testable in a plain
+ * Kept free of `@workspace/runtime` imports so they are unit-testable in a plain
  * Node/vitest environment (no panel runtime required).
  */
 

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openPort, openUrl } from "./portClick.js";
-import { notifications, openExternal, openPanel } from "@vibestudio/runtime";
+import { notifications, openExternal, openPanel } from "@workspace/runtime";
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   openPanel: vi.fn(),
   openExternal: vi.fn(),
   notifications: { show: vi.fn() },

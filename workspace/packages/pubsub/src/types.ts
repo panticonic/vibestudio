@@ -4,7 +4,7 @@
 
 import type { SandboxSource } from "./tracker-types.js";
 import type { ChannelInvite as WorkspaceChannelInvite } from "@vibestudio/shared/channelInvites";
-import type { ParticipantRef } from "@vibestudio/agentic-protocol";
+import type { ParticipantRef } from "@workspace/agentic-protocol";
 
 /**
  * Channel configuration persisted with the channel.

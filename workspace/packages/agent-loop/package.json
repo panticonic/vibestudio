@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@vibestudio/trajectory-identity": "workspace:*",
-    "@vibestudio/agentic-protocol": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
     "@workspace/pi-core": "workspace:*"
   }
 }

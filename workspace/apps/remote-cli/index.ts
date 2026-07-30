@@ -2,6 +2,7 @@ import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
 import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
 import { createServerWsTransport } from "@vibestudio/shell-core/transport/serverWsTransport";
 import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
+import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import WebSocket from "ws";
@@ -67,16 +68,21 @@ export async function main(): Promise<void> {
     workspaceMethods,
     (service, method, args) => rpc.call("main", `${service}.${method}`, args)
   );
+  const runtimeClient = createTypedServiceClient(
+    "runtime",
+    runtimeMethods,
+    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+  );
   printBootstrapSummary();
   const workspace = await workspaceClient.getInfo();
   console.log(`Connected as ${requiredEnv("VIBESTUDIO_TERMINAL_APP_ID")}`);
   console.log(`Workspace: ${workspace.config.id ?? "unknown"}`);
 
-  const units = await workspaceClient.units.list();
-  console.log(`Workspace units: ${units.length}`);
+  const units = await runtimeClient.supervision.list();
+  console.log(`Running executable units: ${units.length}`);
   for (const unit of units) {
     console.log(
-      `- ${unit.kind} ${unit.name} ${unit.source} status=${unit.status} target=${unit.target ?? ""}`
+      `- ${unit.identity.kind} ${unit.identity.entityId} ${unit.source} status=${unit.status}`
     );
   }
 

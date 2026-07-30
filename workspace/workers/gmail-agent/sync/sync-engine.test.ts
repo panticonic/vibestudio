@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GmailAttentionDecision } from "@workspace/gmail/card-types";
-import type { SqlStorage } from "@vibestudio/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker";
 import { SyncEngine } from "./sync-engine.js";
 
 /**

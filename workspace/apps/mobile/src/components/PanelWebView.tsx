@@ -674,7 +674,6 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
           options: {
             title: canonical.title,
             slug: canonical.slug,
-            name: canonical.name,
             contextId: canonical.contextId,
             focus: canonical.focus,
             ref: canonical.ref,

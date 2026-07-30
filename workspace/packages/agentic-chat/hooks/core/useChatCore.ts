@@ -35,7 +35,7 @@ import {
   type DisconnectedAgentInfo,
   type InvocationCardPayload,
 } from "@workspace/agentic-core";
-import type { MessageBlockInput, MessageTier } from "@vibestudio/agentic-protocol";
+import type { MessageBlockInput, MessageTier } from "@workspace/agentic-protocol";
 import { cleanupPendingImages, type PendingImage } from "../../utils/imageUtils";
 import type {
   ChatInputContextValue,

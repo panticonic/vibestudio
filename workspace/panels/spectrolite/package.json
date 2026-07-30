@@ -18,11 +18,12 @@
       "react/jsx-dev-runtime",
       "@radix-ui/themes",
       "@radix-ui/react-icons",
-      "@vibestudio/runtime",
+      "@workspace/runtime",
       "@workspace/agentic-chat",
       "@workspace/ui"
     ],
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "account.profile.update",
@@ -106,15 +107,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -146,12 +138,12 @@
   },
   "dependencies": {
     "@vibestudio/service-schemas": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
-    "@vibestudio/agentic-protocol": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
     "@workspace/eval": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/mdx-editor-core": "workspace:*",

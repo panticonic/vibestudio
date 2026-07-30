@@ -203,7 +203,9 @@ describe("sandbox source hooks", () => {
     moduleMap["@radix-ui/themes"] = RadixThemes;
 
     const sourcePath = "packages/agentic-chat/components/ModelCredentialRequiredCard.tsx";
-    const source = await readFile(path.resolve(process.cwd(), sourcePath), "utf8");
+    const cwd = process.cwd();
+    const checkoutRoot = path.basename(cwd) === "workspace" ? path.dirname(cwd) : cwd;
+    const source = await readFile(path.join(checkoutRoot, "workspace", sourcePath), "utf8");
     const states: InlineUiState[] = [];
     const messages = [
       makeMessage({

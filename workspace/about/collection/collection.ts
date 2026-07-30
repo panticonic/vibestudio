@@ -1,7 +1,7 @@
 /**
  * Pure local-state helpers for the Collection panel.
  *
- * Kept free of `@vibestudio/runtime` imports so they unit-test in a plain
+ * Kept free of `@workspace/runtime` imports so they unit-test in a plain
  * Node/vitest environment without a panel runtime.
  */
 import type { CollectionOrchestrationState } from "@workspace/collection-orchestration";

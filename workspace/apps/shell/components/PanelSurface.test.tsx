@@ -58,6 +58,20 @@ describe("PanelSurface", () => {
     vi.useRealTimers();
   });
 
+  it("claims its initial slot without waiting for an animation frame", () => {
+    window.requestAnimationFrame = vi.fn(() => 1);
+
+    render(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />);
+
+    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledWith({
+      nativeSlotId: "slot-1",
+      bindingId: expect.any(String),
+      panelId: "panel-1",
+      focused: true,
+      bounds: { x: 20, y: 30, width: 400, height: 300 },
+    });
+  });
+
   it("retries binding when the panel WebContentsView is not ready yet", async () => {
     shellClient.bindNativePanelSlot
       .mockRejectedValueOnce(new Error("Native panel slot target is not a panel view: panel-1"))
@@ -77,6 +91,7 @@ describe("PanelSurface", () => {
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
     expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
       nativeSlotId: "slot-1",
+      bindingId: expect.any(String),
       panelId: "panel-1",
       focused: true,
       bounds: { x: 20, y: 30, width: 400, height: 300 },
@@ -105,6 +120,7 @@ describe("PanelSurface", () => {
     });
     expect(shellClient.updateNativePanelSlot).toHaveBeenCalledWith({
       nativeSlotId: "slot-1",
+      bindingId: expect.any(String),
       focused: true,
     });
 
@@ -115,6 +131,7 @@ describe("PanelSurface", () => {
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
     expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
       nativeSlotId: "slot-1",
+      bindingId: expect.any(String),
       panelId: "panel-1",
       focused: true,
       bounds: { x: 20, y: 30, width: 400, height: 300 },
@@ -140,6 +157,7 @@ describe("PanelSurface", () => {
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
     expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
       nativeSlotId: "slot-1",
+      bindingId: expect.any(String),
       panelId: "panel-1",
       focused: true,
       bounds: { x: 20, y: 30, width: 400, height: 300 },

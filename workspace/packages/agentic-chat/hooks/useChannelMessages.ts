@@ -29,7 +29,7 @@ import {
   type AgenticEvent,
   type ChannelEnvelope,
   type ChannelViewState,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 
 /** Maximum messages in the visible window. New messages push oldest out. */
 const MAX_VISIBLE = 2000;

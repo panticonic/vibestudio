@@ -871,9 +871,9 @@ export async function activate(ctx: Ctx) {
               ? (fallbackRecord.runtimeValidation.error ?? "installation validation failed")
               : fallbackRecord
                 ? null
-                : bootstrapStage === "ready"
-                  ? "not installed"
-                  : (bootstrapError ?? `bootstrap ${bootstrapStage}`),
+                : bootstrapStage === "error"
+                  ? (bootstrapError ?? "local-models bootstrap failed")
+                  : "not installed",
       },
       downloads: library.listDownloads(),
       storageRoot: rootDir,

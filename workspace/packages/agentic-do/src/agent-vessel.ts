@@ -20,12 +20,12 @@ import {
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
   assertExactSqlTableSchema,
-} from "@vibestudio/runtime/worker";
+} from "@workspace/runtime/worker";
 import { withCausalParent, type RpcClient } from "@vibestudio/rpc";
 import {
   createGadServiceClient,
   type DurableObjectServiceClient,
-} from "@vibestudio/runtime/workerd-client";
+} from "@workspace/runtime/workerd-client";
 import type {
   ChannelReplayEnvelope,
   RegisterMessageTypeInput,
@@ -55,7 +55,7 @@ import {
   type CustomMessageDisplayMode,
   type ParticipantRef,
   type SubagentProgressUpdate,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 import { sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
 import {
   createDeferredEvalExecutor,
@@ -85,7 +85,7 @@ import type {
   SettleRequest,
   WorkClaim,
 } from "@vibestudio/shared/durableWork";
-import { executeLocalToolWithDeadline } from "./local-tool-execution.js";
+import { executeLocalTool } from "./local-tool-execution.js";
 import {
   AGENT_INSPECTION_METHODS,
   isAgentInspectionMethod,
@@ -133,7 +133,7 @@ export interface AgentToolExecutionContext {
 import type {
   ConnectCredentialRequest,
   StoredCredentialSummary as ModelCredentialSummary,
-} from "@vibestudio/runtime/credentials";
+} from "@workspace/runtime/credentials";
 import { DOIdentity } from "./identity.js";
 import { SubscriptionManager } from "./subscription-manager.js";
 import {
@@ -145,7 +145,11 @@ import {
 import { ChannelClient } from "./channel-client.js";
 import { FeedbackIngest } from "./feedback-ingest.js";
 import { CardManager } from "./custom-cards.js";
-import { AgentLoopDriver, type DriverDeps } from "./agent-loop-driver.js";
+import {
+  AgentLoopDriver,
+  ensureAgentLoopDriverSchema,
+  type DriverDeps,
+} from "./agent-loop-driver.js";
 import { inspectEffectOutbox, outboxExternalId, parseOutboxExternalId } from "./effect-outbox.js";
 import {
   CredentialApprovalDeferredError,
@@ -568,11 +572,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.ensureReady();
-    // Module tables are owned by the composed managers (constructed below);
-    // driver tables (effect_outbox, fold_cache) are created lazily on first
-    // driver use. createTables() itself is therefore a no-op hook.
     this.identity = new DOIdentity(this.sql);
-    this.identity.createTables();
     this.subscriptions = new SubscriptionManager(
       this.sql,
       (channelId) => this.createChannelClient(channelId),
@@ -585,7 +585,35 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         );
       }
     );
-    this.subscriptions.createTables();
+    this.subagentRuns = new SubagentRunStore(this.sql);
+    this.feedback = new FeedbackIngest(this.sql);
+    this.cards = new CardManager({
+      sql: this.sql,
+      createChannelClient: (channelId) => this.createChannelClient(channelId),
+      getParticipantId: (channelId) => this.subscriptions.getParticipantId(channelId),
+      getActor: () => ({ kind: "agent", id: this.participantId() }),
+      getAgentId: () => this.objectKey,
+    });
+    this.registerAgentAlarmSource({
+      id: "agent-loop-driver",
+      nextWakeAt: () => this._driver?.nextWakeAt() ?? this.driverNextWakeAtFromSql(),
+      fire: async () => {
+        await this.driver.reconcileForRecovery();
+      },
+    });
+    this.registerAgentAlarmSource({
+      id: "durable-work-recovery",
+      nextWakeAt: () => this.nextDurableWorkRecoveryAt(),
+      fire: async () => {
+        const queues = this.readyDurableWorkQueues();
+        if (queues.length > 0) this.markWorkReady(...queues);
+      },
+    });
+  }
+
+  protected createTables(): void {
+    DOIdentity.createTables(this.sql);
+    SubscriptionManager.createTables(this.sql);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS agent_inbox_queue (
         delivery_key TEXT PRIMARY KEY,
@@ -647,35 +675,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       CREATE INDEX IF NOT EXISTS idx_agent_hot_path_trace_channel
         ON agent_hot_path_trace(channel_id, sequence)
     `);
-    this.subagentRuns = new SubagentRunStore(this.sql);
-    this.subagentRuns.createTables();
-    this.feedback = new FeedbackIngest(this.sql);
-    this.cards = new CardManager({
-      sql: this.sql,
-      createChannelClient: (channelId) => this.createChannelClient(channelId),
-      getParticipantId: (channelId) => this.subscriptions.getParticipantId(channelId),
-      getActor: () => ({ kind: "agent", id: this.participantId() }),
-      getAgentId: () => this.objectKey,
-    });
-    this.registerAgentAlarmSource({
-      id: "agent-loop-driver",
-      nextWakeAt: () => this._driver?.nextWakeAt() ?? this.driverNextWakeAtFromSql(),
-      fire: async () => {
-        await this.driver.reconcileForRecovery();
-      },
-    });
-    this.registerAgentAlarmSource({
-      id: "durable-work-recovery",
-      nextWakeAt: () => this.nextDurableWorkRecoveryAt(),
-      fire: async () => {
-        const queues = this.readyDurableWorkQueues();
-        if (queues.length > 0) this.markWorkReady(...queues);
-      },
-    });
-  }
-
-  protected createTables(): void {
-    // Composed managers create their own tables; nothing to do here.
+    SubagentRunStore.createTables(this.sql);
+    FeedbackIngest.createTables(this.sql);
+    CardManager.createTables(this.sql);
+    ensureAgentLoopDriverSchema(this.sql);
   }
 
   protected override durableWorkQueues(): readonly DurableWorkQueue[] {
@@ -1066,6 +1069,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   private _identityBootstrapped = false;
+  private _durableWorkActivationRecovered = false;
+  private _durableWorkActivationRecovery: Promise<void> | null = null;
 
   /** Bootstrap identity from the canonical workerd environment. */
   protected ensureIdentity(): void {
@@ -1430,7 +1435,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               };
             }
             const params = prepareAgentToolArguments(agentTool, args);
-            const result = await executeLocalToolWithDeadline(agentTool, {
+            const result = await executeLocalTool(agentTool, {
               invocationId,
               params,
               parentSignal: signal,
@@ -1714,7 +1719,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -2128,7 +2133,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2187,12 +2192,32 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Adopt this concrete vessel's durable queues for one server generation. */
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
-  adoptDurableWorkWorker(workerId: string): { adopted: boolean; previousWorkerId: string | null } {
-    return this.adoptDurableWorkWorkerGeneration(workerId);
+  async adoptDurableWorkWorker(
+    workerId: string
+  ): Promise<{ adopted: boolean; previousWorkerId: string | null }> {
+    const adoption = this.adoptDurableWorkWorkerGeneration(workerId);
+    if (adoption.adopted) this._durableWorkActivationRecovered = false;
+    if (!this._durableWorkActivationRecovered && !this._durableWorkActivationRecovery) {
+      const recovery = (async () => {
+        for (const channelId of this.subscriptions.listChannelIds()) {
+          await this.driver.wake(channelId);
+        }
+        this._durableWorkActivationRecovered = true;
+      })();
+      this._durableWorkActivationRecovery = recovery;
+      const clearRecovery = () => {
+        if (this._durableWorkActivationRecovery === recovery) {
+          this._durableWorkActivationRecovery = null;
+        }
+      };
+      void recovery.then(clearRecovery, clearRecovery);
+    }
+    await this._durableWorkActivationRecovery;
+    return adoption;
   }
 
   /**
@@ -2202,7 +2227,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2262,7 +2287,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2304,7 +2329,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2383,7 +2408,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2555,7 +2580,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2591,7 +2616,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2622,7 +2647,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2693,7 +2718,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -2765,7 +2790,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3485,7 +3510,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3514,7 +3539,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3554,7 +3579,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -3572,7 +3597,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * member while cancellation is already unwinding that membership. */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3583,7 +3608,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -3797,7 +3822,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   @rpc({
     principals: ["code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4220,7 +4245,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  here. Duplicate delivery is a no-op (deterministic terminal ids). */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4237,7 +4262,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * owns continuation; a lost hint is recovered by the ordinary redrive alarm. */
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4355,7 +4380,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   @rpc({
     principals: ["code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4389,7 +4414,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   @rpc({
     principals: ["code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4674,7 +4699,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  the clone (see {@link postClone}), so the old ≤1-subscription gate is gone. */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -4687,7 +4712,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -4789,7 +4814,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -6232,7 +6257,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   @rpc({
     principals: ["code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -6770,7 +6795,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })

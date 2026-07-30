@@ -17,7 +17,6 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 export interface ApprovalsClient {
   list(): Promise<PendingApproval[]>;
   resolve(approvalId: string, decision: ApprovalDecisionId): Promise<void>;
-  resolveUserland(approvalId: string, choice: string): Promise<void>;
   /** Subscribe to queue changes; returns an unsubscribe. */
   onChange(listener: () => void): () => void;
 }
@@ -37,9 +36,6 @@ export function createApprovalsClient(rpc: RpcClient): ApprovalsClient {
     },
     async resolve(approvalId, decision) {
       await shellApproval.resolve(approvalId, decision);
-    },
-    async resolveUserland(approvalId, choice) {
-      await shellApproval.resolveUserland(approvalId, choice);
     },
     onChange(listener) {
       const stopListening = events.on(SHELL_APPROVAL_PENDING_CHANGED_EVENT, () => listener());

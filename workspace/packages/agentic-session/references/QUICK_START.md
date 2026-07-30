@@ -6,7 +6,7 @@ The simplest way to spawn an agent and drive it from code:
 
 ```typescript
 import { HeadlessSession } from "@workspace/agentic-session";
-import { contextId, rpc } from "@vibestudio/runtime";
+import { contextId, rpc } from "@workspace/runtime";
 
 const session = await HeadlessSession.createWithAgent({
   config: { clientId: rpc.selfId, rpc },
@@ -49,7 +49,7 @@ For more control over channel/subscription setup:
 
 ```typescript
 import { HeadlessSession, subscribeHeadlessAgent } from "@workspace/agentic-session";
-import { contextId, rpc } from "@vibestudio/runtime";
+import { contextId, rpc } from "@workspace/runtime";
 
 // Create session
 const session = HeadlessSession.create({
@@ -76,7 +76,7 @@ For maximum control — no agent subscription, no `set_title`, no wait helpers:
 
 ```typescript
 import { ConnectionManager } from "@workspace/agentic-core";
-import { contextId, rpc } from "@vibestudio/runtime";
+import { contextId, rpc } from "@workspace/runtime";
 
 const manager = new ConnectionManager({
   config: { clientId: rpc.selfId, rpc },

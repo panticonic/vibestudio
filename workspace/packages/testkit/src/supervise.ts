@@ -7,13 +7,13 @@
  * filtered to the watch window — deterministic and poll-free. Health probes
  * run on an interval until stop().
  */
-import type { PanelHandle } from "@vibestudio/runtime";
+import type { PanelHandle } from "@workspace/runtime";
 import { TestAssertionError } from "./expect.js";
 
 // Lazy: keeps run.ts/supervise.ts importable outside a live runtime (vitest).
-async function getWorkspace() {
-  const runtime = await import("@vibestudio/runtime");
-  return runtime.workspace;
+async function getRuntime() {
+  const runtime = await import("@workspace/runtime");
+  return runtime.runtime;
 }
 
 export interface SupervisionFinding {
@@ -158,8 +158,14 @@ export class Supervisor {
 
     for (const watch of this.units.values()) {
       try {
-        const workspace = await getWorkspace();
-        const diagnostics = await workspace.units.diagnostics(watch.name, {
+        const runtime = await getRuntime();
+        const matches = (await runtime.supervision.list()).filter(
+          (unit) => unit.identity.entityId === watch.name || unit.source === watch.name
+        );
+        if (matches.length !== 1) {
+          throw new Error(`Expected one running executable entity for ${watch.name}`);
+        }
+        const diagnostics = await runtime.supervision.health(matches[0]!.identity, {
           since: watch.since,
         });
         const records = [...diagnostics.errors];

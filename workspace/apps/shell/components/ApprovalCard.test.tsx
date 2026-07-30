@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -8,33 +8,11 @@ import type {
   PendingClientConfigApproval,
   PendingCredentialApproval,
   PendingUnitBatchApproval,
-  PendingUserlandApproval,
 } from "@vibestudio/shared/approvals";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
 import { ApprovalCard } from "./ApprovalCard";
-import { resolveCallerInfo, type ApprovalCardIntent, type BlobResult } from "./approvalCardModel";
+import { resolveCallerInfo, type ApprovalCardIntent } from "./approvalCardModel";
 import { ApprovalCardSurface } from "../overlay/ApprovalCardSurface";
-
-function userlandApproval(
-  partial: Partial<PendingUserlandApproval> & { approvalId: string; title: string }
-): PendingUserlandApproval {
-  return {
-    kind: "userland",
-    callerId: partial.callerId ?? `panel:${partial.approvalId}`,
-    callerKind: partial.callerKind ?? "panel",
-    repoPath: partial.repoPath ?? "panels/test",
-    effectiveVersion: partial.effectiveVersion ?? "ev",
-    requestedAt: partial.requestedAt ?? Date.now(),
-    callerTitle: partial.callerTitle,
-    subject: partial.subject ?? { id: "sub-1", label: "Subject" },
-    title: partial.title,
-    summary: partial.summary,
-    sealedDetails: partial.sealedDetails,
-    promptOptions: partial.promptOptions ?? "choices",
-    options: partial.options ?? [{ value: "ok", label: "OK", tone: "primary" }],
-    approvalId: partial.approvalId,
-  };
-}
 
 function capabilityApproval(
   partial: Partial<PendingCapabilityApproval> & { approvalId: string; title: string }
@@ -142,70 +120,6 @@ function renderCard(
 }
 
 describe("ApprovalCard", () => {
-  it("reveals review content only on demand and keeps the exact digest visible", async () => {
-    const suffix = "dangerous-suffix-after-one-thousand";
-    const content = `${"x".repeat(1_100)}${suffix}`;
-    const digest = "a".repeat(64);
-    const fetchContent = vi.fn(async () => content);
-    renderCard(
-      userlandApproval({
-        approvalId: "sealed-plan",
-        title: "Run a command",
-        sealedDetails: [
-          { label: "Complete execution plan", digest, byteLength: content.length, format: "code" },
-        ],
-      }),
-      { fetchContent }
-    );
-
-    fireEvent.click(screen.getByText("Inspect request content"));
-    expect(fetchContent).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("Reveal Complete execution plan"));
-    await waitFor(() => expect(fetchContent).toHaveBeenCalledWith(digest));
-    expect(screen.getByText((value) => value.endsWith(suffix))).toBeTruthy();
-    expect(screen.getByText(new RegExp(`sha256:${digest}`))).toBeTruthy();
-  });
-
-  it("does not expose sealed-only payloads and lets a failed review fetch retry", async () => {
-    const reviewDigest = "b".repeat(64);
-    const exactDigest = "c".repeat(64);
-    const fetchContent = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("temporary connection loss"))
-      .mockResolvedValueOnce("reviewed command");
-    renderCard(
-      userlandApproval({
-        approvalId: "sealed-retry",
-        title: "Run a command",
-        sealedDetails: [
-          {
-            label: "Command and input",
-            digest: reviewDigest,
-            byteLength: 20,
-            disclosure: "review",
-          },
-          {
-            label: "Exact execution seal",
-            digest: exactDigest,
-            byteLength: 1_000,
-            disclosure: "sealed-only",
-          },
-        ],
-      }),
-      { fetchContent }
-    );
-
-    fireEvent.click(screen.getByText("Inspect request content"));
-    expect(screen.queryByText("Exact execution seal")).toBeNull();
-    fireEvent.click(screen.getByText("Reveal Command and input"));
-    await screen.findByText(/temporary connection loss/);
-    fireEvent.click(screen.getByText("Retry Command and input"));
-    await screen.findByText("reviewed command");
-    expect(fetchContent).toHaveBeenCalledTimes(2);
-    expect(fetchContent).toHaveBeenNthCalledWith(1, reviewDigest);
-    expect(fetchContent).toHaveBeenNthCalledWith(2, reviewDigest);
-  });
-
   it("exposes a labelled, described dialog and assertive decision errors with long copy", () => {
     const title =
       "Autoriser la publication de cette très longue synthèse dans l’espace de travail partagé";
@@ -269,10 +183,14 @@ describe("ApprovalCard", () => {
         title: "Send the nightly briefing",
         callerTitle: "News",
         snapshot: {
-          v: 1,
+          v: 2,
           service: "push",
           method: "send",
           capability: "push.send",
+          capabilityDefinitionDigest: "-",
+          resourceType: "publishing",
+          provider: "-",
+          providerExecutionDigest: "-",
           resourceKey: "channel:briefings",
           argsDigest: "args:briefing-1",
           preparedStateDigest: "prepared:briefing-1",
@@ -282,7 +200,7 @@ describe("ApprovalCard", () => {
           agentBindingId: "binding:news",
           agentName: "News",
           agentScopeEligible: true,
-          mission: "-",
+          reviewedClosureSubject: "-",
           snippetDigest: "snippet:news",
           codeLineage: { class: "internal", chain: ["code:news"] },
           contextLineage: null,
@@ -409,7 +327,7 @@ describe("ApprovalCard", () => {
   });
 
   it("shows the queue navigator and emits browse intents", () => {
-    const { emit } = renderCard(userlandApproval({ approvalId: "a1", title: "First approval" }), {
+    const { emit } = renderCard(capabilityApproval({ approvalId: "a1", title: "First approval" }), {
       queue: { index: 0, total: 3, canPrev: false, canNext: true },
     });
     expect(screen.getByText("1 / 3")).toBeTruthy();
@@ -418,12 +336,14 @@ describe("ApprovalCard", () => {
   });
 
   it("omits the navigator for a single approval", () => {
-    renderCard(userlandApproval({ approvalId: "solo", title: "Lonely approval" }), { queue: null });
+    renderCard(capabilityApproval({ approvalId: "solo", title: "Lonely approval" }), {
+      queue: null,
+    });
     expect(screen.queryByLabelText("Next approval")).toBeNull();
   });
 
   it("surfaces a decision error", () => {
-    renderCard(userlandApproval({ approvalId: "err", title: "Boom" }), {
+    renderCard(capabilityApproval({ approvalId: "err", title: "Boom" }), {
       decisionError: "resolve blocked",
     });
     expect(screen.getByText("Approval action failed: resolve blocked")).toBeTruthy();
@@ -483,6 +403,8 @@ describe("ApprovalCard", () => {
           evidence: "intentional-broad",
         },
       ],
+      provides: [],
+      previousProvides: [],
       rows: [notificationsRow, profileRow],
       diff: {
         added: [{ ...notificationsRow, flags: { newInDiff: true } }],
@@ -494,68 +416,25 @@ describe("ApprovalCard", () => {
 
     renderCard(approval);
     expect(screen.getByText("+ Publishing & sending")).toBeTruthy();
-    const unchangedItem = screen.getByText(/view your account profile/);
+    const unchangedItem = screen.getByText(/view an account profile/i);
     const unchangedDetails = unchangedItem.closest("details") as HTMLDetailsElement;
     expect(unchangedDetails.open).toBe(false);
 
     fireEvent.click(screen.getByText("Extension 1 · v0.1.0"));
-    expect(screen.getByText(/^\+ send notifications/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        (content) => content.startsWith("+ ") && content.includes(notificationsRow.action)
+      )
+    ).toBeTruthy();
     expect(unchangedDetails.open).toBe(false);
     fireEvent.click(screen.getByText("Unchanged permissions"));
     expect(unchangedDetails.open).toBe(true);
   });
 
   it("emits a minimize intent from the header control", () => {
-    const { emit } = renderCard(userlandApproval({ approvalId: "m", title: "Minimizable" }));
+    const { emit } = renderCard(capabilityApproval({ approvalId: "m", title: "Minimizable" }));
     fireEvent.click(screen.getByLabelText("Minimize approval"));
     expect(emit).toHaveBeenCalledWith({ type: "minimize", approvalId: "m" });
-  });
-
-  it("requests a fresh host fetch when retrying failed review content", async () => {
-    const digest = "d".repeat(64);
-    const approval = userlandApproval({
-      approvalId: "review-retry",
-      title: "Run a command",
-      sealedDetails: [
-        {
-          label: "Command and input",
-          digest,
-          byteLength: 20,
-          disclosure: "review",
-        },
-      ],
-    });
-    const emitIntent = vi.fn<(intent: unknown) => void>();
-    const renderSurface = (blobResults?: Record<string, BlobResult>) => (
-      <Theme>
-        <ApprovalCardSurface
-          props={{ approval, queue: null, decisionError: null, blobResults }}
-          emitIntent={emitIntent}
-        />
-      </Theme>
-    );
-    const { rerender } = render(renderSurface());
-
-    fireEvent.click(screen.getByText("Inspect request content"));
-    fireEvent.click(screen.getByText("Reveal Command and input"));
-    expect(emitIntent).toHaveBeenLastCalledWith({
-      type: "fetch-blob",
-      hash: digest,
-      approvalId: "review-retry",
-    });
-
-    rerender(renderSurface({ [digest]: { error: "temporary connection loss" } }));
-    await screen.findByText(/temporary connection loss/);
-    fireEvent.click(screen.getByText("Retry Command and input"));
-    expect(emitIntent).toHaveBeenLastCalledWith({
-      type: "fetch-blob",
-      hash: digest,
-      approvalId: "review-retry",
-      refresh: true,
-    });
-
-    rerender(renderSurface({ [digest]: { text: "reviewed command" } }));
-    expect(await screen.findByText("reviewed command")).toBeTruthy();
   });
 
   it("remounts the overlay card when the approval changes so secret inputs reset", () => {

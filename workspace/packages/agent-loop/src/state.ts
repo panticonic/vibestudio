@@ -5,7 +5,7 @@
  * (hydration happens in executors, never in the fold).
  */
 
-import type { InvocationTransport, ParticipantRef } from "@vibestudio/agentic-protocol";
+import type { InvocationTransport, ParticipantRef } from "@workspace/agentic-protocol";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";

@@ -13,7 +13,7 @@ import {
   LockClosedIcon,
   MobileIcon,
 } from "@radix-ui/react-icons";
-import { buildPanelLink } from "@vibestudio/runtime";
+import { buildPanelLink } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react";
 import { AboutThemeRoot, AboutPage, BRAND_GRADIENT } from "@workspace/about-shared/ui";
 

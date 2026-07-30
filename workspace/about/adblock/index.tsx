@@ -26,7 +26,7 @@ import {
   CheckCircledIcon,
   ExclamationTriangleIcon,
 } from "@radix-ui/react-icons";
-import { rpc } from "@vibestudio/runtime";
+import { rpc } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
 

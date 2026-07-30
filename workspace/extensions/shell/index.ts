@@ -1,20 +1,7 @@
 import * as path from "node:path";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
-import type {
-  ExtensionContext,
-  UserlandApprovalChoice,
-  UserlandApprovalRequest,
-} from "@vibestudio/extension";
-import {
-  buildContextAttachApproval,
-  buildExecApproval,
-  buildExecPlan,
-  buildOpenApproval,
-  buildUrlOpenApproval,
-  execPlanDigest,
-  serializeExecPlan,
-} from "./approvals.js";
+import type { ExtensionContext } from "@vibestudio/extension";
 import { runExec } from "./exec.js";
 import { SessionManager } from "./sessionManager.js";
 import { prepareVscodeShellIntegrationLaunch } from "./shellIntegrationEnv.js";
@@ -26,7 +13,6 @@ import {
   execRequestSchema,
   launchAdapterSchema,
   openRequestSchema,
-  sealedExecPlanSchema,
   unregisterLaunchAdapterSchema,
 } from "./types.js";
 
@@ -131,24 +117,6 @@ function currentExtensionCaller(ctx: ExtensionContext, method: string): string {
     throw error("EACCES", `shell.${method} is only available to extension callers`);
   }
   return caller.callerId;
-}
-
-async function requireApproval(
-  ctx: ExtensionContext,
-  kind: "exec" | "open",
-  req: UserlandApprovalRequest
-): Promise<UserlandApprovalChoice> {
-  const choice = await ctx.approvals.request(req);
-  if (choice.kind === "uncallable") {
-    throw error("ENOCALLER", "shell extension requires a panel or worker caller");
-  }
-  if (choice.kind === "dismissed") {
-    throw error("EACCES", `shell.${kind} denied by user`);
-  }
-  if (choice.choice === "deny") {
-    throw error("EACCES", `shell.${kind} denied by user`);
-  }
-  return choice;
 }
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
@@ -263,7 +231,7 @@ export async function activate(ctx: ExtensionContext) {
     return true;
   };
   const requireContextAttachApproval = async (
-    operation: "exec" | "open",
+    _operation: "exec" | "open",
     contextId: string | undefined,
     contextAttachToken: string | undefined,
     owner: { callerId: string; callerKind: string }
@@ -272,11 +240,7 @@ export async function activate(ctx: ExtensionContext) {
     if (currentInvocationContextId(ctx) === contextId) return;
     if (consumeFreshContextToken(contextAttachToken, owner.callerId, contextId)) return;
     if (sessions.list(owner.callerId).some((session) => session.contextId === contextId)) return;
-    await requireApproval(
-      ctx,
-      operation,
-      buildContextAttachApproval({ contextId, callerId: owner.callerId, operation })
-    );
+    // The context receiver independently enforces context-boundary authority.
   };
   snug = new SnugServer({
     list: (ownerCallerId) => sessions.list(ownerCallerId),
@@ -302,28 +266,7 @@ export async function activate(ctx: ExtensionContext) {
         cwd,
         caller: owner.callerId,
       });
-      try {
-        await requireApproval(
-          ctx,
-          "open",
-          buildOpenApproval({ command, args, cwd, label: commandLine })
-        );
-      } catch (err) {
-        ctx.log.info?.("snug category-c decision", {
-          action: "split",
-          sourceSessionId,
-          decision: "deny",
-          caller: owner.callerId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw err;
-      }
-      ctx.log.info?.("snug category-c decision", {
-        action: "split",
-        sourceSessionId,
-        decision: "allow",
-        caller: owner.callerId,
-      });
+      // A split is subordinate to an already-authorized interactive session.
       const snugEnv = snug.envForSession(cleanEnv({}).effective);
       try {
         const launch = await prepareVscodeShellIntegrationLaunch({
@@ -363,24 +306,6 @@ export async function activate(ctx: ExtensionContext) {
         action: "open-url",
         sourceSessionId: _sessionId,
         url,
-        caller: owner.callerId,
-      });
-      try {
-        await requireApproval(ctx, "open", buildUrlOpenApproval({ url }));
-      } catch (err) {
-        ctx.log.info?.("snug category-c decision", {
-          action: "open-url",
-          sourceSessionId: _sessionId,
-          decision: "deny",
-          caller: owner.callerId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw err;
-      }
-      ctx.log.info?.("snug category-c decision", {
-        action: "open-url",
-        sourceSessionId: _sessionId,
-        decision: "allow",
         caller: owner.callerId,
       });
       sessions.setMetaById(_sessionId, "snugOpenUrl", {
@@ -453,32 +378,13 @@ export async function activate(ctx: ExtensionContext) {
         contextAttachToken: _contextAttachToken,
         ...execReq
       } = parsed;
-      const plan = buildExecPlan({
+      return runExec({
         intent: parsed.intent,
         cwd,
-        environment,
+        env: environment.effective,
         timeoutMs: execReq.timeoutMs,
         ...(execReq.stdin !== undefined ? { stdin: execReq.stdin } : {}),
         maxOutputBytes: execReq.maxOutputBytes,
-      });
-      const planContent = serializeExecPlan(plan);
-      const planDigest = execPlanDigest(planContent);
-      const approval = await requireApproval(ctx, "exec", buildExecApproval(plan));
-      if (approval.kind !== "choice") {
-        throw error("EACCES", "shell.exec denied by user");
-      }
-      const sealed = approval.sealedDetails?.find((detail) => detail.digest === planDigest);
-      if (!sealed || execPlanDigest(sealed.content) !== planDigest) {
-        throw error("EINTEGRITY", "Approved execution plan seal is missing or invalid");
-      }
-      const approvedPlan = sealedExecPlanSchema.parse(JSON.parse(sealed.content));
-      return runExec({
-        intent: approvedPlan.intent,
-        cwd: approvedPlan.cwd,
-        env: Object.fromEntries(approvedPlan.environment.effective),
-        timeoutMs: approvedPlan.timeoutMs,
-        ...(approvedPlan.stdin !== undefined ? { stdin: approvedPlan.stdin } : {}),
-        maxOutputBytes: approvedPlan.maxOutputBytes,
       });
     },
 
@@ -553,16 +459,6 @@ export async function activate(ctx: ExtensionContext) {
         }
       }
       try {
-        await requireApproval(
-          ctx,
-          "open",
-          buildOpenApproval({
-            command,
-            args,
-            cwd,
-            label: parsed.label,
-          })
-        );
         const { env, token } = snug.envForSession(
           cleanEnv({ ...parsed.env, ...handlerEnv }).effective
         );

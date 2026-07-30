@@ -1,4 +1,4 @@
-import { panel, rpc } from "@vibestudio/runtime";
+import { panel, rpc } from "@workspace/runtime";
 import { addAgentToChannel } from "@workspace-skills/agents";
 import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
 

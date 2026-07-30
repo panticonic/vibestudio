@@ -15,6 +15,7 @@
       ]
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "agent.credentials.manage",
@@ -71,15 +72,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -119,8 +111,8 @@
     }
   },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*",
-    "@vibestudio/cdp-client": "workspace:*",
+    "@workspace/runtime": "workspace:*",
+    "@workspace/cdp-client": "workspace:*",
     "@workspace/testkit": "workspace:*"
   }
 }

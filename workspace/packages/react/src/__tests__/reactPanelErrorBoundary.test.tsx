@@ -11,7 +11,7 @@ const runtime = vi.hoisted(() => ({
   onConnectionError: vi.fn(() => vi.fn()),
 }));
 
-vi.mock("@vibestudio/runtime", () => runtime);
+vi.mock("@workspace/runtime", () => runtime);
 
 import { createReactPanelMount } from "../reactPanel";
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   browserData: {},
   callMain: vi.fn(),
   createDurableObjectServiceClient: vi.fn(() => ({ call: vi.fn() })),
@@ -49,7 +49,8 @@ describe("onboarding browser-data component chain", () => {
         stream: vi.fn(async () => new Response()),
       },
       workers: {
-        resolveDurableObject: vi.fn(async () => ({
+        resolveService: vi.fn(async () => ({
+          kind: "durable-object" as const,
           targetId: "do:vibestudio/internal:BrowserDataDO:environment-key",
           objectKey: "environment-key",
         })),
@@ -64,9 +65,6 @@ describe("onboarding browser-data component chain", () => {
           },
         }),
         signal: () => null,
-      },
-      approvals: {
-        request: vi.fn(async () => ({ kind: "choice" as const, choice: "allow" })),
       },
       log: { info: vi.fn() },
       health: { healthy: vi.fn(), degraded: vi.fn(), unhealthy: vi.fn() },

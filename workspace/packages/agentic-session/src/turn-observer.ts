@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@workspace/agentic-core";
-import type { ChannelViewState, ProjectedTurn } from "@vibestudio/agentic-protocol";
+import type { ChannelViewState, ProjectedTurn } from "@workspace/agentic-protocol";
 
 export interface HeadlessTurnSnapshot {
   messages: readonly ChatMessage[];

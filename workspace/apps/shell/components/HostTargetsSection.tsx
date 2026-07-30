@@ -4,7 +4,6 @@ import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import type {
   HostTarget,
   HostTargetCandidate,
-  HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
 } from "@vibestudio/shared/hostTargets";
 import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
@@ -19,7 +18,12 @@ import {
   unitSourceLabel,
   unitSummaryChips,
 } from "@vibestudio/shared/bootstrapLaunchGate";
-import { workspace } from "../shell/client";
+import {
+  buildUnits,
+  hostLaunch,
+  supervisedUnits,
+  workspace,
+} from "../shell/client";
 
 const HOST_TARGETS: HostTarget[] = ["electron", "react-native", "terminal"];
 
@@ -28,8 +32,30 @@ type SelectionState = Record<
   { selection: HostTargetSelection | null; valid: boolean; reason?: string }
 >;
 
-function launchSessionMessage(session: HostTargetLaunchSessionSnapshot): string {
-  return [session.message, session.detail].filter(Boolean).join(" ");
+const SELECTION_STORAGE_KEY = "vibestudio.host-target-selections";
+
+function storedSelections(): Partial<Record<HostTarget, HostTargetSelection>> {
+  try {
+    return JSON.parse(localStorage.getItem(SELECTION_STORAGE_KEY) ?? "{}") as Partial<
+      Record<HostTarget, HostTargetSelection>
+    >;
+  } catch {
+    return {};
+  }
+}
+
+function persistSelections(selections: SelectionState): void {
+  localStorage.setItem(
+    SELECTION_STORAGE_KEY,
+    JSON.stringify(
+      Object.fromEntries(
+        HOST_TARGETS.flatMap((target) => {
+          const selection = selections[target].selection;
+          return selection ? [[target, selection]] : [];
+        })
+      )
+    )
+  );
 }
 
 export function HostTargetsSection() {
@@ -46,7 +72,6 @@ export function HostTargetsSection() {
   const [pinnedRefs, setPinnedRefs] = useState<Record<string, string>>({});
   const [pendingApproval, setPendingApproval] = useState<{
     target: HostTarget;
-    session: HostTargetLaunchSessionSnapshot;
     approvals: PendingUnitBatchApproval[];
   } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -55,20 +80,121 @@ export function HostTargetsSection() {
   const load = useCallback(async () => {
     try {
       setError(null);
-      const loadedCandidates = await Promise.all(
-        HOST_TARGETS.map(
-          async (target) => [target, await workspace.hostTargets.list(target)] as const
+      const [catalog, live, config] = await Promise.all([
+        buildUnits.list(),
+        supervisedUnits.list(),
+        workspace.getConfig(),
+      ]);
+      const apps = catalog.filter(
+        (unit): unit is typeof unit & { kind: "app"; target: HostTarget } =>
+          unit.kind === "app" && unit.target !== null
+      );
+      const versions = new Map(
+        await Promise.all(
+          apps.map(async (unit) => [
+            unit.name,
+            await supervisedUnits.versions(unit.name),
+          ] as const)
         )
       );
-      const loadedSelections = await Promise.all(
-        HOST_TARGETS.map(
-          async (target) => [target, await workspace.hostTargets.getSelection(target)] as const
-        )
-      );
-      setCandidates(
-        Object.fromEntries(loadedCandidates) as Record<HostTarget, HostTargetCandidate[]>
-      );
-      setSelections(Object.fromEntries(loadedSelections) as SelectionState);
+      const declaredTargets =
+        (config as {
+          hostTargets?: Partial<Record<HostTarget, { app?: string }>>;
+        }).hostTargets ?? {};
+      const nextCandidates = Object.fromEntries(
+        HOST_TARGETS.map((target) => [
+          target,
+          apps
+            .filter((unit) => unit.target === target)
+            .map((unit): HostTargetCandidate => {
+              const running = live.find(
+                (entity) =>
+                  entity.identity.kind === "app" &&
+                  (entity.identity.entityId === unit.name || entity.source === unit.source)
+              );
+              const history = versions.get(unit.name);
+              const status: HostTargetCandidate["status"] =
+                running?.status === "running"
+                  ? "running"
+                  : unit.status === "approval-required"
+                    ? "pending-approval"
+                    : unit.status === "ready"
+                      ? "available"
+                      : unit.status === "available"
+                        ? "not-built"
+                        : unit.status;
+              const reasons =
+                target === "electron" && !unit.capabilities.includes("panel-hosting")
+                  ? ["Electron shell apps must declare the panel-hosting capability"]
+                  : [];
+              return {
+                name: unit.name,
+                source: unit.source,
+                displayName: unit.displayName,
+                target,
+                declared: declaredTargets[target]?.app === unit.source,
+                status,
+                activeEv: unit.effectiveVersion,
+                activeBundleKey: unit.activeBuildKey,
+                capabilities: unit.capabilities,
+                canRollback: Boolean(history?.previous.length),
+                previousVersions:
+                  history?.previous.map((version) => ({
+                    activeBundleKey: version.buildKey,
+                    activeEv: version.effectiveVersion,
+                  })) ?? [],
+                lastError: unit.lastError,
+                compatibility: {
+                  selectable: reasons.length === 0,
+                  reasons,
+                  recommended: reasons.length === 0,
+                },
+              };
+            }),
+        ])
+      ) as Record<HostTarget, HostTargetCandidate[]>;
+      setCandidates(nextCandidates);
+      setSelections((current) => {
+        const persisted = storedSelections();
+        const next = Object.fromEntries(
+          HOST_TARGETS.map((target) => {
+            const selected =
+              current[target].selection ??
+              persisted[target] ??
+              (() => {
+                const declared = nextCandidates[target].find((candidate) => candidate.declared);
+                return declared
+                  ? {
+                      workspaceId: "shell",
+                      target,
+                      source: declared.source,
+                      appId: declared.name,
+                      mode: "follow-ref" as const,
+                      updatedAt: Date.now(),
+                      autoSelected: true,
+                    }
+                  : null;
+              })();
+            const valid = Boolean(
+              selected &&
+                nextCandidates[target].some(
+                  (candidate) =>
+                    candidate.name === selected.appId || candidate.source === selected.source
+                )
+            );
+            return [
+              target,
+              {
+                selection: selected,
+                valid,
+                ...(selected && !valid ? { reason: "Selected app is no longer available" } : {}),
+              },
+            ];
+          })
+        ) as SelectionState;
+        persistSelections(next);
+        return next;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -87,11 +213,24 @@ export function HostTargetsSection() {
     setBusy(`${target}:${candidate.name}:select`);
     try {
       setError(null);
-      await workspace.hostTargets.setSelection(target, {
-        source: candidate.source,
-        mode: "follow-ref",
+      setSelections((current) => {
+        const next: SelectionState = {
+          ...current,
+          [target]: {
+            selection: {
+              workspaceId: "shell",
+              target,
+              source: candidate.source,
+              appId: candidate.name,
+              mode: "follow-ref",
+              updatedAt: Date.now(),
+            },
+            valid: true,
+          },
+        };
+        persistSelections(next);
+        return next;
       });
-      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -103,12 +242,25 @@ export function HostTargetsSection() {
     setBusy(`${target}:${candidate.name}:pin:${buildKey}`);
     try {
       setError(null);
-      await workspace.hostTargets.setSelection(target, {
-        source: candidate.source,
-        mode: "pinned-build",
-        buildKey,
+      setSelections((current) => {
+        const next: SelectionState = {
+          ...current,
+          [target]: {
+            selection: {
+              workspaceId: "shell",
+              target,
+              source: candidate.source,
+              appId: candidate.name,
+              mode: "pinned-build",
+              buildKey,
+              updatedAt: Date.now(),
+            },
+            valid: true,
+          },
+        };
+        persistSelections(next);
+        return next;
       });
-      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -122,17 +274,27 @@ export function HostTargetsSection() {
     setBusy(`${target}:${candidate.name}:ref`);
     try {
       setError(null);
-      const prepared = (await workspace.hostTargets.preparePinnedRef(
-        target,
-        candidate.source,
-        ref
-      )) as { buildKey?: string };
+      const prepared = await supervisedUnits.prepare("app", candidate.name, ref);
       if (!prepared.buildKey) throw new Error("Pinned ref build did not return a build key");
-      await workspace.hostTargets.setSelection(target, {
-        source: candidate.source,
-        mode: "pinned-ref",
-        ref,
-        buildKey: prepared.buildKey,
+      setSelections((current) => {
+        const next: SelectionState = {
+          ...current,
+          [target]: {
+            selection: {
+              workspaceId: "shell",
+              target,
+              source: candidate.source,
+              appId: candidate.name,
+              mode: "pinned-ref",
+              ref,
+              buildKey: prepared.buildKey,
+              updatedAt: Date.now(),
+            },
+            valid: true,
+          },
+        };
+        persistSelections(next);
+        return next;
       });
       await load();
     } catch (err) {
@@ -147,18 +309,26 @@ export function HostTargetsSection() {
     try {
       setError(null);
       setPendingApproval(null);
-      const session = await workspace.hostTargets.beginLaunch(target);
-      if (session.status === "approval-required") {
-        setPendingApproval({ target, session, approvals: session.approvals });
+      const selection = selections[target].selection;
+      if (!selection || !selections[target].valid) {
+        throw new Error(`Select a ${targetLabel(target).toLowerCase()} app first.`);
+      }
+      const result = await hostLaunch.launch(target, {
+        releaseId: selection.appId,
+        ...((selection.mode === "pinned-build" || selection.mode === "pinned-ref") &&
+        selection.buildKey
+          ? { buildKey: selection.buildKey }
+          : {}),
+      });
+      if (result.status === "approval-required") {
+        setPendingApproval({ target, approvals: result.approvals });
         setError(
           `Review and approve the pending ${targetLabel(
             target
           ).toLowerCase()} app request to continue.`
         );
-      } else if (session.status === "unavailable" || session.status === "preparing") {
-        setError(launchSessionMessage(session));
-      } else if (session.status === "denied") {
-        setError(`${targetLabel(target)} app startup was denied.`);
+      } else if (result.status !== "ready") {
+        setError(result.reason);
       }
       await load();
     } catch (err) {
@@ -174,26 +344,15 @@ export function HostTargetsSection() {
     setBusy(`${target}:approval:${decision}`);
     try {
       setError(null);
-      const session = await workspace.hostTargets.resolveLaunchSessionApproval(
-        pendingApproval.session.sessionId,
-        decision
-      );
+      await hostLaunch.resolveApprovals(pendingApproval.approvals, decision);
       if (decision === "deny") {
         setPendingApproval(null);
         setError(`${targetLabel(target)} app startup was denied.`);
         await load();
         return;
       }
-      if (session.status === "approval-required") {
-        setPendingApproval({ target, session, approvals: session.approvals });
-        setError(`Another ${targetLabel(target).toLowerCase()} startup approval is pending.`);
-      } else {
-        setPendingApproval(null);
-        if (session.status === "unavailable" || session.status === "preparing") {
-          setError(launchSessionMessage(session));
-        }
-      }
-      await load();
+      setPendingApproval(null);
+      await launch(target);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

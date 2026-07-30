@@ -20,7 +20,7 @@ import { Card, Flex, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { compileComponent, type SandboxOptions } from "@workspace/eval";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
-import { rpc } from "@vibestudio/runtime";
+import { rpc } from "@workspace/runtime";
 import { useIsMobile, useTouchDevice, useViewportHeight } from "@workspace/react";
 import { useDocState } from "./docState";
 

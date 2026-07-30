@@ -1,4 +1,4 @@
-import { extensions } from "@vibestudio/runtime";
+import { extensions } from "@workspace/runtime";
 import type {} from "@workspace-extensions/shell";
 import { useEffect, useMemo } from "react";
 import { SessionStore, sessionIdsConnectKey, useAllSessions } from "./SessionStore.js";

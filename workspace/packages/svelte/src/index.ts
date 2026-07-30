@@ -5,7 +5,7 @@
  * - Auto-mount utilities for Svelte panels
  * - Svelte stores for panel state and RPC
  *
- * Use alongside @vibestudio/runtime for full functionality.
+ * Use alongside @workspace/runtime for full functionality.
  */
 
 export { autoMountSveltePanel, shouldAutoMount } from "./autoMount.js";

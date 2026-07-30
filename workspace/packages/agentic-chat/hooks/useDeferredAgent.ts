@@ -8,7 +8,7 @@ import type {
 } from "@workspace/agentic-core";
 import { isModelUsable, type DefaultAgentConfig } from "@workspace/model-catalog/catalog";
 import type { AttachmentInput, Participant } from "@workspace/pubsub";
-import type { MessageTier } from "@vibestudio/agentic-protocol";
+import type { MessageTier } from "@workspace/agentic-protocol";
 import type {
   ChatInputContextValue,
   ChatMessage,

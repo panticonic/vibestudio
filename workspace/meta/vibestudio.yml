@@ -85,6 +85,9 @@ initPanels:
         run on the selected local or self-hosted server; never claim that every
         operation runs on the user's current machine.
 singletonObjects:
+  - source: workers/workspace-source
+    className: GadWorkspaceDO
+    key: workspace
   - source: workers/model-settings
     className: ModelSettingsDO
     key: workspace-model-settings
@@ -92,6 +95,26 @@ singletonObjects:
     className: TestkitDriverDO
     key: workspace-testkit-driver
 services:
+  - source: workers/workspace-source
+    name: gad.workspace
+    title: Workspace source
+    action: read or change this workspace's semantic source
+    description: Owns semantic source, history, projections, and workspace initialization.
+    presentation:
+      domain: automation
+      verb: manage
+    protocols:
+      - vibestudio.workspace-source.v1
+      - vibestudio.gad.workspace.v1
+    authority:
+      principals:
+        - host
+        - user
+        - code
+        - session
+        - mission
+    durableObject:
+      className: GadWorkspaceDO
   - source: workers/pubsub-channel
     name: channel
     title: Conversations
@@ -173,9 +196,9 @@ providers:
   evalEngine:
     source: "@workspace/eval"
   evalRuntime:
-    source: "@vibestudio/runtime"
+    source: "@workspace/runtime"
   cdpClient:
-    source: "@vibestudio/cdp-client"
+    source: "@workspace/cdp-client"
   browserData:
     extension: extensions/browser-data
   gitInterop:

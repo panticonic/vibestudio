@@ -15,6 +15,7 @@
       ]
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "agent.credentials.manage",
@@ -62,15 +63,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -103,7 +95,7 @@
   "dependencies": {
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
-    "@vibestudio/runtime": "workspace:*"
+    "@workspace/runtime": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^3.2.2"

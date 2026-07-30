@@ -105,7 +105,6 @@ function AppContent() {
           ...common,
           title: location.title,
           slug: location.slug,
-          name: location.name,
           focus: location.focus ?? true,
         });
       } else {
@@ -113,7 +112,6 @@ function AppContent() {
           ...common,
           title: location.title,
           slug: location.slug,
-          name: location.name,
           focus: location.focus ?? true,
         });
       }

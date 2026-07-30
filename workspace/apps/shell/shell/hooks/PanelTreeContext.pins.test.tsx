@@ -1,23 +1,28 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { Provider, createStore, useAtomValue } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Panel } from "@vibestudio/shared/types";
 
 // The shell client facade is mocked so we control the tree + pin sources.
-const getTreeSnapshot = vi.fn();
-const ensureOwnerTree = vi.fn();
+const getRootGroups = vi.fn();
+const getTreePage = vi.fn();
+const getTreePath = vi.fn();
+const searchTree = vi.fn();
 const listPinnedPanelIds = vi.fn();
+const getPresentation = vi.fn();
 const getProfile = vi.fn(() =>
   Promise.resolve({ userId: "alice", handle: "alice", displayName: "Alice", role: "member" })
 );
 vi.mock("../client.js", () => ({
   ACCOUNT_PROFILE_CHANGED_EVENT: "account-profile-changed",
   panel: {
-    getTreeSnapshot: (...args: unknown[]) => getTreeSnapshot(...args),
-    ensureOwnerTree: (...args: unknown[]) => ensureOwnerTree(...args),
+    getRootGroups: (...args: unknown[]) => getRootGroups(...args),
+    getTreePage: (...args: unknown[]) => getTreePage(...args),
+    getTreePath: (...args: unknown[]) => getTreePath(...args),
+    searchTree: (...args: unknown[]) => searchTree(...args),
     listPinnedPanelIds: (...args: unknown[]) => listPinnedPanelIds(...args),
+    getPresentation: (...args: unknown[]) => getPresentation(...args),
   },
   account: {
     getProfile: () => getProfile(),
@@ -26,25 +31,39 @@ vi.mock("../client.js", () => ({
   workspace: {},
 }));
 
-// Capture the `panel-tree-updated` handler so a test can push a fresh snapshot.
+// Capture the `panel-tree-invalidated` handler so a test can push a fresh snapshot.
 let treeUpdateHandler: ((data: unknown) => void) | null = null;
+let presentationChangeHandler: ((data: { revision: number; panelIds: string[] }) => void) | null =
+  null;
 vi.mock("../useShellEvent.js", () => ({
   useShellEvent: (event: string, handler: (data: unknown) => void) => {
-    if (event === "panel-tree-updated") treeUpdateHandler = handler;
+    if (event === "panel-tree-invalidated") treeUpdateHandler = handler;
+  },
+}));
+vi.mock("../useDirectShellEvent.js", () => ({
+  useDirectShellEvent: (
+    event: string,
+    handler: (data: { revision: number; panelIds: string[] }) => void
+  ) => {
+    if (event === "panel-presentation-changed") presentationChangeHandler = handler;
   },
 }));
 
-import { PanelTreeProvider, useRootPanels } from "./PanelTreeContext";
+import {
+  PanelTreeProvider,
+  useDescendantSiblingGroups,
+  useFullPanel,
+  usePanelTree,
+  useRootPanels,
+} from "./PanelTreeContext";
 import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../../state/appModeAtoms";
 
-function panel(id: string): Panel {
-  return {
-    id,
-    title: id,
-    children: [],
-    snapshot: { source: `panels/${id}`, contextId: `ctx-${id}`, options: {} },
-    artifacts: {},
-  };
+type TestOwnerGroup = { ownerUserId: string | null; slotIds: string[] };
+let currentGroups: TestOwnerGroup[] = [];
+let childSlotIds = new Map<string, string[]>();
+
+function setRootGroups(groups: TestOwnerGroup[]) {
+  currentGroups = groups;
 }
 
 function PinProbe() {
@@ -54,11 +73,35 @@ function PinProbe() {
 
 function RootProbe() {
   const { panels, loading } = useRootPanels();
+  const { refreshing, loadMoreRootGroups } = usePanelTree();
   return (
-    <div data-testid="roots" data-loading={loading ? "true" : "false"}>
-      {panels.map((item) => item.id).join(",")}
+    <>
+      <div
+        data-testid="roots"
+        data-loading={loading ? "true" : "false"}
+        data-refreshing={refreshing ? "true" : "false"}
+      >
+        {panels.map((item) => item.id).join(",")}
+      </div>
+      <button type="button" onClick={() => void loadMoreRootGroups()}>
+        More owners
+      </button>
+    </>
+  );
+}
+
+function FullPanelProbe({ panelId }: { panelId: string }) {
+  const { panel, loading } = useFullPanel(panelId);
+  return (
+    <div data-testid="full-panel" data-loading={loading ? "true" : "false"}>
+      {panel ? `${panel.id}:${panel.artifacts.buildState}` : ""}
     </div>
   );
+}
+
+function DescendantProbe({ panelId }: { panelId: string }) {
+  const { groups } = useDescendantSiblingGroups(panelId);
+  return <div data-testid="descendant">{groups.map((group) => group.selectedId).join(",")}</div>;
 }
 
 function renderProvider() {
@@ -74,25 +117,66 @@ function renderProvider() {
   return store;
 }
 
-function emitTreeSnapshot(revision: number, rootPanels: Panel[]) {
+function emitInvalidation(revision: number) {
   act(() => {
-    treeUpdateHandler?.({ revision, forest: [{ owner: "", rootPanels }] });
+    treeUpdateHandler?.({
+      revision,
+      reset: true,
+      groups: [],
+      changedSlotIds: [],
+      removedSlotIds: [],
+    });
   });
-}
-
-function emitForest(revision: number, forest: Array<{ owner: string; rootPanels: Panel[] }>) {
-  act(() => treeUpdateHandler?.({ revision, forest }));
 }
 
 beforeEach(() => {
   treeUpdateHandler = null;
-  getTreeSnapshot.mockReset();
-  // Most tests drive the event path explicitly; leave the startup recovery
-  // read pending so it cannot race those snapshots.
-  getTreeSnapshot.mockImplementation(() => new Promise(() => {}));
-  ensureOwnerTree.mockReset();
-  ensureOwnerTree.mockImplementation(() => new Promise(() => {}));
+  presentationChangeHandler = null;
+  currentGroups = [];
+  childSlotIds = new Map();
+  getRootGroups.mockReset();
+  getRootGroups.mockImplementation(() =>
+    Promise.resolve({
+      revision: 1,
+      groups: currentGroups.map((group) => ({
+        ownerUserId: group.ownerUserId,
+        rootCount: group.slotIds.length,
+      })),
+      nextCursor: null,
+    })
+  );
+  getTreePage.mockReset();
+  getTreePage.mockImplementation(
+    ({
+      group,
+    }: {
+      group: { kind: string; ownerUserId?: string | null; parentSlotId?: string };
+    }) => {
+      const slotIds =
+        group.kind === "roots"
+          ? (currentGroups.find((item) => item.ownerUserId === group.ownerUserId)?.slotIds ?? [])
+          : (childSlotIds.get(group.parentSlotId ?? "") ?? []);
+      return Promise.resolve({
+        revision: 1,
+        group,
+        nodes: slotIds.map((slotId, index) => ({
+          slotId,
+          parentSlotId: group.kind === "children" ? (group.parentSlotId ?? null) : null,
+          ownerUserId: group.ownerUserId ?? null,
+          title: slotId,
+          createdAt: slotIds.length - index,
+          childCount: childSlotIds.get(slotId)?.length ?? 0,
+        })),
+        nextCursor: null,
+      });
+    }
+  );
+  getTreePath.mockReset();
+  getTreePath.mockResolvedValue(null);
+  searchTree.mockReset();
+  searchTree.mockResolvedValue({ revision: 1, hits: [], nextCursor: null });
   listPinnedPanelIds.mockReset();
+  getPresentation.mockReset();
   getProfile.mockClear();
 });
 
@@ -101,38 +185,102 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("useFullPanel local presentation", () => {
+  it("renders the Electron host's terminal presentation projection", async () => {
+    getPresentation.mockResolvedValue({
+      id: "panel:tree/a",
+      title: "Ready panel",
+      buildKey: "b".repeat(64),
+      parentId: null,
+      position: 0,
+      selectedChildId: null,
+      children: [],
+      snapshot: {
+        source: "panels/ready",
+        contextId: "context-a",
+        options: { ref: "main" },
+      },
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "http://localhost/panel",
+      },
+      hostViewRevision: 3,
+    });
+    render(<FullPanelProbe panelId="panel:tree/a" />);
+
+    expect(screen.getByTestId("full-panel").dataset["loading"]).toBe("true");
+    expect(getPresentation).toHaveBeenCalledWith("panel:tree/a");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:ready")
+    );
+    expect(screen.getByTestId("full-panel").dataset["loading"]).toBe("false");
+  });
+
+  it("applies a pushed local projection change while an earlier read is still building", async () => {
+    const building = {
+      id: "panel:tree/a",
+      title: "Panel",
+      buildKey: "b".repeat(64),
+      parentId: null,
+      position: 0,
+      selectedChildId: null,
+      children: [],
+      snapshot: { source: "panels/ready", contextId: "context-a", options: {} },
+      artifacts: { buildState: "building" },
+      hostViewRevision: 2,
+    };
+    getPresentation
+      .mockResolvedValueOnce(building)
+      .mockResolvedValue({ ...building, artifacts: { buildState: "ready", htmlPath: "/ready" } });
+    render(<FullPanelProbe panelId="panel:tree/a" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:building")
+    );
+
+    act(() => {
+      presentationChangeHandler?.({ revision: 3, panelIds: ["panel:tree/a"] });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:ready")
+    );
+  });
+});
+
 describe("PanelTreeProvider pin reconciliation", () => {
   it("seeds the pin atom from listPinnedPanelIds on the initial snapshot", async () => {
     listPinnedPanelIds.mockResolvedValue(["panel:tree/a"]);
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:tree/a"] }]);
 
     renderProvider();
-    emitTreeSnapshot(1, [panel("panel:tree/a")]);
 
     await waitFor(() => expect(screen.getByTestId("pins").textContent).toBe("panel:tree/a"));
-    expect(screen.getByTestId("roots").dataset["loading"]).toBe("true");
+    expect(screen.getByTestId("roots").dataset["loading"]).toBe("false");
   });
 
   it("re-seeds on every tree update so a reused slot id drops its stale pin", async () => {
     // Initial: panel x is loaded and pinned.
     listPinnedPanelIds.mockResolvedValueOnce(["panel:tree/x"]);
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:tree/x"] }]);
 
     renderProvider();
-    emitTreeSnapshot(1, [panel("panel:tree/x")]);
     await waitFor(() => expect(screen.getByTestId("pins").textContent).toBe("panel:tree/x"));
 
     // A later snapshot (x removed, a new panel under a *reused* slot id appears).
     // The main process is the source of truth and now reports no pins → the
     // atom must reconcile to empty rather than keep the stale 📌.
     listPinnedPanelIds.mockResolvedValue([]);
-    emitTreeSnapshot(2, [panel("panel:tree/y")]);
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:tree/y"] }]);
+    emitInvalidation(2);
 
     await waitFor(() => expect(screen.getByTestId("pins").textContent).toBe(""));
   });
 
   it("discards a reconcile response superseded by a local toggle (no clobber)", async () => {
     listPinnedPanelIds.mockResolvedValueOnce([]); // mount reconcile → empty
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:tree/x"] }]);
     const store = renderProvider();
-    emitTreeSnapshot(1, [panel("panel:tree/x")]);
     await waitFor(() => expect(screen.getByTestId("pins").textContent).toBe(""));
 
     // The next reconcile (from a tree update) hangs until we resolve it.
@@ -143,7 +291,8 @@ describe("PanelTreeProvider pin reconciliation", () => {
           resolveList = res;
         })
     );
-    emitTreeSnapshot(2, [panel("panel:tree/x")]);
+    emitInvalidation(2);
+    await waitFor(() => expect(listPinnedPanelIds).toHaveBeenCalledTimes(2));
 
     // While that reconcile is in flight, a local toggle pins x and bumps the seq.
     act(() => {
@@ -160,34 +309,143 @@ describe("PanelTreeProvider pin reconciliation", () => {
     expect(screen.getByTestId("pins").textContent).toBe("panel:tree/x");
   });
 
-  it("loads the authoritative forest on mount to trigger account first attach", async () => {
+  it("loads bounded owner groups and root pages on mount after account attach", async () => {
     listPinnedPanelIds.mockResolvedValue([]);
-    const snapshot = {
-      revision: 1,
-      forest: [{ owner: "alice", rootPanels: [panel("panel:tree/a")] }],
-    };
-    ensureOwnerTree.mockResolvedValue(snapshot);
-    getTreeSnapshot.mockResolvedValue(snapshot);
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:tree/a"] }]);
 
     renderProvider();
 
     await waitFor(() => expect(screen.getByTestId("roots").textContent).toBe("panel:tree/a"));
     expect(screen.getByTestId("roots").dataset["loading"]).toBe("false");
-    expect(ensureOwnerTree).toHaveBeenCalledOnce();
-    expect(getTreeSnapshot).toHaveBeenCalledOnce();
+    expect(getRootGroups).toHaveBeenCalledOnce();
+    expect(getTreePage).toHaveBeenCalledOnce();
     expect(listPinnedPanelIds).toHaveBeenCalled();
   });
 
   it("orders the verified account's owner group before other members", async () => {
     listPinnedPanelIds.mockResolvedValue([]);
-    renderProvider();
-    emitForest(1, [
-      { owner: "bob", rootPanels: [panel("bob-root")] },
-      { owner: "alice", rootPanels: [panel("alice-root")] },
+    setRootGroups([
+      { ownerUserId: "bob", slotIds: ["bob-root"] },
+      { ownerUserId: "alice", slotIds: ["alice-root"] },
     ]);
+    renderProvider();
 
     await waitFor(() =>
       expect(screen.getByTestId("roots").textContent).toBe("alice-root,bob-root")
     );
+  });
+
+  it("hydrates root pages for owner groups discovered after the first page", async () => {
+    listPinnedPanelIds.mockResolvedValue([]);
+    getRootGroups
+      .mockResolvedValueOnce({
+        revision: 1,
+        groups: [{ ownerUserId: "alice", rootCount: 1 }],
+        nextCursor: "owners:page-2",
+      })
+      .mockResolvedValueOnce({
+        revision: 1,
+        groups: [{ ownerUserId: "bob", rootCount: 1 }],
+        nextCursor: null,
+      });
+    getTreePage.mockImplementation(
+      ({ group }: { group: { kind: string; ownerUserId?: string | null } }) =>
+        Promise.resolve({
+          revision: 1,
+          group,
+          nodes:
+            group.kind === "roots"
+              ? [
+                  {
+                    slotId: `${group.ownerUserId}-root`,
+                    parentSlotId: null,
+                    ownerUserId: group.ownerUserId ?? null,
+                    title: `${group.ownerUserId}-root`,
+                    createdAt: 1,
+                    childCount: 0,
+                  },
+                ]
+              : [],
+          nextCursor: null,
+        })
+    );
+
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId("roots").textContent).toBe("alice-root"));
+
+    fireEvent.click(screen.getByRole("button", { name: "More owners" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("roots").textContent).toBe("alice-root,bob-root")
+    );
+    expect(getTreePage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        group: { kind: "roots", ownerUserId: "bob" },
+      })
+    );
+  });
+
+  it("publishes refresh state synchronously with cache invalidation", async () => {
+    listPinnedPanelIds.mockResolvedValue([]);
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:tree/x"] }]);
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId("roots").textContent).toBe("panel:tree/x"));
+
+    let resolveGroups: (value: {
+      revision: number;
+      groups: Array<{ ownerUserId: string | null; rootCount: number }>;
+      nextCursor: null;
+    }) => void = () => {};
+    getRootGroups.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveGroups = resolve;
+        })
+    );
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:tree/y"] }]);
+    emitInvalidation(2);
+
+    expect(screen.getByTestId("roots").dataset["refreshing"]).toBe("true");
+    await waitFor(() => expect(getRootGroups).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveGroups({
+        revision: 2,
+        groups: [{ ownerUserId: "alice", rootCount: 1 }],
+        nextCursor: null,
+      });
+    });
+    await waitFor(() => expect(screen.getByTestId("roots").textContent).toBe("panel:tree/y"));
+    expect(screen.getByTestId("roots").dataset["refreshing"]).toBe("false");
+  });
+});
+
+describe("PanelTreeProvider local descendant selection", () => {
+  it("uses the host-selected child and updates it without reloading the semantic tree", async () => {
+    listPinnedPanelIds.mockResolvedValue([]);
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:root"] }]);
+    childSlotIds.set("panel:root", ["panel:first", "panel:selected"]);
+    getPresentation.mockResolvedValue({
+      id: "panel:root",
+      selectedChildId: "panel:selected",
+    });
+
+    render(
+      <PanelTreeProvider>
+        <DescendantProbe panelId="panel:root" />
+      </PanelTreeProvider>
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("descendant").textContent).toBe("panel:selected")
+    );
+    getPresentation.mockResolvedValue({
+      id: "panel:root",
+      selectedChildId: "panel:first",
+    });
+    act(() => {
+      presentationChangeHandler?.({ revision: 2, panelIds: ["panel:root"] });
+    });
+    await waitFor(() => expect(screen.getByTestId("descendant").textContent).toBe("panel:first"));
   });
 });

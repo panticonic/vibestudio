@@ -93,8 +93,10 @@ export function PaneContent({
     fullPanel?.artifacts?.viewFailure,
   ]);
 
-  // Keyed on (panelId, resident), not panelId alone: un-parking must re-run
-  // loading because a parked panel may have been GC-unloaded (§5.4).
+  // Reconcile on immutable runtime identity as well as residency. Panel
+  // preparation and lease assignment are independent: the first pass may
+  // intentionally create an about:blank host, and the build-key transition is
+  // the canonical signal to upgrade that same host to real panel content.
   useEffect(() => {
     if (!resident) return;
     void panelService
@@ -107,11 +109,19 @@ export function PaneContent({
       .catch((error) => {
         console.error("Failed to ensure panel is loaded", error);
       });
-  }, [panelId, resident]);
+  }, [panelId, resident, fullPanel?.buildKey]);
 
   if (!fullPanel) {
     return (
-      <Flex direction="column" align="center" justify="center" gap="3" height="100%">
+      <Flex
+        data-panel-content-state="loading"
+        data-panel-id={panelId}
+        direction="column"
+        align="center"
+        justify="center"
+        gap="3"
+        height="100%"
+      >
         <VibestudioLogo size={56} variant="symbol" />
         <Spinner size="3" />
         <Text>Loading panel...</Text>
@@ -122,7 +132,16 @@ export function PaneContent({
   const artifacts = fullPanel.artifacts;
   if (unresponsive) {
     return (
-      <Flex direction="column" align="center" justify="center" height="100%" gap="3" p="4">
+      <Flex
+        data-panel-content-state="unresponsive"
+        data-panel-id={panelId}
+        direction="column"
+        align="center"
+        justify="center"
+        height="100%"
+        gap="3"
+        p="4"
+      >
         <Text size="4" weight="bold">
           This panel is not responding
         </Text>
@@ -150,7 +169,16 @@ export function PaneContent({
   const leasedElsewhere = leasedElsewhereInfo(panelId, runtimeLease, fullPanel.state?.runtime);
   if (leasedElsewhere) {
     return (
-      <Flex direction="column" align="center" justify="center" height="100%" gap="3" p="4">
+      <Flex
+        data-panel-content-state="leased-elsewhere"
+        data-panel-id={panelId}
+        direction="column"
+        align="center"
+        justify="center"
+        height="100%"
+        gap="3"
+        p="4"
+      >
         <Text size="4" weight="bold">
           Running on {leasedElsewhere.holderLabel}
         </Text>
@@ -183,7 +211,15 @@ export function PaneContent({
   if (panelError) {
     const isBuildFailure = Boolean(artifacts?.error);
     return (
-      <Flex direction="column" align="center" justify="center" height="100%" p="4">
+      <Flex
+        data-panel-content-state="failed"
+        data-panel-id={panelId}
+        direction="column"
+        align="center"
+        justify="center"
+        height="100%"
+        p="4"
+      >
         <Text color="red" size="4" weight="bold" mb="2">
           {isBuildFailure ? "Panel build failed" : "Panel failed to load"}
         </Text>
@@ -204,7 +240,17 @@ export function PaneContent({
 
   if (!artifacts?.htmlPath) {
     return (
-      <Flex direction="column" align="center" justify="center" height="100%">
+      <Flex
+        data-panel-content-state="preparing"
+        data-panel-id={panelId}
+        data-panel-build-key={fullPanel.buildKey ?? ""}
+        data-panel-build-state={artifacts?.buildState ?? ""}
+        data-panel-runtime-phase={artifacts?.buildProgress ?? ""}
+        direction="column"
+        align="center"
+        justify="center"
+        height="100%"
+      >
         <Spinner size="3" />
         <Text mt="3">{"Preparing panel..."}</Text>
         {artifacts?.buildProgress ? (
@@ -238,7 +284,9 @@ export function PaneContent({
   if (!resident) {
     // Parked: the native slot is cleared; keep lease/timers mounted but render
     // no surface so nothing binds (§5.4).
-    return <Box style={{ flex: "1 1 0" }} />;
+    return (
+      <Box data-panel-content-state="parked" data-panel-id={panelId} style={{ flex: "1 1 0" }} />
+    );
   }
 
   return (
@@ -253,6 +301,7 @@ export function PaneContent({
         artifacts.htmlPath ?? "",
         artifacts.buildRevision ?? "",
         artifacts.buildState ?? "",
+        fullPanel.hostViewRevision ?? "",
       ].join("|")}
       focused={focused}
       layoutEpoch={layoutEpoch}

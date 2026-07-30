@@ -23,12 +23,13 @@
     },
     "exposeModules": [
       "@earendil-works/pi-ai",
-      "@vibestudio/runtime",
+      "@workspace/runtime",
       "@workspace/pubsub",
       "@workspace/gmail",
       "zod"
     ],
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "accounts.connect",
@@ -41,15 +42,6 @@
         },
         {
           "capability": "agent.credentials.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "automations.register",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -103,15 +95,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "user-approval.request",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -137,6 +120,15 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ]
     }
@@ -145,9 +137,9 @@
     "@earendil-works/pi-ai": "^0.82.0",
     "@vibestudio/shared": "workspace:*",
     "@vibestudio/trajectory-identity": "workspace:*",
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
-    "@vibestudio/agentic-protocol": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
     "@workspace/gmail": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/harness": "workspace:*",

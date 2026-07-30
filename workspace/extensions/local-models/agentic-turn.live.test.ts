@@ -16,8 +16,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { GadWorkspaceDO } from "@workspace-workers/workspace-source";
 import { PubSubChannel } from "../../workers/pubsub-channel/channel-do.js";
 import { activate as activateLocalModels } from "./index.js";
 import { AgentVesselBase } from "../../packages/agentic-do/src/agent-vessel.js";
@@ -32,7 +32,7 @@ const CHANNEL = "live-local-chat";
 // callback routing) by the "do:" prefix (pubsub types.ts:79).
 const AGENT_PID = "do:test:LiveVessel:agent-live";
 const USER_PID = "panel:user";
-const GAD_TARGET = "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
+const GAD_TARGET = "do:workers/workspace-source:GadWorkspaceDO:workspace";
 const CHANNEL_TARGET = `do:workers/pubsub-channel:PubSubChannel:${CHANNEL}`;
 const AGENTIC_KIND = "agentic.trajectory.v1/event";
 
@@ -134,7 +134,7 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
       let envelopesDelivered = 0;
       const deliveredEnvelopes: Array<Record<string, unknown>> = [];
       const gad = await createTestDO(GadWorkspaceDO, {
-        __objectKey: "workspace-semantic-control-plane",
+        __objectKey: "workspace",
       });
       const channel = await createTestDO(PubSubChannel, { __objectKey: CHANNEL });
       const blobs = new Map<string, string>();
@@ -186,7 +186,7 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
             kind: "durable-object",
             source: "vibestudio/internal",
             className: "GadWorkspaceDO",
-            objectKey: "workspace-semantic-control-plane",
+            objectKey: "workspace",
             targetId: GAD_TARGET,
           };
         }

@@ -17,7 +17,7 @@ import {
   type MessageId,
   type MessageRole,
   type TurnId,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 
 function toolFailure(operation: string, message: string) {
   return agentToolFailureFromUnknown({ message }, { operation, stage: "test" });

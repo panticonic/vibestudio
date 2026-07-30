@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   runtimeOpenPanel: vi.fn(),
 }));
 
-vi.mock("@vibestudio/runtime", () => ({
+vi.mock("@workspace/runtime", () => ({
   openPanel: mocks.runtimeOpenPanel,
   panelTree: {
     self() {
@@ -12,6 +12,7 @@ vi.mock("@vibestudio/runtime", () => ({
     },
   },
 }));
+vi.mock("./cdp.js", () => ({ withCdpSession: vi.fn() }));
 
 describe("testkit panel helpers", () => {
   beforeEach(() => {

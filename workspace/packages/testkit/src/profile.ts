@@ -6,7 +6,7 @@
  * Chrome DevTools Performance panel as-is. Artifacts are written to context
  * fs via profiles-store; only compact ProfileRefs travel through eval.
  */
-import type { PanelHandle } from "@vibestudio/runtime";
+import type { PanelHandle } from "@workspace/runtime";
 import { rawCdpSession, type RawCdpSession } from "./cdp.js";
 import { cpuProfileRef, topFunctions, type ProfileRef, type V8Profile } from "./profile-core.js";
 import { profilePath, saveProfile } from "./profiles-store.js";

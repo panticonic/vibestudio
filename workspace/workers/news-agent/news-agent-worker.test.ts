@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { rpcMethodAuthority } from "@vibestudio/rpc";
-import { createTestDO } from "@vibestudio/runtime/worker/test-utils";
+import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { Fetcher } from "@workspace/feeds";
 import { articleId } from "@workspace/feeds";
 import type { NewsBriefingCardState } from "@workspace/feeds/card-types";
