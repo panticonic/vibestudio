@@ -242,7 +242,8 @@ export const templateLocatorSchema = z.union([
   z
     .object({
       catalogId: z.string().trim().min(1),
-      registryRevision: z.string().trim().min(1),
+      registryCommit: WorkspaceGitCommitSchema,
+      registrySnapshot: WorkspaceGitSnapshotSchema,
     })
     .strict(),
 ]);
@@ -271,12 +272,21 @@ export const templateCatalogSnapshotSchema = z
     revision: z.string().trim().min(1),
     systemEpoch: z.number().int().nonnegative(),
     entries: z.array(catalogEntrySchema),
+    coordinates: z
+      .object({
+        url: z.string().trim().min(1),
+        ref: z.string().trim().min(1),
+        commit: WorkspaceGitCommitSchema,
+        snapshot: WorkspaceGitSnapshotSchema,
+      })
+      .strict(),
     source: z.enum(["verified", "cache"]),
     stale: z.boolean(),
     verifiedAt: z.string().datetime(),
     refreshError: z.string().optional(),
   })
   .strict();
+export type TemplateCatalogSnapshot = z.infer<typeof templateCatalogSnapshotSchema>;
 
 const updateCandidateSchema = z
   .object({
@@ -456,7 +466,14 @@ export const templatesMethods = defineServiceMethods({
       z
         .object({
           operationId: z.string(),
-          kind: z.enum(["add", "pull", "remove", "recompose", "adopt-bootstrap"]),
+          kind: z.enum([
+            "add",
+            "pull",
+            "remove",
+            "recompose",
+            "adopt-bootstrap",
+            "publish-authoring",
+          ]),
           contextId: z.string(),
           state: z.enum(["pending", "reviewing"]),
           fingerprint: digest,

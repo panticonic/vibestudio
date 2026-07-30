@@ -14,21 +14,54 @@
       "providerContracts": {
         "gitInterop": {
           "methods": [
+            "setSharedRemote",
+            "removeSharedRemote",
+            "setUpstream",
+            "removeUpstream",
+            "detachUpstream",
+            "setAutoPush",
             "upstreamStatus",
             "pushUpstream",
             "pullUpstream",
             "publishRepo",
             "commitMapping",
-            "pushTemplateContribution",
-            "publishTemplate",
+            "importProject",
             "cloneRepo",
             "remoteDefaultBranch",
             "reconcileUpstreams"
           ]
         }
+      },
+      "methodAuthority": {
+        "retryUpstreamPush": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "pauseAutoPush": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "openGitTab": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "suggestTemplateContribution": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "publishTemplate": {
+          "effect": {
+            "kind": "open"
+          }
+        }
       }
     },
     "authority": {
+      "provides": [],
       "requests": [
         {
           "capability": "context.boundary",
@@ -59,24 +92,6 @@
         },
         {
           "capability": "credential.use",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "git.publish",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "git.remotes.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -122,6 +137,15 @@
         },
         {
           "capability": "workspace-service:models",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.config.apply",
           "resource": {
             "kind": "prefix",
             "prefix": ""

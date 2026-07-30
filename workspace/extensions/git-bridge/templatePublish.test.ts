@@ -95,6 +95,7 @@ function publicationInput(
     version: "1.0.0",
     manifest,
     manifestDigest: `v1-sha256:${sha256Hex(new TextEncoder().encode(manifest))}`,
+    validatedParents: [],
     parts: [{ repoPath: "panels/news", subdir: "panels/news" }],
     destination: {
       provider: "template-publish-test",
@@ -381,6 +382,7 @@ describe("TemplatePublishEngine", () => {
 
     expect(result.snapshot).toBe(consumer.snapshot);
     expect(consumer.files.map((file) => file.path)).toEqual([
+      "meta/template-authoring-provenance.json",
       "meta/template.yml",
       "panels/news/index.ts",
     ]);

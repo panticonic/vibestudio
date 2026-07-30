@@ -56,7 +56,7 @@ converted into a second provenance model.
 
 ## Use the public API
 
-Workspace code uses the typed `git` namespace from `@vibestudio/runtime`.
+Workspace code uses the typed `git` namespace from `@workspace/runtime`.
 Command-line workflows use `vibestudio vcs git ...`. Both reach the configured
 `gitInterop` provider. Userland code must not call the extension through
 `extensions.invoke` or hard-code its package name.
@@ -69,7 +69,7 @@ an explicit context ID. The `git` runtime namespace below starts only after the
 desired snapshot is already protected main.
 
 ```ts
-import { git } from "@vibestudio/runtime";
+import { git } from "@workspace/runtime";
 
 await git.setSharedRemote("projects/bgkit", {
   name: "origin",
@@ -284,7 +284,10 @@ describe semantic/CAS source, not the Git checkout.
 Useful diagnostics:
 
 ```ts
-await workspace.units.logs("@workspace-extensions/git-bridge");
+const live = await runtime.supervision.list({ kind: "extension" });
+const bridge = live.find((entry) => entry.source === "extensions/git-bridge");
+if (!bridge) throw new Error("Git bridge is not live");
+await runtime.supervision.logs(bridge.identity, { limit: 100 });
 await serverLog.query({ tag: "BuildV2" });
 ```
 
@@ -312,21 +315,22 @@ await serverLog.query({ tag: "BuildV2" });
 Preserve actionable states such as `auth-failed` and `diverged`; do not flatten
 them into a generic failure or silently retry with broader authority.
 
-The provider-side convergence method is `reconcileUpstreams(repoPaths)`.
-Config writes and protected-main advances both feed it. Do not reintroduce
-`onMainAdvanced`, direct service-to-provider calls from config handlers, or an
-optional legacy import-evidence result.
+The bridge observes the domain-neutral `workspace:protected-refs-changed` event
+and feeds `reconcileUpstreams(repoPaths)` itself. Git configuration is prepared
+in this extension and applied through the digest-bound
+`workspace.applyPreparedConfig` primitive. Do not reintroduce a host Git service,
+host-side config callbacks, or an optional import-evidence result.
 
 ## Development checklist
 
 When changing Git Bridge behavior, inspect the full path:
 
 - `packages/service-schemas/src/gitInterop.ts`
-- `src/server/services/gitInteropService.ts`
+- `src/server/workspaceConfigWriter.ts`
 - `workspace/extensions/git-bridge/index.ts`
 - `workspace/extensions/git-bridge/bridge.ts`
 - `workspace/extensions/git-bridge/upstream.ts`
-- `packages/runtime/src/shared/git.ts`
+- `workspace/packages/runtime/src/shared/git.ts`
 - `docs/git-upstream.md`
 
 Run focused verification:
@@ -335,7 +339,8 @@ Run focused verification:
 pnpm vitest run workspace/extensions/git-bridge/bridge.test.ts \
   workspace/extensions/git-bridge/upstream.test.ts
 pnpm vitest run packages/service-schemas/src/gitInterop.test.ts \
-  src/server/services/gitInteropService.test.ts \
+  packages/workspace/src/preparedConfig.test.ts \
+  src/server/workspaceConfigWriter.test.ts \
   src/cli/agent/vcsGitCommands.test.ts
 pnpm type-check
 pnpm check:agent-docs

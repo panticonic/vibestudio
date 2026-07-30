@@ -15,6 +15,7 @@ import type {
 import { discoverRepos } from "./vcsHost/repoDiscovery.js";
 
 const CREATION_DESCRIPTOR_PATH = "workspace-creation/v1.json";
+const MATERIALIZATION_RECEIPT_PATH = "workspace-creation/materialization-v1.json";
 const WORKSPACE_MANIFEST_PATH = "meta/vibestudio.yml";
 
 export interface RootTemplateRepository {
@@ -32,6 +33,7 @@ export interface PreparedRootTemplateInitialization {
 export interface WorkspaceRootTemplateBootstrapDeps {
   workspaceId: string;
   statePath: string;
+  sourcePath: string;
   acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
 }
 
@@ -80,19 +82,47 @@ export function enumerateRootTemplateRepositories(
  */
 export class WorkspaceRootTemplateBootstrap {
   private readonly descriptorPath: string;
+  private preparedInitialization: PreparedRootTemplateInitialization | null = null;
+  private acquiredSnapshot: ExactGitSnapshot | null = null;
 
   constructor(private readonly deps: WorkspaceRootTemplateBootstrapDeps) {
     this.descriptorPath = path.join(deps.statePath, CREATION_DESCRIPTOR_PATH);
   }
 
-  async prepareInitialization(): Promise<PreparedRootTemplateInitialization | null> {
+  /**
+   * Ensure the exact root is present for the first startup. Once the local
+   * materialization receipt exists, restart no longer depends on the original
+   * remote template being reachable.
+   */
+  async prepareSource(): Promise<WorkspaceTemplatePin | null> {
     const descriptor = this.readDescriptor();
     if (!descriptor) return null;
-    const snapshot = await this.deps.acquire(descriptor.rootTemplate);
-    if (
-      snapshot.commit !== descriptor.rootTemplate.commit ||
-      snapshot.snapshot !== descriptor.rootTemplate.snapshot
-    ) {
+    if (this.preparedInitialization) return this.preparedInitialization.pin;
+    if (this.validateMaterializedSource(descriptor.rootTemplate)) {
+      return descriptor.rootTemplate;
+    }
+    this.preparedInitialization = await this.acquireInitialization(descriptor.rootTemplate);
+    this.materializeExactSource(this.acquiredSnapshot!);
+    return this.preparedInitialization.pin;
+  }
+
+  async prepareInitialization(): Promise<PreparedRootTemplateInitialization | null> {
+    const pin = await this.prepareSource();
+    if (!pin) return null;
+    if (!this.preparedInitialization) {
+      // Crash recovery after source materialization but before the provider
+      // recorded its initialization receipt still needs the exact repository
+      // plan. This is the only restart path that reacquires the root.
+      this.preparedInitialization = await this.acquireInitialization(pin);
+    }
+    return this.preparedInitialization;
+  }
+
+  private async acquireInitialization(
+    pin: WorkspaceTemplatePin
+  ): Promise<PreparedRootTemplateInitialization> {
+    const snapshot = await this.deps.acquire(pin);
+    if (snapshot.commit !== pin.commit || snapshot.snapshot !== pin.snapshot) {
       throw new Error(
         `Root template acquisition returned coordinates different from the creation descriptor`
       );
@@ -107,10 +137,95 @@ export class WorkspaceRootTemplateBootstrap {
     if (!repositories.some((repository) => repository.repoPath === "meta")) {
       throw new Error(`Root template has no importable meta repository`);
     }
+    this.acquiredSnapshot = snapshot;
     return {
-      pin: descriptor.rootTemplate,
+      pin,
       repositories,
     };
+  }
+
+  private validateMaterializedSource(pin: WorkspaceTemplatePin): boolean {
+    const receiptPath = path.join(this.deps.statePath, MATERIALIZATION_RECEIPT_PATH);
+    const expectedReceipt = {
+      version: 1,
+      commit: pin.commit,
+      snapshot: pin.snapshot,
+    };
+    if (!fs.existsSync(receiptPath)) return false;
+    const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8")) as unknown;
+    if (canonicalJsonValue(receipt) !== canonicalJsonValue(expectedReceipt)) {
+      throw new Error("Workspace root materialization receipt does not match its exact pin");
+    }
+    const manifestPath = path.join(this.deps.sourcePath, WORKSPACE_MANIFEST_PATH);
+    if (!fs.existsSync(manifestPath)) {
+      throw new Error("Workspace root materialization receipt exists but its source is missing");
+    }
+    parseWorkspaceConfigContentWithId(fs.readFileSync(manifestPath, "utf8"), this.deps.workspaceId);
+    return true;
+  }
+
+  private materializeExactSource(snapshot: ExactGitSnapshot): void {
+    const receiptPath = path.join(this.deps.statePath, MATERIALIZATION_RECEIPT_PATH);
+    const expectedReceipt = {
+      version: 1,
+      commit: snapshot.commit,
+      snapshot: snapshot.snapshot,
+    };
+    const parent = path.dirname(this.deps.sourcePath);
+    const basename = path.basename(this.deps.sourcePath);
+    const operationKey = snapshot.commit.slice(0, 16);
+    const staging = path.join(parent, `.${basename}.bootstrap-${operationKey}`);
+    const backup = path.join(parent, `.${basename}.pre-bootstrap-${operationKey}`);
+    this.recoverMaterializationPaths(staging, backup);
+    if (fs.existsSync(staging)) {
+      fs.rmSync(staging, { recursive: true, force: true });
+    }
+    fs.mkdirSync(staging, { recursive: false });
+    for (const file of snapshot.files) {
+      const destination = safeSnapshotDestination(staging, file.path);
+      const bytes = snapshot.readFile(file.path);
+      if (!bytes) throw new Error(`Exact root snapshot cannot read ${file.path}`);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, bytes, {
+        mode: file.mode === 0o755 ? 0o755 : 0o644,
+        flag: "wx",
+      });
+    }
+    parseWorkspaceConfigContentWithId(
+      fs.readFileSync(path.join(staging, WORKSPACE_MANIFEST_PATH), "utf8"),
+      this.deps.workspaceId
+    );
+    if (fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
+    fs.renameSync(this.deps.sourcePath, backup);
+    try {
+      fs.renameSync(staging, this.deps.sourcePath);
+    } catch (error) {
+      if (!fs.existsSync(this.deps.sourcePath) && fs.existsSync(backup)) {
+        fs.renameSync(backup, this.deps.sourcePath);
+      }
+      throw error;
+    }
+    fs.rmSync(backup, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+    const temporaryReceipt = `${receiptPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporaryReceipt, `${JSON.stringify(expectedReceipt, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    fs.renameSync(temporaryReceipt, receiptPath);
+  }
+
+  private recoverMaterializationPaths(staging: string, backup: string): void {
+    if (!fs.existsSync(this.deps.sourcePath) && fs.existsSync(staging)) {
+      fs.renameSync(staging, this.deps.sourcePath);
+    }
+    if (!fs.existsSync(this.deps.sourcePath) && fs.existsSync(backup)) {
+      fs.renameSync(backup, this.deps.sourcePath);
+    }
+    if (fs.existsSync(this.deps.sourcePath) && fs.existsSync(backup)) {
+      fs.rmSync(backup, { recursive: true, force: true });
+    }
   }
 
   private readDescriptor(): WorkspaceCreationDescriptor | null {
@@ -125,4 +240,32 @@ export class WorkspaceRootTemplateBootstrap {
     }
     return descriptor;
   }
+}
+
+function safeSnapshotDestination(root: string, relativePath: string): string {
+  if (
+    !relativePath ||
+    relativePath.startsWith("/") ||
+    relativePath.includes("\\") ||
+    relativePath.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    throw new Error(`Root snapshot contains an invalid path ${JSON.stringify(relativePath)}`);
+  }
+  const destination = path.resolve(root, relativePath);
+  const resolvedRoot = path.resolve(root);
+  if (!destination.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error(`Root snapshot path escapes its materialization root: ${relativePath}`);
+  }
+  return destination;
+}
+
+function canonicalJsonValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonValue).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJsonValue(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }

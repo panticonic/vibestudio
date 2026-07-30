@@ -20,7 +20,7 @@ import {
 } from "@vibestudio/service-schemas/templates";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { credentials, extensions, rpc } from "@vibestudio/runtime";
+import { credentials, extensions, rpc } from "@workspace/runtime";
 import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
 import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/ui";
 import {
@@ -41,7 +41,7 @@ import {
 
 const TEMPLATE_COMPOSER = "@workspace-extensions/template-composer";
 type TemplateLocator =
-  | { catalogId: string; registryRevision: string }
+  | { catalogId: string; registryCommit: string; registrySnapshot: string }
   | { url: string; credential?: string };
 
 function templateComposerCall<T>(method: string, args: unknown[] = []): Promise<T> {
@@ -717,7 +717,11 @@ function TemplatesPage() {
                       size="1"
                       onClick={() =>
                         void prepareAdd(
-                          { catalogId: entry.id, registryRevision: catalog!.revision },
+                          {
+                            catalogId: entry.id,
+                            registryCommit: catalog!.coordinates.commit,
+                            registrySnapshot: catalog!.coordinates.snapshot,
+                          },
                           entry.name
                         )
                       }

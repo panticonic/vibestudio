@@ -4,7 +4,7 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import type { ServiceMethodCaller } from "./typedClients.js";
 import { typedClient } from "./typedClients.js";
 
-/** Public extension short name advertised by `extensions.list`. */
+/** Public extension short name used by the typed extension invocation client. */
 export const TEMPLATE_COMPOSER_EXTENSION = "template-composer";
 
 /**

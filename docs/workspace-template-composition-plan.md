@@ -44,13 +44,13 @@ host-owned initialization workflow.
 
 ## Relationship to the existing system
 
-| Existing piece                                                                              | Role here                                                                                                                                                  |
-| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `initWorkspace(name, { templateDir })` filesystem copy (`packages/workspace/src/loader.ts`) | Becomes the degenerate case: a single template of source kind `filesystem`. The packaged `resources/workspace-template` is just the default root template. |
-| Generic Git bridge and semantic import                                                      | Userland acquires per-unit external repositories after bootstrap and submits ordinary semantic candidates.                                                 |
-| `discoverRepos()` one-owner-per-path law                                                    | Preserved. Composition assigns each repoPath to exactly one template before any import happens.                                                            |
-| `GitBridge` / `UpstreamEngine` per-repoPath sync                                            | Extended with a monorepo remote abstraction (shared checkout + path prefix per repo).                                                                      |
-| Gated meta writes (`workspaceConfigWriter.ts`)                                              | Manifest merging produces an ordinary gated meta push; template-contributed sections flow through the same approval surface.                               |
+| Existing piece                                                    | Role here                                                                                                                                                     |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Historical `initWorkspace(name, { templateDir })` filesystem copy | Deleted by the official-repositories cutover. Root bootstrap acquires an exact promoted Git pin; there is no filesystem-template or packaged-source fallback. |
+| Generic Git bridge and semantic import                            | Userland acquires per-unit external repositories after bootstrap and submits ordinary semantic candidates.                                                    |
+| `discoverRepos()` one-owner-per-path law                          | Preserved. Composition assigns each repoPath to exactly one template before any import happens.                                                               |
+| `GitBridge` / `UpstreamEngine` per-repoPath sync                  | Extended with a monorepo remote abstraction (shared checkout + path prefix per repo).                                                                         |
+| Gated meta writes (`workspaceConfigWriter.ts`)                    | Manifest merging produces an ordinary gated meta push; template-contributed sections flow through the same approval surface.                                  |
 
 ## Declaration
 
@@ -517,13 +517,11 @@ Startup stays deliberately simple: a workspace is created from **one** root
 template (the packaged default, or a chosen URL). Everything beyond that is
 runtime addition, driven from the onboarding conversation:
 
-- **Catalog.** A small, checked-in catalog (shipped with the base template as
-  `skills/onboarding/template-catalog.json`, entries:
-  `{id, name, description, url, recommendedRef, tags}`) lists known
-  templates — "News agent + panel", "Base dev tools", etc. It is data for
-  presentation only; the source of truth for what actually gets pinned is
-  always the resolved exact triple. Arbitrary URLs remain a first-class
-  input alongside the catalog.
+- **Catalog.** The composer reads a verified Git registry, keeps the last
+  verified snapshot for offline display, and binds selection to the registry
+  commit and snapshot. It is presentation data only; the exact promoted
+  template pin remains the installation identity. Arbitrary URLs remain a
+  first-class input alongside the catalog.
 - **Inline UI.** Following the existing onboarding pattern
   (`composeOnboardingSnapshot` / `SetupHub.tsx` rendered via `client_eval` +
   `inline_ui`), the onboarding skill gains a `TemplateCatalog.tsx` app-store
@@ -924,7 +922,8 @@ tools-cards registry, fail-closed):
 
 - `templates.status()` → per-template `{nodeId, alias, version, state}`
   matching the U6 chip states, plus pending-review counts.
-- `templates.catalog()` → the checked-in catalog entries.
+- `templates.catalog()` → the last verified Git registry snapshot, including
+  exact registry coordinates and stale/cache presentation state.
 - `templates.check(alias?)` → on-demand update discovery; returns
   `update-available` candidates with `{candidateRef, candidateCommit}`.
 - `templates.inspect(urlOrAlias)` → **dry-run composition delta with no
@@ -983,12 +982,16 @@ Follows the `vibestudio-vcs` skill shape (SKILL.md + `references/` +
      been asked about (defaults are for the card, not for silent agent
      choices); `inspect` before every `add`, no exceptions.
 - **`references/template-authoring.md`** — for the other direction:
-  helping a user _create_ a template repository. Structure (section dirs +
-  `meta/template.yml` fragment), declaring parent templates with exact
-  pins, what belongs in a fragment vs. what never will (trust, providers,
-  credentials), tagging releases so `track` globs and the U2/U4 version
-  displays work, and a checklist for validating a template against a
-  scratch workspace before publishing.
+  helping a user _create_ a template repository. The authoring contract is
+  owned by `docs/workspace-template-authoring-plan.md` and the live
+  reference, which supersede this document's earlier summary on three
+  points: parent declarations are **URL-only** in the portable manifest
+  (exact pins live in the authoring receipt and the consumer's lock, per
+  the official plan's D1); `providers`/`trust` **may** appear in a
+  fragment — installation surfaces them as individually reviewed
+  suggestions and never applies them; and validation follows a
+  publish-privately-then-install sequence, since publication is what
+  creates the installable coordinate.
 - **`references/errors-and-remedies.md`** — the U7 table extended with
   the agent-side recovery for each state (e.g. fragment digest mismatch →
   offer to move the user's edit into the top layer for them, then retry).

@@ -10,9 +10,197 @@
     "extension": {
       "activationEvents": [
         "onInvoke"
-      ]
+      ],
+      "methodAuthority": {
+        "status": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "catalog": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "operations": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "cancel": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.change",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "resume": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.change",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "check": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "inspect": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "inspectAuthoring": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "authoringParts": {
+          "effect": {
+            "kind": "open"
+          }
+        },
+        "publishAuthoring": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.change",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "add": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.add",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "pull": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.update",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "remove": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.remove",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "decideSuggestion": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.change",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
+        "suggest": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.suggest",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        }
+      }
     },
     "authority": {
+      "provides": [
+        {
+          "name": "workspace.templates.add",
+          "title": "Add this template?",
+          "action": "add this template",
+          "tier": "gated",
+          "sensitivity": "write",
+          "resourceType": "workspace.templates",
+          "presentation": {
+            "domain": "files",
+            "verb": "manage"
+          },
+          "grantScopes": [
+            "once"
+          ]
+        },
+        {
+          "name": "workspace.templates.update",
+          "title": "Update this template?",
+          "action": "update this template",
+          "tier": "gated",
+          "sensitivity": "write",
+          "resourceType": "workspace.templates",
+          "presentation": {
+            "domain": "files",
+            "verb": "manage"
+          },
+          "grantScopes": [
+            "once"
+          ]
+        },
+        {
+          "name": "workspace.templates.remove",
+          "title": "Remove this template?",
+          "action": "remove this template relationship while keeping its parts",
+          "tier": "gated",
+          "sensitivity": "write",
+          "resourceType": "workspace.templates",
+          "presentation": {
+            "domain": "files",
+            "verb": "manage"
+          },
+          "grantScopes": [
+            "once"
+          ]
+        },
+        {
+          "name": "workspace.templates.suggest",
+          "title": "Suggest your changes?",
+          "action": "send these changes for the template maintainers to review",
+          "tier": "gated",
+          "sensitivity": "write",
+          "resourceType": "workspace.templates",
+          "presentation": {
+            "domain": "sharing",
+            "verb": "act"
+          },
+          "grantScopes": [
+            "once"
+          ]
+        },
+        {
+          "name": "workspace.templates.change",
+          "title": "Change workspace templates",
+          "action": "change the workspace template composition",
+          "tier": "gated",
+          "sensitivity": "write",
+          "resourceType": "workspace.templates",
+          "presentation": {
+            "domain": "files",
+            "verb": "manage"
+          },
+          "grantScopes": [
+            "once",
+            "task",
+            "session"
+          ]
+        }
+      ],
       "requests": [
         {
           "capability": "context.boundary",
@@ -33,25 +221,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "git.publish",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "network.response.read",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
-          "capability": "user-approval.request",
           "resource": {
             "kind": "prefix",
             "prefix": ""

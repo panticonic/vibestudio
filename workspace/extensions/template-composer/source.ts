@@ -278,11 +278,15 @@ export function createPinnedTemplateSourcePorts(
 export function catalogPin(
   catalog: TemplateCatalogSnapshot,
   catalogId: string,
-  registryRevision: string
+  registryCommit: string,
+  registrySnapshot: string
 ): WorkspaceTemplatePin {
-  if (catalog.revision !== registryRevision) {
+  if (
+    catalog.coordinates.commit !== registryCommit ||
+    catalog.coordinates.snapshot !== registrySnapshot
+  ) {
     throw new Error(
-      `Template registry revision ${registryRevision} is stale; review revision ${catalog.revision}`
+      "The template catalog changed after it was shown; refresh and review it again"
     );
   }
   const entry = catalog.entries.find((candidate) => candidate.id === catalogId);

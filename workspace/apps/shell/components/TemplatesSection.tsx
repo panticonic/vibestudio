@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Box, Button, Card, Flex, Spinner, Text, TextField } from "@radix-ui/themes";
 import type {
   TemplateInspection,
+  TemplateLocator,
   TemplateOperation,
   TemplateStatusRow,
 } from "@vibestudio/service-schemas/templates";
+import { templateLocatorSchema } from "@vibestudio/service-schemas/templates";
 import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
 import {
   filterTemplateCatalog,
@@ -44,15 +46,16 @@ function stateLabel(row: TemplateStatusRow): string {
 
 function operationMessage(
   operation: Awaited<ReturnType<typeof templates.add>>,
-  pending: string
+  copy: { applied: string; pending: string }
 ): string {
-  if (operation.state !== "pending" && operation.state !== "applied") {
+  if (operation.state === "applied") return copy.applied;
+  if (operation.state !== "pending") {
     return (
       operation.blocker?.message ??
       "This template operation needs your attention before it can continue."
     );
   }
-  return pending;
+  return copy.pending;
 }
 
 function version(ref: string): string {
@@ -104,7 +107,7 @@ export function TemplatesSection() {
   const [error, setError] = useState<string | null>(null);
   const [reviewingAlias, setReviewingAlias] = useState<string | null>(null);
   const [addDraft, setAddDraft] = useState<{
-    locator: { catalogId: string; registryRevision: string } | { url: string; credential?: string };
+    locator: TemplateLocator;
     name: string;
     inspection: TemplateInspection;
     choices: Record<string, "keep" | "take" | "skip">;
@@ -161,9 +164,7 @@ export function TemplatesSection() {
     return filterTemplateCatalog(catalog?.entries ?? [], query);
   }, [catalog, query]);
 
-  const add = async (
-    locator: { catalogId: string; registryRevision: string } | { url: string; credential?: string }
-  ) => {
+  const add = async (locator: TemplateLocator) => {
     setBusy("add");
     setError(null);
     setNotice(null);
@@ -186,7 +187,10 @@ export function TemplatesSection() {
       setNotice(
         operationMessage(
           operation,
-          "The approved template operation is ready for any required VCS review."
+          {
+            applied: `Added the ${name} template — ${inspection.addedParts.length} new parts.`,
+            pending: `Review the incoming changes to finish adding the ${name} template.`,
+          }
         )
       );
       if ("url" in locator) {
@@ -194,7 +198,7 @@ export function TemplatesSection() {
         setCredential("");
       }
     } catch (failure) {
-      setError(`Couldn't add this template. ${message(failure)}`);
+      setError(`Couldn't add this template. Nothing was changed. ${message(failure)}`);
     } finally {
       setBusy(null);
     }
@@ -224,11 +228,14 @@ export function TemplatesSection() {
       setNotice(
         operationMessage(
           operation,
-          "The approved template operation is ready for any required VCS review."
+          {
+            applied: `Added the ${addDraft.name} template — ${addDraft.inspection.addedParts.length} new parts.`,
+            pending: `Review the incoming changes to finish adding the ${addDraft.name} template.`,
+          }
         )
       );
     } catch (failure) {
-      setError(`Couldn't add this template. ${message(failure)}`);
+      setError(`Couldn't add this template. Nothing was changed. ${message(failure)}`);
     } finally {
       setBusy(null);
     }
@@ -243,11 +250,14 @@ export function TemplatesSection() {
       setNotice(
         operationMessage(
           operation,
-          `The approved ${alias} update is ready for any required VCS review.`
+          {
+            applied: `The ${alias} template is up to date.`,
+            pending: `Review the incoming changes to finish updating ${alias}.`,
+          }
         )
       );
     } catch (failure) {
-      setError(`Couldn't check ${alias}. ${message(failure)}`);
+      setError(`Couldn't update ${alias}. Nothing was changed. ${message(failure)}`);
     } finally {
       setBusy(null);
     }
@@ -261,11 +271,14 @@ export function TemplatesSection() {
       setNotice(
         operationMessage(
           operation,
-          `Ready for your review. Removing ${alias} keeps its parts in your workspace.`
+          {
+            applied: `Removed the ${alias} template. Its parts are now part of your workspace.`,
+            pending: `Review the changes to remove ${alias}. Its parts will stay in your workspace.`,
+          }
         )
       );
     } catch (failure) {
-      setError(`Couldn't remove ${alias}. ${message(failure)}`);
+      setError(`Couldn't remove ${alias}. Nothing was changed. ${message(failure)}`);
     } finally {
       setBusy(null);
     }
@@ -279,10 +292,15 @@ export function TemplatesSection() {
         operationId,
         onBuildFailure: "discard-context",
       });
-      setNotice(operationMessage(operation, "The template operation is ready to continue."));
+      setNotice(
+        operationMessage(operation, {
+          applied: "The template change is complete.",
+          pending: "Review the incoming changes to finish.",
+        })
+      );
       await refresh();
     } catch (failure) {
-      setError(`Couldn't resume this template operation. ${message(failure)}`);
+      setError(`Couldn't resume this template operation. Nothing was changed. ${message(failure)}`);
     } finally {
       setBusy(null);
     }
@@ -564,7 +582,13 @@ export function TemplatesSection() {
                 size="1"
                 disabled={busy !== null}
                 onClick={() =>
-                  void add({ catalogId: entry.id, registryRevision: catalog!.revision })
+                  void add(
+                    templateLocatorSchema.parse({
+                      catalogId: entry.id,
+                      registryCommit: catalog!.coordinates.commit,
+                      registrySnapshot: catalog!.coordinates.snapshot,
+                    })
+                  )
                 }
               >
                 Add

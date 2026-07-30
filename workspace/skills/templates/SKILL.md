@@ -66,7 +66,7 @@ commit, and content digest only in a labeled Details view.
 ## Add a template
 
 1. Invoke `inspect` with `{ url, credential? }`, `{ alias }`, or
-   `{ catalogId, registryRevision }` as appropriate. A catalog selection without
+   `{ catalogId, registryCommit, registrySnapshot }` as appropriate. A catalog selection without
    the exact revision it was rendered from is invalid. `credential`, when
    present, is the workspace's logical credential name, never a concrete
    credential id. Explain the returned parts, choices, and optional setup
@@ -178,7 +178,7 @@ or silently edit a catalog.
 The onboarding `TemplateCatalog.tsx` sends typed interactions:
 
 ```ts
-{ source: "onboarding-template-catalog", kind: "template-add", targetId: "news", catalogId: "news", registryRevision: "2026-07-29.3" }
+{ source: "onboarding-template-catalog", kind: "template-add", targetId: "news", catalogId: "news", registryCommit: "<40-character commit>", registrySnapshot: "v1-sha256:<64-character digest>" }
 ```
 
 or, for a pasted address:

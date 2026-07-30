@@ -36,8 +36,14 @@ describe("git-bridge activation surface", () => {
     expect(api).toHaveProperty("suggestTemplateContribution");
   });
 
-  it("routes notification actions back through the host-owned Git service", async () => {
+  it("routes notification actions directly through the owning Git engine", async () => {
     vi.spyOn(UpstreamEngine.prototype, "activate").mockResolvedValue(undefined);
+    const push = vi.spyOn(UpstreamEngine.prototype, "pushUpstream").mockResolvedValue({
+      exported: 0,
+      headCommit: null,
+      outcome: "already-at-remote",
+    });
+    const autoPush = vi.spyOn(UpstreamEngine.prototype, "setAutoPush").mockResolvedValue({});
     const rpc = { call: vi.fn(async () => ({ ok: true })) };
     const api = await activate({
       name: "@workspace-extensions/git-bridge",
@@ -48,13 +54,8 @@ describe("git-bridge activation surface", () => {
     await api.retryUpstreamPush("projects/demo");
     await api.pauseAutoPush("projects/demo");
 
-    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "gitInterop.pushUpstream", "projects/demo");
-    expect(rpc.call).toHaveBeenNthCalledWith(
-      2,
-      "main",
-      "gitInterop.setAutoPush",
-      "projects/demo",
-      false
-    );
+    expect(push).toHaveBeenCalledWith("projects/demo");
+    expect(autoPush).toHaveBeenCalledWith("projects/demo", false);
+    expect(rpc.call).not.toHaveBeenCalled();
   });
 });

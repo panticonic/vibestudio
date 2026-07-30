@@ -92,6 +92,7 @@ export class TemplateRegistryClient {
     if (!cached) throw new TemplateRegistryUnavailableError();
     return {
       ...cached.registry,
+      coordinates: cached.coordinates,
       source: "cache",
       stale: true,
       verifiedAt: cached.verifiedAt,
@@ -125,6 +126,12 @@ export class TemplateRegistryClient {
       });
       return {
         ...registry,
+        coordinates: {
+          url: this.options.source.url,
+          ref: this.options.source.ref,
+          commit: snapshot.commit,
+          snapshot: snapshot.snapshot,
+        },
         source: "verified",
         stale: false,
         verifiedAt,
@@ -134,6 +141,7 @@ export class TemplateRegistryClient {
       if (!cached) throw error;
       return {
         ...cached.registry,
+        coordinates: cached.coordinates,
         source: "cache",
         stale: true,
         verifiedAt: cached.verifiedAt,
@@ -145,6 +153,11 @@ export class TemplateRegistryClient {
   async resolve(selection: TemplateRegistrySelection): Promise<ResolvedTemplateRegistrySelection> {
     const cached = await this.cachedRecord();
     if (!cached) throw new TemplateRegistryUnavailableError();
-    return resolveTemplateRegistrySelection(cached.registry, selection, this.options.systemEpoch);
+    return resolveTemplateRegistrySelection(
+      cached.registry,
+      selection,
+      cached.coordinates,
+      this.options.systemEpoch
+    );
   }
 }

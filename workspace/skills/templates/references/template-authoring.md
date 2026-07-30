@@ -13,7 +13,7 @@ Use the template composer rather than reading host paths or assembling a Git
 checkout:
 
 ```js
-import { extensions } from "@vibestudio/runtime";
+import { extensions } from "@workspace/runtime";
 
 const available = await extensions.invoke(
   "@workspace-extensions/template-composer",
@@ -117,9 +117,16 @@ authoring receipt and the consuming workspace's generated lock.
 - Parent templates belong in `templates.use` and name only their Git URL and,
   when needed, a logical credential. Exact commits and verified snapshots live
   in the generated workspace lock.
-- Do not put workspace identity, concrete credential IDs or material, author
-  identity, `providers`, or `trust` in a fragment. Those belong to the
-  workspace owner.
+- Do not put workspace identity, concrete credential IDs or material, or
+  author identity in a fragment. Those belong to the workspace owner.
+- `providers` and `trust` declarations MAY appear in a fragment, and for
+  integration-heavy templates they should: installation never applies them —
+  the consumer-side sanitizer strips them and surfaces each one as an
+  individually reviewed suggestion the installing user accepts or declines.
+  Omitting them does not make a template safer; it silently deletes its
+  onboarding suggestions, so the installed outcome arrives inert with no
+  offered wiring. A template can declare what it wants; it can never grant or
+  activate it.
 
 ## Make releases usable
 
@@ -128,10 +135,31 @@ snapshot in the Git registry only after the template composes and builds from
 a clean checkout. A template repository's moving branch never changes a
 workspace by itself.
 
-## Validate before publishing
+## Validate a release before promoting it
 
-1. Start with a scratch workspace and add the template through
-   `templates.inspect` then `templates.add`.
+Publication is what creates the installable coordinate, so validation cannot
+precede it: publish first to a **private or experimental** repository, treat
+the first tags as candidates (for example `v0.x` or a `-rc` suffix), and
+promote nothing until the installed result is verified. The authoring
+operation build-gates its selected closure before publication, and version tags
+are immutable — later validation failures require a new tag, never replacement.
+
+An optional repository is a Vibestudio source fragment, not necessarily a
+standalone npm application. Its meaningful release test is the exact
+Vibestudio host plus the exact promoted base plus this optional template:
+
+- `@workspace/*` resolves from the composed base/template source graph.
+- `@vibestudio/*` resolves from platform packages supplied by that exact host
+  and is skipped during external npm installation.
+- ordinary third-party dependencies install normally.
+
+Do not require a bare clone of the optional repository to pass `pnpm install`
+or publish a separate npm SDK before extraction.
+
+1. Publish privately, then start with a scratch workspace created from the
+   exact promoted base and add the template
+   through `templates.inspect` then `templates.add` using the exact URL, tag,
+   commit, and snapshot returned by publication.
 2. Check that every supplied part is assigned exactly once, and that a local
    part or an unrelated template produces a clear choice rather than a silent
    overwrite.

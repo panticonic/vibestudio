@@ -10,18 +10,9 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
   defineServiceMethods,
-  fixedPreparedAuthorityRequirement,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
-import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { vcsExternalSnapshotSchema } from "./vcs.js";
-
-export const GIT_PUBLISH_CAPABILITY = "git.publish" as const;
-export const GIT_PUBLISH_REPO_AUTHORITY_RESOLVER = "gitInterop.publishRepo.destination" as const;
-export const GIT_TEMPLATE_CONTRIBUTION_AUTHORITY_RESOLVER =
-  "gitInterop.pushTemplateContribution.destination" as const;
-export const GIT_TEMPLATE_PUBLISH_AUTHORITY_RESOLVER =
-  "gitInterop.publishTemplate.destination" as const;
 
 // Access descriptors shared across the gitInterop method group. All four
 // methods mutate workspace config (`meta/vibestudio.yml`) and/or reach the
@@ -84,6 +75,18 @@ export const gitTemplatePublishInputSchema = z
     version: z.string().regex(/^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$/u),
     manifest: z.string().min(1),
     manifestDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u),
+    validatedParents: z
+      .array(
+        z
+          .object({
+            url: z.string(),
+            ref: z.string(),
+            commit: z.string().regex(/^[0-9a-f]{40}$/u),
+            snapshot: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u),
+          })
+          .strict()
+      )
+      .default([]),
     parts: z.array(z.object({ repoPath: z.string(), subdir: z.string() }).strict()).min(1),
     credentialId: z.string().trim().min(1).optional(),
     destination: z
@@ -538,6 +541,25 @@ export type GitPublishRepoResult = z.infer<typeof gitPublishRepoResultSchema>;
 
 export const gitInteropMethods = defineServiceMethods({
   setSharedRemote: {
+    capability: "git.remotes.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.mutate",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Change the shared Git remote",
+      action: "change the shared Git remote",
+      description: "Allows {requesterKind} to change the shared Git remote.",
+      group: "files",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     description:
       "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibestudio.yml, syncing it into the repo's git config, and queueing immediate provider reconciliation; may prompt for capability approval. Durable URLs must be credential-free HTTP(S) URLs without query parameters or fragments.",
     args: z.tuple([
@@ -556,6 +578,25 @@ export const gitInteropMethods = defineServiceMethods({
     ],
   },
   removeSharedRemote: {
+    capability: "git.remotes.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.retire",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Remove the shared Git remote",
+      action: "remove the shared Git remote",
+      description: "Allows {requesterKind} to remove the shared Git remote.",
+      group: "files",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     description:
       "Remove a named shared Git remote declaration for a workspace unit from meta/vibestudio.yml, sync the repo's git config, and queue immediate provider reconciliation; may prompt for capability approval.",
     args: z.tuple([
@@ -567,6 +608,25 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", "origin"] }],
   },
   setUpstream: {
+    capability: "git.remotes.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.mutate",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Change the upstream Git repository",
+      action: "change the upstream Git repository",
+      description: "Allows {requesterKind} to change the upstream Git repository.",
+      group: "files",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     description:
       "Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml and queueing immediate provider reconciliation; may prompt for capability approval. The config write does not wait for provider readiness or perform network egress. The optional credential is a portable logical name resolved by the host for this workspace and remote URL.",
     args: z.tuple([
@@ -585,6 +645,25 @@ export const gitInteropMethods = defineServiceMethods({
     ],
   },
   removeUpstream: {
+    capability: "git.remotes.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.retire",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Remove the upstream Git remote",
+      action: "remove the upstream Git remote",
+      description: "Allows {requesterKind} to remove the upstream Git remote.",
+      group: "files",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     description:
       "Remove upstream tracking for a workspace repo from meta/vibestudio.yml, then queue immediate provider reconciliation; may prompt for capability approval.",
     args: z.tuple([
@@ -595,6 +674,25 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit"] }],
   },
   detachUpstream: {
+    capability: "git.remotes.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.control",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Disconnect the upstream Git repository",
+      action: "disconnect the upstream Git repository",
+      description: "Allows {requesterKind} to disconnect the upstream Git repository.",
+      group: "files",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     description:
       "Atomically remove upstream tracking (and optionally the declared remote) for a workspace repo in one config write and one approval, then queue immediate provider reconciliation; may prompt for capability approval.",
     args: z.union([
@@ -609,6 +707,25 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", { forgetRemote: true }] }],
   },
   setAutoPush: {
+    capability: "git.remotes.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.mutate",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Change automatic Git pushing",
+      action: "change automatic Git pushing",
+      description: "Allows {requesterKind} to change automatic Git pushing.",
+      group: "files",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     description:
       "Toggle optional outgoing Git push for future exports of already-published protected main, preserving the upstream's exact credential mode, persisting the change to meta/vibestudio.yml, and queueing immediate provider reconciliation; this never publishes import candidates and may prompt for capability approval.",
     args: z.tuple([
@@ -620,6 +737,13 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", true] }],
   },
   upstreamStatus: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Observe the declared remote and return external Git upstream status for tracked repos, including integration-required candidate coordinates. Relationship, counts, remoteBranchExists, and observedAt describe only the observation made by this call and are absent when it fails. Arguments are positional: call `git.upstreamStatus([imported.path])`, not `git.upstreamStatus([[imported.path]])`. The configured gitInterop provider performs all Git/network work.",
     args: z.union([
@@ -640,6 +764,25 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: [["projects/bgkit"]] }],
   },
   pushUpstream: {
+    capability: "git.publish",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.mutate",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Push changes to the upstream Git repository",
+      action: "push changes to the upstream Git repository",
+      description: "Allows {requesterKind} to push changes to the upstream Git repository.",
+      group: "files",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "act",
+      },
+    },
     description:
       "Export protected main, observe the declared remote, and return a typed push outcome through the configured gitInterop provider; refuse while an external snapshot candidate requires semantic integration. A forced update returns bounded overwrite evidence: related history has an exact count, while unrelated history has count null because no relative commit count exists.",
     args: z.union([
@@ -654,6 +797,25 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", { force: false }] }],
   },
   pullUpstream: {
+    capability: "git.pull",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.control",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Pull changes from the upstream Git repository",
+      action: "pull changes from the upstream Git repository",
+      description: "Allows {requesterKind} to pull changes from the upstream Git repository.",
+      group: "files",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
     description:
       "Fetch a declared upstream and import its exact snapshot as a semantic candidate. With dryRun true, export and fetch only inside an isolated temporary checkout and mutate no managed Git, bridge, semantic, or remote state. A missing configured remote branch is reported explicitly as remoteBranchExists false with zero counts. Reconcile and publish an imported candidate only through vcs.compare, incremental vcs.integrate, vcs.commit, and vcs.push.",
     args: z.union([
@@ -668,30 +830,40 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", { dryRun: true }] }],
   },
   publishRepo: {
+    capability: "git.publish",
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.mutate",
+      rationale:
+        "The transport is open; code callers receive one prepared gated git.publish leaf scoped to the exact external repository",
+    },
+    presentation: {
+      title: "Publish workspace changes",
+      action: "publish workspace changes",
+      description: "Allows {requesterKind} to publish workspace changes.",
+      group: "files",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "act",
+      },
+    },
     description:
       "Resolve exactly one GitHub credential (explicit credentialId, or the sole active GitHub credential; refuse ambiguity), resolve the destination owner from explicit organization, persisted credential target, or authenticated user, preflight live account and publish permissions, create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
     args: z.tuple([gitPublishRepoInputSchema]),
     returns: gitPublishRepoResultSchema,
-    authority: {
-      requirement: requirementForPrincipals(["user", "host", "code"], GIT_PUBLISH_CAPABILITY),
-      resource: { kind: "literal", key: GIT_PUBLISH_CAPABILITY },
-      prepared: {
-        resolver: GIT_PUBLISH_REPO_AUTHORITY_RESOLVER,
-        leaves: [
-          {
-            capability: GIT_PUBLISH_CAPABILITY,
-            requirement: fixedPreparedAuthorityRequirement(
-              requirementForPrincipals(["code"], GIT_PUBLISH_CAPABILITY)
-            ),
-            tier: "gated",
-          },
-        ],
-      },
-    },
     access: UPSTREAM_OPERATION_ACCESS,
     examples: [{ args: [{ repoPath: "projects/bgkit", private: true }] }],
   },
   commitMapping: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.mutate",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Return the semantic-event↔Git commit mapping for a repo's checkout, read from Vibestudio-Event trailers (newest first).",
     args: z.union([
@@ -706,6 +878,25 @@ export const gitInteropMethods = defineServiceMethods({
     examples: [{ args: ["projects/bgkit", { limit: 50 }] }],
   },
   importProject: {
+    capability: "git.project.import",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gitInterop.control",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Import a Git project",
+      action: "import a Git project",
+      description: "Allows {requesterKind} to import a Git project.",
+      group: "files",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
     description:
       "Clone an external Git project, record its remote/upstream config, and return the semantic candidate plus identity-joined evidence from the same atomic semantic import. The import does not publish protected main. The returned semanticEvidence includes the external snapshot source URI, revision, digest, and target repository IDs; the provenance tool can independently inspect the same returned IDs. Check the same repo with the positional call `git.upstreamStatus([imported.path])` to distinguish the unpublished integration-required candidate from protected main and outgoing Git publication, and report that same candidate event ID with the path and publication state. Use the ordinary VCS integration path when publication is intended.",
     args: z.tuple([gitImportProjectSchema]),
@@ -726,78 +917,24 @@ export const gitInteropMethods = defineServiceMethods({
       },
     ],
   },
-  pushTemplateContribution: {
-    description:
-      "Export selected repositories from one exact protected-main event and push one collision-safe template contribution branch through the configured gitInterop provider.",
-    args: z.tuple([gitTemplateContributionInputSchema]),
-    returns: gitTemplateContributionResultSchema,
-    authority: {
-      requirement: requirementForPrincipals(["user", "host", "code"], GIT_PUBLISH_CAPABILITY),
-      resource: { kind: "literal", key: GIT_PUBLISH_CAPABILITY },
-      prepared: {
-        resolver: GIT_TEMPLATE_CONTRIBUTION_AUTHORITY_RESOLVER,
-        leaves: [
-          {
-            capability: GIT_PUBLISH_CAPABILITY,
-            requirement: fixedPreparedAuthorityRequirement(
-              requirementForPrincipals(["code"], GIT_PUBLISH_CAPABILITY)
-            ),
-            tier: "gated",
-          },
-        ],
-      },
-    },
-    access: UPSTREAM_OPERATION_ACCESS,
-  },
-  publishTemplate: {
-    description:
-      "Create a provider repository and publish selected repositories from one exact protected-main event with one generated portable template manifest and immutable version tag.",
-    args: z.tuple([gitTemplatePublishInputSchema]),
-    returns: gitTemplatePublishResultSchema,
-    authority: {
-      requirement: requirementForPrincipals(["user", "host", "code"], GIT_PUBLISH_CAPABILITY),
-      resource: { kind: "literal", key: GIT_PUBLISH_CAPABILITY },
-      prepared: {
-        resolver: GIT_TEMPLATE_PUBLISH_AUTHORITY_RESOLVER,
-        leaves: [
-          {
-            capability: GIT_PUBLISH_CAPABILITY,
-            requirement: fixedPreparedAuthorityRequirement(
-              requirementForPrincipals(["code"], GIT_PUBLISH_CAPABILITY)
-            ),
-            tier: "gated",
-          },
-        ],
-      },
-    },
-    access: UPSTREAM_OPERATION_ACCESS,
-  },
 });
 export type GitInteropMethods = typeof gitInteropMethods;
 export type GitInteropClient = TypedServiceClient<GitInteropMethods>;
 
-/**
- * Complete host-to-extension contract for the manifest-selected Git provider.
- * These methods are host-only and cannot be reached through generic extension
- * invocation.
- */
+/** Complete public contract for the manifest-selected userland Git provider. */
 export const gitInteropProviderMethods = defineServiceMethods({
+  setSharedRemote: gitInteropMethods.setSharedRemote,
+  removeSharedRemote: gitInteropMethods.removeSharedRemote,
+  setUpstream: gitInteropMethods.setUpstream,
+  removeUpstream: gitInteropMethods.removeUpstream,
+  detachUpstream: gitInteropMethods.detachUpstream,
+  setAutoPush: gitInteropMethods.setAutoPush,
   upstreamStatus: gitInteropMethods.upstreamStatus,
   pushUpstream: gitInteropMethods.pushUpstream,
   pullUpstream: gitInteropMethods.pullUpstream,
   publishRepo: gitInteropMethods.publishRepo,
   commitMapping: gitInteropMethods.commitMapping,
-  pushTemplateContribution: {
-    description:
-      "Export selected protected-main repositories as one commit per template subtree and push one collision-safe contribution branch after observing remote truth.",
-    args: z.tuple([gitTemplateContributionInputSchema]),
-    returns: gitTemplateContributionResultSchema,
-  },
-  publishTemplate: {
-    description: "Create and publish one exact multi-repository template tree and version tag.",
-    args: z.tuple([gitTemplatePublishInputSchema]),
-    returns: gitTemplatePublishResultSchema,
-  },
+  importProject: gitInteropMethods.importProject,
   cloneRepo: {
     description: "Clone one declared workspace dependency and return its semantic candidate.",
     args: z.tuple([
@@ -852,7 +989,5 @@ export const GIT_INTEROP_PROVIDER_OPERATIONS = [
   "pullUpstream",
   "publishRepo",
   "commitMapping",
-  "pushTemplateContribution",
-  "publishTemplate",
 ] as const satisfies readonly GitInteropProviderMethod[];
 export type GitInteropProviderOperation = (typeof GIT_INTEROP_PROVIDER_OPERATIONS)[number];

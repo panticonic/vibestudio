@@ -152,11 +152,21 @@ function createCtx(
     workspaceRoot?: string;
   } = {}
 ) {
+  let currentConfig = config;
   const files = opts.files ?? new Map<string, string>();
   const notifications = { show: vi.fn(async () => "notif-id") };
   const rpc = {
-    call: vi.fn(async (_target: string, method: string) => {
-      if (method === "workspace.getConfig") return config;
+    call: vi.fn(async (_target: string, method: string, input?: unknown) => {
+      if (method === "workspace.getConfig") return currentConfig;
+      if (method === "workspace.applyPreparedConfig") {
+        const prepared = input as { nextState: unknown; resultDigest: string };
+        currentConfig = prepared.nextState;
+        return {
+          changed: true,
+          resultDigest: prepared.resultDigest,
+          config: currentConfig,
+        };
+      }
       throw new Error(`unexpected rpc call: ${method}`);
     }),
   };
@@ -176,7 +186,14 @@ function createCtx(
     log: { info: vi.fn(), warn: vi.fn() },
     ...(opts.health ? { health: opts.health } : {}),
   };
-  return { ctx, files, notifications, rpc, credentials };
+  return {
+    ctx,
+    files,
+    notifications,
+    rpc,
+    credentials,
+    currentConfig: () => currentConfig,
+  };
 }
 
 function createBridge(
@@ -305,6 +322,68 @@ describe("UpstreamEngine", () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  it("returns the declared provider result and submits one exact prepared config mutation", async () => {
+    const repo = "projects/configured";
+    const config = { git: { remotes: {}, upstreams: {} } };
+    const { bridge } = createBridge();
+    const { engine, rpc, currentConfig } = makeEngine(config, bridge);
+
+    await expect(
+      engine.setRemote(repo, {
+        name: "origin",
+        url: "https://github.com/acme/configured.git",
+        branch: "main",
+      })
+    ).resolves.toEqual({
+      projects: {
+        configured: {
+          origin: {
+            url: "https://github.com/acme/configured.git",
+            branch: "main",
+          },
+        },
+      },
+    });
+
+    const preparedCalls = rpc.call.mock.calls.filter(
+      ([, method]) => method === "workspace.applyPreparedConfig"
+    );
+    expect(preparedCalls).toHaveLength(1);
+    expect(preparedCalls[0]?.[2]).toMatchObject({
+      expectedBaseDigest: expect.stringMatching(/^v1-sha256:/),
+      resultDigest: expect.stringMatching(/^v1-sha256:/),
+      allowedPathScope: ["git.remotes", "git.upstreams"],
+      summary: `set Git remote origin for ${repo}`,
+    });
+    expect(currentConfig()).toMatchObject({
+      git: {
+        remotes: {
+          projects: {
+            configured: {
+              origin: { url: "https://github.com/acme/configured.git", branch: "main" },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("returns upstream maps rather than leaking the prepared mutation envelope", async () => {
+    const repo = "projects/tracked";
+    const config = buildConfig([{ repo, autoPush: false }]);
+    const { bridge } = createBridge();
+    const { engine } = makeEngine(config, bridge);
+
+    await expect(engine.setAutoPush(repo, true)).resolves.toEqual({
+      projects: {
+        tracked: expect.objectContaining({
+          remote: "origin",
+          autoPush: true,
+        }),
+      },
+    });
   });
 
   it("auto-exports without pushing when autoPush is false", async () => {

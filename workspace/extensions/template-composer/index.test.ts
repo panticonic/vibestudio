@@ -6,7 +6,7 @@ import type {
   TemplateOperationInspection,
   TemplateSourcePorts,
 } from "@workspace/template-composer";
-import { ensureApprovedTemplateOperation } from "./operationRecord.js";
+import { ensureTemplateOperationIntent } from "./operationRecord.js";
 import { createPinnedTemplateSourcePorts } from "./source.js";
 import { affectedRepositoryPaths, type TemplateOperationRecord } from "./staging.js";
 import {
@@ -77,8 +77,7 @@ function approvedRecord(): TemplateOperationRecord {
 }
 
 describe("template composer operation resumption", () => {
-  it("discards the exact approved in-flight context", async () => {
-    const requestApproval = vi.fn(async () => null);
+  it("discards the exact in-flight context", async () => {
     const publishCancellation = vi.fn(async () => undefined);
     const destroy = vi.fn(async () => undefined);
     await expect(
@@ -89,30 +88,25 @@ describe("template composer operation resumption", () => {
           applied: false,
           mainEventId: "event-main",
         }),
-        requestApproval,
         publishCancellation,
         destroy,
       })
     ).resolves.toEqual({ operationId: "pull-1", state: "cancelled" });
-    expect(requestApproval).toHaveBeenCalledOnce();
     expect(publishCancellation).toHaveBeenCalledWith("event-main");
     expect(destroy).toHaveBeenCalledWith("template-composer-operation-exact");
   });
 
   it("treats a repeated cancellation as idempotently complete", async () => {
-    const requestApproval = vi.fn();
     const publishCancellation = vi.fn();
     const destroy = vi.fn();
     await expect(
       cancelTemplateOperation({
         operationId: "pull-1",
         findContext: async () => null,
-        requestApproval,
         publishCancellation,
         destroy,
       })
     ).resolves.toEqual({ operationId: "pull-1", state: "cancelled" });
-    expect(requestApproval).not.toHaveBeenCalled();
     expect(publishCancellation).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
   });
@@ -128,7 +122,6 @@ describe("template composer operation resumption", () => {
           applied,
           mainEventId: applied ? "event-applied" : "event-main",
         }),
-        requestApproval: async () => null,
         publishCancellation: async () => {
           applied = true;
           throw new Error("Protected main changed");
@@ -171,20 +164,17 @@ describe("template composer operation resumption", () => {
     expect(client.refresh).not.toHaveBeenCalled();
   });
 
-  it("re-requests host approval on resume while retaining exact context intent", async () => {
-    const requestApproval = vi.fn(async () => null);
+  it("retains exact context intent on resume", async () => {
     const persist = vi.fn(async () => undefined);
     await expect(
-      ensureApprovedTemplateOperation({
+      ensureTemplateOperationIntent({
         operationId: "pull-1",
         inspection: inspection(),
         intent: { kind: "pull", target: oldPin },
         existing: approvedRecord(),
-        requestApproval,
         persist,
       })
-    ).resolves.toMatchObject({ status: "approved", resumed: true });
-    expect(requestApproval).toHaveBeenCalledOnce();
+    ).resolves.toMatchObject({ resumed: true });
     expect(persist).not.toHaveBeenCalled();
   });
 

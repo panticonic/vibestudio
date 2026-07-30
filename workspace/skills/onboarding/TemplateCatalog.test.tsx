@@ -12,6 +12,12 @@ const catalog = {
   version: 1 as const,
   revision: "2026-07-29.3",
   systemEpoch: 57,
+  coordinates: {
+    url: "git+https://github.com/vibestudio/template-registry.git",
+    ref: "refs/heads/promoted",
+    commit: "fedcba9876543210fedcba9876543210fedcba98",
+    snapshot: `v1-sha256:${"b".repeat(64)}`,
+  },
   source: "verified" as const,
   stale: false,
   verifiedAt: "2026-07-29T12:00:00.000Z",
@@ -54,7 +60,8 @@ describe("TemplateCatalog", () => {
             kind: "template-add",
             targetId: "news",
             catalogId: "news",
-            registryRevision: "2026-07-29.3",
+            registryCommit: "fedcba9876543210fedcba9876543210fedcba98",
+            registrySnapshot: `v1-sha256:${"b".repeat(64)}`,
           },
         },
       })

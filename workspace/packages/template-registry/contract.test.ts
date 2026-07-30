@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   TemplateRegistryEpochError,
-  TemplateRegistryRevisionError,
+  TemplateRegistrySelectionError,
   parseTemplateRegistry,
   resolveTemplateRegistrySelection,
 } from "./contract.js";
 
 const commit = "0123456789abcdef0123456789abcdef01234567";
 const snapshot = `v1-sha256:${"a".repeat(64)}`;
+const coordinates = {
+  url: "git+https://github.com/vibestudio/template-registry.git",
+  ref: "refs/heads/promoted",
+  commit,
+  snapshot,
+};
 
 function registryValue() {
   return {
@@ -43,12 +49,14 @@ describe("template registry contract", () => {
     expect(
       resolveTemplateRegistrySelection(
         registry,
-        { catalogId: "news", registryRevision: "2026-07-29.3" },
+        { catalogId: "news", registryCommit: commit, registrySnapshot: snapshot },
+        coordinates,
         57
       )
     ).toEqual({
       catalogId: "news",
-      registryRevision: "2026-07-29.3",
+      registryCommit: commit,
+      registrySnapshot: snapshot,
       name: "News workspace",
       url: "git+https://github.com/vibestudio/template-news.git",
       promoted: { ref: "refs/tags/v1.2.0", commit, snapshot },
@@ -58,15 +66,21 @@ describe("template registry contract", () => {
   it("rejects stale selections and incompatible epochs", () => {
     const registry = parseTemplateRegistry(registryValue());
     expect(() =>
-      resolveTemplateRegistrySelection(registry, {
-        catalogId: "news",
-        registryRevision: "2026-07-29.2",
-      })
-    ).toThrow(TemplateRegistryRevisionError);
+      resolveTemplateRegistrySelection(
+        registry,
+        {
+          catalogId: "news",
+          registryCommit: "f".repeat(40),
+          registrySnapshot: snapshot,
+        },
+        coordinates
+      )
+    ).toThrow(TemplateRegistrySelectionError);
     expect(() =>
       resolveTemplateRegistrySelection(
         registry,
-        { catalogId: "news", registryRevision: registry.revision },
+        { catalogId: "news", registryCommit: commit, registrySnapshot: snapshot },
+        coordinates,
         58
       )
     ).toThrow(TemplateRegistryEpochError);

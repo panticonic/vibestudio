@@ -117,7 +117,7 @@ describe("resolveTemplate — dependency auto-detection", () => {
     const panel = makePanel("dep-none", true);
     const resolved = resolveTemplate(
       {},
-      { "@vibestudio/runtime": "workspace:*" },
+      { "@workspace/runtime": "workspace:*" },
       panel,
       sourceRoot
     );

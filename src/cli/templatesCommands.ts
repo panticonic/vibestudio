@@ -4,6 +4,7 @@ import {
   templateAuthoringInspectionSchema,
   templatePublicationSchema,
   type TemplateAuthoringInspection,
+  type TemplateCatalogSnapshot,
   type TemplateInspection,
   type TemplateLocator,
   type TemplateOperation,
@@ -150,16 +151,23 @@ function commandId(inv: ParsedInvocation): string {
   return generated;
 }
 
-function target(inv: ParsedInvocation, registryRevision?: string): TemplateLocator {
+function target(
+  inv: ParsedInvocation,
+  registryCoordinates?: TemplateCatalogSnapshot["coordinates"]
+): TemplateLocator {
   const catalogId = inv.flags["catalog"];
   const credential =
     typeof inv.flags["credential"] === "string" ? inv.flags["credential"].trim() : undefined;
   if (typeof catalogId === "string" && catalogId.trim()) {
     if (credential) throw new UsageError("--credential is only valid with a direct template URL");
-    if (!registryRevision) {
-      throw new UsageError("catalog selections must be bound to a verified registry revision");
+    if (!registryCoordinates) {
+      throw new UsageError("catalog selections must be bound to an exact verified registry");
     }
-    return { catalogId: catalogId.trim(), registryRevision };
+    return {
+      catalogId: catalogId.trim(),
+      registryCommit: registryCoordinates.commit,
+      registrySnapshot: registryCoordinates.snapshot,
+    };
   }
   const raw = inv.positionals[0]?.trim();
   if (!raw) throw new UsageError("pass a template URL or alias, or --catalog ID");
@@ -186,7 +194,7 @@ async function resolvedTarget(
 ): Promise<TemplateLocator> {
   if (typeof inv.flags["catalog"] !== "string") return target(inv);
   const catalog = await templates.catalog();
-  return target(inv, catalog.revision);
+  return target(inv, catalog.coordinates);
 }
 
 function requireAlias(inv: ParsedInvocation): string {

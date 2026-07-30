@@ -1,6 +1,11 @@
 # Workspace template authoring from a live workspace
 
-Status: implemented and verified
+Status: mechanism and publication-safety corrections implemented. The official
+release path is gated by repository extraction and composed-result validation
+against an exact Vibestudio host and base-template release, as specified in
+`docs/official-template-repositories-plan.md`. Publishing a standalone npm SDK
+is not a prerequisite. Until those repository releases and validation gates
+exist, permanent tags minted here are candidates, not official releases.
 
 ## Outcome
 
@@ -111,9 +116,10 @@ creates the immutable `refs/tags/<version>` at that commit.
 The result returns the clone/web URLs, canonical `git+` template URL, exact
 tag, commit, snapshot digest, and exported parts. A retry with the same command
 and exact destination resumes a repository-created or main-pushed partial
-operation and returns the same release. An occupied divergent tag, divergent
-command reuse, or non-fast-forward main fails closed; neither a tag nor history
-is overwritten.
+operation and returns the same release. The semantic operation context binds
+the normalized intent before repository creation. An occupied divergent tag,
+divergent command reuse, changed creation settings, or non-fast-forward main
+fails closed; neither a tag nor history is overwritten.
 
 ## Portable manifest projection
 
@@ -146,6 +152,37 @@ report the exact selected/required parts and fingerprint while proving that no
 publication occurred. External Git creation remains a credentialed provider
 integration test; the agentic scenario must not publish an arbitrary public
 repository merely to prove discovery.
+
+## Publication safety corrections (landed 2026-07-29)
+
+The implementation enforces all four review findings:
+
+1. **Pre-publication build gate.** `publishAuthoring` materializes the
+   candidate in an operation context, composes it with its resolved exact
+   parents, and runs the same build gate the
+   consumer-side add uses (official plan D1); only a clean build may
+   create/push/tag the external repository. Registry promotion remains the
+   gate protecting users, but immutable tags should not be mintable for
+   compositions that demonstrably do not assemble.
+2. **The idempotency binding exists before repository creation.** The composer
+   records `commandId → destination + request fingerprint`
+   **durably before creation**, in the operation's own record within the
+   semantic operation context (the composer extension's existing operation
+   record — "the operation context is the journal" applied to publication
+   itself). Resume consults that record first, which closes the empty-repo
+   case; the attributed trailer commit remains the remote-side recovery
+   evidence for resuming across a lost local record, not the binding of first
+   resort.
+3. **The request fingerprint covers `creation`.** `creation.private` and
+   `creation.description` are normalized into the durable intent and Git
+   publication fingerprint, so a visibility-changing retry is divergent.
+4. **Resolved-parent provenance is published.** Direct parents are correctly
+   URL-only in the portable manifest (official plan D1), and installers
+   resolve lock-first against promoted releases — that stands. But the exact
+   parent closure the author validated against is written to
+   `meta/template-authoring-provenance.json` as non-authoritative provenance:
+   never an input to resolution, purely so a later composition failure can
+   name the delta from what the author validated.
 
 ## Registry follow-up
 

@@ -19,6 +19,7 @@ import {
   inspectTemplateOperationWithConflicts,
   prepareTemplateOperation,
   publishPreparedTemplateOperation,
+  TemplateBuildGateError,
   templateStatus,
   templateSuggestionDigest,
   type TemplateOperationInspection,
@@ -44,7 +45,7 @@ import {
   missingTemplateCredential,
   TemplateCredentialRequired,
 } from "./source.js";
-import { ensureApprovedTemplateOperation } from "./operationRecord.js";
+import { ensureTemplateOperationIntent } from "./operationRecord.js";
 import {
   createTemplateOperationPorts,
   ensureTemplateOperationContext,
@@ -255,7 +256,12 @@ async function pinForLocator(
 ): Promise<WorkspaceTemplatePin> {
   if ("catalogId" in locator) {
     if (!env.catalog) throw new Error("Catalog selection requires templates.registry");
-    return catalogPin(env.catalog, locator.catalogId, locator.registryRevision);
+    return catalogPin(
+      env.catalog,
+      locator.catalogId,
+      locator.registryCommit,
+      locator.registrySnapshot
+    );
   }
   if ("alias" in locator) {
     const node = env.observation.lock?.nodes.find((candidate) => candidate.alias === locator.alias);
@@ -467,7 +473,7 @@ async function inspectAdd(
   selected: WorkspaceTemplatePin,
   pins: readonly WorkspaceTemplatePin[] = [],
   conflictDecisions: Readonly<Record<string, string>> = {},
-  selection?: { catalogId: string; registryRevision: string }
+  selection?: { catalogId: string; registryCommit: string; registrySnapshot: string }
 ): Promise<TemplateOperationConflictPreview> {
   const prepared = await adoptionAwareInput(ctx, env);
   const selectedSources = {
@@ -513,33 +519,6 @@ function operationParts(operationId: string, inspection: TemplateOperationInspec
   };
 }
 
-async function approve(
-  ctx: ExtensionContextLike,
-  operationId: string,
-  inspection: TemplateOperationInspection
-): Promise<string | null> {
-  const decision = await ctx.approvals.request({
-    subject: { id: `template-composition:${operationId}`, label: "Change workspace templates" },
-    title: "Change workspace templates",
-    summary: `Apply ${Object.keys(inspection.plan.repositories).length} template-owned workspace parts.`,
-    warning:
-      "Template content can add executable workspace units. New unit versions remain subject to the normal execution approval gate.",
-    details: [
-      { label: "Plan", value: inspection.plan.fingerprint },
-      { label: "Templates", value: inspection.plan.nodes.map((node) => node.alias).join(", ") },
-    ],
-    defaultAction: "deny",
-    promptOptions: "scoped",
-  });
-  if (decision.kind === "uncallable") {
-    return `Approval is unavailable: ${"reason" in decision ? decision.reason : "unknown reason"}`;
-  }
-  if (decision.kind === "dismissed" || ("choice" in decision && decision.choice === "deny")) {
-    return "Template change was denied";
-  }
-  return null;
-}
-
 async function applyInspection(
   ctx: ExtensionContextLike,
   env: Environment,
@@ -550,32 +529,19 @@ async function applyInspection(
 ) {
   const parts = operationParts(operationId, inspection);
   const existing = await readTemplateOperationRecord(ctx, operationId);
-  const approval = await ensureApprovedTemplateOperation({
+  const operation = await ensureTemplateOperationIntent({
     operationId,
     inspection,
     intent,
     existing,
-    requestApproval: () => approve(ctx, operationId, inspection),
     persist: (record) => writeTemplateOperationRecord(ctx, record),
   });
-  if (approval.status === "denied") {
-    return {
-      ...parts,
-      state: "error" as const,
-      blocker: {
-        state: "error" as const,
-        code: "TemplateApprovalDenied",
-        message: approval.message,
-        nextAction: "retry" as const,
-      },
-    };
-  }
   const ports = createTemplateOperationPorts(
     ctx,
     env.info.statePath,
     env.observation,
     createAffectedBuildGate(ctx),
-    approval.record
+    operation.record
   );
   try {
     const preparation = await prepareTemplateOperation({
@@ -626,9 +592,9 @@ async function applyInspection(
       };
     }
     if (error instanceof TemplateReviewRequired) {
-      if (!approval.record.reviews) {
+      if (!operation.record.reviews) {
         await updateTemplateOperationRecord(ctx, {
-          ...approval.record,
+          ...operation.record,
           reviews: [...error.items],
           deltaBasis: error.deltaBasis,
         });
@@ -651,7 +617,6 @@ async function applyInspection(
 export async function cancelTemplateOperation(input: {
   operationId: string;
   findContext(): Promise<{ contextId: string; applied: boolean; mainEventId: string } | null>;
-  requestApproval(): Promise<string | null>;
   publishCancellation(expectedMainEventId: string): Promise<void>;
   destroy(contextId: string): Promise<void>;
 }): Promise<{ operationId: string; state: "cancelled" }> {
@@ -660,8 +625,6 @@ export async function cancelTemplateOperation(input: {
   if (target.applied) {
     throw new Error(`Template operation ${input.operationId} is already applied`);
   }
-  const denied = await input.requestApproval();
-  if (denied) throw new Error(denied);
   try {
     await input.publishCancellation(target.mainEventId);
   } catch (error) {
@@ -842,32 +805,6 @@ export async function activate(ctx: ExtensionContextLike) {
           }
           return null;
         },
-        requestApproval: async () => {
-          const decision = await ctx.approvals.request({
-            subject: {
-              id: `template-operation-cancel:${input.operationId}`,
-              label: "Discard template operation",
-            },
-            title: "Discard template operation",
-            summary:
-              "Discard the isolated template operation and all uncommitted review work in it.",
-            warning: "This operation context cannot be recovered after it is discarded.",
-            defaultAction: "deny",
-            promptOptions: "scoped",
-          });
-          if (decision.kind === "uncallable") {
-            return `Approval is unavailable: ${
-              "reason" in decision ? decision.reason : "unknown reason"
-            }`;
-          }
-          if (
-            decision.kind === "dismissed" ||
-            ("choice" in decision && decision.choice === "deny")
-          ) {
-            return "Template operation cancellation was denied";
-          }
-          return null;
-        },
         publishCancellation: (expectedMainEventId) =>
           publishTemplateOperationCancellation(ctx, input.operationId, expectedMainEventId).then(
             () => undefined
@@ -957,7 +894,8 @@ export async function activate(ctx: ExtensionContextLike) {
         "catalogId" in locator
           ? {
               catalogId: locator.catalogId,
-              registryRevision: locator.registryRevision,
+              registryCommit: locator.registryCommit,
+              registrySnapshot: locator.registrySnapshot,
             }
           : undefined
       );
@@ -1011,21 +949,72 @@ export async function activate(ctx: ExtensionContextLike) {
           "The workspace or authoring selection changed after inspection; inspect authoring again"
         );
       }
-      return ctx.rpc.call("main", "gitInterop.publishTemplate", {
-        operationId: input.commandId,
-        expectedMainEventId: current.mainEventId,
-        templateName: current.request.name,
-        version: input.version,
-        manifest: current.manifest,
-        manifestDigest: current.manifestDigest,
-        parts: current.includedParts.map((repoPath) => ({ repoPath, subdir: repoPath })),
+      const creation = {
+        private: input.creation?.private ?? true,
+        description: input.creation?.description ?? current.request.description,
+      };
+      const publicationIntent = {
+        protocol: "vibestudio-template-authoring-publication/v1",
         destination: input.destination,
-        ...(input.credentialId ? { credentialId: input.credentialId } : {}),
-        creation: {
-          ...input.creation,
-          description: input.creation?.description ?? current.request.description,
+        version: input.version,
+        credentialId: input.credentialId ?? null,
+        creation,
+        planFingerprint: current.fingerprint,
+        mainEventId: current.mainEventId,
+      };
+      const existing = await readTemplateOperationRecord(ctx, input.commandId);
+      if (existing) {
+        if (
+          existing.kind !== "publish-authoring" ||
+          canonicalJson(existing.intent) !== canonicalJson(publicationIntent)
+        ) {
+          throw new Error(
+            `Template publication command ${input.commandId} was already bound to a different request`
+          );
+        }
+      } else {
+        await writeTemplateOperationRecord(ctx, {
+          version: 1,
+          operationId: input.commandId,
+          kind: "publish-authoring",
+          fingerprint: current.fingerprint,
+          intent: publicationIntent,
+          pins: current.parents.map((parent) => ({
+            url: parent.url,
+            ...(parent.credential ? { credential: parent.credential } : {}),
+            ref: parent.ref,
+            commit: parent.commit,
+            snapshot: parent.snapshot,
+          })),
+          addedParts: [...current.includedParts],
+          orphanedParts: [],
+        });
+      }
+      const contextId = await ensureTemplateOperationContext(ctx, input.commandId);
+      const build = await createAffectedBuildGate(ctx)(contextId, current.includedParts);
+      if (build.failures.length > 0) {
+        throw new TemplateBuildGateError(build.failures);
+      }
+      return ctx.extensions.invoke("@workspace-extensions/git-bridge", "publishTemplate", [
+        {
+          operationId: input.commandId,
+          expectedMainEventId: current.mainEventId,
+          templateName: current.request.name,
+          version: input.version,
+          manifest: current.manifest,
+          manifestDigest: current.manifestDigest,
+          validatedParents: current.parents.map(({ url, ref, commit, snapshot }) => ({
+            url,
+            ref,
+            commit,
+            snapshot,
+          })),
+          parts: current.includedParts.map((repoPath) => ({ repoPath, subdir: repoPath })),
+          destination: input.destination,
+          ...(input.credentialId ? { credentialId: input.credentialId } : {}),
+          creation,
         },
-      });
+      ]);
     },
 
     async add(input: {
@@ -1219,31 +1208,6 @@ export async function activate(ctx: ExtensionContextLike) {
           section: input.section,
         };
       }
-      const decision = await ctx.approvals.request({
-        subject: {
-          id: `template-suggestion:${input.commandId}`,
-          label: `${input.decision} ${input.alias} ${input.section} suggestion`,
-        },
-        title: `${input.decision === "accept" ? "Accept" : "Decline"} template suggestion`,
-        summary:
-          input.decision === "accept"
-            ? `Write the exact ${input.section} suggestion from ${input.alias} to the workspace layer.`
-            : `Decline the ${input.section} suggestion from ${input.alias} without changing the workspace.`,
-        details: [
-          { label: "Template", value: input.alias },
-          { label: "Section", value: input.section },
-          { label: "Exact suggestion", value: JSON.stringify(value) },
-        ],
-        defaultAction: "deny",
-        promptOptions: "scoped",
-      });
-      if (
-        decision.kind === "uncallable" ||
-        decision.kind === "dismissed" ||
-        ("choice" in decision && decision.choice === "deny")
-      ) {
-        throw new Error(`Template ${input.section} suggestion decision was not approved`);
-      }
       const merged =
         input.decision === "accept"
           ? mergeAcceptedTemplateSuggestion(env.observation.top, input.section, value)
@@ -1287,19 +1251,21 @@ export async function activate(ctx: ExtensionContextLike) {
           throw new Error(`${repoPath} is not owned by template ${input.alias}`);
         }
       }
-      const result = await ctx.rpc.call<{
+      const result = await ctx.extensions.invoke<{
         branch: string | null;
         url?: string;
-      }>("main", "gitInterop.pushTemplateContribution", {
-        operationId: input.commandId,
-        nodeId: node.nodeId,
-        alias: node.alias,
-        url: node.pin.url,
-        baseCommit: node.pin.commit,
-        expectedMainEventId: observation.mainEventId,
-        parts: selected.map((repoPath) => ({ repoPath, subdir: repoPath })),
-        ...(node.pin.credential ? { credential: node.pin.credential } : {}),
-      });
+      }>("@workspace-extensions/git-bridge", "suggestTemplateContribution", [
+        {
+          operationId: input.commandId,
+          nodeId: node.nodeId,
+          alias: node.alias,
+          url: node.pin.url,
+          baseCommit: node.pin.commit,
+          expectedMainEventId: observation.mainEventId,
+          parts: selected.map((repoPath) => ({ repoPath, subdir: repoPath })),
+          ...(node.pin.credential ? { credential: node.pin.credential } : {}),
+        },
+      ]);
       return {
         operationId: input.commandId,
         state: "applied" as const,

@@ -85,7 +85,7 @@ config update cannot redirect an in-flight fetch, pull, or push.
 From runtime code, configure the two pieces separately:
 
 ```ts
-import { git } from "@vibestudio/runtime";
+import { git } from "@workspace/runtime";
 
 await git.setSharedRemote("projects/bgkit", {
   name: "origin",

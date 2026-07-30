@@ -2,8 +2,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
 
 describe("shipped first-run workspace", () => {
+  it("is valid against the canonical workspace configuration contract", () => {
+    const source = fs.readFileSync(path.resolve("workspace/meta/vibestudio.yml"), "utf8");
+    expect(() => parseWorkspaceConfigContentWithId(source, "shipped-template")).not.toThrow();
+  });
+
   it("automatically starts the single state-aware onboarding chat", () => {
     const source = fs.readFileSync(path.resolve("workspace/meta/vibestudio.yml"), "utf8");
     const manifest = parse(source) as {

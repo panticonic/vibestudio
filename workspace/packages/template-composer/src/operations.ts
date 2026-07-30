@@ -27,7 +27,8 @@ export interface TemplateOperationConflictPreview {
 
 export interface TemplateCatalogSelection {
   catalogId: string;
-  registryRevision: string;
+  registryCommit: string;
+  registrySnapshot: string;
 }
 
 export interface TemplateWorkspaceObservation {

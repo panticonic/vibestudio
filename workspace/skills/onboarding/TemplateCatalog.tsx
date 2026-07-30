@@ -51,7 +51,11 @@ export default function TemplateCatalog({ props, chat }: TemplateCatalogProps) {
     try {
       await chat.send(`Add the ${entry.name} template`, {
         metadata: {
-          interaction: templateCatalogInteraction(entry.id, catalog.revision),
+          interaction: templateCatalogInteraction(
+            entry.id,
+            catalog.coordinates.commit,
+            catalog.coordinates.snapshot
+          ),
         },
       });
     } catch {

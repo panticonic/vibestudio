@@ -173,9 +173,9 @@ providers:
   evalEngine:
     source: "@workspace/eval"
   evalRuntime:
-    source: "@vibestudio/runtime"
+    source: "@workspace/runtime"
   cdpClient:
-    source: "@vibestudio/cdp-client"
+    source: "@workspace/cdp-client"
   browserData:
     extension: extensions/browser-data
   gitInterop:

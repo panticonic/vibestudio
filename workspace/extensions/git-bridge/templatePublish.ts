@@ -20,6 +20,7 @@ import { GitBridge, type ProtectedRepositorySnapshot } from "./bridge.js";
 import type { ExtensionContextLike } from "./context.js";
 
 const MANIFEST_PATH = "meta/template.yml";
+const AUTHORING_PROVENANCE_PATH = "meta/template-authoring-provenance.json";
 const BRANCH = "main";
 const OPERATION_TRAILER = "Vibestudio-Template-Operation:";
 const REQUEST_TRAILER = "Vibestudio-Template-Request:";
@@ -135,11 +136,24 @@ export class TemplatePublishEngine {
       });
     }
 
+    const authoringProvenance = `${JSON.stringify(
+      {
+        protocol: "vibestudio-template-authoring-provenance/v1",
+        validatedParents: input.validatedParents,
+      },
+      null,
+      2
+    )}\n`;
     const expectedTreeEntries: CanonicalTreeEntry[] = [
       {
         path: MANIFEST_PATH,
         mode: 0o100644,
         contentHash: sha256Hex(new TextEncoder().encode(input.manifest)),
+      },
+      {
+        path: AUTHORING_PROVENANCE_PATH,
+        mode: 0o100644,
+        contentHash: sha256Hex(new TextEncoder().encode(authoringProvenance)),
       },
     ];
     const occupiedPaths = new Set([MANIFEST_PATH]);
@@ -166,6 +180,11 @@ export class TemplatePublishEngine {
         version: tag,
         expectedMainEventId: input.expectedMainEventId,
         manifestDigest: input.manifestDigest,
+        validatedParents: input.validatedParents,
+        creation: {
+          private: input.creation?.private ?? true,
+          description: input.creation?.description ?? input.templateName,
+        },
         parts: snapshots.map(({ repoPath, subdir, snapshot }) => ({
           repoPath,
           subdir,
@@ -334,8 +353,10 @@ export class TemplatePublishEngine {
           }
         }
         const manifestPath = safeJoin(checkout, MANIFEST_PATH);
+        const provenancePath = safeJoin(checkout, AUTHORING_PROVENANCE_PATH);
         await fsp.mkdir(path.dirname(manifestPath), { recursive: true });
         await fsp.writeFile(manifestPath, input.manifest, "utf8");
+        await fsp.writeFile(provenancePath, authoringProvenance, "utf8");
         for (const part of snapshots) {
           for (const file of part.snapshot.files) {
             const relative = `${part.subdir}/${file.path}`;

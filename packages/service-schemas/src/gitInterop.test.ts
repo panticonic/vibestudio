@@ -34,8 +34,6 @@ describe("gitInterop canonical contract", () => {
       "publishRepo",
       "commitMapping",
       "importProject",
-      "pushTemplateContribution",
-      "publishTemplate",
     ]);
   });
 
@@ -259,26 +257,6 @@ describe("gitInterop canonical contract", () => {
     ).toBe(false);
   });
 
-  it("binds template contributions to one exact protected-main event", () => {
-    const request = {
-      operationId: "suggest-1",
-      nodeId: "t-abcdef",
-      alias: "news",
-      url: "https://github.com/acme/news.git",
-      baseCommit: "a".repeat(40),
-      expectedMainEventId: "event:main",
-      parts: [{ repoPath: "panels/news", subdir: "panels/news" }],
-    };
-    expect(gitInteropMethods.pushTemplateContribution.args.safeParse([request]).success).toBe(true);
-    const { expectedMainEventId: _expectedMainEventId, ...unbound } = request;
-    expect(gitInteropMethods.pushTemplateContribution.args.safeParse([unbound]).success).toBe(
-      false
-    );
-    expect(gitInteropMethods.pushTemplateContribution.authority?.prepared?.resolver).toBe(
-      "gitInterop.pushTemplateContribution.destination"
-    );
-  });
-
   it("requires the provider's complete publish result", () => {
     const result = {
       repoPath: "projects/demo",
@@ -336,13 +314,18 @@ describe("gitInterop canonical contract", () => {
 
   it("defines the complete strict host-only provider contract", () => {
     expect(Object.keys(gitInteropProviderMethods)).toEqual([
+      "setSharedRemote",
+      "removeSharedRemote",
+      "setUpstream",
+      "removeUpstream",
+      "detachUpstream",
+      "setAutoPush",
       "upstreamStatus",
       "pushUpstream",
       "pullUpstream",
       "publishRepo",
       "commitMapping",
-      "pushTemplateContribution",
-      "publishTemplate",
+      "importProject",
       "cloneRepo",
       "remoteDefaultBranch",
       "reconcileUpstreams",

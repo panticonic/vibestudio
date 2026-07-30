@@ -7,6 +7,12 @@ import {
   getDeclaredUpstreamForRepo,
   listDeclaredUpstreams,
   normalizeWorkspaceRepoPath,
+  removeDeclaredRemoteFromConfig,
+  removeDeclaredUpstreamFromConfig,
+  setDeclaredRemoteInConfig,
+  setDeclaredUpstreamInConfig,
+  validateWorkspaceGitRemote,
+  validateWorkspaceGitUpstream,
   validateWorkspaceGitRemoteBranch,
   validateWorkspaceGitRemoteName,
   type ResolvedWorkspaceGitUpstream,
@@ -15,8 +21,12 @@ import {
   WORKSPACE_IMPORT_PARENT_DIRS,
   isSupportedImportRepoPath,
 } from "@vibestudio/workspace/pathPolicy";
+import { workspaceConfigDigest } from "@vibestudio/workspace/preparedConfig";
 import type {
   GitCommitMappingRow,
+  GitDetachUpstreamResult,
+  GitImportedWorkspaceRepo,
+  GitImportProjectRequest,
   GitOverwritePreview,
   GitPublishRepoInput,
   GitPublishRepoResult,
@@ -26,6 +36,8 @@ import type {
   GitUpstreamState,
   GitUpstreamStatusOptions,
   GitUpstreamStatusRow,
+  GitSharedRemotes,
+  GitUpstreams,
 } from "@vibestudio/service-schemas/gitInterop";
 import type {
   WorkspaceConfig,
@@ -740,18 +752,27 @@ export class UpstreamEngine {
       ...(credentialId ? { credentialId } : {}),
     });
     try {
-      await this.setRemote(repo, {
-        name: remoteName,
-        url: created.cloneUrl,
-        branch,
-      });
-      await this.setUpstream(repo, {
-        remote: remoteName,
-        branch,
-        autoPush: input.autoPush ?? false,
-        ...(input.authorEmail ? { authorEmail: input.authorEmail } : {}),
-        ...(input.authorName ? { authorName: input.authorName } : {}),
-      });
+      await this.applyConfigMutation(
+        (current) =>
+          setDeclaredUpstreamInConfig(
+            setDeclaredRemoteInConfig(current, repo, {
+              name: remoteName,
+              url: created.cloneUrl,
+              branch,
+            }),
+            repo,
+            {
+              remote: remoteName,
+              branch,
+              autoPush: input.autoPush ?? false,
+              ...(input.authorEmail ? { authorEmail: input.authorEmail } : {}),
+              ...(input.authorName ? { authorName: input.authorName } : {}),
+            }
+          ),
+        `record published Git repository ${repo}`
+      );
+      await this.clearRepoState(repo);
+      await this.reportHealth();
     } catch (err) {
       // The provider repo ALREADY exists; a lost URL here strands the caller.
       // Name it and the exact commands that finish the job.
@@ -793,6 +814,87 @@ export class UpstreamEngine {
       headCommit: pushed.headCommit,
       pushed: pushed.outcome === "pushed" || pushed.outcome === "remote-missing-created",
     };
+  }
+
+  async importProject(request: GitImportProjectRequest): Promise<GitImportedWorkspaceRepo> {
+    const repo = normalizeWorkspaceRepoPath(request.path);
+    if (!isSupportedImportRepoPath(repo)) {
+      throw new Error(`Imports must target one of: ${WORKSPACE_IMPORT_PARENT_DIRS.join(", ")}`);
+    }
+    let remote = validateWorkspaceGitRemote(request.remote);
+    const before = await this.readConfig();
+    const existingRemote = getDeclaredRemoteForRepo(before, repo, remote.name);
+    let existingUpstream: ResolvedWorkspaceGitUpstream | null = null;
+    try {
+      existingUpstream = getDeclaredUpstreamForRepo(before, repo);
+    } catch {
+      existingUpstream = null;
+    }
+    if (
+      existingRemote &&
+      (existingRemote.url !== remote.url ||
+        (remote.branch !== undefined &&
+          existingRemote.branch !== undefined &&
+          existingRemote.branch !== remote.branch))
+    ) {
+      throw new Error(`Import declaration for ${repo} conflicts with its existing remote`);
+    }
+    if (existingUpstream && existingUpstream.remote !== remote.name) {
+      throw new Error(`Import declaration for ${repo} conflicts with its existing upstream`);
+    }
+    if (!remote.branch) {
+      const discovered = await this.remoteDefaultBranch({
+        url: remote.url,
+        credentialIdOverride: request.credentialIdOverride,
+      });
+      if (!discovered.branch) {
+        throw new Error(
+          `Remote ${remote.url} does not advertise a default branch; specify remote.branch explicitly`
+        );
+      }
+      remote = { ...remote, branch: discovered.branch };
+    }
+    if (!existingRemote || !existingUpstream) {
+      await this.applyConfigMutation(
+        (current) =>
+          setDeclaredUpstreamInConfig(
+            existingRemote ? current : setDeclaredRemoteInConfig(current, repo, remote),
+            repo,
+            { remote: remote.name, branch: remote.branch, autoPush: false }
+          ),
+        `record Git import ${repo} from ${remote.url}`
+      );
+    }
+    try {
+      const candidate = await this.cloneRepo({
+        repoPath: repo,
+        credentialIdOverride: request.credentialIdOverride,
+      });
+      return { path: repo, remote, candidate };
+    } catch (error) {
+      if (!existingRemote || !existingUpstream) {
+        try {
+          await this.applyConfigMutation(
+            (current) => {
+              const withoutUpstream = existingUpstream
+                ? setDeclaredUpstreamInConfig(
+                    current,
+                    repo,
+                    declaredUpstreamConfig(existingUpstream)
+                  )
+                : removeDeclaredUpstreamFromConfig(current, repo);
+              return existingRemote
+                ? setDeclaredRemoteInConfig(withoutUpstream, repo, existingRemote)
+                : removeDeclaredRemoteFromConfig(withoutUpstream, repo, remote.name);
+            },
+            `roll back failed Git import ${repo}`
+          );
+        } catch (cleanupError) {
+          throw attachGitCleanupFailure(error, cleanupError, "restore-import-config");
+        }
+      }
+      throw error;
+    }
   }
 
   async cloneRepo(input: {
@@ -867,24 +969,136 @@ export class UpstreamEngine {
     return { branch: await git.getRemoteDefaultBranch(input.url) };
   }
 
-  private async setUpstream(
+  async setUpstream(
     repoPath: string,
     config: WorkspaceGitUpstreamConfig
-  ): Promise<unknown> {
+  ): Promise<GitUpstreams> {
     const repo = normalizeWorkspaceRepoPath(repoPath);
-    const result = await this.ctx.rpc.call("main", "gitInterop.setUpstream", repo, config);
+    const normalized = validateWorkspaceGitUpstream(config);
+    const result = await this.applyConfigMutation(
+      (current) => {
+        if (!getDeclaredRemoteForRepo(current, repo, normalized.remote)) {
+          throw new Error(`Upstream remote "${normalized.remote}" is not declared for ${repo}`);
+        }
+        return setDeclaredUpstreamInConfig(current, repo, normalized);
+      },
+      `set Git upstream for ${repo}`
+    );
     await this.clearRepoState(repo);
     await this.reportHealth();
-    return result;
+    return result.config.git?.upstreams ?? {};
   }
 
-  private async setRemote(repoPath: string, remote: WorkspaceGitRemoteConfig): Promise<unknown> {
-    return this.ctx.rpc.call(
-      "main",
-      "gitInterop.setSharedRemote",
-      normalizeWorkspaceRepoPath(repoPath),
-      remote
+  async setRemote(
+    repoPath: string,
+    remote: WorkspaceGitRemoteConfig
+  ): Promise<GitSharedRemotes> {
+    const repo = normalizeWorkspaceRepoPath(repoPath);
+    const normalized = validateWorkspaceGitRemote(remote);
+    const result = await this.applyConfigMutation(
+      (current) => setDeclaredRemoteInConfig(current, repo, normalized),
+      `set Git remote ${normalized.name} for ${repo}`
     );
+    return result.config.git?.remotes ?? {};
+  }
+
+  async removeRemote(repoPath: string, remoteName: string): Promise<GitSharedRemotes> {
+    const repo = normalizeWorkspaceRepoPath(repoPath);
+    const name = validateWorkspaceGitRemoteName(remoteName);
+    const result = await this.applyConfigMutation(
+      (current) => {
+        const withoutRemote = removeDeclaredRemoteFromConfig(current, repo, name);
+        let upstream: WorkspaceGitUpstreamConfig | null = null;
+        try {
+          upstream = getDeclaredUpstreamForRepo(current, repo);
+        } catch {
+          upstream = null;
+        }
+        return upstream?.remote === name
+          ? removeDeclaredUpstreamFromConfig(withoutRemote, repo)
+          : withoutRemote;
+      },
+      `remove Git remote ${name} from ${repo}`
+    );
+    return result.config.git?.remotes ?? {};
+  }
+
+  async removeUpstream(repoPath: string): Promise<GitUpstreams> {
+    const repo = normalizeWorkspaceRepoPath(repoPath);
+    const result = await this.applyConfigMutation(
+      (current) => removeDeclaredUpstreamFromConfig(current, repo),
+      `remove Git upstream from ${repo}`
+    );
+    await this.clearRepoState(repo);
+    await this.reportHealth();
+    return result.config.git?.upstreams ?? {};
+  }
+
+  async setAutoPush(repoPath: string, enabled: boolean): Promise<GitUpstreams> {
+    const repo = normalizeWorkspaceRepoPath(repoPath);
+    const result = await this.applyConfigMutation(
+      (current) => {
+        const upstream = getDeclaredUpstreamForRepo(current, repo);
+        if (!upstream) throw new Error(`No upstream tracking is declared for ${repo}`);
+        return setDeclaredUpstreamInConfig(current, repo, {
+          ...declaredUpstreamConfig(upstream),
+          autoPush: enabled,
+        });
+      },
+      `${enabled ? "enable" : "disable"} automatic Git push for ${repo}`
+    );
+    await this.clearRepoState(repo);
+    await this.reportHealth();
+    return result.config.git?.upstreams ?? {};
+  }
+
+  async detachUpstream(
+    repoPath: string,
+    options: { forgetRemote?: boolean; remote?: string } = {}
+  ): Promise<GitDetachUpstreamResult> {
+    const repo = normalizeWorkspaceRepoPath(repoPath);
+    const current = await this.readConfig();
+    let upstream: WorkspaceGitUpstreamConfig | null = null;
+    try {
+      upstream = getDeclaredUpstreamForRepo(current, repo);
+    } catch {
+      upstream = null;
+    }
+    const remoteName =
+      options.forgetRemote === true
+        ? validateWorkspaceGitRemoteName(options.remote ?? upstream?.remote ?? "origin")
+        : null;
+    const result = await this.applyConfigMutation(
+      (config) => {
+        const withoutUpstream = removeDeclaredUpstreamFromConfig(config, repo);
+        return remoteName
+          ? removeDeclaredRemoteFromConfig(withoutUpstream, repo, remoteName)
+          : withoutUpstream;
+      },
+      `disconnect Git upstream from ${repo}${remoteName ? ` and remove ${remoteName}` : ""}`
+    );
+    await this.clearRepoState(repo);
+    await this.reportHealth();
+    return {
+      upstreams: result.config.git?.upstreams ?? {},
+      remotes: result.config.git?.remotes ?? {},
+      removedRemote: remoteName,
+    };
+  }
+
+  private async applyConfigMutation(
+    mutate: (current: WorkspaceConfig) => WorkspaceConfig,
+    summary: string
+  ): Promise<{ changed: boolean; resultDigest: string; config: WorkspaceConfig }> {
+    const current = await this.readConfig();
+    const nextState = mutate(current);
+    return this.ctx.rpc.call("main", "workspace.applyPreparedConfig", {
+      expectedBaseDigest: workspaceConfigDigest(current),
+      nextState,
+      resultDigest: workspaceConfigDigest(nextState),
+      allowedPathScope: ["git.remotes", "git.upstreams"],
+      summary,
+    });
   }
 
   async openGitTab(repoPath?: string): Promise<{
@@ -1479,6 +1693,56 @@ function firstLine(message: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function attachGitCleanupFailure(
+  primary: unknown,
+  cleanup: unknown,
+  stage: "restore-import-config"
+): Error {
+  const error = primary instanceof Error ? primary : new Error(String(primary));
+  const existing =
+    isRecord(error) && isRecord(error["errorData"])
+      ? error["errorData"]
+      : {};
+  const errorData = {
+    ...existing,
+    cleanupFailures: [
+      {
+        stage,
+        message: errorMessage(cleanup),
+      },
+    ],
+  };
+  try {
+    Object.defineProperty(error, "errorData", {
+      value: errorData,
+      writable: true,
+      configurable: true,
+    });
+    return error;
+  } catch {
+    const wrapped = new Error(error.message, { cause: error });
+    Object.defineProperty(wrapped, "errorData", {
+      value: errorData,
+      writable: true,
+      configurable: true,
+    });
+    return wrapped;
+  }
+}
+
+function declaredUpstreamConfig(
+  upstream: ResolvedWorkspaceGitUpstream
+): WorkspaceGitUpstreamConfig {
+  return {
+    remote: upstream.remote,
+    branch: upstream.branch,
+    autoPush: upstream.autoPush,
+    ...(upstream.credential !== undefined ? { credential: upstream.credential } : {}),
+    ...(upstream.authorEmail !== undefined ? { authorEmail: upstream.authorEmail } : {}),
+    ...(upstream.authorName !== undefined ? { authorName: upstream.authorName } : {}),
+  };
 }
 
 function displayRemote(url: string): string {

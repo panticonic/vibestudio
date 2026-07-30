@@ -8,7 +8,7 @@
  *  - raw Node disk access for operational checkouts under workspace host state
  *
  * The host reaches it exclusively through the manifest-declared
- * `providers.gitInterop` slot. Userland calls the typed `gitInterop.*` service
+ * `providers.gitInterop` slot. Userland calls the selected provider directly
  * through the runtime `git` client and never names this extension.
  */
 
@@ -65,6 +65,7 @@ type GitBridgeApi = {
   openGitTab(repoPath?: string): ReturnType<UpstreamEngine["openGitTab"]>;
   /** Userland template composer entry; deliberately outside the host provider namespace. */
   suggestTemplateContribution(input: TemplatePushInput): ReturnType<TemplatePushEngine["push"]>;
+  publishTemplate(input: GitTemplatePublishInput): ReturnType<TemplatePublishEngine["publish"]>;
 };
 
 /** Internal provider surface exposed to the extension host. */
@@ -79,7 +80,37 @@ export async function activate(ctx: ExtensionContextLike) {
   const templatePush = new TemplatePushEngine(ctx, bridge);
   const templatePublish = new TemplatePublishEngine(ctx, bridge);
   await upstream.activate();
+  const unsubscribe = ctx.rpc.on?.("workspace:protected-refs-changed", (event) => {
+    const payload = event.payload as { repoPaths?: unknown };
+    if (!Array.isArray(payload.repoPaths) || !payload.repoPaths.every((item) => typeof item === "string")) {
+      ctx.log.warn?.("ignored malformed protected-ref event");
+      return;
+    }
+    upstream.reconcileUpstreams(payload.repoPaths.map((repoPath) => ({ repoPath })));
+  });
+  if (unsubscribe) ctx.subscriptions?.push({ dispose: unsubscribe });
   const gitInterop = {
+    setSharedRemote(repoPath: string, remote: Parameters<UpstreamEngine["setRemote"]>[1]) {
+      return upstream.setRemote(repoPath, remote);
+    },
+    removeSharedRemote(repoPath: string, remoteName: string) {
+      return upstream.removeRemote(repoPath, remoteName);
+    },
+    setUpstream(repoPath: string, config: Parameters<UpstreamEngine["setUpstream"]>[1]) {
+      return upstream.setUpstream(repoPath, config);
+    },
+    removeUpstream(repoPath: string) {
+      return upstream.removeUpstream(repoPath);
+    },
+    detachUpstream(
+      repoPath: string,
+      options?: Parameters<UpstreamEngine["detachUpstream"]>[1]
+    ) {
+      return upstream.detachUpstream(repoPath, options);
+    },
+    setAutoPush(repoPath: string, enabled: boolean) {
+      return upstream.setAutoPush(repoPath, enabled);
+    },
     upstreamStatus(repoPaths: string[], options: GitUpstreamStatusOptions = {}) {
       return upstream.upstreamStatus(repoPaths, options);
     },
@@ -95,11 +126,8 @@ export async function activate(ctx: ExtensionContextLike) {
     commitMapping(repoPath: string, options: GitCommitMappingOptions = {}) {
       return upstream.commitMapping(repoPath, options);
     },
-    pushTemplateContribution(input) {
-      return templatePush.push(input);
-    },
-    publishTemplate(input: GitTemplatePublishInput) {
-      return templatePublish.publish(input);
+    importProject(input: Parameters<UpstreamEngine["importProject"]>[0]) {
+      return upstream.importProject(input);
     },
     cloneRepo(input: { repoPath: string; credentialIdOverride?: string | null }) {
       return upstream.cloneRepo(input);
@@ -117,16 +145,19 @@ export async function activate(ctx: ExtensionContextLike) {
   const api = {
     providerContracts: { gitInterop },
     retryUpstreamPush(repoPath: string) {
-      return ctx.rpc.call("main", "gitInterop.pushUpstream", repoPath);
+      return upstream.pushUpstream(repoPath);
     },
     pauseAutoPush(repoPath: string) {
-      return ctx.rpc.call("main", "gitInterop.setAutoPush", repoPath, false);
+      return upstream.setAutoPush(repoPath, false);
     },
     openGitTab(repoPath?: string) {
       return upstream.openGitTab(repoPath);
     },
     suggestTemplateContribution(input: TemplatePushInput) {
       return templatePush.push(input);
+    },
+    publishTemplate(input: GitTemplatePublishInput) {
+      return templatePublish.publish(input);
     },
   } satisfies GitBridgeApi;
   return api;

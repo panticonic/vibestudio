@@ -41,6 +41,7 @@ export interface TemplateRegistry {
 }
 
 export interface TemplateCatalogSnapshot extends TemplateRegistry {
+  coordinates: TemplateRegistryCoordinates;
   source: "verified" | "cache";
   stale: boolean;
   verifiedAt: string;
@@ -49,12 +50,14 @@ export interface TemplateCatalogSnapshot extends TemplateRegistry {
 
 export interface TemplateRegistrySelection {
   catalogId: string;
-  registryRevision: string;
+  registryCommit: string;
+  registrySnapshot: string;
 }
 
 export interface ResolvedTemplateRegistrySelection {
   catalogId: string;
-  registryRevision: string;
+  registryCommit: string;
+  registrySnapshot: string;
   name: string;
   url: string;
   promoted: PromotedTemplatePin;
@@ -67,17 +70,10 @@ export class TemplateRegistryValidationError extends Error {
   }
 }
 
-export class TemplateRegistryRevisionError extends Error {
-  readonly requestedRevision: string;
-  readonly currentRevision: string;
-
-  constructor(requestedRevision: string, currentRevision: string) {
-    super(
-      `Template registry revision ${requestedRevision} is stale; refresh the catalog and review revision ${currentRevision}`
-    );
-    this.name = "TemplateRegistryRevisionError";
-    this.requestedRevision = requestedRevision;
-    this.currentRevision = currentRevision;
+export class TemplateRegistrySelectionError extends Error {
+  constructor() {
+    super("The template catalog changed after it was shown; refresh and review it again");
+    this.name = "TemplateRegistrySelectionError";
   }
 }
 
@@ -244,10 +240,14 @@ export function assertTemplateRegistryEpoch(
 export function resolveTemplateRegistrySelection(
   registry: TemplateRegistry,
   selection: TemplateRegistrySelection,
+  coordinates: TemplateRegistryCoordinates,
   systemEpoch?: number
 ): ResolvedTemplateRegistrySelection {
-  if (selection.registryRevision !== registry.revision) {
-    throw new TemplateRegistryRevisionError(selection.registryRevision, registry.revision);
+  if (
+    selection.registryCommit !== coordinates.commit ||
+    selection.registrySnapshot !== coordinates.snapshot
+  ) {
+    throw new TemplateRegistrySelectionError();
   }
   if (systemEpoch !== undefined) assertTemplateRegistryEpoch(registry, systemEpoch);
   const selected = registry.entries.find((candidate) => candidate.id === selection.catalogId);
@@ -258,7 +258,8 @@ export function resolveTemplateRegistrySelection(
   }
   return {
     catalogId: selected.id,
-    registryRevision: registry.revision,
+    registryCommit: coordinates.commit,
+    registrySnapshot: coordinates.snapshot,
     name: selected.name,
     url: selected.url,
     promoted: selected.promoted,

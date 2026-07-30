@@ -3,17 +3,13 @@ import type { TemplateOperationInspection } from "@workspace/template-composer";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import type { TemplateOperationRecord } from "./staging.js";
 
-export async function ensureApprovedTemplateOperation(input: {
+export async function ensureTemplateOperationIntent(input: {
   operationId: string;
   inspection: TemplateOperationInspection;
   intent: unknown;
   existing: TemplateOperationRecord | null;
-  requestApproval(): Promise<string | null>;
   persist(record: TemplateOperationRecord): Promise<void>;
-}): Promise<
-  | { status: "approved"; record: TemplateOperationRecord; resumed: boolean }
-  | { status: "denied"; message: string }
-> {
+}): Promise<{ record: TemplateOperationRecord; resumed: boolean }> {
   if (input.existing) {
     if (input.existing.fingerprint !== input.inspection.plan.fingerprint) {
       throw new Error(
@@ -26,10 +22,8 @@ export async function ensureApprovedTemplateOperation(input: {
       );
     }
   }
-  const denied = await input.requestApproval();
-  if (denied) return { status: "denied", message: denied };
   if (input.existing) {
-    return { status: "approved", record: input.existing, resumed: true };
+    return { record: input.existing, resumed: true };
   }
   const record: TemplateOperationRecord = {
     version: 1,
@@ -44,5 +38,5 @@ export async function ensureApprovedTemplateOperation(input: {
       .map((change) => change.repoPath),
   };
   await input.persist(record);
-  return { status: "approved", record, resumed: false };
+  return { record, resumed: false };
 }

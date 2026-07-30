@@ -55,7 +55,7 @@ const CANCELLATION_RECORD_DIR = "template-cancellations";
 export interface TemplateOperationRecord {
   version: 1;
   operationId: string;
-  kind: TemplateOperationInspection["kind"];
+  kind: TemplateOperationInspection["kind"] | "publish-authoring";
   fingerprint: string;
   intent: unknown;
   pins: WorkspaceTemplatePin[];

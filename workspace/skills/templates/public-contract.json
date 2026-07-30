@@ -16,7 +16,7 @@
     },
     "inspect": {
       "tier": "read",
-      "arguments": ["{ alias } | { url, credential? } | { catalogId, registryRevision }"],
+      "arguments": ["{ alias } | { url, credential? } | { catalogId, registryCommit, registrySnapshot }"],
       "returns": "TemplateInspection"
     },
     "inspectAuthoring": {
@@ -96,7 +96,7 @@
     "the current lock wins for every already-resolved URL; catalog selections and unseen dependencies resolve from the reviewed registry revision, while direct URLs use inspect's independently discovered exact pin",
     "pending review items are opened through normal VCS compare/integrate using their context and delta ids; approval record identifiers are host-internal",
     "catalog rendering is cache-only; network refresh occurs only through catalog({ refresh: true })",
-    "a catalog selection is rejected unless registryRevision exactly matches the cached verified registry",
+    "a catalog selection is rejected unless registryCommit and registrySnapshot exactly match the cached verified registry",
     "excluded trust/provider values come from acquired exact template pins and are accepted or declined through a separate individually approved action",
     "status is a local projection of the committed lock and content-addressed suggestion evidence; it never acquires or fetches template sources",
     "a direct URL may name a logical credential; that name is preserved in inspect.pin and durable operation intent",

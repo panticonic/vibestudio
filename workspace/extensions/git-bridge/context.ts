@@ -16,7 +16,9 @@ export interface ExtensionContextLike {
   };
   rpc: {
     call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
+    on?(eventName: string, cb: (event: { payload: unknown }) => void): () => void;
   };
+  subscriptions?: Array<{ dispose(): void }>;
   storage: {
     mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
     readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;

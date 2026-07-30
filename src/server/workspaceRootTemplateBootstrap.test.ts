@@ -53,7 +53,9 @@ function fixture(rootSnapshot: ExactGitSnapshot) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "root-template-bootstrap-"));
   roots.push(root);
   const statePath = path.join(root, "state");
+  const sourcePath = path.join(root, "source");
   fs.mkdirSync(path.join(statePath, "workspace-creation"), { recursive: true });
+  fs.mkdirSync(sourcePath);
   const pin = {
     url: "git+https://example.test/base.git",
     ref: "refs/tags/v1",
@@ -68,9 +70,12 @@ function fixture(rootSnapshot: ExactGitSnapshot) {
   return {
     pin,
     acquire,
+    statePath,
+    sourcePath,
     bootstrap: new WorkspaceRootTemplateBootstrap({
       workspaceId: "ws-1",
       statePath,
+      sourcePath,
       acquire,
     }),
   };
@@ -124,6 +129,27 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     await expect(fx.bootstrap.prepareInitialization()).rejects.toThrow(
       /coordinates different from the creation descriptor/
     );
+  });
+
+  it("restarts from the local materialization receipt without reacquiring the remote root", async () => {
+    const rootSnapshot = snapshot([
+      { path: "meta/vibestudio.yml", text: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` },
+    ]);
+    const fx = fixture(rootSnapshot);
+    await fx.bootstrap.prepareSource();
+
+    const unavailableAcquire = vi.fn(async (): Promise<ExactGitSnapshot> => {
+      throw new Error("template registry unavailable");
+    });
+    const restarted = new WorkspaceRootTemplateBootstrap({
+      workspaceId: "ws-1",
+      statePath: fx.statePath,
+      sourcePath: fx.sourcePath,
+      acquire: unavailableAcquire,
+    });
+
+    await expect(restarted.prepareSource()).resolves.toEqual(fx.pin);
+    expect(unavailableAcquire).not.toHaveBeenCalled();
   });
 
   it("requires a flattened runtime manifest even when template source exists", async () => {
