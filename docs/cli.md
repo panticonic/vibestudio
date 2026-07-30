@@ -38,17 +38,17 @@ encryption key remain shared, so a fresh test instance can use configured models
 without copying secrets.
 
 `pnpm dev` and `pnpm server:live` both default to the persistent `source`
-instance. It is the checkout's one source-coupled development identity:
-protected workspace publications are mirrored back into `workspace/`, so
-interactive edits survive a restart. The checkout-scoped instance lock prevents
-the desktop and standalone launchers from accidentally owning that identity at
-the same time.
+instance. It is the checkout's persistent development identity: its acquired
+workspace state survives restarts, but the promoted base-template repository is
+immutable input and is never a publication target. The checkout-scoped instance
+lock prevents the desktop and standalone launchers from accidentally owning
+that identity at the same time.
 
 `--instance NAME` selects another persistent state root. `--ephemeral` creates a
 temporary root deleted after ordered shutdown; combine it with a name for
 parallel testing. Every non-`source` instance is fully isolated: its protected
-workspace publications remain in its own copied workspace and are never
-mirrored into the checkout. The supervisor prints
+workspace publications remain in its own acquired workspace and are never
+pushed into the promoted base-template repository. The supervisor prints
 `pnpm cli --instance NAME <command>`. The instance registry is checkout-scoped,
 so identical names in different worktrees do not collide. Starting or stopping
 one instance never signals another.
@@ -386,7 +386,7 @@ workspace manifest's configured `providers.gitInterop` extension rather than a
 host-hardcoded workspace package.
 
 Use `git.setSharedRemote()` and `git.setUpstream()` from
-`@vibestudio/runtime` to declare a remote and opt a workspace repo into upstream
+`@workspace/runtime` to declare a remote and opt a workspace repo into upstream
 tracking. The runtime `git.*` methods use the same host `gitInterop.*` service as
 the CLI, and that service dispatches transport work through the configured
 `providers.gitInterop` extension. Runtime code does not invoke the extension by

@@ -70,7 +70,7 @@ hash chains / cryptographic audit** — trusted members (plan §0.0).
   - **(a) Agent tool-call approvals** — already journaled in userland GAD:
     `approval.requested`/`approval.resolved` events keyed by `causality.approvalId`, projected
     into the resolve-once `trajectory_approvals` table with `requested_by_json`/
-    `resolved_by_json` (`packages/semantic-control-plane/src/index.ts:1833-1846`, `projectApproval`
+    `resolved_by_json` (`workspace/workers/workspace-source/GadWorkspaceDO.ts`, `projectApproval`
     `:4008-4056`).
   - **(b) Host approval-queue resolutions** — credential, capability, client-config,
     credential-input, userland, unit-batch, device-code, external-agent — resolve in-process
@@ -184,7 +184,7 @@ export interface ApprovalProvenanceRecord {
 - **GAD (agent path):** the existing `approval.resolved` event
   (`payloadKind: "approval.resolved.v1"`) gains the account on
   `payload.resolvedBy` and on `actor.metadata.userId`; extend `projectApproval`
-  (`semantic-control-plane/src/index.ts:4008`) so `resolved_by_json` carries the account. **Do not** set
+  (`workspace/workers/workspace-source/GadWorkspaceDO.ts`) so `resolved_by_json` carries the account. **Do not** set
   `actor.kind = "user"` — that kind is the semantic "human-authored" role, not an account
   (GAD substrate review); the account rides in `metadata`.
 
@@ -301,18 +301,18 @@ the agent half; a small host-fed panel/section renders the host-log half.
 
 ## 10. File-change checklist
 
-| File                                              | Change                                                                                                                                                                                 |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/shared/src/governance/types.ts`         | **new** — `ApprovalProvenanceRecord`, `MembershipGovernanceRecord`                                                                                                                     |
-| `packages/shared/src/governance/governanceLog.ts` | **new** — host-owned exact-schema transactional SQLite ledger, WAL + full synchronous durability, approval-id replay protection (**no** hash chain)                                    |
-| `src/server/services/approvalQueue.ts`            | **single `settle(entry, resolution)` coordinator** — snapshot → emit `resolved` → remove → govern (fixes delete-before-emit `:1223`); route `resolveExternalAgentByRequest` through it |
-| `src/server/services/shellApprovalService.ts`     | capture resolver subject in every handler; all resolutions go through the queue's `settle` coordinator                                                                                 |
-| `src/main/serverClient.ts`                        | no acting-principal payload or identity-override seam; the authenticated connection supplies the verified subject                                                                      |
-| hub/WP2 membership services                       | emit `MembershipGovernanceRecord` on invite/revoke/add/remove/role-change                                                                                                              |
-| `packages/semantic-control-plane/src/index.ts` | `projectApproval` reads account into `resolved_by_json`; `approval.resolved.v1` carries `actor.metadata.userId`                                                                        |
-| `src/server/services/governanceService.ts`        | **new** — `governance.list` read RPC (host-side; approvals + membership)                                                                                                               |
-| `workspace/panels/gad-browser/*`                  | Governance view (union of host log + GAD projection)                                                                                                                                   |
-| `pushMetrics.ts`                                  | keep counters; they are metrics, not the record (no longer the only one)                                                                                                               |
+| File                                                   | Change                                                                                                                                                                                 |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/shared/src/governance/types.ts`              | **new** — `ApprovalProvenanceRecord`, `MembershipGovernanceRecord`                                                                                                                     |
+| `packages/shared/src/governance/governanceLog.ts`      | **new** — host-owned exact-schema transactional SQLite ledger, WAL + full synchronous durability, approval-id replay protection (**no** hash chain)                                    |
+| `src/server/services/approvalQueue.ts`                 | **single `settle(entry, resolution)` coordinator** — snapshot → emit `resolved` → remove → govern (fixes delete-before-emit `:1223`); route `resolveExternalAgentByRequest` through it |
+| `src/server/services/shellApprovalService.ts`          | capture resolver subject in every handler; all resolutions go through the queue's `settle` coordinator                                                                                 |
+| `src/main/serverClient.ts`                             | no acting-principal payload or identity-override seam; the authenticated connection supplies the verified subject                                                                      |
+| hub/WP2 membership services                            | emit `MembershipGovernanceRecord` on invite/revoke/add/remove/role-change                                                                                                              |
+| `workspace/workers/workspace-source/GadWorkspaceDO.ts` | `projectApproval` reads account into `resolved_by_json`; `approval.resolved.v1` carries `actor.metadata.userId`                                                                        |
+| `src/server/services/governanceService.ts`             | **new** — `governance.list` read RPC (host-side; approvals + membership)                                                                                                               |
+| `workspace/panels/gad-browser/*`                       | Governance view (union of host log + GAD projection)                                                                                                                                   |
+| `pushMetrics.ts`                                       | keep counters; they are metrics, not the record (no longer the only one)                                                                                                               |
 
 ---
 

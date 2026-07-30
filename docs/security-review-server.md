@@ -282,12 +282,12 @@ for an existing ID would recreate the original defect.
 - HTTP tests intentionally assert that a worker may relay to unrelated panel and shell targets (`src/server/rpcServer.httpRpc.test.ts:858-891`).
 - Panel/shell calls are forwarded to the target bridge at `src/server/rpcServer.ts:2849-2858`.
 - Regular-worker calls are forwarded using a host-stamped envelope but without a target/method authority decision at `src/server/rpcServer.ts:3441-3481`.
-- The worker dispatches the received envelope to methods registered with `runtime.expose()` (`packages/runtime/src/worker/index.ts:341-355`, `packages/runtime/src/worker/index.ts:383-402`).
+- The worker dispatches the received envelope to methods registered with `runtime.expose()` (`workspace/packages/runtime/src/worker/index.ts:341-355`, `workspace/packages/runtime/src/worker/index.ts:383-402`).
 - By comparison, direct Durable Object calls have an exact build-catalog and authority-attestation path beginning at `src/server/rpcServer.ts:2915-2920` and wired through `src/server/index.ts:2737-2813`.
 
 #### Impact
 
-Any exposed panel, shell, or regular-worker method is transport-callable by any authenticated participant unless the receiver implements its own check. Current built-ins include panel agent inspection/mode methods (`packages/runtime/src/panel/agentApi.ts:65-72`), and workspace code can add arbitrary methods through the ergonomic `expose` API (`packages/runtime/src/setup/createBaseRuntime.ts:237-239`).
+Any exposed panel, shell, or regular-worker method is transport-callable by any authenticated participant unless the receiver implements its own check. Current built-ins include panel agent inspection/mode methods (`workspace/packages/runtime/src/panel/agentApi.ts:65-72`), and workspace code can add arbitrary methods through the ergonomic `expose` API (`workspace/packages/runtime/src/setup/createBaseRuntime.ts:237-239`).
 
 This is an authorization asymmetry, not proof that every exposed method is sensitive. It becomes a vulnerability as soon as a receiver assumes the transport enforces parent/owner/source or method authority.
 

@@ -93,7 +93,7 @@ notification because they require in-app UI.
 
 ## Userland Approval Flow
 
-Userland code calls `requestApproval()` from `@vibestudio/runtime` (panel) or
+Userland code calls `requestApproval()` from `@workspace/runtime` (panel) or
 `runtime.requestApproval()` from a worker runtime. The request supplies a
 provider-owned `subject.id` and user-facing copy. By default the prompt shows
 scoped host choices: `Allow once`, `Allow this session`, `Trust version`, and

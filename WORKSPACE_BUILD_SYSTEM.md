@@ -8,6 +8,14 @@ These builds run in the server process. Electron requests them via RPC and the
 headless server uses the same service. For repository/desktop/server artifacts
 produced by the root `build.mjs`, see [HOST_BUILD_SYSTEM.md](HOST_BUILD_SYSTEM.md).
 
+Exact-state build reports run TypeScript against the same materialized
+unit/dependency closure used for bundling. Typecheck and materialization
+failures fail closed. The protected VCS push-to-`main` gate repeats the
+build/typecheck report for the changed units and their transitive reverse
+dependents against the exact candidate workspace state before approval or ref
+mutation. Source-manifest or graph-topology changes conservatively expand the
+scope to all buildable units.
+
 ## Core Concepts
 
 ### Effective Versions
@@ -160,7 +168,7 @@ Two build strategies, selected by unit kind:
 - `jsx: "automatic"` (React 17+ transform)
 - Code splitting enabled
 - Plugins: workspace resolve, `.js` → `.ts` rewrite, `fs` shim, `path` shim, React/react-dom dedupe
-- `fs` shim imports `{ fs as _fs }` from `@vibestudio/runtime` and re-exports individual methods as wrapper functions
+- `fs` shim imports `{ fs as _fs }` from `@workspace/runtime` and re-exports individual methods as wrapper functions
 - `path` shim delegates to `pathe` (browser-compatible)
 - Eager panel dependencies stay in the primary artifact; chunks are reserved for genuine dynamic imports so remote clients do not waterfall through synthetic startup dependencies
 - Manifest `externals` produce an import map in the generated HTML

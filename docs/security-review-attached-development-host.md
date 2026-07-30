@@ -220,14 +220,14 @@ below. Every row names the test that fails if the asserted boundary regresses.
 | A parent cannot widen the child-local ceiling; a fixed-code initiator cannot be widened to interactive authority | `src/server/services/attachedHostProtocol.test.ts` — “rejects a parent-requested ceiling broader than child-local policy”; `packages/shared/src/serviceDispatcher.attachedHost.test.ts` — broad live grants, expiry, and digest drift; `src/server/services/developmentService.test.ts` — “persists a fixed-code initiator's manifest as the attached route ceiling” |
 | Approval presentation is parent-canonical and child prose is inert | `src/server/services/attachedHostProtocol.test.ts` — canonical decision/dishonest presentation cases and explicit display-text exclusion; `src/server/services/attachedHostTransport.test.ts` — canonical parent queue request |
 | Decisions cannot be substituted, replayed, or consumed twice | `src/server/services/attachedHostProtocol.test.ts` — exact decision binding, substitution, and second-consumption rejection; `src/server/services/attachedHostSessionStore.test.ts` — durable replay rejection across reopen |
-| Route loss before child consumption mints no grant and eval reports a distinct restartable terminal condition | `src/server/services/attachedHostProtocol.test.ts` and `src/server/services/attachedHostTransport.test.ts` — route-loss/no-grant cases; `src/server/internalDOs/evalDO.cancel.test.ts` — “persists approval route loss as a distinct restartable terminal condition” |
+| Route loss before child consumption mints no grant and eval reports a distinct restartable terminal condition | `src/server/services/attachedHostProtocol.test.ts` and `src/server/services/attachedHostTransport.test.ts` — route-loss/no-grant cases; `packages/builtin/src/eval-engine/EvalDO.cancel.test.ts` — “persists approval route loss as a distinct restartable terminal condition” |
 | Bootstrap credentials are revoked and cannot remain as a management fallback | `src/server/services/attachedHostTransport.test.ts` — exact remote-device revocation, file removal, and later-use rejection; `src/server/services/isolatedDevelopmentHostExecutor.test.ts` — attachment/management lifecycle |
 | Private keys and reusable credentials are absent from durable attached records | `src/server/services/attachedHostProtocol.test.ts` — public-material-only record; `src/server/services/attachedHostSessionStore.test.ts` — explicit private-key/refresh-token persistence rejection |
 | Parent/admin/unrelated credentials are absent from the child environment | `src/server/services/isolatedDevelopmentHostExecutor.test.ts` — explicit forbidden environment-key census and no refresh-token serialization |
 | Intentional stop wins the child-exit race; a foreign process generation is never signalled or unregistered | `src/server/services/isolatedDevelopmentHostExecutor.test.ts` — “makes intentional stop own the exit race and refuses a foreign generation”; `src/dev/devInstanceSupervisor.test.ts` — exact process-group termination |
 | A foreign or escaped execution root is never executed or deleted | `src/server/services/developmentExecutor.test.ts` — “refuses path escapes and foreign owner markers before execution or deletion” |
 | Cleanup failure preserves the original failure plus exact retained run/artifact identities | `src/server/services/developmentService.test.ts` — “preserves the primary failure and exact retained ids when force-retire cleanup fails”; unproven process ownership remains `requires-repair` rather than claiming retirement |
-| Production exposes the promised owner-scoped ordinary child-service surface | `src/server/services/attachedHostController.test.ts` — owner validation and generic child invocation; `packages/runtime/src/shared/hostedRuntime.test.ts` — `hosts.attach(...).services.<service>.<method>`; `src/server/index.ts` is the production controller/service/runtime-route composition |
+| Production exposes the promised owner-scoped ordinary child-service surface | `src/server/services/attachedHostController.test.ts` — owner validation and generic child invocation; `workspace/packages/runtime/src/shared/hostedRuntime.test.ts` — `hosts.attach(...).services.<service>.<method>`; `src/server/index.ts` is the production controller/service/runtime-route composition |
 
 Acceptance command boundary:
 
@@ -243,6 +243,6 @@ pnpm vitest run \
   src/server/services/developmentExecutor.test.ts \
   src/server/services/isolatedDevelopmentHostExecutor.test.ts \
   src/dev/devInstanceSupervisor.test.ts \
-  src/server/internalDOs/evalDO.cancel.test.ts \
-  packages/runtime/src/shared/hostedRuntime.test.ts
+  packages/builtin/src/eval-engine/EvalDO.cancel.test.ts \
+  workspace/packages/runtime/src/shared/hostedRuntime.test.ts
 ```

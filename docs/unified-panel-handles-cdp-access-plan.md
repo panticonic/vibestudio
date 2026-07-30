@@ -14,9 +14,9 @@ Vibestudio is an Electron tree-browser: the UI is a tree of "panels" (each an El
 `WebContentsView`), plus non-visual participants — workers and Durable Objects (DOs) —
 sharing one userland runtime. Today's connectivity model is fragmented and restrictive:
 
-- **Two divergent handle types.** `ParentHandle` (`packages/runtime/src/core/types.ts:119-162`)
+- **Two divergent handle types.** `ParentHandle` (`workspace/packages/runtime/src/core/types.ts:119-162`)
   is RPC-only (`id/call/emit/on`, with typed-contract generics). `PanelHandle`
-  (`packages/runtime/src/panel/handle.ts:15-34`) is control/metadata/CDP only, with
+  (`workspace/packages/runtime/src/panel/handle.ts:15-34`) is control/metadata/CDP only, with
   _no_ RPC. A child can RPC its parent but can't CDP it; a parent can CDP a child but the two
   surfaces don't match.
 - **CDP is ancestor→descendant + browser-kind only.** `cdpServer.canAccessBrowser()`
@@ -166,7 +166,7 @@ the tree/host and must not be silently authorized by an automate grant (`panel.s
 
 ### 4.2 Reuse the server capability system, in-process
 
-Do **not** call `userlandApprovalService` directly. Use `requestCapabilityPermission`
+Use `requestCapabilityPermission`
 (`src/server/services/capabilityPermission.ts`) — the same helper behind `cors-response-read`
 and `external-browser-open`. Because the CDP broker now lives **in the server**, this is a
 direct in-process call: no `serverClient` hop, no main-local token, no impersonation. It
@@ -253,7 +253,7 @@ reusing `cdpBridge`'s provider-side protocol (`handleExtensionConnection`,
 
 ## 5. Unified `PanelHandle`
 
-Define one type in `packages/runtime/src/core/types.ts` (merging today's
+Define one type in `workspace/packages/runtime/src/core/types.ts` (merging today's
 `PanelHandle` + `ParentHandle`):
 
 - **Metadata stays synchronous `readonly` props** (`id`, `title`, `source`, `kind`,
@@ -262,7 +262,7 @@ Define one type in `packages/runtime/src/core/types.ts` (merging today's
   pattern, `handle.ts:152`); fully-hydrated handles come from `list()`/`children()`. Add an
   async `refresh()` to (re)populate metadata for a bare handle.
 - **RPC:** `call: TypedCallProxy<Exposed>`, `emit`, `on` — generalize
-  `createParentHandle` (`packages/runtime/src/shared/handles.ts:10-31`) from
+  `createParentHandle` (`workspace/packages/runtime/src/shared/handles.ts:10-31`) from
   `parentId` to any target id.
 - **Typed contracts:** `withContract(contract, role)` where `role` resolves which side of the
   (asymmetric) `defineContract` `.call` exposes (`child.methods` vs `parent.methods`): a
@@ -314,12 +314,12 @@ server-published state. `handle.ts` `panelCall` routes to this server service ov
 runtimes; the shell renderer keeps its IPC fast-path to `panelShellService` until the shell UI
 is migrated to the same server tree service.
 
-Export `panelTree` + `PanelHandle` from `packages/runtime/src/panel/index.ts`,
+Export `panelTree` + `PanelHandle` from `workspace/packages/runtime/src/panel/index.ts`,
 `worker/index.ts`, and `worker/durable-base.ts`.
 
 ## 7. CDP layer: client API, privileged tracking, naming
 
-- **Client** (`packages/runtime/src/panel/browserAutomation.ts`): drop the `kind`
+- **Client** (`workspace/packages/runtime/src/panel/browserAutomation.ts`): drop the `kind`
   param and `assertBrowser` (and its 7 call sites); rename → `createCdpAutomation` /
   `CdpAutomation`. It obtains the endpoint from the **`getCdpEndpoint` server service** (§4.3)
   on its own RPC connection — not via the Electron IPC fast-path — and connects to the server
@@ -484,7 +484,7 @@ exist, so the headless extension is mostly policy + the windowless host process.
   `PANEL_SYSTEM.md` runtime-API list, `workspace/skills/*/{BROWSER,EVAL,WORKFLOW*}.md`.
 - **Tests:** `src/server/cdpBridge.test.ts` (broker auth + client/provider routing), a new host
   CDP **provider agent** test (migrated `cdpServer` attach/forward/queue/screenshot logic),
-  `packages/runtime/src/panel/handle.test.ts` (remove kind-gating reject at `:59`;
+  `workspace/packages/runtime/src/panel/handle.test.ts` (remove kind-gating reject at `:59`;
   rename `.browser`→`.cdp`; unified RPC+cdp surface), `packages/shared/src/cdpGrants.test.ts`,
   plus a new **`getCdpEndpoint` server-service** test (in-process `accessDecision` +
   `requestCapabilityPermission`) and shared-policy tests for `accessDecision`. Cases: any

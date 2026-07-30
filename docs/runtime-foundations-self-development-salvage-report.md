@@ -2523,7 +2523,7 @@ would be a serious regression if implemented literally.
 
 Today the EvalDO pushes the terminal result to the initiating receiver:
 `this.rpc.call(args.agentRef, "onEvalComplete", [...])`
-(`src/server/internalDOs/evalDO.ts:874`). The agent vessel's own comment states
+(`packages/builtin/src/eval-engine/EvalDO.ts:874`). The agent vessel's own comment states
 the relationship explicitly — `getRun` is "a poll BACKSTOP, not the primary
 settle path" (`workspace/packages/agentic-do/src/agent-vessel.ts:4218-4226`).
 
@@ -3042,9 +3042,9 @@ the old lifecycle reproduces the documented drift theme in the July 2026 UX
 review, on the surface with the most readers.
 
 Note that the EvalDO's _internal_ `startRun` method
-(`src/server/internalDOs/evalDO.ts`, exercised by
+(`packages/builtin/src/eval-engine/EvalDO.ts`, exercised by
 `src/server/internalStorageWorkerd.test.ts:536` and
-`src/server/internalDOs/evalDO.cancel.test.ts`) is a durable-object method, not
+`packages/builtin/src/eval-engine/EvalDO.cancel.test.ts`) is a durable-object method, not
 the public service method. It may keep its name. Only the public service surface
 is being cut.
 

@@ -17,7 +17,7 @@ export default function MyApp() {
   "name": "@workspace-panels/my-app",
   "vibestudio": { "title": "My App" },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*"
   }
 }
@@ -77,7 +77,7 @@ From userland runtimes, opening a panel is a structural tree mutation and prompt
 per requester entity and parent/root target; shell UI calls use the trusted shell path.
 
 ```tsx
-import { openPanel, buildPanelLink } from "@vibestudio/runtime";
+import { openPanel, buildPanelLink } from "@workspace/runtime";
 
 function NavigationExample() {
   // Open a panel (new tab)
@@ -118,7 +118,7 @@ function NavigationExample() {
 When panels need to share the same filesystem and storage (e.g., chat + agents in a session):
 
 ```tsx
-import { buildPanelLink } from "@vibestudio/runtime";
+import { buildPanelLink } from "@workspace/runtime";
 
 function SessionLauncher() {
   const launchSession = () => {
@@ -166,7 +166,7 @@ compiles the panel: `"default"` ⇒ React + Radix, `"svelte"` ⇒ Svelte, `"vani
 ⇒ no framework (plain DOM). See
 [PANEL_SYSTEM.md](PANEL_SYSTEM.md) for the full resolution order.
 
-The neutral `@vibestudio/runtime` API — identity, navigation, `rpc`, `openPanel`,
+The neutral `@workspace/runtime` API — identity, navigation, `rpc`, `openPanel`,
 `panel.stateArgs`, `vcs`, `workspace`, and so on — is **identical
 across all three frameworks**. Only the rendering layer and the binding package
 change.
@@ -181,7 +181,7 @@ Set the template to `"svelte"` and depend on `@workspace/svelte`:
   "name": "@workspace-panels/hello-svelte",
   "vibestudio": { "title": "Hello Svelte", "template": "svelte" },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/svelte": "workspace:*"
   }
 }
@@ -204,18 +204,18 @@ declare module "*.svelte";
 
 `panels/hello-svelte` is the canonical, working reference.
 
-### Vanilla (`panels/hello-vanilla`)
+### Vanilla
 
 No UI binding package — set the template to `"vanilla"` and depend only on
-`@vibestudio/runtime`:
+`@workspace/runtime`:
 
 ```json
-// panels/hello-vanilla/package.json
+// panels/my-vanilla-panel/package.json
 {
-  "name": "@workspace-panels/hello-vanilla",
-  "vibestudio": { "title": "Hello Vanilla", "template": "vanilla" },
+  "name": "@workspace-panels/my-vanilla-panel",
+  "vibestudio": { "title": "My Vanilla Panel", "template": "vanilla" },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*"
+    "@workspace/runtime": "workspace:*"
   }
 }
 ```
@@ -224,12 +224,13 @@ The entry is an `index.ts` that mounts itself into the template's `#root` with
 plain DOM:
 
 ```ts
-// panels/hello-vanilla/index.ts
+// panels/my-vanilla-panel/index.ts
 const root = document.getElementById("root")!;
 root.textContent = "Hello from a vanilla panel!";
 ```
 
-`panels/hello-vanilla` is the canonical, working reference.
+This is a self-contained example; the default workspace intentionally does not
+ship a dedicated vanilla demo panel.
 
 ---
 
@@ -241,7 +242,7 @@ For type-safe parent-child communication, define a contract:
 
 ```typescript
 // panels/editor/contract.ts
-import { z, defineContract } from "@vibestudio/runtime";
+import { z, defineContract } from "@workspace/runtime";
 
 export interface EditorApi {
   getContent(): Promise<string>;
@@ -278,7 +279,7 @@ export const editorContract = defineContract({
 ```tsx
 // panels/editor/index.tsx
 import { useEffect, useState } from "react";
-import { rpc, getParentWithContract } from "@vibestudio/runtime";
+import { rpc, getParentWithContract } from "@workspace/runtime";
 import { editorContract } from "./contract.js";
 
 const parent = getParentWithContract(editorContract);
@@ -318,7 +319,7 @@ export default function Editor() {
 ```tsx
 // panels/ide/index.tsx
 import { useState, useEffect } from "react";
-import { buildPanelLink } from "@vibestudio/runtime";
+import { buildPanelLink } from "@workspace/runtime";
 import { editorContract } from "@workspace-panels/editor/contract";
 
 export default function IDE() {
@@ -378,7 +379,7 @@ its event, integrate source changes through local decisions, recommit, and retry
 There is no repository-group push, staging path, or rebase shortcut.
 
 ```typescript
-import { contextId, vcs } from "@vibestudio/runtime";
+import { contextId, vcs } from "@workspace/runtime";
 
 const command = (operation: string) => `panel-dev:${operation}:${contextId}:${crypto.randomUUID()}`;
 const status = await vcs.status({ contextId });
@@ -412,7 +413,7 @@ typed recovery, and protected publication.
 Access environment variables passed to your panel via `panel.env`:
 
 ```typescript
-import { panel } from "@vibestudio/runtime";
+import { panel } from "@workspace/runtime";
 
 const workspace = panel.env["VIBESTUDIO_WORKSPACE"] || "/workspace";
 ```
@@ -427,7 +428,7 @@ structural operations are approval-gated per requester/target.
 #### Typed API
 
 ```typescript
-import { openPanel, openExternal, panelTree } from "@vibestudio/runtime";
+import { openPanel, openExternal, panelTree } from "@workspace/runtime";
 
 // panelTree is a top-level export, not workspace.panelTree.
 const handle = await openPanel("https://example.com", { focus: true });
@@ -467,7 +468,7 @@ do not navigate, reload, or close them unless requested.
 In Electron mode, `window.open("https://...")` also creates browser panels. Discover the child ID via event:
 
 ```typescript
-import { getPanelHandle, onChildCreated } from "@vibestudio/runtime";
+import { getPanelHandle, onChildCreated } from "@workspace/runtime";
 
 onChildCreated(({ childId, url }) => {
   const handle = getPanelHandle(childId);
@@ -537,7 +538,7 @@ import type { MyType } from "@workspace-panels/my-panel/types";
 Pass and receive configuration data during panel navigation:
 
 ```typescript
-import { buildPanelLink, panel } from "@vibestudio/runtime";
+import { buildPanelLink, panel } from "@workspace/runtime";
 import { useStateArgs } from "@workspace/react"; // React hook — the reactive form of panel.stateArgs.get
 
 // Pass state when navigating
@@ -580,7 +581,7 @@ issuer, and every non-dismiss choice is remembered for that issuer and
 `subject.id`.
 
 ```tsx
-import { approvals } from "@vibestudio/runtime";
+import { approvals } from "@workspace/runtime";
 
 const decision = await approvals.request({
   subject: { id: "sync:push", label: "Sync push" },
@@ -639,6 +640,6 @@ Key channel client APIs:
 
 5. **Use openPanel for navigation** -- `openPanel(source)` opens any panel; use `buildPanelLink` only for in-page navigation:
    ```typescript
-   import { openPanel } from "@vibestudio/runtime";
+   import { openPanel } from "@workspace/runtime";
    await openPanel("panels/target");
    ```

@@ -11,7 +11,7 @@ platform layer.
 | System | Shape | Use for |
 |---|---|---|
 | `@vibestudio/rpc` | Stateless point-to-point method calls + HTTP-Response streaming | Service calls (`credentials.fetch`, `fs.read`, `blobstore.putText`), URL-bound credential proxying, model SDK fetches |
-| Workspace services | Workspace-authored workers and Durable Objects, plus explicitly product-sealed services, resolved by protocol | Stateful channels, durable conversation state, multi-participant flows, and semantic control-plane protocols |
+| Workspace services | Workspace-authored workers and Durable Objects resolved by manifest protocol | Stateful channels, durable conversation state, multi-participant flows, and the finite workspace-source protocol |
 
 If you're routing a single call/response, possibly with a streaming body,
 between two endpoints, use rpc. If you're building anything with subscribers,

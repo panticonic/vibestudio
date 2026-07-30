@@ -137,7 +137,7 @@ The full string inventory is in [approval-ux-copy.md](approval-ux-copy.md).
 
 This section assigns every current semantic capability. It is the seed of the
 authoritative table that will live next to `hostMethodCapabilities.ts` (as
-`capabilityDomains.ts`) and be enforced by typecheck plus the ledger audit;
+`authorityDomains.ts`) and be enforced by typecheck plus the ledger audit;
 this document is the reviewed source it is generated from. Capabilities added
 later must be assigned here first.
 
@@ -221,8 +221,7 @@ credential, not the browsing.
 | -------------------------------- | ---------- | -------------------------------------- |
 | `workspace-units.manage`         | manage     | install, update, or remove apps        |
 | `workspace-units.publish`        | act        | publish an app version                 |
-| `workspace.units.restart`        | act        | restart an app                         |
-| `workspace.units.rollback`       | act        | roll an app back to an earlier version |
+| `runtime.supervision.manage`     | manage     | start, stop, restart, or restore an app |
 | `workspace-panels.manage`        | manage     | add or remove panels                   |
 | `workspace.runtime-state.manage` | act        | rearrange panels and views             |
 | `automations.register`           | manage     | set up an automation                   |
@@ -367,7 +366,7 @@ distinction honest:
 
 The mapping is security-relevant copy. Controls:
 
-- **Single source.** `packages/shared/src/authority/capabilityDomains.ts`
+- **Single source.** `packages/shared/src/authority/authorityDomains.ts`
   exports `CAPABILITY_DOMAINS: Record<SemanticCapability, { domain, verb }>`.
   Typecheck fails if any promptable capability lacks an entry (same pattern
   as `HOST_CAPABILITY_PRESENTATIONS`).
@@ -375,7 +374,7 @@ The mapping is security-relevant copy. Controls:
   fails on: unmapped promptable capability; `safety`-domain capability whose
   receiver admits `session` or userland `code` principals; egress-flagged
   receiver mapped outside `sharing`; infra capability that is promptable.
-- **Review requirement.** Changes to `capabilityDomains.ts`, domain labels,
+- **Review requirement.** Changes to `authorityDomains.ts`, domain labels,
   or verb labels require the same review bar as prompt copy. Moving a
   capability _to a lower-anxiety domain_ (e.g. out of `sharing`) must be
   called out explicitly in review.

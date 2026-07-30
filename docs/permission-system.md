@@ -34,43 +34,26 @@ Each permission has:
 
 Do not hand-roll this flow in individual services.
 
-## Userland Approval Grants
+## Workspace-owned capabilities
 
-Use the `userlandApproval` service through `requestApproval()` when panel or
-worker code owns a policy question that Vibestudio cannot interpret as a built-in
-host capability. Examples: a worker exposes a workspace-local service and wants
-the user to decide whether a provider-supplied subject may access it, or a panel
-has a domain-specific "allow/deny" decision for one of its own resources.
+A workspace provider declares resources it owns in
+`vibestudio.authority.provides` and binds each protected `@rpc` receiver method to
+one local capability. The exact build seals the definition, input contract, and
+resource derivation. The host evaluates it through the same acquisition
+coordinator, grant store, approval queue, inventory, and audit path used by host
+capabilities before provider code runs.
 
-Userland approvals default to scoped host choices: allow once, allow for this
-concrete caller session, trust the current source version, or deny. Positive
-scoped choices return `choice: "allow"` to userland; deny returns
-`choice: "deny"`. Callers can opt into `promptOptions: "choices"` to present
-provider-defined buttons such as a simple allow/deny pair.
+Receiver-object resources bind to the live service object. Prepared state uses a
+host-sealed opaque handle: a declared producer returns a bounded selector and
+presentation, the host persists their binding, and a declared consumer accepts
+the handle at a fixed argument position. Unknown, revoked, cross-workspace,
+wrong-definition, wrong-provider, wrong-receiver, and wrong-type handles fail
+before method entry. Handles carry no authority and no expiry.
 
-```ts
-{ kind: "choice", choice: "allow" }
-{ kind: "dismissed" }
-```
-
-Scoped userland grants are stored according to their selected scope. Custom
-`choices` grants persist server-side under a flat key:
-
-```text
-(verified issuer callerId, provider subject.id)
-```
-
-The issuer is read from `ServiceContext` and verified through
-`CodeIdentityResolver`; the requester cannot supply or spoof it. The subject is
-provider-supplied and validated before reaching the queue. A later request from
-the same issuer with the same `subject.id` returns the stored choice without a
-new prompt. `revokeApproval(subjectId)` removes that stored decision.
-
-Do not use userland approvals as a substitute for host capabilities. If the
-action opens an external browser, stores or uses credentials, writes workspace repo state,
-imports a project, or otherwise touches host-managed resources, call the
-corresponding runtime API and let the built-in permission flow choose the right
-scope and audit model.
+Provider capabilities never substitute for host capabilities. If the receiver
+then opens an external browser, uses credentials, publishes protected workspace
+state, or performs another host-managed effect, that effect is evaluated
+independently.
 
 ## Workspace Main Advances
 

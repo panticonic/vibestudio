@@ -1165,13 +1165,13 @@ Host/runtime:
 
 - `src/server/services/alarmDriver.ts` — durable claims and de-serialization
   (Phase 1), then recovery scheduling only
-- `src/server/internalDOs/workspaceDO.ts` — `do_alarms` dispatch claim state and
+- `packages/builtin/src/workspace-state/WorkspaceDO.ts` — `do_alarms` dispatch claim state and
   `alarmClaimDue`; `entities` as the owner registry
 - `src/server/services/durableWorkDriver.ts` — new immediate driver and recovery
   scan
 - `src/server/doDispatch.ts` — consume work-ready receipts; `dispatchHeld` is the
   existing held-execution precedent
-- `packages/runtime/src/worker/durable-base.ts` — work-ready receipt on
+- `workspace/packages/runtime/src/worker/durable-base.ts` — work-ready receipt on
   the method, `__alarm`, and lifecycle-resume response paths
 - a shared durable-work contract package extracted from `effect-outbox.ts`
 
@@ -1188,7 +1188,7 @@ Agent:
 - `workspace/packages/agentic-do/src/effect-outbox.ts`
 - `workspace/packages/agentic-do/src/effect-executors/`
 - `workspace/packages/agentic-do/src/channel-client.ts`
-- GAD/semantic-control-plane append and inspection surfaces
+- GAD/workspace-source append and inspection surfaces
 
 The Phase 2 census must find every alarm, outbox, `waitUntil`, detached promise,
 redelivery timer, and cross-DO callback before coding. The list above is a

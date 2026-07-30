@@ -88,7 +88,7 @@ A `BUILD_CACHE_VERSION` bump in buildV2 may change the cache **build key**, but 
     }
   },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*"
+    "@workspace/runtime": "workspace:*"
   }
 }
 ```
@@ -331,27 +331,11 @@ interface HealthDetail {
 interface ExtensionInvocationClient {
   current(): ExtensionInvocation | null;
 }
-
-interface ApprovalsClient {
-  // Existing panel/worker approval client methods remain available where
-  // applicable. Extensions also get this helper:
-  //
-  // Submit a userland approval request against the active invocation's
-  // userlandCaller, using the same namespaced ApprovalQueue /
-  // UserlandApprovalGrantStore path panels and workers use today. The host
-  // supplies the principal from the invocation envelope and the issuer from
-  // the extension identity; the extension supplies only the local subject,
-  // copy, details, and options. Throws ENOCALLER when there is no immediate
-  // panel/worker principal to ask.
-  requestForCaller(req: UserlandApprovalRequest): Promise<UserlandApprovalChoice>;
-}
 ```
 
-Clients on `ctx` are bound through the extension process's WebSocket connection to the dispatcher with `callerKind: "extension"` and `callerId: <extension name>`. Host-service calls are attributed to the extension for logs. When an extension asks its caller for a userland approval, the prompt shows both sides: the original panel/worker principal being asked, and the extension that issued the request.
+Clients on `ctx` are bound through the extension process's WebSocket connection to the dispatcher with `callerKind: "extension"` and `callerId: <extension name>`. Host-service calls are attributed to the extension for logs. An extension-owned protected method declares a capability in `vibestudio.authority.provides`; the extension host evaluates that sealed receiver declaration before invoking extension code.
 
-`ctx.approvals.requestForCaller(...)` is the extension-specific approval path. It reuses the existing userland approval request system, including the same subject/options model, grant storage, pending queue, and shell UI. The key difference is principal and issuer derivation: panels and workers still call `userlandApproval.request` directly and the service derives both the principal and default issuer from `ServiceContext`; extensions call through the extension host, and the host derives the principal from the current `ExtensionInvocation.userlandCaller` and the issuer from the extension identity. The extension never sends `repoPath`, `effectiveVersion`, `callerKind`, or issuer identity as trusted input.
-
-**Parity now, narrower later.** The starting set above mirrors what `@vibestudio/runtime` already exposes to panels and workers, so an extension has feature parity with the rest of userland from day one and no consumer of the runtime has to learn a new shape. The longer-term target is narrower: only host _substrate_ (`fs`, `workspace`, `workers`, `credentials`, `approvals`, `notifications`, `extensions`) genuinely belongs on `ctx.*`. The capability clients (`ai`, the user-facing portion of `git`, the `webhooks` subscription surface) are migration candidates that should become extensions in their own right and be reached via `ctx.extensions.use(...)` once that work lands. Each capability migration drops its entry from `ctx.*` across all three runtimes (panel, worker, extension) in the same change. The principle: `ctx.*` is what the host _has to_ provide; anything that's a discrete capability — even one shipped by default — eventually moves out.
+**Parity now, narrower later.** The starting set above mirrors what `@workspace/runtime` already exposes to panels and workers, so an extension has feature parity with the rest of userland from day one and no consumer of the runtime has to learn a new shape. The longer-term target is narrower: only host _substrate_ (`fs`, `workspace`, `workers`, `credentials`, `notifications`, `extensions`) genuinely belongs on `ctx.*`. The capability clients (`ai`, the user-facing portion of `git`, the `webhooks` subscription surface) are migration candidates that should become extensions in their own right and be reached via `ctx.extensions.use(...)` once that work lands. Each capability migration drops its entry from `ctx.*` across all three runtimes (panel, worker, extension) in the same change. The principle: `ctx.*` is what the host _has to_ provide; anything that's a discrete capability — even one shipped by default — eventually moves out.
 
 ### Git upstream boundary
 
@@ -430,10 +414,10 @@ There is exactly one RPC entry point: the dispatcher service named `extensions`.
 
 `invoke`, non-host-owned `invokeProvider`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. Both invocation paths are caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. Host-owned provider contracts such as `gitInterop` are reachable only through their typed host service, not public `extensions.invokeProvider`. There are no imperative management methods: extensions are installed/enabled by declaring them in `meta/vibestudio.yml`, and the reconciler grants newly declared extensions through the joint approval flow. `reload` is approval-gated, and extension main/master push acceptance uses the extension-specific approval treatment described below.
 
-Consumers — panels, workers, and other extensions — use the same thin client from `@vibestudio/runtime`:
+Consumers — panels, workers, and other extensions — use the same thin client from `@workspace/runtime`:
 
 ```ts
-import { extensions } from "@vibestudio/runtime";
+import { extensions } from "@workspace/runtime";
 import type { GitToolsApi } from "@workspace-extensions/git-tools";
 
 const git = extensions.use<GitToolsApi>("@workspace-extensions/git-tools");
@@ -459,7 +443,7 @@ Extensions activate independently. There is no coordination API in v1: calls to 
 
 ### `ExtensionsClient` surface
 
-The same client is exposed to panels and workers via `@vibestudio/runtime`, and to extensions via `ctx.extensions`:
+The same client is exposed to panels and workers via `@workspace/runtime`, and to extensions via `ctx.extensions`:
 
 ```ts
 interface ExtensionsClient {
@@ -520,7 +504,7 @@ Implementation note: the current `RouteRegistry` only owns `/_r/` worker/service
 
 - an `extension-auto` route kind under `/_r/ext/<encoded-name>/*`, with caller-token auth.
 
-Consumers reach the auto-prefix HTTP surface the same way they reach any internal route, using the existing `@vibestudio/runtime` fetch helpers.
+Consumers reach the auto-prefix HTTP surface the same way they reach any internal route, using the existing `@workspace/runtime` fetch helpers.
 
 ## Extension approvals — informed-consent UX
 
@@ -536,27 +520,13 @@ Two extension-specific approval sub-kinds cover declarative reconciliation:
 
 Source updates are handled by the git push approval flow, not by `extensions.update`. The push is the user's intent signal and the approval decision is scoped to that git write. If approved, the push lands; the extension manager then rebuilds and activates from the new branch state. If denied, the push fails and no extension state changes.
 
-Extension-owned per-call approvals are standard userland approvals submitted with `ctx.approvals.requestForCaller(...)`. They reuse the same approval pipeline panels and workers use, but the trusted principal comes from the current invocation envelope rather than from extension-supplied input. Host services reached through other `ctx.*` clients are still called as `callerKind: "extension"` and may apply their own service-specific policy; they are not the primary authorization mechanism for extension APIs. Disable, enable, reload, and uninstall are also standard.
-
-### Namespaced userland approval artifacts
-
-Userland approval artifacts are namespaced for every issuer, not only extensions. A pending request, persisted grant, notification cancel key, and audit record all carry:
-
-```ts
-interface UserlandApprovalIssuer {
-  kind: "panel" | "worker" | "extension";
-  id: string; // callerId for panel/worker, extension name for extension
-  repoPath?: string; // present for panel/worker issuers
-  effectiveVersion?: string;
-}
-
-interface NamespacedUserlandApprovalSubject {
-  issuer: UserlandApprovalIssuer;
-  local: UserlandApprovalSubject; // the subject supplied by userland code
-}
-```
-
-The durable key is `canonicalKey(["userland-grant", principal.callerId, issuer.kind, issuer.id, local.id])`. Direct panel/worker calls to `userlandApproval.request(...)` get `issuer = principal`; extension calls to `requestForCaller(...)` get `issuer = { kind: "extension", id: extensionName }`. UI copy shows both: "Panel X is being asked by extension Y", or for direct panel/worker requests simply "Panel X requests your decision". This prevents two independent pieces of userland from sharing a grant just because they chose the same local subject id.
+Extension-owned protected methods use sealed receiver capabilities. Their package
+manifest supplies the reviewed title, action, resource type, and permitted grant
+scopes; `extension.methodAuthority` binds each public method to the local
+definition. The extension host derives the caller, provider, definition identity,
+and receiver resource and evaluates the canonical acquisition path before extension
+code runs. Host services reached through `ctx.*` independently enforce their own
+effects. Disable, enable, reload, and uninstall remain standard host operations.
 
 ### Approval payload
 
@@ -591,7 +561,7 @@ await approvals.request({
       push: null,
     },
     workspaceDepChanges: [           // populated only for explicit dependency update
-      { name: "@vibestudio/runtime", fromEv: "ev_a1...", toEv: "ev_b2...",
+      { name: "@workspace/runtime", fromEv: "ev_a1...", toEv: "ev_b2...",
         sha: "...", previousSha: "...",
         stat: { filesChanged: 3, insertions: 18, deletions: 4 },
         commit: { author: {...}, committer: {...}, message: "...", timestamp: 1715000000 },
@@ -630,7 +600,7 @@ The user just initiated this. The prompt is informational and forward-looking.
 `extension.update` is only for explicit dependency refreshes. Source updates use the git push approval flow.
 
 - **Title and lead**: "**@acme/git-tools** dependency update." Then on a second line: "This will rebuild the extension against newer approved workspace or external dependencies."
-- **Dependency changes** are the primary content. A push to `@vibestudio/runtime` does not automatically enqueue extension approvals; the extension manager can show that `@acme/git-tools` has an available dependency update, and the user chooses whether to run it.
+- **Dependency changes** are the primary content. A push to `@workspace/runtime` does not automatically enqueue extension approvals; the extension manager can show that `@acme/git-tools` has an available dependency update, and the user chooses whether to run it.
 - **Diff sections** show workspace and external dependency diffs.
 - **Verb pair**: "Update and run" / "Cancel".
 
@@ -691,7 +661,7 @@ The server **reconciles** the registry against the declared set at two moments:
 The remaining userland surface is read/diagnostic only:
 
 ```ts
-import { extensions } from "@vibestudio/runtime";
+import { extensions } from "@workspace/runtime";
 
 await extensions.list(); // No approval — registry metadata
 await extensions.reload("@workspace-extensions/git-tools"); // Approval-gated; restarts active build
@@ -725,8 +695,9 @@ Core dispatcher changes:
 - Add `"extension"` to `CallerKind`.
 - `ServiceContext.callerId` for an extension call is the extension name.
 - Existing service definitions are reviewed one by one. Host-substrate services extensions need (`workspace`, `credentials`, `notifications`, `events`, etc.) explicitly add `"extension"` to `policy.allowed`; shell/admin-only services do not get extension access by default.
-- `CodeIdentityResolver`, approval shared types, `UserlandApprovalGrantStore`, approval copy, and `userlandApprovalService` stay panel/worker-principal based. They are extended only enough for an extension-host internal call to submit `ApprovalQueue.requestUserland(...)` using a host-stamped `ExtensionInvocation.userlandCaller`.
-- Approval prompts initiated by extensions use the standard userland prompt style, **not** the elevated one — elevated prompts are reserved for install, dependency update, and extension source-push events. The standard prompt's caller-attribution string surfaces both the panel/worker being asked and the extension asking. The prompt is fundamentally a user-intent mechanism (the extension chose to ask the caller) rather than a security boundary against already-installed Node code.
+- Receiver capability prompts use the shared acquisition coordinator, grant store,
+  approval queue, copy registry, and caller attribution. There is no extension-only
+  approval store or advisory callback.
 
 `ctx.fs` for an extension is **unrestricted** — it covers the whole host filesystem, matching the ambient `node:fs` access the extension already has. There is no per-context root and no path scoping. This is a deliberate departure from panel/worker semantics; per-context rooting would be theater, since the extension can write anywhere via `node:fs` directly. The userland `ctx.fs` exists for callers that want auditable, user-attributable writes; the unrestricted scope makes that path strictly more capable than scoped, not less.
 
@@ -899,7 +870,7 @@ These are migrations where the current in-host service is exposed on `ctx.*` to 
 Listed here so future readers don't waste time considering them:
 
 - **Dispatcher, route registry, transport, `ServiceContainer`** — the substrate extensions plug into.
-- **Approvals system** (`approvalQueue`, `shellApprovalService`, `userlandApprovalService`, `capabilityPermission`, `capabilityGrantStore`) — the single source of truth for user consent.
+- **Authority acquisition** (`acquisitionCoordinator`, `approvalQueue`, `shellApprovalService`, `capabilityPermission`, `capabilityGrantStore`) — the single source of truth for user consent.
 - **Auth and identity** (`authService`, `deviceAuthStore`, `codeIdentityResolver`) — every RPC's caller identity flows through these.
 - **Build pipeline** (`buildService`, buildV2) — builds the extensions.
 - **Worker lifecycle** (`workerdService`, `workerService`, `workerLogService`) — co-equal infrastructure.

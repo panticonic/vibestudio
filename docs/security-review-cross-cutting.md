@@ -93,7 +93,7 @@ The RPC library correctly delivers a verified inbound caller to every receiver:
 But the common runtime convenience wrapper discards the entire request context,
 including `caller` and `origin`, and forwards only positional arguments:
 
-- `packages/runtime/src/setup/createBaseRuntime.ts:237-239`
+- `workspace/packages/runtime/src/setup/createBaseRuntime.ts:237-239`
 
 The terminal panel repeats this caller-erasing wrapper:
 
@@ -139,7 +139,7 @@ policy-bearing `panelTree.callAgent` operation:
 Yet panels also directly expose `_agent.snapshot`, `_agent.tree`, `_agent.state`,
 `_agent.routes`, and `_agent.setMode`:
 
-- `packages/runtime/src/panel/agentApi.ts:65-72`
+- `workspace/packages/runtime/src/panel/agentApi.ts:65-72`
 
 Open direct relay can therefore bypass the host's panel relationship/resource
 evaluation and read rendered text or registered panel state directly.

@@ -78,7 +78,7 @@ _Surface: `panels-infra-notifications`_
 
 The panel SDK ships a full connection-loss UX: panel.onConnectionError (createBaseRuntime.ts) and the ConnectionErrorBarrier in the React mount that renders a full-screen 'Connection lost' overlay or a 'Backend unavailable' banner. PANEL_SYSTEM.md documents it as firing 'on terminal WebSocket close codes'. But a repo-wide search finds zero emitters of the 'runtime:connection-error' event — not in ipcDispatcher, wsTransport, panelOrchestrator, or the mobile host. When the panel's RPC session dies (lease revoked, server down, pipe torn down), the overlay never appears; and since the RPC client has no implicit request deadline, panel calls simply hang — the panel looks frozen with no on-screen explanation.
 
-**Evidence:** packages/runtime/src/setup/createBaseRuntime.ts:180-198 (only listener); workspace/packages/react/src/reactPanel.ts:83-147 (overlay UI); PANEL_SYSTEM.md:259-274 (docs); grep for 'runtime:connection-error' across src/, workspace/, packages/ returns only the listener; packages/rpc/src/client.ts:508-510 ('No implicit deadline')
+**Evidence:** workspace/packages/runtime/src/setup/createBaseRuntime.ts:180-198 (only listener); workspace/packages/react/src/reactPanel.ts:83-147 (overlay UI); PANEL_SYSTEM.md:259-274 (docs); grep for 'runtime:connection-error' across src/, workspace/, packages/ returns only the listener; packages/rpc/src/client.ts:508-510 ('No implicit deadline')
 
 **Recommended fix:** Emit runtime:connection-error from the desktop host when the panel session terminally closes or the server pipe enters a terminal state (ipcDispatcher.ensurePanelSession catch / session close callback, panelOrchestrator lease-revoked path), and from the mobile bridge equivalently; add a reconnect/retry affordance to the ConnectionErrorBarrier overlay.
 
@@ -196,9 +196,9 @@ README tells users: 'Quitting the app leaves the detached server running by defa
 
 _Surface: `docs-truthfulness`_
 
-The 'Userland Approval Prompts' section shows `import { requestApproval, revokeApproval, listApprovals } from "@vibestudio/runtime"` with a full worked example, and the 'Environment Variables' section shows `import { env } from "@vibestudio/runtime"`. None of these are exports: a dedicated test asserts the approval trio is 'gone from every surface', and env exists only as panel.env inside the panel namespace. A developer copying either example gets a build/type failure at the build-gated vcs.push with no hint that the doc itself is wrong; the real APIs are approvals.request/revoke/list and panel.env.
+The 'Userland Approval Prompts' section shows `import { requestApproval, revokeApproval, listApprovals } from "@workspace/runtime"` with a full worked example, and the 'Environment Variables' section shows `import { env } from "@workspace/runtime"`. None of these are exports: a dedicated test asserts the approval trio is 'gone from every surface', and env exists only as panel.env inside the panel namespace. A developer copying either example gets a build/type failure at the build-gated vcs.push with no hint that the doc itself is wrong; the real APIs are approvals.request/revoke/list and panel.env.
 
-**Evidence:** PANEL_DEVELOPMENT.md:577-594 (approvals example), PANEL_DEVELOPMENT.md:404-412 (env example); packages/runtime/src/shared/runtimeSurface.test.ts:91-97 ('expose and the approval-trio aliases are gone from every surface'); packages/runtime/src/shared/approvalsApi.ts:18-30 (actual {request,revoke,list} surface); packages/runtime/src/panel/index.ts:225-229 (env only under panel namespace)
+**Evidence:** PANEL_DEVELOPMENT.md:577-594 (approvals example), PANEL_DEVELOPMENT.md:404-412 (env example); workspace/packages/runtime/src/shared/runtimeSurface.test.ts:91-97 ('expose and the approval-trio aliases are gone from every surface'); workspace/packages/runtime/src/shared/approvalsApi.ts:18-30 (actual {request,revoke,list} surface); workspace/packages/runtime/src/panel/index.ts:225-229 (env only under panel namespace)
 
 **Recommended fix:** Rewrite both sections to use `approvals.request/revoke/list` and `panel.env`, and add a doc-snippet lint against the runtime surface manifest.
 
@@ -369,7 +369,7 @@ No change on this branch (file untouched by the four fix commits). startMemoryMo
 
 - **Failed link opens from panels are completely silent — runtime:child-creation-error has no consumer** (`panels-infra-notifications`)
   When a user clicks a link in a panel and the resulting createPanel/createBrowserUrlPanel call fails, PanelView sends a 'runtime:child-creation-error' event to the source panel. No code anywhere consumes this event: the SDK only exposes onChildCreated (success), and neither the shell nor NotificationBar listens for the error variant. Additionally, window.open of a non-http(s), non-managed URL (mailto:, custom protocols) is denied with no event at all. Net effect: the click does nothing visible, with no toast, no console hint inside the panel, no recourse.
-  _Evidence:_ src/main/panelView.ts:755-759 (emit), src/main/panelView.ts:593-609 (silent deny fallback); packages/runtime/src/panel/handle.ts:104-127 (only child-created is consumed); repo-wide grep shows no listener for runtime:child-creation-error
+  _Evidence:_ src/main/panelView.ts:755-759 (emit), src/main/panelView.ts:593-609 (silent deny fallback); workspace/packages/runtime/src/panel/handle.ts:104-127 (only child-created is consumed); repo-wide grep shows no listener for runtime:child-creation-error
   _Fix:_ Surface link-open failures in the shell NotificationBar (main already knows the failure — emit notification:show from handlePanelLinkError), and add an onChildCreationError SDK hook for panels that want to handle it themselves.
 
 - **Remote-mode panel asset failure renders raw plain text and falsely promises automatic retry** (`panels-infra-notifications`)
@@ -384,7 +384,7 @@ No change on this branch (file untouched by the four fix commits). startMemoryMo
 
 - **Panel boot failures before framework mount produce a blank panel with no on-screen diagnostics** (`panels-infra-notifications`)
   The runtime initializes at module import: getInjectedConfig throws if **vibestudioEntityId or the gateway token is missing, and createPanelTransport throws if the **vibestudioShell bridge is absent (panelPreload's own comment says this yields a 'blank panel'). Any such throw aborts bundle.js before React/Svelte mounts, so the SDK's RenderErrorBoundary and ConnectionErrorBarrier never exist — the user sees an empty #root with the error only in the webview devtools console. The panel templates ship no window.onerror boot-failure surface.
-  _Evidence:_ packages/runtime/src/shared/globals.ts:101-112 (throws), packages/runtime/src/panel/index.ts:39-42 (init at import), src/preload/panelPreload.ts:29-32 (blank-panel comment), workspace/templates/default/index.html (no error hook)
+  _Evidence:_ workspace/packages/runtime/src/shared/globals.ts:101-112 (throws), workspace/packages/runtime/src/panel/index.ts:39-42 (init at import), src/preload/panelPreload.ts:29-32 (blank-panel comment), workspace/templates/default/index.html (no error hook)
   _Fix:_ Add a small inline window.onerror/unhandledrejection handler to the template HTML that renders the boot error with a reload button into #root when the bundle fails before first paint.
 
 - **NotificationBar action clicks swallow main-side failures and dismiss the notification regardless** (`panels-infra-notifications`)
@@ -439,7 +439,7 @@ No change on this branch (file untouched by the four fix commits). startMemoryMo
 
 - **In-chat approvals and ask_user prompts get no OS-level attention when the window is unfocused or minimized** (`chat-agent-interaction`)
   createApprovalAttention (dock badge, frame flash, native notification) only covers the server-side shellApproval queue (listPending on shellApproval service). Agent-loop tool approvals and ask_user/ui_prompt forms are delivered as channel calls into the chat panel, whose only attention path is notifications.show — an in-shell chrome toast (rpc notification.show), invisible when the app is minimized or behind other windows. An agent can block on an approval indefinitely while the user gets no badge, flash, or native notification, in contrast to shell approvals which get all three.
-  _Evidence:_ src/main/approvalAttention.ts:27-45 with src/main/index.ts:1967-1975 (listPending = shellApproval only); workspace/packages/agentic-chat/hooks/useAgenticChat.ts:810-812,1173-1175 (onAttentionRequired only when !document.hasFocus()); workspace/panels/chat/index.tsx:861-863 (onAttentionRequired → notifications.show); packages/runtime/src/shared/notifications.ts:85-88 (in-shell notification.show RPC, no OS notification)
+  _Evidence:_ src/main/approvalAttention.ts:27-45 with src/main/index.ts:1967-1975 (listPending = shellApproval only); workspace/packages/agentic-chat/hooks/useAgenticChat.ts:810-812,1173-1175 (onAttentionRequired only when !document.hasFocus()); workspace/panels/chat/index.tsx:861-863 (onAttentionRequired → notifications.show); workspace/packages/runtime/src/shared/notifications.ts:85-88 (in-shell notification.show RPC, no OS notification)
   _Fix:_ Bridge chat approval/ask_user waits into the same attention machinery: emit a shell event the main process folds into approvalAttention (badge count + native notification that focuses the panel).
 
 - **Approval requested while no panel is connected is auto-denied with a jargon diagnostic instead of waiting for the user** (`chat-agent-interaction`)
@@ -499,7 +499,7 @@ No change on this branch (file untouched by the four fix commits). startMemoryMo
 
 - **No UI exists to review or delete saved browser passwords** (`trust-permissions-credentials`)
   The shell prompts to save site passwords and autofills them, but there is no management surface: the Credentials page covers only URL-bound managed credentials, and the browser-import-inspector does not handle passwords. A deletePassword API exists in the DO and browser-data extension but nothing user-facing calls it, so a user cannot see what passwords Vibestudio holds, remove a stale/wrong one, or clean up after saving a password by mistake — the only visibility is the autofill dropdown on the matching site.
-  _Evidence:_ workspace/extensions/browser-data/index.ts:373-374 and src/server/internalDOs/browserDataDO.ts:492 (deletePassword API with no UI consumer); workspace/about/ contains no passwords page (ls: about, adblock, browser-import-inspector, credentials, help, keyboard-shortcuts, new, permissions, server-logs); workspace/about/credentials/index.tsx covers ManagedCredentialSummary only
+  _Evidence:_ workspace/extensions/browser-data/index.ts:373-374 and packages/builtin/src/browser-data/BrowserDataDO.ts:492 (deletePassword API with no UI consumer); workspace/about/ contains no passwords page (ls: about, adblock, browser-import-inspector, credentials, help, keyboard-shortcuts, new, permissions, server-logs); workspace/about/credentials/index.tsx covers ManagedCredentialSummary only
   _Fix:_ Add a saved-passwords section (list by origin/username, delete, and the never-save list) either inside about/credentials or as a dedicated about page, wired to the existing browser-data deletePassword/list APIs.
 
 - **Menu items 'Credentials...' and 'Permissions...' fail silently if the about panel cannot be created** (`trust-permissions-credentials`)
@@ -605,8 +605,8 @@ No change on this branch (file untouched by the four fix commits). startMemoryMo
   _Fix:_ Change both examples to rpc.exposeAll({...}) (and fix the unguarded `parent.emit(...)` at PANEL_DEVELOPMENT.md:304 to `parent?.emit(...)` per the doc's own Best Practice #3).
 
 - **PANEL_SYSTEM.md 'Connection Error Handling' imports onConnectionError as a top-level export that doesn't exist** (`docs-truthfulness`)
-  The section shows `import { onConnectionError } from "@vibestudio/runtime"`, but onConnectionError only exists as panel.onConnectionError. The same document says at line 129 that lifecycle members 'are not flat top-level exports' and lists panel.onConnectionError at line 84, so the doc contradicts itself and the failing form is the one presented as the copy-paste example.
-  _Evidence:_ PANEL_SYSTEM.md:259-274 (broken example) vs PANEL_SYSTEM.md:84,129 (correct namespace statement); packages/runtime/src/panel/index.ts:240 (onConnectionError only inside the panel namespace object)
+  The section shows `import { onConnectionError } from "@workspace/runtime"`, but onConnectionError only exists as panel.onConnectionError. The same document says at line 129 that lifecycle members 'are not flat top-level exports' and lists panel.onConnectionError at line 84, so the doc contradicts itself and the failing form is the one presented as the copy-paste example.
+  _Evidence:_ PANEL_SYSTEM.md:259-274 (broken example) vs PANEL_SYSTEM.md:84,129 (correct namespace statement); workspace/packages/runtime/src/panel/index.ts:240 (onConnectionError only inside the panel namespace object)
   _Fix:_ Change the example to `panel.onConnectionError((error) => ...)` (or the useConnectionError hook from @workspace/react, hooks.ts:308).
 
 - **PANEL_SYSTEM.md lists @workspace-agents/\* scope and workspace/agents/ directory that were removed** (`docs-truthfulness`)

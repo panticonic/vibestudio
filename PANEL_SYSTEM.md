@@ -26,7 +26,7 @@ my-panel/
     "exposeModules": ["@radix-ui/colors"]
   },
   "dependencies": {
-    "@vibestudio/runtime": "workspace:*",
+    "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*"
   }
 }
@@ -56,9 +56,9 @@ Three frameworks are supported, one per template:
 | ------------------------------------------ | --------- | ---------------- | -------------------------------- |
 | `default` (`workspace/templates/default/`) | `react`   | React + Radix UI | `@workspace/react`               |
 | `svelte` (`workspace/templates/svelte/`)   | `svelte`  | Svelte 5         | `@workspace/svelte`              |
-| `vanilla` (`workspace/templates/vanilla/`) | `vanilla` | none — pure DOM  | none (`@vibestudio/runtime` only) |
+| `vanilla` (`workspace/templates/vanilla/`) | `vanilla` | none — pure DOM  | none (`@workspace/runtime` only) |
 
-Most panels should use the `default` (React) template. To use another framework, set the `template` field and depend on its binding package (or none for vanilla). Canonical examples: `panels/hello-svelte` (Svelte) and `panels/hello-vanilla` (vanilla); see [PANEL_DEVELOPMENT.md](PANEL_DEVELOPMENT.md) for how to write each.
+Most panels should use the `default` (React) template. To use another framework, set the `template` field and depend on its binding package (or none for vanilla). `panels/hello-svelte` is the canonical non-React example; [PANEL_DEVELOPMENT.md](PANEL_DEVELOPMENT.md) also includes a minimal inline vanilla example.
 
 ### Framework resolution order
 
@@ -111,9 +111,11 @@ import {
   credentials,
   workers,
   extensions,
-  approvals,
   notifications,
   webhooks,
+  services, // Dynamic caller-scoped service namespace (portable)
+  hosts, // Owner-scoped attached-host client (portable)
+  runtime, // Typed lifecycle/supervision client (portable)
 
   // Durable Objects, gateway, agent APIs
   doTargetId,
@@ -135,8 +137,8 @@ import {
   getFileName,
   resolvePath,
   createGatewayFetch,
-} from "@vibestudio/runtime";
-export type { PanelHandle } from "@vibestudio/runtime";
+} from "@workspace/runtime";
+export type { PanelHandle } from "@workspace/runtime";
 ```
 
 The full, always-current surface is generated from the runtime manifest into
@@ -145,12 +147,18 @@ The full, always-current surface is generated from the runtime manifest into
 live surface. Identity, theme, lifecycle, and state args live under the `panel.*`
 namespace — they are **not** flat top-level exports.
 
+`gatewayFetch` is gateway-origin scoped: use a relative route or an absolute
+URL on the configured gateway origin. It rejects cross-origin URLs; use
+`credentials.fetch` for external HTTP. The injected `fs` uses the same
+context-bound filesystem as every runtime target and has no implicit RPC
+deadline—only explicit cancellation from its owning execution.
+
 State args are read and written imperatively via `panel.stateArgs.get()` /
 `panel.stateArgs.set()`. For reactive access in a React panel, use the
 `useStateArgs` hook from `@workspace/react`:
 
 ```typescript
-import { panel } from "@vibestudio/runtime";
+import { panel } from "@workspace/runtime";
 import { useStateArgs } from "@workspace/react";
 
 const snapshot = panel.stateArgs.get<{ channel: string }>(); // imperative
@@ -171,7 +179,7 @@ convenience.
 Use `openPanel` to open panels. It handles both URLs (browser panels) and workspace sources:
 
 ```typescript
-import { openPanel } from "@vibestudio/runtime";
+import { openPanel } from "@workspace/runtime";
 
 await openPanel("panels/editor"); // Open a workspace panel
 await openPanel("panels/chat", { stateArgs: { ch: "x" } }); // With state args
@@ -181,7 +189,7 @@ await openPanel("https://github.com"); // Open URL as browser panel
 For in-page navigation (replacing the current panel), use `buildPanelLink` + `window.location.href`:
 
 ```typescript
-import { buildPanelLink } from "@vibestudio/runtime";
+import { buildPanelLink } from "@workspace/runtime";
 
 // Same-context navigation (relative URL)
 window.location.href = buildPanelLink("panels/chat");
@@ -218,7 +226,7 @@ Define contracts for type-safe parent communication:
 
 ```typescript
 // panels/editor/contract.ts
-import { z, defineContract } from "@vibestudio/runtime";
+import { z, defineContract } from "@workspace/runtime";
 
 export interface EditorApi {
   getContent(): Promise<string>;
@@ -239,7 +247,7 @@ export const editorContract = defineContract({
 A panel exposes methods and communicates with its parent using the contract:
 
 ```typescript
-import { rpc, getParentWithContract } from "@vibestudio/runtime";
+import { rpc, getParentWithContract } from "@workspace/runtime";
 import { editorContract } from "./contract.js";
 
 const parent = getParentWithContract(editorContract);
@@ -261,7 +269,7 @@ await parent?.emit("saved", { path: "/file.txt" }); // Typed when a parent is pr
 Query workspace repo metadata through the workspace and VCS namespaces:
 
 ```typescript
-import { contextId, workspace, vcs } from "@vibestudio/runtime";
+import { contextId, workspace, vcs } from "@workspace/runtime";
 
 // Get the full workspace source tree
 const tree = await workspace.sourceTree();
@@ -282,7 +290,7 @@ const history = await vcs.history({ root: committed, direction: "past", limit: 5
 Monitor RPC connection health:
 
 ```typescript
-import { panel } from "@vibestudio/runtime";
+import { panel } from "@workspace/runtime";
 
 const unsubscribe = panel.onConnectionError((error) => {
   console.error(`Connection error [${error.code}]: ${error.reason}`);

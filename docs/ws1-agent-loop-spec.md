@@ -101,7 +101,7 @@ workspace/packages/agent-loop/
   src/*.test.ts
 ```
 
-Dependencies: `@vibestudio/agentic-protocol`, `@workspace/pi-core` (vendored
+Dependencies: `@workspace/agentic-protocol`, `@workspace/pi-core` (vendored
 types/compaction/session-tree only — no pi-ai at the pure layer).
 
 ### 1.1 `AgentState`
@@ -1109,7 +1109,7 @@ Surgical deletions:
 - `workspace/packages/agentic-do/src/turn-dispatcher.ts` — queue half
   (pending/pendingSteered/drainLoop/keepAlive/interrupted); addressing
   survives (§2.5). Its keepalive test dies with it.
-- `packages/runtime/src/worker/durable-base.ts` — entire deferred-
+- `workspace/packages/runtime/src/worker/durable-base.ts` — entire deferred-
   RPC layer: `deferred_requests` DDL + `ensureDeferredSchema`, `callDeferred`,
   `onDeferredResult`, `applyDeferredResult`, `redriveDeferredRequests`,
   `onDeferredResolved` (lines ~280–468). Alarm + state-KV APIs stay.

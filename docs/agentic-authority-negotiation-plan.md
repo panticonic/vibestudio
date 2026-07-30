@@ -574,7 +574,7 @@ with the superseded shape are invalidated and rebuilt, not translated.
 
 ### 8.2 Add the capability→domain mapping
 
-`packages/shared/src/authority/capabilityDomains.ts`, generated from the
+`packages/shared/src/authority/authorityDomains.ts`, generated from the
 reviewed census in
 [domain-vocabulary.md](authority/domain-vocabulary.md) §5: every promptable
 capability maps to exactly one `{ domain, verb }`. Exhaustiveness enforced by
@@ -732,7 +732,7 @@ cascades immediately; and no notification action can approve a charter.
 
 ### WP0 — Vocabulary and census (new; unblocks all UX work)
 
-1. Land `capabilityDomains.ts` from the census in
+1. Land `authorityDomains.ts` from the census in
    [domain-vocabulary.md](authority/domain-vocabulary.md), with typecheck
    exhaustiveness.
 2. Extend the ledger audit with the §9 vocabulary checks.

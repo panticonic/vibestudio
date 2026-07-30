@@ -85,8 +85,9 @@ deleted):
    `cacheMessageTypeMutation`/`cacheMessageTypes`/`localMessageTypes` +
    `registryMutationFromPublishedPayload()` (derives a
    `RegistryMutationInput` from `messageType.registered/cleared` payloads,
-   throws `Invalid registry payload …` on malformed ones) +
-   `appendRegistryEvent` → GAD `appendChannelEnvelopeWithRegistryMutation`.
+   throws `Invalid registry payload …` on malformed ones). This cache and
+   adapter path are deleted; the canonical GAD log projection owns registry
+   updates.
 5. **Transport schema validation** — `publish()` runs
    `storedAgenticEventSchema.safeParse(payload)` for
    `payloadKind === AGENTIC_EVENT_PAYLOAD_KIND` and throws the first zod issue
@@ -299,7 +300,7 @@ behavior as today (`encodeChannelPayloadStoredValues` /
 
 ```ts
 // log-store.ts
-import { CHANNEL_LOG_HEAD } from "@vibestudio/agentic-protocol"; // "main", Stage 0
+import { CHANNEL_LOG_HEAD } from "@workspace/agentic-protocol"; // "main", Stage 0
 
 export interface ChannelAppendInput {
   payloadKind: string; // "agentic.trajectory.v1/event" | "presence" | "error" | "config-update" | ...
@@ -385,16 +386,15 @@ log-store only does blob encoding.
 
 **Registry mutation moves to a GAD projection (WS2-owned delta to the semantic control plane,
 layered on Stage 0):** add a projection applier `projectMessageTypeEvent` in
-`packages/semantic-control-plane/src/index.ts` — when a channel-log append has
+`workspace/workers/workspace-source/GadWorkspaceDO.ts` — when a channel-log append has
 `payloadKind === AGENTIC_EVENT_PAYLOAD_KIND` and `payload.kind ===
 "messageType.registered" | "messageType.cleared"`, upsert/clear
 `channel_message_types` in the same txn (identical SQL semantics to today's
 `applyRegistryMutation`: monotone `updated_at_seq` guard, `cleared_at_seq`
 max-merge). The payload is already schema-validated by step 6, so a malformed
 registration is REJECTED at append (replacing the channel's
-`Invalid registry payload` throw with the zod-derived message). The
-`appendChannelEnvelopeWithRegistryMutation` adapter remains for any legacy
-callers until Stage B but the channel DO stops calling it.
+`Invalid registry payload` throw with the zod-derived message). There is no
+second registry-mutation append surface.
 
 ---
 
@@ -491,7 +491,7 @@ ids scoped to log lineage):
 ### 4.1 Package API (`workspace/packages/channel-policies/src/index.ts`)
 
 ```ts
-import type { ParticipantRef, AgenticEvent, InvocationOutcome } from "@vibestudio/agentic-protocol";
+import type { ParticipantRef, AgenticEvent, InvocationOutcome } from "@workspace/agentic-protocol";
 
 /** Minimal durable-envelope view a policy folds over. Pure data. */
 export interface PolicyEnvelopeView {
@@ -725,7 +725,7 @@ The `invocation.started` payload already carries everything needed to rebuild
 a pending row except the deadline. Additions:
 
 - `InvocationTransport` channel variant
-  (`packages/agentic-protocol/src/events.ts:211`) gains
+  (`workspace/packages/agentic-protocol/src/events.ts:211`) gains
   `deadlineAt?: number` (epoch ms); `invocationTransportSchema`
   (`schemas.ts:138`) gains `deadlineAt: z.number().int().positive().optional()`.
 - `callEventPayload.started` writes it when `opts.timeoutMs` was given.
@@ -992,9 +992,8 @@ annotations), "appends a durable invocation.cancelled…", "appends a durable
 invocation.output…", "drops a method result…", "appends a durable
 invocation.abandoned…", "does not block channel cancellation…", "persists
 method terminal events…", "spills oversized method results…", "forks the
-GAD-backed channel log during postClone". Also the test harness's direct
-`gad.instance.appendChannelEnvelopeWithRegistryMutation` calls keep working
-(adapter survives until Stage B).
+GAD-backed channel log during postClone". Registry tests append the canonical
+channel log events and observe the GAD projection directly.
 
 Semantic changes (each is a deliberate behavior move, update the assertion):
 

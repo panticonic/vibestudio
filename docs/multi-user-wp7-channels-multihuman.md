@@ -177,7 +177,7 @@ Live nudge:
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `workspace/workers/pubsub-channel/channel-do.ts`         | `channel_members`; `addMember`/`removeMember`/`listMembers`; revisioned projection into the generic durable inbox (§7)                           |
 | `workspace/packages/agent-loop/src/policies/index.ts`    | `askUserPolicy` target/mention-aware (`:168-173`); fallback broadcast-to-humans                                                                  |
-| `packages/agentic-protocol/participant-ref.ts` | (from WP6) `user:` kind; mention→user resolution                                                                                                 |
+| `workspace/packages/agentic-protocol/participant-ref.ts` | (from WP6) `user:` kind; mention→user resolution                                                                                                 |
 | `workspace/packages/agentic-chat/*`                      | invite chip / auto-subscribe UI for "added to channel"                                                                                           |
 | userland notification layer                              | GAD `user_notifications` snapshot + acknowledgement tombstones; opaque per-user live nudge through the host; no channel content in the host path |
 

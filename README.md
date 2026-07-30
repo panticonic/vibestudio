@@ -102,7 +102,7 @@ hub, and its one-time root-device invite from the strict ready file. Use
 ### Develop (contributors)
 
 ```bash
-pnpm bootstrap        # install root deps and the split userland workspace deps
+pnpm bootstrap        # install the complete host and userland workspace graph
 pnpm dev             # build + start Electron in the source developer instance
 pnpm dev:webrtc      # build + start a local hub, then connect to a routed child over WebRTC
 pnpm cli --help      # run the CLI live from TypeScript
@@ -139,8 +139,7 @@ instances run concurrently. Stopping one never targets another hub.
 ## Scripts
 
 - `pnpm dev` - Build and start in development mode with DevTools
-- `pnpm bootstrap` - Install both root dependencies and `workspace/` userland dependencies
-- `pnpm install:userland` - Refresh only the split `workspace/` dependency install
+- `pnpm bootstrap` - Install the complete host and userland workspace graph
 - `pnpm dev:webrtc` - Build, start an isolated local hub, and launch Electron through its routed child over WebRTC
 - `pnpm build` - Production build
 - `pnpm stage:npm` - Build and stage the public npm packages under `dist-packages/`

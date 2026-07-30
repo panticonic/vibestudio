@@ -452,7 +452,7 @@ is attached purely for attribution/routing and never widens a grant.
 | `src/server/hubServer.ts`                  | `hubControl.inviteUser` (root/admin), `pairDevice` (member), first-redemption root bootstrap; resolve current role from the identity DB                                 |
 | `src/server/services/principalIdentity.ts` | **new** `resolveUserSubject(entityCache, callerId)` sibling to `resolveCodeIdentity`                                                                                    |
 | `src/server/rpcServer.ts`                  | `userSubjectSource` dep; `handleAuth` device-credential→identity-DB subject on each path; `verifiedCallerFor` + `redeemPairingCredential` return `subject`              |
-| `src/server/internalDOs/workspaceDO.ts`    | `entities.owner_user_id` (+ stamp at `entityActivate`)                                                                                                                  |
+| `packages/builtin/src/workspace-state/WorkspaceDO.ts`    | `entities.owner_user_id` (+ stamp at `entityActivate`)                                                                                                                  |
 | `src/server/hubServer.ts`                  | remove per-child device store; hub owns the identity DB (`UserStore`/`DeviceAuthStore`/`MembershipStore`, hub-side minting is WP1); pass its read-only path to children |
 | `STATE_DIRECTORY.md`                       | document the hub-owned identity DB + clean-cut re-pair                                                                                                                  |
 

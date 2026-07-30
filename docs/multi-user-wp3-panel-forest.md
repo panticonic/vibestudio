@@ -40,7 +40,7 @@ per-user presence UI (WP8, which consumes owner data).
 
 ## 2. Data model — `WorkspaceDO`
 
-Bump `WorkspaceDO.schemaVersion` (`src/server/internalDOs/workspaceDO.ts:272`; destructive
+Bump `WorkspaceDO.schemaVersion` (`packages/builtin/src/workspace-state/WorkspaceDO.ts:272`; destructive
 clean-cut migration `:463`). Add owner columns:
 
 ```sql
@@ -185,7 +185,7 @@ first interactive attach; each invited user's tree seeds on their first interact
 
 | File | Change |
 |---|---|
-| `src/server/internalDOs/workspaceDO.ts` | `slots.owner_user_id` (+ index), `DbSlotRow`/`DbEntityRow`, `slotListOpen` owner-tag, schemaVersion bump; stamp owner on slot create |
+| `packages/builtin/src/workspace-state/WorkspaceDO.ts` | `slots.owner_user_id` (+ index), `DbSlotRow`/`DbEntityRow`, `slotListOpen` owner-tag, schemaVersion bump; stamp owner on slot create |
 | `packages/shell-core/src/panelManager.ts` | `fetchPanelTree` groups roots by owner into a forest |
 | `packages/shared/src/panelRegistry.ts` | owner-grouped snapshot |
 | `packages/shared/src/types.ts` | `Panel.owner`; `PanelTreeSnapshot.forest` (replaces `rootPanels`) |

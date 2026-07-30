@@ -292,7 +292,7 @@ remains confined for its entire incarnation:
   the port and session are bound.
 
 The confinement membrane does not impose a fixed capability list. The iframe receives
-the same portable `@vibestudio/runtime` surface as panels through an iframe-specific
+the same portable `@workspace/runtime` surface as panels through an iframe-specific
 `RuntimeHost` adapter over its logical RPC session. Capability and receiver discovery,
 preflight, acquisition, invocation, opaque handles, streams, subscriptions, package
 builds, brokered network access, filesystem operations, terminal control, panel
@@ -308,7 +308,7 @@ unaccounted authority channel.
 The existing target-neutral runtime assembly is reused rather than copying the panel
 runtime. An iframe supplies its own transport, RPC-backed filesystem, workers, panel
 facade, gateway/fetch adapter, external-open adapter, and verified parent relationship
-to `createHostedRuntime`. Authored imports remain `@vibestudio/runtime`. The panel's
+to `createHostedRuntime`. Authored imports remain `@workspace/runtime`. The panel's
 singleton bootstrap, injected gateway credential, and Electron-local transport are
 not loaded into the iframe.
 
@@ -581,6 +581,10 @@ interface UserlandCapabilityDefinition {
   tier: "gated" | "critical";
   sensitivity: "read" | "write" | "admin" | "destructive";
   resource: DeclarativeResourceDerivation;
+  presentation: {
+    domain: AuthorityDomainId;
+    verb: AuthorityVerb;
+  };
   grantScopes: readonly ("once" | "task" | "agent" | "session" | "version")[];
 }
 ```
@@ -617,6 +621,12 @@ attestations. Any provider rebuild or definition change creates a different capa
 identity and cannot reuse an existing once, task, agent, session, or version grant.
 Logical provider name and package version remain presentation and discovery metadata;
 there is no cross-build grant-compatibility path.
+
+Installed callers declare the single provider-bound definition family
+`userland:<provider-repo-path>/<local-capability-name>#*` with bounded-dynamic
+evidence. The wildcard covers only definition revisions for that provider and
+local name; runtime requirements, decisions, and grants always carry the full
+definition digest, and no general capability wildcard is admitted.
 
 ### Resource derivation
 
@@ -682,6 +692,7 @@ The provider supplies bounded structured copy:
 - action verb;
 - resource type and label;
 - consequence/description;
+- one reviewed authority domain and verb from the shared presentation vocabulary;
 - optional positive evidence fields.
 
 The host supplies immutable chrome showing provider title, source, exact version,
@@ -760,22 +771,13 @@ Userland capabilities may separately protect resources actually owned by termina
 workspace code, such as a shared scratch buffer or terminal-specific collaboration
 object. They cannot authorize PTY creation, reading, input, signals, or disposal.
 
-## Migration from custom userland approvals
+## Receiver-enforced userland capabilities
 
-The current `userlandApproval.request` API returns a decision that provider code is
-expected to enforce. It has useful presentation, deduplication, persistence, and scope
-semantics, but it is not receiver enforcement.
-
-The final migration is a cutover, not a compatibility layer:
-
-1. Add sealed userland capability definitions and receiver enforcement.
-2. Migrate every extension, worker, DO, and panel gate to a declared capability.
-3. Convert stored allow/deny rows only when issuer, subject/resource, scope, exact
-   provider build, and exact definition have an unambiguous representation in the new
-   ledger; otherwise discard them and ask on the next exercise.
-4. Keep secret-input collection as a distinct input surface—it returns user data and
-   is not an authority decision.
-5. Remove the generic custom-choice authorization API and its parallel grant lookup.
+Workspace receivers declare sealed capability definitions and the host enforces them
+at every dispatch boundary. There is no advisory custom-choice authorization API,
+parallel grant lookup, stored-choice conversion, or compatibility path. Secret-input
+collection remains a distinct input surface because it returns user data rather than
+an authority decision.
 
 Non-authorizing product choices with more than allow/deny are application state, not
 capabilities. They should use an ordinary trusted form/interaction API. This keeps the

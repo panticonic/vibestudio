@@ -146,7 +146,7 @@ Direct RPC relay is intentionally open among authenticated participants except f
 
 The transport does carry request context, but the base runtime drops it before invoking exposed handlers:
 
-- `packages/runtime/src/setup/createBaseRuntime.ts:237-239` converts `rpc.expose(method, request => ...)` into `handler(...request.args)`.
+- `workspace/packages/runtime/src/setup/createBaseRuntime.ts:237-239` converts `rpc.expose(method, request => ...)` into `handler(...request.args)`.
 - The terminal panel duplicates the same caller-erasing wrapper (`workspace/panels/terminal/TerminalApp.tsx:14-17`).
 
 The terminal exposes sensitive methods directly:
@@ -156,9 +156,9 @@ The terminal exposes sensitive methods directly:
 
 This is reachable through the ordinary panel-handle API rather than requiring a guessed transport identifier:
 
-- panel metadata carries the live `runtimeEntityId` as `rpcTargetId` (`packages/runtime/src/shared/panelRuntime.ts:140-167`);
-- a handle resolves that live target and relays arbitrary method calls to it (`packages/runtime/src/shared/handles.ts:62-81`, `packages/runtime/src/shared/handles.ts:110-120`);
-- worker/eval hosted runtimes expose `listPanels` and `getPanelHandle` as normal runtime operations (`packages/runtime/src/shared/panelRuntime.ts:383-389`).
+- panel metadata carries the live `runtimeEntityId` as `rpcTargetId` (`workspace/packages/runtime/src/shared/panelRuntime.ts:140-167`);
+- a handle resolves that live target and relays arbitrary method calls to it (`workspace/packages/runtime/src/shared/handles.ts:62-81`, `workspace/packages/runtime/src/shared/handles.ts:110-120`);
+- worker/eval hosted runtimes expose `listPanels` and `getPanelHandle` as normal runtime operations (`workspace/packages/runtime/src/shared/panelRuntime.ts:383-389`).
 
 The shell extension does enforce session ownership, but it observes only its immediate caller:
 
@@ -418,9 +418,9 @@ The reviewed eval path does not expose host `process`, raw filesystem, or ambien
 
 - `packages/shared/src/evalConfinement.ts:1-45` declares an explicit guest-global allowlist and excludes host authority.
 - `src/server/internalDOs/evalNodeCompat.ts:40-133` implements `node:fs` through the owner-scoped runtime filesystem and omits `node:child_process`.
-- `src/server/internalDOs/evalDO.ts:1490-1690` builds explicit bindings and reviewed import maps.
-- `src/server/internalDOs/evalDO.ts:2138-2151` uses an owner-scoped, relative-only gateway bearer.
-- `src/server/internalDOs/evalDO.ts:2240-2256` keeps `fetch` private to the reviewed CDP provider rather than publishing it to authored eval code.
+- `packages/builtin/src/eval-engine/EvalDO.ts:1490-1690` builds explicit bindings and reviewed import maps.
+- `packages/builtin/src/eval-engine/EvalDO.ts:2138-2151` uses an owner-scoped, relative-only gateway bearer.
+- `packages/builtin/src/eval-engine/EvalDO.ts:2240-2256` keeps `fetch` private to the reviewed CDP provider rather than publishing it to authored eval code.
 
 Focused confinement and Node-compat tests passed in this review.
 

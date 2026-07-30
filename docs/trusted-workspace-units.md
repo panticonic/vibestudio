@@ -36,9 +36,10 @@ Trusted app activation is server-side; client adoption is target-specific.
   artifacts rather than host-supervised process replacements.
 
 The protocol surface is `apps:available`, `apps:status`, `apps:lifecycle`,
-`workspace.units.versions`, and `workspace.units.rollback`. Rollback history is
-retained per app with a bounded retention limit and old artifacts remain
-servable while they are retained.
+`runtime.supervision.versions`, and `runtime.supervision.rollback`. Release
+operations use exact `{kind, releaseId}` identities. Rollback history is retained
+per app with a bounded retention limit and old artifacts remain servable while
+they are retained.
 
 ## Device And Principal Model
 

@@ -619,7 +619,7 @@ relay, persistent ECDSA P-256 cert via `certificatePemFile`/`keyPemFile`:
 - `packages/rpc/src/protocol/streamCodec.ts` — shared stream-frame constants and HTTP/WS stream decoder.
 - `packages/rpc/src/protocol/sessionNegotiation.ts` + a per-logical-session server transport — new; extracted/generalized from `rpcServer.ts:633‑821` and `wsServerTransport.ts:64` (close-time failure synthesis).
 - `src/server/rpcServer.ts`, `src/server/wsServerTransport.ts` — make auth/session + server→client bridge per-logical-session, not per-socket.
-- `packages/runtime/src/shared/gatewayFetch.ts` — rewrite to tunnel over the bridge (no loopback HTTP); `src/server/serviceWithHttpRoutes.ts` — panel-facing routes retired for RPC, third-party-facing routes move to the relay.
+- `workspace/packages/runtime/src/shared/gatewayFetch.ts` — rewrite to tunnel over the bridge (no loopback HTTP); `src/server/serviceWithHttpRoutes.ts` — panel-facing routes retired for RPC, third-party-facing routes move to the relay.
 - `src/server/panelHttpServer.ts` — split server build authority from a client loopback façade serving non-secret assets only (no per-request token gate).
 - `src/server/browserTransportEntry.ts`, `src/server/panelBootstrapScript.ts`, desktop preload bridge — panel `EnvelopeRpcTransport` rides the shell bridge (replaces the panel's direct `ws://…/rpc`).
 - `src/main/serverClient.ts`, `workspace/apps/mobile/src/services/mobileTransport.ts` — transport selection.

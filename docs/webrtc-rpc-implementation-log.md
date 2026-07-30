@@ -120,7 +120,7 @@ This is the work that makes the repo build green end-to-end. Ordered:
 
 ### 2. Workstream D — loopback origin + shell-bridge panel RPC
 
-- Repoint `packages/runtime/src/panel/transport.ts:createPanelTransport`
+- Repoint `workspace/packages/runtime/src/panel/transport.ts:createPanelTransport`
   so ALL non-electron-local RPC rides the **shell bridge** (`__vibestudioShell`)
   instead of `globalThis.__vibestudioTransport` (the direct WS). The host forwards
   each panel's envelopes onto the pipe as that panel's logical session.
@@ -130,7 +130,7 @@ This is the work that makes the repo build green end-to-end. Ordered:
   server-side and the client serves **non-secret assets only** over the bulk
   channel + a content-addressed cache; drop `validateManagementAuth`/`/api/*`;
   bind `127.0.0.1` only; keep `basePath`.
-- Rewrite `packages/runtime/src/shared/gatewayFetch.ts` to tunnel over
+- Rewrite `workspace/packages/runtime/src/shared/gatewayFetch.ts` to tunnel over
   the bridge `stream()` (no loopback HTTP `Authorization` header).
 
 ### 3. Workstream C — native packaging
