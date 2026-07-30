@@ -163,6 +163,7 @@ export class WebRtcRpcClient {
         callerKind: this.config.callerKind ?? "shell",
         transport: paired.mainSession,
         onRecovery: (handler) => paired.onRecovery(handler),
+        authorityAcquisition: "wait",
       });
       return { paired, core, callerId };
     } catch (error) {

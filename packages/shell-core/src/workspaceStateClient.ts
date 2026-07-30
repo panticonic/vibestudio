@@ -15,9 +15,20 @@ import type {
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
+  WorkspacePanelDetail,
+  WorkspacePanelCloseCleanupPage,
+  WorkspacePanelCloseCleanupPageInput,
+  WorkspacePanelCloseResult,
   WorkspacePanelTreeHistoryRow,
+  WorkspacePanelTreePage,
+  WorkspacePanelTreePageInput,
+  WorkspacePanelTreePath,
+  WorkspacePanelTreePlacement,
+  WorkspacePanelTreeRootGroupPage,
+  WorkspacePanelTreeRootGroupPageInput,
+  WorkspacePanelTreeSearchInput,
+  WorkspacePanelTreeSearchPage,
   WorkspacePanelTreeSlot,
-  WorkspacePanelTreeStateSnapshot,
 } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 
 export interface SlotHistoryEntryInput {
@@ -52,25 +63,28 @@ export interface SlotCommitPreparedNavigationResult {
 export interface SlotCreateInput {
   slotId: PanelSlotId;
   parentSlotId: PanelSlotId | null;
-  positionId: string;
+  placement?: WorkspacePanelTreePlacement;
   initialEntry?: SlotHistoryEntryInput;
 }
 
 export type SlotRow = WorkspacePanelTreeSlot;
 export type SlotHistoryRow = WorkspacePanelTreeHistoryRow;
-export type PanelTreeStateSnapshot = WorkspacePanelTreeStateSnapshot;
 
 /**
  * Client surface mirroring the `workspace-state` server service.
- * Read methods (the panel-tree aggregate, slot list/get/history, and entity
- * resolution) are available to any kind; write methods (everything starting
- * with `slot` other than reads) are only routable from shell/server callers.
+ * Tree reads are bounded queries. No method on this surface reconstructs the
+ * complete panel forest or a slot's complete navigation history.
  */
 export interface WorkspaceStateClient {
-  getPanelTreeStateSnapshot(): Promise<PanelTreeStateSnapshot>;
-  listSlots(): Promise<SlotRow[]>;
+  getPanelTreeRootGroups(
+    input: WorkspacePanelTreeRootGroupPageInput
+  ): Promise<WorkspacePanelTreeRootGroupPage>;
+  getPanelTreePage(input: WorkspacePanelTreePageInput): Promise<WorkspacePanelTreePage>;
+  getPanelTreePath(slotId: PanelSlotId): Promise<WorkspacePanelTreePath | null>;
+  getPanelDetail(slotId: PanelSlotId): Promise<WorkspacePanelDetail | null>;
+  searchPanelTree(input: WorkspacePanelTreeSearchInput): Promise<WorkspacePanelTreeSearchPage>;
   getSlot(slotId: PanelSlotId): Promise<SlotRow | null>;
-  getSlotHistory(slotId: PanelSlotId): Promise<SlotHistoryRow[]>;
+  getRelativeSlotHistory(slotId: PanelSlotId, delta: -1 | 1): Promise<SlotHistoryRow | null>;
   resolveActiveEntity(id: string): Promise<EntityRecord | null>;
   resolveEntity(id: string): Promise<EntityRecord | null>;
   /**
@@ -84,14 +98,16 @@ export interface WorkspaceStateClient {
     input: SlotCommitPreparedNavigationInput
   ): Promise<SlotCommitPreparedNavigationResult>;
   updateCurrentStateArgs(slotId: PanelSlotId, stateArgs: unknown): Promise<void>;
-  setSlotParent(slotId: PanelSlotId, parentSlotId: PanelSlotId | null): Promise<void>;
-  setSlotPosition(slotId: PanelSlotId, positionId: string): Promise<void>;
   moveSlot(
     slotId: PanelSlotId,
     parentSlotId: PanelSlotId | null,
-    positionId: string
+    placement?: WorkspacePanelTreePlacement
   ): Promise<void>;
-  closeSlot(slotId: PanelSlotId): Promise<void>;
+  closeSlot(slotId: PanelSlotId): Promise<WorkspacePanelCloseResult>;
+  getCloseCleanupPage(
+    input: WorkspacePanelCloseCleanupPageInput
+  ): Promise<WorkspacePanelCloseCleanupPage>;
+  acknowledgeCloseCleanup(slotIds: PanelSlotId[]): Promise<void>;
 }
 
 /**

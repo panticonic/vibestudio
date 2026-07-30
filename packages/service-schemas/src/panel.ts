@@ -8,9 +8,15 @@ import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import {
   PanelFocusResultSchema,
-  PanelTreeSnapshotSchema,
+  PanelSchema,
   ThemeConfigSchema,
 } from "@vibestudio/shared/panelContracts";
+
+export const PanelPlacementHintSchema = z.object({
+  disposition: z.enum(["side", "replace", "split-below"]).optional(),
+  preferredWidth: z.number().positive().optional(),
+  minWidth: z.number().positive().optional(),
+});
 
 const PanelChromeStateSchema = z
   .object({
@@ -36,37 +42,6 @@ const PanelChromeStateSchema = z
     mediaPlaying: z.boolean(),
   })
   .strict();
-
-const PanelAddressOptionsSchema = z
-  .object({
-    source: z.string(),
-    suggestions: z.array(
-      z.object({
-        source: z.string(),
-        title: z.string().optional(),
-        kind: z.enum(["launchable", "package", "skill", "unit", "folder"]),
-      })
-    ),
-  })
-  .strict();
-
-const BrowserAddressOptionsSchema = z.object({
-  query: z.string(),
-  suggestions: z.array(
-    z.object({
-      url: z.string(),
-      title: z.string().optional(),
-      visitCount: z.number().optional(),
-      typedCount: z.number().optional(),
-      lastVisit: z.number().optional(),
-      source: z.enum(["history", "session", "bookmark", "search-engine"]),
-      engineId: z.number().optional(),
-      engineName: z.string().optional(),
-      keyword: z.string().optional(),
-      searchTemplate: z.string().optional(),
-    })
-  ),
-});
 
 export const BrowserNavigationIntentSchema = z.object({
   transition: z
@@ -105,90 +80,134 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
 
+const PanelPresentationSchema = z.intersection(
+  PanelSchema,
+  z.object({
+    parentId: z.string().nullable(),
+    position: z.number().int().nonnegative(),
+    hostViewRevision: z.number().int().nonnegative(),
+  })
+);
+
 export const panelMethods = defineServiceMethods({
+  focusPanel: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "Focus and placement are device-local native presentation effects on the caller's panel host",
+    },
+    description: "Focus a panel on the current native host, loading its current lease if needed.",
+    args: z.tuple([
+      z.string(),
+      z
+        .object({
+          anchorPanelId: z.string().optional(),
+          placement: PanelPlacementHintSchema.optional(),
+        })
+        .optional(),
+    ]),
+    returns: PanelFocusResultSchema,
+    authority: { principals: ["user", "code"] },
+    access: WRITE_ACCESS,
+  },
   updateTheme: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Set the server-controlled theme appearance (light/dark) for the panel chrome.",
     args: z.tuple([z.enum(["light", "dark"])]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },
   updateThemeConfig: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Set the server-controlled theme identity tokens broadcast to hosted panels.",
     args: z.tuple([ThemeConfigSchema]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },
   getThemeConfig: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Return the current server-controlled theme identity tokens for hosted panels.",
     args: z.tuple([]),
     returns: ThemeConfigSchema,
     authority: { principals: ["user", "code"] },
     access: READ_ACCESS,
   },
-  getTreeSnapshot: {
-    description: "Return the Electron host's current mirrored panel tree snapshot.",
-    args: z.tuple([]),
-    returns: PanelTreeSnapshotSchema,
-    access: READ_ACCESS,
-  },
-  getFocusedPanelId: {
-    description: "Return the currently focused panel id from the Electron host mirror.",
-    args: z.tuple([]),
-    returns: z.string().nullable(),
+  getPresentation: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale:
+        "P-panels: read-only Electron-local presentation state for trusted panel-hosting chrome",
+    },
+    description: "Return the Electron host's current local presentation projection for a panel.",
+    args: z.tuple([z.string()]),
+    returns: PanelPresentationSchema.nullable(),
     access: READ_ACCESS,
   },
   getChromeState: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Current chrome state (title, address, navigation affordances) for a panel by id.",
     args: z.tuple([z.string()]),
     returns: PanelChromeStateSchema,
     access: READ_ACCESS,
   },
-  getAddressOptions: {
-    description: "Address-bar options and suggestions for the current panel input.",
-    args: z.tuple([z.string()]),
-    returns: PanelAddressOptionsSchema,
-    access: READ_ACCESS,
-  },
-  getBrowserAddressOptions: {
-    description: "Browser address-bar options for a browser-backed panel by id.",
-    args: z.tuple([z.string()]),
-    returns: BrowserAddressOptionsSchema,
-    access: READ_ACCESS,
-  },
-  ensureLoaded: {
-    description:
-      "Ensure a panel runtime is loaded into a host view without changing the active focus.",
-    args: z.tuple([z.string()]),
-    returns: PanelFocusResultSchema,
-    access: WRITE_ACCESS,
-  },
-  takeOver: {
-    description:
-      "Take over a panel runtime lease for the calling host view and return the focus result.",
-    args: z.tuple([z.string()]),
-    returns: PanelFocusResultSchema,
-    access: WRITE_ACCESS,
-  },
   markBrowserNavigationIntent: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Record how an imminent browser navigation was initiated so the panel can classify it.",
     args: z.tuple([z.string(), BrowserNavigationIntentSchema]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },
-  reloadView: {
-    description: "Reload the panel's view.",
-    args: z.tuple([z.string()]),
-    returns: z.void(),
-    access: WRITE_ACCESS,
-  },
-  forceReloadView: {
-    description: "Force-reload the panel's view, bypassing caches.",
-    args: z.tuple([z.string()]),
-    returns: z.void(),
-    access: WRITE_ACCESS,
-  },
   findInPage: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: in-page find UI on the focused panel; core mutually inspectable workspace UX.",
+    },
     description: "Find text in the current panel document and return the final match count.",
     args: z.tuple([
       z.string(),
@@ -202,12 +221,28 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   stopFindInPage: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX.",
+    },
     description: "Close find-in-page and clear the current selection.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },
   getBrowserSiteState: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale:
+        "P-panels: read of the focused browser panel's per-site UI state; core mutually inspectable workspace UX.",
+    },
     description: "Return canonical bookmark, cookie, and zoom state for the current browser page.",
     args: z.tuple([z.string()]),
     returns: z.object({
@@ -221,42 +256,98 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   toggleBrowserBookmark: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: bookmark toggle on the focused browser panel; core mutually inspectable workspace UX.",
+    },
     description: "Add or remove the current browser page from canonical bookmarks.",
     args: z.tuple([z.string()]),
     returns: z.object({ bookmarked: z.boolean(), bookmarkId: z.number().int().nullable() }),
     access: WRITE_ACCESS,
   },
   setBrowserZoom: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.mutate",
+      rationale:
+        "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX.",
+    },
     description: "Set and persist page zoom for the current browser origin.",
     args: z.tuple([z.string(), z.number().min(0.25).max(5)]),
     returns: z.number(),
     access: WRITE_ACCESS,
   },
   clearBrowserSiteData: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: shell-driven browser site-data clear for the focused panel; core mutually inspectable workspace UX.",
+    },
     description: "Clear canonical cookies and local site data for the current browser origin.",
     args: z.tuple([z.string()]),
     returns: z.number().int().nonnegative(),
     access: WRITE_ACCESS,
   },
   printBrowserPage: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: shell print action on the focused browser panel; core mutually inspectable workspace UX.",
+    },
     description: "Open the native print flow for the current browser page.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },
   saveBrowserPagePdf: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: shell save-as-PDF action on the focused browser panel; core mutually inspectable workspace UX.",
+    },
     description: "Save the current browser page as a PDF through a native file dialog.",
     args: z.tuple([z.string()]),
     returns: z.string().nullable(),
     access: WRITE_ACCESS,
   },
   stopBrowserMedia: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: stops media in the focused browser panel; core mutually inspectable workspace UX.",
+    },
     description: "Stop active camera, microphone, and geolocation use in a browser panel.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },
   togglePin: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Toggle the client-local pin for a panel (by slot id). Returns the new pinned state.",
     args: z.tuple([z.string()]),
@@ -264,12 +355,28 @@ export const panelMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   listPinnedPanelIds: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "List the slot ids of all client-local pinned panels.",
     args: z.tuple([]),
     returns: z.array(z.string()),
     access: READ_ACCESS,
   },
   getPanelLayout: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Return the client-local persisted panel layout for the active workspace and signed-in account, or null. The shell re-validates and prunes against the live tree on restore.",
     args: z.tuple([]),
@@ -277,16 +384,82 @@ export const panelMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   savePanelLayout: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Persist the client-local panel layout for the active workspace and signed-in account. Stored on this device only; never synced.",
     args: z.tuple([PersistedPanelLayoutSchema]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },
-  setFocusedPanelId: {
-    description:
-      "Record the focused panel in the Electron host mirror and persist the focused path, so getFocusedPanelId and restore reflect the shell's layout focus.",
-    args: z.tuple([z.string()]),
+  getFocusedPanelId: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.local-panel-state",
+      rationale: "Reads the selected panel from the exact client-local native view registry",
+    },
+    description: "Return this client's focused panel id.",
+    args: z.tuple([]),
+    returns: z.string().nullable(),
+    access: READ_ACCESS,
+  },
+  getCollapsedPanelIds: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.local-panel-state",
+      rationale: "Reads collapsed nodes from this client's local panel presentation state",
+    },
+    description: "Return this client's collapsed panel ids.",
+    args: z.tuple([]),
+    returns: z.array(z.string()),
+    access: READ_ACCESS,
+  },
+  setPanelCollapsed: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.local-panel-state",
+      rationale: "Persists one collapsed-node choice in this client's local presentation state",
+    },
+    description: "Set one panel's collapsed state on this client.",
+    args: z.tuple([z.string(), z.boolean()]),
+    returns: z.void(),
+    access: WRITE_ACCESS,
+  },
+  expandPanelIds: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.local-panel-state",
+      rationale: "Expands exact nodes in this client's local panel presentation state",
+    },
+    description: "Expand panel ids on this client.",
+    args: z.tuple([z.array(z.string())]),
+    returns: z.void(),
+    access: WRITE_ACCESS,
+  },
+  openPanelDevTools: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.native-panel",
+      rationale: "Opens Electron DevTools for the exact native panel webContents",
+    },
+    description: "Open native developer tools for a panel hosted by this client.",
+    args: z.tuple([z.string(), z.enum(["detach", "right", "bottom"]).optional()]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },

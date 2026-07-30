@@ -3,30 +3,31 @@
  *
  * Provides:
  * - listSources: launchable worker sources (including manifest entry + durable classes)
- * - listServices: product-owned and workspace-authored services available here
- * - resolveService: workspace-authored services plus product-sealed workspace services
+ * - listServices: manifest-declared workspace services available here
+ * - resolveService: manifest-declared workspace services
  */
 
 import { z } from "zod";
 import type { PrincipalKind } from "@vibestudio/rpc";
-import { PRODUCT_WORKSPACE_SERVICES } from "@vibestudio/shared/productWorkspaceServices.mjs";
 import {
   selectedPreparedAuthoritySelection,
   type ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { selectedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
-import { findReviewedInternalDurableObjectTarget } from "../reviewedInternalDurableObjectTargets.js";
-import { resolveWorkspaceService, type ResolvedWorkspaceService } from "../workspaceServices.js";
 import {
-  browserEnvironmentIdentityFromContext,
-  isBrowserDataDurableObject,
-} from "../browserEnvironmentIdentity.js";
+  findProductBuiltinService,
+  PRODUCT_BUILTIN_CATALOG,
+  productBuiltinByIdentity,
+} from "@vibestudio/shared/productBuiltinCatalog.generated";
+import { resolveWorkspaceService, type ResolvedWorkspaceService } from "../workspaceServices.js";
+import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIdentity.js";
 
 type ServiceListRow =
   | {
@@ -44,7 +45,7 @@ type ServiceListRow =
       defaultObjectKey: string | null;
     }
   | {
-      origin: "workspace";
+      origin: "product" | "workspace";
       name: string;
       title?: string;
       action?: string;
@@ -112,11 +113,22 @@ export function createWorkerService(deps: {
     ctx: ServiceContext,
     source: string,
     className: string,
-    requestedObjectKey: string
+    requestedObjectKey: string,
+    throughService = false
   ): string => {
-    if (!isBrowserDataDurableObject(source, className)) return requestedObjectKey;
+    const builtin = productBuiltinByIdentity(source, className);
+    if (builtin && !throughService) return requestedObjectKey;
+    if (!builtin || builtin.durableObject.keyMode === "caller-supplied") {
+      return requestedObjectKey;
+    }
     if (!deps.workspaceId) {
-      throw new Error("Browser environment resolution is unavailable without a workspace id");
+      throw new Error("Workspace-scoped builtin resolution is unavailable without a workspace id");
+    }
+    if (builtin.durableObject.keyMode === "workspace-scoped") {
+      if (requestedObjectKey && requestedObjectKey !== deps.workspaceId) {
+        throw new Error(`Builtin service ${builtin.name} is scoped to the current workspace`);
+      }
+      return deps.workspaceId;
     }
     return browserEnvironmentIdentityFromContext(deps.workspaceId, ctx).environmentKey;
   };
@@ -130,10 +142,6 @@ export function createWorkerService(deps: {
       "session",
       "mission",
     ]),
-  };
-  const reviewedInternalTargetLeaf = {
-    capability: "service:workers.resolveDurableObject",
-    requirement: selectedPreparedAuthorityRequirement(["code"]),
   };
   const preparedResolutionAuthority = (method: "resolveService" | "resolveDurableObject") => {
     const capability = `service:workers.${method}`;
@@ -149,16 +157,21 @@ export function createWorkerService(deps: {
           method === "resolveService"
             ? "workers.resolveService.workspace-service"
             : "workers.resolveDurableObject.target",
-        leaves:
-          method === "resolveDurableObject"
-            ? [dynamicWorkspaceServiceLeaf, reviewedInternalTargetLeaf]
-            : [dynamicWorkspaceServiceLeaf],
+        leaves: [dynamicWorkspaceServiceLeaf],
       },
     };
   };
 
-  const methods = {
+  const methods = defineServiceMethods({
     listSources: {
+      tier: {
+        tier: "open",
+        session: "family",
+        residency: "untrusted-execution",
+        family: "workers.read",
+        rationale:
+          "P-discovery: capability discovery and introspection; §2 default {code, session} family",
+      },
       description:
         "List launchable worker sources with their manifest entry point and durable object classes (empty for regular workers)",
       args: z.tuple([]),
@@ -166,26 +179,50 @@ export function createWorkerService(deps: {
       access: { sensitivity: "read" as const },
     },
     listServices: {
+      tier: {
+        tier: "open",
+        session: "family",
+        residency: "untrusted-execution",
+        family: "workers.read",
+        rationale:
+          "P-discovery: capability discovery and introspection; §2 default {code, session} family",
+      },
       description:
-        "List product-owned and workspace-authored services visible in the caller's live context; workspace rows include the live docs catalog id. In eval import the top-level workers API from @vibestudio/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval.",
+        "List manifest-declared workspace services visible in the caller's live context; rows include the live docs catalog id. In eval import the top-level workers API from @workspace/runtime. Inside an installed worker, call runtime.workers.listServices() on the createWorkerRuntime(env) result; never construct a worker runtime from eval.",
       args: z.tuple([]),
       access: { sensitivity: "read" as const },
     },
     resolveService: {
+      tier: {
+        tier: "open",
+        session: "family",
+        residency: "untrusted-execution",
+        family: "workers.read",
+        rationale:
+          "P-discovery: agent sessions must resolve only the structurally exposed services in their mission envelope",
+      },
       description:
-        "Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @vibestudio/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API.",
+        "Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @workspace/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API.",
       args: z.tuple([z.string(), z.string().nullable().optional()]),
       access: { sensitivity: "read" as const },
       authority: preparedResolutionAuthority("resolveService"),
     },
     resolveDurableObject: {
+      tier: {
+        tier: "open",
+        session: "family",
+        residency: "untrusted-execution",
+        family: "workers.read",
+        rationale:
+          "P-discovery: agent sessions must resolve only the structurally exposed durable targets in their mission envelope",
+      },
       description:
         "Resolve and activate a concrete Durable Object RPC target by source/class/key when no declared workspace service fits. The returned target is a lifecycle handle as well as an RPC address: when the caller owns a disposable object, clear any test data and pass that same target to workers.destroy(...) so its durable storage is retired.",
       args: z.tuple([z.string(), z.string(), z.string()]),
       access: { sensitivity: "read" as const },
       authority: preparedResolutionAuthority("resolveDurableObject"),
     },
-  };
+  });
 
   return {
     name: "workers",
@@ -254,12 +291,7 @@ export function createWorkerService(deps: {
           String(className),
           String(objectKey)
         );
-        const scoped = await resolveDurableObjectForCaller(
-          ctx,
-          String(source),
-          String(className),
-          resolvedObjectKey
-        );
+        const scoped = await resolveDurableObjectForCaller(ctx, String(source), String(className));
         const targetId = `do:${String(source)}:${String(className)}:${resolvedObjectKey}`;
         for (const authority of scoped.authority) {
           if (!authority.capability.startsWith("workspace-service:")) continue;
@@ -299,14 +331,34 @@ export function createWorkerService(deps: {
         }));
       },
       listServices: async (ctx) => {
-        const mainRows = [...listProductServiceRows(), ...listServiceRows(workspaceDecls)];
+        const productRows: ServiceListRow[] = PRODUCT_BUILTIN_CATALOG.flatMap((entry) =>
+          entry.kind === "service"
+            ? [
+                {
+                  origin: "product" as const,
+                  name: entry.name,
+                  title: entry.title,
+                  description: entry.description,
+                  presentation: entry.presentation,
+                  protocols: [...entry.protocols],
+                  source: INTERNAL_DO_SOURCE,
+                  kind: "durable-object" as const,
+                  className: entry.className,
+                  defaultObjectKey: null,
+                },
+              ]
+            : []
+        );
+        const productQueries = new Set(productRows.flatMap((row) => [row.name, ...row.protocols]));
+        const mainRows = listServiceRows(workspaceDecls).filter(
+          (row) =>
+            !productQueries.has(row.name) && !row.protocols.some((p) => productQueries.has(p))
+        );
         const scopedContext = await declarationsForCallerContext(ctx);
-        if (!scopedContext) return mainRows;
-        const seen = new Set([
-          ...PRODUCT_WORKSPACE_SERVICES.flatMap((service) => [service.name, ...service.protocols]),
-          ...serviceQueryKeys(workspaceDecls),
-        ]);
+        if (!scopedContext) return [...productRows, ...mainRows];
+        const seen = new Set([...productQueries, ...serviceQueryKeys(workspaceDecls)]);
         return [
+          ...productRows,
           ...mainRows,
           ...listServiceRows(scopedContext.decls).filter((row) => {
             if (seen.has(row.name)) return false;
@@ -335,12 +387,7 @@ export function createWorkerService(deps: {
       },
       resolveDurableObject: async (ctx, [source, className, objectKey]) => {
         const resolvedObjectKey = resolvedDurableObjectKey(ctx, source, className, objectKey);
-        const scoped = await resolveDurableObjectForCaller(
-          ctx,
-          source,
-          className,
-          resolvedObjectKey
-        );
+        const scoped = await resolveDurableObjectForCaller(ctx, source, className);
         const targetId = `do:${source}:${className}:${resolvedObjectKey}`;
         const singleton = scoped.decls.singletons.find(source, className);
         const contextId = singleton?.contextId ?? scoped.contextId;
@@ -385,6 +432,37 @@ export function createWorkerService(deps: {
     query: string,
     objectKey: string | null | undefined
   ): Promise<ScopedDeclarations & { service: ResolvedWorkspaceService }> {
+    const builtin = findProductBuiltinService(query);
+    if (builtin) {
+      const requestedObjectKey = objectKey ?? "";
+      const resolvedObjectKey = resolvedDurableObjectKey(
+        ctx,
+        INTERNAL_DO_SOURCE,
+        builtin.className,
+        requestedObjectKey,
+        true
+      );
+      return {
+        decls: workspaceDecls,
+        scope: "main",
+        service: {
+          kind: "durable-object",
+          origin: "product",
+          name: builtin.name,
+          title: builtin.title,
+          action: builtin.action,
+          description: builtin.description,
+          presentation: builtin.presentation,
+          ...((builtin.protocols as readonly string[]).includes(query) ? { protocol: query } : {}),
+          protocols: [...builtin.protocols],
+          source: INTERNAL_DO_SOURCE,
+          authority: { principals: [...builtin.principals] },
+          className: builtin.className,
+          objectKey: resolvedObjectKey,
+          targetId: `do:${INTERNAL_DO_SOURCE}:${builtin.className}:${resolvedObjectKey}`,
+        } as ResolvedWorkspaceService,
+      };
+    }
     try {
       return {
         service: resolveWorkspaceService(workspaceDecls, query, objectKey),
@@ -406,26 +484,10 @@ export function createWorkerService(deps: {
   async function resolveDurableObjectForCaller(
     ctx: ServiceContext,
     source: string,
-    className: string,
-    objectKey: string
+    className: string
   ): Promise<ScopedDurableObject> {
     if (source === INTERNAL_DO_SOURCE) {
-      const reviewed = findReviewedInternalDurableObjectTarget(
-        source,
-        className,
-        isBrowserDataDurableObject(source, className) ? "browser-environment" : objectKey
-      );
-      if (!reviewed) throw new Error(missingDurableObjectMessage(source, className));
-      return {
-        decls: workspaceDecls,
-        scope: "main",
-        authority: [
-          {
-            capability: reviewed.authority.capability,
-            principals: reviewed.authority.principals,
-          },
-        ],
-      };
+      throw new Error(missingDurableObjectMessage(source, className));
     }
 
     try {
@@ -538,22 +600,6 @@ function listServiceRows(decls: WorkspaceDeclarations): ServiceListRow[] {
       routePath: service.worker.routePath,
     };
   });
-}
-
-function listProductServiceRows(): ServiceListRow[] {
-  return PRODUCT_WORKSPACE_SERVICES.map((service) => ({
-    origin: "product" as const,
-    name: service.name,
-    title: service.title,
-    action: service.action,
-    description: service.description,
-    presentation: service.presentation,
-    protocols: [...service.protocols],
-    source: service.source,
-    kind: "durable-object" as const,
-    className: service.durableObject.className,
-    defaultObjectKey: service.durableObject.objectKey,
-  }));
 }
 
 function assertDurableObjectExists(

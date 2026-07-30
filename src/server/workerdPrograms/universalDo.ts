@@ -131,11 +131,18 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       return new Response("universal-do: bad key", { status: 400 });
     }
 
-    if (parts[1] === "__vibestudio_retire") {
+    if (parts[1] === "__vibestudio_retire" || parts[1] === "__vibestudio_restart") {
       if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== this.env.WORKERD_LOADER_SECRET) {
         return new Response("Forbidden", { status: 403 });
       }
-      this.ctx.facets.abort("do", new Error("Runtime entity retired"));
+      this.ctx.facets.abort(
+        "do",
+        new Error(
+          parts[1] === "__vibestudio_restart"
+            ? "Runtime entity restarted"
+            : "Runtime entity retired"
+        )
+      );
       this.loadedFacet = null;
       this.loadedFacetFlight = null;
       return new Response(null, { status: 204 });

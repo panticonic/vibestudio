@@ -61,6 +61,7 @@ import {
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
 import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
+import type { UnitSupervisor } from "./unitSupervisor.js";
 
 export interface RuntimeEntityHooks {
   /**
@@ -167,9 +168,9 @@ export interface RuntimeServiceInternal {
    * session. It intentionally does not create entities, clone DO storage, or
    * materialize a host projection.
    */
-  forkDevelopmentSessionContext(
+  forkSemanticContext(
     caller: VerifiedCaller,
-    sessionId: string
+    targetContextId: string
   ): Promise<{
     contextId: string;
     parentContextId: string;
@@ -177,7 +178,7 @@ export interface RuntimeServiceInternal {
     childBaseState: VcsStateNodeRef;
   }>;
   /** Undo a never-executed development-session context after admission fails. */
-  discardDevelopmentSessionContext(contextId: string): Promise<void>;
+  dropSemanticContext(contextId: string): Promise<void>;
 }
 
 export interface RuntimeServiceResult {
@@ -273,6 +274,7 @@ export interface RuntimeServiceDeps {
    * attested system-test harness before aborting this exact active DO facet.
    */
   faultAbortAgentVessel?: (caller: VerifiedCaller, record: EntityRecord) => void | Promise<void>;
+  unitSupervisor: UnitSupervisor;
 }
 
 /**
@@ -537,9 +539,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     caller: VerifiedCaller,
     spec: RuntimeCodeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
-    if (!isTrustedRuntimeHost(caller)) {
-      throw new Error("Deferred runtime entities are host-managed");
-    }
     assertCreateEntityAllowed(caller, spec);
     const explicitContextId = spec.contextId;
     const key = spec.key ?? randomUUID();
@@ -612,9 +611,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     caller: VerifiedCaller,
     spec: RuntimeCodeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
-    if (!isTrustedRuntimeHost(caller)) {
-      throw new Error("Deferred runtime entities are host-managed");
-    }
     if (!spec.key) {
       throw new Error("activateReservedEntity requires the reserved entity key");
     }
@@ -627,6 +623,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const existing = await store.resolveRecord(canonicalId);
     if (!existing || existing.kind !== spec.kind) {
       throw new Error(`Unknown reserved entity ${canonicalId}`);
+    }
+    if (!callerOwnsEntity(caller, existing)) {
+      throw new Error(
+        `runtime.activateReservedEntity caller ${caller.runtime.id} does not own ${canonicalId}`
+      );
     }
     if (existing.source.repoPath !== spec.execution.source) {
       throw new Error(
@@ -748,16 +749,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       }
       if (!/^[0-9a-f]{64}$/.test(prepared.executionDigest)) {
         throw new Error(`${spec.kind} ${canonicalId} is missing a canonical execution digest`);
-      }
-      if (
-        spec.kind === "panel" &&
-        existing &&
-        !existing.activeBuildKey &&
-        prepared.effectiveVersion !== existing.source.effectiveVersion
-      ) {
-        throw new Error(
-          `Cannot reactivate legacy panel ${canonicalId}: its immutable build key is unknown and current source resolves to a different effective version`
-        );
       }
       if (existing?.status !== "retired") effectiveVersion = prepared.effectiveVersion;
       buildKey = prepared.buildKey;
@@ -1344,9 +1335,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return { contextId };
   }
 
-  async function forkDevelopmentSessionContext(
+  async function forkSemanticContext(
     caller: VerifiedCaller,
-    sessionId: string
+    targetContextId: string
   ): Promise<{
     contextId: string;
     parentContextId: string;
@@ -1360,10 +1351,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         { code: "ENOENT" }
       );
     }
-    const contextId = `ctx-development-${createHash("sha256")
-      .update(sessionId)
-      .digest("hex")
-      .slice(0, 32)}`;
+    const contextId = targetContextId;
     const parentWorkingHead = await deps.semanticContexts.resolveWorkingState(parentContextId);
     // Semantic state only: do not create a projection folder and do not touch
     // entity/DO state. forkContext is valid even when the parent is empty.
@@ -1379,7 +1367,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return { contextId, parentContextId, parentWorkingHead, childBaseState };
   }
 
-  async function discardDevelopmentSessionContext(contextId: string): Promise<void> {
+  async function dropSemanticContext(contextId: string): Promise<void> {
     // Development contexts reach this path only before an executor exists, so
     // semantic state and its registry edge are the entire resource set.
     await deps.semanticContexts.dropContext(contextId);
@@ -1427,41 +1415,44 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return { contexts: await deps.semanticContexts.listContexts(prefix) };
   }
 
+  const prepareEntityContextBoundary = async (
+    ctx: ServiceContext,
+    rawSpec: unknown
+  ): Promise<import("@vibestudio/shared/serviceDefinition").PreparedAuthorityState> => {
+    const spec = rawSpec as RuntimeEntityCreateSpec;
+    assertCreateEntityAllowed(ctx.caller, spec);
+    if (
+      spec.contextId == null ||
+      spec.contextId === "" ||
+      isExtensionOrchestratedCreate(ctx.caller, spec)
+    ) {
+      return { selections: [], payload: null };
+    }
+    const boundaryCaller =
+      ctx.caller.runtime.kind === "extension" ? verifiedInitiator(ctx) : ctx.caller;
+    return {
+      selections: await prepareContextBoundary(boundaryCaller, spec.contextId, {
+        kind: "runtime",
+        verb: `Create ${spec.kind}`,
+        targetLabel: runtimeEntitySource(spec),
+        targetLabelName: "Source",
+        groupKey: `context-boundary:${spec.contextId}:${runtimeEntitySource(spec)}`,
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+      }),
+      payload: null,
+    };
+  };
+
   const definition: ServiceDefinition = {
     name: "runtime",
     description: "Runtime entity creation and retirement",
     authority: { principals: ["code", "user", "host"] },
     methods: runtimeMethods,
     authorityPreparation: {
-      "runtime.createEntity.contextBoundary": async (ctx, [rawSpec]) => {
-        const spec = rawSpec as RuntimeEntityCreateSpec;
-        assertCreateEntityAllowed(ctx.caller, spec);
-        if (
-          spec.contextId == null ||
-          spec.contextId === "" ||
-          isExtensionOrchestratedCreate(ctx.caller, spec)
-        ) {
-          return { selections: [], payload: null };
-        }
-        // Extensions execute delegated user work. Attribute the context
-        // boundary to the host-verified upstream initiator so an extension can
-        // launch a runtime inside that initiator's lifecycle-owned child
-        // context without a synthetic cross-context prompt. A genuinely
-        // foreign context still produces the ordinary exact-context challenge.
-        const boundaryCaller =
-          ctx.caller.runtime.kind === "extension" ? verifiedInitiator(ctx) : ctx.caller;
-        return {
-          selections: await prepareContextBoundary(boundaryCaller, spec.contextId, {
-            kind: "runtime",
-            verb: `Create ${spec.kind}`,
-            targetLabel: runtimeEntitySource(spec),
-            targetLabelName: "Source",
-            groupKey: `context-boundary:${spec.contextId}:${runtimeEntitySource(spec)}`,
-            ...(ctx.signal ? { signal: ctx.signal } : {}),
-          }),
-          payload: null,
-        };
-      },
+      "runtime.createEntity.contextBoundary": (ctx, [rawSpec]) =>
+        prepareEntityContextBoundary(ctx, rawSpec),
+      "runtime.reserveEntity.contextBoundary": (ctx, [rawSpec]) =>
+        prepareEntityContextBoundary(ctx, rawSpec),
       "runtime.retireEntity.contextBoundary": async (ctx, [rawArgs]) => {
         const { id, removeContext } = rawArgs as { id: string; removeContext?: boolean };
         const target = await store.resolveRecord(id);
@@ -1602,6 +1593,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       destroyContext: async (ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });
       },
+      forkSemanticContext: (ctx, [{ targetContextId }]) =>
+        forkSemanticContext(ctx.caller, targetContextId),
+      dropSemanticContext: async (_ctx, [{ contextId }]) => {
+        await dropSemanticContext(contextId);
+      },
       listOwnedContexts: (_ctx, [listArgs]) => listOwnedContexts(listArgs),
       recordContextEdge: async (ctx, [edgeArgs]) => {
         await recordContextEdge(ctx.caller, edgeArgs);
@@ -1615,6 +1611,30 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           explicit: options?.explicit === true,
         });
       },
+      "supervision.list": (_ctx, [input]) => deps.unitSupervisor.list(input?.kind),
+      "supervision.describe": (_ctx, [key]) => deps.unitSupervisor.describe(key),
+      "supervision.health": (_ctx, [key, query]) => deps.unitSupervisor.health(key, query),
+      "supervision.logs": (_ctx, [key, query]) => deps.unitSupervisor.logs(key, query),
+      "supervision.reportReady": async (ctx, [report]) => {
+        await deps.unitSupervisor.reportReady(ctx, report);
+        return null;
+      },
+      "supervision.reportHealth": async (ctx, [report]) => {
+        await deps.unitSupervisor.reportHealth(ctx, report);
+        return null;
+      },
+      "supervision.appendLog": async (ctx, [report]) => {
+        await deps.unitSupervisor.appendLog(ctx, report);
+        return null;
+      },
+      "supervision.restart": (ctx, [key]) => deps.unitSupervisor.restart(ctx, key),
+      "supervision.activate": (ctx, [key]) => deps.unitSupervisor.activate(ctx, key),
+      "supervision.prepare": (ctx, [key, selector]) =>
+        deps.unitSupervisor.prepare(ctx, key, selector.ref),
+      "supervision.retire": (ctx, [key]) => deps.unitSupervisor.retire(ctx, key),
+      "supervision.versions": (_ctx, [key]) => deps.unitSupervisor.versions(key),
+      "supervision.rollback": (ctx, [key, options]) =>
+        deps.unitSupervisor.rollback(ctx, key, options?.buildKey),
     }),
   };
   return {
@@ -1625,8 +1645,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       retireEntity: (id) => retireEntity(id),
       createContext,
       resolveContext,
-      forkDevelopmentSessionContext,
-      discardDevelopmentSessionContext,
+      forkSemanticContext,
+      dropSemanticContext,
     },
   };
 }

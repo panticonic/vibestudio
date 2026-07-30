@@ -1,6 +1,7 @@
 import z from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { AuditLog } from "@vibestudio/credential-client/audit";
 import type { AuditEntry, CredentialAuditEvent } from "@vibestudio/credential-client/types";
 
@@ -68,12 +69,30 @@ function sanitizeAuditEvent(entry: CredentialAuditEvent): CredentialAuditEvent {
 }
 
 export function createAuditService(auditLog: AuditLog): ServiceDefinition {
-  const methods = {
+  const methods = defineServiceMethods({
     query: {
+      capability: "security.audit.read",
+      tier: {
+        tier: "gated",
+        session: "family",
+        residency: "observability",
+        family: "audit.read",
+        rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
+      },
+      presentation: {
+        title: "View the security activity log",
+        action: "view the security activity log",
+        description: "Allows {requesterKind} to view the security activity log.",
+        group: "approvals",
+        authorityCategory: {
+          domain: "safety",
+          verb: "see",
+        },
+      },
       args: z.tuple([auditQuerySchema.optional()]),
       access: { sensitivity: "read" as const },
     },
-  };
+  });
   return {
     name: "audit",
     description: "Audit log query access",

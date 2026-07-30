@@ -2,14 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { createRuntimeClient, createWorkspaceStateClient } from "./createShellCore.js";
 
 describe("shared shell service adapters", () => {
-  it("routes panel-tree startup through one aggregate workspace-state read", async () => {
-    const call = vi.fn(async () => ({ revision: 0, slots: [], histories: [], entities: [] }));
+  it("routes bounded panel-tree pages through workspace state", async () => {
+    const call = vi.fn(async () => ({
+      revision: 0,
+      group: { kind: "roots", ownerUserId: null },
+      nodes: [],
+      nextCursor: null,
+    }));
     const client = createWorkspaceStateClient(call);
+    const input = { group: { kind: "roots" as const, ownerUserId: null }, limit: 25 };
 
-    await client.getPanelTreeStateSnapshot();
+    await client.getPanelTreePage(input);
 
     expect(call).toHaveBeenCalledOnce();
-    expect(call).toHaveBeenCalledWith("workspace-state", "panelTree.snapshot", []);
+    expect(call).toHaveBeenCalledWith("workspace-state", "panelTree.page", [input]);
   });
 
   it("routes entity resolution through the complete workspace-state contract", async () => {

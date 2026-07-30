@@ -260,7 +260,6 @@ function createApprovalQueueMock(
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
     requestMissionReview: vi.fn(async () => ({
       decision: "dismiss" as const,
       decidedBy: "user:test" as const,
@@ -271,17 +270,11 @@ function createApprovalQueueMock(
       dispose: vi.fn(),
     })),
     resolve: vi.fn(),
-    resolveUserland: vi.fn(),
     resolveMissionReview: vi.fn(),
-    requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
-    resolveExternalAgent: vi.fn(),
-    settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(async () => 0),
     submitClientConfig: vi.fn(),
     submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
     listPending: vi.fn(() => []),
-    getUserlandSealedDetail: vi.fn(() => null),
     cancelForCaller: vi.fn(),
   };
 }

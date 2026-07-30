@@ -1,9 +1,8 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
-import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import { productBuiltinMethodRequests } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import { describe, expect, it, vi } from "vitest";
 import { EventService } from "@vibestudio/shared/eventsService";
-import internalDoExecutionCatalog from "../internalDOs/internalDoExecutionCatalog.json";
 import { createExternalOpenService } from "./externalOpenService.js";
 
 const panelCaller = () =>
@@ -84,9 +83,10 @@ describe("externalOpenService", () => {
     const dispatcher = createTestServiceDispatcher();
     dispatcher.registerService(createExternalOpenService({ eventService: new EventService() }));
     dispatcher.markInitialized();
-    const evalAuthority = parseUnitAuthorityManifest(
-      internalDoExecutionCatalog.classes.EvalDO,
-      "EvalDO authority"
+    const evalRequests = productBuiltinMethodRequests(
+      "vibestudio/internal",
+      "EvalDO",
+      "executeRun"
     );
     const runtimeId = "do:vibestudio/internal:EvalDO:agent-channel";
     const caller = createVerifiedCaller(runtimeId, "do", {
@@ -95,7 +95,7 @@ describe("externalOpenService", () => {
       repoPath: "vibestudio/internal",
       effectiveVersion: "version-1",
       executionDigest: "b".repeat(64),
-      requested: evalAuthority.requests,
+      requested: evalRequests,
     });
 
     await expect(

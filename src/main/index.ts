@@ -155,7 +155,7 @@ import { PanelLayoutStore } from "./panelLayoutStore.js";
 import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibestudio/shared/constants";
 import type { PanelView } from "./panelView.js";
 import type { AppAvailableEvent } from "./appOrchestrator.js";
-import { readyElectronLaunchEvent } from "./hostTargetLaunchAdapter.js";
+import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { resolveElectronViewCaller } from "./callerResolution.js";
 import { setMenuPanelLifecycle, setMenuPanelRegistry, setMenuEventService } from "./menu.js";
 import { getAppRoot } from "./paths.js";
@@ -186,7 +186,6 @@ import {
 import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
 import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
-import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@vibestudio/shared/hostTargetLaunchGate";
 import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
 import {
   bindHostDirectServerEvents,
@@ -365,6 +364,8 @@ function shouldAutoPairPendingDevWebRtcLink(): boolean {
 }
 
 let appliedElectronHostTargetKey: string | null = null;
+let electronHostTargetApplicationTail: Promise<void> = Promise.resolve();
+const electronHostTargetApplications = new Map<string, Promise<boolean>>();
 let electronHostLaunchLastStatusKey: string | null = null;
 let panelTreeInitializationStarted = false;
 let shellCore: ReturnType<
@@ -416,6 +417,8 @@ const applicationWindow = new ApplicationWindowController({
     panelTreeInitializationStarted = false;
     clearPanelInitializationFailure();
     appliedElectronHostTargetKey = null;
+    electronHostTargetApplications.clear();
+    electronHostTargetApplicationTail = Promise.resolve();
     electronHostLaunchLastStatusKey = null;
   },
 });
@@ -896,7 +899,7 @@ async function handleCredentialSessionCaptureRequest(
     }
 
     const panel = await panelOrchestrator.createBrowserUrlPanel("shell", signInUrl.href, {
-      name: "Credential sign-in",
+      title: "Credential sign-in",
       focus: true,
     });
 
@@ -1043,13 +1046,7 @@ async function handleCredentialSessionCaptureRequest(
   }
 }
 
-async function applyReadyElectronLaunchResult(result: unknown): Promise<boolean> {
-  const event = readyElectronLaunchEvent(result, {
-    resolveArtifactRoute: (route) =>
-      isAppArtifactRoute(route) ? resolveElectronAppArtifactRoute(route) : null,
-    warn: (message) => log.warn(`[apps] ${message}`),
-  });
-  if (!event) return false;
+async function applyReadyElectronLaunchEvent(event: AppAvailableEvent): Promise<boolean> {
   const appOrchestrator = applicationWindow.appOrchestrator;
   if (!appOrchestrator) {
     pendingReadyElectronLaunch = event;
@@ -1062,11 +1059,31 @@ async function applyReadyElectronLaunchResult(result: unknown): Promise<boolean>
   if (appliedElectronHostTargetKey === launchKey) {
     return true;
   }
-  log.info(`[apps] Applying ready Electron host target: ${event.appId}`);
-  await appOrchestrator.applyAppAvailable(event);
-  appliedElectronHostTargetKey = launchKey;
-  initializePanelTreeOnce("electron-host-ready");
-  return true;
+  const existing = electronHostTargetApplications.get(launchKey);
+  if (existing) return existing;
+
+  const application = electronHostTargetApplicationTail
+    .catch(() => undefined)
+    .then(async () => {
+      if (appliedElectronHostTargetKey === launchKey) return true;
+      log.info(`[apps] Applying ready Electron host target: ${event.appId}`);
+      await appOrchestrator.applyAppAvailable(event);
+      appliedElectronHostTargetKey = launchKey;
+      initializePanelTreeOnce("electron-host-ready");
+      return true;
+    });
+  electronHostTargetApplications.set(launchKey, application);
+  electronHostTargetApplicationTail = application.then(
+    () => undefined,
+    () => undefined
+  );
+  try {
+    return await application;
+  } finally {
+    if (electronHostTargetApplications.get(launchKey) === application) {
+      electronHostTargetApplications.delete(launchKey);
+    }
+  }
 }
 
 function electronHostTargetKey(event: AppAvailableEvent): string {
@@ -1170,30 +1187,7 @@ function shouldSyncElectronHostTargetForChange(change: ServerHostTargetChangeEve
     return appliedElectronHostTargetKey === null;
   }
 
-  if (change.event === "host-targets:changed") {
-    const reason = payload?.["reason"];
-    if (
-      reason === "selection-changed" ||
-      reason === "selection-cleared" ||
-      reason === "app-removed"
-    ) {
-      return true;
-    }
-    return appliedElectronHostTargetKey === null;
-  }
-
-  if (change.event === "host-target-launch:session-changed") {
-    return appliedElectronHostTargetKey === null;
-  }
-
   return appliedElectronHostTargetKey === null;
-}
-
-function electronLaunchFromSessionResult(result: unknown): unknown | null {
-  if (!result || typeof result !== "object") return null;
-  const session = result as { target?: unknown; status?: unknown; launch?: unknown };
-  if (session.target !== "electron" || session.status !== "ready") return null;
-  return session.launch ?? null;
 }
 
 async function drainPendingReadyElectronLaunch(): Promise<void> {
@@ -1205,11 +1199,9 @@ async function drainPendingReadyElectronLaunch(): Promise<void> {
     pendingReadyElectronLaunch = null;
     return;
   }
-  log.info(`[apps] Applying held Electron host target: ${event.appId}`);
-  await appOrchestrator.applyAppAvailable(event);
-  appliedElectronHostTargetKey = launchKey;
+  log.info(`[apps] Releasing held Electron host target: ${event.appId}`);
+  await applyReadyElectronLaunchEvent(event);
   pendingReadyElectronLaunch = null;
-  initializePanelTreeOnce("held-electron-host-ready");
 }
 
 function initializePanelTreeOnce(reason: string): void {
@@ -1268,7 +1260,9 @@ async function syncElectronHostTarget(
   serverClient: Pick<ServerClient, "call">
 ): Promise<ElectronHostTargetSyncResult> {
   try {
-    const result = await serverClient.call("workspace", "hostTargets.launch", ["electron"]);
+    const result = await new HostLaunchClient((service, method, args) =>
+      serverClient.call(service, method, args)
+    ).launch("electron");
     const launch = recordFromUnknown(result);
     const status = launch?.["status"] ?? null;
     if (status === "approval-required") {
@@ -1282,7 +1276,7 @@ async function syncElectronHostTarget(
     if (status === "ready") {
       electronHostLaunchBlockedByApproval = false;
       rememberElectronHostLaunchStatus("ready", launch);
-      return (await applyReadyElectronLaunchResult(result)) ? "adopted" : "retry";
+      return "adopted";
     }
     if (status === "preparing") {
       electronHostLaunchBlockedByApproval = false;
@@ -2247,11 +2241,9 @@ app.on("ready", async () => {
       "apps:available",
       "apps:status",
       "extensions:status",
-      "host-targets:changed",
-      HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT,
       "external-open:open",
       "browser-panel:open",
-      "panel-tree-updated",
+      "panel-tree-invalidated",
       "panel-title-updated",
       "panel:runtimeLeaseChanged",
       "shell-approval:pending-changed",
@@ -2275,9 +2267,23 @@ app.on("ready", async () => {
     // manages its lifecycle), so there is no out-of-process server to /healthz-
     // poll. Remote topology is WebRTC, whose own liveness lives in the transport.
 
-    // Create PanelRegistry (pure in-memory — server owns persistence)
+    // Create PanelRegistry (pure in-memory — server owns persistence). Its
+    // debounced projection notification is the Electron-local presentation
+    // signal; the server's lifecycle observer must not be re-entered merely to
+    // tell hosted chrome that a native view finished loading.
+    let forwardPanelProjectionChange = (
+      _payload: import("@vibestudio/shared/events").EventPayloads["panel-presentation-changed"]
+    ): void => {};
     panelRegistry = new PanelRegistry({
-      onTreeUpdated: (snapshot) => eventService.emit("panel-tree-updated", snapshot),
+      onTreeUpdated: (snapshot) => {
+        const panelIds: string[] = [];
+        const visit = (panel: (typeof snapshot.forest)[number]["rootPanels"][number]) => {
+          panelIds.push(panel.id);
+          panel.children.forEach(visit);
+        };
+        snapshot.forest.forEach((group) => group.rootPanels.forEach(visit));
+        forwardPanelProjectionChange({ revision: snapshot.revision, panelIds });
+      },
     });
 
     const { createElectronShellCore } = await import("./shellCore/createElectronShellCore.js");
@@ -2324,22 +2330,10 @@ app.on("ready", async () => {
         applicationWindow.viewManager?.getWebContents(callerId) ?? null,
       getPanelRuntimeConnection: (panelId) => panelOrchestrator?.getPanelRuntimeConnection(panelId),
       authorizeAppServerCall,
-      onServerRpcResult: async ({ service, method, args, result }) => {
-        if (service === "workspace" && method === "hostTargets.launch" && args[0] === "electron") {
-          await applyReadyElectronLaunchResult(result);
-          return;
-        }
-        if (
-          service === "workspace" &&
-          (method === "hostTargets.beginLaunch" ||
-            method === "hostTargets.resolveLaunchSessionApproval" ||
-            method === "hostTargets.getLaunchSession")
-        ) {
-          const launch = electronLaunchFromSessionResult(result);
-          if (launch) await applyReadyElectronLaunchResult(launch);
-        }
-      },
     });
+    forwardPanelProjectionChange = (payload) => {
+      ipcDispatcher.sendEventToShell("panel-presentation-changed", payload);
+    };
     // Account- and caller-addressed events arrive on the authenticated server
     // session, independently of the response-owned server watch. Preserve that
     // addressing across Electron IPC; the renderer binds them with rpc.on().
@@ -2420,6 +2414,7 @@ app.on("ready", async () => {
     });
 
     await panelOrchestrator.registerRuntimeClient();
+    initializePanelTreeOnce("panel-orchestrator-ready");
 
     // Batch panel warn/error + lifecycle diagnostics into `panelLog.append`
     // so panel failures land in the server's per-unit diagnostics store
@@ -2506,7 +2501,7 @@ app.on("ready", async () => {
         // navigatePanel / navigatePanelHistory host commands were removed: the
         // server is the sole panel-tree writer (panelManager.navigate /
         // navigateHistory) and broadcasts; the desktop reloads views reactively
-        // (panelOrchestrator.applyServerPanelTreeSnapshot reconcile).
+        // (panel-tree invalidation reconcile).
         if (action === "accessibilityTree") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           return cdpHostProvider.getAccessibilityTree(panelId);
@@ -2519,7 +2514,15 @@ app.on("ready", async () => {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           if (!panelOrchestrator) throw new Error("Panel orchestrator not initialized");
           const boot = await cdpHostProvider.getBootObservation(panelId);
-          return panelOrchestrator.getPanelHostObservation(panelId, boot);
+          const host = panelOrchestrator.getPanelHostObservation(panelId, boot);
+          if (
+            !host.view.exists ||
+            typeof host.view.url !== "string" ||
+            typeof host.view.loading !== "boolean"
+          ) {
+            return null;
+          }
+          return { url: host.view.url, loading: host.view.loading, boot: host.boot };
         }
         if (action === "consoleHistory") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
@@ -2562,9 +2565,7 @@ app.on("ready", async () => {
     const getViewManager = () => assertPresent(applicationWindow.viewManager);
 
     const { createAppService } = await import("./services/appService.js");
-    const { createPanelShellService } = await import("./services/panelShellService.js");
     const { createViewService } = await import("./services/viewService.js");
-    const { createPaletteService } = await import("./services/paletteService.js");
     const { createMenuService } = await import("./services/menuService.js");
     const { createAdblockService } = await import("./services/adblockService.js");
     const { createDesktopEventsService } = await import("./services/desktopEventsService.js");
@@ -2603,13 +2604,6 @@ app.on("ready", async () => {
         onWorkspaceRoute: handleWorkspaceRoute,
       })
     );
-    const { createOnboardingStatusService } = await import("./services/onboardingStatusService.js");
-    electronContainer.registerRpc(
-      createOnboardingStatusService({
-        client: conn.hubControlClient,
-        getConnectionMode: () => conn.connectionMode,
-      })
-    );
     // The layout store is keyed main-side by (workspace, signed-in account);
     // the shell never passes identity (§3.3). The account subject is stable
     // for the life of this authenticated connection, so resolve it lazily once.
@@ -2622,7 +2616,7 @@ app.on("ready", async () => {
       return cachedAccountUserId;
     };
     electronContainer.registerRpc(
-      createPanelShellService({
+      createViewService({
         panelOrchestrator,
         panelRegistry,
         get panelView(): PanelView {
@@ -2635,8 +2629,6 @@ app.on("ready", async () => {
         getAccountUserId,
       })
     );
-    electronContainer.registerRpc(createViewService({ getViewManager }));
-    electronContainer.registerRpc(createPaletteService({ panelOrchestrator, getViewManager }));
     electronContainer.registerRpc(
       createMenuService({
         panelOrchestrator,
@@ -2857,9 +2849,7 @@ app.on("ready", async () => {
       electronContainer.registerRpc(
         createDesktopEventsService({
           eventService,
-          snapshots: {
-            "panel-tree-updated": () => panelRegistry?.getPanelTreeSnapshot(),
-          },
+          snapshots: {},
           onWatchOpened: (events, ctx) => {
             if (!shouldForwardServerEvents(ctx.caller)) return undefined;
             return serverEventSubscriptions.retainMany(events);
@@ -3247,17 +3237,6 @@ app.on("will-quit", (event) => {
       (updateQuit || (quitIntent.kind === "ordinary" && quitIntent.serverDecision !== "keep"));
 
     const cleanupThenClose = (async () => {
-      if (panelRegistry && shellCore) {
-        const livePanelIds = panelRegistry.listPanels().map((p) => asPanelSlotId(p.panelId));
-        const cleanup = shellCore.panelManager.shutdownCleanup(livePanelIds);
-        if (updateQuit) {
-          await cleanup;
-        } else {
-          await cleanup.catch((e: unknown) =>
-            console.error("[App] Failed to run shutdown cleanup:", e)
-          );
-        }
-      }
       const unregister = panelOrchestrator?.unregisterRuntimeClient();
       if (updateQuit) {
         await unregister;

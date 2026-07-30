@@ -1,15 +1,26 @@
 import { describe, expect, it } from "vitest";
+import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
 import { buildMethods, executionArtifactRefSchema } from "./build.js";
 
 const digest = "0".repeat(64);
 const semanticState = { kind: "event" as const, eventId: "event:test" };
 
-function sourceState(kind: "workspace" | "product-seed") {
+interface TestSourceState {
+  kind: "workspace" | "product-seed";
+  workspaceId: string;
+  effectiveVersion: string;
+  state: ExecutionSourceStateRef | null;
+  contentRoots: Array<{ repoPath: string | null; stateHash: string }>;
+  sourceClosureDigest: string;
+}
+
+function sourceState(kind: "workspace" | "product-seed"): TestSourceState {
+  const state: ExecutionSourceStateRef | null = kind === "workspace" ? semanticState : null;
   return {
     kind,
     workspaceId: "workspace:test",
     effectiveVersion: digest,
-    state: kind === "workspace" ? semanticState : null,
+    state,
     contentRoots: [
       {
         repoPath: kind === "workspace" ? "packages/test" : null,
@@ -20,7 +31,7 @@ function sourceState(kind: "workspace" | "product-seed") {
   };
 }
 
-function artifact(source: ReturnType<typeof sourceState>) {
+function artifact(source: TestSourceState) {
   return {
     version: 1,
     sourceState: source,
@@ -39,6 +50,31 @@ describe("execution artifact ref wire schema", () => {
     expect(
       executionArtifactRefSchema.safeParse(artifact({ ...sourceState("workspace"), state: null }))
         .success
+    ).toBe(false);
+  });
+
+  it("accepts a canonical bootstrap snapshot as exact workspace source state", () => {
+    expect(
+      executionArtifactRefSchema.safeParse(
+        artifact({
+          ...sourceState("workspace"),
+          state: {
+            kind: "bootstrap-snapshot",
+            snapshotHash: `state:${digest}`,
+          },
+        })
+      ).success
+    ).toBe(true);
+    expect(
+      executionArtifactRefSchema.safeParse(
+        artifact({
+          ...sourceState("workspace"),
+          state: {
+            kind: "bootstrap-snapshot",
+            snapshotHash: "not-a-state",
+          },
+        })
+      ).success
     ).toBe(false);
   });
 

@@ -22,10 +22,7 @@ import YAML from "yaml";
 import dotenv from "dotenv";
 import { z } from "zod";
 import { createDevLogger } from "@vibestudio/dev-log";
-import {
-  parseWorkspaceConfigContentWithId,
-  resolveWorkspaceTrustGrants,
-} from "./configParser.js";
+import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { currentContextProjectionsPath } from "./contextProjections.js";
 export {
@@ -78,37 +75,8 @@ export interface WorkspaceCreationOptions {
   workspaceId?: string;
 }
 
-const ModelConfigSchema = z
-  .object({
-    provider: z.string().trim().min(1),
-    model: z.string().trim().min(1),
-    temperature: z.number().min(0).max(2).optional(),
-    maxTokens: z.number().int().positive().optional(),
-    topP: z.number().min(0).max(1).optional(),
-    topK: z.number().int().nonnegative().optional(),
-    presencePenalty: z.number().min(-2).max(2).optional(),
-    frequencyPenalty: z.number().min(-2).max(2).optional(),
-    stopSequences: z.array(z.string()).optional(),
-  })
-  .strict()
-  .refine((value) => value.provider !== "claude-agent", {
-    message: "The claude-agent model provider is not supported",
-    path: ["provider"],
-  });
-
-const ModelRoleValueSchema = z.union([
-  z
-    .string()
-    .regex(/^[^:\s]+:[^\s]+$/, "Expected a provider:model reference")
-    .refine((value) => !value.startsWith("claude-agent:"), {
-      message: "The claude-agent model provider is not supported",
-    }),
-  ModelConfigSchema,
-]);
-
 export const CentralConfigSchema = z
   .object({
-    models: z.record(z.string().min(1), ModelRoleValueSchema).optional(),
     cache: z
       .object({
         maxEntries: z.number().int().positive().optional(),

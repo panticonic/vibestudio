@@ -85,6 +85,28 @@ describe("event-backed extension subscriptions", () => {
   });
 });
 
+describe("ExtensionContext operational reporting", () => {
+  const host = new Set([
+    "service:runtime.supervision.appendLog",
+    "service:runtime.supervision.reportHealth",
+  ]);
+
+  it("maps log and health facades to their actual supervision RPC methods", () => {
+    assert.deepEqual(
+      [
+        ...inferExtensionContextCapabilities(
+          `
+            ctx.log.info("ready");
+            ctx.health.healthy({ summary: "ready" });
+          `,
+          host
+        ),
+      ].sort(),
+      ["service:runtime.supervision.appendLog", "service:runtime.supervision.reportHealth"]
+    );
+  });
+});
+
 describe("inferEventsClientCapabilities", () => {
   const services = new Map([
     ["events", ["watch"]],
@@ -105,7 +127,7 @@ describe("inferEventsClientCapabilities", () => {
 });
 
 describe("declared host-method capability dependencies", () => {
-  it("seals atomic workspace-state commit authority into panel navigation callers", () => {
+  it("seals context-boundary authority into atomic workspace-state navigation", () => {
     const matrix = JSON.parse(
       fs.readFileSync(
         new URL("../../src/server/services/__serviceAuthorityMatrix.golden.json", import.meta.url),
@@ -113,10 +135,10 @@ describe("declared host-method capability dependencies", () => {
       )
     );
     const dependencies = declaredMethodCapabilityDependencies(matrix);
-    const expected = ["service:workspace-state.slot.commitPreparedNavigation", "context.boundary"];
-
-    assert.deepEqual([...(dependencies.get("service:panelTree.navigate") ?? [])], expected);
-    assert.deepEqual([...(dependencies.get("service:panelTree.navigateHistory") ?? [])], expected);
+    assert.deepEqual(
+      [...(dependencies.get("service:workspace-state.slot.commitPreparedNavigation") ?? [])],
+      ["context.boundary"]
+    );
   });
 
   it("keeps every shipped panel-navigation manifest closed over its atomic commit", () => {
@@ -131,10 +153,7 @@ describe("declared host-method capability dependencies", () => {
         const requests = new Set(
           (manifest.vibestudio?.authority?.requests ?? []).map((request) => request.capability)
         );
-        if (
-          requests.has("service:panelTree.navigate") &&
-          !requests.has("service:workspace-state.slot.commitPreparedNavigation")
-        ) {
+        if (requests.has("workspace.runtime-state.manage") && !requests.has("context.boundary")) {
           missing.push(`${root}/${entry.name}`);
         }
       }

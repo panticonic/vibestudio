@@ -1,5 +1,15 @@
 import type { EntityRecord } from "../runtime/entitySpec.js";
 import type { PanelEntityId, PanelSlotId } from "./ids.js";
+import type {
+  PanelTreePage,
+  PanelTreePageInput,
+  PanelTreePath,
+  PanelTreePlacement,
+  PanelTreeRootGroupPage,
+  PanelTreeRootGroupPageInput,
+  PanelTreeSearchInput,
+  PanelTreeSearchPage,
+} from "./treeIndex.js";
 
 /** Durable slot row used to reconstruct the authoritative panel forest. */
 export interface WorkspacePanelTreeSlot {
@@ -8,7 +18,9 @@ export interface WorkspacePanelTreeSlot {
   current_entity_id: PanelEntityId | null;
   current_entity_title?: string | null;
   current_entry_key: string | null;
-  position_id: string;
+  current_history_cursor?: number | null;
+  history_count?: number;
+  sort_key: number;
   owner_user_id?: string | null;
   created_at: number;
   closed_at: number | null;
@@ -27,14 +39,37 @@ export interface WorkspacePanelTreeHistoryRow {
   recorded_at: number;
 }
 
-/**
- * One internally consistent read of every durable input needed to reconstruct
- * the panel tree. `revision` changes whenever a row visible through this
- * projection changes.
- */
-export interface WorkspacePanelTreeStateSnapshot {
+/** Addressed runtime detail for one panel; bounded independently of tree size/history length. */
+export interface WorkspacePanelDetail {
   revision: number;
-  slots: WorkspacePanelTreeSlot[];
-  histories: WorkspacePanelTreeHistoryRow[];
-  entities: EntityRecord[];
+  slot: WorkspacePanelTreeSlot;
+  currentHistory: WorkspacePanelTreeHistoryRow;
+  entity: EntityRecord;
 }
+
+export interface WorkspacePanelCloseResult {
+  closeId: string;
+  closedCount: number;
+}
+
+export interface WorkspacePanelCloseCleanupPage {
+  items: Array<{ slotId: PanelSlotId; entityId: PanelEntityId | null }>;
+  nextCursor: string | null;
+}
+
+export interface WorkspacePanelCloseCleanupPageInput {
+  closeId?: string;
+  ownerUserId?: string | null;
+  cursor?: string;
+  limit?: number;
+}
+
+/** Query-first tree contracts exposed by durable workspace state. */
+export type WorkspacePanelTreePage = PanelTreePage;
+export type WorkspacePanelTreePageInput = PanelTreePageInput;
+export type WorkspacePanelTreePath = PanelTreePath;
+export type WorkspacePanelTreeRootGroupPage = PanelTreeRootGroupPage;
+export type WorkspacePanelTreeRootGroupPageInput = PanelTreeRootGroupPageInput;
+export type WorkspacePanelTreeSearchInput = PanelTreeSearchInput;
+export type WorkspacePanelTreeSearchPage = PanelTreeSearchPage;
+export type WorkspacePanelTreePlacement = PanelTreePlacement;

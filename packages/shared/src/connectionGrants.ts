@@ -20,8 +20,20 @@ export interface ConnectionGrantValidation {
   issuedBy: string;
 }
 
+function hasSealedExecutableIncarnation(record: EntityRecord): boolean {
+  // External-document panels have a runtime identity so the hosted document can
+  // connect, but deliberately have no BuildV2 image to seal. Their immutable
+  // navigation entity and active lifecycle are the credential binding.
+  return !(
+    record.kind === "panel" &&
+    record.source.repoPath.startsWith("browser:")
+  );
+}
+
 function connectableExecutionDigest(record: EntityRecord): string | undefined {
-  if (!isCodeIdentityCallerKind(record.kind)) return undefined;
+  if (!isCodeIdentityCallerKind(record.kind) || !hasSealedExecutableIncarnation(record)) {
+    return undefined;
+  }
   if (!record.activeBuildKey || !record.activeExecutionDigest || !record.activeAuthority) {
     throw new Error(
       `Cannot grant connection for executable principal without a sealed active incarnation: ${record.id}`
@@ -31,7 +43,9 @@ function connectableExecutionDigest(record: EntityRecord): string | undefined {
 }
 
 function grantMatchesActiveIncarnation(grant: ConnectionGrant, record: EntityRecord): boolean {
-  if (!isCodeIdentityCallerKind(record.kind)) return grant.executionDigest === undefined;
+  if (!isCodeIdentityCallerKind(record.kind) || !hasSealedExecutableIncarnation(record)) {
+    return grant.executionDigest === undefined;
+  }
   return (
     record.activeAuthority !== undefined &&
     record.activeBuildKey !== undefined &&

@@ -25,7 +25,7 @@ function unitErrorMessage(error: unknown): string {
 export function readUnitAuthorityReview(
   unitPath: string,
   label: string,
-  previous: UnitAuthorityManifest = { requests: [] },
+  previous: UnitAuthorityManifest = { requests: [], provides: [] },
   presentationFor?: CapabilityPresentationResolver,
   requesterKind?: CapabilityRequesterKind
 ) {
@@ -44,7 +44,7 @@ export function readUnitAuthorityReview(
 export function authorityReviewFromPackageJson(
   packageJsonSource: string,
   label: string,
-  previous: UnitAuthorityManifest = { requests: [] },
+  previous: UnitAuthorityManifest = { requests: [], provides: [] },
   presentationFor?: CapabilityPresentationResolver,
   requesterKind?: CapabilityRequesterKind
 ) {

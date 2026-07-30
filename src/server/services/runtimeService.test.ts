@@ -29,8 +29,9 @@ import {
 } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
-import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
-import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
+import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
+import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
+import { UnitSupervisor } from "./unitSupervisor.js";
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-svc-"));
@@ -39,7 +40,7 @@ function tempStatePath(): string {
 const sealedExecution = {
   buildKey: "b".repeat(64),
   executionDigest: "f".repeat(64),
-  authorityRequests: [] as const,
+  authority: { requests: [] as const, provides: [] as const },
 };
 
 function approvalQueueMock(
@@ -49,7 +50,6 @@ function approvalQueueMock(
     request: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
     requestMissionReview: vi.fn(async () => ({
       decision: "dismiss" as const,
       decidedBy: "user:test" as const,
@@ -60,18 +60,12 @@ function approvalQueueMock(
       dispose: vi.fn(),
     })),
     resolve: vi.fn(),
-    resolveUserland: vi.fn(),
     resolveMissionReview: vi.fn(),
-    requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
-    resolveExternalAgent: vi.fn(),
-    settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(async () => 0),
     submitClientConfig: vi.fn(),
     submitCredentialInput: vi.fn(),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     submitSecretInput: vi.fn(),
     listPending: vi.fn(() => []),
-    getUserlandSealedDetail: vi.fn(() => null),
     cancelForCaller: vi.fn(),
   };
 }
@@ -203,6 +197,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
   });
 
   const runtimeResult = createRuntimeService({
+    unitSupervisor: new UnitSupervisor(),
     entityStore,
     hooks: {
       prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
@@ -257,7 +252,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
           effectiveVersion: raw.effectiveVersion,
           buildKey: raw.buildKey,
           executionDigest: raw.executionDigest,
-          authority: { requests: raw.authorityRequests },
+          authority: raw.authority,
         };
       }) as RuntimeEntityHooks["prepare"],
       onRetire,
@@ -393,7 +388,6 @@ const systemTestCasePolicy = (
     testId: "model-policy",
     agent: { model, approvalLevel: 2, fallback: "disabled" },
     authority: [],
-    userland: [],
     unexpectedPrompts: "fail",
   },
 });
@@ -468,7 +462,7 @@ describe("runtimeService system-test agent execution policy", () => {
   });
 });
 
-describe("runtimeService.forkDevelopmentSessionContext", () => {
+describe("runtimeService.forkSemanticContext", () => {
   it("forks semantic state only and records a deterministic lifecycle edge for an empty context", async () => {
     const forkContext = vi.fn(async () => {});
     const resolveWorkingState = vi.fn(async (contextId: string) =>
@@ -493,8 +487,8 @@ describe("runtimeService.forkDevelopmentSessionContext", () => {
       cleanupComplete: true,
     });
 
-    const first = await internal.forkDevelopmentSessionContext(caller, "development-session-1");
-    const second = await internal.forkDevelopmentSessionContext(caller, "development-session-1");
+    const first = await internal.forkSemanticContext(caller, "ctx-development-session-1");
+    const second = await internal.forkSemanticContext(caller, "ctx-development-session-1");
 
     expect(first).toMatchObject({
       parentContextId: "ctx-parent",
@@ -784,7 +778,7 @@ describe("runtimeService.createEntity (do kind)", () => {
       targetId: "target:MyDO:k1",
       effectiveVersion: "ev-do",
       ...sealedExecution,
-      authorityRequests,
+      authority: { requests: authorityRequests, provides: [] },
     }));
     const { service, instance, entityCache } = await buildDeps({ prepareDurableObject });
 
@@ -798,18 +792,20 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(handle.authorityRequests).toEqual(authorityRequests);
     expect(instance.entityResolve(handle.id)?.activeAuthority).toEqual({
       requests: authorityRequests,
+      provides: [],
     });
     expect(entityCache.resolveActive(handle.id)?.activeAuthority).toEqual({
       requests: authorityRequests,
+      provides: [],
     });
   });
 
-  it("rejects a missing prepared authority request list before durable activation", async () => {
+  it("rejects a missing prepared authority manifest before durable activation", async () => {
     const prepareDurableObject = vi.fn(async () => ({
       targetId: "target:MyDO:k1",
       effectiveVersion: "ev-do",
       ...sealedExecution,
-      authorityRequests: undefined,
+      authority: undefined,
     }));
     const { service, instance } = await buildDeps({ prepareDurableObject });
 
@@ -817,7 +813,7 @@ describe("runtimeService.createEntity (do kind)", () => {
       service.handler({ caller: serverCaller }, "createEntity", [
         doCreateSpec({ contextId: "ctx-x" }),
       ])
-    ).rejects.toThrow(/authority.*requests/);
+    ).rejects.toThrow(/authority/);
     expect(
       instance.entityResolve(
         canonicalEntityId({

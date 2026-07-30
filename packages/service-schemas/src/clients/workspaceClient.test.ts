@@ -2,25 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorkspaceClient } from "./workspaceClient.js";
 
 describe("createWorkspaceClient project discovery", () => {
-  it("exposes status as the same authoritative unit listing", async () => {
-    const rows = [
-      {
-        name: "@workspace-workers/demo",
-        kind: "worker",
-        source: "workers/demo",
-        status: "available",
-      },
-    ];
-    const call = vi.fn(async (_target: string, method: string) => {
-      if (method === "workspace.units.list") return rows;
-      throw new Error(`Unexpected RPC ${method}`);
-    });
-    const workspace = createWorkspaceClient({ call } as never);
-
-    await expect(workspace.units.status()).resolves.toEqual(rows);
-    expect(call).toHaveBeenCalledWith("main", "workspace.units.list", []);
-  });
-
   it("lists project units and resolves only paths owned by projects", async () => {
     const call = vi.fn(async (_target: string, method: string, args: unknown[]) => {
       if (method === "workspace.sourceTree") {

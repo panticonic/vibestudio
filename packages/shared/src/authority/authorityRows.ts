@@ -1,7 +1,9 @@
 import type { ResourceScope } from "@vibestudio/rpc";
 import type { UnitAuthorityRequest } from "../authorityManifest.js";
-import { capabilityDomain, type AuthorityDomainId, type AuthorityVerb } from "./capabilityDomains.js";
-import { hostCapabilityPresentation } from "./hostCapabilityPresentations.js";
+import { HOST_SEMANTIC_CAPABILITY_COPY } from "../hostApprovalCopy.js";
+import { productBuiltinCapabilityPresentation } from "../productBuiltinCatalog.generated.js";
+import { generatedHostCapabilityPresentation } from "./hostAuthorityCatalog.generated.js";
+import { capabilityDomain, type AuthorityDomainId, type AuthorityVerb } from "./authorityDomains.js";
 
 export type AuthorityStatement = "declared" | "allowed" | "snapshot" | "prospective";
 export type AuthorityRowState = "active" | "suspended" | "locked";
@@ -45,16 +47,18 @@ export function authorityRow(input: {
   category?: { domain: AuthorityDomainId; verb: AuthorityVerb };
   reviewedAction?: string;
 }): AuthorityRow {
-  const staticCategory = capabilityDomain(input.capability);
-  if (
-    staticCategory &&
-    input.category &&
-    (staticCategory.domain !== input.category.domain || staticCategory.verb !== input.category.verb)
-  ) {
-    throw new Error(`Capability ${input.capability} contradicts the reviewed authority census`);
-  }
+  const staticCategory = input.capability.startsWith("workspace-service:") && input.category
+    ? null : capabilityDomain(input.capability);
+  // Host effects use the reviewed census; a workspace service uses its sealed provider vocabulary.
   const category = staticCategory ?? input.category;
-  const presentation = hostCapabilityPresentation(input.capability);
+  const presentation =
+    HOST_SEMANTIC_CAPABILITY_COPY.find(({ prefix }) =>
+      prefix.endsWith(":") || prefix.endsWith(".")
+        ? input.capability.startsWith(prefix)
+        : input.capability === prefix || input.capability.startsWith(`${prefix}:`)
+    )?.presentation ??
+    productBuiltinCapabilityPresentation(input.capability) ??
+    generatedHostCapabilityPresentation(input.capability);
   if (!category || (!presentation && !input.reviewedAction)) {
     throw new Error(`Capability ${input.capability} has no reviewed authority presentation`);
   }
@@ -76,9 +80,7 @@ export function authorityRow(input: {
   };
 }
 
-export function declaredAuthorityRows(
-  requests: readonly UnitAuthorityRequest[]
-): AuthorityRow[] {
+export function declaredAuthorityRows(requests: readonly UnitAuthorityRequest[]): AuthorityRow[] {
   return requests.map((request) =>
     authorityRow({
       capability: request.capability,

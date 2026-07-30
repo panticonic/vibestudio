@@ -1,6 +1,7 @@
 export const APPROVAL_DECISIONS = [
   "once",
   "task",
+  "mission",
   "agent",
   "lock",
   "session",
@@ -44,8 +45,6 @@ export type PushApprovalDataPayload = {
     | "client-config"
     | "credential-input"
     | "secret-input"
-    | "userland"
-    | "external-agent"
     | "device-code"
     | "browser-permission";
   title?: string;
@@ -63,7 +62,6 @@ export const RPC_METHODS = {
     submitClientConfig: "shellApproval.submitClientConfig",
     submitCredentialInput: "shellApproval.submitCredentialInput",
     submitSecretInput: "shellApproval.submitSecretInput",
-    resolveUserland: "shellApproval.resolveUserland",
     listPending: "shellApproval.listPending",
   },
   push: {

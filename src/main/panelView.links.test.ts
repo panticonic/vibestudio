@@ -288,7 +288,7 @@ describe("PanelView plain panel links", () => {
       expect(panelOrchestrator.createPanel).toHaveBeenCalledWith(
         panelId,
         "panels/chat",
-        { name: "chat-link" },
+        {},
         undefined,
         undefined
       );

@@ -75,7 +75,12 @@ import { ContentProjectionStore } from "./contentProjectionStore.js";
 import { DiskProjector } from "./diskProjector.js";
 import { ContextMaterializer } from "./contextMaterializer.js";
 import { discoverRepos } from "./repoDiscovery.js";
-import type { SemanticControlPlaneCaller } from "../internalDOs/controlPlane.js";
+import type {
+  WorkspaceSemanticPort,
+  WorkspaceSourceProviderV1,
+  WorkspaceSourceSemanticDispatchResult,
+  WorkspaceSourceSemanticEffect,
+} from "../workspaceSourceProvider.js";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
@@ -128,7 +133,10 @@ export interface WorkspaceVcsDeps {
   buildSourcesRoot: string;
   refs: ProtectedRefStore;
   /** The only pre-userland template path: acquire one exact root for first publication. */
-  rootTemplateBootstrap?: Pick<WorkspaceRootTemplateBootstrap, "prepareInitialization">;
+  rootTemplateBootstrap?: Pick<
+    WorkspaceRootTemplateBootstrap,
+    "prepareSource" | "prepareInitialization"
+  >;
 }
 
 export interface WorkspaceActivationTimings {
@@ -219,21 +227,8 @@ export type CallerPublicationGateContext = {
 
 type PublicationGateContext = CallerPublicationGateContext | { kind: "workspace-initialization" };
 
-interface SemanticEffect {
-  effectId: string;
-  scopeKind: "context" | "workspace";
-  scopeId: string;
-  commandId: string;
-  kind: "observe-content" | "materialize-context" | "publish-main";
-  payload: Record<string, unknown>;
-  payloadDigest: string;
-  status: "pending";
-}
-
-type SemanticDispatchResult =
-  | { kind: "complete"; result: unknown }
-  | { kind: "effects-pending"; result: unknown; effects: SemanticEffect[] }
-  | { kind: "host-read"; request: Record<string, unknown> };
+type SemanticEffect = WorkspaceSourceSemanticEffect;
+type SemanticDispatchResult = WorkspaceSourceSemanticDispatchResult;
 
 export interface ContentFile {
   content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
@@ -251,7 +246,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return this.deps.workspaceId;
   }
 
-  private gadCaller: SemanticControlPlaneCaller | null = null;
+  private gadCaller: WorkspaceSemanticPort | null = null;
+  private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
   private readonly emitter = new EventEmitter();
   private readonly projector: DiskProjector;
   private readonly materializer: ContextMaterializer;
@@ -296,10 +292,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     epoch: number;
     executionSourceRoots: readonly ExecutionSourceContentRoot[];
   }): Promise<PreparedWorkspaceGc> {
-    const semantic = await this.gad().call<{
-      contentRoots: string[];
-      contentHashes: string[];
-    }>("vcsContentGcRoots", {});
+    const semantic = await this.gad().contentGcRoots();
     const roots = new Set(semantic.contentRoots);
     for (const main of this.deps.refs.listMains()) roots.add(main.contentRoot);
     for (const executionRoot of options.executionSourceRoots) {
@@ -374,11 +367,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     contextIds: readonly string[],
     references: readonly { kind: string; value: unknown }[]
   ): Promise<boolean> {
-    return this.gad().call<boolean>("vcsReferencesReachable", { contextIds, references });
+    return this.gad().referencesReachable({ contextIds, references });
   }
 
   async listSemanticContexts(prefix?: string): Promise<string[]> {
-    return this.gad().call<string[]>("vcsListContexts", {
+    return this.gad().listContexts({
       ...(prefix === undefined ? {} : { prefix }),
     });
   }
@@ -387,35 +380,42 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     ancestor: VcsStateNodeRef,
     descendant: VcsStateNodeRef
   ): Promise<boolean> {
-    return this.gad().call<boolean>("vcsIsStateDescendant", {
+    return this.gad().isStateDescendant({
       ancestor,
       descendant,
       maxEdges: 100_000,
     });
   }
 
-  async attachGad(gad: SemanticControlPlaneCaller): Promise<void> {
+  async attachGad(gad: WorkspaceSemanticPort): Promise<void> {
     if (this.gadCaller) throw new Error("semantic workspace is already attached");
     this.gadCaller = gad;
   }
 
+  attachWorkspaceSourceProvider(provider: WorkspaceSourceProviderV1): void {
+    if (this.sourceProviderCaller) {
+      throw new Error("workspace source provider is already attached");
+    }
+    this.sourceProviderCaller = provider;
+  }
+
   /**
-   * Resolve the product-sealed provenance stamped on one durable channel
-   * envelope. This is a control-plane read, not a semantic VCS command: routing
-   * it through `vcsSemanticDispatch` would conflate the GAD's log API with the
-   * finite semantic-workspace command vocabulary.
+   * Resolve the workspace source provider's provenance for one durable channel
+   * envelope. This is a source-provider read, not a semantic VCS command: routing
+   * it through a semantic VCS operation would conflate the GAD's log API with
+   * the finite semantic-workspace command vocabulary.
    */
   getChannelEnvelopeIntegrity(input: {
     channelId: string;
     envelopeId: string;
   }): Promise<{ contentClass: "internal" | "external" } | null> {
-    return this.gad().call("getChannelEnvelope", input);
+    return this.gad().getChannelEnvelope(input);
   }
 
   /** Dispatch meaning, drain exact host commands, acknowledge, and continue. */
   async semanticCall<T>(
     method: string,
-    request: unknown,
+    request: SemanticRequest,
     publicationGateContext?: CallerPublicationGateContext
   ): Promise<T> {
     return this.dispatchSemanticCall(method, request, publicationGateContext);
@@ -423,17 +423,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async dispatchSemanticCall<T>(
     method: string,
-    request: unknown,
+    request: SemanticRequest,
     publicationGateContext?: PublicationGateContext
   ): Promise<T> {
-    if (!/^vcs[A-Z][A-Za-z0-9]*$/.test(method)) {
-      throw new Error(`Invalid semantic VCS method ${JSON.stringify(method)}`);
-    }
     const dispatch = async (): Promise<T> => {
-      const next = await this.gad().call<SemanticDispatchResult>("vcsSemanticDispatch", {
-        method,
-        request,
-      });
+      const next = await this.dispatchSemanticWire(method, request);
       return this.drainSemanticResult<T>(next, publicationGateContext);
     };
     const operation = (): Promise<T> => {
@@ -443,6 +437,63 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
     const contextId = semanticRequestContextId(request);
     return contextId ? this.locked(`context-lifecycle:${contextId}`, operation) : operation();
+  }
+
+  private dispatchSemanticWire(
+    method: string,
+    request: SemanticRequest
+  ): Promise<WorkspaceSourceSemanticDispatchResult> {
+    const gad = this.gad();
+    switch (method) {
+      case "vcsEdit":
+        return gad.vcsEdit(request);
+      case "vcsMove":
+        return gad.vcsMove(request);
+      case "vcsCopy":
+        return gad.vcsCopy(request);
+      case "vcsIntegrate":
+        return gad.vcsIntegrate(request);
+      case "vcsRevert":
+        return gad.vcsRevert(request);
+      case "vcsCommit":
+        return gad.vcsCommit(request);
+      case "vcsDiscard":
+        return gad.vcsDiscard(request);
+      case "vcsImportSnapshot":
+        return gad.vcsImportSnapshot(request);
+      case "vcsRegisterExternalDelta":
+        return gad.vcsRegisterExternalDelta(request);
+      case "vcsSupersedeExternalDelta":
+        return gad.vcsSupersedeExternalDelta(request);
+      case "vcsFinalizeExternalDelta":
+        return gad.vcsFinalizeExternalDelta(request);
+      case "vcsPush":
+        return gad.vcsPush(request);
+      case "vcsStatus":
+        return gad.vcsStatus(request);
+      case "vcsCompare":
+        return gad.vcsCompare(request);
+      case "vcsInspect":
+        return gad.vcsInspect(request);
+      case "vcsNeighbors":
+        return gad.vcsNeighbors(request);
+      case "vcsHistory":
+        return gad.vcsHistory(request);
+      case "vcsBlame":
+        return gad.vcsBlame(request);
+      case "vcsReadMemory":
+        return gad.vcsReadMemory(request);
+      case "vcsResolveRepository":
+        return gad.vcsResolveRepository(request);
+      case "vcsReadFile":
+        return gad.vcsReadFile(request);
+      case "vcsListDirectory":
+        return gad.vcsListDirectory(request);
+      case "vcsListFiles":
+        return gad.vcsListFiles(request);
+      default:
+        throw new Error(`Invalid semantic VCS method ${JSON.stringify(method)}`);
+    }
   }
 
   semanticDirectCall<T>(method: string, input: unknown): Promise<T> {
@@ -542,7 +593,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         this.deps.refs.acknowledgePublication(effect.effectId);
       }
       const acknowledgeStartedAt = performance.now();
-      result = await this.gad().call<SemanticDispatchResult>("vcsSemanticEffectAck", {
+      result = await this.gad().semanticEffectAck({
         acknowledgement: {
           effectId: effect.effectId,
           payloadDigest: effect.payloadDigest,
@@ -567,7 +618,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async recoverPendingSemanticEffects(): Promise<number> {
     let recovered = 0;
     for (let step = 0; step < 1_000; step += 1) {
-      const effects = await this.gad().call<SemanticEffect[]>("vcsPendingSemanticEffects", {});
+      const effects = await this.gad().pendingSemanticEffects();
       // Publication authorization belongs to the request that initiated the
       // protected advance. A generic restart has no caller or lifecycle
       // authority and must never manufacture one. It may only finish the
@@ -600,7 +651,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         // Selection happens outside the lifecycle lock. Re-check after joining
         // it so an effect cancelled by context deletion cannot recreate the
         // disposable projection from a stale command.
-        const pending = await this.gad().call<SemanticEffect[]>("vcsPendingSemanticEffects", {});
+        const pending = await this.gad().pendingSemanticEffects();
         if (
           !pending.some(
             (candidate) =>
@@ -617,7 +668,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             }
           : await this.executeSemanticEffect(effect);
         if (publication) this.deps.refs.acknowledgePublication(effect.effectId);
-        await this.gad().call<SemanticDispatchResult>("vcsSemanticEffectAck", {
+        await this.gad().semanticEffectAck({
           acknowledgement: {
             effectId: effect.effectId,
             payloadDigest: effect.payloadDigest,
@@ -776,9 +827,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
   }
 
-  private gad(): SemanticControlPlaneCaller {
+  private gad(): WorkspaceSemanticPort {
     if (!this.gadCaller) throw new Error("semantic workspace is not attached");
     return this.gadCaller;
+  }
+
+  private workspaceSourceProvider(): WorkspaceSourceProviderV1 {
+    if (!this.sourceProviderCaller) {
+      throw new Error("workspace source provider bootstrap ABI is not attached");
+    }
+    return this.sourceProviderCaller;
   }
 
   // -----------------------------------------------------------------------
@@ -851,11 +909,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         contextId,
       })
     )}`;
-    const result = await this.gad().call<SemanticDispatchResult>("vcsEnsureContext", {
+    const result = await this.gad().ensureContext({
       contextId,
       commandId,
       ...(projection === "deferred" ? { projection } : {}),
-      ingress: { causalParent: null },
+      ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
     });
     const context = await this.drainSemanticResult<{
       working: { ref: VcsStateNodeRef };
@@ -865,10 +923,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async repairContextMaterialization(contextId: string): Promise<void> {
     const current = await this.materializer.materializationState(contextId);
-    const command = await this.gad().call<ContextMaterializationCommand>(
-      "vcsContextMaterializationCommand",
-      { contextId, materializedState: current?.targetState ?? null }
-    );
+    const command = await this.gad().contextMaterializationCommand({
+      contextId,
+      materializedState: current?.targetState ?? null,
+    });
     await this.materializer.materialize(command);
     await this.rememberVerifiedProjection(contextId);
   }
@@ -900,6 +958,53 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       totalMs: 0,
     };
     const contextId = `workspace-initialization:${this.deps.workspaceId}`;
+    const rootPin = this.deps.rootTemplateBootstrap
+      ? await this.deps.rootTemplateBootstrap.prepareSource()
+      : null;
+    if (rootPin) {
+      let spanStartedAt = performance.now();
+      const initialization = await this.workspaceSourceProvider().inspectInitialization();
+      timings.inspectMs = performance.now() - spanStartedAt;
+      if (initialization.state === "ready") {
+        if (
+          initialization.receipt.pin.url !== rootPin.url ||
+          initialization.receipt.pin.ref !== rootPin.ref ||
+          initialization.receipt.pin.commit !== rootPin.commit ||
+          initialization.receipt.pin.snapshot !== rootPin.snapshot
+        ) {
+          throw new Error(
+            "Workspace source initialization receipt does not match the exact root template"
+          );
+        }
+        spanStartedAt = performance.now();
+        const fresh = await this.ensureFresh();
+        timings.ensureFreshMs = performance.now() - spanStartedAt;
+        timings.totalMs = performance.now() - activationStartedAt;
+        return { ...fresh, initialized: false, timings };
+      }
+      if (initialization.state === "failed") {
+        throw new Error(
+          `Workspace source initialization failed: ${initialization.failure.message}`
+        );
+      }
+      const preparedRoot = await this.deps.rootTemplateBootstrap!.prepareInitialization();
+      if (!preparedRoot) {
+        throw new Error("Workspace root template disappeared during source initialization");
+      }
+      spanStartedAt = performance.now();
+      const receipt = await this.initializeExactWorkspaceSource(preparedRoot);
+      timings.importSnapshotMs = performance.now() - spanStartedAt;
+      spanStartedAt = performance.now();
+      const fresh = await this.ensureFresh();
+      timings.ensureFreshMs = performance.now() - spanStartedAt;
+      timings.totalMs = performance.now() - activationStartedAt;
+      if (fresh.stateHash !== receipt.initializedStateHash) {
+        throw new Error(
+          `Workspace source receipt ${receipt.initializedStateHash} does not match protected source ${fresh.stateHash}`
+        );
+      }
+      return { ...fresh, initialized: true, timings };
+    }
     let spanStartedAt = performance.now();
     const state = await this.ensureContext(contextId);
     timings.ensureContextAndMaterializationMs = performance.now() - spanStartedAt;
@@ -921,9 +1026,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       return { ...fresh, initialized: false, timings };
     }
 
-    const preparedRoot = this.deps.rootTemplateBootstrap
-      ? await this.deps.rootTemplateBootstrap.prepareInitialization()
-      : null;
     const initializationEvidence = await this.initializationEvidence(state);
 
     const scanned = await this.contentProjection.localState(this.deps.workspaceRoot);
@@ -944,94 +1046,47 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const sourceFiles = [...scanned.files];
     sourceFiles.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
     const repositories = [];
-    if (!preparedRoot) {
-      for (const repository of discoverRepos(sourceFiles.map((file) => file.path))) {
-        const prefix = `${repository.repoPath}/`;
-        const repositoryFiles = sourceFiles.filter((file) => file.path.startsWith(prefix));
-        const files = repositoryFiles.map((file) => ({
-          path: file.path.slice(prefix.length),
-          contentHash: file.contentHash,
-          mode: file.mode & 0o777,
-        }));
-        repositories.push({
-          repoPath: repository.repoPath,
-          files,
-        });
-      }
+    for (const repository of discoverRepos(sourceFiles.map((file) => file.path))) {
+      const prefix = `${repository.repoPath}/`;
+      const repositoryFiles = sourceFiles.filter((file) => file.path.startsWith(prefix));
+      const files = repositoryFiles.map((file) => ({
+        path: file.path.slice(prefix.length),
+        contentHash: file.contentHash,
+        mode: file.mode & 0o777,
+      }));
+      repositories.push({
+        repoPath: repository.repoPath,
+        files,
+      });
     }
 
     let workingHead = state;
     spanStartedAt = performance.now();
-    if (!preparedRoot) {
-      const localSnapshotRevision = scanned.stateHash;
-      const localAlreadyImported = initializationEvidence.some(
-        (evidence) =>
-          evidence.sourceKind === "filesystem" &&
-          evidence.sourceUri === "vibestudio://workspace/source" &&
-          evidence.snapshotRevision === localSnapshotRevision
-      );
-      if (!localAlreadyImported) {
-        const importResult = await this.semanticDirectCall<VcsImportSnapshotResult>(
-          "vcsImportSnapshot",
-          {
-            contextId,
-            commandId: `initial-import:${localSnapshotRevision}`,
-            expectedWorkingHead: workingHead,
-            intentSummary: "Import the initial local workspace snapshot",
-            source: {
-              kind: "filesystem",
-              uri: "vibestudio://workspace/source",
-              snapshotRevision: localSnapshotRevision,
-            },
-            repositories,
-            message: "Import initial local workspace snapshot",
-          }
-        );
-        workingHead = { kind: "event", eventId: importResult.eventId };
-      }
-    }
-    for (const repository of [...(preparedRoot?.repositories ?? [])].sort((left, right) =>
-      compareUtf16CodeUnits(left.repoPath, right.repoPath)
-    )) {
-      if (!preparedRoot) {
-        throw new Error(`Root template repository ${repository.repoPath} has no prepared root`);
-      }
-      const evidence = initializationEvidence.find(
-        (candidate) =>
-          candidate.sourceKind === "git" &&
-          candidate.sourceUri === preparedRoot.pin.url &&
-          candidate.snapshotRevision === preparedRoot.pin.commit &&
-          candidate.sourceSubdir === repository.subdir &&
-          candidate.canonicalSnapshot === repository.snapshot
-      );
-      if (evidence) {
-        continue;
-      }
-      const imported = await this.semanticDirectCall<VcsImportSnapshotResult>("vcsImportSnapshot", {
-        contextId,
-        commandId: `initial-root:${preparedRoot.pin.commit}:${repository.repoPath}`,
-        expectedWorkingHead: workingHead,
-        intentSummary: `Import ${repository.repoPath} from root template ${preparedRoot.pin.url}`,
-        source: {
-          kind: "git",
-          url: preparedRoot.pin.url,
-          commit: preparedRoot.pin.commit,
-          subdir: repository.subdir,
-          snapshot: repository.snapshot,
-        },
-        repositories: [
-          {
-            repoPath: repository.repoPath,
-            files: repository.files.map(({ path: filePath, contentHash, mode }) => ({
-              path: filePath,
-              contentHash,
-              mode,
-            })),
+    const localSnapshotRevision = scanned.stateHash;
+    const localAlreadyImported = initializationEvidence.some(
+      (evidence) =>
+        evidence.sourceKind === "filesystem" &&
+        evidence.sourceUri === "vibestudio://workspace/source" &&
+        evidence.snapshotRevision === localSnapshotRevision
+    );
+    if (!localAlreadyImported) {
+      const importResult = await this.semanticDirectCall<VcsImportSnapshotResult>(
+        "vcsImportSnapshot",
+        {
+          contextId,
+          commandId: `initial-import:${localSnapshotRevision}`,
+          expectedWorkingHead: workingHead,
+          intentSummary: "Import the initial local workspace snapshot",
+          source: {
+            kind: "filesystem",
+            uri: "vibestudio://workspace/source",
+            snapshotRevision: localSnapshotRevision,
           },
-        ],
-        message: `Import ${repository.repoPath} from root template ${preparedRoot.pin.url}`,
-      });
-      workingHead = { kind: "event", eventId: imported.eventId };
+          repositories,
+          message: "Import initial local workspace snapshot",
+        }
+      );
+      workingHead = { kind: "event", eventId: importResult.eventId };
     }
     timings.importSnapshotMs = performance.now() - spanStartedAt;
     const genesisEventId = await this.initializationGenesisEventId(workingHead);
@@ -1051,6 +1106,68 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     timings.ensureFreshMs = performance.now() - spanStartedAt;
     timings.totalMs = performance.now() - activationStartedAt;
     return { ...fresh, initialized: true, timings };
+  }
+
+  private initializeExactWorkspaceSource(
+    prepared: import("../workspaceRootTemplateBootstrap.js").PreparedRootTemplateInitialization
+  ): Promise<
+    import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceInitializationReceipt
+  > {
+    return this.withProtectedMainMutation(async () => {
+      const provider = this.workspaceSourceProvider();
+      const request = {
+        commandId: `workspace-source:${prepared.pin.commit}:${prepared.pin.snapshot}`,
+        pin: {
+          url: prepared.pin.url,
+          ref: prepared.pin.ref,
+          commit: prepared.pin.commit,
+          snapshot: prepared.pin.snapshot,
+        },
+        repositories: [...prepared.repositories]
+          .sort((left, right) => compareUtf16CodeUnits(left.repoPath, right.repoPath))
+          .map((repository) => ({
+            repoPath: repository.repoPath,
+            subdir: repository.subdir,
+            snapshot: repository.snapshot,
+            files: repository.files.map(({ path: filePath, contentHash, mode }) => ({
+              path: filePath,
+              contentHash,
+              mode,
+            })),
+          })),
+      } satisfies import("@vibestudio/workspace-contracts/workspaceSource").InitializeExactWorkspaceSnapshotInput;
+      let acknowledgement:
+        | import("@vibestudio/workspace-contracts/workspaceSource").WorkspaceSourceEffectAcknowledgement
+        | undefined;
+      for (let step = 0; step < 1_000; step += 1) {
+        const inspection = await provider.initializeExactSnapshot({
+          ...request,
+          ...(acknowledgement ? { acknowledgement } : {}),
+        });
+        acknowledgement = undefined;
+        if (inspection.state === "ready") return inspection.receipt;
+        if (inspection.state === "failed") {
+          throw new Error(`Workspace source initialization failed: ${inspection.failure.message}`);
+        }
+        if (inspection.state === "empty") {
+          throw new Error("Workspace source provider did not record initialization");
+        }
+        const effect = inspection.pendingEffect;
+        if (!effect) continue;
+        const receipt = await this.executeSemanticEffect(effect, {
+          kind: "workspace-initialization",
+        });
+        if (effect.kind === "publish-main") {
+          this.deps.refs.acknowledgePublication(effect.effectId);
+        }
+        acknowledgement = {
+          effectId: effect.effectId,
+          payloadDigest: effect.payloadDigest,
+          receipt,
+        };
+      }
+      throw new Error("Workspace source initialization exceeded the host-effect limit");
+    });
   }
 
   private async initializationGenesisEventId(state: VcsStateNodeRef): Promise<string> {
@@ -1135,11 +1252,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           targetContextId,
         })
       )}`;
-      const result = await this.gad().call<SemanticDispatchResult>("vcsForkContext", {
+      const result = await this.gad().forkContext({
         sourceContextId,
         targetContextId,
         commandId,
-        ingress: { causalParent: null },
+        ingress: { causalParent: null, contextIntegrity: HOST_SEMANTIC_INTEGRITY },
       });
       const context = await this.drainSemanticResult<{
         working: { ref: VcsStateNodeRef };
@@ -1156,7 +1273,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // success can never be followed by a stale projection resurrection.
       await this.materializer.drop(contextId);
       this.verifiedProjectionStates.delete(contextId);
-      await this.gad().call("vcsDropContext", { contextId });
+      await this.gad().dropContext({ contextId });
     });
   }
 
@@ -1203,10 +1320,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     repositoryId: string;
     requiredFiles: readonly string[];
   }): Promise<ExactRepositorySnapshotPlan> {
-    const command = await this.gad().call<ContextMaterializationCommand>(
-      "vcsContextMaterializationCommand",
-      { contextId: input.contextId, materializedState: null }
-    );
+    const command = await this.gad().contextMaterializationCommand({
+      contextId: input.contextId,
+      materializedState: null,
+    });
     const roots = await this.materializer.planContentRoots(command.repositories);
     const repository = roots.find((candidate) => candidate.repositoryId === input.repositoryId);
     if (!repository)
@@ -1370,7 +1487,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return stateHash;
   }
 
-  semanticStateForContent(stateHash: string): VcsStateNodeRef | null {
+  executionStateForContent(stateHash: string): VcsStateNodeRef | null {
     return this.semanticStateByContent.get(stateHash) ?? null;
   }
 
@@ -1495,7 +1612,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async recordBuild(record: BuildRecord): Promise<void> {
     if (!this.attached) return;
-    await this.gad().call("appendLogEvent", {
+    await this.gad().appendLogEvent({
       logId: BUILDS_LOG_ID,
       head: "main",
       logKind: "builds",

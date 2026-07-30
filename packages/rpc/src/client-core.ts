@@ -221,13 +221,18 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     options?: RpcCallOptions | RpcStreamOptions,
     provenance: AuthenticatedCaller[] = baseProvenance
   ): RpcEnvelope {
-    const authorityParentNonce =
-      message.type === "request" || message.type === "stream-request"
-        ? config.authorityParentNonce?.()
-        : undefined;
     const executionSessionNonce =
       message.type === "request" || message.type === "stream-request" || message.type === "event"
         ? executionSessionNonceFor(options)
+        : undefined;
+    // An evaluated execution admission is the complete, durable trust unit for
+    // this request. Do not also couple it to the transient direct invocation
+    // that happened to start the work: that handler may return while its
+    // journaled/background execution is still legitimately running.
+    const authorityParentNonce =
+      !executionSessionNonce &&
+      (message.type === "request" || message.type === "stream-request")
+        ? config.authorityParentNonce?.()
         : undefined;
     const carriedMessage =
       (authorityParentNonce || executionSessionNonce) &&

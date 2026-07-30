@@ -153,7 +153,7 @@ describe("GovernanceLog", () => {
     const before = readFileSync(databasePath);
 
     expect(() => new GovernanceLog({ databasePath })).toThrow(
-      /schema version 0 predates production baseline 1/
+      /schema version is 0, expected 1/
     );
     expect(readFileSync(databasePath)).toEqual(before);
   });

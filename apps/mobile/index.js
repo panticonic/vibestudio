@@ -52,11 +52,7 @@ import {
   unitSourceLabel,
   unitSummaryChips,
 } from "@vibestudio/shared/bootstrapLaunchGate";
-import {
-  HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS,
-  isLaunchSessionEventForTarget,
-} from "@vibestudio/shared/hostTargetLaunchGate";
-import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
+import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { name as appName } from "./app.json";
 import { VibestudioLogo } from "./VibestudioLogo";
 
@@ -166,82 +162,6 @@ async function closeBootstrapConnectionAfterFailure(connection, error) {
   }
 }
 
-async function launchGateRpc(connection, method, args) {
-  return connection.rpc.call("main", method, args);
-}
-
-/**
- * Launch-readiness event client over the WebRTC session. Subscribes to the
- * host-target launch events and lets the gate await the next change. Server
- * events are an optimization: each wait is capped so the gate falls back to
- * polling `getLaunchSession` at a bounded cadence (never a busy loop) if no
- * event arrives — polling guarantees progress.
- */
-function createLaunchReadinessEventClient(connection) {
-  const eventNames = HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS;
-  const POLL_CAP_MS = 2000;
-  let lastSession = null;
-  let revision = 0;
-  let observedRevision = 0;
-  const waiters = new Set();
-  const notify = () => {
-    revision += 1;
-    for (const waiter of Array.from(waiters)) waiter(true);
-  };
-  const unsubs = [];
-  const events = new EventsClient(connection.rpc);
-  for (const name of eventNames) {
-    unsubs.push(
-      events.on(name, (payload) => {
-        if (isLaunchSessionEventForTarget("react-native", name, payload)) {
-          lastSession = payload;
-          notify();
-        }
-      })
-    );
-  }
-  // The poll fallback covers an unavailable watch without inventing a retry loop.
-  void events.subscribeAll(eventNames).catch((error) => {
-    console.warn(
-      `[MobileLaunchGate] readiness watch failed: ${
-        error instanceof Error ? (error.stack ?? error.message) : String(error)
-      }`
-    );
-  });
-  return Promise.resolve({
-    waitForLaunchSessionChange(sessionId, timeoutMs) {
-      if (lastSession?.sessionId === sessionId && revision !== observedRevision) {
-        observedRevision = revision;
-        return Promise.resolve(lastSession);
-      }
-      const waitMs = Math.max(1, Math.min(timeoutMs, POLL_CAP_MS));
-      return new Promise((waitResolve) => {
-        const timer = setTimeout(() => {
-          waiters.delete(done);
-          waitResolve(null);
-        }, waitMs);
-        const done = (value) => {
-          if (value) observedRevision = revision;
-          clearTimeout(timer);
-          waiters.delete(done);
-          waitResolve(lastSession?.sessionId === sessionId ? lastSession : null);
-        };
-        waiters.add(done);
-      });
-    },
-    close() {
-      for (const waiter of Array.from(waiters)) waiter(false);
-      waiters.clear();
-      for (const unsub of unsubs) {
-        try {
-          unsub();
-        } catch {}
-      }
-      void events.unsubscribeAll().catch(() => {});
-    },
-  });
-}
-
 function ActionButton({ title, onPress, variant = "primary", disabled = false }) {
   const buttonStyle =
     variant === "danger"
@@ -292,14 +212,44 @@ function StepIndicator({ activeStep }) {
 
 function formatLaunchSessionStatus(session) {
   if (!session) return "Preparing secure workspace access";
-  return [session.message, session.detail].filter(Boolean).join("\n");
+  if (session.status === "approval-required") return "Review workspace app access";
+  if (session.status === "ready") return "Workspace app is ready";
+  return session.reason ?? "Preparing secure workspace access";
 }
 
 function LaunchTimeline({ session }) {
-  if (!session?.timeline?.length) return null;
+  if (!session) return null;
+  const timeline = [
+    {
+      id: "review",
+      label: "Review trust",
+      state:
+        session.status === "approval-required"
+          ? "active"
+          : session.status === "preparing" || session.status === "ready"
+            ? "complete"
+            : "pending",
+    },
+    {
+      id: "activate",
+      label: "Activate app",
+      state:
+        session.status === "preparing"
+          ? "active"
+          : session.status === "ready"
+            ? "complete"
+            : "pending",
+      detail: session.status === "preparing" ? session.reason : undefined,
+    },
+    {
+      id: "connected",
+      label: "Connected",
+      state: session.status === "ready" ? "complete" : "pending",
+    },
+  ];
   return (
     <View style={styles.timeline}>
-      {session.timeline.map((phase) => (
+      {timeline.map((phase) => (
         <View key={phase.id} style={styles.timelineRow}>
           <View style={[styles.timelineDot, styles[`timelineDot_${phase.state}`]]} />
           <View style={styles.timelineText}>
@@ -327,125 +277,68 @@ function VibestudioMobileHostBootstrap() {
   const scannerLastValueRef = useRef(null);
   const cameraDevice = useCameraDevice("back");
 
-  const runLaunchGate = useCallback(async (grant, initialSession = null) => {
+  const runLaunchGate = useCallback(async (grant) => {
     const generation = ++launchGateGeneration.current;
     const isCurrent = () => generation === launchGateGeneration.current;
+    const launchClient = new HostLaunchClient((service, method, args) =>
+      grant.rpc.call("main", `${service}.${method}`, args)
+    );
     setBusy(true);
     setApprovals([]);
     setOpenApprovalIds(new Set());
     setLaunchGrant(grant);
-    let eventClient = null;
-    let diagnosticSessionId = initialSession?.sessionId ?? null;
     try {
-      // Launch readiness is the authoritative lifecycle boundary. Do not
-      // speculatively fetch the bundle first: the bootstrap endpoint must wait
-      // for a ready build, while a streaming fetch must produce its response
-      // head promptly. Beginning the launch session first keeps build progress
-      // in the launch state machine and downloads only a known-ready artifact.
-      let session =
-        initialSession ??
-        (await launchGateRpc(grant, "workspace.hostTargets.beginLaunch", ["react-native"]));
-      diagnosticSessionId = session?.sessionId ?? diagnosticSessionId;
-      console.log(
-        `[MobileLaunchGate] session=${diagnosticSessionId ?? "unknown"} status=${
-          session?.status ?? "unknown"
-        }`
-      );
       for (;;) {
+        const launch = await launchClient.launch("react-native");
         if (!isCurrent()) return;
-        setLaunchSession(session);
-        setStatus(formatLaunchSessionStatus(session));
-        if (!isCurrent()) return;
-        if (session?.status === "ready") {
+        setLaunchSession(launch);
+        setStatus(formatLaunchSessionStatus(launch));
+        if (launch.status === "ready") {
           setApprovals([]);
           setStatus("Workspace app approved. Activating bundle...");
-          // Fetch + activate the bundle OVER THE PIPE (manifest + artifact via
-          // gateway.fetch). Fails loud if it can't — pair/connect/RPC already
-          // succeeded, so a bundle failure is a real error, not a soft "pending".
-          await activateApprovedWorkspaceApp(grant, {
-            source: session.launch?.source ?? null,
-          });
+          await activateApprovedWorkspaceApp(grant, { source: launch.entity.source });
           if (!isCurrent()) return;
           setStatus("Workspace app activated. Reloading...");
           return;
         }
-        if (session?.status === "approval-required") {
+        if (launch.status === "approval-required") {
           smokePhase("embedded-host-target-approval-required");
-          setApprovals(Array.isArray(session.approvals) ? session.approvals : []);
-          setStatus(formatLaunchSessionStatus(session));
+          setApprovals(launch.approvals);
           return;
         }
-        if (session?.status === "preparing" || session?.status === "starting") {
+        if (launch.status === "preparing") {
           smokePhase("embedded-host-target-preparing");
-          const previousStatus = session.status;
-          const previousUpdatedAt = session.updatedAt;
-          if (!eventClient) {
-            eventClient = await createLaunchReadinessEventClient(grant).catch(() => null);
-          }
-          const observed = eventClient
-            ? await eventClient.waitForLaunchSessionChange(session.sessionId, 2000)
-            : null;
-          if (!isCurrent()) return;
-          if (observed) {
-            console.log(
-              `[MobileLaunchGate] session=${diagnosticSessionId ?? "unknown"} event-status=${
-                observed.status ?? "unknown"
-              }`
-            );
-            session = observed;
-            continue;
-          }
-          const refreshed = await launchGateRpc(grant, "workspace.hostTargets.getLaunchSession", [
-            session.sessionId,
-          ]);
-          if (!isCurrent()) return;
-          if (refreshed) {
-            const unchanged =
-              refreshed.status === previousStatus && refreshed.updatedAt === previousUpdatedAt;
-            session = refreshed;
-            console.log(
-              `[MobileLaunchGate] session=${diagnosticSessionId ?? "unknown"} poll-status=${
-                session.status ?? "unknown"
-              }`
-            );
-            if (unchanged) {
-              await new Promise((resolve) => setTimeout(resolve, 750));
-            }
-            continue;
-          }
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
         }
         setApprovals([]);
-        setStatus(formatLaunchSessionStatus(session));
         return;
       }
     } catch (error) {
       console.error(
-        `[MobileLaunchGate] session=${diagnosticSessionId ?? "unknown"} failed: ${
+        `[MobileLaunchGate] failed: ${
           error instanceof Error ? (error.stack ?? error.message) : String(error)
         }`
       );
       throw error;
-    } finally {
-      eventClient?.close();
     }
   }, []);
 
   const resolveLaunchApprovals = useCallback(
     async (decision) => {
       if (!launchGrant) return;
-      if (!launchSession?.sessionId) return;
+      if (!approvals.length) return;
       setBusy(true);
       setStatus(decision === "once" ? "Approving workspace app..." : "Denying workspace app...");
       try {
-        const session = await rpc(
-          launchGrant,
-          "workspace.hostTargets.resolveLaunchSessionApproval",
-          [launchSession.sessionId, decision]
+        const launchClient = new HostLaunchClient((service, method, args) =>
+          launchGrant.rpc.call("main", `${service}.${method}`, args)
         );
+        await launchClient.resolveApprovals(approvals, decision);
         if (decision === "once") {
-          await runLaunchGate(launchGrant, session);
+          await runLaunchGate(launchGrant);
         } else {
-          setLaunchSession(session);
+          setLaunchSession(null);
           setApprovals([]);
           setStatus("Workspace app approval denied.");
         }
@@ -455,7 +348,7 @@ function VibestudioMobileHostBootstrap() {
         setBusy(false);
       }
     },
-    [launchGrant, launchSession, runLaunchGate]
+    [approvals, launchGrant, runLaunchGate]
   );
 
   const presentConnectLink = useCallback((rawUrl) => {

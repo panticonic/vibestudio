@@ -4,7 +4,7 @@
  * The frontend-dev loop's eyes: enumerate the live panel tree, capture a
  * screenshot of a running panel (written to a real image file — exactly what a
  * headless agent needs to look at UI it is building), and read a panel's
- * console history. All three relay to host services (`panelTree.*` reads,
+ * console history. Tree reads use the bounded workspace-state builtin projection;
  * `panelCdp.screenshot` / `panelCdp.consoleHistory`); screenshot/console are
  * context-boundary gated server-side — a panel in the agent's own context is
  * free, a foreign-context panel is denied with remediation guidance (open a
@@ -23,12 +23,12 @@ import { jsonMode, printError, printResult, UsageError } from "./output.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./agent/sessionContext.js";
 
 interface PanelNode {
-  id?: string;
+  slotId?: string;
   title?: string;
   kind?: string;
   source?: string;
   contextId?: string;
-  children?: unknown[];
+  parentSlotId?: string | null;
 }
 
 interface PanelRow {
@@ -62,31 +62,49 @@ interface PanelConsoleHistoryResult {
   dropped: { entries: number; errors: number };
 }
 
-function flattenTree(nodes: unknown[], depth: number, out: PanelRow[]): void {
-  for (const raw of nodes) {
-    if (!raw || typeof raw !== "object") continue;
-    const node = raw as PanelNode;
-    if (typeof node.id === "string") {
-      out.push({
-        id: node.id,
-        title: typeof node.title === "string" ? node.title : null,
-        kind: typeof node.kind === "string" ? node.kind : null,
-        source: typeof node.source === "string" ? node.source : null,
-        contextId: typeof node.contextId === "string" ? node.contextId : null,
-        depth,
-      });
-    }
-    if (Array.isArray(node.children)) flattenTree(node.children, depth + 1, out);
-  }
-}
-
 async function list(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const { client, contextId } = resolveSessionScope(inv);
-    const snapshot = await client.call<{ roots?: unknown[] }>("panelTree.getTreeSnapshot", []);
     const rows: PanelRow[] = [];
-    flattenTree(snapshot.roots ?? [], 0, rows);
+    const rootGroups = await client.call<{
+      groups: Array<{ ownerUserId: string }>;
+      nextCursor: string | null;
+    }>("workspace-state.panelTree.rootGroups", [{ limit: 100 }]);
+    const queue: Array<{
+      group: { kind: "roots"; ownerUserId: string } | { kind: "children"; parentSlotId: string };
+      depth: number;
+    }> = rootGroups.groups.map((group) => ({
+      group: { kind: "roots", ownerUserId: group.ownerUserId },
+      depth: 0,
+    }));
+    while (queue.length > 0) {
+      const next = queue.shift();
+      if (!next) break;
+      let cursor: string | undefined;
+      do {
+        const page = await client.call<{ nodes: PanelNode[]; nextCursor: string | null }>(
+          "workspace-state.panelTree.page",
+          [{ group: next.group, limit: 200, ...(cursor ? { cursor } : {}) }]
+        );
+        for (const node of page.nodes) {
+          if (typeof node.slotId !== "string") continue;
+          rows.push({
+            id: node.slotId,
+            title: typeof node.title === "string" ? node.title : null,
+            kind: typeof node.kind === "string" ? node.kind : null,
+            source: typeof node.source === "string" ? node.source : null,
+            contextId: typeof node.contextId === "string" ? node.contextId : null,
+            depth: next.depth,
+          });
+          queue.push({
+            group: { kind: "children", parentSlotId: node.slotId },
+            depth: next.depth + 1,
+          });
+        }
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+    }
     printResult(rows, {
       json,
       human: () => {

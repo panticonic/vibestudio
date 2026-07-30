@@ -14,6 +14,7 @@ import {
   type ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { fixedPreparedAuthorityRequirement } from "@vibestudio/shared/typedServiceClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { WorkerdInspectorTarget } from "../workerdInspectorBridge.js";
@@ -36,9 +37,38 @@ export interface WorkerdInspectorServiceDeps {
 export function createWorkerdInspectorService(
   deps: WorkerdInspectorServiceDeps
 ): ServiceDefinition {
-  const methods = {
-    listTargets: { args: z.tuple([]), access: { sensitivity: "read" as const } },
+  const methods = defineServiceMethods({
+    listTargets: {
+      tier: {
+        tier: "open",
+        session: "family",
+        residency: "observability",
+        family: "workerdInspector.read",
+        rationale: "Read-only discovery of inspectable processes; attaching remains gated",
+      },
+      args: z.tuple([]),
+      access: { sensitivity: "read" as const },
+    },
     getEndpoint: {
+      capability: "runtime.inspect",
+      tier: {
+        tier: "open",
+        session: "family",
+        residency: "observability",
+        family: "workerdInspector.read",
+        rationale:
+          "The transport is open; non-chrome code receives one prepared gated runtime.inspect leaf",
+      },
+      presentation: {
+        title: "Inspect workspace runtimes",
+        action: "inspect workspace runtimes",
+        description: "Allows {requesterKind} to inspect workspace runtimes.",
+        group: "runtime",
+        authorityCategory: {
+          domain: "computer",
+          verb: "see",
+        },
+      },
       args: z.tuple([z.string()]),
       authority: {
         requirement: requirementForPrincipals(
@@ -61,7 +91,7 @@ export function createWorkerdInspectorService(
       },
       access: { sensitivity: "admin" as const },
     },
-  };
+  });
 
   return {
     name: "workerdInspector",

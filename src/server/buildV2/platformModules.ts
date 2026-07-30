@@ -22,7 +22,7 @@
 // ---------------------------------------------------------------------------
 
 /**
- * `@vibestudio/runtime` — the workspace-side SDK that panels, workers, and
+ * `@workspace/runtime` — the workspace-side SDK that panels, workers, and
  * eval'd code import to talk to the host.
  *
  * Why the host requires it:
@@ -44,19 +44,19 @@
  *   - Its panel entry (condition `vibestudio-panel`) self-initializes on load; its
  *     worker entry (conditions `worker`/`workerd`) must NOT self-initialize.
  */
-export const RUNTIME_MODULE = "@vibestudio/runtime";
+export const RUNTIME_MODULE = "@workspace/runtime";
 
 /**
- * `@vibestudio/cdp-client` — Chrome-DevTools-Protocol client used by agent
+ * `@workspace/cdp-client` — Chrome-DevTools-Protocol client used by agent
  * tooling inside the eval sandbox.
  *
  * Why the host requires it: worker builds that expose {@link RUNTIME_MODULE}
  * force this module onto `__vibestudioModuleMap__` too, so sandboxed eval code can
- * `require("@vibestudio/cdp-client")` without declaring it in the worker's own
+ * `require("@workspace/cdp-client")` without declaring it in the worker's own
  * manifest. The host registers the whole module namespace; no specific named
  * export is consumed by host code itself.
  */
-export const CDP_CLIENT_MODULE = "@vibestudio/cdp-client";
+export const CDP_CLIENT_MODULE = "@workspace/cdp-client";
 
 /**
  * Companion modules the host force-exposes on the worker module map whenever a

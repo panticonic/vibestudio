@@ -127,69 +127,6 @@ export function createShellApprovalService(deps: {
         await approvalQueue.resolve(approvalId, decision, resolverFrom(ctx, deviceLabelFor));
         metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
       },
-      resolveUserland: async (ctx, [approvalId, choice]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
-        if (!pending || pending.kind !== "userland") {
-          throw new ServiceError(
-            serviceName,
-            "resolveUserland",
-            "No pending userland approval found",
-            "ENOENT"
-          );
-        }
-        if (choice === "dismiss") {
-          await approvalQueue.resolve(approvalId, "dismiss", resolverFrom(ctx, deviceLabelFor));
-          metrics.recordApprovalResolved({
-            decision: "dismiss",
-            source: ctx.caller.runtime.kind,
-          });
-          return;
-        }
-        if (!pending.options.some((option) => option.value === choice)) {
-          throw new ServiceError(
-            serviceName,
-            "resolveUserland",
-            "Userland approval choice was not presented to the user",
-            "EINVAL"
-          );
-        }
-        await approvalQueue.resolveUserland(approvalId, choice, resolverFrom(ctx, deviceLabelFor));
-        metrics.recordApprovalResolved({ decision: choice, source: ctx.caller.runtime.kind });
-      },
-      resolveExternalAgent: async (ctx, [approvalId, behavior]) => {
-        const pending = approvalQueue
-          .listPending()
-          .find((approval) => approval.approvalId === approvalId);
-        if (!pending || pending.kind !== "external-agent") {
-          throw new ServiceError(
-            serviceName,
-            "resolveExternalAgent",
-            "No pending external-agent approval found",
-            "ENOENT"
-          );
-        }
-        await approvalQueue.resolveExternalAgent(
-          approvalId,
-          behavior,
-          resolverFrom(ctx, deviceLabelFor)
-        );
-        metrics.recordApprovalResolved({ decision: behavior, source: ctx.caller.runtime.kind });
-      },
-      resolveExternalAgentByRequest: async (ctx, [ref, behavior]) => {
-        const resolved = await approvalQueue.resolveExternalAgentByRequest(
-          ref.channelId,
-          ref.requestId,
-          ref.resolveToken,
-          behavior,
-          resolverFrom(ctx, deviceLabelFor)
-        );
-        if (resolved > 0) {
-          metrics.recordApprovalResolved({ decision: behavior, source: ctx.caller.runtime.kind });
-        }
-        return { resolved: resolved > 0 };
-      },
       submitClientConfig: async (ctx, [approvalId, values]) => {
         const pending = approvalQueue
           .listPending()
@@ -247,8 +184,6 @@ export function createShellApprovalService(deps: {
         );
         metrics.recordApprovalResolved({ decision: "submit", source: ctx.caller.runtime.kind });
       },
-      getUserlandSealedDetail: (_ctx, [approvalId, digest]) =>
-        approvalQueue.getUserlandSealedDetail(approvalId, digest),
       listPending: () => approvalQueue.listPending(),
     }),
   };

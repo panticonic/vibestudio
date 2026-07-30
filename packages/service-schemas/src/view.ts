@@ -8,6 +8,7 @@
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { panelMethods } from "./panel.js";
 
 // Access descriptors classify native window/view mutations. The Electron view
 // service definition separately declares the required principals.
@@ -106,8 +107,16 @@ export const ContentOverlayThemeSchema = z.object({
 });
 export type ContentOverlayTheme = z.infer<typeof ContentOverlayThemeSchema>;
 
-export const viewMethods = defineServiceMethods({
+export const coreViewMethods = defineServiceMethods({
   setBounds: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Reposition and resize a native view to the given window-relative pixel bounds.",
     args: z.tuple([z.string(), ViewBoundsSchema]),
     returns: z.void(),
@@ -115,6 +124,14 @@ export const viewMethods = defineServiceMethods({
     examples: [{ args: ["view-123", { x: 0, y: 48, width: 800, height: 600 }] }],
   },
   setVisible: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Show or hide a native view without changing its bounds.",
     args: z.tuple([z.string(), z.boolean()]),
     returns: z.void(),
@@ -122,6 +139,14 @@ export const viewMethods = defineServiceMethods({
     examples: [{ args: ["view-123", true] }],
   },
   forwardMouseClick: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Synthesize a left mouse click at a window-relative point inside a view, focusing it; returns false if the point falls outside the view's bounds or the view is gone.",
     args: z.tuple([z.string(), ViewPointSchema]),
@@ -130,17 +155,36 @@ export const viewMethods = defineServiceMethods({
     examples: [{ args: ["view-123", { x: 120, y: 80 }], returns: true }],
   },
   setThemeCss: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Apply a global theme CSS string injected into hosted views.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: VIEW_THEME_ACCESS,
   },
   bindNativePanelSlot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Bind a panel into a native slot owned by the calling host view at the given bounds; returns the slot sync status.",
     args: z.tuple([
       z.object({
         nativeSlotId: z.string().describe("Caller-chosen identifier for the native slot."),
+        bindingId: z
+          .string()
+          .describe("Unique incarnation of this mounted slot binding; stale releases are ignored."),
         panelId: z.string().describe("Panel to place into the slot."),
         bounds: ViewBoundsSchema.describe("Window-relative bounds the panel should occupy."),
         focused: z.boolean().optional().describe("Whether the slot should receive focus."),
@@ -153,6 +197,7 @@ export const viewMethods = defineServiceMethods({
         args: [
           {
             nativeSlotId: "slot-main",
+            bindingId: "binding-main-1",
             panelId: "panel-chat",
             bounds: { x: 0, y: 0, width: 400, height: 600 },
           },
@@ -161,11 +206,20 @@ export const viewMethods = defineServiceMethods({
     ],
   },
   updateNativePanelSlot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Update the bounds and/or focus of an already-bound native panel slot; returns the slot sync status.",
     args: z.tuple([
       z.object({
         nativeSlotId: z.string().describe("Identifier of the previously bound native slot."),
+        bindingId: z.string().describe("Incarnation returned by the corresponding bind lifecycle."),
         bounds: ViewBoundsSchema.optional().describe("New window-relative bounds, if changing."),
         focused: z.boolean().optional().describe("New focus state, if changing."),
       }),
@@ -174,16 +228,35 @@ export const viewMethods = defineServiceMethods({
     access: VIEW_SLOT_BIND_ACCESS,
   },
   clearNativePanelSlot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Unbind and remove a native panel slot owned by the calling host view.",
     args: z.tuple([
       z.object({
         nativeSlotId: z.string().describe("Identifier of the native slot to clear."),
+        bindingId: z
+          .string()
+          .describe("Incarnation to release; a stale incarnation cannot clear a newer binding."),
       }),
     ]),
     returns: z.void(),
     access: VIEW_SLOT_CLEAR_ACCESS,
   },
   setHostedShellReady: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Mark the caller's hosted shell as ready (or not), which gates whether its owner view is shown.",
     args: z.tuple([
@@ -195,12 +268,28 @@ export const viewMethods = defineServiceMethods({
     access: VIEW_SHELL_READY_ACCESS,
   },
   setShellOverlay: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Activate or deactivate the shell overlay layer.",
     args: z.tuple([z.boolean()]),
     returns: z.void(),
     access: VIEW_OVERLAY_TOGGLE_ACCESS,
   },
   showNativeShellOverlay: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Show a native shell overlay (e.g. a command palette/list) with the given rows at the supplied bounds.",
     args: z.tuple([
@@ -216,6 +305,14 @@ export const viewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_SHOW_ACCESS,
   },
   updateNativeShellOverlay: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Update an already-shown native shell overlay; every field is optional, so only the provided properties change.",
     args: z.tuple([
@@ -231,6 +328,14 @@ export const viewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_SHOW_ACCESS,
   },
   hideNativeShellOverlay: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Hide a native shell overlay, optionally identified by id; omit the id to hide the active overlay.",
     args: z.tuple([z.string().optional()]),
@@ -238,6 +343,14 @@ export const viewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_HIDE_ACCESS,
   },
   showContentOverlay: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Show the rich content overlay (a shell React surface floated above the panels) for the given surface key, anchored to the supplied region.",
     args: z.tuple([
@@ -255,6 +368,14 @@ export const viewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_SHOW_ACCESS,
   },
   updateContentOverlay: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Update the already-shown content overlay; every field is optional, so only the provided properties change.",
     args: z.tuple([
@@ -270,12 +391,28 @@ export const viewMethods = defineServiceMethods({
     access: VIEW_OVERLAY_SHOW_ACCESS,
   },
   hideContentOverlay: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Hide the content overlay surface.",
     args: z.tuple([]),
     returns: z.void(),
     access: VIEW_OVERLAY_HIDE_ACCESS,
   },
   browserNavigate: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description:
       "Navigate a browser view to an http(s) URL (rejected if the URL is not http/https).",
     args: z.tuple([z.string(), z.string()]),
@@ -284,33 +421,79 @@ export const viewMethods = defineServiceMethods({
     examples: [{ args: ["browser-1", "https://example.com"] }],
   },
   browserGoBack: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Navigate a browser view back one entry in its history.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: VIEW_NAV_HISTORY_ACCESS,
   },
   browserGoForward: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Navigate a browser view forward one entry in its history.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: VIEW_NAV_HISTORY_ACCESS,
   },
   browserReload: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Reload a browser view.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: VIEW_RELOAD_ACCESS,
   },
   browserForceReload: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Reload a browser view bypassing the cache.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: VIEW_RELOAD_ACCESS,
   },
   browserStop: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
     description: "Stop any in-progress load in a browser view.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: VIEW_STOP_ACCESS,
   },
+});
+
+/** The one public Electron view surface, including panel-hosting operations. */
+export const viewMethods = defineServiceMethods({
+  ...coreViewMethods,
+  ...panelMethods,
 });

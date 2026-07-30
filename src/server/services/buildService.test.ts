@@ -59,20 +59,6 @@ function makeBuildSystem(): BuildSystemV2 {
     getEffectiveVersion: vi.fn(),
     getExternalDeps: vi.fn(),
     listRecentBuildEvents: vi.fn(() => []),
-    doctorExtension: vi.fn(async () => ({
-      name: "@workspace-extensions/example",
-      kind: "extension" as const,
-      path: "extensions/example",
-      dependencyDiagnostics: {
-        dependencyMode: "auto" as const,
-        classifiedDeps: [],
-        runtimeExternalDeps: {},
-        bundledDeps: {},
-        notes: [],
-      },
-      buildMetadata: null,
-      checks: [{ name: "manifest", status: "pass" as const, message: "ok" }],
-    })),
     recompute: vi.fn(),
     gc: vi.fn(),
     getAboutPages: vi.fn(),
@@ -88,6 +74,16 @@ function makeBuildSystem(): BuildSystemV2 {
           dependencyOverrides: {},
           internalDeps: [],
           manifest: {},
+        },
+        {
+          name: "@workspace-panels/hello-svelte",
+          kind: "panel",
+          relativePath: "panels/hello-svelte",
+          path: "/tmp/workspace/panels/hello-svelte",
+          dependencies: {},
+          dependencyOverrides: {},
+          internalDeps: [],
+          manifest: { title: "Hello Svelte" },
         },
       ],
       tryGet: (name: string) =>
@@ -111,10 +107,10 @@ function makeBuildSystem(): BuildSystemV2 {
 }
 
 describe("build service extension diagnostics", () => {
-  it("preserves the legacy { bundle } contract for library builds", async () => {
+  it("returns the portable { bundle } contract for library builds", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getBuild).mockResolvedValue({ bundle: "module.exports = {};" } as never);
-    const service = createBuildService({ buildSystem });
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getBuild", [
@@ -131,7 +127,7 @@ describe("build service extension diagnostics", () => {
 
   it("exposes build metadata by immutable build key", async () => {
     const buildSystem = makeBuildSystem();
-    const service = createBuildService({ buildSystem });
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getBuildMetadata", [
@@ -144,17 +140,16 @@ describe("build service extension diagnostics", () => {
     });
   });
 
-  it("delegates doctorExtension reports", async () => {
-    const buildSystem = makeBuildSystem();
-    const service = createBuildService({ buildSystem });
+  it("resolves panel metadata by its public workspace source path", async () => {
+    const service = createBuildService({ buildSystem: makeBuildSystem(), listUnits: () => [] });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "doctorExtension", [
-        "@workspace-extensions/example",
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getPanelMetadata", [
+        "panels/hello-svelte",
       ])
     ).resolves.toMatchObject({
-      name: "@workspace-extensions/example",
-      checks: [expect.objectContaining({ name: "manifest", status: "pass" })],
+      source: "panels/hello-svelte",
+      title: "Hello Svelte",
     });
   });
 
@@ -180,7 +175,7 @@ describe("build service extension diagnostics", () => {
       cleanupFailures: [],
       retainedSourceRoots: [],
     });
-    const service = createBuildService({ buildSystem });
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "gc", [])
@@ -205,7 +200,7 @@ describe("build service extension diagnostics", () => {
         timestamp: "2026-01-01T00:00:01.000Z",
       },
     ]);
-    const service = createBuildService({ buildSystem });
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
       service.handler(
@@ -258,7 +253,7 @@ describe("build service extension diagnostics", () => {
         timestamp: "2026-01-01T00:00:01.000Z",
       },
     ]);
-    const service = createBuildService({ buildSystem });
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "listRecentBuildEvents", [
@@ -304,7 +299,7 @@ describe("build service extension diagnostics", () => {
       ],
       tryGet: () => undefined,
     } as never);
-    const service = createBuildService({ buildSystem });
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
       service.handler(

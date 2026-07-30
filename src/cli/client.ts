@@ -554,8 +554,12 @@ async function terminalStart(inv: ParsedInvocation): Promise<number> {
       human: () => {
         if (result.status === "ready") {
           const launch = result.launch?.status === "ready" ? result.launch : null;
-          console.log(`terminal app started${launch?.appId ? `: ${launch.appId}` : ""}`);
-          if (launch?.buildKey) console.log(`build: ${launch.buildKey}`);
+          console.log(
+            `terminal app started${launch?.entity.identity.entityId ? `: ${launch.entity.identity.entityId}` : ""}`
+          );
+          if (launch?.entity.artifact.buildKey) {
+            console.log(`build: ${launch.entity.artifact.buildKey}`);
+          }
           if (result.approvalsResolved > 0) {
             console.log(`approvals resolved: ${result.approvalsResolved}`);
           }
@@ -566,17 +570,11 @@ async function terminalStart(inv: ParsedInvocation): Promise<number> {
           return;
         }
         if (result.launch?.status === "unavailable") {
-          const details = result.launch.details.length
-            ? `: ${result.launch.details.join("; ")}`
-            : "";
-          console.log(`${result.launch.reason}${details}`);
+          console.log(result.launch.reason);
           return;
         }
         if (result.launch?.status === "preparing") {
-          const details = result.launch.details.length
-            ? `: ${result.launch.details.join("; ")}`
-            : "";
-          console.log(`${result.launch.reason}${details}`);
+          console.log(result.launch.reason);
           return;
         }
         console.log(`terminal app did not start: ${result.status}`);

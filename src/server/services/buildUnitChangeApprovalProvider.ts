@@ -63,12 +63,13 @@ export function createBuildUnitChangeApprovalProvider(deps: {
           ),
           previous.unitName
         )
-      : { requests: [] };
+      : { requests: [], provides: [] };
     const authority = authorityReviewFromPackageJson(
       packageJsonSource,
       candidate.unitName,
       {
         requests: previousAuthority.requests,
+        provides: previousAuthority.provides,
       },
       deps.describeCapability,
       candidate.kind
@@ -78,6 +79,7 @@ export function createBuildUnitChangeApprovalProvider(deps: {
       effectiveVersion: candidate.effectiveVersion,
       authority: {
         requests: authority.requests,
+        provides: authority.provides,
       },
     };
     if (!previous && deps.approvalStore.has(approvalIdentity)) return null;
@@ -91,6 +93,7 @@ export function createBuildUnitChangeApprovalProvider(deps: {
       externalDeps: candidate.externalDeps,
       authority: {
         requests: authority.requests,
+        provides: authority.provides,
       },
     })}`;
     pendingIdentities.set(identityKey, approvalIdentity);

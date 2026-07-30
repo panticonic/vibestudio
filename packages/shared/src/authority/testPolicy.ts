@@ -5,5 +5,4 @@ export type {
   AgentExecutionTestCasePolicy,
   AgentExecutionTestPolicy,
   AgentExecutionTestPolicySpec,
-  AgentExecutionTestUserlandRule,
 } from "@vibestudio/rpc";

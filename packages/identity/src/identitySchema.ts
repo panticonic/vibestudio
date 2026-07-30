@@ -1,10 +1,8 @@
-import type { CanonicalSqliteMigrationPlan, CanonicalSqliteSchema } from "@vibestudio/sqlite";
+import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 10 is the first production migration baseline: no exact, lossless
- * contract for the experimental versions before it survived, so they are
- * rejected intact rather than guessed at.
+ * Version 10 is the only accepted schema. Every other shape is rejected.
  */
 export const IDENTITY_DATABASE_SCHEMA_VERSION = 10;
 
@@ -166,10 +164,4 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
       )`,
     },
   ],
-};
-
-/** Shared by both IdentityDb and CentralDataManager, the two owners of this file. */
-export const IDENTITY_DATABASE_MIGRATION_PLAN: CanonicalSqliteMigrationPlan = {
-  current: IDENTITY_DATABASE_SCHEMA,
-  migrations: [],
 };

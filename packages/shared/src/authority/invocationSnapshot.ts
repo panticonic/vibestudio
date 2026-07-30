@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { InvocationSnapshot } from "@vibestudio/rpc";
 import { canonicalJson } from "../canonicalJson.js";
 
-const DOMAIN = "vibestudio:invocation-snapshot:v1\0";
+const DOMAIN = "vibestudio:invocation-snapshot:v2\0";
 
 export type InvocationSnapshotInput = Omit<InvocationSnapshot, "v" | "argsDigest" | "at"> & {
   args: readonly unknown[];
@@ -15,10 +15,14 @@ export function sha256Canonical(value: unknown): string {
 
 export function createInvocationSnapshot(input: InvocationSnapshotInput): InvocationSnapshot {
   return {
-    v: 1,
+    v: 2,
     service: input.service,
     method: input.method,
     capability: input.capability,
+    capabilityDefinitionDigest: input.capabilityDefinitionDigest,
+    resourceType: input.resourceType,
+    provider: input.provider,
+    providerExecutionDigest: input.providerExecutionDigest,
     ...(input.targetRequirement ? { targetRequirement: input.targetRequirement } : {}),
     ...(input.targetCapability ? { targetCapability: input.targetCapability } : {}),
     resourceKey: input.resourceKey,
@@ -34,7 +38,7 @@ export function createInvocationSnapshot(input: InvocationSnapshotInput): Invoca
     ...(input.agentScopeEligible ? { agentScopeEligible: true } : {}),
     ...(input.executionMode ? { executionMode: input.executionMode } : {}),
     ...(input.testPolicyId ? { testPolicyId: input.testPolicyId } : {}),
-    mission: input.mission,
+    reviewedClosureSubject: input.reviewedClosureSubject,
     snippetDigest: input.snippetDigest,
     codeLineage: {
       class: input.codeLineage.class,
@@ -54,6 +58,10 @@ export function invocationSnapshotDigest(snapshot: InvocationSnapshot): string {
     service: snapshot.service,
     method: snapshot.method,
     capability: snapshot.capability,
+    capabilityDefinitionDigest: snapshot.capabilityDefinitionDigest,
+    resourceType: snapshot.resourceType,
+    provider: snapshot.provider,
+    providerExecutionDigest: snapshot.providerExecutionDigest,
     targetRequirement: snapshot.targetRequirement ?? null,
     targetCapability: snapshot.targetCapability ?? null,
     resourceKey: snapshot.resourceKey,
@@ -65,7 +73,7 @@ export function invocationSnapshotDigest(snapshot: InvocationSnapshot): string {
     irreversible: snapshot.irreversible ?? false,
     executionMode: snapshot.executionMode ?? null,
     testPolicyId: snapshot.testPolicyId ?? null,
-    mission: snapshot.mission,
+    reviewedClosureSubject: snapshot.reviewedClosureSubject,
     snippetDigest: snapshot.snippetDigest,
     codeLineageClass: snapshot.codeLineage.class,
   };

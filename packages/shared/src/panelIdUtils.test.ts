@@ -9,9 +9,18 @@ import {
   computePanelId,
 } from "./panelIdUtils.js";
 
-vi.mock("crypto", () => ({
-  randomBytes: vi.fn(() => Buffer.from([0xde, 0xad, 0xbe, 0xef])),
-}));
+beforeEach(() => {
+  vi.stubGlobal("crypto", {
+    getRandomValues: (bytes: Uint8Array) => {
+      bytes.set([0xde, 0xad, 0xbe, 0xef]);
+      return bytes;
+    },
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("sanitizePanelIdSegment", () => {
   // --- valid inputs ---

@@ -372,7 +372,7 @@ describe("pushService", () => {
     );
   });
 
-  it("does not upgrade or mutate a nonempty pre-cutover push database", () => {
+  it("rejects and does not mutate a nonempty database with an unsupported schema", () => {
     const databasePath = tempDatabasePath();
     const raw = new DatabaseSync(databasePath);
     raw.exec(`CREATE TABLE push_registrations (
@@ -390,7 +390,7 @@ describe("pushService", () => {
     const before = fs.readFileSync(databasePath);
 
     expect(() => createPushService({ databasePath, metrics: createPushMetrics() })).toThrow(
-      /schema version 0 predates production baseline 1/
+      /schema version is 0, expected 1/
     );
     expect(fs.readFileSync(databasePath)).toEqual(before);
     const unchanged = new DatabaseSync(databasePath);

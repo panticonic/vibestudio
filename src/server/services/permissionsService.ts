@@ -13,7 +13,7 @@ import {
   capabilityDomain,
   type AuthorityDomainId,
   type AuthorityVerb,
-} from "@vibestudio/shared/authority/capabilityDomains";
+} from "@vibestudio/shared/authority/authorityDomains";
 import { resourcePhrase } from "@vibestudio/shared/authority/authorityRows";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
@@ -51,39 +51,11 @@ export function createPermissionsService(deps: {
     methods: permissionsMethods,
     handler: defineServiceHandler(SERVICE, permissionsMethods, {
       list: async (ctx) => {
-        await deps.browserPermissions.ensureMigrated();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
         const reviewingUserId = ctx.caller.subject?.userId;
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
           .listActiveAuthorityGrants()
-          .filter((grant) => !grant.capability.startsWith("userland.choice/"))
           .map((grant) => savedAuthorityGrant(grant, reviewingUserId));
-        const userland: SavedPermissionGrant[] = deps.capabilityGrants
-          .listPersistentUserland()
-          .map(({ id, grant }) => ({
-            id,
-            kind: "userland",
-            callerLabel: grant.principal.repoPath || grant.principal.callerId,
-            scopeLabel:
-              grant.scope === "version"
-                ? `Remembered choice: ${grant.choice} (this version)`
-                : `Remembered choice: ${grant.choice}`,
-            capability: grant.subject.label ?? "Agent choice",
-            resource: grant.subject.id,
-            ...(grant.principal.repoPath ? { repoPath: grant.principal.repoPath } : {}),
-            ...(grant.principal.effectiveVersion
-              ? { effectiveVersion: grant.principal.effectiveVersion }
-              : {}),
-            grantedAt: grant.grantedAt,
-            why: `Remembered the answer “${grant.choice}” so this request does not interrupt you again.`,
-            approvedBy: humanizeDecisionPrincipal(grant.grantedBy ?? "", reviewingUserId),
-            duration:
-              grant.scope === "version"
-                ? "Until this exact installed version changes or you revoke it"
-                : "Until you revoke it",
-            revokeEffect:
-              "The next matching request will ask again; requests already being handled are stopped.",
-          }));
         const credentialUse: SavedPermissionGrant[] = deps.credentialUseGrants
           .listAll()
           .map((grant) => ({
@@ -163,13 +135,12 @@ export function createPermissionsService(deps: {
             };
           }
         );
-        return [...capability, ...userland, ...credentialUse, ...browserSites].sort(
+        return [...capability, ...credentialUse, ...browserSites].sort(
           (a, b) => (b.grantedAt ?? 0) - (a.grantedAt ?? 0)
         );
       },
       revoke: async (ctx, [{ kind, id }]) => {
         if (kind === "browser-site") {
-          await deps.browserPermissions.ensureMigrated();
           const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
           const removed = deps.browserPermissions.revokeById(
             identity.environmentKey,
@@ -183,9 +154,7 @@ export function createPermissionsService(deps: {
         const removed =
           kind === "capability"
             ? deps.capabilityGrants.revoke(id)
-            : kind === "userland"
-              ? deps.capabilityGrants.revokePersistentUserland(id)
-              : await deps.credentialUseGrants.revoke(id);
+            : await deps.credentialUseGrants.revoke(id);
         if (!removed)
           throw new ServiceError(SERVICE, "revoke", "Permission grant not found", "ENOENT");
       },
@@ -433,7 +402,7 @@ function authorityGrantDuration(grant: AuthorityGrant): string {
     case "agent":
       return "Until you revoke it, or after 3 months without use";
     case "mission":
-      return "Until the mission changes, ends, or you revoke it";
+      return "Until the reviewed automation changes, ends, or you revoke it";
     case "version":
       return "Until this exact installed version changes or you revoke it";
     default:

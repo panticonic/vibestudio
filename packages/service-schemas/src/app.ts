@@ -18,6 +18,13 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
 
 export const appMethods = defineServiceMethods({
   getInfo: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "App version plus connection mode/host, current server connection status, and the selected ICE path (relay vs direct).",
     args: z.tuple([]),
@@ -36,6 +43,13 @@ export const appMethods = defineServiceMethods({
     ],
   },
   getSystemTheme: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "Whether the OS is currently in dark or light appearance.",
     args: z.tuple([]),
     returns: z.enum(["dark", "light"]),
@@ -43,6 +57,13 @@ export const appMethods = defineServiceMethods({
     examples: [{ args: [], returns: "dark" }],
   },
   setThemeMode: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.mutate",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Set the app theme source to light, dark, or system (follow OS). Requires the window-management capability.",
     args: z.tuple([z.enum(["light", "dark", "system"])]),
@@ -51,6 +72,13 @@ export const appMethods = defineServiceMethods({
     examples: [{ args: ["dark"] }],
   },
   openDevTools: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.create",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Open Chromium DevTools for the calling app view (or the shell). Requires the window-management capability.",
     args: z.tuple([]),
@@ -58,6 +86,25 @@ export const appMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   openExternal: {
+    capability: "external.open",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "app.create",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Open a link in another application",
+      action: "open a link in another application",
+      description: "Allows {requesterKind} to open a link in another application.",
+      group: "host",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "act",
+      },
+    },
     description:
       "Open an http(s) URL in the user's default external browser. Requires the open-external capability; non-http(s) URLs are rejected.",
     args: z.tuple([z.string()]),
@@ -66,12 +113,27 @@ export const appMethods = defineServiceMethods({
     examples: [{ args: ["https://example.com"] }],
   },
   openWorkspacePath: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.create",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "Reveal the workspace directory in the OS file manager. Shell-only.",
     args: z.tuple([]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },
   openShellSurface: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.create",
+      rationale:
+        "Open bias: opens bounded first-party shell chrome without changing the managed state; §2 default {code, session} family",
+    },
     description:
       "Open a typed shell-owned management surface without exposing its private state to the caller.",
     args: z.tuple([z.enum(["connection-settings", "workspace-chooser"])]),
@@ -79,6 +141,25 @@ export const appMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   clearBuildCache: {
+    capability: "workspace.build-cache.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "app.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Clear cached build files",
+      action: "clear cached build files",
+      description: "Allows {requesterKind} to clear cached build files.",
+      group: "host",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description:
       "Recompute the build graph and invalidate ready panels so they rebuild on next load. Requires the panel-hosting capability.",
     args: z.tuple([]),
@@ -86,6 +167,13 @@ export const appMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   getShellPages: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "List the shell's built-in about/info page routes. Requires the panel-hosting capability.",
     args: z.tuple([]),
@@ -93,6 +181,25 @@ export const appMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   applyUpdate: {
+    capability: "application.update",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "app.mutate",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Install an application update",
+      action: "install an application update",
+      description: "Allows {requesterKind} to install an application update.",
+      group: "host",
+      authorityCategory: {
+        domain: "computer",
+        verb: "act",
+      },
+    },
     description:
       "Apply a pending build update for the given app id; returns whether an update was applied. Requires shell or a panel-hosting app.",
     args: z.tuple([z.string()]),
@@ -101,6 +208,13 @@ export const appMethods = defineServiceMethods({
     examples: [{ args: ["com.example.app"], returns: { applied: true } }],
   },
   listPendingUpdates: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "app.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "List apps with a pending build update, including source/target build keys and versions. Requires shell or a panel-hosting app.",
     args: z.tuple([]),

@@ -34,25 +34,30 @@ async function shellStatus(app: ElectronApplication): Promise<{
   hasOperationFailure: boolean;
 }> {
   return app.evaluate(async ({ webContents }) => {
-    let buildingCount = 0;
-    let hasOperationFailure = false;
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const status = await contents.executeJavaScript(
+    const contents = webContents
+      .getAllWebContents()
+      .find(
+        (candidate) => !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
+      );
+    if (!contents) return { buildingCount: 0, hasOperationFailure: false };
+    try {
+      const status = await Promise.race([
+        contents.executeJavaScript(
           `(() => ({
             buildingCount: document.querySelectorAll('.app-tree-spinner,[aria-label="Building"]').length,
             hasOperationFailure: (document.body?.innerText ?? '').includes('A Vibestudio operation failed'),
           }))()`,
           true
-        );
-        buildingCount += Number(status?.buildingCount ?? 0);
-        hasOperationFailure ||= status?.hasOperationFailure === true;
-      } catch {
-        // Non-DOM webContents do not participate in shell status.
-      }
+        ),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
+      ]);
+      return {
+        buildingCount: Number(status?.buildingCount ?? 0),
+        hasOperationFailure: status?.hasOperationFailure === true,
+      };
+    } catch {
+      return { buildingCount: 0, hasOperationFailure: false };
     }
-    return { buildingCount, hasOperationFailure };
   });
 }
 

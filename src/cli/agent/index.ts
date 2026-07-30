@@ -471,12 +471,23 @@ async function logs(inv: ParsedInvocation): Promise<number> {
       }
       options.limit = limit;
     }
-    const workspace = typedClient(
-      "workspace",
-      workspaceMethods,
+    const runtime = typedClient(
+      "runtime",
+      runtimeMethods,
       new RpcClient(requireWorkspaceCredentials())
     );
-    const records = await workspace.units.logs(unit, options);
+    const matches = (await runtime.supervision.list()).filter(
+      (entry) =>
+        entry.identity.entityId === unit || entry.source === unit || entry.displayName === unit
+    );
+    if (matches.length !== 1) {
+      throw new UsageError(
+        matches.length === 0
+          ? `No running executable entity matches ${unit}`
+          : `Executable entity selector is ambiguous: ${unit}`
+      );
+    }
+    const records = await runtime.supervision.logs(matches[0]!.identity, options);
     printResult(records, { json });
     return 0;
   } catch (error) {
@@ -504,31 +515,32 @@ async function diag(inv: ParsedInvocation): Promise<number> {
       }
       options.limit = limit;
     }
-    const workspace = typedClient(
-      "workspace",
-      workspaceMethods,
+    const runtime = typedClient(
+      "runtime",
+      runtimeMethods,
       new RpcClient(requireWorkspaceCredentials())
     );
-    const result = await workspace.units.diagnostics(unit, options);
+    const matches = (await runtime.supervision.list()).filter(
+      (entry) =>
+        entry.identity.entityId === unit || entry.source === unit || entry.displayName === unit
+    );
+    if (matches.length !== 1) {
+      throw new UsageError(
+        matches.length === 0
+          ? `No running executable entity matches ${unit}`
+          : `Executable entity selector is ambiguous: ${unit}`
+      );
+    }
+    const result = await runtime.supervision.health(matches[0]!.identity, options);
     if (json) {
       printResult(result, { json });
       return 0;
     }
     const ts = (ms: number) => new Date(ms).toISOString();
-    if (result.unit) {
-      console.log(`${result.unit.name} (${result.unit.kind}) — status: ${result.unit.status}`);
-      if (result.unit.lastError) console.log(`last error: ${result.unit.lastError}`);
-    } else {
-      console.log(`${unit} — unit not found in workspace (showing raw diagnostics)`);
-    }
-    const builds = result.builds;
-    if (builds.length > 0) {
-      console.log("\nrecent builds:");
-      for (const event of builds.slice(-10)) {
-        const suffix = event.type === "build-error" ? ` — ${event.error}` : "";
-        console.log(`  ${event.timestamp}  ${event.type}${suffix}`);
-      }
-    }
+    console.log(
+      `${result.entity.identity.entityId} (${result.entity.identity.kind}) — status: ${result.entity.status}`
+    );
+    if (result.entity.lastError) console.log(`last error: ${result.entity.lastError}`);
     if (result.errors.length > 0) {
       console.log("\nrecent errors:");
       for (const entry of result.errors.slice(-20)) {
@@ -541,7 +553,7 @@ async function diag(inv: ParsedInvocation): Promise<number> {
         console.log(`  ${ts(entry.timestamp)}  [${entry.level}] ${entry.message}`);
       }
     }
-    if (builds.length === 0 && result.errors.length === 0 && result.logs.length === 0) {
+    if (result.errors.length === 0 && result.logs.length === 0) {
       console.log("no diagnostics recorded for this unit");
     }
     return 0;

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
+import { workspaceConfigDigest } from "@vibestudio/workspace/preparedConfig";
 import {
   createWorkspaceConfigMainWriter,
   renderWorkspaceConfigYaml,
@@ -462,5 +463,64 @@ describe("workspaceConfigWriter", () => {
 
     expect(rendered).not.toMatch(/^id:/mu);
     expect(rendered).toContain("defaultRepo: projects/new");
+  });
+
+  it("rejects stale, forged, and out-of-scope prepared config mutations before authoring", async () => {
+    const initialYaml = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`;
+    const semanticCausalCall = configReader(initialYaml);
+    const vcs = {
+      withProtectedMainMutation,
+      ensureContext: vi.fn(async () => mainState),
+      dropContext: vi.fn(async () => undefined),
+      semanticCausalCall,
+      semanticPublishCall: vi.fn(),
+    } as unknown as WorkspaceVcs;
+    const writer = createWorkspaceConfigMainWriter({ workspaceId: WORKSPACE_ID, vcs });
+    const ctx = {
+      caller: createVerifiedCaller("shell:dev", "shell"),
+      requestId: "request:prepared-config",
+      authorization: INTERNAL_AUTHORIZATION,
+    } satisfies ServiceContext;
+    const current = {
+      id: WORKSPACE_ID,
+      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    };
+    const next = { ...current, defaultRepo: "projects/new" };
+
+    await expect(
+      writer.applyPrepared({
+        ctx,
+        expectedBaseDigest: "v1-sha256:".padEnd(74, "0"),
+        nextState: next,
+        resultDigest: workspaceConfigDigest(next),
+        allowedPathScope: ["defaultRepo"],
+        summary: "stale mutation",
+      })
+    ).rejects.toThrow(/base is stale/);
+
+    await expect(
+      writer.applyPrepared({
+        ctx,
+        expectedBaseDigest: workspaceConfigDigest(current),
+        nextState: next,
+        resultDigest: "v1-sha256:".padEnd(74, "f"),
+        allowedPathScope: ["defaultRepo"],
+        summary: "forged mutation",
+      })
+    ).rejects.toThrow(/result digest mismatch/);
+
+    await expect(
+      writer.applyPrepared({
+        ctx,
+        expectedBaseDigest: workspaceConfigDigest(current),
+        nextState: next,
+        resultDigest: workspaceConfigDigest(next),
+        allowedPathScope: ["git.remotes"],
+        summary: "scope escape",
+      })
+    ).rejects.toThrow(/defaultRepo outside its allowed scope/);
+
+    expect(semanticCausalCall.mock.calls.map(([method]) => method)).not.toContain("vcsEdit");
+    expect(vcs.semanticPublishCall).not.toHaveBeenCalled();
   });
 });

@@ -14,7 +14,6 @@ import { z } from "zod";
 
 import {
   openCanonicalSqliteDatabase,
-  type CanonicalSqliteMigrationPlan,
   type CanonicalSqliteSchema,
 } from "@vibestudio/sqlite";
 import {
@@ -166,12 +165,6 @@ const GOVERNANCE_SCHEMA: CanonicalSqliteSchema = {
   ],
 };
 
-/** Version 1 is the first production baseline; future changes append migrations here. */
-const GOVERNANCE_MIGRATION_PLAN: CanonicalSqliteMigrationPlan = {
-  current: GOVERNANCE_SCHEMA,
-  migrations: [],
-};
-
 export interface GovernanceQueryFilter {
   recordKind?: "approval" | "membership";
   userId?: string;
@@ -240,7 +233,7 @@ export class GovernanceLog {
     this.db = new DatabaseSync(databasePath);
     this.db.exec("PRAGMA busy_timeout = 5000");
     try {
-      openCanonicalSqliteDatabase(this.db, GOVERNANCE_MIGRATION_PLAN, {
+      openCanonicalSqliteDatabase(this.db, GOVERNANCE_SCHEMA, {
         description: `governance database ${databasePath}`,
       });
       this.db.exec("PRAGMA journal_mode = WAL");

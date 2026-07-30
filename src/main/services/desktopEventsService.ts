@@ -4,6 +4,7 @@ import {
   createEventsServiceDefinition,
   type EventsServiceDefinitionOptions,
 } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
+import { desktopEventsMethods } from "@vibestudio/service-schemas/desktopEvents";
 
 export interface DesktopEventsServiceDeps extends Omit<
   EventsServiceDefinitionOptions,
@@ -19,6 +20,7 @@ export interface DesktopEventsServiceDeps extends Omit<
 export function createDesktopEventsService(deps: DesktopEventsServiceDeps): ServiceDefinition {
   return createEventsServiceDefinition(deps.eventService, {
     serviceName: "desktopEvents",
+    methods: desktopEventsMethods,
     snapshots: deps.snapshots,
     onWatchOpened: deps.onWatchOpened,
   });

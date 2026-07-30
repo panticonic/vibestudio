@@ -4,6 +4,12 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createCatalogIndex } from "./catalogIndex.js";
 import type { BuildCatalogDeps } from "./buildCatalog.js";
 
+const TEST_OPEN_TIER = {
+  tier: "open" as const,
+  session: "family" as const,
+  rationale: "Explicit catalog fixture",
+};
+
 const blobstore: ServiceDefinition = {
   name: "blobstore",
   description: "Content-addressable blob storage",
@@ -13,21 +19,19 @@ const blobstore: ServiceDefinition = {
       description: "Store a UTF-8 string and return its digest",
       args: z.tuple([z.string()]),
       returns: z.object({ digest: z.string() }),
+      tier: TEST_OPEN_TIER,
     },
     "admin.wipe": {
       description: "Delete everything",
       args: z.tuple([]),
       authority: { principals: ["host"] },
+      tier: TEST_OPEN_TIER,
     },
   },
   handler: async () => undefined,
 };
 
-const testTierLookup = (method: string) =>
-  method.startsWith("blobstore.") || method.startsWith("demo2.")
-    ? { tier: "open" as const, session: "family" as const, rationale: "Explicit catalog fixture" }
-    : null;
-const load = () => ({ definitions: [blobstore], tierLookup: testTierLookup });
+const load = () => ({ definitions: [blobstore] });
 
 describe("createCatalogIndex", () => {
   it("ranks token-overlap hits and filters by caller", () => {
@@ -64,7 +68,7 @@ describe("createCatalogIndex", () => {
 
   it("picks up new definitions without explicit rebuild", () => {
     let defs: ServiceDefinition[] = [blobstore];
-    const index = createCatalogIndex(() => ({ definitions: defs, tierLookup: testTierLookup }));
+    const index = createCatalogIndex(() => ({ definitions: defs }));
     expect(index.get("service:demo2", "server")).toBeNull();
     defs = [
       ...defs,
@@ -72,7 +76,7 @@ describe("createCatalogIndex", () => {
         name: "demo2",
         description: "d",
         authority: { principals: ["host"] },
-        methods: { ping: { args: z.tuple([]) } },
+        methods: { ping: { args: z.tuple([]), tier: TEST_OPEN_TIER } },
         handler: async () => undefined,
       },
     ];
@@ -107,7 +111,7 @@ describe("createCatalogIndex", () => {
 
   it("picks up same-name definition replacements without explicit rebuild", () => {
     let defs: ServiceDefinition[] = [blobstore];
-    const index = createCatalogIndex(() => ({ definitions: defs, tierLookup: testTierLookup }));
+    const index = createCatalogIndex(() => ({ definitions: defs }));
     expect(index.get("service:blobstore.admin.wipe", "panel")).toBeNull();
 
     defs = [
@@ -119,6 +123,7 @@ describe("createCatalogIndex", () => {
             description: "Delete everything, now panel-visible.",
             args: z.tuple([]),
             authority: { principals: ["code", "host"] },
+            tier: TEST_OPEN_TIER,
           },
         },
       },

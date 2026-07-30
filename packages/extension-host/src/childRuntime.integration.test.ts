@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import * as esbuild from "esbuild";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { createNodeProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
 import {
@@ -49,14 +49,30 @@ function makeEnvelope(
 }
 
 describe("extension child runtime process", () => {
+  let childRuntimeBundle = "";
   let root: string | null = null;
   let proc: ProcessAdapter | null = null;
   let server: WebSocketServer | null = null;
   let httpServer: Server | null = null;
 
+  beforeAll(async () => {
+    const result = await esbuild.build({
+      entryPoints: [path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts")],
+      bundle: true,
+      platform: "node",
+      target: "node20",
+      format: "esm",
+      write: false,
+      external: ["@vibestudio/process-adapter"],
+      logLevel: "silent",
+    });
+    childRuntimeBundle = result.outputFiles[0]!.text;
+  });
+
   afterEach(async () => {
     proc?.kill();
     proc = null;
+    for (const client of server?.clients ?? []) client.terminate();
     await new Promise<void>((resolve) => server?.close(() => resolve()) ?? resolve());
     server = null;
     await new Promise<void>((resolve) => httpServer?.close(() => resolve()) ?? resolve());
@@ -68,6 +84,7 @@ describe("extension child runtime process", () => {
   it("starts through the process adapter, reports ready, and handles invoke", async () => {
     root = tempDir();
     const childRuntimePath = path.join(root, "childRuntime.mjs");
+    fs.writeFileSync(childRuntimePath, childRuntimeBundle);
     const extensionDir = path.join(root, "extension");
     fs.mkdirSync(extensionDir, { recursive: true });
     fs.writeFileSync(path.join(extensionDir, "package.json"), '{"type":"module"}');
@@ -96,17 +113,6 @@ describe("extension child runtime process", () => {
         "",
       ].join("\n")
     );
-
-    await esbuild.build({
-      entryPoints: [path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts")],
-      bundle: true,
-      platform: "node",
-      target: "node20",
-      format: "esm",
-      outfile: childRuntimePath,
-      external: ["@vibestudio/process-adapter"],
-      logLevel: "silent",
-    });
 
     const admissionGrant = "extension-admission-grant";
     httpServer = createServer((req, res) => {
@@ -194,10 +200,10 @@ describe("extension child runtime process", () => {
                   envelope: makeEnvelope("main", envelope.from, "server", response),
                 } satisfies WsServerMessage)
               );
-              if (rpc.method === "extensions.log") {
+              if (rpc.method === "runtime.supervision.appendLog") {
                 extensionLogArgs = rpc.args;
               }
-              if (rpc.method === "extensions.ready") {
+              if (rpc.method === "runtime.supervision.reportReady") {
                 resolve({ ws, message: rpc });
               }
             } catch (err) {
@@ -217,14 +223,13 @@ describe("extension child runtime process", () => {
       VIBESTUDIO_EXTENSION_GATEWAY_URL: gatewayUrl,
       VIBESTUDIO_EXTENSION_RPC_TOKEN: "test-token",
     });
-
     const ready = await readyPromise;
     expect(ready.message.args[0]).toEqual({
       methods: ["ping", "callerContext", "targetEcho"],
       providerMethods: { gitInterop: ["providerPing"] },
       hasFetch: false,
     });
-    expect(extensionLogArgs).toEqual(["info", "activated"]);
+    expect(extensionLogArgs).toEqual([{ level: "info", message: "activated" }]);
 
     const requestId = randomUUID();
     const response = await waitForMessage<RpcResponse>((resolve, reject) => {

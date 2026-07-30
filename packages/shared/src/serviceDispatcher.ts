@@ -55,9 +55,7 @@ import {
   receiverAuthorityPolicy,
   standingAgentScopeEligible,
 } from "./authority/receiverAuthorityPolicy.js";
-import { methodTier, type MethodTierDecision } from "./authority/tierTable.js";
-import { resolveMethodTierPolicy } from "./serviceAuthority.js";
-import { hostMethodCapability } from "./authority/hostMethodCapabilities.js";
+import { resolveMethodTierPolicy, type MethodTierPolicy } from "./serviceAuthority.js";
 import { describeCapability } from "./authorityPresentation.js";
 export type { CallerKind } from "./principalKinds.js";
 
@@ -508,8 +506,8 @@ export interface AuthorityChallengePresentation {
   /** Sealed workspace-service categorization. Host-census capabilities ignore
    * caller data and are joined from the static reviewed table instead. */
   authorityVocabulary?: {
-    domain: import("./authority/capabilityDomains.js").AuthorityDomainId;
-    verb: import("./authority/capabilityDomains.js").AuthorityVerb;
+    domain: import("./authority/authorityDomains.js").AuthorityDomainId;
+    verb: import("./authority/authorityDomains.js").AuthorityVerb;
     declaredBy: string;
     substanceKind?: import("./approvals.js").OperationSubstance["kind"];
   };
@@ -611,7 +609,7 @@ export interface HostAuthorityEffect {
   resourceKey: string;
   requirement: import("./authorization.js").AuthorityRequirement;
   tier: "open" | "gated" | "critical";
-  sessionAdmission: MethodTierDecision["session"];
+  sessionAdmission: MethodTierPolicy["session"];
   args: readonly unknown[];
   preparedStateDigest: string;
   challenge?: AuthorityChallengePresentation;
@@ -634,10 +632,8 @@ interface AuthorityAssessmentBaseline {
 export class ServiceDispatcher {
   private handlers = new Map<string, ServiceHandler>();
   private definitions = new Map<string, ServiceDefinition>();
-  private readonly methodTiers = new Map<string, MethodTierDecision>();
+  private readonly methodTiers = new Map<string, MethodTierPolicy>();
   private initialized = false;
-  private readonly tierLookup: (method: string) => MethodTierDecision | null;
-  private readonly capabilityLookup: (method: string) => string | null;
   private authorityAcquirer?: {
     request(input: {
       snapshot: InvocationSnapshot;
@@ -663,7 +659,7 @@ export class ServiceDispatcher {
       signal?: AbortSignal
     ): Promise<{
       state: "decided" | "closed";
-      decision?: "once" | "session" | "task" | "agent" | "lock" | "version" | "deny";
+      decision?: "once" | "session" | "task" | "mission" | "agent" | "lock" | "version" | "deny";
       info?: AcquisitionInfo;
     }>;
     consume(grantId: string): boolean;
@@ -674,7 +670,7 @@ export class ServiceDispatcher {
       resource: ResourceScope;
     }): number;
     invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
-    proposeMissionRevision?(input: {
+    proposeReviewedClosureRevision?(input: {
       snapshot: InvocationSnapshot;
       tier: "gated" | "critical";
       renderedAction: string;
@@ -694,16 +690,6 @@ export class ServiceDispatcher {
       snapshotDigest?: string;
     };
   }) => void | Promise<void>;
-
-  constructor(
-    opts: {
-      tierLookup?: (method: string) => MethodTierDecision | null;
-      capabilityLookup?: (method: string) => string | null;
-    } = {}
-  ) {
-    this.tierLookup = opts.tierLookup ?? methodTier;
-    this.capabilityLookup = opts.capabilityLookup ?? hostMethodCapability;
-  }
 
   setAuthorityAcquirer(acquirer: NonNullable<ServiceDispatcher["authorityAcquirer"]>): void {
     this.authorityAcquirer = acquirer;
@@ -745,8 +731,8 @@ export class ServiceDispatcher {
     requirement: import("./authorization.js").AuthorityRequirement;
     challenge?: AuthorityChallengePresentation;
     sensitivity?: import("./serviceAuthority.js").MethodSensitivity;
-    tier: MethodTierDecision["tier"];
-    sessionAdmission: MethodTierDecision["session"];
+    tier: MethodTierPolicy["tier"];
+    sessionAdmission: MethodTierPolicy["session"];
   }) =>
     | {
         context: AuthorizationContext;
@@ -757,7 +743,7 @@ export class ServiceDispatcher {
         contextId?: string;
         readOnly?: boolean;
         decision?: "once" | "session" | "version";
-        missionChangeRequired?: boolean;
+        reviewedClosureChangeRequired?: boolean;
       }
     | Promise<{
         context: AuthorizationContext;
@@ -768,7 +754,7 @@ export class ServiceDispatcher {
         contextId?: string;
         readOnly?: boolean;
         decision?: "once" | "session" | "version";
-        missionChangeRequired?: boolean;
+        reviewedClosureChangeRequired?: boolean;
       }>;
 
   setAuthorityResolver(
@@ -782,8 +768,8 @@ export class ServiceDispatcher {
       requirement: import("./authorization.js").AuthorityRequirement;
       challenge?: AuthorityChallengePresentation;
       sensitivity?: import("./serviceAuthority.js").MethodSensitivity;
-      tier: MethodTierDecision["tier"];
-      sessionAdmission: MethodTierDecision["session"];
+      tier: MethodTierPolicy["tier"];
+      sessionAdmission: MethodTierPolicy["session"];
     }) =>
       | {
           context: AuthorizationContext;
@@ -794,7 +780,7 @@ export class ServiceDispatcher {
           contextId?: string;
           readOnly?: boolean;
           decision?: "once" | "session" | "version";
-          missionChangeRequired?: boolean;
+          reviewedClosureChangeRequired?: boolean;
         }
       | Promise<{
           context: AuthorizationContext;
@@ -805,7 +791,7 @@ export class ServiceDispatcher {
           contextId?: string;
           readOnly?: boolean;
           decision?: "once" | "session" | "version";
-          missionChangeRequired?: boolean;
+          reviewedClosureChangeRequired?: boolean;
         }>
   ): void {
     this.authorityResolver = resolver;
@@ -860,18 +846,11 @@ export class ServiceDispatcher {
     const usedPreparers = new Set<string>();
     for (const [method, schema] of Object.entries(def.methods)) {
       const qualifiedMethod = `${def.name}.${method}`;
-      const reviewedTier = resolveMethodTierPolicy(
-        qualifiedMethod,
-        schema.tier,
-        this.tierLookup(qualifiedMethod)
-      );
+      const reviewedTier = resolveMethodTierPolicy(qualifiedMethod, schema.tier, null);
       if (!reviewedTier.rationale.trim()) {
         throw new Error(`Service method ${qualifiedMethod} has an empty tier rationale`);
       }
-      if (
-        reviewedTier.tier !== "open" &&
-        !(schema.capability ?? this.capabilityLookup(qualifiedMethod))
-      ) {
+      if (reviewedTier.tier !== "open" && !schema.capability) {
         throw new Error(
           `Promptable service method ${qualifiedMethod} has no reviewed semantic capability`
         );
@@ -1117,9 +1096,7 @@ export class ServiceDispatcher {
       throw new ServiceError(service, method, "Reviewed method tier is unavailable");
     }
     const capabilityName =
-      methodTierDecision.tier === "open"
-        ? transportLabel
-        : (methodDef.capability ?? this.capabilityLookup(`${service}.${method}`));
+      methodTierDecision.tier === "open" ? transportLabel : methodDef.capability;
     if (!capabilityName) {
       throw new ServiceError(
         service,
@@ -1381,7 +1358,9 @@ export class ServiceDispatcher {
         selection.authorizingCaller,
         selection.challenge,
         preflight,
-        tier
+        tier,
+        undefined,
+        selection.receiverAuthority
       );
       if (result) {
         preflightLeaves.push(result.leaf);
@@ -1450,7 +1429,13 @@ export class ServiceDispatcher {
     challenge?: AuthorityChallengePresentation,
     preflight = false,
     tierOverride?: "open" | "gated" | "critical",
-    effectReview?: MethodTierDecision
+    effectReview?: MethodTierPolicy,
+    receiverAuthority?: {
+      capabilityDefinitionDigest: string;
+      resourceType: string;
+      provider: string;
+      providerExecutionDigest: string;
+    }
   ): Promise<{
     leaf: AuthorityPreflightLeaf;
     wouldPrompt?: AuthorityPreflightResult["wouldPrompt"];
@@ -1524,6 +1509,10 @@ export class ServiceDispatcher {
         service,
         method,
         capability,
+        capabilityDefinitionDigest: receiverAuthority?.capabilityDefinitionDigest ?? "-",
+        resourceType: receiverAuthority?.resourceType ?? capability,
+        provider: receiverAuthority?.provider ?? "-",
+        providerExecutionDigest: receiverAuthority?.providerExecutionDigest ?? "-",
         resourceKey,
         args: validatedArgs,
         preparedStateDigest,
@@ -1558,8 +1547,8 @@ export class ServiceDispatcher {
           resolved.context.executionSession?.mode ??
           (resolved.context.testPolicy ? "test" : undefined),
         testPolicyId: resolved.context.testPolicy?.policyId,
-        mission: resolved.context.session.mission
-          ? `mission:${resolved.context.session.mission.missionId}@${resolved.context.session.mission.closureDigest}`
+        reviewedClosureSubject: resolved.context.session.reviewedClosure
+          ? resolved.context.session.reviewedClosure.subject
           : "-",
         snippetDigest:
           resolved.context.authorizingOrigin.kind === "session"
@@ -1689,9 +1678,10 @@ export class ServiceDispatcher {
         locks: resolved.locks,
         tier: reviewedTier,
         invocationDigest: snapshotDigest,
+        providerExecutionDigest: snapshot.providerExecutionDigest,
       });
       const decision =
-        resolved.missionChangeRequired === true
+        resolved.reviewedClosureChangeRequired === true
           ? {
               allowed: false as const,
               code: "mission-change-required" as const,
@@ -1744,7 +1734,7 @@ export class ServiceDispatcher {
       });
       if (decision.code === "mission-change-required") {
         if (!preflight) {
-          await this.authorityAcquirer?.proposeMissionRevision?.({
+          await this.authorityAcquirer?.proposeReviewedClosureRevision?.({
             snapshot,
             tier: reviewedTier === "open" ? "gated" : reviewedTier,
             renderedAction:
@@ -2003,7 +1993,7 @@ function isAuthorityDenial(error: unknown): boolean {
   return code === "EACCES" || code.startsWith("EVAL_");
 }
 
-function reviewedSeverity(tier: MethodTierDecision["tier"]): "routine" | "sensitive" | "critical" {
+function reviewedSeverity(tier: MethodTierPolicy["tier"]): "routine" | "sensitive" | "critical" {
   return tier === "critical" ? "critical" : tier === "gated" ? "sensitive" : "routine";
 }
 

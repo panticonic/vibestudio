@@ -57,6 +57,25 @@ export type CorsApprovalResult = z.infer<typeof corsApprovalResultSchema>;
 
 export const corsApprovalMethods = defineServiceMethods({
   authorize: {
+    capability: "network.response.read",
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "corsApproval.control",
+      rationale:
+        "The transport is open to declared code; its exact target origin is a prepared gated network.response.read leaf",
+    },
+    presentation: {
+      title: "Let workspace apps read website responses",
+      action: "let workspace apps read website responses",
+      description: "Allows {requesterKind} to let workspace apps read website responses.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
     description:
       "Request approval to read CORS-protected responses from a target origin; may prompt the user and returns whether access was granted (with the persisted decision scope).",
     args: z.tuple([authorizeCorsSchema]),

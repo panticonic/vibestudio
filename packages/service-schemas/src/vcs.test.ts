@@ -1148,18 +1148,18 @@ describe("walkable bounded reads", () => {
     expect(
       vcsListDirectoryInputSchema.parse({
         state: event,
-        path: "packages/runtime",
+        path: "workspace/packages/runtime",
         limit: 100,
       })
-    ).toMatchObject({ path: "packages/runtime" });
+    ).toMatchObject({ path: "workspace/packages/runtime" });
     expect(
       vcsListDirectoryResultSchema.parse({
         state: event,
-        path: "packages/runtime",
+        path: "workspace/packages/runtime",
         entries: [
           {
             name: "src",
-            path: "packages/runtime/src",
+            path: "workspace/packages/runtime/src",
             kind: "directory",
             identity: "directory:runtime:src",
             repositoryId: "repository:runtime",

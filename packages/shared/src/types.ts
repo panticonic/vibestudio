@@ -5,6 +5,7 @@ import type { CapabilityScope } from "@vibestudio/rpc";
 import type { UnitAuthorityManifest } from "./authorityManifest.js";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 import type { PanelFailureCode } from "./panel/observation.js";
+import type { AppCapability, WorkspaceAppTarget } from "./unitManifest.js";
 
 // Re-export types for consumers of this module
 export type { StateArgsSchema, StateArgsValue };
@@ -62,6 +63,13 @@ export interface PackageManifest {
   worker?: Record<string, unknown>;
   /** Future shared manifest discriminator for panel units. */
   panel?: Record<string, unknown>;
+  /** Native host app contract, validated by the app manifest descriptor. */
+  app?: {
+    target: WorkspaceAppTarget;
+    capabilities?: AppCapability[];
+    renderer?: string;
+    preload?: string;
+  };
   // ----- Panel-only fields -----
   /** Top-level package.json dependencies merged in by `loadPanelManifest`. */
   dependencies?: Record<string, string>;
@@ -93,7 +101,13 @@ export interface PackageManifest {
   framework?: string;
   // ----- Worker-only fields -----
   /** Durable Object classes exported by this worker (workers only). */
-  durable?: { classes: Array<{ className: string }> };
+  durable?: {
+    classes: Array<{
+      className: string;
+      /** Stable host-reviewed typed receiver contract used by build discovery. */
+      rpcSchema?: string;
+    }>;
+  };
   /**
    * Marks this worker as a selectable chat agent and supplies gallery metadata.
    * Presence of this block is what distinguishes chat-agent DOs from service DOs
@@ -234,11 +248,7 @@ export interface PanelRuntimeStatus {
   connectionId?: string;
 }
 
-export type PanelLifecycleOperation =
-  | "reload"
-  | "rebuild"
-  | "unload"
-  | "close";
+export type PanelLifecycleOperation = "reload" | "rebuild" | "unload" | "close";
 
 export interface PanelLifecycleResult {
   panelId: string;
@@ -249,6 +259,7 @@ export interface PanelLifecycleResult {
   reloaded: boolean;
   buildRevision?: number;
   effectiveVersion?: string | null;
+  closedCount?: number;
 }
 
 export interface PanelExplicitState {
@@ -390,7 +401,6 @@ export interface Panel {
 
   // Tree structure
   children: Panel[];
-  positionId?: string;
   selectedChildId?: string | null;
   snapshot: PanelSnapshot;
   history?: PanelSnapshotHistory;
@@ -415,22 +425,6 @@ export interface WorkspaceEntry {
   workspaceId: string;
   name: string;
   lastOpened: number;
-}
-
-/**
- * Simplified model role config for IPC (string format only).
- * Full ModelConfig objects are converted to "provider:model" strings.
- */
-export interface ModelRoleConfig {
-  smart?: string;
-  coding?: string;
-  fast?: string;
-  cheap?: string;
-  [key: string]: string | undefined;
-}
-
-export interface SettingsData {
-  modelRoles: ModelRoleConfig;
 }
 
 /** Actions available in panel context menus */
@@ -462,15 +456,17 @@ export type PanelContextMenuAction =
 // =============================================================================
 
 /**
- * Request to move a panel to a new parent at a specific position.
+ * Request to move a panel using stable neighboring siblings.
  * Used for drag-and-drop reordering and reparenting.
  */
 export interface MovePanelRequest {
   panelId: string;
   /** New parent ID, or null to make it a root panel */
   newParentId: string | null;
-  /** Target position among siblings (0-indexed) */
-  targetPosition: number;
+  /** Sibling immediately before the moved panel, if any. */
+  beforePanelId?: string | null;
+  /** Sibling immediately after the moved panel, if any. */
+  afterPanelId?: string | null;
 }
 
 /**

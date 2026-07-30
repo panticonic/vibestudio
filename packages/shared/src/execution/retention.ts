@@ -6,7 +6,6 @@ export type ExecutionOwnerKind =
   | "panel-history"
   | "app-generation"
   | "extension-generation"
-  | "host-target-selection"
   | "terminal-app"
   | "runtime-image"
   | "eval-run"
@@ -25,9 +24,10 @@ export interface ExecutionSourceContentRoot {
   readonly stateHash: string;
 }
 
-export type ExecutionSemanticStateRef =
+export type ExecutionSourceStateRef =
   | { readonly kind: "event"; readonly eventId: string }
-  | { readonly kind: "application"; readonly applicationId: string };
+  | { readonly kind: "application"; readonly applicationId: string }
+  | { readonly kind: "bootstrap-snapshot"; readonly snapshotHash: string };
 
 interface ExecutionSourceIdentityBaseV1 {
   readonly workspaceId: string;
@@ -39,7 +39,7 @@ interface ExecutionSourceIdentityBaseV1 {
 export type ExecutionSourceIdentityV1 =
   | (ExecutionSourceIdentityBaseV1 & {
       readonly kind: "workspace";
-      readonly state: ExecutionSemanticStateRef;
+      readonly state: ExecutionSourceStateRef;
     })
   | (ExecutionSourceIdentityBaseV1 & {
       readonly kind: "product-seed";
@@ -124,6 +124,32 @@ export async function publishExecutionOwnerAsync<T>(
 
 const STATE_HASH = /^state:[0-9a-f]{64}$/u;
 
+function canonicalExecutionSourceState(
+  state: ExecutionSourceStateRef,
+  contentRoots: readonly ExecutionSourceContentRoot[]
+): ExecutionSourceStateRef {
+  switch (state.kind) {
+    case "event":
+      if (!state.eventId) throw new Error("Execution event source identity is required");
+      return { kind: "event", eventId: state.eventId };
+    case "application":
+      if (!state.applicationId) {
+        throw new Error("Execution application source identity is required");
+      }
+      return { kind: "application", applicationId: state.applicationId };
+    case "bootstrap-snapshot":
+      if (!STATE_HASH.test(state.snapshotHash)) {
+        throw new Error("Execution bootstrap snapshot is not a canonical state hash");
+      }
+      if (contentRoots.some((root) => root.stateHash !== state.snapshotHash)) {
+        throw new Error("Execution bootstrap snapshot does not match its content roots");
+      }
+      return { kind: "bootstrap-snapshot", snapshotHash: state.snapshotHash };
+    default:
+      throw new Error("Unsupported workspace execution source state");
+  }
+}
+
 export function canonicalExecutionSourceRoots(
   roots: readonly ExecutionSourceContentRoot[]
 ): readonly ExecutionSourceContentRoot[] {
@@ -177,7 +203,7 @@ export function executionArtifactDigest(ref: UnsignedExecutionArtifactRefV1): Sh
             ref.sourceState.effectiveVersion,
             "execution source effective version"
           ),
-          state: ref.sourceState.state,
+          state: canonicalExecutionSourceState(ref.sourceState.state, contentRoots),
           contentRoots,
           sourceClosureDigest: parseSha256(
             ref.sourceState.sourceClosureDigest,
@@ -216,7 +242,7 @@ export function verifyExecutionArtifactRef(ref: ExecutionArtifactRefV1): Executi
   const contentRoots = canonicalExecutionSourceRoots(ref.sourceState.contentRoots);
   if (!ref.sourceState.workspaceId) throw new Error("Execution source workspaceId is required");
   if (ref.sourceState.kind === "workspace" && !ref.sourceState.state) {
-    throw new Error("Workspace execution semantic source state is required");
+    throw new Error("Workspace execution source state is required");
   }
   if (
     ref.sourceState.kind === "product-seed" &&
@@ -246,7 +272,7 @@ export function verifyExecutionArtifactRef(ref: ExecutionArtifactRefV1): Executi
           kind: "workspace",
           workspaceId: ref.sourceState.workspaceId,
           effectiveVersion,
-          state: ref.sourceState.state,
+          state: canonicalExecutionSourceState(ref.sourceState.state, contentRoots),
           contentRoots,
           sourceClosureDigest,
         }

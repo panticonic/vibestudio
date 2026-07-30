@@ -2,7 +2,7 @@
  * Canonical JSON — key-sorted, undefined-dropping JSON serialization used for
  * every content-tree hash (worktree manifests, state hashes, tree objects).
  *
- * HOST-OWNED VERBATIM PORT of packages/agentic-protocol/src/
+ * HOST-OWNED VERBATIM PORT of workspace/packages/agentic-protocol/src/
  * canonical-json.ts. The gad-store DO (workerd) keeps its own copy; the two
  * MUST agree byte-for-byte — contentTree/worktreeHash.test.ts pins golden
  * vectors generated from the workspace implementation. Do not "improve" the

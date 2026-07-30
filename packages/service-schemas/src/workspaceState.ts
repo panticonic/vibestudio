@@ -3,9 +3,9 @@
  * entity.* on WorkspaceDO. Pure-data wire contract shared by the server
  * registration and typed clients.
  *
- * Reads (panelTree.snapshot, slot.list/get/history, and entity resolution) are
- * open to all runtime kinds; writes (slot create / commitPreparedNavigation /
- * setParent / close) are gated to the shipped shell, approved shell app, and
+ * Bounded tree queries, addressed slot reads, and entity resolution are open
+ * to all runtime kinds; writes (slot create / commitPreparedNavigation /
+ * move / close) are gated to the shipped shell, approved shell app, and
  * server. Panels and workers manipulate slots via runtime.*, not directly here.
  */
 
@@ -13,6 +13,23 @@ import { z } from "zod";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { UnitAuthorityManifestSchema } from "./build.js";
+import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
+
+const WORKSPACE_RUNTIME_STATE_PRESENTATION = {
+  title: "Manage running workspace services",
+  action: "manage apps, panels, background tasks, and scheduled work that's currently running",
+  description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+  group: "workspace",
+  authorityCategory: { domain: "automation", verb: "manage" },
+} as const;
+
+const WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION = {
+  title: "Inspect running workspace services",
+  action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+  description: "Read the current structure and status of running workspace services",
+  group: "workspace",
+  authorityCategory: { domain: "automation", verb: "see" },
+} as const;
 
 export const SlotHistoryEntryInputSchema = z.object({
   entryKey: z.string(),
@@ -43,7 +60,13 @@ export const SlotCommitPreparedNavigationResultSchema = z.object({
 export const SlotCreateInputSchema = z.object({
   slotId: z.string(),
   parentSlotId: z.string().nullable(),
-  positionId: z.string(),
+  placement: z
+    .object({
+      beforeSlotId: z.string().nullable().optional(),
+      afterSlotId: z.string().nullable().optional(),
+    })
+    .strict()
+    .optional(),
   initialEntry: SlotHistoryEntryInputSchema.optional(),
 });
 
@@ -104,7 +127,9 @@ export const SlotRowSchema = z.object({
   current_entity_id: z.string().nullable(),
   current_entity_title: z.string().nullable().optional(),
   current_entry_key: z.string().nullable(),
-  position_id: z.string(),
+  current_history_cursor: z.number().int().nonnegative().nullable().optional(),
+  history_count: z.number().int().nonnegative().optional(),
+  sort_key: z.number().int(),
   owner_user_id: z.string().nullable().optional(),
   created_at: z.number(),
   closed_at: z.number().nullable(),
@@ -145,43 +170,271 @@ export const EntityRecordSchema = z.object({
   error: z.string().optional(),
 });
 
-export const PanelTreeStateSnapshotSchema = z.object({
-  revision: z.number().int().nonnegative(),
-  slots: z.array(SlotRowSchema),
-  histories: z.array(SlotHistoryRowSchema),
-  entities: z.array(EntityRecordSchema),
-});
+export const PanelDetailSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    slot: SlotRowSchema,
+    currentHistory: SlotHistoryRowSchema,
+    entity: EntityRecordSchema,
+  })
+  .strict();
+
+const PanelTreeGroupSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("roots"), ownerUserId: z.string().nullable() }).strict(),
+  z.object({ kind: z.literal("children"), parentSlotId: z.string() }).strict(),
+]);
+
+const PanelTreeNodeSchema = z
+  .object({
+    slotId: z.string(),
+    parentSlotId: z.string().nullable(),
+    ownerUserId: z.string().nullable(),
+    title: z.string(),
+    createdAt: z.number(),
+    childCount: z.number().int().nonnegative(),
+    source: z.string().optional(),
+    kind: z.enum(["workspace", "browser"]).optional(),
+    contextId: z.string().optional(),
+    runtimeEntityId: z.string().nullable().optional(),
+    effectiveVersion: z.string().nullable().optional(),
+    buildKey: z.string().nullable().optional(),
+    ref: z.string().nullable().optional(),
+    placement: z
+      .object({
+        disposition: z.enum(["side", "replace", "split-below"]).optional(),
+        preferredWidth: z.number().positive().optional(),
+        minWidth: z.number().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const PanelTreePageInputSchema = z
+  .object({
+    group: PanelTreeGroupSchema,
+    cursor: z.string().optional(),
+    limit: z.number().int().positive().max(200).optional(),
+  })
+  .strict();
+
+export const PanelTreePageSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    group: PanelTreeGroupSchema,
+    nodes: z.array(PanelTreeNodeSchema),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+
+export const PanelTreeRootGroupsInputSchema = z
+  .object({
+    cursor: z.string().optional(),
+    limit: z.number().int().positive().max(200).optional(),
+  })
+  .strict();
+
+export const PanelTreeRootGroupsSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    groups: z.array(
+      z
+        .object({
+          ownerUserId: z.string().nullable(),
+          rootCount: z.number().int().nonnegative(),
+        })
+        .strict()
+    ),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+
+export const PanelTreePathSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    nodes: z.array(PanelTreeNodeSchema),
+  })
+  .strict();
+
+export const PanelTreeSearchInputSchema = z
+  .object({
+    query: z.string().trim().min(1).max(2_000),
+    cursor: z.string().optional(),
+    limit: z.number().int().positive().max(200).optional(),
+  })
+  .strict();
+
+export const PanelTreeSearchPageSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    hits: z.array(
+      z
+        .object({
+          node: PanelTreeNodeSchema,
+          ancestors: z.array(PanelTreeNodeSchema),
+          ancestorsTruncated: z.boolean().optional(),
+        })
+        .strict()
+    ),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+
+export const PanelTreePlacementSchema = z
+  .object({
+    beforeSlotId: z.string().nullable().optional(),
+    afterSlotId: z.string().nullable().optional(),
+  })
+  .strict();
 
 export const workspaceStateMethods = defineServiceMethods({
-  "panelTree.snapshot": {
-    args: z.tuple([]),
-    description: "Read one revisioned, internally consistent panel-tree reconstruction snapshot.",
+  "panelTree.rootGroups": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Bounded durable ownership census over the builtin slot topology used to select an exact account forest",
+    },
+    args: z.tuple([PanelTreeRootGroupsInputSchema]),
+    description: "Keyset-page the owner groups that currently contain open root panels.",
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
-    returns: PanelTreeStateSnapshotSchema,
+    returns: PanelTreeRootGroupsSchema,
   },
-  "slot.list": {
-    args: z.tuple([]),
-    description: "List open slots.",
+  "panelTree.page": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Bounded durable parent/child and ownership projection from the builtin slot identity authority",
+    },
+    args: z.tuple([PanelTreePageInputSchema]),
+    description: "Read one bounded, newest-first sibling page.",
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
-    returns: z.array(SlotRowSchema),
+    returns: PanelTreePageSchema,
+  },
+  "panelTree.path": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Bounded durable ancestry projection used to preserve the exact slot ownership and context boundary",
+    },
+    args: z.tuple([z.string()]),
+    description: "Read the bounded root-to-slot path for one open panel.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: PanelTreePathSchema.nullable(),
+  },
+  "panelTree.detail": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Exact durable slot/history/entity join used to attest the active panel identity and context",
+    },
+    args: z.tuple([z.string()]),
+    description: "Read the current runtime detail for one open panel without its siblings/history.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: PanelDetailSchema.nullable(),
+  },
+  "panelTree.search": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale:
+        "Exact typed proxy to the builtin topology owner for one bounded indexed presentation query",
+    },
+    args: z.tuple([PanelTreeSearchInputSchema]),
+    description: "Keyset-page full-text title matches with their ancestor breadcrumbs.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: PanelTreeSearchPageSchema,
   },
   "slot.get": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "The stable slot-to-entity/context binding is an input to caller ancestry and context-boundary enforcement",
+    },
     args: z.tuple([z.string()]),
     description: "Get a single slot row by id.",
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: SlotRowSchema.nullable(),
   },
-  "slot.history": {
-    args: z.tuple([z.string()]),
-    description: "Get the history for a slot.",
+  "slot.historyRelative": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale:
+        "Exact typed proxy to the builtin topology owner for one bounded adjacent-history read",
+    },
+    args: z.tuple([z.string(), z.union([z.literal(-1), z.literal(1)])]),
+    description: "Read the adjacent history entry relative to a slot's current cursor.",
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
-    returns: z.array(SlotHistoryRowSchema),
+    returns: SlotHistoryRowSchema.nullable(),
+  },
+  "slot.historyEntry": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "The exact stored destination context is an input to context-boundary enforcement before history selection",
+    },
+    args: z.tuple([z.string(), z.string()]),
+    description: "Read one exact history entry belonging to a slot.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: SlotHistoryRowSchema.nullable(),
   },
   "entity.resolveActive": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "The active entity incarnation is an input to runtime attestation and caller identity",
+    },
     args: z.tuple([z.string()]),
     description: "Resolve a single active entity record by id.",
     authority: WORKSPACE_STATE_READ_POLICY,
@@ -189,6 +442,16 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: EntityRecordSchema.nullable(),
   },
   "entity.resolve": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "The reserved or active entity incarnation is an input to runtime attestation and caller identity",
+    },
     args: z.tuple([z.string()]),
     description: "Resolve an entity record by id, including a preparing reservation.",
     authority: WORKSPACE_STATE_READ_POLICY,
@@ -196,6 +459,16 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: EntityRecordSchema.nullable(),
   },
   "slot.resolveByEntity": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "The entity-to-slot binding determines runtime ancestry and the context-boundary target",
+    },
     args: z.tuple([z.string()]),
     description:
       "Resolve the OPEN slot id whose current entity is the given runtime-entity (nav) id, or null. " +
@@ -205,56 +478,218 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.string().nullable(),
   },
   "slot.create": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Creating a stable slot records the ownership and ancestry identity used by panel access enforcement",
+    },
     args: z.tuple([SlotCreateInputSchema]),
     description: "Create a new slot row.",
-    authority: WORKSPACE_STATE_WRITE_POLICY,
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "slot.create",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "openPanel",
+      targetPath: ["parentSlotId"],
+      tier: "gated",
+    }),
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "slot.commitPreparedNavigation": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "The prepared commit atomically changes the slot-to-entity/context identity consumed by access enforcement",
+    },
     args: z.tuple([SlotCommitPreparedNavigationInputSchema]),
     description:
       "Atomically append, replace, or select history and swap current to a prepared panel incarnation.",
-    authority: WORKSPACE_STATE_WRITE_POLICY,
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "slot.commitPreparedNavigation",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "replacePanel",
+      targetPath: ["slotId"],
+      requestedContextPath: ["mutation", "entry", "contextId"],
+      requestedContextLookup: {
+        method: "slotHistoryEntry",
+        arguments: [
+          { argument: 0, path: ["slotId"] },
+          { argument: 0, path: ["mutation", "entryKey"] },
+        ],
+        resultPath: ["context_id"],
+      },
+      tier: "gated",
+    }),
     access: { sensitivity: "write" },
     returns: SlotCommitPreparedNavigationResultSchema,
   },
   "slot.updateCurrentStateArgs": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale:
+        "Exact typed proxy to the builtin topology owner for one receiver-validated current-entry update",
+    },
     args: z.tuple([z.string(), z.unknown()]),
     description: "Mutate the stateArgs for a slot's current history entry.",
-    authority: WORKSPACE_STATE_WRITE_POLICY,
-    access: { sensitivity: "write" },
-    returns: z.void(),
-  },
-  "slot.setParent": {
-    args: z.tuple([z.string(), z.string().nullable()]),
-    description: "Reparent a slot.",
-    authority: WORKSPACE_STATE_WRITE_POLICY,
-    access: { sensitivity: "write" },
-    returns: z.void(),
-  },
-  "slot.setPosition": {
-    args: z.tuple([z.string(), z.string()]),
-    description: "Update a slot's position rank.",
-    authority: WORKSPACE_STATE_WRITE_POLICY,
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "slot.updateCurrentStateArgs",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "updatePanelState",
+      tier: "gated",
+    }),
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "slot.move": {
-    args: z.tuple([z.string(), z.string().nullable(), z.string()]),
-    description: "Atomically update a slot's parent and position.",
-    authority: WORKSPACE_STATE_WRITE_POLICY,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Reparenting changes stable panel ancestry and owning-user identity consumed by access enforcement",
+    },
+    args: z.tuple([z.string(), z.string().nullable(), PanelTreePlacementSchema.optional()]),
+    description: "Atomically reparent a slot and place it using stable sibling anchors.",
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "slot.move",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "movePanel",
+      tier: "gated",
+    }),
     access: { sensitivity: "write" },
     returns: z.void(),
   },
   "slot.close": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Closing a subtree retires its stable ownership and ancestry identities atomically",
+    },
     args: z.tuple([z.string()]),
-    description: "Mark a slot closed.",
+    description:
+      "Atomically close a subtree and enqueue its runtime cleanup without materializing descendants.",
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "slot.close",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "close",
+      tier: "gated",
+    }),
+    access: { sensitivity: "destructive" },
+    returns: z
+      .object({ closeId: z.string(), closedCount: z.number().int().nonnegative() })
+      .strict(),
+  },
+  "slot.closeCleanupPage": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.cleanup",
+      rationale: "Bounded durable retirement work is consumed by the runtime cleanup supervisor",
+    },
+    args: z.tuple([
+      z
+        .object({
+          closeId: z.string().optional(),
+          ownerUserId: z.string().nullable().optional(),
+          cursor: z.string().optional(),
+          limit: z.number().int().positive().max(200).optional(),
+        })
+        .strict(),
+    ]),
+    description: "Read one bounded page of durable post-close runtime cleanup work.",
+    authority: WORKSPACE_STATE_WRITE_POLICY,
+    access: { sensitivity: "destructive" },
+    returns: z
+      .object({
+        items: z.array(z.object({ slotId: z.string(), entityId: z.string().nullable() }).strict()),
+        nextCursor: z.string().nullable(),
+      })
+      .strict(),
+  },
+  "slot.closeOwnedRoots": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Account revocation atomically closes only roots carrying the revoked durable owner identity",
+    },
+    args: z.tuple([z.string().min(1)]),
+    description: "Close every open root owned by one revoked workspace user.",
+    authority: { principals: ["host"] },
+    access: { sensitivity: "destructive" },
+    returns: z
+      .object({
+        rootIds: z.array(z.string()),
+        closedIds: z.array(z.string()),
+      })
+      .strict(),
+  },
+  "slot.closeCleanupAck": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.cleanup",
+      rationale: "Acknowledgement advances the durable runtime cleanup supervisor queue",
+    },
+    args: z.tuple([z.array(z.string()).max(200)]),
+    description: "Acknowledge successfully completed post-close cleanup items.",
     authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "destructive" },
     returns: z.void(),
   },
   "panel.search": {
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Workspace-member panel-index read; no C1-C4 or G1-G5 rule applies",
+    },
     args: z.tuple([z.string(), z.number().optional()]),
     description: "FTS5 search over panel entities.",
     authority: WORKSPACE_STATE_READ_POLICY,
@@ -262,6 +697,15 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.array(PanelSearchResultSchema),
   },
   "panel.index": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "G5: host infrastructure plumbing; §2 default {code, session} family",
+    },
     args: z.tuple([
       z.object({
         id: z.string(),
@@ -276,16 +720,46 @@ export const workspaceStateMethods = defineServiceMethods({
     description: "Upsert a panel's search-metadata row.",
     authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
-    returns: z.void(),
+    returns: z.string().nullable(),
   },
   "panel.updateTitle": {
-    args: z.tuple([z.string(), z.string()]),
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale:
+        "Exact typed proxy to the builtin topology owner for one slot-bound presentation update",
+    },
+    args: z.tuple([
+      z.string(),
+      z.string(),
+      z.object({ explicit: z.boolean().optional() }).strict().optional(),
+    ]),
     description: "Update the searchable title for a panel entity.",
-    authority: WORKSPACE_STATE_WRITE_POLICY,
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "panel.updateTitle",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "updatePanelState",
+      tier: "gated",
+    }),
     access: { sensitivity: "write" },
-    returns: z.void(),
+    returns: z.string().nullable(),
   },
   "panel.incrementAccess": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "G5: host infrastructure plumbing; §2 default {code, session} family",
+    },
     args: z.tuple([z.string()]),
     description: "Bump the access counter for a panel entity.",
     authority: WORKSPACE_STATE_WRITE_POLICY,
@@ -293,6 +767,15 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "panel.rebuildIndex": {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "G5: host infrastructure plumbing; §2 default {code, session} family",
+    },
     args: z.tuple([]),
     description: "Rebuild the panel-search index from active panel entities.",
     authority: WORKSPACE_STATE_WRITE_POLICY,
@@ -300,6 +783,16 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   lifecycleLeaseUpsert: {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.supervision",
+      rationale:
+        "Runtime-intrinsic self-lease tracking is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+    },
     args: z.tuple([LifecycleLeaseSchema]),
     description: "Mark a Durable Object as having active checkpointable work.",
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
@@ -307,6 +800,16 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   lifecycleLeaseClear: {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.supervision",
+      rationale:
+        "Runtime-intrinsic self-lease cleanup is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+    },
     args: z.tuple([LifecycleKeySchema]),
     description: "Clear a Durable Object active-work lease.",
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
@@ -314,6 +817,16 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   alarmSet: {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.supervision",
+      rationale:
+        "Runtime-intrinsic self-alarm scheduling is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+    },
     args: z.tuple([AlarmSetSchema]),
     description: "Register/replace a Durable Object's server-driven wake time.",
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
@@ -321,6 +834,16 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   alarmClear: {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.supervision",
+      rationale:
+        "Runtime-intrinsic self-alarm cleanup is not discretionary authority; the receiver requires an exact DO lifecycle-key match or a host-originated call",
+    },
     args: z.tuple([LifecycleKeySchema]),
     description: "Clear a Durable Object's pending server-driven alarm.",
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
@@ -328,6 +851,15 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   heartbeatRegister: {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "The durable heartbeat row schedules and supervises a reviewed recurring runtime",
+    },
     args: z.tuple([HeartbeatRegistryRowSchema]),
     description: "Register or update an agent heartbeat registry row.",
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
@@ -335,6 +867,15 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   heartbeatRemove: {
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Removing the durable heartbeat row retires a reviewed recurring runtime schedule",
+    },
     args: z.tuple([z.object({ name: z.string().min(1) })]),
     description: "Remove an agent heartbeat registry row.",
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,

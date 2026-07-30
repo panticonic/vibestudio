@@ -92,10 +92,10 @@ describe("TypeCheckService workspace resolution", () => {
   it("resolves a workspace package from its source via the workspace context map", () => {
     // Build a minimal pnpm-workspace-style monorepo:
     //   <root>/pnpm-workspace.yaml           (packages: ["packages/*"])
-    //   <root>/packages/runtime/package.json (name: "@vibestudio/runtime", exports: ./src/index.ts)
-    //   <root>/packages/runtime/src/index.ts (exports RuntimeThing)
+    //   <root>/workspace/packages/runtime/package.json (name: "@workspace/runtime", exports: ./src/index.ts)
+    //   <root>/workspace/packages/runtime/src/index.ts (exports RuntimeThing)
     //   <root>/packages/consumer/package.json
-    //   <root>/packages/consumer/index.ts    (imports @vibestudio/runtime)
+    //   <root>/packages/consumer/index.ts    (imports @workspace/runtime)
     const root = createTempDir("typecheck-service-workspace-");
 
     writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
@@ -105,7 +105,7 @@ describe("TypeCheckService workspace resolution", () => {
       path.join(root, "packages", "runtime", "package.json"),
       JSON.stringify(
         {
-          name: "@vibestudio/runtime",
+          name: "@workspace/runtime",
           type: "module",
           exports: { ".": "./src/index.ts" },
         },
@@ -127,7 +127,7 @@ describe("TypeCheckService workspace resolution", () => {
     writeFile(
       consumerFile,
       [
-        'import type { RuntimeThing } from "@vibestudio/runtime";',
+        'import type { RuntimeThing } from "@workspace/runtime";',
         "const value: RuntimeThing = { ok: true };",
         "void value;",
       ].join("\n")
@@ -347,11 +347,11 @@ describe("TypeCheckService extension augmentation", () => {
       ].join("\n")
     );
 
-    // @vibestudio/runtime: generic extension client only.
+    // @workspace/runtime: generic extension client only.
     writeFile(
       path.join(root, "packages", "runtime", "package.json"),
       JSON.stringify({
-        name: "@vibestudio/runtime",
+        name: "@workspace/runtime",
         type: "module",
         exports: { ".": "./src/index.ts" },
       })
@@ -370,7 +370,7 @@ describe("TypeCheckService extension augmentation", () => {
     writeFile(
       panelFile,
       [
-        'import { use } from "@vibestudio/runtime";',
+        'import { use } from "@workspace/runtime";',
         ...(opts.importExtension ? ['import type {} from "@ext/foo";'] : []),
         'const greeting: string = use("@ext/foo").greet();',
         "void greeting;",

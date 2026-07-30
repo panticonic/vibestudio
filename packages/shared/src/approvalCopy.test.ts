@@ -371,39 +371,6 @@ describe("approvalCopy", () => {
       summaryIncludes: "files and anything running",
       warning: "This can affect files and running work in a different part of your project.",
     },
-    {
-      name: "userland",
-      approval: {
-        ...base,
-        kind: "userland",
-        subject: { id: "team-x:foo", label: "Foo" },
-        title: "Allow foo?",
-        summary: "Team X is requesting access to foo.",
-        promptOptions: "choices",
-        options: [{ value: "allow", label: "Allow", tone: "primary" }],
-      },
-      category: "Background task request",
-      title: "Allow foo?",
-      summaryIncludes: "Team X is requesting access to foo.",
-    },
-    {
-      name: "app userland",
-      approval: {
-        ...base,
-        callerId: "app:apps/shell:device-1",
-        callerKind: "app",
-        repoPath: "apps/shell",
-        kind: "userland",
-        subject: { id: "native:notifications", label: "Notifications" },
-        title: "Allow notifications?",
-        summary: "The shell app is requesting notification access.",
-        promptOptions: "choices",
-        options: [{ value: "allow", label: "Allow", tone: "primary" }],
-      },
-      category: "App request",
-      title: "Allow notifications?",
-      summaryIncludes: "notification access",
-    },
   ];
 
   it.each(fixtures)(
@@ -448,20 +415,6 @@ describe("approvalCopy", () => {
     // Capability/unit-batch requests have no secondary chip.
     expect(getApprovalAttribution(byName("capability"))).toEqual({});
 
-    // Userland delegated through an extension surfaces the issuer label.
-    const delegated: PendingApproval = {
-      ...base,
-      kind: "userland",
-      issuer: { kind: "extension", id: "ext:gh", label: "GitHub extension" },
-      subject: { id: "team-x:foo", label: "Foo" },
-      title: "Allow foo?",
-      promptOptions: "choices",
-      options: [{ value: "allow", label: "Allow", tone: "primary" }],
-    };
-    expect(getApprovalAttribution(delegated)).toEqual({
-      relation: "for",
-      target: "GitHub extension",
-    });
   });
 
   it("formats standard action labels by approval subtype", () => {

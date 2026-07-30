@@ -9,7 +9,7 @@ import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
 import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
-import type { RecurringJobRow } from "../internalDOs/workspaceDO.js";
+import type { RecurringJobRow } from "@panticonic/builtin/workspace-state";
 
 const log = createDevLogger("RecurringRegistry");
 

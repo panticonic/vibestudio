@@ -15,6 +15,9 @@ describe("validateUnitManifest", () => {
           extension: {
             activationEvents: ["*"],
             dependencyMode: "external",
+            methodAuthority: {
+              invoke: { effect: { kind: "open" } },
+            },
             providerContracts: {
               gitInterop: { methods: ["upstreamStatus", "pushUpstream"] },
             },
@@ -28,10 +31,20 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         extensionUnitManifestDescriptor,
-        { extension: { activationEvents: ["onInvoke"] } },
+        { extension: { activationEvents: ["onInvoke"], methodAuthority: {} } },
         { unitName: "@workspace-extensions/lazy" }
       )
     ).not.toThrow();
+  });
+
+  it("requires a closed-world extension method authority declaration", () => {
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        { extension: { activationEvents: ["*"] } },
+        { unitName: "@workspace-extensions/a" }
+      )
+    ).toThrow(/must declare methodAuthority for every public method/);
   });
 
   it("rejects ambiguous or unknown extension activation policies", () => {
@@ -39,7 +52,7 @@ describe("validateUnitManifest", () => {
       expect(() =>
         validateUnitManifest(
           extensionUnitManifestDescriptor,
-          { extension: { activationEvents } },
+          { extension: { activationEvents, methodAuthority: {} } },
           { unitName: "@workspace-extensions/a" }
         )
       ).toThrow(/exactly \["\*"\] or \["onInvoke"\]/);
@@ -53,6 +66,7 @@ describe("validateUnitManifest", () => {
         {
           extension: {
             activationEvents: ["*"],
+            methodAuthority: {},
             providerContracts: {
               gitInterop: { methods: ["pushUpstream", "pushUpstream"] },
             },
@@ -68,6 +82,7 @@ describe("validateUnitManifest", () => {
         {
           extension: {
             activationEvents: ["*"],
+            methodAuthority: {},
             providerContracts: {
               "git-interop": { methods: ["pushUpstream"] },
             },
@@ -83,6 +98,7 @@ describe("validateUnitManifest", () => {
         {
           extension: {
             activationEvents: ["*"],
+            methodAuthority: {},
             providerContracts: {
               gitInterop: { methods: ["pushUpstream"], public: true },
             },
@@ -97,7 +113,13 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         extensionUnitManifestDescriptor,
-        { extension: { activationEvents: ["*"], contributes: { buildTargets: ["electron"] } } },
+        {
+          extension: {
+            activationEvents: ["*"],
+            methodAuthority: {},
+            contributes: { buildTargets: ["electron"] },
+          },
+        },
         { unitName: "@workspace-extensions/a" }
       )
     ).toThrow(/contributes.buildTargets/);
@@ -108,7 +130,7 @@ describe("validateUnitManifest", () => {
       validateUnitManifest(
         extensionUnitManifestDescriptor,
         {
-          extension: { activationEvents: ["*"] },
+          extension: { activationEvents: ["*"], methodAuthority: {} },
           app: { target: "electron", renderer: "index.tsx" },
         },
         { unitName: "@workspace-extensions/a" }

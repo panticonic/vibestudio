@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -66,7 +66,7 @@ describe("ContextIntegrityStore", () => {
     store.close();
   });
 
-  it("adopts exact aggregate lineage storage without carrying unverifiable v3 state", () => {
+  it("rejects v3 context-integrity state without modifying it", () => {
     const statePath = mkdtempSync(join(tmpdir(), "context-integrity-"));
     const databasePath = stateLayout(statePath).governance.contentTrustDb;
     mkdirSync(dirname(databasePath), { recursive: true });
@@ -127,21 +127,11 @@ describe("ContextIntegrityStore", () => {
     `);
     legacy.close();
 
-    const store = new ContextIntegrityStore({ statePath });
-    expect(store.fact("chat")).toEqual({
-      class: "internal",
-      latchEpoch: 0,
-      externalKeys: [],
-    });
-    expect(store.isTrusted(`blob:${"a".repeat(64)}`)).toBe(false);
-    expect(store.cutoverRoot()).toBe(`state:${"b".repeat(64)}`);
-    store.ingestResolved({
-      sessionId: "future",
-      key: `pkg:npm:future@1.0.0#${"c".repeat(64)}`,
-      via: "package",
-    });
-    expect(store.fact("future").class).toBe("internal");
-    store.close();
+    const before = readFileSync(databasePath);
+    expect(() => new ContextIntegrityStore({ statePath })).toThrow(
+      /schema version is 3, expected 4/
+    );
+    expect(readFileSync(databasePath)).toEqual(before);
   });
 
   it("records more than 256 exact outside sources as one expandable aggregate", () => {

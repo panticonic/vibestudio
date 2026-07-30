@@ -31,6 +31,73 @@ function flattenPanelTree(entries: PanelTreeEntry[]): PanelTreeEntry[] {
   ]);
 }
 
+type DurablePanelEntry = {
+  id: string;
+  source: string | null;
+};
+
+async function getDurablePanelTree(
+  app: Parameters<typeof getPanelTree>[0]
+): Promise<DurablePanelEntry[]> {
+  return app.evaluate(async () => {
+    const testApi = (
+      globalThis as {
+        __testApi?: {
+          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+        };
+      }
+    ).__testApi;
+    if (!testApi) throw new Error("Test API not available");
+
+    type RootGroup = { ownerUserId: string | null };
+    type TreeNode = { slotId: string; childCount: number; source?: string };
+    type RootGroupsPage = {
+      groups: RootGroup[];
+      nextCursor: string | null;
+    };
+    type TreePage = {
+      nodes: TreeNode[];
+      nextCursor: string | null;
+    };
+
+    const groups: RootGroup[] = [];
+    let groupCursor: string | undefined;
+    do {
+      const page = (await testApi.rpcCall("panelTree", "rootGroups", [
+        { cursor: groupCursor, limit: 200 },
+      ])) as RootGroupsPage;
+      groups.push(...page.groups);
+      groupCursor = page.nextCursor ?? undefined;
+    } while (groupCursor);
+
+    const result: DurablePanelEntry[] = [];
+    const readGroup = async (
+      group:
+        | { kind: "roots"; ownerUserId: string | null }
+        | { kind: "children"; parentSlotId: string }
+    ): Promise<void> => {
+      let cursor: string | undefined;
+      do {
+        const page = (await testApi.rpcCall("panelTree", "page", [
+          { group, cursor, limit: 200 },
+        ])) as TreePage;
+        for (const node of page.nodes) {
+          result.push({ id: node.slotId, source: node.source ?? null });
+          if (node.childCount > 0) {
+            await readGroup({ kind: "children", parentSlotId: node.slotId });
+          }
+        }
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+    };
+
+    for (const group of groups) {
+      await readGroup({ kind: "roots", ownerUserId: group.ownerUserId });
+    }
+    return result;
+  });
+}
+
 async function waitForRestorablePanelTree(
   app: Parameters<typeof getPanelTree>[0]
 ): Promise<PanelTreeEntry[]> {
@@ -83,17 +150,11 @@ test.describe("Panel Persistence", () => {
       });
       await expect
         .poll(async () =>
-          flattenPanelTree(await getPanelTree(testApp!.app)).some(
-            (panel) => panel.id === created.id
-          )
+          (await getDurablePanelTree(testApp!.app)).some((panel) => panel.id === created.id)
         )
         .toBe(true);
 
-      const initialTree = await getPanelTree(testApp.app);
-      const initialPanels = flattenPanelTree(initialTree).map((panel) => ({
-        id: panel.id,
-        source: panel.snapshot?.source ?? null,
-      }));
+      const initialPanels = await getDurablePanelTree(testApp.app);
       // Save workspace path for restart
       // Close app using cleanup (which has a timeout to prevent hanging)
       await testApp.cleanup();
@@ -107,11 +168,8 @@ test.describe("Panel Persistence", () => {
       await approvePendingStartupUnits(testApp.app);
 
       await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
-      const restoredTree = await waitForRestorablePanelTree(testApp.app);
-      const restoredPanels = flattenPanelTree(restoredTree).map((panel) => ({
-        id: panel.id,
-        source: panel.snapshot?.source ?? null,
-      }));
+      await waitForRestorablePanelTree(testApp.app);
+      const restoredPanels = await getDurablePanelTree(testApp.app);
 
       expect(restoredPanels).toEqual(initialPanels);
     } finally {

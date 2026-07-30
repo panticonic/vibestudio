@@ -11,10 +11,11 @@ import {
   requirementForPrincipals,
   scopeCovers,
 } from "@vibestudio/shared/authorization";
+import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
 import {
-  isHostIntrinsicDirectMethod,
-  productDirectMethodCapability,
-} from "@vibestudio/shared/authority/directMethodEffects";
+  productBuiltinMethodCapability,
+  productBuiltinMethodPolicy,
+} from "@vibestudio/shared/productBuiltinCatalog.generated";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -72,7 +73,7 @@ export interface AuthorityFacts {
   capability: string;
   resourceKey: string;
   tier?: "open" | "gated" | "critical";
-  mission?: import("@vibestudio/rpc").SessionMissionFact | null;
+  reviewedClosure?: import("@vibestudio/rpc").SessionReviewedClosureFact | null;
   contextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
   incarnationId?: string | null;
   /** Live manifest/provider policy may withhold the code grant. */
@@ -128,41 +129,15 @@ export function testPolicyAllowsGatedInvocation(
   );
 }
 
-export function testPolicyUserlandDecision(
-  caller: VerifiedCaller,
-  authorization: AuthorizationContext | undefined,
-  subjectId: string
-): {
-  policyId: string;
-  testId: string;
-  ruleId: string;
-  decision: string;
-  remember: boolean;
-} | null {
-  const policy =
-    authorization?.testPolicy ?? caller.testPolicy ?? caller.executionSession?.testPolicy;
-  if (!policy || policy.kind !== "case") return null;
-  const rule = policy.case.userland.find((candidate) => scopeCovers(candidate.subject, subjectId));
-  return rule
-    ? {
-        policyId: policy.policyId,
-        testId: policy.case.testId,
-        ruleId: rule.ruleId,
-        decision: rule.decision,
-        remember: rule.remember,
-      }
-    : null;
-}
-
 /** Exact mission-to-runtime join; both sides use canonical repo identity + EV. */
-export function callerMatchesMissionHarness(
+export function callerMatchesReviewedClosureHarness(
   caller: VerifiedCaller,
-  mission: import("@vibestudio/rpc").SessionMissionFact
+  closure: import("@vibestudio/rpc").SessionReviewedClosureFact
 ): boolean {
   return Boolean(
     caller.code?.executionDigest &&
-    caller.code.repoPath === mission.harness.unit &&
-    caller.code.effectiveVersion === mission.harness.ev
+    caller.code.repoPath === closure.harness.unit &&
+    caller.code.effectiveVersion === closure.harness.ev
   );
 }
 
@@ -225,10 +200,10 @@ export function authorizeVerifiedCaller(
           : null,
       executionSession.harness.principal !== code ? "harness" : null,
       executionSession.mode === "mission" &&
-      (!facts.mission ||
-        executionSession.mission?.missionId !== facts.mission.missionId ||
-        executionSession.mission.closureDigest !== facts.mission.closureDigest)
-        ? "mission"
+      (!facts.reviewedClosure ||
+        executionSession.reviewedClosure?.subject !== facts.reviewedClosure.subject ||
+        executionSession.reviewedClosure.closureDigest !== facts.reviewedClosure.closureDigest)
+        ? "reviewed-closure"
         : null,
     ].filter((mismatch): mismatch is string => mismatch !== null);
     if (mismatches.length > 0) {
@@ -289,8 +264,12 @@ export function authorizeVerifiedCaller(
       id: facts.sessionId,
       audience: facts.audience,
       version: "1.0.0",
-      expiresAt: now + 5_000,
-      ...(facts.mission ? { mission: facts.mission } : {}),
+      // This bound sizes receiver nonce retention; it is not a freshness
+      // grant. First acceptance is authorized by the sealed invocation facts
+      // and single-use nonce, while receivers reject after they can no longer
+      // prove the nonce unused.
+      expiresAt: now + 60_000,
+      ...(facts.reviewedClosure ? { reviewedClosure: facts.reviewedClosure } : {}),
       ...(executionSession ? { mediatingHarness: executionSession.harness.principal } : {}),
       ...(executionSession ? { taskRef: executionSession.taskRef } : {}),
     },
@@ -332,10 +311,8 @@ export function authorizeVerifiedCaller(
     if (facts.tier === "critical" && !subjects.includes(sessionPrincipal)) {
       subjects.push(sessionPrincipal);
     }
-    if (context.session.mission) {
-      subjects.push(
-        `mission:${context.session.mission.missionId}@${context.session.mission.closureDigest}`
-      );
+    if (context.session.reviewedClosure) {
+      subjects.push(context.session.reviewedClosure.subject);
     }
     grants.push(...facts.grantStore.grantsForSubjects(subjects, facts.capability, now));
   }
@@ -391,23 +368,33 @@ export function attestDirectRpc(input: {
   incarnationId?: string | null;
   grantCode?: boolean;
   grantStore?: CapabilityGrantStore;
-  mission?: import("@vibestudio/rpc").SessionMissionFact | null;
+  reviewedClosure?: import("@vibestudio/rpc").SessionReviewedClosureFact | null;
   contextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
   /** Live workspace service capability selected from the exact declarations. */
   capability?: string;
   /** Exact sealed receiver declaration selected from the active build. */
   effect?: RpcAuthorityEffect;
+  receiverAuthority?: {
+    capabilityDefinitionDigest: string;
+    resourceType: string;
+    provider: string;
+    providerExecutionDigest: string;
+  };
+  resourceKey?: string;
   /** Workspace service calls use gated acquisition, not the static product bridge. */
   tier?: "open" | "gated" | "critical";
   now?: number;
 }): DirectAuthorityAttestation {
   const now = input.now ?? Date.now();
   const audience = directAuthorityAudience(input.source, input.className, input.objectKey);
-  const resourceKey = audience;
+  const resourceKey = input.resourceKey ?? audience;
   const hostIntrinsic = isHostIntrinsicDirectMethod(input.method);
   const productCapability = hostIntrinsic
     ? null
-    : productDirectMethodCapability(input.className, input.method);
+    : productBuiltinMethodCapability(input.source, input.className, input.method);
+  const productPolicy = hostIntrinsic
+    ? null
+    : productBuiltinMethodPolicy(input.source, input.className, input.method);
   const capability =
     input.capability ?? productCapability ?? directAuthorityCapability(input.method);
   const { context, grants, locks } = authorizeVerifiedCaller(input.caller, {
@@ -421,9 +408,9 @@ export function attestDirectRpc(input: {
     incarnationId: input.incarnationId,
     grantCode: input.grantCode ?? input.caller.codeApproved,
     grantStore: input.grantStore,
-    mission: input.mission,
+    reviewedClosure: input.reviewedClosure,
     contextIntegrity: input.contextIntegrity,
-    tier: input.tier,
+    tier: input.tier ?? productPolicy?.tier,
     now,
   });
   return {
@@ -432,11 +419,21 @@ export function attestDirectRpc(input: {
     effect:
       input.effect ??
       (hostIntrinsic
-        ? { kind: "runtime-intrinsic" }
-        : productCapability
-          ? { kind: "semantic", capability: productCapability }
-          : { kind: "runtime-intrinsic" }),
+        ? { kind: "open" }
+        : productPolicy
+          ? (productPolicy.effect as RpcAuthorityEffect)
+          : productCapability
+            ? {
+                kind: "host-capability",
+                capability: productCapability,
+                resource: { kind: "receiver-object" },
+              }
+            : { kind: "open" }),
     capability,
+    capabilityDefinitionDigest: input.receiverAuthority?.capabilityDefinitionDigest ?? "-",
+    resourceType: input.receiverAuthority?.resourceType ?? capability,
+    provider: input.receiverAuthority?.provider ?? "-",
+    providerExecutionDigest: input.receiverAuthority?.providerExecutionDigest ?? "-",
     resourceKey,
     issuedAt: now,
     expiresAt: now + 60_000,
@@ -449,6 +446,8 @@ export function attestDirectRpc(input: {
 
 export interface WorkspaceDoMethodAuthority {
   effect: RpcAuthorityEffect;
+  /** Canonical grant capability; userland effects retain their unit-local name in `effect`. */
+  capability?: string;
   tier: "open" | "gated" | "critical";
 }
 
@@ -466,8 +465,8 @@ export function attestWorkspaceDoRpc(
 ): DirectAuthorityAttestation {
   const targetCapability = `workspace-service:${input.service.name}`;
   const methodCapability =
-    input.methodAuthority.effect.kind === "semantic"
-      ? input.methodAuthority.effect.capability
+    input.methodAuthority.effect.kind !== "open"
+      ? (input.methodAuthority.capability ?? input.methodAuthority.effect.capability)
       : targetCapability;
   const attestation = attestDirectRpc({
     ...input,
@@ -479,7 +478,7 @@ export function attestWorkspaceDoRpc(
     const target = attestDirectRpc({
       ...input,
       capability: targetCapability,
-      effect: { kind: "workspace-service" },
+      effect: { kind: "open" },
       tier: "gated",
     });
     attestation.grants = Object.freeze([...attestation.grants, ...target.grants]);

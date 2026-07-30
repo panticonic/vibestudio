@@ -50,6 +50,25 @@ export const openExternalResultSchema = z.object({
 
 export const externalOpenMethods = defineServiceMethods({
   openExternal: {
+    capability: "external.open",
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "externalOpen.create",
+      rationale:
+        "The transport is open; code callers receive one prepared gated external.open leaf scoped to the destination",
+    },
+    presentation: {
+      title: "Open links in other applications",
+      action: "open links in other applications",
+      description: "Allows {requesterKind} to open links in other applications.",
+      group: "network",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "act",
+      },
+    },
     description:
       "Open an http(s) URL in the host browser or an OS-protocol URL in its registered application; approval-gated for code callers, returning the persisted approval decision when one was made.",
     args: z.tuple([z.string(), openExternalOptionsSchema.optional()]),

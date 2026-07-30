@@ -47,6 +47,10 @@ describe("eval lifecycle contract", () => {
 
   it("uses request presence as the exact-allowlist boundary and rejects combinations that could prompt unexpectedly", () => {
     expect(evalAuthorityInputSchema.parse({})).toEqual({});
+    expect(evalAuthorityInputSchema.parse({ effects: "read-write" })).toEqual({
+      effects: "read-write",
+    });
+    expect(evalAuthorityInputSchema.safeParse({ effects: "mutable" }).success).toBe(false);
     expect(
       evalStartInputSchema.parse({
         runId: "run:1",

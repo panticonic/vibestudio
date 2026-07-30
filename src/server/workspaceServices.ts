@@ -5,10 +5,6 @@ import type {
   SingletonRegistry,
 } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
-import {
-  findProductWorkspaceService,
-  PRODUCT_WORKSPACE_SERVICES,
-} from "@vibestudio/shared/productWorkspaceServices.mjs";
 
 export interface WorkspaceServiceAuthority {
   principals: PrincipalKind[];
@@ -46,30 +42,13 @@ export interface WorkerServiceResolution extends WorkspaceServiceResolution {
 
 export type ResolvedWorkspaceService = DurableObjectServiceResolution | WorkerServiceResolution;
 
-export function assertNoProductWorkspaceServiceCollisions(decls: WorkspaceDeclarations): void {
-  const productKeys = new Set(
-    PRODUCT_WORKSPACE_SERVICES.flatMap((service) => [service.name, ...service.protocols])
-  );
-  for (const service of decls.services) {
-    for (const key of [service.name, ...(service.protocols ?? [])]) {
-      if (productKeys.has(key)) {
-        throw new Error(
-          `Workspace service ${service.name} collides with product-owned service key ${key}`
-        );
-      }
-    }
-  }
-}
-
 /**
- * Resolve a workspace service by name or protocol. Product-sealed services
- * are resolved from executable product topology; workspace-authored services
- * are resolved from the parsed manifest declarations.
+ * Resolve a manifest-declared workspace service by name or protocol.
  *
  * For DO-backed services:
  * - If a matching `singletonObjects` row exists, the service is
- *   singleton-backed: `objectKey` is sourced from that row, and callers MAY
- *   override it for fan-out targets (e.g. forked channels).
+ *   singleton-backed: `objectKey` is sourced from that row and cannot be
+ *   overridden.
  * - Otherwise the service is a factory: callers MUST pass an explicit
  *   `objectKey`. Resolving without one throws.
  */
@@ -78,9 +57,6 @@ export function resolveWorkspaceService(
   query: string,
   objectKey?: string | null
 ): ResolvedWorkspaceService {
-  assertNoProductWorkspaceServiceCollisions(decls);
-  const productService = resolveProductWorkspaceService(query, objectKey);
-  if (productService) return productService;
   for (const service of decls.services) {
     const protocols = service.protocols ?? [];
     if (service.name !== query && !protocols.includes(query)) continue;
@@ -88,37 +64,6 @@ export function resolveWorkspaceService(
     return protocols.includes(query) ? { ...resolved, protocol: query } : resolved;
   }
   throw new Error(`No workspace service registered for ${query}`);
-}
-
-function resolveProductWorkspaceService(
-  query: string,
-  objectKey: string | null | undefined
-): DurableObjectServiceResolution | null {
-  const service = findProductWorkspaceService(query);
-  if (!service) return null;
-  const { className, objectKey: sealedObjectKey } = service.durableObject;
-  if (objectKey != null && objectKey !== sealedObjectKey) {
-    throw new Error(
-      `Product workspace service ${service.name} has one sealed object key (${sealedObjectKey}); ` +
-        `caller-supplied key ${JSON.stringify(objectKey)} is not permitted`
-    );
-  }
-  return {
-    kind: "durable-object",
-    origin: "product",
-    name: service.name,
-    title: service.title,
-    action: service.action,
-    description: service.description,
-    presentation: service.presentation,
-    ...(service.protocols.includes(query) ? { protocol: query } : {}),
-    protocols: [...service.protocols],
-    source: service.source,
-    authority: { principals: [...service.authority.principals] },
-    className,
-    objectKey: sealedObjectKey,
-    targetId: `do:${service.source}:${className}:${sealedObjectKey}`,
-  };
 }
 
 function buildResolution(
@@ -134,7 +79,13 @@ function buildResolution(
   if (service.durableObject) {
     const className = service.durableObject.className;
     const singletonKey = singletons.find(source, className)?.key ?? null;
-    const resolvedObjectKey = overrideObjectKey ?? singletonKey;
+    if (singletonKey !== null && overrideObjectKey !== null && overrideObjectKey !== singletonKey) {
+      throw new Error(
+        `Workspace service "${service.name}" is the singleton ${JSON.stringify(singletonKey)}; ` +
+          `caller-supplied key ${JSON.stringify(overrideObjectKey)} is not permitted`
+      );
+    }
+    const resolvedObjectKey = singletonKey ?? overrideObjectKey;
     if (resolvedObjectKey === null) {
       throw new Error(
         `Workspace service "${service.name}" is a factory (no singletonObjects row for ` +

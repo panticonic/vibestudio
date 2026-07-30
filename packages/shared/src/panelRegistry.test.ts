@@ -63,8 +63,8 @@ describe("PanelRegistry", () => {
       registry.addPanel(p2, null, { addAsRoot: true });
 
       expect(registry.getRootPanels().length).toBe(2);
-      expect(registry.getRootPanels()[0]!.id).toBe("panel:tree/root-1");
-      expect(registry.getRootPanels()[1]!.id).toBe("panel:tree/root-2");
+      expect(registry.getRootPanels()[0]!.id).toBe("panel:tree/root-2");
+      expect(registry.getRootPanels()[1]!.id).toBe("panel:tree/root-1");
     });
 
     it("adds a child panel under a parent", () => {
@@ -80,7 +80,9 @@ describe("PanelRegistry", () => {
 
     it("throws when adding a child to a nonexistent parent", () => {
       const child = makePanel("panel:tree/child");
-      expect(() => registry.addPanel(child, "panel:tree/no-such-parent")).toThrow("Parent panel not found");
+      expect(() => registry.addPanel(child, "panel:tree/no-such-parent")).toThrow(
+        "Parent panel not found"
+      );
     });
   });
 
@@ -99,8 +101,16 @@ describe("PanelRegistry", () => {
 
       expect(registry.listPanels()).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ panelId: "panel:tree/root", kind: "workspace", parentId: null }),
-          expect.objectContaining({ panelId: "panel:tree/child", kind: "browser", parentId: "panel:tree/root" }),
+          expect.objectContaining({
+            panelId: "panel:tree/root",
+            kind: "workspace",
+            parentId: null,
+          }),
+          expect.objectContaining({
+            panelId: "panel:tree/child",
+            kind: "browser",
+            parentId: "panel:tree/root",
+          }),
         ])
       );
       expect(registry.getChildren("panel:tree/root")).toEqual([
@@ -292,6 +302,34 @@ describe("PanelRegistry", () => {
     });
   });
 
+  describe("applyExecutionIdentity", () => {
+    it("does not regress an already-presented execution on duplicate activation", () => {
+      const panel = makePanel("panel:tree/root", {
+        runtimeEntityId: "panel:nav-root",
+        effectiveVersion: "effective",
+        buildKey: "b".repeat(64),
+        executionDigest: "e".repeat(64),
+        authorityRequests: [],
+        artifacts: { buildState: "ready", htmlPath: "http://localhost/panel" },
+      });
+      registry.addPanel(panel, null);
+
+      expect(
+        registry.applyExecutionIdentity(panel.id, {
+          runtimeEntityId: panel.runtimeEntityId!,
+          effectiveVersion: panel.effectiveVersion!,
+          buildKey: panel.buildKey!,
+          executionDigest: panel.executionDigest!,
+          authorityRequests: [],
+        })
+      ).toBe(true);
+      expect(panel.artifacts).toEqual({
+        buildState: "ready",
+        htmlPath: "http://localhost/panel",
+      });
+    });
+  });
+
   // -------------------------------------------------------------------------
   // findParentId
   // -------------------------------------------------------------------------
@@ -441,7 +479,9 @@ describe("PanelRegistry", () => {
     it("throws when new parent not found", () => {
       const p = makePanel("panel:tree/p");
       registry.addPanel(p, null, { addAsRoot: true });
-      expect(() => registry.movePanel("panel:tree/p", "no-parent", 0)).toThrow("New parent panel not found");
+      expect(() => registry.movePanel("panel:tree/p", "no-parent", 0)).toThrow(
+        "New parent panel not found"
+      );
     });
 
     it("clamps target position to valid range", () => {

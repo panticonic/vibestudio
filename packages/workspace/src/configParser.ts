@@ -17,7 +17,6 @@ import {
 import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { validateWorkspaceGitConfig } from "./remotes.js";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
-import { findProductWorkspaceService } from "@vibestudio/shared/productWorkspaceServices.mjs";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
@@ -221,7 +220,6 @@ function validateDeclaredUnits(config: WorkspaceConfig): void {
     singular: "app",
     values: config.apps,
   });
-  validateWorkspaceServiceOwnership(config.services);
   validateHeartbeats(config.heartbeats);
   validateTrust(config.trust);
   validateHostTargets(config.hostTargets);
@@ -232,18 +230,6 @@ function validateDeclaredUnits(config: WorkspaceConfig): void {
     throw new Error(
       `meta/vibestudio.yml: ${error instanceof Error ? error.message : String(error)}`
     );
-  }
-}
-
-function validateWorkspaceServiceOwnership(services: WorkspaceConfig["services"]): void {
-  for (const [index, service] of (services ?? []).entries()) {
-    for (const key of [service.name, ...(service.protocols ?? [])]) {
-      const productService = findProductWorkspaceService(key);
-      if (!productService) continue;
-      throw new Error(
-        `meta/vibestudio.yml: \`services.${index}\` key ${JSON.stringify(key)} is owned by product workspace service ${JSON.stringify(productService.name)} and cannot be redeclared`
-      );
-    }
   }
 }
 

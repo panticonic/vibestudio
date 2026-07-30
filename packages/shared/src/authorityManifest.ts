@@ -1,5 +1,6 @@
 import type { CapabilityScope, ResourceScope } from "@vibestudio/rpc";
 import type { BuildRecipe, CanonicalBuildValue } from "./execution/identity.js";
+import type { AuthorityDomainId, AuthorityVerb } from "./authority/authorityDomains.js";
 
 export interface UnitAuthorityManifest {
   /**
@@ -8,6 +9,23 @@ export interface UnitAuthorityManifest {
    * A trailing `*` is the only supported capability wildcard.
    */
   requests: readonly UnitAuthorityRequest[];
+  /** Receiver-owned capabilities provided by this exact executable build. */
+  provides: readonly UserlandCapabilityDefinition[];
+}
+
+export type UserlandGrantScope = "once" | "task" | "agent" | "mission" | "version" | "session";
+
+export interface UserlandCapabilityDefinition {
+  name: string;
+  title: string;
+  action: string;
+  description?: string;
+  tier: "gated" | "critical";
+  sensitivity: "read" | "write" | "admin" | "destructive";
+  resourceType: string;
+  /** Provider-authored classification shown with immutable issuer chrome. */
+  presentation: { domain: AuthorityDomainId; verb: AuthorityVerb };
+  grantScopes: readonly UserlandGrantScope[];
 }
 
 export type AuthorityRequestTier = "gated" | "critical";
@@ -21,6 +39,7 @@ export interface UnitAuthorityRequest extends CapabilityScope {
 }
 
 export const NO_AUTHORITY_REQUESTS: readonly UnitAuthorityRequest[] = Object.freeze([]);
+export const NO_USERLAND_CAPABILITIES: readonly UserlandCapabilityDefinition[] = Object.freeze([]);
 
 /**
  * Host runtime protocol used by every extension bundle, independently of the
@@ -69,13 +88,19 @@ export function parseAuthorityRequests(
         `${requestLabel}.evidence must be "exact", "bounded-dynamic", or "intentional-broad"`
       );
     }
+    const userlandDefinitionFamily = isUserlandDefinitionFamilyPattern(candidate["capability"]);
     const capability = canonicalCapabilityPattern(
       candidate["capability"],
-      options.allowCapabilityWildcards === true
+      options.allowCapabilityWildcards === true || userlandDefinitionFamily
     );
     const resource = parseResourceScope(candidate["resource"], requestLabel);
     const packages = parsePackages(candidate["packages"], requestLabel);
     const evidence = candidate["evidence"] as AuthorityEvidenceClass;
+    if (userlandDefinitionFamily && evidence !== "bounded-dynamic") {
+      throw new Error(
+        `${label}.requests[${index}] a provider-bound userland definition family requires bounded-dynamic evidence`
+      );
+    }
     if (evidence === "exact" && resource.kind !== "exact") {
       throw new Error(`${label}.requests[${index}] exact evidence requires an exact resource`);
     }
@@ -84,7 +109,9 @@ export function parseAuthorityRequests(
       !(resource.kind === "prefix" && resource.prefix === "") &&
       resource.kind !== "network"
     ) {
-      throw new Error(`${label}.requests[${index}] intentional-broad evidence requires a broad resource`);
+      throw new Error(
+        `${label}.requests[${index}] intentional-broad evidence requires a broad resource`
+      );
     }
     const tier = candidate["tier"] as AuthorityRequestTier;
     const key = `${capability}\0${tier}\0${JSON.stringify(resource)}\0${JSON.stringify(packages)}`;
@@ -98,9 +125,7 @@ export function parseAuthorityRequests(
       ...(packages ? { packages } : {}),
     } satisfies UnitAuthorityRequest;
   });
-  return Object.freeze(
-    requests.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
-  );
+  return Object.freeze(requests.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
 }
 
 export function parseUnitAuthorityManifest(
@@ -112,16 +137,165 @@ export function parseUnitAuthorityManifest(
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  const unknownKeys = keys.filter((key) => key !== "requests");
+  const unknownKeys = keys.filter((key) => key !== "requests" && key !== "provides");
   if (unknownKeys.length > 0) {
     throw new Error(`${label} has unknown field(s): ${unknownKeys.join(", ")}`);
   }
-  if (keys.length === 0) {
+  if (!Object.prototype.hasOwnProperty.call(record, "requests")) {
     throw new Error(`${label} must contain a requests array`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(record, "provides")) {
+    throw new Error(`${label} must contain a provides array`);
   }
   return Object.freeze({
     requests: parseAuthorityRequests(value, label),
+    provides: parseUserlandCapabilities(record["provides"], label),
   });
+}
+
+export function parseUserlandCapabilities(
+  value: unknown,
+  label = "vibestudio.authority"
+): readonly UserlandCapabilityDefinition[] {
+  if (!Array.isArray(value)) throw new Error(`${label}.provides must be an array`);
+  const seen = new Set<string>();
+  const definitions = value.map((entry, index) => {
+    const entryLabel = `${label}.provides[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${entryLabel} must be an object`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    const allowed = new Set([
+      "name",
+      "title",
+      "action",
+      "description",
+      "tier",
+      "sensitivity",
+      "resourceType",
+      "presentation",
+      "grantScopes",
+    ]);
+    const unknown = Object.keys(candidate).filter((key) => !allowed.has(key));
+    if (unknown.length > 0) {
+      throw new Error(`${entryLabel} has unknown field(s): ${unknown.join(", ")}`);
+    }
+    const name = boundedCapabilityText(candidate["name"], `${entryLabel}.name`, 96);
+    if (!/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u.test(name)) {
+      throw new Error(`${entryLabel}.name is not a canonical local capability name`);
+    }
+    if (seen.has(name)) throw new Error(`${label}.provides contains duplicate capability ${name}`);
+    seen.add(name);
+    const title = boundedCapabilityText(candidate["title"], `${entryLabel}.title`, 120);
+    const action = boundedCapabilityText(candidate["action"], `${entryLabel}.action`, 240);
+    const description =
+      candidate["description"] === undefined
+        ? undefined
+        : boundedCapabilityText(candidate["description"], `${entryLabel}.description`, 500);
+    const tier = candidate["tier"];
+    if (tier !== "gated" && tier !== "critical") {
+      throw new Error(`${entryLabel}.tier must be "gated" or "critical"`);
+    }
+    const sensitivity = candidate["sensitivity"];
+    if (!["read", "write", "admin", "destructive"].includes(String(sensitivity))) {
+      throw new Error(`${entryLabel}.sensitivity is invalid`);
+    }
+    const resourceType = boundedCapabilityText(
+      candidate["resourceType"],
+      `${entryLabel}.resourceType`,
+      96
+    );
+    if (!/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u.test(resourceType)) {
+      throw new Error(`${entryLabel}.resourceType is not canonical`);
+    }
+    const presentation = candidate["presentation"];
+    if (!presentation || typeof presentation !== "object" || Array.isArray(presentation)) {
+      throw new Error(`${entryLabel}.presentation must declare a domain and verb`);
+    }
+    const presentationRecord = presentation as Record<string, unknown>;
+    const presentationUnknown = Object.keys(presentationRecord).filter(
+      (key) => key !== "domain" && key !== "verb"
+    );
+    if (presentationUnknown.length > 0) {
+      throw new Error(
+        `${entryLabel}.presentation has unknown field(s): ${presentationUnknown.join(", ")}`
+      );
+    }
+    const domain = presentationRecord["domain"];
+    const verb = presentationRecord["verb"];
+    if (
+      ![
+        "files",
+        "web",
+        "sharing",
+        "accounts",
+        "automation",
+        "people",
+        "computer",
+        "safety",
+      ].includes(String(domain))
+    ) {
+      throw new Error(`${entryLabel}.presentation.domain is invalid`);
+    }
+    if (!["see", "act", "manage"].includes(String(verb))) {
+      throw new Error(`${entryLabel}.presentation.verb is invalid`);
+    }
+    if (domain === "safety") {
+      throw new Error(`${entryLabel}.presentation cannot declare the Safety controls domain`);
+    }
+    if (!Array.isArray(candidate["grantScopes"]) || candidate["grantScopes"].length === 0) {
+      throw new Error(`${entryLabel}.grantScopes must be a non-empty array`);
+    }
+    const grantScopes = candidate["grantScopes"].map((scope) => String(scope));
+    const validScopes = new Set<UserlandGrantScope>([
+      "once",
+      "task",
+      "agent",
+      "mission",
+      "version",
+      "session",
+    ]);
+    if (
+      grantScopes.some((scope) => !validScopes.has(scope as UserlandGrantScope)) ||
+      new Set(grantScopes).size !== grantScopes.length
+    ) {
+      throw new Error(`${entryLabel}.grantScopes contains an invalid or duplicate scope`);
+    }
+    if (
+      (tier === "critical" || sensitivity === "destructive") &&
+      grantScopes.some((scope) => scope !== "once")
+    ) {
+      throw new Error(`${entryLabel} critical or destructive authority may offer only once`);
+    }
+    return Object.freeze({
+      name,
+      title,
+      action,
+      ...(description === undefined ? {} : { description }),
+      tier,
+      sensitivity: sensitivity as UserlandCapabilityDefinition["sensitivity"],
+      resourceType,
+      presentation: {
+        domain: domain as AuthorityDomainId,
+        verb: verb as AuthorityVerb,
+      },
+      grantScopes: Object.freeze([...grantScopes].sort() as UserlandGrantScope[]),
+    });
+  });
+  return Object.freeze(definitions.sort((a, b) => a.name.localeCompare(b.name)));
+}
+
+function boundedCapabilityText(value: unknown, label: string, maximum: number): string {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value !== value.trim() ||
+    value.includes("\0") ||
+    value.length > maximum
+  ) {
+    throw new Error(`${label} must be non-empty, trimmed, and at most ${maximum} characters`);
+  }
+  return value;
 }
 
 export function authorityRequestsFromManifest(
@@ -205,6 +379,14 @@ function canonicalCapabilityPattern(value: string, allowWildcard = false): strin
     throw new Error(`Invalid capability pattern: ${JSON.stringify(value)}`);
   }
   return value;
+}
+
+function isUserlandDefinitionFamilyPattern(value: string): boolean {
+  if (!/^userland:[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)+#[*]$/u.test(value)) {
+    return false;
+  }
+  const providerAndName = value.slice("userland:".length, -2);
+  return !providerAndName.split("/").some((segment) => segment === "." || segment === "..");
 }
 
 function parseResourceScope(value: unknown, label: string): ResourceScope {

@@ -9,6 +9,7 @@ import {
 } from "@vibestudio/shared/vcs/pathAdmission";
 import { VCS_ATOMIC_IMPORT_MAX_DESCRIPTOR_BYTES } from "@vibestudio/vcs-path-policy";
 import { DigestSchema } from "./blobstore.js";
+import { buildDiagnosticSchema } from "./build.js";
 
 /**
  * Public semantic VCS contract.
@@ -1959,6 +1960,15 @@ export const vcsErrorSchema = z.discriminatedUnion("code", [
     .strict(),
   z
     .object({
+      code: z.literal("BuildGateFailed"),
+      ...errorBase,
+      candidateState: id("Exact candidate workspace state checked before publication."),
+      affectedUnits: z.array(id("Build unit in the affected dependency closure.")).max(10_000),
+      diagnostics: z.array(buildDiagnosticSchema).max(100_000),
+    })
+    .strict(),
+  z
+    .object({
       code: z.literal("IntegrityFailure"),
       ...errorBase,
       handle: id("Opaque integrity diagnostic."),
@@ -1986,6 +1996,7 @@ const ERROR_DESCRIPTIONS: Record<VcsErrorCode, string> = {
   CommandIdReuse: "The command identity was reused with a different request.",
   ScopeTooLarge: "The bounded operation requires a narrower request or page.",
   ExternalEffectFailed: "A requested host effect failed.",
+  BuildGateFailed: "The exact candidate build/typecheck gate failed.",
   IntegrityFailure: "The semantic graph failed an integrity invariant.",
 };
 
@@ -2080,6 +2091,14 @@ const defineVcsMethods = <const M extends Record<string, VcsMethodSchema>>(metho
 
 const vcsSemanticMethods = defineVcsMethods({
   edit: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.mutate",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Atomically create repositories with their initial files or author exact text, binary, file-create, delete, and mode changes on the working head.",
     args: z.tuple([vcsEditInputSchema]),
@@ -2095,6 +2114,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.move", "vcs.copy", "vcs.revert"],
   },
   move: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Move stable file or repository identities without reconstructing intent from bytes.",
     args: z.tuple([vcsMoveInputSchema]),
@@ -2111,6 +2138,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.copy", "vcs.neighbors"],
   },
   copy: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Copy exact source files into new identities with immediate coordinate provenance.",
     args: z.tuple([vcsCopyInputSchema]),
@@ -2128,6 +2163,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.move", "vcs.blame"],
   },
   integrate: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Take one local adopt, reconcile, or decline step against an exact source event or coordinator-owned external delta.",
     args: z.tuple([vcsIntegrateInputSchema]),
@@ -2144,6 +2187,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.compare", "vcs.commit"],
   },
   revert: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Author explicit counteractions of exact semantic changes.",
     args: z.tuple([vcsRevertInputSchema]),
     returns: vcsWorkingMutationResultSchema,
@@ -2154,6 +2205,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.history", "vcs.discard"],
   },
   commit: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.mutate",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Commit the complete local application chain; derive all integration parents from recorded decisions, or accept explicit zero-change sources.",
     args: z.tuple([vcsCommitInputSchema]),
@@ -2165,6 +2224,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.status", "vcs.push"],
   },
   discard: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Discard the complete uncommitted chain and return to the committed event.",
     args: z.tuple([vcsDiscardInputSchema]),
     returns: vcsDiscardResultSchema,
@@ -2175,6 +2242,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.revert", "vcs.status"],
   },
   importSnapshot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Import one exact complete external snapshot as ordinary changes on an import work unit and atomically return the committed event, application, work unit, admitted repository IDs, and canonical external snapshot.",
     args: z.tuple([vcsImportSnapshotInputSchema]),
@@ -2192,6 +2267,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.blame", "vcs.inspect"],
   },
   registerExternalDelta: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.create",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Register one exact unapplied old-to-new external repository delta.",
     args: z.tuple([vcsRegisterExternalDeltaInputSchema]),
     returns: vcsExternalDeltaResultSchema,
@@ -2206,6 +2289,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.compare", "vcs.integrate"],
   },
   supersedeExternalDelta: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Retire one active external delta so it can no longer be integrated.",
     args: z.tuple([vcsExternalDeltaLifecycleInputSchema]),
     returns: vcsExternalDeltaResultSchema,
@@ -2216,6 +2307,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.compare"],
   },
   finalizeExternalDelta: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Finalize one fully decided external delta and release its dedicated GC roots.",
     args: z.tuple([vcsExternalDeltaLifecycleInputSchema]),
     returns: vcsExternalDeltaResultSchema,
@@ -2226,6 +2325,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.commit", "vcs.compare"],
   },
   push: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.mutate",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Publish one exact already-committed event to protected main.",
     args: z.tuple([vcsPushInputSchema]),
     returns: vcsPushResultSchema,
@@ -2245,12 +2352,21 @@ const vcsSemanticMethods = defineVcsMethods({
         "WorkingChangesPresent",
         "CommandIdReuse",
         "ExternalEffectFailed",
+        "BuildGateFailed",
         "IntegrityFailure"
       ),
     ],
     seeAlso: ["vcs.commit", "vcs.status"],
   },
   status: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read-transport",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Return context pointers, clean state, main relation, and compact working counts.",
     args: z.tuple([vcsStatusInputSchema]),
     returns: vcsStatusResultSchema,
@@ -2261,6 +2377,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.compare", "vcs.history"],
   },
   compare: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Compare an exact target state with a committed source event or coordinator-owned external delta by semantic change.",
     args: z.tuple([vcsCompareInputSchema]),
@@ -2276,6 +2400,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.integrate", "vcs.inspect"],
   },
   inspect: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.read-protected",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Inspect one typed semantic node and a bounded preview of its direct adjacency.",
     args: z.tuple([vcsInspectInputSchema]),
     returns: vcsInspectResultSchema,
@@ -2286,6 +2418,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.neighbors", "vcs.history"],
   },
   neighbors: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Page immediate typed provenance edges without persisting traversal state.",
     args: z.tuple([vcsNeighborsInputSchema]),
     returns: vcsNeighborsResultSchema,
@@ -2296,6 +2436,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.inspect", "vcs.blame"],
   },
   history: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Page event history in either direction or past file history from one exact state.",
     args: z.tuple([vcsHistoryInputSchema]),
@@ -2307,6 +2455,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.inspect", "vcs.neighbors"],
   },
   blame: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Trace an exact bounded file range through immediate content-coordinate mappings.",
     args: z.tuple([vcsBlameInputSchema]),
     returns: vcsBlameResultSchema,
@@ -2321,6 +2477,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.neighbors", "vcs.history"],
   },
   readMemory: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Project bounded blame-backed workspace memory for the exact text range and content hash returned by a managed file read.",
     args: z.tuple([vcsReadMemoryInputSchema]),
@@ -2332,6 +2496,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.blame", "vcs.inspect", "vcs.history"],
   },
   resolveRepository: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Resolve one canonical repository path at one exact semantic state.",
     args: z.tuple([vcsResolveRepositoryInputSchema]),
     returns: vcsResolveRepositoryResultSchema,
@@ -2342,6 +2514,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.listFiles", "vcs.inspect"],
   },
   readFile: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Read one file from an exact semantic state.",
     args: z.tuple([vcsReadFileInputSchema]),
     returns: vcsReadFileResultSchema,
@@ -2356,6 +2536,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.listFiles", "vcs.blame"],
   },
   listDirectory: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Page immediate visible children of one workspace directory with stable identities and attached name provenance.",
     args: z.tuple([vcsListDirectoryInputSchema]),
@@ -2367,6 +2555,14 @@ const vcsSemanticMethods = defineVcsMethods({
     seeAlso: ["vcs.readFile", "vcs.listFiles", "vcs.resolveRepository"],
   },
   listFiles: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "vcs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Page the exact path-to-file manifest of one repository at one semantic state.",
     args: z.tuple([vcsListFilesInputSchema]),
     returns: vcsListFilesResultSchema,

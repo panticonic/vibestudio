@@ -28,6 +28,7 @@ import {
   type RpcCausalParent,
   type RpcCallOptions,
   type AgentExecutionTestPolicy,
+  type CapabilityScope,
   type RpcAuthorityEffect,
 } from "@vibestudio/rpc";
 import type {
@@ -67,6 +68,7 @@ import {
   type VerifiedCodeIdentity,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
+import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -147,7 +149,17 @@ import {
   receiverAuthorityPolicy,
   standingAgentScopeEligible,
 } from "@vibestudio/shared/authority/receiverAuthorityPolicy";
-import { attestDirectRpc, attestWorkspaceDoRpc } from "./services/authorityRuntime.js";
+import {
+  attestDirectRpc,
+  attestWorkspaceDoRpc,
+  authorizeVerifiedCaller,
+  directAuthorityAudience,
+} from "./services/authorityRuntime.js";
+import {
+  productBuiltinByIdentity,
+  productBuiltinMethodPolicy,
+  productBuiltinMethodRequests,
+} from "@vibestudio/shared/productBuiltinCatalog.generated";
 import {
   authorityFailureForDecision,
   evaluateAuthority,
@@ -508,7 +520,8 @@ export class RpcServer {
     string,
     {
       receiverRuntimeId: string;
-      testPolicy: AgentExecutionTestPolicy;
+      testPolicy: AgentExecutionTestPolicy | null;
+      requested: readonly CapabilityScope[] | null;
     }
   >();
 
@@ -591,14 +604,16 @@ export class RpcServer {
         invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
       };
       /** Stable mission fact for the same session identity used by service dispatch. */
-      missionFactForSession?: (
+      reviewedClosureFactForSession?: (
         sessionId: string
-      ) => import("@vibestudio/rpc").SessionMissionFact | null;
+      ) => import("@vibestudio/rpc").SessionReviewedClosureFact | null;
       /** Durable server-observed context latch for direct userland calls. */
       contextIntegrityFactForSession?: (
         sessionId: string,
         caller: VerifiedCaller
       ) => import("@vibestudio/rpc").ContextIntegrityFact;
+      /** Authenticate schema-declared hidden system-test receiver seams. */
+      isAttestedSystemTestHarness?: (caller: VerifiedCaller) => boolean;
       /**
        * Resolve an exact live workspace service declaration for a direct DO
        * target. This is deliberately runtime data: context-scoped/user-created
@@ -616,11 +631,27 @@ export class RpcServer {
               capability: string;
               methodEffect: RpcAuthorityEffect;
               methodCapability?: string;
+              methodReceiverAuthority?: {
+                capabilityDefinitionDigest: string;
+                resourceType: string;
+                provider: string;
+                providerExecutionDigest: string;
+                grantScopes: readonly import("@vibestudio/shared/authorityManifest").UserlandGrantScope[];
+                title: string;
+                action: string;
+                description?: string;
+              };
+              methodHandleProduction?: {
+                capability: string;
+                capabilityDefinitionDigest: string;
+                resourceType: string;
+                provider: string;
+              };
               methodTier: "open" | "gated" | "critical";
               principals: readonly import("@vibestudio/rpc").PrincipalKind[];
               presentation: {
-                domain: import("@vibestudio/shared/authority/capabilityDomains").AuthorityDomainId;
-                verb: import("@vibestudio/shared/authority/capabilityDomains").AuthorityVerb;
+                domain: import("@vibestudio/shared/authority/authorityDomains").AuthorityDomainId;
+                verb: import("@vibestudio/shared/authority/authorityDomains").AuthorityVerb;
                 substanceKind?: import("@vibestudio/shared/approvals").OperationSubstance["kind"];
               };
               title: string;
@@ -633,11 +664,27 @@ export class RpcServer {
             capability: string;
             methodEffect: RpcAuthorityEffect;
             methodCapability?: string;
+            methodReceiverAuthority?: {
+              capabilityDefinitionDigest: string;
+              resourceType: string;
+              provider: string;
+              providerExecutionDigest: string;
+              grantScopes: readonly import("@vibestudio/shared/authorityManifest").UserlandGrantScope[];
+              title: string;
+              action: string;
+              description?: string;
+            };
+            methodHandleProduction?: {
+              capability: string;
+              capabilityDefinitionDigest: string;
+              resourceType: string;
+              provider: string;
+            };
             methodTier: "open" | "gated" | "critical";
             principals: readonly import("@vibestudio/rpc").PrincipalKind[];
             presentation: {
-              domain: import("@vibestudio/shared/authority/capabilityDomains").AuthorityDomainId;
-              verb: import("@vibestudio/shared/authority/capabilityDomains").AuthorityVerb;
+              domain: import("@vibestudio/shared/authority/authorityDomains").AuthorityDomainId;
+              verb: import("@vibestudio/shared/authority/authorityDomains").AuthorityVerb;
               substanceKind?: import("@vibestudio/shared/approvals").OperationSubstance["kind"];
             };
             title: string;
@@ -645,6 +692,47 @@ export class RpcServer {
             description?: string;
             declaredBy: string;
           }[];
+      /**
+       * Resolve state-dependent leaves declared by a product builtin method.
+       * The declaration remains catalog-owned; this callback only reads the
+       * current host facts needed to select its resource and presentation.
+       */
+      resolveProductBuiltinPreparedAuthority?: (input: {
+        caller: VerifiedCaller;
+        source: string;
+        className: string;
+        objectKey: string;
+        method: string;
+        args: readonly unknown[];
+        resolver: string;
+        contextBoundary?: {
+          operation:
+            | "openPanel"
+            | "replacePanel"
+            | "reload"
+            | "unload"
+            | "close"
+            | "movePanel"
+            | "takeOver"
+            | "rebuildPanel"
+            | "updatePanelState";
+          targetArgument: number;
+          targetPath?: readonly (string | number)[];
+          requestedContextPath?: readonly (string | number)[];
+          requestedContextLookup?: {
+            method: string;
+            arguments: readonly {
+              argument: number;
+              path?: readonly (string | number)[];
+            }[];
+            resultPath: readonly (string | number)[];
+          };
+        };
+      }) => readonly PreparedAuthoritySelection[] | Promise<readonly PreparedAuthoritySelection[]>;
+      userlandResourceHandles?: Pick<
+        import("./services/userlandResourceHandleStore.js").UserlandResourceHandleStore,
+        "issueFromPreparation" | "resolve"
+      >;
       /**
        * Live identity gate for persistent WS/WebRTC sessions. Authentication
        * stamps a caller once, but revocation and workspace membership are
@@ -727,16 +815,22 @@ export class RpcServer {
       egressProxy: deps.egressProxy,
       authenticateHttp: (req) => this.authenticateHttpRequest(req),
       verifiedCaller: (caller, request, subject) =>
-        this.verifiedCallerFor(
-          caller.callerId,
-          caller.callerKind,
-          caller.agentBinding,
-          subject,
-          this.testPolicyFromAuthorityParent(
+        this.callerWithAuthorityParent(
+          this.verifiedCallerFor(
+            caller.callerId,
+            caller.callerKind,
+            caller.agentBinding,
+            subject,
+            this.authorityParentFor(
+              caller.callerId,
+              (request as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
+            )?.testPolicy,
+            (request as InternalRpcRequest | InternalRpcStreamRequest).executionSessionNonce
+          ),
+          this.authorityParentFor(
             caller.callerId,
             (request as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
-          ),
-          (request as InternalRpcRequest | InternalRpcStreamRequest).executionSessionNonce
+          )
         ),
       authorizeRelay: (callerId, callerKind, targetId, method) =>
         this.checkRelayAuth(callerId, callerKind, targetId, method),
@@ -872,10 +966,14 @@ export class RpcServer {
       : verified;
   }
 
-  private testPolicyFromAuthorityParent(
+  private authorityParentFor(
     callerRuntimeId: string,
     authorityParentNonce: string | undefined
-  ): AgentExecutionTestPolicy | null {
+  ): {
+    receiverRuntimeId: string;
+    testPolicy: AgentExecutionTestPolicy | null;
+    requested: readonly CapabilityScope[] | null;
+  } | null {
     if (authorityParentNonce === undefined) return null;
     if (
       typeof authorityParentNonce !== "string" ||
@@ -891,7 +989,25 @@ export class RpcServer {
     if (active.receiverRuntimeId !== callerRuntimeId) {
       throw createRelayError("Invocation authority parent belongs to another runtime", "EACCES");
     }
-    return active.testPolicy;
+    return active;
+  }
+
+  private callerWithAuthorityParent(
+    caller: VerifiedCaller,
+    parent: {
+      receiverRuntimeId: string;
+      testPolicy: AgentExecutionTestPolicy | null;
+      requested: readonly CapabilityScope[] | null;
+    } | null
+  ): VerifiedCaller {
+    if (!parent || parent.requested === null || !caller.code) return caller;
+    return {
+      ...caller,
+      code: {
+        ...caller.code,
+        requested: parent.requested,
+      },
+    };
   }
 
   private beginAuthorityParent(
@@ -899,18 +1015,22 @@ export class RpcServer {
     authorization: DirectAuthorityAttestation
   ): () => void {
     const inheritedTestPolicy = authorization.context.testPolicy;
-    if (!inheritedTestPolicy) return () => {};
     const receiver = this.deps.entityCache?.resolveActive(receiverRuntimeId);
     const residentTestPolicy = receiver?.contextId
       ? this.deps.testPolicyForContext?.(receiver.contextId)
       : null;
-    const testPolicy = refineTestPolicy(residentTestPolicy, inheritedTestPolicy);
+    const testPolicy = refineTestPolicy(residentTestPolicy, inheritedTestPolicy) ?? null;
+    const ref = parseDOTarget(receiverRuntimeId);
+    const requested = productBuiltinByIdentity(ref.source, ref.className)
+      ? productBuiltinMethodRequests(ref.source, ref.className, authorization.method)
+      : null;
     if (this.activeAuthorityParents.has(authorization.nonce)) {
       throw createRelayError("Direct invocation authority nonce is already active", "EACCES");
     }
     const entry = {
       receiverRuntimeId,
-      testPolicy: testPolicy ?? inheritedTestPolicy,
+      testPolicy,
+      requested,
     };
     this.activeAuthorityParents.set(authorization.nonce, entry);
     let active = true;
@@ -2837,16 +2957,20 @@ export class RpcServer {
     const requestId = message.requestId;
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
-    const verifiedCaller = this.verifiedCallerFor(
+    const authorityParent = this.authorityParentFor(
       callerId,
-      callerKind,
-      agentBinding,
-      undefined,
-      this.testPolicyFromAuthorityParent(
+      (message as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
+    );
+    const verifiedCaller = this.callerWithAuthorityParent(
+      this.verifiedCallerFor(
         callerId,
-        (message as InternalRpcRequest | InternalRpcStreamRequest).authorityParentNonce
+        callerKind,
+        agentBinding,
+        undefined,
+        authorityParent?.testPolicy,
+        (message as InternalRpcRequest | InternalRpcStreamRequest).executionSessionNonce
       ),
-      (message as InternalRpcRequest | InternalRpcStreamRequest).executionSessionNonce
+      authorityParent
     );
     const causalParent = await this.resolveCausalParent(verifiedCaller, message);
     // A causal parent authenticates invocation lineage; it does not change the
@@ -3130,9 +3254,57 @@ export class RpcServer {
       );
     }
     const workspaceAuthority = workspaceAuthorities?.[0];
+    const productPolicy = productBuiltinMethodPolicy(
+      input.ref.source,
+      input.ref.className,
+      input.method
+    );
+    if (
+      productPolicy?.execution?.harness === "attested-system-test" &&
+      !this.deps.isAttestedSystemTestHarness?.(input.caller)
+    ) {
+      throw createRelayError(`${input.method} requires an attested system-test harness`, "EACCES");
+    }
+    const preparedDeclaration = productPolicy?.prepared;
     const sessionId = input.caller.agentBinding?.channelId ?? input.caller.runtime.id;
     const methodCapability = workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;
     const methodTier = workspaceAuthority?.methodTier;
+    let resolvedHandle:
+      | import("./services/userlandResourceHandleStore.js").ResolvedUserlandResourceHandle
+      | undefined;
+    if (
+      workspaceAuthority?.methodEffect.kind === "userland-capability" &&
+      workspaceAuthority.methodEffect.resource.kind === "opaque-handle"
+    ) {
+      const receiver = workspaceAuthority.methodReceiverAuthority;
+      const handle = input.args[workspaceAuthority.methodEffect.resource.argument];
+      if (!receiver || typeof handle !== "string" || !this.deps.userlandResourceHandles) {
+        throw createRelayError("Opaque resource handle is missing or unavailable", "EACCES");
+      }
+      try {
+        resolvedHandle = this.deps.userlandResourceHandles.resolve(handle, {
+          workspaceId,
+          capability: workspaceAuthority.methodCapability!,
+          capabilityDefinitionDigest: receiver.capabilityDefinitionDigest,
+          provider: receiver.provider,
+          receiverSource: input.ref.source,
+          receiverClass: input.ref.className,
+          receiverObjectKey: input.ref.objectKey,
+          resourceType: receiver.resourceType,
+        });
+      } catch {
+        throw createRelayError(
+          "Opaque resource handle is not valid for this receiver capability",
+          "EACCES"
+        );
+      }
+    }
+    const receiverResourceKey = resolvedHandle
+      ? resolvedHandle.resourceKey
+      : workspaceAuthority?.methodReceiverAuthority &&
+          workspaceAuthority.methodEffect.kind === "userland-capability"
+        ? `${workspaceAuthority.methodReceiverAuthority.resourceType}:do:${input.ref.source}:${input.ref.className}:${input.ref.objectKey}`
+        : undefined;
     const policyFor = (capability: string) =>
       receiverAuthorityPolicy(
         capability,
@@ -3154,12 +3326,13 @@ export class RpcServer {
       workspaceRole: this.deps.workspaceRoleResolver?.(input.caller.subject) ?? null,
       sessionId,
       grantStore: this.deps.capabilityGrantStore,
-      mission: this.deps.missionFactForSession?.(sessionId) ?? null,
+      reviewedClosure: this.deps.reviewedClosureFactForSession?.(sessionId) ?? null,
       contextIntegrity:
         this.deps.contextIntegrityFactForSession?.(sessionId, input.caller) ??
         (input.caller.agentBinding
           ? { class: "internal" as const, latchEpoch: 0, externalKeys: [] }
           : { class: "not-applicable" as const, latchEpoch: 0, externalKeys: [] }),
+      ...(receiverResourceKey ? { resourceKey: receiverResourceKey } : {}),
     } as const;
     const attestation = workspaceAuthority
       ? attestWorkspaceDoRpc({
@@ -3170,12 +3343,27 @@ export class RpcServer {
           },
           methodAuthority: {
             effect: workspaceAuthority.methodEffect,
+            ...(workspaceAuthority.methodCapability
+              ? { capability: workspaceAuthority.methodCapability }
+              : {}),
             tier: workspaceAuthority.methodTier,
           },
+          ...(workspaceAuthority.methodReceiverAuthority
+            ? { receiverAuthority: workspaceAuthority.methodReceiverAuthority }
+            : {}),
         })
       : attestDirectRpc(authorityFacts);
     const result: DirectAuthorityAttestation = {
       ...attestation,
+      ...(resolvedHandle
+        ? {
+            resourceHandle: resolvedHandle.handle,
+            resourceSelector: resolvedHandle.selector,
+          }
+        : {}),
+      ...(workspaceAuthority?.methodHandleProduction
+        ? { handleProduction: workspaceAuthority.methodHandleProduction }
+        : {}),
       ...(workspaceAuthority
         ? {
             targetRequirement: requirementForPrincipals(
@@ -3188,42 +3376,180 @@ export class RpcServer {
         : {}),
       ...(input.readOnly ? { readOnly: true as const } : {}),
     };
-    if (!workspaceAuthority || input.method.startsWith("__event:")) return result;
+    if ((!workspaceAuthority && !preparedDeclaration) || input.method.startsWith("__event:")) {
+      return result;
+    }
 
     const requiredMethodCapability =
-      workspaceAuthority.methodCapability ?? workspaceAuthority.capability;
-    const requiredMethodTier = workspaceAuthority.methodTier;
-    const leaves = [
-      {
-        capability: requiredMethodCapability,
-        tier: requiredMethodTier,
-        requirement: requirementForPrincipals(
-          workspaceAuthority.principals,
-          requiredMethodCapability
-        ),
-      },
-      ...(requiredMethodCapability !== workspaceAuthority.capability ||
-      requiredMethodTier !== "gated"
+      workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;
+    const requiredMethodTier = workspaceAuthority?.methodTier;
+    const staticLeaves =
+      workspaceAuthority && requiredMethodCapability && requiredMethodTier
         ? [
             {
-              capability: workspaceAuthority.capability,
-              tier: "gated" as const,
+              capability: requiredMethodCapability,
+              tier: requiredMethodTier,
               requirement: requirementForPrincipals(
                 workspaceAuthority.principals,
-                workspaceAuthority.capability
+                requiredMethodCapability
               ),
+              resourceKey: result.resourceKey,
+              context: result.context,
+              grants: result.grants,
+              locks: result.locks,
+              caller: input.caller,
+              challenge: undefined,
             },
+            ...(requiredMethodCapability !== workspaceAuthority.capability ||
+            requiredMethodTier !== "gated"
+              ? [
+                  {
+                    capability: workspaceAuthority.capability,
+                    tier: "gated" as const,
+                    requirement: requirementForPrincipals(
+                      workspaceAuthority.principals,
+                      workspaceAuthority.capability
+                    ),
+                    resourceKey: result.resourceKey,
+                    context: result.context,
+                    grants: result.grants,
+                    locks: result.locks,
+                    caller: input.caller,
+                    challenge: undefined,
+                  },
+                ]
+              : []),
           ]
-        : []),
-    ];
-    const snapshotFor = (capability: string) =>
+        : [];
+    const preparedSelections = preparedDeclaration
+      ? await this.deps.resolveProductBuiltinPreparedAuthority?.({
+          caller: input.caller,
+          ...input.ref,
+          method: input.method,
+          args: input.args,
+          resolver: preparedDeclaration.resolver,
+          ...(preparedDeclaration.contextBoundary
+            ? { contextBoundary: preparedDeclaration.contextBoundary }
+            : {}),
+        })
+      : [];
+    if (preparedDeclaration && preparedSelections === undefined) {
+      throw createRelayError(
+        `Direct builtin method ${input.ref.source}:${input.ref.className}.${input.method} requires unavailable authority preparation '${preparedDeclaration.resolver}'`,
+        "EACCES"
+      );
+    }
+    const preparedLeaves = [...(preparedSelections ?? [])].map((selection) => {
+      const declaration = preparedDeclaration!.leaves.find((candidate) => {
+        if ("capability" in candidate && candidate.capability !== undefined) {
+          return candidate.capability === selection.capability;
+        }
+        return (
+          "capabilityPrefix" in candidate &&
+          candidate.capabilityPrefix !== undefined &&
+          selection.capability.startsWith(candidate.capabilityPrefix)
+        );
+      });
+      if (!declaration) {
+        throw createRelayError(
+          `Authority preparer '${preparedDeclaration!.resolver}' selected undeclared capability '${selection.capability}'`,
+          "EACCES"
+        );
+      }
+      const declaredRequirement = declaration.requirement;
+      let requirement;
+      if (declaredRequirement.kind === "selected") {
+        if (!selection.requirement) {
+          throw createRelayError(
+            `Authority preparer '${preparedDeclaration!.resolver}' omitted the selected requirement for '${selection.capability}'`,
+            "EACCES"
+          );
+        }
+        requirement = selection.requirement;
+      } else {
+        if (selection.requirement) {
+          throw createRelayError(
+            `Authority preparer '${preparedDeclaration!.resolver}' replaced the fixed requirement for '${selection.capability}'`,
+            "EACCES"
+          );
+        }
+        requirement = declaredRequirement;
+      }
+      const declaredTier = declaration.tier;
+      const tier = declaredTier && typeof declaredTier === "object" ? selection.tier : declaredTier;
+      if (
+        !tier ||
+        (declaredTier &&
+          typeof declaredTier === "object" &&
+          (!selection.tier || !declaredTier.selectedFrom.includes(selection.tier))) ||
+        (typeof declaredTier === "string" &&
+          selection.tier !== undefined &&
+          selection.tier !== declaredTier)
+      ) {
+        throw createRelayError(
+          `Authority preparer '${preparedDeclaration!.resolver}' selected an undeclared tier for '${selection.capability}'`,
+          "EACCES"
+        );
+      }
+      const caller = selection.authorizingCaller ?? input.caller;
+      const authorization = authorizeVerifiedCaller(caller, {
+        workspaceId,
+        workspaceMember:
+          caller.runtime.kind === "server" ||
+          !this.deps.membershipGate ||
+          this.deps.membershipGate(caller.subject),
+        workspaceRole: this.deps.workspaceRoleResolver?.(caller.subject) ?? null,
+        sessionId,
+        audience: directAuthorityAudience(
+          input.ref.source,
+          input.ref.className,
+          input.ref.objectKey
+        ),
+        capability: selection.capability,
+        resourceKey: selection.resourceKey,
+        grantCode: caller.codeApproved,
+        grantStore: this.deps.capabilityGrantStore,
+        reviewedClosure: this.deps.reviewedClosureFactForSession?.(sessionId) ?? null,
+        contextIntegrity: authorityFacts.contextIntegrity,
+        tier,
+      });
+      return {
+        capability: selection.capability,
+        tier,
+        requirement,
+        resourceKey: selection.resourceKey,
+        context: authorization.context,
+        grants: authorization.grants,
+        locks: authorization.locks,
+        caller,
+        challenge: selection.challenge,
+      };
+    });
+    const leaves = [...staticLeaves, ...preparedLeaves];
+    const snapshotFor = (leaf: (typeof leaves)[number]) =>
       createInvocationSnapshot({
         service: `direct:${input.ref.source}:${input.ref.className}`,
         method: input.method,
-        capability,
+        capability: leaf.capability,
+        capabilityDefinitionDigest:
+          workspaceAuthority && leaf.capability === workspaceAuthority.methodCapability
+            ? (workspaceAuthority.methodReceiverAuthority?.capabilityDefinitionDigest ?? "-")
+            : "-",
+        resourceType:
+          workspaceAuthority && leaf.capability === workspaceAuthority.methodCapability
+            ? (workspaceAuthority.methodReceiverAuthority?.resourceType ?? leaf.capability)
+            : leaf.capability,
+        provider:
+          workspaceAuthority && leaf.capability === workspaceAuthority.methodCapability
+            ? (workspaceAuthority.methodReceiverAuthority?.provider ?? "-")
+            : "-",
+        providerExecutionDigest:
+          workspaceAuthority && leaf.capability === workspaceAuthority.methodCapability
+            ? (workspaceAuthority.methodReceiverAuthority?.providerExecutionDigest ?? "-")
+            : "-",
         targetRequirement: result.targetRequirement,
         targetCapability: result.targetCapability,
-        resourceKey: result.resourceKey,
+        resourceKey: leaf.resourceKey,
         args: input.args,
         preparedStateDigest: sha256Canonical({
           source: input.ref.source,
@@ -3233,78 +3559,80 @@ export class RpcServer {
           methodTier,
           targetCapability: result.targetCapability ?? null,
           targetTier: result.targetTier ?? null,
-          principals: workspaceAuthority.principals,
+          principals: workspaceAuthority?.principals ?? productPolicy?.principals ?? [],
         }),
-        callerPrincipal: result.context.authorizingOrigin.principal,
+        callerPrincipal: leaf.context.authorizingOrigin.principal,
         sessionId,
-        ...(result.context.session.taskRef ? { taskRef: result.context.session.taskRef } : {}),
-        ...(result.context.executionSession?.agentBinding?.bindingId
+        ...(leaf.context.session.taskRef ? { taskRef: leaf.context.session.taskRef } : {}),
+        ...(leaf.context.executionSession?.agentBinding?.bindingId
           ? {
-              agentBindingId: result.context.executionSession.agentBinding.bindingId,
-              agentName: result.context.executionSession.agentBinding.entityId,
+              agentBindingId: leaf.context.executionSession.agentBinding.bindingId,
+              agentName: leaf.context.executionSession.agentBinding.entityId,
             }
           : {}),
-        lineageClasses: result.context.contextIntegrity
-          ? lineageClasses(result.context.contextIntegrity)
+        lineageClasses: leaf.context.contextIntegrity
+          ? lineageClasses(leaf.context.contextIntegrity)
           : ["none"],
-        irreversible: policyFor(capability).irreversible,
+        irreversible: policyFor(leaf.capability).irreversible,
         agentScopeEligible: standingAgentScopeEligible({
-          capability,
-          tier: workspaceAuthority.methodTier,
-          policy: policyFor(capability),
-          domain: workspaceAuthority.presentation.domain,
+          capability: leaf.capability,
+          tier: leaf.tier,
+          policy: policyFor(leaf.capability),
+          domain: workspaceAuthority?.presentation.domain ?? "computer",
           priorInteractiveApprovals:
-            result.context.executionSession?.agentBinding?.bindingId === undefined
+            leaf.context.executionSession?.agentBinding?.bindingId === undefined
               ? 0
               : (this.deps.capabilityGrantStore?.priorInteractiveApprovalCount({
-                  agentBindingId: result.context.executionSession.agentBinding.bindingId,
-                  capability,
-                  resource: { kind: "exact", key: result.resourceKey },
+                  agentBindingId: leaf.context.executionSession.agentBinding.bindingId,
+                  capability: leaf.capability,
+                  resource: { kind: "exact", key: leaf.resourceKey },
                 }) ?? 0),
         }),
         executionMode:
-          result.context.executionSession?.mode ?? (result.context.testPolicy ? "test" : undefined),
-        testPolicyId: result.context.testPolicy?.policyId,
-        mission: result.context.session.mission
-          ? `mission:${result.context.session.mission.missionId}@${result.context.session.mission.closureDigest}`
+          leaf.context.executionSession?.mode ?? (leaf.context.testPolicy ? "test" : undefined),
+        testPolicyId: leaf.context.testPolicy?.policyId,
+        reviewedClosureSubject: leaf.context.session.reviewedClosure
+          ? leaf.context.session.reviewedClosure.subject
           : "-",
         snippetDigest:
-          result.context.authorizingOrigin.kind === "session"
-            ? (result.context.executingCode?.principal.split("@").at(-1) ?? "-")
+          leaf.context.authorizingOrigin.kind === "session"
+            ? (leaf.context.executingCode?.principal.split("@").at(-1) ?? "-")
             : "-",
-        codeLineage: result.context.executingCode
+        codeLineage: leaf.context.executingCode
           ? {
-              class: result.context.executingCode.sourceLineage.class,
-              chain: result.context.executingCode.sourceLineage.externalKeys,
+              class: leaf.context.executingCode.sourceLineage.class,
+              chain: leaf.context.executingCode.sourceLineage.externalKeys,
             }
           : { class: "unknown", chain: [] },
-        contextLineage: result.context.contextIntegrity,
-        initiatorChain: result.context.initiatorChain,
+        contextLineage: leaf.context.contextIntegrity,
+        initiatorChain: leaf.context.initiatorChain,
       });
     const decisions = leaves.map((leaf) => {
-      const snapshot = snapshotFor(leaf.capability);
+      const snapshot = snapshotFor(leaf);
       const snapshotDigest = invocationSnapshotDigest(snapshot);
       return {
         leaf,
         snapshot,
         snapshotDigest,
         decision: evaluateAuthority({
-          context: result.context,
+          context: leaf.context,
           requirement: leaf.requirement,
-          resourceKey: result.resourceKey,
-          grants: result.grants,
-          locks: result.locks,
+          resourceKey: leaf.resourceKey,
+          grants: leaf.grants,
+          locks: leaf.locks,
           tier: leaf.tier,
           invocationDigest: snapshotDigest,
+          providerExecutionDigest: snapshot.providerExecutionDigest,
         }),
       };
     });
     result.invocationDigest = decisions[0]?.snapshotDigest;
     const denied = decisions.find(({ decision }) => !decision.allowed);
     if (denied) {
+      const preparedChallenge = "challenge" in denied.leaf ? denied.leaf.challenge : undefined;
       const authorityFailure = authorityFailureForDecision(denied.decision, {
         capability: denied.leaf.capability,
-        resourceKey: result.resourceKey,
+        resourceKey: denied.leaf.resourceKey,
         tier: denied.leaf.tier,
       });
       const acquirable =
@@ -3324,10 +3652,15 @@ export class RpcServer {
         snapshot: denied.snapshot,
         snapshotDigest: denied.snapshotDigest,
         tier: denied.leaf.tier as "gated" | "critical",
-        caller: input.caller,
-        renderedAction: (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability)
-          .action,
-        resource: { kind: "exact", key: result.resourceKey },
+        caller: denied.leaf.caller,
+        renderedAction:
+          preparedChallenge?.operation.verb ??
+          (workspaceAuthority &&
+          denied.leaf.capability === workspaceAuthority.methodCapability &&
+          workspaceAuthority.methodReceiverAuthority
+            ? workspaceAuthority.methodReceiverAuthority.action
+            : (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability).action),
+        resource: { kind: "exact", key: denied.leaf.resourceKey },
         ...(policyFor(denied.leaf.capability).requiresSubstance
           ? {
               substance: {
@@ -3335,44 +3668,80 @@ export class RpcServer {
                 summary: `${
                   (this.deps.describeCapability ?? describeCapability)(denied.leaf.capability)
                     .action
-                } ${workspaceAuthority?.title ?? result.resourceKey}`,
+                } ${workspaceAuthority?.title ?? denied.leaf.resourceKey}`,
                 digest: denied.snapshot.preparedStateDigest,
               },
             }
           : {}),
-        ...(workspaceAuthority && denied.leaf.capability === workspaceAuthority.capability
-          ? {
-              presentation: {
-                title: `Allow ${input.caller.runtime.id} to ${workspaceAuthority.action}?`,
-                description:
-                  workspaceAuthority.description ??
-                  `Use ${workspaceAuthority.title} in this workspace.`,
-                deniedReason: `The ${workspaceAuthority.title} request was not allowed`,
-                resource: {
-                  type: "workspace-service",
-                  label: "Service",
-                  value: workspaceAuthority.title,
-                },
-                operation: {
-                  kind: "unknown" as const,
-                  verb: workspaceAuthority.action,
-                  object: {
-                    type: "workspace-service",
-                    label: "Service",
-                    value: workspaceAuthority.title,
+        ...(preparedChallenge
+          ? { presentation: preparedChallenge }
+          : workspaceAuthority?.methodReceiverAuthority &&
+              denied.leaf.capability === workspaceAuthority.methodCapability
+            ? {
+                presentation: {
+                  title: workspaceAuthority.methodReceiverAuthority.title,
+                  description:
+                    resolvedHandle?.presentation.detail ??
+                    workspaceAuthority.methodReceiverAuthority.description ??
+                    `Provided by ${workspaceAuthority.methodReceiverAuthority.provider}.`,
+                  deniedReason: `${workspaceAuthority.methodReceiverAuthority.title} was not allowed`,
+                  resource: {
+                    type: workspaceAuthority.methodReceiverAuthority.resourceType,
+                    label: "Resource",
+                    value: resolvedHandle?.presentation.title ?? denied.leaf.resourceKey,
+                  },
+                  operation: {
+                    kind: "unknown" as const,
+                    verb: workspaceAuthority.methodReceiverAuthority.action,
+                    object: {
+                      type: workspaceAuthority.methodReceiverAuthority.resourceType,
+                      label: "Resource",
+                      value: resolvedHandle?.presentation.title ?? denied.leaf.resourceKey,
+                    },
+                  },
+                  allowedDecisions: [
+                    ...workspaceAuthority.methodReceiverAuthority.grantScopes,
+                    "deny" as const,
+                  ],
+                  authorityVocabulary: {
+                    ...workspaceAuthority.presentation,
+                    declaredBy: workspaceAuthority.methodReceiverAuthority.provider,
                   },
                 },
-                authorityVocabulary: {
-                  ...workspaceAuthority.presentation,
-                  declaredBy: workspaceAuthority.declaredBy,
-                },
-              },
-            }
-          : {}),
+              }
+            : workspaceAuthority && denied.leaf.capability === workspaceAuthority.capability
+              ? {
+                  presentation: {
+                    title: `Allow ${input.caller.runtime.id} to ${workspaceAuthority.action}?`,
+                    description:
+                      workspaceAuthority.description ??
+                      `Use ${workspaceAuthority.title} in this workspace.`,
+                    deniedReason: `The ${workspaceAuthority.title} request was not allowed`,
+                    resource: {
+                      type: "workspace-service",
+                      label: "Service",
+                      value: workspaceAuthority.title,
+                    },
+                    operation: {
+                      kind: "unknown" as const,
+                      verb: workspaceAuthority.action,
+                      object: {
+                        type: "workspace-service",
+                        label: "Service",
+                        value: workspaceAuthority.title,
+                      },
+                    },
+                    authorityVocabulary: {
+                      ...workspaceAuthority.presentation,
+                      declaredBy: workspaceAuthority.declaredBy,
+                    },
+                  },
+                }
+              : {}),
       } as const;
       this.deps.directAuthorityAcquirer.invalidate(
         denied.snapshotDigest,
-        input.caller.runtime.id,
+        denied.leaf.caller.runtime.id,
         denied.snapshot.callerPrincipal
       );
       if (input.waitForAuthority) {
@@ -3475,7 +3844,7 @@ export class RpcServer {
     // Assertion-only: the concrete DO entity must exist before dispatch.
     // Method-specific context checks (e.g. subscribeChannel) belong in the
     // DO's own handler, not in the generic relay path. Cross-context calls
-    // to shared singletons (panel → GadWorkspaceDO) must pass through.
+    // to shared manifest-declared singletons must pass through.
     const cache = this.deps.entityCache;
     if (cache && !cache.resolveActive(targetId)) {
       throw createRelayError(
@@ -3518,9 +3887,10 @@ export class RpcServer {
         args,
         readOnly: meta?.readOnly,
       });
+      const dispatchedArgs = this.resolveOpaqueHandleArgument(args, authorization);
       const releaseAuthorityParent = this.beginAuthorityParent(targetId, authorization);
       try {
-        return await postToDurableObject(ref, method, args, {
+        const result = await postToDurableObject(ref, method, dispatchedArgs, {
           workerdUrl,
           workerdGatewayToken,
           ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
@@ -3534,6 +3904,7 @@ export class RpcServer {
           ...(meta?.readOnly ? { readOnly: true } : {}),
           ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
         });
+        return this.sealProducedResourceHandle(ref, authorization, result);
       } finally {
         releaseAuthorityParent();
       }
@@ -3546,6 +3917,49 @@ export class RpcServer {
     // identity. Callers may retry explicitly with their semantic command's
     // idempotency key after resolving the entity lifecycle again.
     return await dispatch();
+  }
+
+  private resolveOpaqueHandleArgument(
+    args: readonly unknown[],
+    authorization: DirectAuthorityAttestation
+  ): unknown[] {
+    if (
+      authorization.effect.kind !== "userland-capability" ||
+      authorization.effect.resource.kind !== "opaque-handle"
+    ) {
+      return [...args];
+    }
+    if (authorization.resourceSelector === undefined) {
+      throw createRelayError("Opaque resource handle was not resolved", "EACCES");
+    }
+    const next = [...args];
+    next[authorization.effect.resource.argument] = authorization.resourceSelector;
+    return next;
+  }
+
+  private sealProducedResourceHandle(
+    ref: { source: string; className: string; objectKey: string },
+    authorization: DirectAuthorityAttestation,
+    result: unknown
+  ): unknown {
+    const production = authorization.handleProduction;
+    if (!production) return result;
+    if (!this.deps.workspaceId || !this.deps.userlandResourceHandles) {
+      throw createRelayError("Opaque resource handle service is unavailable", "EACCES");
+    }
+    return this.deps.userlandResourceHandles.issueFromPreparation(
+      {
+        workspaceId: this.deps.workspaceId,
+        capability: production.capability,
+        capabilityDefinitionDigest: production.capabilityDefinitionDigest,
+        provider: production.provider,
+        receiverSource: ref.source,
+        receiverClass: ref.className,
+        receiverObjectKey: ref.objectKey,
+        resourceType: production.resourceType,
+      },
+      result
+    );
   }
 
   private async relayTargetStream(
@@ -3588,12 +4002,16 @@ export class RpcServer {
       waitForAuthority: true,
       signal,
     });
+    if (authorization.handleProduction) {
+      throw createRelayError("Handle-producing RPC methods cannot stream responses", "EACCES");
+    }
+    const dispatchedArgs = this.resolveOpaqueHandleArgument(request.args, authorization);
     const releaseAuthorityParent = this.beginAuthorityParent(targetId, authorization);
     try {
       const response = await streamFromDurableObject(
         ref,
         request.method,
-        request.args,
+        dispatchedArgs,
         {
           workerdUrl: this.workerdUrl,
           workerdGatewayToken: this.workerdGatewayToken,

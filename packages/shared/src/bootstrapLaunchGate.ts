@@ -1,5 +1,13 @@
 import type { PendingUnitBatchApproval, UnitBatchEntry } from "./approvals.js";
-import type { HostTarget, HostTargetLaunchApprovalView } from "./hostTargets.js";
+import type { HostTarget } from "./hostTargets.js";
+
+export interface HostTargetLaunchApprovalView {
+  approvalId: string;
+  title: string;
+  summary: string;
+  chips: string[];
+  units: UnitReviewRow[];
+}
 
 export type BootstrapDecision = "once" | "deny";
 

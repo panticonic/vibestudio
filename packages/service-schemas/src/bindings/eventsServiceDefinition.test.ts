@@ -2,11 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { EventService } from "@vibestudio/shared/eventsService";
 import { readEventWatchRecords } from "@vibestudio/shared/events";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { PanelTreeSnapshot } from "@vibestudio/shared/types";
+import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import { createEventsServiceDefinition } from "./eventsServiceDefinition.js";
 
-const EVENT = "panel-tree-updated" as const;
-const snapshot: PanelTreeSnapshot = { revision: 1, forest: [] };
+const EVENT = "panel-tree-invalidated" as const;
+const snapshot: PanelTreeInvalidation = {
+  revision: 1,
+  reset: true,
+  groups: [],
+  changedSlotIds: [],
+  removedSlotIds: [],
+};
 
 function context(
   callerId: string,
@@ -134,7 +140,13 @@ describe("events.watch", () => {
 
   it("registers the watch before evaluating its snapshot provider", async () => {
     const events = new EventService();
-    const duringSnapshot = { revision: 2, forest: [] } satisfies PanelTreeSnapshot;
+    const duringSnapshot = {
+      revision: 2,
+      reset: true,
+      groups: [],
+      changedSlotIds: [],
+      removedSlotIds: [],
+    } satisfies PanelTreeInvalidation;
     const service = createEventsServiceDefinition(events, {
       snapshots: {
         [EVENT]: () => {

@@ -68,26 +68,27 @@ export const PanelLifecycleResultSchema: z.ZodType<PanelLifecycleResult> = z.obj
   reloaded: z.boolean(),
   buildRevision: z.number().optional(),
   effectiveVersion: z.string().nullable().optional(),
+  closedCount: z.number().int().nonnegative().optional(),
 });
 
 export const PanelFailureCodeSchema = z.enum([
-    "unit_not_found",
-    "ref_not_found",
-    "manifest_invalid",
-    "dependency_resolution_failed",
-    "compile_failed",
-    "build_identity_invalid",
-    "host_unavailable",
-    "lease_conflict",
-    "parent_resolution_timeout",
-    "navigation_failed",
-    "asset_unavailable",
-    "entry_threw",
-    "runtime_handshake_timeout",
-    "render_crashed",
-    "panel_not_found",
-    "unknown_failure",
-  ]);
+  "unit_not_found",
+  "ref_not_found",
+  "manifest_invalid",
+  "dependency_resolution_failed",
+  "compile_failed",
+  "build_identity_invalid",
+  "host_unavailable",
+  "lease_conflict",
+  "parent_resolution_timeout",
+  "navigation_failed",
+  "asset_unavailable",
+  "entry_threw",
+  "runtime_handshake_timeout",
+  "render_crashed",
+  "panel_not_found",
+  "unknown_failure",
+]);
 export const PanelFailureStageSchema = z.enum([
   "resolve",
   "build",
@@ -233,7 +234,8 @@ export const PanelNavigationStateSchema: z.ZodType<PanelNavigationState> = z.obj
 export const MovePanelRequestSchema = z.object({
   panelId: z.string(),
   newParentId: z.string().nullable(),
-  targetPosition: z.number().int().nonnegative(),
+  beforePanelId: z.string().nullable().optional(),
+  afterPanelId: z.string().nullable().optional(),
 });
 
 export const PanelRuntimeLeaseSchema = z.object({
@@ -329,14 +331,21 @@ export const PanelSchema: z.ZodType<Panel> = z.lazy(() =>
     title: z.string(),
     runtimeEntityId: z.string().nullable().optional(),
     effectiveVersion: z.string().nullable().optional(),
-    buildKey: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
-    executionDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+    buildKey: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .nullable()
+      .optional(),
+    executionDigest: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .nullable()
+      .optional(),
     authorityRequests: z
       .array(z.custom<import("./authorityManifest.js").UnitAuthorityRequest>())
       .optional(),
     owner: z.string().optional(),
     children: z.array(PanelSchema),
-    positionId: z.string().optional(),
     selectedChildId: z.string().nullable().optional(),
     snapshot: PanelSnapshotSchema,
     history: PanelSnapshotHistorySchema.optional(),

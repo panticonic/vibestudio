@@ -2,10 +2,26 @@
 
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
+import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 const readAccess: MethodAccessDescriptor = { sensitivity: "read" };
 const adminAccess: MethodAccessDescriptor = { sensitivity: "admin" };
+const USER_CODE_HOST: ServiceAuthorityPolicy = { principals: ["user", "code", "host"] };
+const MOBILE_DEVICES_PRESENTATION = {
+  title: "View available mobile devices",
+  action: "view available mobile devices",
+  description: "Allows {requesterKind} to view available mobile devices.",
+  group: "accounts",
+  authorityCategory: { domain: "people", verb: "see" },
+} as const;
+const MOBILE_PROVISION_PRESENTATION = {
+  title: "Install and pair a mobile device",
+  action: "install and pair a mobile device",
+  description: "Allows {requesterKind} to install and pair a mobile device.",
+  group: "accounts",
+  authorityCategory: { domain: "people", verb: "manage" },
+} as const;
 
 export const PhonePlatformSchema = z.enum(["android", "ios"]);
 export type PhonePlatform = z.infer<typeof PhonePlatformSchema>;
@@ -95,11 +111,16 @@ export const phoneProvisioningMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(PhoneProviderSchema),
     access: readAccess,
+    authority: USER_CODE_HOST,
     capability: "mobile.devices.read",
+    presentation: MOBILE_DEVICES_PRESENTATION,
     tier: {
       tier: "gated",
       session: "family",
-      rationale: "Connected desktop-provider inventory is private device state.",
+      residency: "transport",
+      family: "phoneProvisioning.read",
+      rationale:
+        "Builtin policy composes account-bound connected-client transport without retaining product policy in the kernel.",
     },
   },
   devices: {
@@ -108,11 +129,16 @@ export const phoneProvisioningMethods = defineServiceMethods({
     args: z.tuple([PhoneDeviceQuerySchema]),
     returns: PhoneDeviceDiscoverySchema,
     access: readAccess,
+    authority: USER_CODE_HOST,
     capability: "mobile.devices.read",
+    presentation: MOBILE_DEVICES_PRESENTATION,
     tier: {
       tier: "gated",
       session: "family",
-      rationale: "Attached device inventory and installed-app state are private.",
+      residency: "transport",
+      family: "phoneProvisioning.read",
+      rationale:
+        "Builtin policy invokes the receiver-owned native device endpoint over account-bound transport.",
     },
   },
   provision: {
@@ -121,12 +147,16 @@ export const phoneProvisioningMethods = defineServiceMethods({
     args: z.tuple([PhoneProvisionArgsSchema]),
     returns: PhoneProvisioningResultSchema,
     access: adminAccess,
+    authority: USER_CODE_HOST,
     capability: "mobile.provision",
+    presentation: MOBILE_PROVISION_PRESENTATION,
     tier: {
       tier: "gated",
       session: "family",
+      residency: "native-effect",
+      family: "phoneProvisioning.provision",
       rationale:
-        "Installs software and adds the attached phone to the current account through a connected desktop.",
+        "Builtin policy invokes the exact receiver-owned native install and pairing endpoint on the selected desktop.",
     },
   },
 });

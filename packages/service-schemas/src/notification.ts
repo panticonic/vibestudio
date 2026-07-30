@@ -30,13 +30,23 @@ export const NotificationActionSchema = z.object({
     .union([
       z.object({ type: z.literal("app.applyUpdate"), appId: z.string() }),
       z.object({
-        type: z.literal("app.rollback"),
-        appId: z.string(),
+        type: z.literal("runtime.supervision.rollback"),
+        release: z
+          .object({
+            kind: z.literal("app"),
+            releaseId: z.string(),
+          })
+          .strict(),
         buildKey: z.string().optional(),
       }),
       z.object({
-        type: z.literal("workspace.restartUnit"),
-        name: z.string(),
+        type: z.literal("runtime.supervision.restart"),
+        identity: z
+          .object({
+            kind: z.enum(["panel", "worker", "do", "app", "extension"]),
+            entityId: z.string(),
+          })
+          .strict(),
       }),
       z.object({ type: z.literal("desktop.installNpmUpdate") }),
       z.object({ type: z.literal("desktop.copyNpmUpdateCommand") }),
@@ -105,6 +115,13 @@ export const NotificationShowRequestSchema = z.object({
 
 export const notificationMethods = defineServiceMethods({
   show: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "notification.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Show a notification in the shell chrome; returns its id (auto-generated when not supplied).",
     args: z.tuple([NotificationShowRequestSchema]),
@@ -113,6 +130,13 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: [{ type: "info", title: "Hello", message: "World" }] }],
   },
   dismiss: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "notification.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Dismiss the notification with the given id, rejecting any pending waitForAction for it.",
     args: z.tuple([z.string()]),
@@ -121,6 +145,13 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: ["notif-123"] }],
   },
   reportAction: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "notification.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Report that the user took an action on a notification, emitting an event and resolving any pending waitForAction.",
     args: z.tuple([z.string(), z.string()]),
@@ -129,6 +160,13 @@ export const notificationMethods = defineServiceMethods({
     examples: [{ args: ["notif-123", "approve"] }],
   },
   signalUserInbox: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "notification.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Notify every live session for one host-verified account that its durable userland inbox changed.",
     args: z.tuple([z.string().min(1)]),

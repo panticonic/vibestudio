@@ -14,7 +14,7 @@ function identity(
     kind: "panel",
     stateHash: previousState,
     effectiveVersion: "ev-old",
-    dependencyEvs: { "@vibestudio/runtime": "runtime-old" },
+    dependencyEvs: { "@workspace/runtime": "runtime-old" },
     externalDeps: {},
     ...overrides,
   };
@@ -27,6 +27,7 @@ function packageJson(capability: string): string {
     vibestudio: {
       displayName: "Example panel",
       authority: {
+        provides: [],
         requests: [
           {
             capability,
@@ -57,7 +58,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
               identity({
                 stateHash: state,
                 effectiveVersion: "ev-new",
-                dependencyEvs: { "@vibestudio/runtime": "runtime-new" },
+                dependencyEvs: { "@workspace/runtime": "runtime-new" },
               }),
             ]
           : [identity()]
@@ -108,6 +109,7 @@ describe("createBuildUnitChangeApprovalProvider", () => {
         repoPath: "panels/example",
         effectiveVersion: "ev-new",
         authority: {
+          provides: [],
           requests: [
             {
               capability: "notifications",

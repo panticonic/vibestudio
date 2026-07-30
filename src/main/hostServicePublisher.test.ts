@@ -9,10 +9,7 @@ import { exposeServerOriginatedHostMethod } from "./serverClient.js";
 
 describe("desktop host-service publication", () => {
   it("publishes host-owned service methods through the local dispatcher", async () => {
-    const dispatcher = new ServiceDispatcher({
-      tierLookup: () => null,
-      capabilityLookup: () => null,
-    });
+    const dispatcher = new ServiceDispatcher();
     dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
       testAuthority(caller, capability, resourceKey)
     );

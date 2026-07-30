@@ -7,7 +7,6 @@ const RETIRED_CHANNEL_ENVELOPE_METHODS = [
   "listChannelEnvelopesAfter",
   "listChannelEnvelopesBefore",
   "getInitialChannelWindow",
-  "listChannelEnvelopes",
 ] as const;
 
 function markdownFiles(root: string): string[] {

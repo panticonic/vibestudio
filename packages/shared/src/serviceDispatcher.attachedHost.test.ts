@@ -48,10 +48,7 @@ function setup(attachedHost: AttachedHostExecutionFact, throughEvalSession = fal
     { userId: "usr_one", handle: "one" },
     executionSession
   );
-  const dispatcher = new ServiceDispatcher({
-    tierLookup: () => ({ tier: "gated", session: "family", rationale: "test effect" }),
-    capabilityLookup: () => CAPABILITY,
-  });
+  const dispatcher = new ServiceDispatcher();
   dispatcher.setAuthorityResolver(({ caller: resolvedCaller }) => {
     const resolved = testAuthority(resolvedCaller, CAPABILITY, RESOURCE);
     return {
@@ -77,6 +74,11 @@ function setup(attachedHost: AttachedHostExecutionFact, throughEvalSession = fal
       write: {
         args: z.tuple([]),
         capability: CAPABILITY,
+        tier: {
+          tier: "gated",
+          session: "family",
+          rationale: "Attached-host authority test effect",
+        },
         authority: {
           requirement: {
             kind: "capability",

@@ -13,7 +13,7 @@ function createProjection() {
   const canonical = new CapabilityGrantStore({ statePath });
   return {
     canonical,
-    projection: new BrowserPermissionGrantProjection(canonical, statePath),
+    projection: new BrowserPermissionGrantProjection(canonical),
   };
 }
 

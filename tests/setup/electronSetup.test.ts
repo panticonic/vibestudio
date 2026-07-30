@@ -39,7 +39,10 @@ describe("hosted-shell initialization diagnostics", () => {
       rpcCall,
     } as unknown as TestApi;
     const app = {
-      evaluate: async (callback: () => unknown) => callback(),
+      evaluate: async (
+        callback: (_electron: unknown, input: unknown) => unknown,
+        input: unknown
+      ) => callback(undefined, input),
     } as unknown as ElectronApplication;
 
     await expect(

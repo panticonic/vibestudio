@@ -47,7 +47,7 @@ const TEST_EXECUTION_IDENTITY: NonNullable<BuildMetadata["execution"]> = {
 };
 const TEST_SEALED_APP_BUILD_METADATA = {
   execution: TEST_EXECUTION_IDENTITY,
-  authority: { requests: [] },
+  authority: { requests: [], provides: [] },
 } satisfies Pick<BuildMetadata, "execution" | "authority">;
 
 function publicationEvent(): ProtectedPublicationEvent {
@@ -120,7 +120,7 @@ function makeHarness(
           capabilities: ["notifications"],
           ...(opts.invalidManifest ? { preload: "preload.ts" } : {}),
         },
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
       },
     })
   );
@@ -171,7 +171,7 @@ function makeHarness(
         ev: "ev-app",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
         details: { kind: "app", target: "electron", integrity: "sha256-app" },
       },
       artifacts: [artifact],
@@ -186,7 +186,7 @@ function makeHarness(
               ev: "ev-app",
               sourceStateHash: "state:test",
               execution: TEST_EXECUTION_IDENTITY,
-              authority: { requests: [] } as NonNullable<BuildMetadata["authority"]>,
+              authority: { requests: [], provides: [] } as NonNullable<BuildMetadata["authority"]>,
               details: { kind: "app", target: "electron", integrity: "sha256-app" },
             },
             artifacts: [artifact],
@@ -338,7 +338,7 @@ function createAppGraphNode(
           renderer: opts.target === "terminal" ? "index.mjs" : "index.tsx",
           capabilities: opts.capabilities ?? [],
         },
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
       },
     })
   );
@@ -386,7 +386,7 @@ function setAppManifestTarget(
       vibestudio: {
         displayName: node.manifest.displayName,
         app: appBlock,
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
       },
     })
   );
@@ -509,7 +509,7 @@ describe("AppHost", () => {
         vibestudio: {
           displayName: "Shell App",
           app: { target: "electron", renderer: "index.tsx" },
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
         },
       })
     );
@@ -525,7 +525,7 @@ describe("AppHost", () => {
     ]);
   });
 
-  it("builds, registers, and emits available Electron apps from trusted main", async () => {
+  it("builds and registers Electron releases without activating them", async () => {
     const { host, buildSystem, eventService, entityCache } = makeHarness();
 
     await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
@@ -537,32 +537,13 @@ describe("AppHost", () => {
       target: "electron",
       activeBundleKey: "app-key",
       activeSourceHash: "state:test",
-      status: "running",
+      status: "available",
     });
-    expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
-      expect.objectContaining({
-        appId: "@workspace-apps/shell",
-        target: "electron",
-        artifactRoute: "/_a/app-key/index.html",
-        capabilities: ["notifications"],
-      })
-    );
-    expect(entityCache.resolveActive("@workspace-apps/shell")).toMatchObject({
-      id: "@workspace-apps/shell",
-      kind: "app",
-      source: { repoPath: "apps/shell", effectiveVersion: "ev-app" },
-      activeBuildKey: "app-key",
-      activeExecutionDigest: TEST_EXECUTION_IDENTITY.executionDigest,
-      activeAuthority: { requests: [] },
-      status: "active",
-    });
-    const connectionGrants = new ConnectionGrantService({ entityCache });
-    expect(() => connectionGrants.grant("@workspace-apps/shell", "desktop-shell")).not.toThrow();
-    connectionGrants.stop();
+    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
+    expect(entityCache.resolveActive("@workspace-apps/shell")).toBeNull();
   });
 
-  it("registers existing approved Electron apps when reusing the active build after restart", async () => {
+  it("keeps an existing approved Electron release prepared after restart", async () => {
     const { host, buildSystem, entityCache, graphNode } = makeHarness();
     installApp(host, graphNode);
 
@@ -572,12 +553,7 @@ describe("AppHost", () => {
     await host.whenSettled();
 
     expect(buildSystem.getBuild).not.toHaveBeenCalled();
-    expect(entityCache.resolveActive("@workspace-apps/shell")).toMatchObject({
-      id: "@workspace-apps/shell",
-      kind: "app",
-      source: { repoPath: "apps/shell", effectiveVersion: "ev-app" },
-      status: "active",
-    });
+    expect(entityCache.resolveActive("@workspace-apps/shell")).toBeNull();
   });
 
   it("surfaces push rebuild failures and keeps the previous app build active", async () => {
@@ -670,7 +646,7 @@ describe("AppHost", () => {
 
     expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
-      status: "running",
+      status: "available",
       activeBundleKey: "app-key-2",
       activeEv: "ev-app-2",
       previousVersions: [
@@ -751,7 +727,7 @@ describe("AppHost", () => {
     await flushAsyncWork();
 
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
-      status: "running",
+      status: "available",
       activeBundleKey: "app-key-2",
       activeEv: "ev-app-2",
       previousVersions: [
@@ -768,8 +744,11 @@ describe("AppHost", () => {
             command: { type: "app.applyUpdate", appId: "@workspace-apps/shell" },
           }),
           expect.objectContaining({
-            id: "app.rollback",
-            command: { type: "app.rollback", appId: "@workspace-apps/shell" },
+            id: "runtime.supervision.rollback",
+            command: {
+              type: "runtime.supervision.rollback",
+              release: { kind: "app", releaseId: "@workspace-apps/shell" },
+            },
           }),
         ]),
       })
@@ -805,34 +784,7 @@ describe("AppHost", () => {
     );
   });
 
-  it("persists host target selections and invalidates them when the app disappears", () => {
-    const { host, buildSystem, graphNode } = makeHarness();
-    graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
-
-    const selection = host.setHostTargetSelection("electron", {
-      source: "apps/shell",
-      mode: "follow-ref",
-    });
-
-    expect(selection).toMatchObject({
-      workspaceId: "ws",
-      target: "electron",
-      source: "apps/shell",
-      appId: "@workspace-apps/shell",
-      mode: "follow-ref",
-    });
-    expect(host.getHostTargetSelection("electron")).toMatchObject({
-      valid: true,
-      selection: expect.objectContaining({ source: "apps/shell" }),
-    });
-    buildSystem.getGraph.mockReturnValueOnce({ allNodes: () => [] } as never);
-    expect(host.getHostTargetSelection("electron")).toMatchObject({
-      valid: false,
-      reason: "Selected app is no longer available",
-    });
-  });
-
-  it("auto-selects and launches the canonical Electron shell when no host selection is stored", async () => {
+  it("activates an exact prepared Electron release", async () => {
     const { host, buildSystem, eventService, graphNode } = makeHarness();
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
     installApp(host, graphNode);
@@ -845,6 +797,7 @@ describe("AppHost", () => {
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
         authority: {
+          provides: [],
           requests: [
             {
               capability: "service:events.watch",
@@ -867,30 +820,7 @@ describe("AppHost", () => {
       ],
     });
 
-    expect(host.getHostTargetSelection("electron")).toMatchObject({
-      valid: true,
-      selection: expect.objectContaining({
-        source: "apps/shell",
-        appId: "@workspace-apps/shell",
-        mode: "follow-ref",
-        autoSelected: true,
-      }),
-    });
-
-    await expect(host.launchHostTarget("electron")).resolves.toMatchObject({
-      status: "ready",
-      launched: true,
-      target: "electron",
-      source: "apps/shell",
-      appId: "@workspace-apps/shell",
-      executionDigest: "a".repeat(64),
-      authorityRequests: [
-        {
-          capability: "service:events.watch",
-          resource: { kind: "exact", key: "service:events.watch" },
-        },
-      ],
-    });
+    await expect(host.activateRelease("@workspace-apps/shell")).resolves.toBeUndefined();
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:available",
       expect.objectContaining({
@@ -902,19 +832,15 @@ describe("AppHost", () => {
     );
   });
 
-  it("prepares an unbuilt selected Electron shell before launching", async () => {
+  it("prepares an unbuilt Electron release before activation", async () => {
     const { host, buildSystem, eventService, graphNode } = makeHarness();
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
 
     host.setDeclared([{ source: "apps/shell", ref: "main" }]);
 
-    await expect(host.launchHostTarget("electron")).resolves.toMatchObject({
-      status: "ready",
-      launched: true,
-      target: "electron",
-      source: "apps/shell",
-      appId: "@workspace-apps/shell",
-    });
+    await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
+    await host.whenSettled();
+    await expect(host.activateRelease("@workspace-apps/shell")).resolves.toBeUndefined();
     expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
       target: "electron",
@@ -953,7 +879,7 @@ describe("AppHost", () => {
     expect(buildSystem.getBuild).not.toHaveBeenCalled();
 
     await expect(host.ensureElectronReady()).resolves.toMatchObject({
-      ready: true,
+      ready: false,
       source: "apps/shell",
       appId: "@workspace-apps/shell",
     });
@@ -976,20 +902,14 @@ describe("AppHost", () => {
     expect(host.registry.get("@workspace-apps/mobile")).toBeNull();
   });
 
-  it("launches the selected Electron shell after startup approval", async () => {
+  it("activates the Electron shell after startup approval", async () => {
     const { host, buildSystem, eventService, graphNode, approvalQueue } = makeHarness();
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
 
     await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
     await host.whenSettled();
 
-    const launched = await host.launchHostTarget("electron");
-
-    expect(launched).toMatchObject({
-      status: "ready",
-      launched: true,
-      target: "electron",
-    });
+    await expect(host.activateRelease("@workspace-apps/shell")).resolves.toBeUndefined();
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "unit-batch",
@@ -1043,7 +963,7 @@ describe("AppHost", () => {
     );
   });
 
-  it("ensures the selected Electron shell has an active HTML build before desktop pairing", async () => {
+  it("reports a prepared Electron shell as not ready until generic activation", async () => {
     const { host, buildSystem, graphNode } = makeHarness();
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
 
@@ -1051,13 +971,17 @@ describe("AppHost", () => {
     const readiness = await host.ensureElectronReady();
 
     expect(readiness).toMatchObject({
-      ready: true,
+      ready: false,
       source: "apps/shell",
       appId: "@workspace-apps/shell",
+    });
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
+    await host.activateRelease("@workspace-apps/shell");
+    await expect(host.ensureElectronReady()).resolves.toMatchObject({
+      ready: true,
       buildKey: "app-key",
       artifactRoute: "/_a/app-key/index.html",
     });
-    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
   });
 
   it("advertises Electron shell artifacts as gateway routes", async () => {
@@ -1067,6 +991,8 @@ describe("AppHost", () => {
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
 
     host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    await host.ensureElectronReady();
+    await host.activateRelease("@workspace-apps/shell");
     const readiness = await host.ensureElectronReady();
 
     expect(readiness).toMatchObject({
@@ -1093,31 +1019,6 @@ describe("AppHost", () => {
     );
   });
 
-  it("marks unselected Electron app availability events for the host to ignore", async () => {
-    const { host, buildSystem, eventService, graphNode, workspacePath } = makeHarness();
-    graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
-    const altNode = createAppGraphNode(workspacePath, "apps/desktop-alt", {
-      name: "@workspace-apps/desktop-alt",
-      target: "electron",
-      capabilities: ["panel-hosting"],
-    });
-    buildSystem.getGraph.mockReturnValue({
-      allNodes: () => [graphNode, altNode],
-    } as never);
-
-    host.setHostTargetSelection("electron", { source: "apps/desktop-alt" });
-    await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
-    await host.whenSettled();
-
-    expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
-      expect.objectContaining({
-        appId: "@workspace-apps/shell",
-        selectedForHost: false,
-      })
-    );
-  });
-
   it("keeps panel-hosting in apps:available for a trusted chrome app", async () => {
     const { host, eventService, graphNode } = makeHarness();
     // apps/shell is seeded into trust.chromeApps by the shared beforeEach.
@@ -1125,6 +1026,7 @@ describe("AppHost", () => {
 
     await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
     await host.whenSettled();
+    await host.activateRelease("@workspace-apps/shell");
 
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:available",
@@ -1146,6 +1048,7 @@ describe("AppHost", () => {
 
     await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
     await host.whenSettled();
+    await host.activateRelease("@workspace-apps/shell");
 
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:available",
@@ -1159,7 +1062,7 @@ describe("AppHost", () => {
     expect(host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(false);
   });
 
-  it("uses the selected React Native source instead of the canonical mobile fallback", () => {
+  it("uses the explicitly requested React Native source", () => {
     const { host, buildSystem, graphNode, workspacePath } = makeHarness();
     const otherNode = createAppGraphNode(workspacePath, "apps/field-mobile", {
       name: "@workspace-apps/field-mobile",
@@ -1215,14 +1118,14 @@ describe("AppHost", () => {
       capabilities: ["notifications", "panel-hosting"],
     });
 
-    host.setHostTargetSelection("react-native", { source: "apps/field-mobile" });
-
-    expect(host.reactNative.getBootstrap()).toMatchObject({
+    expect(host.reactNative.getBootstrap("apps/field-mobile")).toMatchObject({
       appId: "@workspace-apps/field-mobile",
       buildKey: "field-key",
       effectiveVersion: "ev-field",
     });
-    expect(host.reactNative.registerPrincipal("device-1")).toBe("app:apps/field-mobile:device-1");
+    expect(host.reactNative.registerPrincipal("device-1", "apps/field-mobile")).toBe(
+      "app:apps/field-mobile:device-1"
+    );
     expect(host.hasAppCapability("app:apps/field-mobile:device-1", "panel-hosting")).toBe(false);
     expect(host.hasAppCapability("app:apps/mobile:device-1", "panel-hosting")).toBe(false);
   });
@@ -1250,11 +1153,7 @@ describe("AppHost", () => {
     };
     buildSystem.getBuild.mockResolvedValueOnce(pinnedBuild as never);
 
-    const result = await host.prepareHostTargetPinnedRef(
-      "electron",
-      "apps/shell",
-      "state:0123456789abcdef"
-    );
+    const result = await host.prepareRelease("apps/shell", "state:0123456789abcdef");
 
     expect(result).toMatchObject({
       buildKey: "pinned-ref-key",
@@ -1280,89 +1179,6 @@ describe("AppHost", () => {
       source: { repo: "apps/shell", ref: "state:0123456789abcdef" },
       effectiveVersion: "ev-pinned",
       capabilities: ["notifications", "panel-hosting"],
-    });
-  });
-
-  it("keeps pinned host target builds active when a newer build is produced", async () => {
-    const { host, buildSystem, graphNode } = makeHarness();
-    graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
-    const buildByKey = new Map([
-      [
-        "app-key",
-        {
-          dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key"),
-          metadata: {
-            ...TEST_SEALED_APP_BUILD_METADATA,
-            ev: "ev-app",
-            sourceStateHash: "state:test",
-            details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app" },
-          },
-          artifacts: [
-            {
-              path: "index.html",
-              role: "html",
-              contentType: "text/html; charset=utf-8",
-              encoding: "utf8",
-              content: "<!doctype html><div>old</div>",
-            },
-          ],
-        },
-      ],
-      [
-        "app-key-2",
-        {
-          dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
-          metadata: {
-            ...TEST_SEALED_APP_BUILD_METADATA,
-            ev: "ev-app-2",
-            sourceStateHash: "state:test",
-            details: {
-              kind: "app" as const,
-              target: "electron" as const,
-              integrity: "sha256-app-2",
-            },
-          },
-          artifacts: [
-            {
-              path: "index.html",
-              role: "html",
-              contentType: "text/html; charset=utf-8",
-              encoding: "utf8",
-              content: "<!doctype html><div>new</div>",
-            },
-          ],
-        },
-      ],
-    ]);
-    buildSystem.getBuildByKey.mockImplementation(
-      (key: string) => (buildByKey.get(key) ?? null) as never
-    );
-    installAppEntry(host, graphNode, {
-      target: "electron",
-      activeBundleKey: "app-key",
-      activeEv: "ev-app",
-      capabilities: ["panel-hosting"],
-    });
-    host.setHostTargetSelection("electron", {
-      source: "apps/shell",
-      mode: "pinned-build",
-      buildKey: "app-key",
-    });
-    buildSystem.getBuild.mockResolvedValueOnce(buildByKey.get("app-key-2") as never);
-
-    const onPush = buildSystem.onPushBuild.mock.calls[0]?.[0] as
-      | ((source: string) => void)
-      | undefined;
-    expect(onPush).toBeDefined();
-    onPush?.("apps/shell");
-    await flushAsyncWork();
-
-    expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
-      activeBundleKey: "app-key",
-      activeEv: "ev-app",
-      previousVersions: [
-        expect.objectContaining({ activeBundleKey: "app-key-2", activeEv: "ev-app-2" }),
-      ],
     });
   });
 
@@ -1445,9 +1261,9 @@ describe("AppHost", () => {
         buildKey,
         sourcePath: "apps/shell",
         sourceStateHash,
-        sourceSemanticState: { kind: "event", eventId: "event:test" },
+        sourceState: { kind: "event", eventId: "event:test" },
         ev: effectiveVersion,
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
         execution,
       },
     } as never);
@@ -1466,7 +1282,7 @@ describe("AppHost", () => {
         target: "electron",
         integrity: "sha256-app",
         executionDigest: execution.executionDigest,
-        authorityRequests: [],
+        authority: { requests: [], provides: [] },
       },
     });
     expect(fs.existsSync(path.join(outDir, "manifest.json"))).toBe(true);
@@ -1511,7 +1327,7 @@ describe("AppHost", () => {
       source: { repoPath: "apps/mobile", effectiveVersion: "ev-mobile" },
       activeBuildKey: "mobile-key",
       activeExecutionDigest: "a".repeat(64),
-      activeAuthority: { requests: [] },
+      activeAuthority: { requests: [], provides: [] },
       status: "active",
     });
     const connectionGrants = new ConnectionGrantService({ entityCache });
@@ -1633,7 +1449,7 @@ describe("AppHost", () => {
             entry: "index.ts",
             capabilities: ["clipboard"],
           },
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
         },
       })
     );
@@ -1648,7 +1464,7 @@ describe("AppHost", () => {
         ev: "ev-terminal",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
         details: {
           kind: "app",
           target: "terminal",
@@ -1700,6 +1516,7 @@ describe("AppHost", () => {
       capabilities: ["clipboard"],
       status: "available",
     });
+    await host.activateRelease(graphNode.name);
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:available",
       expect.objectContaining({
@@ -1713,7 +1530,7 @@ describe("AppHost", () => {
       "apps:status",
       expect.objectContaining({
         name: "@workspace-apps/shell",
-        status: "available",
+        status: "running",
         error: null,
       })
     );
@@ -1729,7 +1546,7 @@ describe("AppHost", () => {
         ev: "ev-terminal",
         sourceStateHash: "state:test",
         execution: TEST_EXECUTION_IDENTITY,
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
         details: {
           kind: "app" as const,
           target: "terminal" as const,
@@ -1766,11 +1583,7 @@ describe("AppHost", () => {
     expect(stop).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
 
-    await expect(host.launchHostTarget("terminal")).resolves.toMatchObject({
-      status: "ready",
-      target: "terminal",
-      buildKey: "terminal-key",
-    });
+    await expect(host.activateRelease(graphNode.name)).resolves.toBeUndefined();
     expect(isRunningBuild).toHaveBeenCalledWith(graphNode.name, "terminal-key");
     expect(start).not.toHaveBeenCalled();
   });
@@ -1908,7 +1721,10 @@ describe("AppHost", () => {
         title: "Terminal app update available",
         actions: expect.arrayContaining([
           expect.objectContaining({
-            command: { type: "workspace.restartUnit", name: graphNode.name },
+            command: {
+              type: "runtime.supervision.restart",
+              identity: { kind: "app", entityId: graphNode.name },
+            },
           }),
         ]),
       })
@@ -1938,14 +1754,9 @@ describe("AppHost", () => {
     expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
       unitKind: "app",
       activeBundleKey: "app-key",
-      status: "running",
+      status: "available",
     });
-    expect(eventService.emit).toHaveBeenCalledWith(
-      "apps:available",
-      expect.objectContaining({
-        appId: "@workspace-apps/shell",
-      })
-    );
+    expect(eventService.emit).not.toHaveBeenCalledWith("apps:available", expect.anything());
   });
 
   it("previews and applies React Native provider changes from trusted main", async () => {
@@ -2032,6 +1843,7 @@ describe("AppHost", () => {
       },
     ]);
     await host.whenSettled();
+    await host.activateRelease(graphNode.name);
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2240,7 +2052,7 @@ describe("AppHost", () => {
           : null
     );
 
-    const readiness = await host.reactNative.ensureReady(graphNode.relativePath);
+    const prepared = await host.reactNative.ensureReady(graphNode.relativePath);
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2258,13 +2070,17 @@ describe("AppHost", () => {
         ],
       })
     );
-    expect(readiness).toMatchObject({
-      ready: true,
+    expect(prepared).toMatchObject({
+      ready: false,
       source: graphNode.relativePath,
       appId: graphNode.name,
-      buildKey: "rn-provider-change-key",
     });
     expect(host.registry.get(graphNode.name)?.activeBundleKey).toBe("rn-provider-change-key");
+    await host.activateRelease(graphNode.name);
+    await expect(host.reactNative.ensureReady(graphNode.relativePath)).resolves.toMatchObject({
+      ready: true,
+      buildKey: "rn-provider-change-key",
+    });
   });
 
   it("stages React Native app approval before the provider is active and consumes it after provider startup", async () => {
@@ -2274,7 +2090,9 @@ describe("AppHost", () => {
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     host.setDeclared([{ source: graphNode.relativePath, ref: "main" }]);
 
-    const waitingForProvider = await host.reactNative.ensureReady(null, { waitForApproval: false });
+    const waitingForProvider = await host.reactNative.ensureReady(graphNode.relativePath, {
+      waitForApproval: false,
+    });
 
     expect(waitingForProvider).toMatchObject({
       ready: false,
@@ -2350,18 +2168,22 @@ describe("AppHost", () => {
       key === "rn-preflight-key" ? (rnBuild as never) : null
     );
 
-    const readiness = await host.reactNative.ensureReady();
+    const prepared = await host.reactNative.ensureReady(graphNode.relativePath);
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(readiness).toMatchObject({
-      ready: true,
+    expect(prepared).toMatchObject({
+      ready: false,
       source: graphNode.relativePath,
       appId: graphNode.name,
-      buildKey: "rn-preflight-key",
     });
     expect(host.registry.get(graphNode.name)).toMatchObject({
-      status: "running",
+      status: "available",
       activeBundleKey: "rn-preflight-key",
+    });
+    await host.activateRelease(graphNode.name);
+    await expect(host.reactNative.ensureReady(graphNode.relativePath)).resolves.toMatchObject({
+      ready: true,
+      buildKey: "rn-preflight-key",
     });
   });
 
@@ -2489,17 +2311,21 @@ describe("AppHost", () => {
       key === "rn-ready-key" ? (rnBuild as never) : null
     );
 
-    const readiness = await host.reactNative.ensureReady();
+    const prepared = await host.reactNative.ensureReady(graphNode.relativePath);
 
-    expect(readiness).toMatchObject({
-      ready: true,
+    expect(prepared).toMatchObject({
+      ready: false,
       source: graphNode.relativePath,
       appId: graphNode.name,
-      buildKey: "rn-ready-key",
     });
     expect(host.registry.get(graphNode.name)).toMatchObject({
-      status: "running",
+      status: "available",
       activeBundleKey: "rn-ready-key",
+    });
+    await host.activateRelease(graphNode.name);
+    await expect(host.reactNative.ensureReady(graphNode.relativePath)).resolves.toMatchObject({
+      ready: true,
+      buildKey: "rn-ready-key",
     });
   });
 
@@ -2553,12 +2379,16 @@ describe("AppHost", () => {
       key === "rn-delayed-key" ? (rnBuild as never) : null
     );
 
-    const readiness = await host.reactNative.ensureReady();
+    const prepared = await host.reactNative.ensureReady(graphNode.relativePath);
 
-    expect(readiness).toMatchObject({
-      ready: true,
+    expect(prepared).toMatchObject({
+      ready: false,
       source: graphNode.relativePath,
       appId: graphNode.name,
+    });
+    await host.activateRelease(graphNode.name);
+    await expect(host.reactNative.ensureReady(graphNode.relativePath)).resolves.toMatchObject({
+      ready: true,
       buildKey: "rn-delayed-key",
     });
   });
@@ -2900,7 +2730,7 @@ describe("AppHost", () => {
     await host.whenSettled();
 
     expect(host.registry.get(graphNode.name)).toMatchObject({
-      status: "running",
+      status: "available",
       activeBundleKey: "rn-android-only-key",
       lastError: null,
     });

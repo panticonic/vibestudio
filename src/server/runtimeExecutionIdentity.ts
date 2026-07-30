@@ -6,7 +6,7 @@ import type { EntityActivationInput, EntityRecord } from "@vibestudio/shared/run
 
 export interface PreparedExecutionIdentity {
   executionDigest?: string;
-  authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+  authority?: UnitAuthorityManifest;
 }
 
 export interface ActiveExecutionIdentity {
@@ -55,13 +55,10 @@ export function requireActiveExecutionIdentity(
   // activation boundary with either field absent would make it impossible to
   // distinguish a deliberately empty envelope from a partially propagated
   // one, so the sealed runtime form is intentionally total.
-  if (!Array.isArray(prepared.authorityRequests)) {
-    throw new Error(`${label} authority is missing normalized requests`);
+  if (!prepared.authority) {
+    throw new Error(`${label} is missing its sealed authority manifest`);
   }
-  const activeAuthority = parseUnitAuthorityManifest(
-    { requests: prepared.authorityRequests },
-    `${label} authority`
-  );
+  const activeAuthority = parseUnitAuthorityManifest(prepared.authority, `${label} authority`);
   return {
     activeExecutionDigest: prepared.executionDigest,
     activeAuthority,

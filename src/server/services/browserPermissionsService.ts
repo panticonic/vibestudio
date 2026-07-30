@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { AuthorityGrant } from "@vibestudio/rpc";
 import type { BrowserSitePermissionCapability } from "@vibestudio/shared/approvals";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -37,17 +35,7 @@ type ParsedBrowserGrant = BrowserPermissionGrant & {
  * a second source of authority.
  */
 export class BrowserPermissionGrantProjection {
-  private migration: Promise<void> | null = null;
-
-  constructor(
-    private readonly grants: CapabilityGrantStore,
-    private readonly statePath: string
-  ) {}
-
-  ensureMigrated(): Promise<void> {
-    if (!this.migration) this.migration = this.migrateLegacyJson();
-    return this.migration;
-  }
+  constructor(private readonly grants: CapabilityGrantStore) {}
 
   list(
     environmentKey: string,
@@ -180,68 +168,6 @@ export class BrowserPermissionGrantProjection {
     }
     return count;
   }
-
-  private async migrateLegacyJson(): Promise<void> {
-    const legacyPath = path.join(this.statePath, "browser-permission-grants.json");
-    let parsed: {
-      version?: unknown;
-      grants?: Array<BrowserPermissionGrant & { environmentKey?: string; ownerUserId?: string }>;
-    };
-    try {
-      parsed = JSON.parse(await fs.readFile(legacyPath, "utf8")) as typeof parsed;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    if (parsed.version === 1 && Array.isArray(parsed.grants)) {
-      const existingIds = new Set(
-        this.grants
-          .listAuthorityGrants()
-          .map((grant) => grant.id)
-          .filter(Boolean)
-      );
-      for (const grant of parsed.grants) {
-        if (
-          typeof grant.environmentKey !== "string" ||
-          typeof grant.ownerUserId !== "string" ||
-          !isCapability(grant.capability) ||
-          (grant.decision !== "allow" && grant.decision !== "block") ||
-          (grant.scope !== "always" && grant.scope !== "block")
-        ) {
-          continue;
-        }
-        let origin: string;
-        try {
-          origin = normalizeWebOrigin(grant.origin);
-        } catch {
-          continue;
-        }
-        const id = `browser-legacy-${createHash("sha256")
-          .update(`${grant.environmentKey}\0${grant.ownerUserId}\0${origin}\0${grant.capability}`)
-          .digest("base64url")}`;
-        if (existingIds.has(id)) continue;
-        const subject = userSubject(grant.ownerUserId);
-        this.grants.issue({
-          id,
-          effect: grant.decision === "block" ? "deny" : "allow",
-          capability: `${CAPABILITY_PREFIX}${grant.capability}`,
-          resource: {
-            kind: "exact",
-            key: browserPermissionResourceKey(grant.environmentKey, PERSISTENT_EPOCH, origin),
-          },
-          subject,
-          constraints: { lineageAtConsent: [] },
-          issuedBy: subject,
-          provenance: "acquisition",
-          createdAt: grant.updatedAt,
-          scope: "system",
-          decidedBy: subject,
-          decisionSurface: "browser-permission-migration",
-        });
-      }
-    }
-    await fs.rename(legacyPath, `${legacyPath}.migrated`);
-  }
 }
 
 export function createBrowserPermissionsService(deps: {
@@ -270,7 +196,6 @@ export function createBrowserPermissionsService(deps: {
     methods: browserPermissionsMethods,
     handler: defineServiceHandler("browserPermissions", browserPermissionsMethods, {
       snapshot: async (ctx, [{ sessionEpoch }]) => {
-        await deps.grantStore.ensureMigrated();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
         deps.grantStore.cleanupPreviousSessions(
           identity.environmentKey,
@@ -283,7 +208,6 @@ export function createBrowserPermissionsService(deps: {
         };
       },
       request: async (ctx, [request]) => {
-        await deps.grantStore.ensureMigrated();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
         const origin = normalizeWebOrigin(request.origin);
         const topLevelUrl = new URL(request.topLevelUrl);
@@ -363,7 +287,6 @@ export function createBrowserPermissionsService(deps: {
         };
       },
       revoke: async (ctx, [request]) => {
-        await deps.grantStore.ensureMigrated();
         const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
         const origin = normalizeWebOrigin(request.origin);
         const removed = deps.grantStore.revoke(

@@ -14,6 +14,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Add a custom ad-blocking list",
+          "action": "add a custom ad-blocking list",
+          "description": "Allows {requesterKind} to add a custom ad-blocking list.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       },
       "addToWhitelist": {
@@ -25,7 +43,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.control",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "getConfig": {
         "authority": {
@@ -33,7 +60,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.read",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "getPanelUrl": {
         "authority": {
@@ -44,7 +80,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.read",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "getStats": {
         "authority": {
@@ -55,7 +100,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.read",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "getStatsForPanel": {
         "authority": {
@@ -66,7 +120,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.read",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "isActive": {
         "authority": {
@@ -77,7 +140,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.control",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "isEnabledForPanel": {
         "authority": {
@@ -88,7 +160,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.control",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "rebuildEngine": {
         "authority": {
@@ -96,6 +177,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Refresh ad blocking",
+          "action": "refresh ad blocking",
+          "description": "Allows {requesterKind} to refresh ad blocking.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       },
       "removeCustomList": {
@@ -104,6 +203,24 @@
         },
         "access": {
           "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.retire",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Remove a custom ad-blocking list",
+          "action": "remove a custom ad-blocking list",
+          "description": "Allows {requesterKind} to remove a custom ad-blocking list.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       },
       "removeFromWhitelist": {
@@ -115,6 +232,24 @@
         },
         "access": {
           "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.retire",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Resume blocking ads on a website",
+          "action": "resume blocking ads on a website",
+          "description": "Allows {requesterKind} to resume blocking ads on a website.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       },
       "resetStats": {
@@ -123,6 +258,24 @@
         },
         "access": {
           "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Clear ad-blocking statistics",
+          "action": "clear ad-blocking statistics",
+          "description": "Allows {requesterKind} to clear ad-blocking statistics.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       },
       "resetStatsForPanel": {
@@ -134,6 +287,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Clear a panel's ad-blocking statistics",
+          "action": "clear a panel's ad-blocking statistics",
+          "description": "Allows {requesterKind} to clear a panel's ad-blocking statistics.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       },
       "setEnabled": {
@@ -142,6 +313,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.mutate",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Turn ad blocking on or off",
+          "action": "turn ad blocking on or off",
+          "description": "Allows {requesterKind} to turn ad blocking on or off.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       },
       "setEnabledForPanel": {
@@ -153,6 +342,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.mutate",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Change ad blocking for a panel",
+          "action": "change ad blocking for a panel",
+          "description": "Allows {requesterKind} to change ad blocking for a panel.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       },
       "setListEnabled": {
@@ -161,6 +368,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "adblock.mutate",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "adblock.manage",
+        "presentation": {
+          "title": "Turn an ad-blocking list on or off",
+          "action": "turn an ad-blocking list on or off",
+          "description": "Allows {requesterKind} to turn an ad-blocking list on or off.",
+          "group": "network",
+          "authorityCategory": {
+            "domain": "web",
+            "verb": "manage"
+          }
         }
       }
     }
@@ -180,6 +405,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.mutate",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "application.update",
+        "presentation": {
+          "title": "Install an application update",
+          "action": "install an application update",
+          "description": "Allows {requesterKind} to install an application update.",
+          "group": "host",
+          "authorityCategory": {
+            "domain": "computer",
+            "verb": "act"
+          }
         }
       },
       "clearBuildCache": {
@@ -188,6 +431,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspace.build-cache.manage",
+        "presentation": {
+          "title": "Clear cached build files",
+          "action": "clear cached build files",
+          "description": "Allows {requesterKind} to clear cached build files.",
+          "group": "host",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
         }
       },
       "getInfo": {
@@ -196,7 +457,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.read",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "getShellPages": {
         "authority": {
@@ -204,7 +474,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.read",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "getSystemTheme": {
         "authority": {
@@ -212,7 +491,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.read",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "listPendingUpdates": {
         "authority": {
@@ -220,7 +508,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.read",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "openDevTools": {
         "authority": {
@@ -228,7 +525,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.create",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "openExternal": {
         "authority": {
@@ -236,6 +542,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.create",
+          "rationale": "G1: external-system effect or listening surface; §2 default {code, session} family"
+        },
+        "capability": "external.open",
+        "presentation": {
+          "title": "Open a link in another application",
+          "action": "open a link in another application",
+          "description": "Allows {requesterKind} to open a link in another application.",
+          "group": "host",
+          "authorityCategory": {
+            "domain": "sharing",
+            "verb": "act"
+          }
         }
       },
       "openShellSurface": {
@@ -244,7 +568,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.create",
+          "rationale": "Open bias: opens bounded first-party shell chrome without changing the managed state; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "openWorkspacePath": {
         "authority": {
@@ -252,7 +585,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.create",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "setThemeMode": {
         "authority": {
@@ -260,7 +602,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "app.mutate",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       }
     }
   },
@@ -279,6 +630,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "autofill.control",
+          "rationale": "Stores personal form-fill values only after an explicit post-submission browser prompt."
+        },
+        "capability": "browser-form-fill.manage",
+        "presentation": {
+          "title": "Save form-fill values",
+          "action": "save personal form-fill values",
+          "description": "Allows {requesterKind} to save the personal form values shown in a browser submission prompt.",
+          "group": "credentials",
+          "authorityCategory": {
+            "domain": "accounts",
+            "verb": "act"
+          }
         }
       },
       "confirmSave": {
@@ -287,38 +656,24 @@
         },
         "access": {
           "sensitivity": "write"
-        }
-      },
-      "deleteSavedPassword": {
-        "authority": {
-          "inherits": true
         },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "listNeverSaveOrigins": {
-        "authority": {
-          "inherits": true
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "autofill.control",
+          "rationale": "Stores or suppresses a credential only after an explicit browser save prompt."
         },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "listSavedPasswords": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "removeNeverSaveOrigin": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
+        "capability": "browser-passwords.manage",
+        "presentation": {
+          "title": "Save this password choice",
+          "action": "save this password choice",
+          "description": "Allows {requesterKind} to save a password or remember that password saving is disabled for this site.",
+          "group": "credentials",
+          "authorityCategory": {
+            "domain": "accounts",
+            "verb": "manage"
+          }
         }
       }
     }
@@ -393,7 +748,16 @@
         },
         "access": {
           "sensitivity": "destructive"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.retire",
+          "rationale": "Host-principal-only download control driven by explicit shell UI."
+        },
+        "capability": null,
+        "presentation": null
       },
       "cancelImportRead": {
         "authority": {
@@ -457,7 +821,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.retire",
+          "rationale": "Cancels a streamed browser-profile import read; gated by authority principals."
+        },
+        "capability": null,
+        "presentation": null
       },
       "flushCookieProjection": {
         "authority": {
@@ -521,7 +894,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.control",
+          "rationale": "Host-principal-only browser environment maintenance; the authority principal gate keeps prompts/code out."
+        },
+        "capability": null,
+        "presentation": null
       },
       "getCookieProjectionDiagnostics": {
         "authority": {
@@ -585,7 +967,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.read",
+          "rationale": "Host-principal-only diagnostics read for the browser environment cookie projection."
+        },
+        "capability": null,
+        "presentation": null
       },
       "getImportHost": {
         "authority": {
@@ -649,7 +1040,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.read",
+          "rationale": "Host/code read of the browser-import host descriptor; per-method authority principals gate callers."
+        },
+        "capability": null,
+        "presentation": null
       },
       "listDownloads": {
         "authority": {
@@ -713,7 +1113,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.read",
+          "rationale": "Host-principal-only read of the browser environment download ledger."
+        },
+        "capability": null,
+        "presentation": null
       },
       "listImportOpenTabs": {
         "authority": {
@@ -777,7 +1186,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.read",
+          "rationale": "Reads open tabs from an external browser profile for import; gated by authority principals."
+        },
+        "capability": null,
+        "presentation": null
       },
       "listImportSources": {
         "authority": {
@@ -841,7 +1259,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.read",
+          "rationale": "Enumerates importable external browser profiles; read-only discovery gated by authority principals."
+        },
+        "capability": null,
+        "presentation": null
       },
       "nextImportFrame": {
         "authority": {
@@ -905,7 +1332,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.control",
+          "rationale": "Continues a streamed browser-profile import read; gated by authority principals."
+        },
+        "capability": null,
+        "presentation": null
       },
       "openDownload": {
         "authority": {
@@ -969,7 +1405,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.create",
+          "rationale": "Host-principal-only open of a completed download, driven by explicit shell UI."
+        },
+        "capability": null,
+        "presentation": null
       },
       "pauseDownload": {
         "authority": {
@@ -1033,7 +1478,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.control",
+          "rationale": "Host-principal-only download control driven by explicit shell UI."
+        },
+        "capability": null,
+        "presentation": null
       },
       "previewImportSource": {
         "authority": {
@@ -1097,7 +1551,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.control",
+          "rationale": "Read-only preview of an external browser profile import; gated by authority principals."
+        },
+        "capability": null,
+        "presentation": null
       },
       "resumeDownload": {
         "authority": {
@@ -1161,7 +1624,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.control",
+          "rationale": "Host-principal-only download control driven by explicit shell UI."
+        },
+        "capability": null,
+        "presentation": null
       },
       "revealDownload": {
         "authority": {
@@ -1225,7 +1697,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.control",
+          "rationale": "Host-principal-only reveal of a completed download in the file manager, driven by explicit shell UI."
+        },
+        "capability": null,
+        "presentation": null
       },
       "startImportRead": {
         "authority": {
@@ -1289,7 +1770,16 @@
         },
         "access": {
           "sensitivity": "read"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.create",
+          "rationale": "Starts a streamed read of an external browser profile for import; gated by authority principals."
+        },
+        "capability": null,
+        "presentation": null
       }
     }
   },
@@ -1308,7 +1798,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "desktopEvents.control",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       }
     }
   },
@@ -1327,6 +1826,24 @@
         },
         "access": {
           "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspace.members.manage",
+        "presentation": {
+          "title": "Add a workspace member",
+          "action": "add a workspace member",
+          "description": "Allows {requesterKind} to add a workspace member.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "createWorkspace": {
@@ -1335,6 +1852,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.create",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspaces.create",
+        "presentation": {
+          "title": "Create a workspace",
+          "action": "create a workspace",
+          "description": "Allows {requesterKind} to create a workspace.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
         }
       },
       "deleteWorkspace": {
@@ -1343,6 +1878,24 @@
         },
         "access": {
           "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "critical",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.retire",
+          "rationale": "C3: irreversible destruction outside VCS protection; §2 default {code, session} family"
+        },
+        "capability": "workspaces.delete",
+        "presentation": {
+          "title": "Delete a workspace",
+          "action": "delete a workspace",
+          "description": "Allows {requesterKind} to delete a workspace.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
         }
       },
       "ensureEphemeralWorkspace": {
@@ -1351,6 +1904,24 @@
         },
         "access": {
           "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspaces.create",
+        "presentation": {
+          "title": "Prepare a temporary workspace",
+          "action": "prepare a temporary workspace",
+          "description": "Allows {requesterKind} to prepare a temporary workspace.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
         }
       },
       "getProfile": {
@@ -1359,6 +1930,24 @@
         },
         "access": {
           "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.read",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "account.profile.read",
+        "presentation": {
+          "title": "View an account profile",
+          "action": "view an account profile",
+          "description": "Allows {requesterKind} to view an account profile.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "accounts",
+            "verb": "see"
+          }
         }
       },
       "inviteUser": {
@@ -1367,6 +1956,24 @@
         },
         "access": {
           "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspace.members.manage",
+        "presentation": {
+          "title": "Invite someone to the workspace",
+          "action": "invite someone to the workspace",
+          "description": "Allows {requesterKind} to invite someone to the workspace.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "listDevices": {
@@ -1375,6 +1982,24 @@
         },
         "access": {
           "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.read",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "devices.read",
+        "presentation": {
+          "title": "View connected devices",
+          "action": "view connected devices",
+          "description": "Allows {requesterKind} to view connected devices.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "see"
+          }
         }
       },
       "listUserPresence": {
@@ -1383,6 +2008,24 @@
         },
         "access": {
           "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.read",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "presence.read",
+        "presentation": {
+          "title": "View who is currently active",
+          "action": "view who is currently active",
+          "description": "Allows {requesterKind} to view who is currently active.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "see"
+          }
         }
       },
       "listWorkspaceMembers": {
@@ -1391,6 +2034,24 @@
         },
         "access": {
           "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.read",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspace.members.read",
+        "presentation": {
+          "title": "View workspace members",
+          "action": "view workspace members",
+          "description": "Allows {requesterKind} to view workspace members.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "see"
+          }
         }
       },
       "listWorkspaces": {
@@ -1399,6 +2060,24 @@
         },
         "access": {
           "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.read",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspaces.read",
+        "presentation": {
+          "title": "View available workspaces",
+          "action": "view available workspaces",
+          "description": "Allows {requesterKind} to view available workspaces.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "files",
+            "verb": "see"
+          }
         }
       },
       "pairDevice": {
@@ -1407,6 +2086,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "devices.pair",
+        "presentation": {
+          "title": "Pair a device",
+          "action": "pair a device",
+          "description": "Allows {requesterKind} to pair a device.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "removeWorkspaceMember": {
@@ -1415,6 +2112,24 @@
         },
         "access": {
           "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "critical",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.retire",
+          "rationale": "C2: removes authority or identity membership; §2 default {code, session} family"
+        },
+        "capability": "workspace.members.remove",
+        "presentation": {
+          "title": "Remove a workspace member",
+          "action": "remove a workspace member",
+          "description": "Allows {requesterKind} to remove a workspace member.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "revokeDevice": {
@@ -1423,6 +2138,24 @@
         },
         "access": {
           "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "critical",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.retire",
+          "rationale": "C2: removes authority or identity membership; §2 default {code, session} family"
+        },
+        "capability": "devices.revoke",
+        "presentation": {
+          "title": "Disconnect a device",
+          "action": "disconnect a device",
+          "description": "Allows {requesterKind} to disconnect a device.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "revokeUser": {
@@ -1431,6 +2164,24 @@
         },
         "access": {
           "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "critical",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.retire",
+          "rationale": "C2: removes authority or identity membership; §2 default {code, session} family"
+        },
+        "capability": "users.revoke",
+        "presentation": {
+          "title": "Revoke a user's access",
+          "action": "revoke a user's access",
+          "description": "Allows {requesterKind} to revoke a user's access.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "routeWorkspace": {
@@ -1439,6 +2190,24 @@
         },
         "access": {
           "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.control",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspaces.open",
+        "presentation": {
+          "title": "Connect to a workspace",
+          "action": "connect to a workspace",
+          "description": "Allows {requesterKind} to connect to a workspace.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "files",
+            "verb": "act"
+          }
         }
       },
       "setRole": {
@@ -1447,6 +2216,24 @@
         },
         "access": {
           "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.mutate",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "workspace.members.manage",
+        "presentation": {
+          "title": "Change a workspace member's role",
+          "action": "change a workspace member's role",
+          "description": "Allows {requesterKind} to change a workspace member's role.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "updateProfile": {
@@ -1455,6 +2242,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "hubControl.mutate",
+          "rationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family"
+        },
+        "capability": "account.profile.update",
+        "presentation": {
+          "title": "Change an account profile",
+          "action": "change an account profile",
+          "description": "Allows {requesterKind} to change an account profile.",
+          "group": "accounts",
+          "authorityCategory": {
+            "domain": "accounts",
+            "verb": "act"
+          }
         }
       }
     }
@@ -1473,7 +2278,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "menu.control",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "showHamburger": {
         "authority": {
@@ -1481,7 +2295,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "menu.control",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "showPanelContext": {
         "authority": {
@@ -1489,297 +2312,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
-      }
-    }
-  },
-  "onboardingStatus": {
-    "service": {
-      "principals": [
-        "user",
-        "host",
-        "code"
-      ]
-    },
-    "methods": {
-      "read": {
-        "authority": {
-          "inherits": true
         },
-        "access": {
-          "sensitivity": "read"
-        }
-      }
-    }
-  },
-  "palette": {
-    "service": {
-      "principals": [
-        "user",
-        "code"
-      ]
-    },
-    "methods": {
-      "list": {
-        "authority": {
-          "inherits": true
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "menu.control",
+          "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
         },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "register": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "run": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "unregister": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      }
-    }
-  },
-  "panel": {
-    "service": {
-      "principals": [
-        "user",
-        "code"
-      ]
-    },
-    "methods": {
-      "clearBrowserSiteData": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "ensureLoaded": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "findInPage": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "forceReloadView": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "getAddressOptions": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "getBrowserAddressOptions": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "getBrowserSiteState": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "getChromeState": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "getFocusedPanelId": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "getPanelLayout": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "getThemeConfig": {
-        "authority": {
-          "principals": [
-            "user",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "getTreeSnapshot": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "listPinnedPanelIds": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        }
-      },
-      "markBrowserNavigationIntent": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "printBrowserPage": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "reloadView": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "saveBrowserPagePdf": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "savePanelLayout": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "setBrowserZoom": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "setFocusedPanelId": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "stopBrowserMedia": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "stopFindInPage": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "takeOver": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "toggleBrowserBookmark": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "togglePin": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "updateTheme": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
-      },
-      "updateThemeConfig": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        }
+        "capability": null,
+        "presentation": null
       }
     }
   },
@@ -1797,6 +2339,24 @@
         },
         "access": {
           "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "critical",
+          "session": "family",
+          "residency": "secret",
+          "family": "remoteCred.control",
+          "rationale": "C1: destroys credential or client secret material; §2 default {code, session} family"
+        },
+        "capability": "remote-client.clear",
+        "presentation": {
+          "title": "Clear a remote connection",
+          "action": "clear a remote connection",
+          "description": "Allows {requesterKind} to clear a remote connection.",
+          "group": "credentials",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "getCurrent": {
@@ -1805,6 +2365,24 @@
         },
         "access": {
           "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "secret",
+          "family": "remoteCred.read",
+          "rationale": "G2: credential mediation; §2 default {code, session} family"
+        },
+        "capability": "remote-client.read",
+        "presentation": {
+          "title": "View the current remote connection",
+          "action": "view the current remote connection",
+          "description": "Allows {requesterKind} to view the current remote connection.",
+          "group": "credentials",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "see"
+          }
         }
       },
       "pair": {
@@ -1813,6 +2391,24 @@
         },
         "access": {
           "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "secret",
+          "family": "remoteCred.control",
+          "rationale": "G2: credential mediation; §2 default {code, session} family"
+        },
+        "capability": "remote-client.connect",
+        "presentation": {
+          "title": "Pair a remote connection",
+          "action": "pair a remote connection",
+          "description": "Allows {requesterKind} to pair a remote connection.",
+          "group": "credentials",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "reconnectNow": {
@@ -1821,6 +2417,24 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "secret",
+          "family": "remoteCred.control",
+          "rationale": "G2: credential mediation; §2 default {code, session} family"
+        },
+        "capability": "remote-client.connect",
+        "presentation": {
+          "title": "Reconnect now",
+          "action": "reconnect now",
+          "description": "Allows {requesterKind} to reconnect now.",
+          "group": "credentials",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       },
       "relaunch": {
@@ -1829,6 +2443,24 @@
         },
         "access": {
           "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "secret",
+          "family": "remoteCred.control",
+          "rationale": "G2: credential mediation; §2 default {code, session} family"
+        },
+        "capability": "remote-client.connect",
+        "presentation": {
+          "title": "Restart the remote connection",
+          "action": "restart the remote connection",
+          "description": "Allows {requesterKind} to restart the remote connection.",
+          "group": "credentials",
+          "authorityCategory": {
+            "domain": "people",
+            "verb": "manage"
+          }
         }
       }
     }
@@ -1847,7 +2479,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "browserForceReload": {
         "authority": {
@@ -1855,7 +2496,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "browserGoBack": {
         "authority": {
@@ -1863,7 +2513,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "browserGoForward": {
         "authority": {
@@ -1871,7 +2530,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "browserNavigate": {
         "authority": {
@@ -1879,7 +2547,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "browserReload": {
         "authority": {
@@ -1887,7 +2564,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "browserStop": {
         "authority": {
@@ -1895,7 +2581,33 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "clearBrowserSiteData": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: shell-driven browser site-data clear for the focused panel; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
       },
       "clearNativePanelSlot": {
         "authority": {
@@ -1903,7 +2615,70 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "expandPanelIds": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.local-panel-state",
+          "rationale": "Expands exact nodes in this client's local panel presentation state"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "findInPage": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: in-page find UI on the focused panel; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "focusPanel": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "Focus and placement are device-local native presentation effects on the caller's panel host"
+        },
+        "capability": null,
+        "presentation": null
       },
       "forwardMouseClick": {
         "authority": {
@@ -1911,7 +2686,138 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getBrowserSiteState": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.read",
+          "rationale": "P-panels: read of the focused browser panel's per-site UI state; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getChromeState": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.read",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getCollapsedPanelIds": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.local-panel-state",
+          "rationale": "Reads collapsed nodes from this client's local panel presentation state"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getFocusedPanelId": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.local-panel-state",
+          "rationale": "Reads the selected panel from the exact client-local native view registry"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getPanelLayout": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.read",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getPresentation": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.read",
+          "rationale": "P-panels: read-only Electron-local presentation state for trusted panel-hosting chrome"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getThemeConfig": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.read",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "hideContentOverlay": {
         "authority": {
@@ -1919,7 +2825,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "hideNativeShellOverlay": {
         "authority": {
@@ -1927,7 +2842,118 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listPinnedPanelIds": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.read",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "markBrowserNavigationIntent": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "openPanelDevTools": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.native-panel",
+          "rationale": "Opens Electron DevTools for the exact native panel webContents"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "printBrowserPage": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: shell print action on the focused browser panel; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "saveBrowserPagePdf": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: shell save-as-PDF action on the focused browser panel; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "savePanelLayout": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "setBounds": {
         "authority": {
@@ -1935,7 +2961,33 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "setBrowserZoom": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.mutate",
+          "rationale": "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
       },
       "setHostedShellReady": {
         "authority": {
@@ -1943,7 +2995,33 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "setPanelCollapsed": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.local-panel-state",
+          "rationale": "Persists one collapsed-node choice in this client's local presentation state"
+        },
+        "capability": null,
+        "presentation": null
       },
       "setShellOverlay": {
         "authority": {
@@ -1951,7 +3029,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "setThemeCss": {
         "authority": {
@@ -1959,7 +3046,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "setVisible": {
         "authority": {
@@ -1967,7 +3063,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "showContentOverlay": {
         "authority": {
@@ -1975,7 +3080,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "showNativeShellOverlay": {
         "authority": {
@@ -1983,7 +3097,84 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "stopBrowserMedia": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: stops media in the focused browser panel; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "stopFindInPage": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "toggleBrowserBookmark": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: bookmark toggle on the focused browser panel; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "togglePin": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "updateContentOverlay": {
         "authority": {
@@ -1991,7 +3182,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "updateNativePanelSlot": {
         "authority": {
@@ -1999,7 +3199,16 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       },
       "updateNativeShellOverlay": {
         "authority": {
@@ -2007,7 +3216,50 @@
         },
         "access": {
           "sensitivity": "write"
-        }
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "updateTheme": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "updateThemeConfig": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
       }
     }
   }

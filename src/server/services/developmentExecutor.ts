@@ -23,7 +23,6 @@ import {
   type BuildArtifactInput,
 } from "../buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
-import type { DevelopmentRecipeRegistry } from "./developmentRecipes.js";
 
 const execFileAsync = promisify(execFile);
 const REDACT = /(?:token|password|secret|authorization|cookie|private[_-]?key)\s*[=:]\s*[^\s]+/giu;
@@ -104,7 +103,6 @@ export class DevelopmentExecutor {
       workspaceId: string;
       hostExecutionDigest: string;
       root: string;
-      recipes: DevelopmentRecipeRegistry;
       planSource(input: {
         contextId: string;
         repositoryId: string;
@@ -115,10 +113,10 @@ export class DevelopmentExecutor {
     }
   ) {}
 
-  async prepare(input: {
+  async prepareExact(input: {
     session: DevelopmentSession;
     runId: string;
-    recipeId: string;
+    recipe: DevelopmentRecipe;
   }): Promise<PreparedDevelopmentBuild> {
     if (process.platform === "win32") {
       throw Object.assign(
@@ -129,11 +127,7 @@ export class DevelopmentExecutor {
       );
     }
     this.assertRunId(input.runId);
-    const recipe = this.deps.recipes.get(input.recipeId);
-    if (!recipe)
-      throw Object.assign(new Error(`Unknown reviewed recipe ${input.recipeId}`), {
-        code: "ENOENT",
-      });
+    const recipe = input.recipe;
     if (recipe.platform !== process.platform || recipe.arch !== process.arch) {
       throw Object.assign(
         new Error(
@@ -160,8 +154,20 @@ export class DevelopmentExecutor {
       "vibestudio/development-lockfiles/v1",
       canonicalJson(sourcePlan.requiredFiles)
     );
-    const recipeDigest = this.deps.recipes.digest(recipe);
-    const environmentDigest = this.deps.recipes.environmentDigest(recipe);
+    const { reviewDigest, ...reviewedRecipeBody } = recipe;
+    if (
+      domainHash("vibestudio/development-recipe-review/v1", canonicalJson(reviewedRecipeBody)) !==
+      reviewDigest
+    ) {
+      throw Object.assign(new Error(`Recipe ${recipe.recipeId} has an invalid review digest`), {
+        code: "EIDENTITYDRIFT",
+      });
+    }
+    const recipeDigest = domainHash("vibestudio/development-recipe/v1", canonicalJson(recipe));
+    const environmentDigest = domainHash(
+      "vibestudio/development-environment/v1",
+      canonicalJson(recipe.declaredEnvironment)
+    );
     const snapshotBase = {
       version: 1 as const,
       sessionId: input.session.sessionId,
@@ -462,9 +468,9 @@ export class DevelopmentExecutor {
         sourcePath: run.snapshot.repoPath,
         ev: effectiveVersion,
         sourceStateHash: run.snapshot.contentRoot,
-        sourceSemanticState: run.snapshot.repositoryState,
+        sourceState: run.snapshot.repositoryState,
         sourcemap: false,
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
         details: { kind: "generic" },
         builtAt: new Date().toISOString(),
       }
@@ -839,9 +845,14 @@ async function copyPackageClosure(sourceRoot: string, targetRoot: string): Promi
 }
 
 async function resolvePnpmCli(nodePath: string): Promise<string> {
+  const executableName = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  const pathCandidates = (process.env["PATH"] ?? "")
+    .split(path.delimiter)
+    .filter((directory) => path.isAbsolute(directory))
+    .map((directory) => path.join(directory, executableName));
   const candidates = [
     process.env["npm_execpath"],
-    path.join(path.dirname(nodePath), process.platform === "win32" ? "pnpm.cmd" : "pnpm"),
+    path.join(path.dirname(nodePath), executableName),
     path.join(
       path.dirname(path.dirname(nodePath)),
       "lib",
@@ -850,6 +861,7 @@ async function resolvePnpmCli(nodePath: string): Promise<string> {
       "bin",
       "pnpm.cjs"
     ),
+    ...pathCandidates,
   ].filter((candidate): candidate is string => Boolean(candidate && path.isAbsolute(candidate)));
   for (const candidate of candidates) {
     try {

@@ -11,6 +11,13 @@ import type { MethodSchema } from "./typedServiceClient.js";
 interface PreparedAuthoritySelectionFields {
   capability: string;
   resourceKey: string;
+  /** Sealed receiver facts for a manifest-provided userland capability. */
+  receiverAuthority?: {
+    capabilityDefinitionDigest: string;
+    resourceType: string;
+    provider: string;
+    providerExecutionDigest: string;
+  };
   authorizingCaller?: VerifiedCaller;
   challenge?: AuthorityChallengePresentation;
   /** Host-selected tier, allowed only when the schema declares its closed set. */

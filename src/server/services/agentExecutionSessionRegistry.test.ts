@@ -26,7 +26,7 @@ function admission(
       runId,
       authorityManifest: {
         mode: "adaptive",
-        effects: "mutable",
+        effects: "read-write",
         approvals: "prompt",
         requests: [],
         digest: "0".repeat(64),
@@ -54,11 +54,13 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     expect(registry.testPolicyForContext("ctx:child")).toBeNull();
   });
 
-  it("rejects policy crossover and releases every adopted context when the run ends", () => {
+  it("rejects policy crossover and retains adopted contexts between orchestrator cells", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
     const registry = new AgentExecutionSessionRegistry();
     const policy = registry.createTestPolicy("system-test-runner:run-42");
     const first = registry.admit({
       ...admission("runtime:eval:one", "system-test-runner:run-42"),
+      expiresAt: 2_000,
       mode: "test",
       contextId: "ctx:runner",
       testPolicy: policy,
@@ -81,9 +83,12 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     expect(registry.close(second.eval.runtimeId, second.eval.runId)).toBe(true);
     expect(registry.testPolicyForContext("ctx:durable-receiver")).toBe(policy);
     expect(registry.close(first.eval.runtimeId, first.eval.runId)).toBe(true);
+    expect(registry.testPolicyForContext("ctx:runner")).toBe(policy);
+    expect(registry.resolve(first.eval.runtimeId, 2_000)).toBeNull();
     expect(registry.testPolicyForContext("ctx:runner")).toBeNull();
     expect(registry.testPolicyForContext("ctx:child")).toBeNull();
     expect(registry.testPolicyForContext("ctx:durable-receiver")).toBeNull();
+    vi.restoreAllMocks();
   });
 
   it("derives one exact case policy only from a live orchestrator context", () => {
@@ -105,14 +110,6 @@ describe("AgentExecutionSessionRegistry test policy", () => {
           resource: { kind: "exact", key: "approvals.read" },
           tier: "gated",
           decision: "once",
-        },
-      ],
-      userland: [
-        {
-          ruleId: "choice",
-          subject: { kind: "exact", key: "system-test:harmless-resource" },
-          decision: "allow",
-          remember: true,
         },
       ],
       unexpectedPrompts: "fail",
@@ -144,14 +141,6 @@ describe("AgentExecutionSessionRegistry test policy", () => {
             decision: "once",
           },
         ],
-        userland: [
-          {
-            ruleId: "choice",
-            subject: { kind: "exact", key: "system-test:harmless-resource" },
-            decision: "allow",
-            remember: true,
-          },
-        ],
         unexpectedPrompts: "fail",
       })
     ).not.toThrow();
@@ -164,17 +153,18 @@ describe("AgentExecutionSessionRegistry test policy", () => {
           fallback: "disabled",
         },
         authority: [],
-        userland: [],
         unexpectedPrompts: "fail",
       })
     ).toThrow(/orchestrator-owned/);
   });
 
-  it("revokes descendant execution facts when the orchestrator run ends", () => {
+  it("revokes descendant execution facts when the orchestrator history expires", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
     const registry = new AgentExecutionSessionRegistry();
     const orchestrator = registry.createTestPolicy("system-test-runner:run-42");
     const root = registry.admit({
       ...admission("runtime:eval:root", "system-test-runner:run-42"),
+      expiresAt: 2_000,
       mode: "test",
       contextId: "ctx:orchestrator",
       testPolicy: orchestrator,
@@ -188,7 +178,6 @@ describe("AgentExecutionSessionRegistry test policy", () => {
         fallback: "disabled",
       },
       authority: [],
-      userland: [],
       unexpectedPrompts: "fail",
     });
     const casePolicy = registry.testPolicyForContext("ctx:case");
@@ -201,9 +190,12 @@ describe("AgentExecutionSessionRegistry test policy", () => {
     });
 
     expect(registry.close(root.eval.runtimeId, root.eval.runId)).toBe(true);
+    expect(registry.resolve(child.eval.runtimeId)).toBe(child);
+    expect(registry.resolve(root.eval.runtimeId, 2_000)).toBeNull();
     expect(registry.resolve(child.eval.runtimeId)).toBeNull();
     expect(registry.testPolicyForContext("ctx:orchestrator")).toBeNull();
     expect(registry.testPolicyForContext("ctx:case")).toBeNull();
+    vi.restoreAllMocks();
   });
 });
 
@@ -221,15 +213,18 @@ describe("AgentExecutionSessionRegistry admission", () => {
     vi.restoreAllMocks();
   });
 
-  it("requires the exact run to close a runtime and admits a fresh run afterward", () => {
+  it("requires the exact run to close a cell and preserves the notebook trust identity", () => {
     const registry = new AgentExecutionSessionRegistry();
     const first = registry.admit(admission());
     expect(registry.close(first.eval.runtimeId, "run:wrong-owner")).toBe(false);
     expect(registry.resolve(first.eval.runtimeId)).toBe(first);
     expect(registry.close(first.eval.runtimeId, first.eval.runId)).toBe(true);
+    expect(registry.resolve(first.eval.runtimeId)).toBe(first);
     const second = registry.admit(admission(first.eval.runtimeId, "run:two"));
-    expect(second.nonce).not.toBe(first.nonce);
-    expect(second.authoritySessionId).not.toBe(first.authoritySessionId);
+    expect(second.nonce).toBe(first.nonce);
+    expect(second.authoritySessionId).toBe(first.authoritySessionId);
+    expect(second.authoritySessionVersion).toBe(first.authoritySessionVersion + 1);
+    expect(registry.resolveInvocation(first.eval.runtimeId, first.nonce)).toBe(second);
   });
 
   it("resolves evaluated effects only with the exact live admission nonce", () => {

@@ -19,15 +19,6 @@ const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
 // markdown code blocks; every other control character stays rejected.
 const CONTROL_CHARS_EXCEPT_NEWLINE = /[\u0000-\u0009\u000B-\u001F\u007F]/;
 const ZERO_WIDTH_CHARS = /[\u200B-\u200F]/g;
-const SUBJECT_ID_PATTERN = /^[A-Za-z0-9._:/-]+$/;
-const OPTION_VALUE_PATTERN = /^[A-Za-z0-9_-]+$/;
-export const USERLAND_APPROVAL_RESERVED_SUBJECT_PREFIXES = [
-  "shell:",
-  "server:",
-  "system:",
-  "@",
-] as const;
-
 export function approvalCleanString(
   label: string,
   opts: { min?: number; max: number; pattern?: RegExp; multiline?: boolean }
@@ -53,70 +44,11 @@ export function approvalCleanString(
   return schema;
 }
 
-export const userlandApprovalSubjectIdSchema = approvalCleanString("subject id", {
-  min: 1,
-  max: 128,
-  pattern: SUBJECT_ID_PATTERN,
-}).refine(
-  (id) => !USERLAND_APPROVAL_RESERVED_SUBJECT_PREFIXES.some((prefix) => id.startsWith(prefix)),
-  { message: "subject id uses a reserved prefix" }
-);
-
-export const userlandApprovalDetailSchema = z
+export const approvalDetailSchema = z
   .object({
     label: approvalCleanString("detail label", { max: 40 }),
     value: approvalCleanString("detail value", { max: 1000, multiline: true }),
     format: z.enum(["plain", "markdown", "code", "tree"]).optional(),
-  })
-  .strict();
-
-const SHA256_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
-/**
- * The RPC control frame is capped at 16 MiB. Reserve 1 MiB for the request
- * envelope, approval copy, and encoding overhead; one execution plan may use
- * the remainder.
- */
-export const USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES = 15 * 1024 * 1024;
-/**
- * Reviewable text is rendered directly in trusted approval surfaces. Keep it
- * comfortably bounded so opening an approval can never monopolize the UI
- * thread. Larger exact payloads remain sealable, but must be represented by a
- * bounded human review projection or a content-addressed artifact.
- */
-export const USERLAND_APPROVAL_REVIEW_DETAILS_MAX_BYTES = 128 * 1024;
-
-/**
- * Large, security-relevant approval detail submitted for host sealing.
- *
- * The content is accepted only on the requester-facing service. Pending
- * approval projections carry the host-computed reference below, never these
- * bytes; trusted approval surfaces fetch them lazily while the request lives.
- */
-export const userlandApprovalSealedDetailInputSchema = z
-  .object({
-    label: approvalCleanString("sealed detail label", { min: 1, max: 40 }),
-    content: z.string(),
-    format: z.enum(["plain", "code"]).optional(),
-    disclosure: z.enum(["review", "sealed-only"]).optional(),
-  })
-  .strict();
-
-/** Host-computed immutable reference exposed on a pending approval. */
-export const userlandApprovalSealedDetailRefSchema = z
-  .object({
-    label: approvalCleanString("sealed detail label", { min: 1, max: 40 }),
-    digest: z.string().regex(SHA256_DIGEST_PATTERN),
-    byteLength: z.number().int().nonnegative(),
-    format: z.enum(["plain", "code"]).optional(),
-    disclosure: z.enum(["review", "sealed-only"]).optional(),
-  })
-  .strict();
-
-/** Exact host-sealed bytes returned to the requester after approval. */
-export const approvedUserlandSealedDetailSchema = z
-  .object({
-    digest: z.string().regex(SHA256_DIGEST_PATTERN),
-    content: z.string(),
   })
   .strict();
 
@@ -127,125 +59,6 @@ export const approvalPrincipalSchema = z
     repoPath: approvalCleanString("repo path", { min: 1, max: 300 }),
     effectiveVersion: approvalCleanString("effective version", { min: 1, max: 200 }),
     callerTitle: approvalCleanString("caller title", { max: 120 }).optional(),
-  })
-  .strict();
-
-export const userlandApprovalOptionSchema = z
-  .object({
-    value: approvalCleanString("option value", {
-      min: 1,
-      max: 40,
-      pattern: OPTION_VALUE_PATTERN,
-    }).refine((value) => value !== "dismiss", { message: "option value is reserved" }),
-    label: approvalCleanString("option label", { min: 1, max: 40 }),
-    description: approvalCleanString("option description", { max: 120 }).optional(),
-    tone: z.enum(["primary", "danger", "neutral"]).optional(),
-  })
-  .strict();
-
-export const userlandApprovalRequestSchema = z
-  .object({
-    subject: z
-      .object({
-        id: userlandApprovalSubjectIdSchema,
-        label: approvalCleanString("subject label", { max: 80 }).optional(),
-      })
-      .strict(),
-    title: approvalCleanString("title", { min: 1, max: 120 }),
-    summary: approvalCleanString("summary", { max: 1000, multiline: true }).optional(),
-    warning: approvalCleanString("warning", { max: 200 }).optional(),
-    details: z.array(userlandApprovalDetailSchema).max(8).optional(),
-    sealedDetails: z.array(userlandApprovalSealedDetailInputSchema).max(4).optional(),
-    positiveEvidence: z.array(userlandApprovalDetailSchema).max(6).optional(),
-    severity: z.enum(["standard", "dangerous"]).optional(),
-    defaultAction: z.enum(["allow", "deny"]).optional(),
-    promptOptions: z.enum(["scoped", "choices"]).optional(),
-    options: z.array(userlandApprovalOptionSchema).min(1).max(6).optional(),
-  })
-  .strict()
-  .superRefine((req, ctx) => {
-    const sealedBytes = (req.sealedDetails ?? []).reduce(
-      (total, detail) => total + new TextEncoder().encode(detail.content).byteLength,
-      0
-    );
-    if (sealedBytes > USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["sealedDetails"],
-        message:
-          "sealed approval details exceed the RPC frame budget; execute a reviewed immutable file or artifact instead",
-      });
-    }
-    const reviewBytes = (req.sealedDetails ?? [])
-      .filter((detail) => (detail.disclosure ?? "review") === "review")
-      .reduce((total, detail) => total + new TextEncoder().encode(detail.content).byteLength, 0);
-    if (reviewBytes > USERLAND_APPROVAL_REVIEW_DETAILS_MAX_BYTES) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["sealedDetails"],
-        message:
-          "reviewable approval details are too large for an interactive prompt; provide a bounded review projection or a content-addressed artifact",
-      });
-    }
-    const values = new Set<string>();
-    for (const [index, option] of (req.options ?? []).entries()) {
-      if (values.has(option.value)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["options", index, "value"],
-          message: "option values must be unique",
-        });
-      }
-      values.add(option.value);
-    }
-  });
-
-export const userlandApprovalChoiceSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("choice"),
-      choice: z.string(),
-      sealedDetails: z.array(approvedUserlandSealedDetailSchema).max(4).optional(),
-    })
-    .strict(),
-  z.object({ kind: z.literal("dismissed") }).strict(),
-  z
-    .object({
-      kind: z.literal("uncallable"),
-      reason: z.literal("no-user-context"),
-    })
-    .strict(),
-]);
-
-export const userlandApprovalGrantSchema = z
-  .object({
-    principal: z
-      .object({
-        callerId: z.string(),
-        callerKind: z.enum(["panel", "app", "worker", "do", "extension"]),
-        repoPath: z.string().optional(),
-        effectiveVersion: z.string().optional(),
-      })
-      .strict(),
-    issuer: z
-      .object({
-        kind: z.enum(["panel", "app", "worker", "do", "extension"]),
-        id: z.string(),
-        label: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    subject: z
-      .object({
-        id: z.string(),
-        label: z.string().optional(),
-      })
-      .strict(),
-    reviewDigest: z.string().regex(SHA256_DIGEST_PATTERN).optional(),
-    choice: z.string(),
-    grantedAt: z.number(),
-    grantedBy: z.string().optional(),
-    scope: z.enum(["caller", "session", "version"]).optional(),
   })
   .strict();
 
@@ -314,8 +127,6 @@ export interface ApprovalOperationDescriptor {
     | "worker-lifecycle"
     | "workspace"
     | "service-setup"
-    | "userland"
-    | "external-agent"
     | "device-code"
     | "unknown";
   verb: string;
@@ -381,79 +192,10 @@ export const secretInputRequestSchema = z
     title: approvalCleanString("title", { min: 1, max: 120 }),
     description: approvalCleanString("description", { max: 1000, multiline: true }).optional(),
     warning: approvalCleanString("warning", { max: 200 }).optional(),
-    details: z.array(userlandApprovalDetailSchema).max(8).optional(),
+    details: z.array(approvalDetailSchema).max(8).optional(),
     fields: z.array(approvalInputFieldSchema).length(1),
   })
   .strict();
-
-// A tool-input preview is arbitrary source text (JSON, shell, code) that may
-// carry tabs/newlines. Rather than reject those (approvalCleanString rejects all
-// control chars, tabs included), we STRIP zero-width and non-whitespace control
-// characters while keeping tab, newline, and CR so the monospace preview renders
-// faithfully.
-const PREVIEW_STRIP = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F]/g;
-export const externalAgentPreviewSchema = z
-  .string()
-  .max(8000, { message: "preview is too long" })
-  .transform((value) => value.replace(PREVIEW_STRIP, ""));
-
-/**
- * Request shape for `userlandApproval.requestExternal`: a bound external agent
- * runtime relaying a tool-use permission prompt into the workspace approvals
- * system.
- * The runtime supplies these fields; the service derives the bound runtime
- * entity from the verified caller and stamps `kind: "external-agent"` onto the
- * pending approval it files. Resolution is per-request (allow/deny), with no
- * durable grant.
- */
-export const externalAgentApprovalRequestSchema = z
-  .object({
-    channelId: approvalCleanString("channel id", { min: 1, max: 200 }),
-    capability: approvalCleanString("capability", {
-      min: 1,
-      max: 120,
-      pattern: /^[A-Za-z0-9._:-]+$/,
-    }),
-    operation: approvalCleanString("operation", { min: 1, max: 200 }),
-    description: approvalCleanString("description", { max: 1000, multiline: true }).optional(),
-    preview: externalAgentPreviewSchema.optional(),
-    requestId: approvalCleanString("request id", {
-      min: 1,
-      max: 200,
-      pattern: /^[A-Za-z0-9._:/-]+$/,
-    }),
-    resolveToken: approvalCleanString("resolve token", {
-      min: 16,
-      max: 200,
-      pattern: /^[A-Za-z0-9._:/-]+$/,
-    }),
-  })
-  .strict();
-
-export type ExternalAgentApprovalRequest = z.infer<typeof externalAgentApprovalRequestSchema>;
-
-/**
- * Argument for `userlandApproval.settleExternal`: the quiet-settle path. When a
- * relayed permission is answered elsewhere, the runtime withdraws the workspace
- * card without recording a deny. Scoped by the caller's verified bound-agent
- * record plus `channelId`, so one runtime cannot settle another's requests.
- */
-export const externalAgentSettleSchema = z
-  .object({
-    channelId: approvalCleanString("channel id", { min: 1, max: 200 }),
-    requestId: approvalCleanString("request id", {
-      min: 1,
-      max: 200,
-      pattern: /^[A-Za-z0-9._:/-]+$/,
-    }),
-    resolution: z.enum(["answered-elsewhere"]).optional(),
-  })
-  .strict();
-
-export type ExternalAgentSettle = z.infer<typeof externalAgentSettleSchema>;
-
-/** Verdict returned to the relaying runtime by `requestExternal`. */
-export type ExternalAgentApprovalResult = { behavior: "allow" | "deny" };
 
 /** The verified runtime caller that issued the prompt. Populated by the dispatcher. */
 export interface ApprovalPrincipal {
@@ -470,52 +212,6 @@ export interface ApprovalPrincipal {
   callerTitle?: string;
   requesterCategory?: ApprovalRequesterCategory;
   requester?: ApprovalRequesterIdentity;
-}
-
-/**
- * What reusable authority the userland approval is about.
- *
- * `id` is the capability identity used by host-managed session/version
- * grants. It must include behavior-changing inputs, but should not include
- * incidental execution limits or opaque review-payload digests. Exact bytes
- * for the current invocation belong in `sealedDetails`.
- */
-export interface UserlandApprovalSubject {
-  id: string;
-  label?: string;
-}
-
-/**
- * Who is asking the user. For direct panel/worker calls this equals the
- * principal; for extension-issued approvals (via `ctx.approvals.request`),
- * this identifies the extension acting on behalf of the principal.
- *
- * `label` is a server-controlled display title (panel title, worker
- * `setTitle` value, extension manifest name) — present when the server can
- * resolve it. Consumers should prefer `label` over `id` in UI.
- */
-export interface UserlandApprovalIssuer {
-  kind: "panel" | "app" | "worker" | "do" | "extension";
-  id: string;
-  label?: string;
-}
-
-/** A persisted decision for one flat (principal, subject) pair. */
-export interface UserlandApprovalGrant {
-  principal: {
-    callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do" | "extension";
-    repoPath?: string;
-    effectiveVersion?: string;
-  };
-  issuer?: UserlandApprovalIssuer;
-  subject: UserlandApprovalSubject;
-  /** Host-derived identity of the sealed review material this grant covers. */
-  reviewDigest?: string;
-  choice: string;
-  grantedAt: number;
-  grantedBy?: string;
-  scope?: UserlandApprovalGrantScope;
 }
 
 /**
@@ -651,7 +347,11 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
   cardType?:
     | "permission.gated"
     | "permission.outside"
-    | "confirm.critical";
+    | "confirm.critical"
+    | "template.add"
+    | "template.update"
+    | "template.remove"
+    | "template.suggest";
   /** Host-derived decisions this exact authority request can meaningfully mint. */
   allowedDecisions?: ApprovalDecision[];
   /** Canonical server-side projection used by every authority surface. */
@@ -725,6 +425,10 @@ export interface UnitBatchEntry {
   /** Exact, version-bound manifest review plus human-oriented change groups. */
   authority?: {
     requests: readonly UnitAuthorityRequest[];
+    /** Receiver-owned userland capabilities in the proposed exact build. */
+    provides: readonly import("./authorityManifest.js").UserlandCapabilityDefinition[];
+    /** Receiver-owned capabilities in the previously approved exact build. */
+    previousProvides: readonly import("./authorityManifest.js").UserlandCapabilityDefinition[];
     rows: import("./authority/authorityRows.js").AuthorityRow[];
     diff: import("./authority/authorityRowDiff.js").AuthorityRowDiff;
   };
@@ -778,7 +482,7 @@ export interface PendingMissionReviewApproval extends PendingApprovalBase {
     rows: import("./authority/authorityRows.js").AuthorityRow[];
     diff: import("./authority/authorityRowDiff.js").AuthorityRowDiff;
   };
-  toolkitDomains: import("./authority/capabilityDomains.js").AuthorityDomainId[];
+  toolkitDomains: import("./authority/authorityDomains.js").AuthorityDomainId[];
   networkSummary: string;
   lineageSummary: string;
   charter: import("./authority/mission.js").MissionCharter;
@@ -835,73 +539,6 @@ export interface PendingSecretInputApproval extends PendingApprovalBase {
 }
 
 /**
- * A tool-use permission prompt relayed from a bound external agent runtime,
- * filed as a first-class workspace approval. Resolution is binary per-request
- * (allow/deny), has no durable grant, and returns `{ behavior }` to the relaying runtime. The card
- * renders a monospace `preview` of the tool input. Quiet-settled (card removed
- * without a recorded deny) when the permission is answered elsewhere.
- */
-export interface PendingExternalAgentApproval extends PendingApprovalBase {
-  kind: "external-agent";
-  /** Runtime entity the linked agent serves. Derived and stamped by the host. */
-  entityId: string;
-  /** Agentic channel carrying the external-agent prompt. */
-  channelId: string;
-  /** Capability namespace, e.g. `external-agent.tool`. */
-  capability: string;
-  /**
-   * The tool/operation the agent wants to run, e.g. `Bash`. Named `operationName`
-   * (not `operation`) because `PendingApprovalBase.operation` is the structured
-   * {@link ApprovalOperationDescriptor}; the runtime-facing request field is still
-   * `operation`.
-   */
-  operationName: string;
-  description?: string;
-  /** Monospace-rendered tool input preview. */
-  preview?: string;
-  /** Correlates the verdict back to the external agent's pending request. */
-  requestId: string;
-  /** Opaque one-shot token emitted only with the inline channel signal. */
-  resolveToken: string;
-}
-
-export interface UserlandApprovalOption {
-  value: string;
-  label: string;
-  description?: string;
-  tone?: "primary" | "danger" | "neutral";
-}
-
-export type UserlandApprovalPromptOptions = "scoped" | "choices";
-export type UserlandApprovalGrantScope = "caller" | "session" | "version";
-
-export interface PendingUserlandApproval extends PendingApprovalBase {
-  kind: "userland";
-  /** Issuer of the request — the panel/worker/extension that asked. */
-  issuer?: UserlandApprovalIssuer;
-  subject: UserlandApprovalSubject;
-  title: string;
-  summary?: string;
-  warning?: string;
-  details?: Array<{
-    label: string;
-    value: string;
-    format?: ApprovalDetailFormat;
-  }>;
-  /** Host-sealed, lazily fetched detail references. Bytes live only with the pending request. */
-  sealedDetails?: UserlandApprovalSealedDetailRef[];
-  positiveEvidence?: Array<{
-    label: string;
-    value: string;
-    format?: ApprovalDetailFormat;
-  }>;
-  severity?: "standard" | "dangerous";
-  defaultAction?: "allow" | "deny";
-  promptOptions: UserlandApprovalPromptOptions;
-  options: UserlandApprovalOption[];
-}
-
-/**
  * OAuth 2.0 Device Authorization Grant (RFC 8628) flow status.
  *
  * Surfaced on the trusted approval bar so the user can read the `userCode`
@@ -929,64 +566,9 @@ export interface PendingDeviceCodeApproval extends PendingApprovalBase {
   oauthTokenOrigin: string;
 }
 
-/**
- * Consumer contract: call this at every privileged-action boundary. Do not
- * cache the result. The host owns persistence, deduplication, scope, and
- * revocation. If you think you need a local allowlist, you are about to
- * introduce a bug.
- */
-export interface UserlandApprovalRequest {
-  /** Optional issuer override. Direct panel/worker callers can omit (issuer = principal). */
-  issuer?: UserlandApprovalIssuer;
-  subject: UserlandApprovalSubject;
-  title: string;
-  summary?: string;
-  warning?: string;
-  details?: Array<{
-    label: string;
-    value: string;
-    format?: ApprovalDetailFormat;
-  }>;
-  /**
-   * Immutable content sealed to this invocation. `review` details are bounded
-   * human projections revealed on demand; `sealed-only` details are returned
-   * to the requester after approval but never disclosed by approval surfaces.
-   */
-  sealedDetails?: UserlandApprovalSealedDetailInput[];
-  /** Positive proof for security claims displayed by the prompt. */
-  positiveEvidence?: Array<{
-    label: string;
-    value: string;
-    format?: ApprovalDetailFormat;
-  }>;
-  /** Dangerous prompts default to denial and render with stronger copy. */
-  severity?: "standard" | "dangerous";
-  /** Default action for scoped prompts. Dangerous actions should use deny. */
-  defaultAction?: "allow" | "deny";
-  /**
-   * `scoped` (default) shows host-managed Allow once / Session / Trust version-or-identity
-   * choices and returns `choice: "allow"` or `choice: "deny"`.
-   * `choices` shows the supplied `options` and persists the selected choice
-   * for this concrete caller until revoked.
-   */
-  promptOptions?: UserlandApprovalPromptOptions;
-  options?: UserlandApprovalOption[];
-}
-
-export type UserlandApprovalChoice =
-  | { kind: "choice"; choice: string; sealedDetails?: ApprovedUserlandSealedDetail[] }
-  | { kind: "dismissed" }
-  | { kind: "uncallable"; reason: "no-user-context" };
-
 export type SecretInputResult =
   | { decision: "submit"; values: Record<string, string> }
   | { decision: "deny" };
-
-export type UserlandApprovalSealedDetailInput = z.infer<
-  typeof userlandApprovalSealedDetailInputSchema
->;
-export type UserlandApprovalSealedDetailRef = z.infer<typeof userlandApprovalSealedDetailRefSchema>;
-export type ApprovedUserlandSealedDetail = z.infer<typeof approvedUserlandSealedDetailSchema>;
 
 export type SecretInputRequest = z.infer<typeof secretInputRequestSchema>;
 
@@ -998,7 +580,5 @@ export type PendingApproval =
   | PendingClientConfigApproval
   | PendingCredentialInputApproval
   | PendingSecretInputApproval
-  | PendingUserlandApproval
-  | PendingExternalAgentApproval
   | PendingDeviceCodeApproval
   | PendingBrowserPermissionApproval;

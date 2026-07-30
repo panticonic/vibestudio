@@ -1,5 +1,4 @@
-import type { HostSemanticCapability } from "./hostCapabilityPresentations.js";
-import { capabilityDomain } from "./capabilityDomains.js";
+import { capabilityDomain } from "./authorityDomains.js";
 
 export interface ReceiverAuthorityPolicy {
   agentScope: "offer" | "never";
@@ -9,12 +8,9 @@ export interface ReceiverAuthorityPolicy {
   substanceKind: import("../approvals.js").OperationSubstance["kind"] | null;
 }
 
-const NETWORK_EGRESS = new Set<HostSemanticCapability>([
-  "network.response.read",
-  "workspace.gateway.access",
-]);
+const NETWORK_EGRESS = new Set<string>(["network.response.read", "workspace.gateway.access"]);
 
-const IRREVERSIBLE = new Set<HostSemanticCapability>([
+const IRREVERSIBLE = new Set<string>([
   "application.shutdown",
   "browser-passwords.delete",
   "workspace.storage.delete",
@@ -25,7 +21,7 @@ const IRREVERSIBLE = new Set<HostSemanticCapability>([
   "account-providers.delete",
 ]);
 
-const AGENT_SCOPE_OFFERABLE = new Set<HostSemanticCapability>([
+const AGENT_SCOPE_OFFERABLE = new Set<string>([
   "adblock.manage",
   "external.open",
   "credential.use",
@@ -53,7 +49,7 @@ const AGENT_SCOPE_OFFERABLE = new Set<HostSemanticCapability>([
   "workspace-panels.manage",
 ]);
 
-const SHARING = new Set<HostSemanticCapability>([
+const SHARING = new Set<string>([
   "external.open",
   "git.remotes.manage",
   "git.publish",
@@ -78,21 +74,20 @@ export function receiverAuthorityPolicy(
       substanceKind: dynamic?.substanceKind ?? null,
     };
   }
-  const typed = capability as HostSemanticCapability;
-  const irreversible = IRREVERSIBLE.has(typed);
-  const agentScope = AGENT_SCOPE_OFFERABLE.has(typed) && !irreversible ? "offer" : "never";
+  const irreversible = IRREVERSIBLE.has(capability);
+  const agentScope = AGENT_SCOPE_OFFERABLE.has(capability) && !irreversible ? "offer" : "never";
   return {
     agentScope,
     irreversible,
     missionGrant: !irreversible,
-    requiresSubstance: irreversible || SHARING.has(typed),
+    requiresSubstance: irreversible || SHARING.has(capability),
     substanceKind: irreversible
       ? "deletion"
-      : typed === "git.publish"
+      : capability === "git.publish"
         ? "change-set"
-        : typed === "push.send"
+        : capability === "push.send"
           ? "send"
-          : SHARING.has(typed)
+          : SHARING.has(capability)
             ? "custom"
             : null,
   };
@@ -110,8 +105,6 @@ export function standingAgentScopeEligible(input: {
   }
   const domain = input.domain ?? capabilityDomain(input.capability)?.domain;
   const needsHistory =
-    domain === "sharing" ||
-    domain === "accounts" ||
-    NETWORK_EGRESS.has(input.capability as HostSemanticCapability);
+    domain === "sharing" || domain === "accounts" || NETWORK_EGRESS.has(input.capability);
   return !needsHistory || input.priorInteractiveApprovals >= 2;
 }

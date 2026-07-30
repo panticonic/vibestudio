@@ -128,7 +128,9 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
   }
 
   list(ownerCallerId?: string): Promise<WebhookIngressSubscription[]> {
-    return this.call("list", [ownerCallerId]) as Promise<WebhookIngressSubscription[]>;
+    return this.call("list", ownerCallerId === undefined ? [] : [ownerCallerId]) as Promise<
+      WebhookIngressSubscription[]
+    >;
   }
 
   async replace(subscription: WebhookIngressSubscription): Promise<void> {

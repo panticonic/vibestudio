@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import * as path from "path";
-import { diagnosticsFromError, workspaceDiagnosticPath } from "./diagnostics.js";
+import {
+  BuildGateFailedError,
+  diagnosticsFromError,
+  workspaceDiagnosticPath,
+} from "./diagnostics.js";
 
 describe("build diagnostics path normalization", () => {
   it("maps esbuild materialized source paths back to workspace-relative files", () => {
@@ -40,5 +44,31 @@ describe("build diagnostics path normalization", () => {
         unitRelativePath: "panels/hello",
       })
     ).toBe("panels/hello/src/index.ts");
+  });
+
+  it("preserves the build-report diagnostic contract for publication refusals", () => {
+    const diagnostics = [
+      {
+        source: "tsc" as const,
+        severity: "error" as const,
+        file: "packages/lib/src/index.ts",
+        line: 12,
+        column: 4,
+        message: "Type mismatch",
+      },
+    ];
+    const error = new BuildGateFailedError(
+      diagnostics,
+      ["@workspace/lib", "@workspace-panels/app"],
+      "state:candidate"
+    );
+
+    expect(error.code).toBe("BuildGateFailed");
+    expect(error.errorData).toMatchObject({
+      code: "BuildGateFailed",
+      candidateState: "state:candidate",
+      affectedUnits: ["@workspace/lib", "@workspace-panels/app"],
+      diagnostics,
+    });
   });
 });

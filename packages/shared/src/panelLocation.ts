@@ -31,8 +31,6 @@ export interface PanelLocation {
   title?: string;
   /** Opt-in stable id segment, unique among the parent's children. */
   slug?: string;
-  /** @deprecated Alias for `title`. */
-  name?: string;
   /** Whether a newly-created target should receive focus. */
   focus?: boolean;
   /** Placement relative to the panel from which navigation originates. */
@@ -58,7 +56,6 @@ const PARAMETER_KEYS = new Set([
   "stateArgs",
   "title",
   "slug",
-  "name",
   "focus",
   "disposition",
   "placement",
@@ -100,7 +97,6 @@ export function validatePanelLocation(location: PanelLocation): void {
     ["contextId", location.contextId, 1024],
     ["title", location.title, 256],
     ["slug", location.slug, 256],
-    ["name", location.name, 256],
   ] as const) {
     if (value !== undefined && !isSafeText(value, maxLength)) {
       throw new Error(`Panel ${label} is empty, too long, or contains control characters`);
@@ -166,7 +162,6 @@ function encodePanelLocationParams(location: PanelLocation): string {
   }
   if (location.title !== undefined) pairs.push(["title", location.title]);
   if (location.slug !== undefined) pairs.push(["slug", location.slug]);
-  if (location.name !== undefined) pairs.push(["name", location.name]);
   if (location.focus !== undefined) pairs.push(["focus", String(location.focus)]);
   if (location.disposition !== undefined) pairs.push(["disposition", location.disposition]);
   if (location.placement?.disposition !== undefined) {
@@ -327,7 +322,6 @@ export function parsePanelLocationLink(raw: string): ParsedPanelLocationLink {
     ...(stateArgs !== undefined ? { stateArgs } : {}),
     ...(decoded.get("title") !== undefined ? { title: decoded.get("title") } : {}),
     ...(decoded.get("slug") !== undefined ? { slug: decoded.get("slug") } : {}),
-    ...(decoded.get("name") !== undefined ? { name: decoded.get("name") } : {}),
     ...(focusValue !== undefined ? { focus: focusValue === "true" } : {}),
     ...(dispositionValue !== undefined
       ? { disposition: dispositionValue as PanelDisposition }

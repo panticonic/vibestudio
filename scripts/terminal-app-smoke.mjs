@@ -6,6 +6,7 @@ import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { envelopeFromMessage } from "@vibestudio/rpc";
+import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
@@ -155,11 +156,14 @@ async function waitForRunning(url, shellToken, events) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const before = events.checkpoint();
-    const units = await rpc(url, shellToken, "workspace.units.list");
-    const remoteCli = units.find((unit) => unit.name === REMOTE_CLI);
+    const units = await rpc(url, shellToken, "runtime.supervision.list", [{ kind: "app" }]);
+    const remoteCli = units.find((unit) => unit.source === REMOTE_CLI);
     if (remoteCli?.status === "running") return remoteCli;
     if (remoteCli?.status === "error") {
-      const logs = await rpc(url, shellToken, "workspace.units.logs", [REMOTE_CLI, { limit: 80 }]);
+      const logs = await rpc(url, shellToken, "runtime.supervision.logs", [
+        remoteCli.identity,
+        { limit: 80 },
+      ]);
       throw new Error(
         `${REMOTE_CLI} errored: ${remoteCli.lastError}\n${JSON.stringify(logs, null, 2)}`
       );
@@ -174,13 +178,17 @@ async function launchTerminalWithGate(url, shellToken, events) {
   // the approved native extensions before the terminal app can legitimately
   // take several minutes on a cold registry/network path.
   const deadline = Date.now() + 600_000;
-  let session = await rpc(url, shellToken, "workspace.hostTargets.beginLaunch", ["terminal"]);
+  let approvalsResolved = 0;
+  const hostLaunch = new HostLaunchClient((service, method, args) =>
+    rpc(url, shellToken, `${service}.${method}`, args)
+  );
   while (Date.now() < deadline) {
     const before = events.checkpoint();
-    if (session.status === "ready") {
-      return { launch: session.launch, approvalsResolved: session.approvalsResolved };
+    const launch = await hostLaunch.launch("terminal");
+    if (launch.status === "ready") {
+      return { launch: launch.entity, approvalsResolved };
     }
-    if (session.status === "unavailable") {
+    if (launch.status === "unavailable") {
       const pending = await rpc(url, shellToken, "shellApproval.listPending").catch(() => []);
       const pendingSummary = Array.isArray(pending)
         ? pending.map((approval) => ({
@@ -197,34 +205,20 @@ async function launchTerminalWithGate(url, shellToken, events) {
           }))
         : pending;
       throw new Error(
-        `${session.message}${session.detail ? `: ${session.detail}` : ""}` +
-          `\nPending approvals: ${JSON.stringify(pendingSummary, null, 2)}`
+        `${launch.reason}\nPending approvals: ${JSON.stringify(pendingSummary, null, 2)}`
       );
     }
-    if (session.status === "preparing" || session.status === "starting") {
-      const observed = await events.wait(
-        Math.min(1_000, Math.max(1, deadline - Date.now())),
-        before
-      );
-      const refreshed = await rpc(url, shellToken, "workspace.hostTargets.beginLaunch", [
-        "terminal",
-      ]);
-      if (refreshed) {
-        session = refreshed;
-        continue;
-      }
-      if (observed) continue;
-      throw new Error(`${session.message}${session.detail ? `: ${session.detail}` : ""}`);
+    if (launch.status === "preparing") {
+      await events.wait(Math.min(1_000, Math.max(1, deadline - Date.now())), before);
+      continue;
     }
-    if (session.status !== "approval-required" || !Array.isArray(session.approvals)) {
-      throw new Error(`Unexpected terminal launch session: ${JSON.stringify(session)}`);
+    if (launch.status !== "approval-required") {
+      throw new Error(`Unexpected terminal launch result: ${JSON.stringify(launch)}`);
     }
-    session = await rpc(url, shellToken, "workspace.hostTargets.resolveLaunchSessionApproval", [
-      session.sessionId,
-      "once",
-    ]);
+    await hostLaunch.resolveApprovals(launch.approvals, "once");
+    approvalsResolved += launch.approvals.length;
   }
-  throw new Error(`Terminal launch gate did not settle: ${JSON.stringify(session)}`);
+  throw new Error("Terminal launch gate did not settle before its deadline");
 }
 
 async function waitForLogLine(url, shellToken, events, needle) {
@@ -232,9 +226,11 @@ async function waitForLogLine(url, shellToken, events, needle) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const before = events.checkpoint();
-    const units = await rpc(url, shellToken, "workspace.units.list");
-    const remoteCli = units.find((unit) => unit.name === REMOTE_CLI);
-    lastLogs = await rpc(url, shellToken, "workspace.units.logs", [REMOTE_CLI, { limit: 200 }]);
+    const units = await rpc(url, shellToken, "runtime.supervision.list", [{ kind: "app" }]);
+    const remoteCli = units.find((unit) => unit.source === REMOTE_CLI);
+    lastLogs = remoteCli
+      ? await rpc(url, shellToken, "runtime.supervision.logs", [remoteCli.identity, { limit: 200 }])
+      : [];
     if (lastLogs.some((row) => String(row.message).includes(needle))) {
       return lastLogs;
     }

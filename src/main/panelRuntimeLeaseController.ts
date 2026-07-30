@@ -1,11 +1,6 @@
 import { randomUUID } from "crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
-import type {
-  Panel,
-  PanelArtifacts,
-  PanelSnapshot,
-  PanelTreeSnapshot,
-} from "@vibestudio/shared/types";
+import type { Panel, PanelSnapshot } from "@vibestudio/shared/types";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { PanelManager } from "@vibestudio/shell-core/panelManager";
@@ -31,7 +26,7 @@ import {
   PANEL_UI_IDLE_UNLOAD_MS_HEADLESS,
   PANEL_UI_MAX_LOADED_HEADLESS,
 } from "@vibestudio/shared/constants";
-import { getCurrentSnapshot, getPanelSource } from "@vibestudio/shared/panel/accessors";
+import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { assertPresent } from "../lintHelpers";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
@@ -92,7 +87,7 @@ export class PanelRuntimeLeaseController {
   /** Slots whose lease is being acquired by a local load operation. */
   private readonly locallyLoadingSlots = new Set<string>();
   private readonly explicitTitlePanelIds = new Set<string>();
-  private lastAppliedServerPanelTreeRevision = 0;
+  private readonly preparedViewConvergenceBySlot = new Map<string, Promise<void>>();
   private currentViewRevision = 0;
   private readonly panelRuntime = createTypedServiceClient(
     "panelRuntime",
@@ -196,6 +191,11 @@ export class PanelRuntimeLeaseController {
   async syncLeaseSnapshot(): Promise<void> {
     const snapshot = await this.panelRuntime.getSnapshot();
     this.deps.registry.applyRuntimeLeaseSnapshot(snapshot);
+    if (!this.loadOnLeaseAssignment) return;
+    for (const lease of snapshot.leases) {
+      if (lease.clientSessionId !== this.clientSessionId || !lease.loadOnLeaseAssignment) continue;
+      await this.materializeAssignedLease(lease.slotId, lease);
+    }
   }
 
   async repairLeasesForExistingViews(): Promise<void> {
@@ -213,113 +213,6 @@ export class PanelRuntimeLeaseController {
         );
       }
     }
-  }
-
-  async applyServerPanelTreeSnapshot(snapshot: PanelTreeSnapshot): Promise<void> {
-    if (snapshot.revision <= this.lastAppliedServerPanelTreeRevision) return;
-    this.lastAppliedServerPanelTreeRevision = snapshot.revision;
-    const rootPanels = this.preserveExplicitTitlesInSnapshot(
-      snapshot.forest.flatMap((group) => group.rootPanels)
-    );
-    if (this.panelTreesMatchSemantically(this.deps.registry.getRootPanels(), rootPanels)) return;
-    if (this.panelTreesMatchIgnoringTitles(this.deps.registry.getRootPanels(), rootPanels)) {
-      this.applyPanelTitlesFromSnapshot(rootPanels);
-      return;
-    }
-
-    const beforeIds = new Set(this.deps.registry.listPanels().map((panel) => panel.panelId));
-    const view = this.deps.getPanelView();
-    const hostedBefore = new Map<
-      string,
-      {
-        source: string;
-        contextId: string;
-        stateArgsJson: string;
-        buildKey: string | null;
-        artifacts: PanelArtifacts;
-      }
-    >();
-    if (view) {
-      for (const { panelId } of this.deps.registry.listPanels()) {
-        if (!view.hasView(panelId)) continue;
-        const panel = this.deps.registry.getPanel(panelId);
-        if (!panel) continue;
-        const current = getCurrentSnapshot(panel);
-        hostedBefore.set(panelId, {
-          source: current.source,
-          contextId: current.contextId,
-          stateArgsJson: JSON.stringify(current.stateArgs ?? {}),
-          buildKey: panel.buildKey ?? null,
-          artifacts: { ...panel.artifacts },
-        });
-      }
-    }
-
-    this.deps.registry.repopulate(rootPanels);
-    this.deps.shellCore.syncEntityCachesFromRegistry();
-    for (const panelId of beforeIds) {
-      if (!this.deps.registry.getPanel(panelId)) this.pruneRemovedPanelLocally(panelId);
-    }
-    this.deps.pinStore?.prune(this.deps.registry.listPanels().map((panel) => panel.panelId));
-
-    for (const [panelId, before] of hostedBefore) {
-      const panel = this.deps.registry.getPanel(panelId);
-      if (!panel || !view?.hasView(panelId)) continue;
-      const current = getCurrentSnapshot(panel);
-      const stateArgsJson = JSON.stringify(current.stateArgs ?? {});
-      const executionIdentityUnchanged =
-        current.source === before.source &&
-        current.contextId === before.contextId &&
-        (panel.buildKey ?? null) === before.buildKey;
-      if (executionIdentityUnchanged) {
-        // Tree snapshots carry semantic panel state, but renderer artifacts are
-        // host-local lifecycle state. A structural or state-args update must
-        // not regress a live hosted view back to the server's stale `pending`
-        // projection when its immutable execution identity did not change.
-        this.deps.registry.updateArtifacts(panelId, before.artifacts);
-      }
-      if (stateArgsJson !== before.stateArgsJson) {
-        this.deps.sendPanelEvent(panelId, "runtime:stateArgsChanged", current.stateArgs ?? {});
-      }
-      const runtimeImageBecameReady =
-        before.buildKey !== (panel.buildKey ?? null) && this.hasCompleteExecutionIdentity(panel);
-      if (executionIdentityUnchanged && !runtimeImageBecameReady) {
-        continue;
-      }
-      if (current.source.startsWith("browser:") || before.source.startsWith("browser:")) continue;
-      this.explicitTitlePanelIds.delete(panelId);
-      this.ensureStateArgsPush(panelId);
-      await this.loadSnapshotIntoView(panelId, current).catch((error: unknown) => {
-        log.warn(
-          `[applyServerPanelTreeSnapshot] view reload after navigate failed for ${panelId}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
-    }
-
-    const focusedPanelId = this.deps.registry.getFocusedPanelId();
-    if (focusedPanelId && beforeIds.has(focusedPanelId) && view && !view.hasView(focusedPanelId)) {
-      const panel = this.deps.registry.getPanel(focusedPanelId);
-      if (panel && !getPanelSource(panel).startsWith("browser:")) {
-        await this.loadSnapshotIntoView(focusedPanelId, getCurrentSnapshot(panel)).catch(
-          (error: unknown) => {
-            log.warn(
-              `[applyServerPanelTreeSnapshot] focused view recovery failed for ${focusedPanelId}: ${
-                error instanceof Error ? error.message : String(error)
-              }`
-            );
-          }
-        );
-      }
-    }
-    await this.syncLeaseSnapshot().catch((error: unknown) => {
-      log.warn(
-        `[applyServerPanelTreeSnapshot] Failed to sync runtime leases: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    });
   }
 
   applyServerPanelTitleUpdate(update: {
@@ -363,7 +256,10 @@ export class PanelRuntimeLeaseController {
     }
 
     if (disposition.kind !== "assigned") return;
-    const lease = disposition.lease;
+    await this.materializeAssignedLease(slotId, disposition.lease);
+  }
+
+  private async materializeAssignedLease(slotId: string, lease: PanelRuntimeLease): Promise<void> {
     const view = this.deps.getPanelView();
     // A local load owns view creation from lease acquisition through commit.
     // The broadcast is still applied to the registry, but must not start a
@@ -375,9 +271,14 @@ export class PanelRuntimeLeaseController {
       });
       return;
     }
+    const durablePanel = await this.deps.shellCore.refreshPanel(asPanelSlotId(slotId));
     if (view && !view.hasView(slotId)) {
       try {
-        const panel = this.deps.registry.getPanel(slotId);
+        // Lease delivery and query-first tree hydration are independent
+        // streams. A server-created slot can be assigned before this host has
+        // projected it into its local registry; hydrate that exact slot from
+        // authoritative workspace state instead of dropping the assignment.
+        const panel = this.deps.registry.getPanel(slotId) ?? durablePanel;
         if (panel) {
           await this.loadAssignedLeaseIntoView(slotId, getCurrentSnapshot(panel), lease);
           this.resources.track(slotId);
@@ -402,6 +303,13 @@ export class PanelRuntimeLeaseController {
         this.recordPanelViewFailure(slotId, message);
       }
     } else if (view?.hasView(slotId)) {
+      const panel = this.deps.registry.getPanel(slotId) ?? durablePanel;
+      if (panel && !panel.artifacts.htmlPath && this.hasCompleteExecutionIdentity(panel)) {
+        await this.loadAssignedLeaseIntoView(slotId, getCurrentSnapshot(panel), lease);
+        this.resources.track(slotId);
+        await this.resources.enforceCap(slotId);
+        return;
+      }
       this.connectionBySlot.set(slotId, {
         runtimeEntityId: lease.runtimeEntityId,
         connectionId: lease.connectionId,
@@ -533,19 +441,89 @@ export class PanelRuntimeLeaseController {
         connectionId: lease.connectionId,
       });
       this.registerExistingCdpTarget(panelId);
+    } else {
+      const current = this.connectionBySlot.get(panelId);
+      const runtimeEntityId = await this.deps.shellCore.getCurrentEntityId(asPanelSlotId(panelId));
+      if (
+        current?.runtimeEntityId === runtimeEntityId &&
+        lease?.connectionId === current.connectionId
+      ) {
+        this.registerExistingCdpTarget(panelId);
+      } else {
+        await this.acquireRuntimeLease(panelId, "acquire");
+        this.registerExistingCdpTarget(panelId);
+      }
+    }
+
+    await this.convergePreparedPanelView(panelId);
+  }
+
+  /**
+   * Upgrade a locally owned preparing view once the server has sealed the
+   * panel incarnation's immutable execution identity. This transition belongs
+   * to the native runtime host and never depends on a renderer effect.
+   */
+  async convergePreparedPanelView(
+    panelId: string,
+    options: { refreshPresentedIdentity?: boolean } = {}
+  ): Promise<void> {
+    const existing = this.preparedViewConvergenceBySlot.get(panelId);
+    if (existing) {
+      await existing;
+      if (options.refreshPresentedIdentity) {
+        await this.convergePreparedPanelViewOnce(panelId, options);
+      }
       return;
     }
-    const current = this.connectionBySlot.get(panelId);
-    const runtimeEntityId = await this.deps.shellCore.getCurrentEntityId(asPanelSlotId(panelId));
+    const convergence = this.convergePreparedPanelViewOnce(panelId, options).finally(() => {
+      if (this.preparedViewConvergenceBySlot.get(panelId) === convergence) {
+        this.preparedViewConvergenceBySlot.delete(panelId);
+      }
+    });
+    this.preparedViewConvergenceBySlot.set(panelId, convergence);
+    return convergence;
+  }
+
+  private async convergePreparedPanelViewOnce(
+    panelId: string,
+    options: { refreshPresentedIdentity?: boolean }
+  ): Promise<void> {
+    const view = this.deps.getPanelView();
+    const panel = this.deps.registry.getPanel(panelId);
     if (
-      current?.runtimeEntityId === runtimeEntityId &&
-      lease?.connectionId === current.connectionId
+      !view?.hasView(panelId) ||
+      !panel ||
+      panel.snapshot.source.startsWith("browser:") ||
+      !this.hasCompleteExecutionIdentity(panel)
     ) {
-      this.registerExistingCdpTarget(panelId);
       return;
     }
-    await this.acquireRuntimeLease(panelId, "acquire");
-    this.registerExistingCdpTarget(panelId);
+    const snapshot = getCurrentSnapshot(panel);
+    if (panel.artifacts.htmlPath) {
+      if (options.refreshPresentedIdentity) {
+        // An activation event can add the server-sealed authority manifest
+        // after this exact build was presented. createViewForPanel is
+        // idempotent for an existing view and refreshes the code identity used
+        // to authorize direct Electron-local service calls.
+        await view.createViewForPanel(panelId, panel.artifacts.htmlPath, snapshot.contextId);
+      }
+      return;
+    }
+    const connection = this.connectionBySlot.get(panelId);
+    if (!connection || connection.runtimeEntityId !== panel.runtimeEntityId) return;
+
+    const runtimeEntityId = panel.runtimeEntityId;
+    const buildKey = panel.buildKey;
+    const panelUrl = this.buildPanelUrl(panelId, snapshot);
+    await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
+    const current = this.deps.registry.getPanel(panelId);
+    if (!current || current.runtimeEntityId !== runtimeEntityId || current.buildKey !== buildKey) {
+      return;
+    }
+    this.recordViewMutation();
+    this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
+    this.resources.track(panelId);
+    await this.resources.enforceCap(panelId);
   }
 
   releaseLocalPanelRuntime(panelId: string, _transition: PanelRuntimeReleaseTransition): void {
@@ -746,94 +724,5 @@ export class PanelRuntimeLeaseController {
     this.stateArgsPushUnsubs.delete(panelId);
     this.explicitTitlePanelIds.delete(panelId);
     this.releaseLocalPanelRuntime(panelId, "close");
-  }
-
-  private panelTreesMatchSemantically(
-    current: readonly Panel[],
-    incoming: readonly Panel[]
-  ): boolean {
-    if (current.length !== incoming.length) return false;
-    return current.every((panel, index) =>
-      this.panelsMatchSemantically(panel, assertPresent(incoming[index]))
-    );
-  }
-
-  private panelsMatchSemantically(current: Panel, incoming: Panel): boolean {
-    return (
-      current.id === incoming.id &&
-      current.title === incoming.title &&
-      (current.runtimeEntityId ?? null) === (incoming.runtimeEntityId ?? null) &&
-      (current.buildKey ?? null) === (incoming.buildKey ?? null) &&
-      (current.executionDigest ?? null) === (incoming.executionDigest ?? null) &&
-      (current.owner ?? null) === (incoming.owner ?? null) &&
-      (current.positionId ?? null) === (incoming.positionId ?? null) &&
-      (current.selectedChildId ?? null) === (incoming.selectedChildId ?? null) &&
-      this.panelSnapshotsMatchSemantically(current, incoming) &&
-      this.panelTreesMatchSemantically(current.children, incoming.children)
-    );
-  }
-
-  private panelTreesMatchIgnoringTitles(
-    current: readonly Panel[],
-    incoming: readonly Panel[]
-  ): boolean {
-    if (current.length !== incoming.length) return false;
-    return current.every((panel, index) =>
-      this.panelsMatchIgnoringTitle(panel, assertPresent(incoming[index]))
-    );
-  }
-
-  private panelsMatchIgnoringTitle(current: Panel, incoming: Panel): boolean {
-    return (
-      current.id === incoming.id &&
-      (current.runtimeEntityId ?? null) === (incoming.runtimeEntityId ?? null) &&
-      (current.buildKey ?? null) === (incoming.buildKey ?? null) &&
-      (current.executionDigest ?? null) === (incoming.executionDigest ?? null) &&
-      (current.owner ?? null) === (incoming.owner ?? null) &&
-      (current.positionId ?? null) === (incoming.positionId ?? null) &&
-      (current.selectedChildId ?? null) === (incoming.selectedChildId ?? null) &&
-      this.panelSnapshotsMatchSemantically(current, incoming) &&
-      this.panelTreesMatchIgnoringTitles(current.children, incoming.children)
-    );
-  }
-
-  private applyPanelTitlesFromSnapshot(panels: readonly Panel[]): void {
-    for (const panel of panels) {
-      this.applyServerPanelTitleUpdate({ panelId: panel.id, title: panel.title });
-      this.applyPanelTitlesFromSnapshot(panel.children);
-    }
-  }
-
-  private preserveExplicitTitlesInSnapshot(panels: readonly Panel[]): Panel[] {
-    let changed = false;
-    const preserve = (panel: Panel): Panel => {
-      const children = panel.children.map(preserve);
-      const childrenChanged = children.some((child, index) => child !== panel.children[index]);
-      const currentPanel = this.explicitTitlePanelIds.has(panel.id)
-        ? this.deps.registry.getPanel(panel.id)
-        : null;
-      const title = currentPanel?.title ?? panel.title;
-      if (!childrenChanged && title === panel.title) return panel;
-      changed = true;
-      return { ...panel, title, children };
-    };
-    const next = panels.map(preserve);
-    return changed ? next : (panels as Panel[]);
-  }
-
-  private panelSnapshotsMatchSemantically(current: Panel, incoming: Panel): boolean {
-    try {
-      const currentSnapshot = getCurrentSnapshot(current);
-      const incomingSnapshot = getCurrentSnapshot(incoming);
-      return (
-        currentSnapshot.source === incomingSnapshot.source &&
-        currentSnapshot.contextId === incomingSnapshot.contextId &&
-        currentSnapshot.options.ref === incomingSnapshot.options.ref &&
-        JSON.stringify(currentSnapshot.stateArgs ?? null) ===
-          JSON.stringify(incomingSnapshot.stateArgs ?? null)
-      );
-    } catch {
-      return false;
-    }
   }
 }

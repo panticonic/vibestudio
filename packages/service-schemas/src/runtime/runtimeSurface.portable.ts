@@ -3,7 +3,7 @@
  * panel · worker · eval, i.e. exactly what `createHostedRuntime` returns. This is
  * the single source of truth for cross-target parity:
  *   - `runtimeSurface.eval.ts` IS this surface (what `import {…} from
- *     "@vibestudio/runtime"` resolves to inside eval).
+ *     "@workspace/runtime"` resolves to inside eval).
  *   - `runtimeSurface.core.ts` is this surface minus the few entries whose
  *     description differs per target (workspace / openPanel / … / panelTree),
  *     which panel & worker then re-add with their own wording.
@@ -12,8 +12,8 @@
  *
  * Includes `callMain` + `parent`/`getParent`/`getParentWithContract` (portable as
  * of the surface-harmonization). Does NOT include `expose` (use `rpc.expose`) or
- * the old `requestApproval`/`revokeApproval`/`listApprovals` aliases (use
- * `approvals.*`) — both removed everywhere.
+ * the removed approval APIs. Authority acquisition is receiver-owned and is
+ * not exposed as an advisory runtime namespace.
  */
 
 import {
@@ -301,22 +301,22 @@ export const WEBHOOKS_MEMBERS = [
   "rotateSecret",
 ];
 
-export const EXTENSIONS_MEMBERS = ["use", "invoke", "invokeProvider", "on", "list", "reload"];
-export const APPROVALS_MEMBERS = ["request", "revoke", "list"];
+export const EXTENSIONS_MEMBERS = ["use", "invoke", "invokeProvider", "on"];
 export const NOTIFICATIONS_MEMBERS = ["show", "dismiss"];
 export const PANEL_TREE_MEMBERS = [
   "self",
   "get",
-  "list",
-  "roots",
-  "children",
+  "rootGroups",
+  "page",
+  "path",
+  "search",
   "parent",
   "navigate",
 ];
 
 /**
  * The full portable surface — every key `createHostedRuntime` returns. Entries
- * whose description differs per target (workspace / openPanel / listPanels /
+ * whose description differs per target (workspace / openPanel /
  * getPanelHandle / panelTree) carry a neutral default here; panel & worker
  * manifests override those five with target-specific wording.
  */
@@ -340,19 +340,18 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   gatewayConfig: valueEntry("Gateway base URL and bearer token for Vibestudio service routes."),
   gatewayFetch: valueEntry(
-    "Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."
+    "Gateway-origin fetch helper. It accepts relative paths and absolute URLs on the configured gateway origin, then authenticates that request; cross-origin targets are rejected. Use credentials.fetch for external egress."
   ),
   openExternal: callableEntry(
     "externalOpen",
     "openExternal",
-    "Call `await openExternal(url, options?)` from `@vibestudio/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
+    "Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
   ),
   openPanel: valueEntry(
     "Create a workspace or browser panel and return its handle after application boot-ready. The slot commits before readiness; on PanelOperationError, inspect failure.provenance.panelId instead of blindly repeating creation. " +
       PANEL_HANDLE_AUTOMATION_GUIDE,
     OPEN_PANEL_SIGNATURE
   ),
-  listPanels: valueEntry("List open panels."),
   getPanelHandle: valueEntry("Get a handle to a panel by id."),
   workers: namespaceEntry(
     WORKERS_MEMBERS,
@@ -362,7 +361,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   workspace: namespaceEntry(
     WORKSPACE_MEMBERS,
-    "Workspace configuration, registered-unit/build-health, projects, and semantic source operations. workspace.units.list() reports registered units and their build state; it is not the catalog of launchable worker types. Use workers.listSources() for launchable workers and workers.list() for running worker instances.",
+    "Workspace configuration, projects, and semantic source operations. Use build.listUnits() for declared source/build readiness, workers.listSources() for launchable workers, and runtime.supervision.list() for exact live entities.",
     "workspace"
   ),
   credentials: namespaceEntry(
@@ -398,19 +397,26 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "webhookIngress"
   ),
   extensions: namespaceEntry(EXTENSIONS_MEMBERS, undefined, "extensions"),
-  approvals: namespaceEntry(APPROVALS_MEMBERS),
   notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),
   panelTree: namespaceEntry(PANEL_TREE_MEMBERS),
+  services: valueEntry(
+    "Portable dynamic service namespace. Rich runtime clients are available by name; other services dispatch through the caller-scoped main service boundary. The same client is available in panels, workers, Durable Objects, and eval."
+  ),
+  hosts: valueEntry(
+    "Portable owner-scoped attached-host access for development sessions."
+  ),
+  runtime: valueEntry(
+    "Portable typed runtime lifecycle and supervision client for the current workspace context."
+  ),
 };
 
 /** The portable key set (= Object.keys of what createHostedRuntime returns). */
 export const PORTABLE_KEYS = Object.keys(portableExports);
 
-/** The five entries whose description differs per target (panel/worker override). */
+/** Entries whose description differs per target (panel/worker override). */
 export const PER_TARGET_DESCRIPTION_KEYS = [
   "workspace",
   "openPanel",
-  "listPanels",
   "getPanelHandle",
   "panelTree",
 ] as const;

@@ -7,15 +7,10 @@ import { describe, expect, it } from "vitest";
 import {
   collectFindings,
   collectWorkspaceFindings,
-  defaultReason,
-  isAllowlisted,
-  isTestContext,
   isWorkspaceImportScope,
-  looksPathLike,
-  matchesAllowlistEntry,
   resolvesIntoAnyRoot,
   resolvesIntoWorkspace,
-  startsWithWorkspaceScope,
+  scanRepository,
 } from "../scripts/check-host-workspace-imports.mjs";
 
 const SCRIPT = path.resolve(__dirname, "../scripts/check-host-workspace-imports.mjs");
@@ -34,11 +29,11 @@ function findings(text: string, absFile = HOST_FILE) {
 describe("isWorkspaceImportScope", () => {
   it("matches the plain and hyphenated workspace scopes", () => {
     for (const scope of [
-      "@workspace/agentic-protocol",
+      "@workspace/runtime",
       "@workspace-apps/shell",
       "@workspace-panels/foo",
       "@workspace-about/x",
-      "@workspace/semantic-control-plane",
+      "@workspace-vibestudio/internal",
       "@workspace-skills/y",
       "@workspace-extensions/browser-data",
       "@workspace-packages/z",
@@ -58,29 +53,6 @@ describe("isWorkspaceImportScope", () => {
     ]) {
       expect(isWorkspaceImportScope(s)).toBe(false);
     }
-  });
-});
-
-describe("startsWithWorkspaceScope", () => {
-  it("accepts bare scopes and subpaths but rejects lookalikes", () => {
-    expect(startsWithWorkspaceScope("@workspace")).toBe(true);
-    expect(startsWithWorkspaceScope("@workspace-apps/shell")).toBe(true);
-    expect(startsWithWorkspaceScope("@workspace/eval")).toBe(true);
-    expect(startsWithWorkspaceScope("@workspacey")).toBe(false);
-    expect(startsWithWorkspaceScope("prefix @workspace/x")).toBe(false);
-  });
-});
-
-describe("looksPathLike", () => {
-  it("accepts slashed relative-ish paths", () => {
-    expect(looksPathLike("workspace/apps/mobile")).toBe(true);
-    expect(looksPathLike("../../workspace/x")).toBe(true);
-  });
-  it("rejects urls, scoped ids, prose and separator-less strings", () => {
-    expect(looksPathLike("https://example.com/x")).toBe(false);
-    expect(looksPathLike("@workspace/x")).toBe(false);
-    expect(looksPathLike("build the workspace/ dir")).toBe(false);
-    expect(looksPathLike("noseparator")).toBe(false);
   });
 });
 
@@ -104,24 +76,13 @@ describe("resolvesIntoAnyRoot", () => {
   });
 });
 
-describe("isTestContext", () => {
-  it("flags test/spec files and anything under test/fixture roots", () => {
-    expect(isTestContext("src/server/foo.test.ts")).toBe(true);
-    expect(isTestContext("src/server/foo.spec.tsx")).toBe(true);
-    expect(isTestContext("tests/foo.ts")).toBe(true);
-    expect(isTestContext("src/__tests__/foo.ts")).toBe(true);
-    expect(isTestContext("tests/fixtures/foo.ts")).toBe(true);
-    expect(isTestContext("src/server/foo.ts")).toBe(false);
-  });
-});
-
 describe("collectFindings — import-violation category", () => {
   it("flags static imports, re-exports, dynamic imports and require() into workspace", () => {
     const text = [
-      `import a from "@workspace/agentic-protocol";`,
-      `export { b } from "@workspace/semantic-control-plane";`,
+      `import a from "@workspace/runtime";`,
+      `export { b } from "@workspace-vibestudio/internal";`,
       `const c = await import("@workspace-apps/shell");`,
-      `const d = require("../../workspace/packages/semantic-control-plane/src/index.js");`,
+      `const d = require("../../workspace/workers/workspace-source/GadWorkspaceDO.js");`,
     ].join("\n");
     const result = findings(text);
     expect(result.filter((f) => f.category === "import-violation")).toHaveLength(4);
@@ -132,22 +93,22 @@ describe("collectFindings — import-violation category", () => {
     const text = [
       `import type A from "@workspace/x";`,
       `import { type B } from "@workspace-apps/shell";`,
-      `export type { C } from "@workspace/semantic-control-plane";`,
+      `export type { C } from "@workspace-vibestudio/internal";`,
     ].join("\n");
     const result = findings(text);
     expect(result).toHaveLength(3);
     expect(result.every((f) => f.category === "import-violation")).toBe(true);
   });
 
-  it("needs no exception for product-sealed root packages", () => {
-    expect(
-      collectFindings({
-        text: `export { GadWorkspaceDO } from "@vibestudio/semantic-control-plane";`,
-        absFile: "/repo/src/server/internalDOs/index.ts",
-        root: ROOT,
-      })
-    ).toEqual([]);
-    expect(findings(`import x from "@workspace/semantic-control-plane";`)).toHaveLength(1);
+  it("rejects a userland package regardless of its workspace scope", () => {
+    const result = collectFindings({
+      text: `export { GadWorkspaceDO } from "@workspace-vibestudio/internal";`,
+      absFile: "/repo/src/server/internalDOs/index.ts",
+      root: ROOT,
+      workspacePackageNames: new Set(["@workspace-vibestudio/internal"]),
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.category).toBe("import-violation");
   });
 
   it("does not flag ordinary imports", () => {
@@ -157,43 +118,21 @@ describe("collectFindings — import-violation category", () => {
     expect(result).toHaveLength(0);
   });
 
-  it("does not double-count an import specifier as a workspace-reference", () => {
-    const result = findings(`import a from "@workspace/agentic-protocol";`);
+  it("reports each import once", () => {
+    const result = findings(`import a from "@workspace/runtime";`);
     expect(result).toHaveLength(1);
     expect(result[0].category).toBe("import-violation");
   });
-});
-
-describe("collectFindings — workspace-reference category", () => {
-  it("flags scope-prefixed and path-like string literals in production files", () => {
-    const text = [`const id = "@workspace-apps/shell";`, `const p = "workspace/apps/mobile";`].join(
-      "\n"
-    );
-    // Use a root-level file so "workspace/..." resolves into the workspace tree.
-    const result = collectFindings({ text, absFile: "/repo/build.mjs", root: ROOT });
-    const refs = result.filter((f) => f.category === "workspace-reference");
-    expect(refs.map((f) => f.specifier).sort()).toEqual([
-      "@workspace-apps/shell",
-      "workspace/apps/mobile",
-    ]);
-  });
-
-  it("skips string-literal references in test-context files (noise reduction)", () => {
-    const text = `const id = "@workspace-apps/shell";`;
-    const result = collectFindings({ text, absFile: "/repo/src/server/foo.test.ts", root: ROOT });
-    expect(result).toHaveLength(0);
-  });
-
-  it("still flags hard imports in test-context files", () => {
+  it("still flags hard imports in test files", () => {
     const text = `import a from "@workspace/runtime/worker/test-utils";`;
     const result = collectFindings({ text, absFile: "/repo/src/server/foo.test.ts", root: ROOT });
     expect(result).toHaveLength(1);
     expect(result[0].category).toBe("import-violation");
   });
 
-  it("ignores unrelated string literals", () => {
+  it("does not treat contract strings as dependencies", () => {
     const result = collectFindings({
-      text: `const s = "hello world";\nconst u = "https://x/y";`,
+      text: `const scope = "@workspace-apps/shell";\nconst path = "workspace/apps/mobile";`,
       absFile: "/repo/build.mjs",
       root: ROOT,
     });
@@ -219,8 +158,8 @@ describe("collectWorkspaceFindings — workspace-host-import category", () => {
   it("allows shared package imports and workspace-local imports", () => {
     const text = [
       `import { x } from "@vibestudio/shared/foo";`,
-      `import { y } from "@vibestudio/runtime";`,
-      `import { z } from "../packages/runtime/src/shared/vcsClient.js";`,
+      `import { y } from "@workspace/runtime";`,
+      `import { z } from "../workspace/packages/runtime/src/shared/vcsClient.js";`,
     ].join("\n");
     expect(collectWorkspaceFindings({ text, absFile: WORKSPACE_FILE, root: ROOT })).toHaveLength(
       0
@@ -228,53 +167,24 @@ describe("collectWorkspaceFindings — workspace-host-import category", () => {
   });
 });
 
-describe("allowlist matching", () => {
-  const finding = {
-    file: "src/server/foo.ts",
-    line: 1,
-    specifier: "@workspace/x",
-    category: "import-violation",
-  };
-
-  it("matches on file + specifier + category", () => {
-    expect(
-      matchesAllowlistEntry(finding, {
-        file: "src/server/foo.ts",
-        specifier: "@workspace/x",
-        category: "import-violation",
-      })
-    ).toBe(true);
-    expect(
-      matchesAllowlistEntry(finding, { file: "src/server/foo.ts", specifier: "@workspace/other" })
-    ).toBe(false);
-    expect(
-      matchesAllowlistEntry(finding, { file: "src/server/bar.ts", specifier: "@workspace/x" })
-    ).toBe(false);
-  });
-
-  it("matches whole-file entries, but does not allowlist hard import violations", () => {
-    expect(matchesAllowlistEntry(finding, { file: "src/server/foo.ts" })).toBe(true);
-    expect(isAllowlisted(finding, [{ file: "src/server/foo.ts" }])).toBe(false);
-    expect(
-      isAllowlisted(
-        { ...finding, category: "workspace-reference" },
-        [{ file: "src/server/foo.ts" }]
-      )
-    ).toBe(true);
-  });
-
-  it("filters by category when present", () => {
-    expect(
-      matchesAllowlistEntry(finding, { file: "src/server/foo.ts", category: "workspace-reference" })
-    ).toBe(false);
-  });
-});
-
-describe("defaultReason", () => {
-  it("assigns the documented seed reasons", () => {
-    expect(
-      defaultReason({ file: "src/server/buildV2/builder.ts", category: "workspace-reference" })
-    ).toContain("workspace-reference baseline");
+describe("workspace package identities", () => {
+  it("rejects @vibestudio identities owned by the workspace tree", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-identity-"));
+    try {
+      fs.mkdirSync(path.join(dir, "workspace", "packages", "owned"), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "workspace", "packages", "owned", "package.json"),
+        JSON.stringify({ name: "@vibestudio/owned" })
+      );
+      expect(scanRepository(dir)).toContainEqual({
+        file: "workspace/packages/owned/package.json",
+        line: 1,
+        specifier: "@vibestudio/owned",
+        category: "workspace-package-identity",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -311,31 +221,6 @@ describe("CLI (child process against a temp fixture dir)", () => {
     }
   });
 
-  it("still fails when a hard import finding is allowlisted", () => {
-    const dir = makeFixtureDir();
-    try {
-      fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
-      fs.writeFileSync(
-        path.join(dir, "scripts", "host-boundary-allowlist.json"),
-        JSON.stringify({
-          entries: [
-            {
-              file: "src/bad.ts",
-              specifier: "@workspace/thing",
-              category: "import-violation",
-              reason: "test",
-            },
-          ],
-        })
-      );
-      const { code, stderr } = run(dir);
-      expect(code).toBe(1);
-      expect(stderr).toContain("import-violation");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it("ignores publish build output directories", () => {
     const dir = makeFixtureDir();
     try {
@@ -360,33 +245,9 @@ describe("CLI (child process against a temp fixture dir)", () => {
       fs.writeFileSync(path.join(dir, "src", "bad.ts"), `export const ok = true;\n`);
       fs.writeFileSync(
         path.join(dir, "tests", "workspace-integration", "mixed.test.ts"),
-        `import x from "@vibestudio/runtime/worker/test-utils";\n`
+        `import x from "@workspace/runtime/worker/test-utils";\n`
       );
       expect(run(dir).code).toBe(0);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("--update-allowlist writes only soft references and never masks hard imports", () => {
-    const dir = makeFixtureDir();
-    try {
-      fs.writeFileSync(
-        path.join(dir, "src", "bad.ts"),
-        `const soft = "@workspace-apps/shell";\nimport x from "@workspace/thing";\nexport const y = x;\n`
-      );
-      const updated = run(dir, ["--update-allowlist"]);
-      expect(updated.code).toBe(0);
-      const written = JSON.parse(
-        fs.readFileSync(path.join(dir, "scripts", "host-boundary-allowlist.json"), "utf8")
-      );
-      expect(written.entries).toHaveLength(1);
-      expect(written.entries[0]).toMatchObject({
-        file: "src/bad.ts",
-        specifier: "@workspace-apps/shell",
-        category: "workspace-reference",
-      });
-      expect(run(dir).code).toBe(1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

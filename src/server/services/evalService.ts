@@ -162,9 +162,9 @@ export function createEvalService(deps: {
   tokenManager: TokenManager;
   workspaceId: string;
   executionSessions: AgentExecutionSessionRegistry;
-  missionFactForSession?: (
+  reviewedClosureFactForSession?: (
     sessionId: string
-  ) => import("@vibestudio/rpc").SessionMissionFact | null;
+  ) => import("@vibestudio/rpc").SessionReviewedClosureFact | null;
   isSystemTestHarness?: (caller: ServiceContext["caller"], runId: string) => boolean;
   /**
    * Host-wide background-work registry (idle-exit monitor). Every admitted run
@@ -376,7 +376,7 @@ export function createEvalService(deps: {
       key: objectKey,
       activeBuildKey: evalExecutionIdentity.buildKey,
       activeExecutionDigest: evalExecutionIdentity.executionDigest,
-      activeAuthority: { requests: evalExecutionIdentity.authorityRequests },
+      activeAuthority: evalExecutionIdentity.authority,
       // The EvalDO's launch parent IS its owner. An entity spawned FROM an eval (e.g. a headless
       // sub-agent the orchestrator's eval creates via runtime.createEntity) records THIS EvalDO as its
       // parentId — so without this link the lineage dead-ends at the EvalDO and the sub-agent's panels
@@ -560,7 +560,7 @@ export function createEvalService(deps: {
       );
     }
     const sessionId = agentBinding?.channelId ?? evalRuntimeId;
-    const mission = deps.missionFactForSession?.(sessionId) ?? null;
+    const mission = deps.reviewedClosureFactForSession?.(sessionId) ?? null;
     const inheritedTestPolicy = deps.executionSessions.testPolicyForContext(owner.contextId);
     const testPolicy =
       !mission &&
@@ -608,7 +608,7 @@ export function createEvalService(deps: {
       ctx.signal
     );
     if (!executionSession.eval.eventSinkNonce) {
-      deps.executionSessions.close(evalRuntimeId, runId);
+      deps.executionSessions.discard(evalRuntimeId, runId);
       throw new Error("Evaluated execution admission has no live event sink");
     }
     const activityId =
@@ -675,7 +675,7 @@ export function createEvalService(deps: {
     });
     if (normalizeEvalAuthorityIntent(runArgs.authority).preauthorize?.length) {
       if (!deps.preauthorize) {
-        deps.executionSessions.close(evalRuntimeId, runId);
+        deps.executionSessions.discard(evalRuntimeId, runId);
         throw new ServiceError(
           "eval",
           "start",
@@ -712,7 +712,7 @@ export function createEvalService(deps: {
           await deps.preauthorize(prospectiveCtx, operation);
         }
       } catch (error) {
-        deps.executionSessions.close(evalRuntimeId, runId);
+        deps.executionSessions.discard(evalRuntimeId, runId);
         throw error;
       }
     }
@@ -723,7 +723,7 @@ export function createEvalService(deps: {
       // Admission and kernel residency are one preparation transaction. If the
       // lease cannot be established, no run can start and nothing downstream
       // will reach the normal completion cleanup.
-      deps.executionSessions.close(evalRuntimeId, runId);
+      deps.executionSessions.discard(evalRuntimeId, runId);
       throw error;
     }
     return {

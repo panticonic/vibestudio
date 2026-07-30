@@ -53,6 +53,16 @@ export function getLocalHubLogPath(): string {
   return path.join(getCentralDataPath(), "logs", "hub.log");
 }
 
+function hubStartupFailureDetail(logPath: string): string | null {
+  try {
+    const tail = fs.readFileSync(logPath, "utf8").slice(-16_000);
+    const fatalLines = [...tail.matchAll(/^Fatal: (.+)$/gmu)];
+    return fatalLines.at(-1)?.[1]?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export interface HubProcessManagerConfig {
   workspaceName: string;
   ephemeral: boolean;
@@ -381,6 +391,11 @@ export class HubProcessManager {
         await this.waitForExit(child.pid, false);
       }
       fs.rmSync(readyFile, { force: true });
+      const detail = hubStartupFailureDetail(logPath);
+      if (detail) {
+        const summary = error instanceof Error ? error.message : String(error);
+        throw new Error(`${summary}: ${detail}`, { cause: error });
+      }
       throw error;
     }
     const record: HubRuntime = {

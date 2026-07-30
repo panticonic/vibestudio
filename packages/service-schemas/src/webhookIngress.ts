@@ -162,6 +162,42 @@ export const listWebhookIngressSubscriptionsOptionsSchema = z
   })
   .strict();
 
+export const webhookIngressSubscriptionSchema = z
+  .object({
+    subscriptionId: webhookIdentifierSchema,
+    label: z.string().min(1).max(256).optional(),
+    ownerCallerId: z.string().min(1),
+    ownerCallerKind: z.string().min(1),
+    target: webhookTargetSchema,
+    delivery: webhookDeliverySchema,
+    bodyBudget: webhookBodyBudgetSchema,
+    payload: webhookPayloadFormatSchema,
+    verifier: webhookVerifierSchema,
+    replay: z
+      .object({
+        key: webhookReplayKeySchema,
+        ttlMs: z
+          .number()
+          .int()
+          .positive()
+          .max(7 * 24 * 60 * 60 * 1000),
+      })
+      .strict()
+      .optional(),
+    response: z
+      .object({
+        successStatus: z.union([z.literal(200), z.literal(201), z.literal(202), z.literal(204)]),
+        malformedPayload: z.enum(["ack", "reject"]),
+        dispatchError: z.enum(["ack", "retry"]),
+      })
+      .strict(),
+    publicUrl: z.string().url(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+    revokedAt: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
 export const rotateWebhookIngressSecretSchema = z
   .object({
     subscriptionId: webhookIdentifierSchema,
@@ -255,6 +291,25 @@ export const rotateWebhookIngressSecretResultSchema = z
 
 export const webhookIngressMethods = defineServiceMethods({
   createSubscription: {
+    capability: "webhooks.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "webhookIngress.create",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Accept incoming web requests",
+      action: "accept incoming web requests",
+      description: "Allows {requesterKind} to accept incoming web requests.",
+      group: "network",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     args: z.tuple([createWebhookIngressSubscriptionSchema]),
     returns: webhookIngressSubscriptionSummarySchema,
     agentFacing: false,
@@ -262,6 +317,25 @@ export const webhookIngressMethods = defineServiceMethods({
     description: `Create an owner-scoped public webhook subscription targeting a method in the caller's own source. Omitted maxBodyBytes uses the relay ceiling (${WEBHOOK_DEFAULT_MAX_BODY_BYTES}) for relay delivery and the configured host ceiling for direct delivery (${WEBHOOK_DEFAULT_DIRECT_MAX_BODY_BYTES} bytes by default). In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey.`,
   },
   listSubscriptions: {
+    capability: "webhooks.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "webhookIngress.read",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View incoming web connections",
+      action: "view incoming web connections",
+      description: "Allows {requesterKind} to view incoming web connections.",
+      group: "network",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     args: z.union([z.tuple([]), z.tuple([listWebhookIngressSubscriptionsOptionsSchema])]),
     returns: z.array(webhookIngressSubscriptionSummarySchema),
     agentFacing: false,
@@ -270,6 +344,25 @@ export const webhookIngressMethods = defineServiceMethods({
       "List the caller's active webhook subscriptions (secrets redacted). Pass includeRevoked:true only for audit/history views.",
   },
   revokeSubscription: {
+    capability: "webhooks.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "webhookIngress.retire",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Stop accepting an incoming web connection",
+      action: "stop accepting an incoming web connection",
+      description: "Allows {requesterKind} to stop accepting an incoming web connection.",
+      group: "network",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     args: z.tuple([webhookSubscriptionIdSchema]),
     returns: z.void(),
     agentFacing: false,
@@ -277,6 +370,25 @@ export const webhookIngressMethods = defineServiceMethods({
     description: "Revoke one caller-owned webhook subscription idempotently.",
   },
   rotateSecret: {
+    capability: "webhooks.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "webhookIngress.control",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Replace an incoming web connection's secret",
+      action: "replace an incoming web connection's secret",
+      description: "Allows {requesterKind} to replace an incoming web connection's secret.",
+      group: "network",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "manage",
+      },
+    },
     args: z.tuple([rotateWebhookIngressSecretSchema]),
     returns: rotateWebhookIngressSecretResultSchema,
     agentFacing: false,

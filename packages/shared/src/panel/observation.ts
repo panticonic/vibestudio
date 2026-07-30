@@ -160,6 +160,8 @@ export interface PanelHostObservation {
   holderLabel?: string;
   platform?: "desktop" | "headless" | "mobile";
   supportsInspection?: boolean;
+  /** Monotonic host-local revision bumped whenever native panel views mutate. */
+  viewRevision?: number;
   view: {
     exists: boolean;
     url?: string;

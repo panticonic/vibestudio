@@ -7,18 +7,13 @@ import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/servi
 import {
   authorizeVerifiedCaller,
   attestDirectRpc,
-  callerMatchesMissionHarness,
+  callerMatchesReviewedClosureHarness,
   directAuthorityAudience,
   directAuthorityCapability,
   isBlessedSystemTestConduit,
   isAttestedSystemTestHarness,
   testPolicyAuthorityDecision,
-  testPolicyUserlandDecision,
 } from "./authorityRuntime.js";
-import {
-  getInternalDOBundle,
-  internalDOExecutionIdentity,
-} from "../internalDOs/internalDoLoader.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
 const effectiveVersion = "a".repeat(64);
@@ -90,44 +85,6 @@ describe("authority runtime", () => {
     expect(isAttestedSystemTestHarness(harness, () => false)).toBe(false);
   });
 
-  it("matches test userland approvals through bounded resource scopes", () => {
-    const caller = createVerifiedCaller("agent:test", "agent", null, null, null, null, {
-      policyId: "test:terminal-roundtrip",
-      kind: "case",
-      orchestratorPolicyId: "test:orchestrator",
-      case: {
-        testId: "terminal-roundtrip",
-        agent: {
-          model: "openai-codex:gpt-5.3-codex-spark",
-          approvalLevel: 2,
-          fallback: "disabled",
-        },
-        authority: [],
-        userland: [
-          {
-            ruleId: "terminal-exec",
-            subject: { kind: "prefix", prefix: "user.exec." },
-            decision: "allow",
-            remember: false,
-          },
-        ],
-        unexpectedPrompts: "fail",
-      },
-    });
-
-    expect(
-      testPolicyUserlandDecision(caller, undefined, `user.exec.${"a".repeat(48)}`)
-    ).toMatchObject({
-      policyId: "test:terminal-roundtrip",
-      testId: "terminal-roundtrip",
-      ruleId: "terminal-exec",
-      decision: "allow",
-      remember: false,
-    });
-    expect(testPolicyUserlandDecision(caller, undefined, "user.execution.fake")).toBeNull();
-    expect(testPolicyUserlandDecision(caller, undefined, "user.open.fake")).toBeNull();
-  });
-
   it("matches dynamic capability names only inside both declared namespaces", () => {
     const caller = createVerifiedCaller("agent:test", "agent", null, null, null, null, {
       policyId: "test:dynamic-service",
@@ -152,7 +109,6 @@ describe("authority runtime", () => {
             decision: "once",
           },
         ],
-        userland: [],
         unexpectedPrompts: "fail",
       },
     });
@@ -189,20 +145,20 @@ describe("authority runtime", () => {
       executionDigest: "b".repeat(64),
     });
     const mission = {
-      missionId: "msn_system_agent",
+      subject: `mission:msn_system_agent@${"c".repeat(64)}` as const,
       closureDigest: "c".repeat(64),
       harness: { unit: "workers/system-agent", ev: digest },
     };
 
-    expect(callerMatchesMissionHarness(caller, mission)).toBe(true);
+    expect(callerMatchesReviewedClosureHarness(caller, mission)).toBe(true);
     expect(
-      callerMatchesMissionHarness(caller, {
+      callerMatchesReviewedClosureHarness(caller, {
         ...mission,
         harness: { ...mission.harness, unit: "workers/other" },
       })
     ).toBe(false);
     expect(
-      callerMatchesMissionHarness(caller, {
+      callerMatchesReviewedClosureHarness(caller, {
         ...mission,
         harness: { ...mission.harness, ev: "d".repeat(64) },
       })
@@ -599,6 +555,26 @@ describe("authority runtime", () => {
     ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 
+  it("does not classify a userland class-name collision as a product builtin", () => {
+    const attestation = attestDirectRpc({
+      caller: createHostCaller("main"),
+      source: "workers/untrusted",
+      className: "EvalDO",
+      objectKey: "owner",
+      method: "executeRun",
+      workspaceId: "ws-1",
+      workspaceMember: true,
+      sessionId: "host:userland-eval-collision",
+      now: 100,
+    });
+
+    expect(attestation).toMatchObject({
+      capability: "rpc:executeRun",
+      effect: { kind: "open" },
+    });
+    expect(attestation.capability).not.toBe("runtime.code-execution.manage");
+  });
+
   it("classifies framework probes before product class method families", () => {
     const attestation = attestDirectRpc({
       caller: createHostCaller("main"),
@@ -613,7 +589,7 @@ describe("authority runtime", () => {
     });
 
     expect(attestation).toMatchObject({
-      effect: { kind: "runtime-intrinsic" },
+      effect: { kind: "open" },
       capability: "rpc:durableWorkCapabilities",
     });
   });
@@ -691,18 +667,23 @@ describe("authority runtime", () => {
     ).toMatchObject({ allowed: false, code: "approval-required" });
   });
 
-  it("does not give sealed control-plane plumbing discretionary service authority", () => {
-    const identity = internalDOExecutionIdentity(getInternalDOBundle(), "GadWorkspaceDO");
+  it("does not give the workspace-source worker discretionary service authority", () => {
+    const identity = {
+      source: "vibestudio/internal",
+      effectiveVersion,
+      executionDigest,
+      authority: { requests: [] },
+    };
     const capability = "workspace.runtime-state.manage";
-    expect(identity.authorityRequests).toEqual([]);
+    expect(identity.authority.requests).toEqual([]);
     const caller = {
-      ...createVerifiedCaller("do:vibestudio/internal:GadWorkspaceDO:gad", "do", {
-        callerId: "do:vibestudio/internal:GadWorkspaceDO:gad",
+      ...createVerifiedCaller("do:workers/workspace-source:GadWorkspaceDO:gad", "do", {
+        callerId: "do:workers/workspace-source:GadWorkspaceDO:gad",
         callerKind: "do",
         repoPath: identity.source,
         effectiveVersion: identity.effectiveVersion,
         executionDigest: identity.executionDigest,
-        requested: identity.authorityRequests,
+        requested: identity.authority.requests,
       }),
       codeApproved: true as const,
     };

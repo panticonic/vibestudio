@@ -177,7 +177,8 @@ async function clickShellButton(app: ElectronApplication, label: RegExp): Promis
       try {
         const priority = await contents.executeJavaScript(
           `(() => {
-              const hasHostedShellChrome = Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
+              const hasHostedShellChrome = Boolean(document.querySelector('[data-shell-top-chrome="titlebar"]')
+                || document.querySelector(".titlebar-breadcrumb-scroll")
                 || document.querySelector('[aria-label="Menu"]')
                 || document.querySelector('[aria-label="Open panel tree"]')
                 || document.querySelector('[aria-label="Close panel tree"]')
@@ -245,25 +246,32 @@ async function rpcCall(
 
 async function clickRecoveryApproval(app: ElectronApplication): Promise<boolean> {
   return app.evaluate(async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
+    const candidates = webContents.getAllWebContents().filter((contents) => {
+      if (contents.isDestroyed()) return false;
+      const title = contents.getTitle();
+      return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+    });
+    for (const contents of candidates) {
       try {
-        const clicked = await contents.executeJavaScript(
-          `(() => {
-            if (!document.querySelector('[data-bootstrap-launch-gate="true"]')) return false;
-            const approveAll = Array.from(document.querySelectorAll("button"))
-              .find((button) =>
-                /^(Trust and start|Approve and start)$/.test((button.textContent ?? "").trim())
-              );
-            if (!approveAll) return false;
-            approveAll.click();
-            return true;
-          })()`,
-          true
-        );
+        const clicked = await Promise.race([
+          contents.executeJavaScript(
+            `(() => {
+              if (!document.querySelector('[data-bootstrap-launch-gate="true"]')) return false;
+              const approveAll = Array.from(document.querySelectorAll("button"))
+                .find((button) =>
+                  /^(Trust and start|Approve and start)$/.test((button.textContent ?? "").trim())
+                );
+              if (!approveAll) return false;
+              approveAll.click();
+              return true;
+            })()`,
+            true
+          ),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+        ]);
         if (clicked) return true;
       } catch {
-        // Ignore non-DOM webContents.
+        // The shell can navigate while startup authority is being committed.
       }
     }
     return false;

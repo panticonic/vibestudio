@@ -58,6 +58,13 @@ export const PanelContextMenuActionSchema = z.enum([
 
 export const menuMethods = defineServiceMethods({
   showHamburger: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "menu.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "Pop up the application hamburger menu at the given position.",
     args: z.tuple([MenuPositionSchema]),
     returns: z.void(),
@@ -65,6 +72,13 @@ export const menuMethods = defineServiceMethods({
     examples: [{ args: [{ x: 12, y: 40 }] }],
   },
   showContext: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "menu.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Pop up a context menu built from the given items at the position; resolves with the selected item's id, or null if dismissed.",
     args: z.tuple([z.array(MenuItemSchema), MenuPositionSchema]),
@@ -83,6 +97,13 @@ export const menuMethods = defineServiceMethods({
     ],
   },
   showPanelContext: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "menu.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Pop up the per-panel context menu (back/reload/duplicate/archive/etc.) for the given panel; resolves with the chosen panel action, or null if dismissed.",
     args: z.tuple([z.string(), MenuPositionSchema, PanelContextPresentationSchema.optional()]),

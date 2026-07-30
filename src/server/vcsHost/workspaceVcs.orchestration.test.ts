@@ -15,9 +15,20 @@ import {
   putTree,
 } from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
+import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
 const roots: string[] = [];
+const TEST_PROVIDER = { source: "test/provider", className: "TestProvider", objectKey: "test" };
+
+function providerFromWireCall(call: (method: string, input: unknown) => Promise<unknown>) {
+  return createWorkspaceSemanticPort(
+    {
+      dispatch: (_provider: unknown, method: string, input: unknown) => call(method, input),
+    } as never,
+    TEST_PROVIDER
+  );
+}
 
 function emptyRepairCommand(
   input: { contextId: string; materializedState: null | { kind: string } },
@@ -43,6 +54,7 @@ async function harness() {
     statePath: path.join(root, "refs"),
     gate: vi.fn(async () => undefined),
   });
+  await fsp.mkdir(path.join(root, "source"), { recursive: true });
   const deps = {
     workspaceId: "workspace:test",
     blobsDir,
@@ -64,7 +76,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
   it("reads channel provenance through the GAD log API, outside semantic VCS dispatch", async () => {
     const { vcs } = await harness();
     const call = vi.fn(async () => ({ contentClass: "external" as const }));
-    await vcs.attachGad({ call } as never);
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(
       vcs.getChannelEnvelopeIntegrity({ channelId: "channel:one", envelopeId: "message:one" })
@@ -80,10 +92,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const cached = await putBytes(blobsDir, Buffer.from("cached-composed-view"));
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await vcs.attachGad({
-      call: vi.fn(async (method: string) => {
-        if (method !== "vcsContentGcRoots") throw new Error(`unexpected ${method}`);
-        return { contentRoots: [], contentHashes: [] };
-      }),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
     vi.spyOn(vcs.repositories, "collectCachedReachableDigests").mockResolvedValue({
       treeDigests: [],
@@ -109,10 +118,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     );
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await vcs.attachGad({
-      call: vi.fn(async (method: string) => {
-        if (method !== "vcsContentGcRoots") throw new Error(`unexpected ${method}`);
-        return { contentRoots: [], contentHashes: [] };
-      }),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
 
     await expect(
@@ -132,10 +138,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const { blobsDir, vcs } = await harness();
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await vcs.attachGad({
-      call: vi.fn(async (method: string) => {
-        if (method !== "vcsContentGcRoots") throw new Error(`unexpected ${method}`);
-        return { contentRoots: [], contentHashes: [] };
-      }),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
 
     await expect(
@@ -163,10 +166,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
     await fsp.unlink(blobPath(blobsDir, retained.digest));
     await vcs.attachGad({
-      call: vi.fn(async (method: string) => {
-        if (method !== "vcsContentGcRoots") throw new Error(`unexpected ${method}`);
-        return { contentRoots: [], contentHashes: [] };
-      }),
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
     } as never);
 
     await expect(
@@ -186,14 +186,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const restarted = new WorkspaceVcs(deps);
     const calls: unknown[] = [];
     const gad = {
-      call: vi.fn(async (method: string, input: unknown) => {
-        if (method === "vcsContextMaterializationCommand") {
-          return emptyRepairCommand(input as never, {
-            kind: "event",
-            eventId: "event:main",
-          });
-        }
-        if (method !== "vcsEnsureContext") throw new Error(`unexpected ${method}`);
+      contextMaterializationCommand: vi.fn(async (input: unknown) =>
+        emptyRepairCommand(input as never, {
+          kind: "event",
+          eventId: "event:main",
+        })
+      ),
+      ensureContext: vi.fn(async (input: unknown) => {
         calls.push(input);
         return {
           kind: "complete" as const,
@@ -257,11 +256,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           result: { working: { ref: { kind: "event", eventId: "event:genesis" } } },
         };
       }
-      if (method !== "vcsSemanticDispatch") throw new Error(`unexpected ${method}`);
-      const dispatch = input as {
-        method: string;
-        request: { input: unknown };
-      };
+      const dispatch = { method, request: input as { input: unknown } };
       if (dispatch.method === "vcsInspect") {
         return {
           kind: "complete",
@@ -282,7 +277,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`unexpected ${dispatch.method}`);
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: true });
 
@@ -341,119 +336,106 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       ],
     };
     const rootTemplateBootstrap = {
+      prepareSource: vi.fn(async () => pin),
       prepareInitialization: vi.fn(async () => prepared),
     };
     const templateVcs = new WorkspaceVcs({ ...deps, rootTemplateBootstrap });
-    let head = "event:genesis";
-    const imports: Array<Record<string, unknown>> = [];
-    const events = new Map<
-      string,
-      { parent: string | null; applicationId?: string; source?: Record<string, unknown> }
-    >([["event:genesis", { parent: null }]]);
     vi.spyOn(templateVcs, "ensureContext").mockImplementation(async () => ({
       kind: "event",
-      eventId: head,
+      eventId: "event:genesis",
     }));
     vi.spyOn(templateVcs, "ensureFresh").mockResolvedValue({ stateHash: EMPTY_STATE_HASH });
-    vi.spyOn(templateVcs, "semanticDirectCall").mockImplementation(
-      async (method: string, input: unknown) => {
-        if (method === "vcsImportSnapshot") {
-          const request = input as {
-            commandId: string;
-            source: Record<string, unknown>;
-            repositories: unknown;
-          };
-          imports.push(request);
-          const eventId = request.source["kind"] === "git" ? "event:template" : "event:local";
-          const applicationId = `${eventId}:application`;
-          events.set(eventId, {
-            parent: head,
-            applicationId,
-            source: request.source,
-          });
-          head = eventId;
-          return { eventId } as never;
-        }
+    await templateVcs.attachGad(
+      providerFromWireCall(async (method) => {
         if (method !== "vcsInspect") throw new Error(`unexpected ${method}`);
-        const node = (
-          input as {
-            node: { kind: string; eventId?: string; applicationId?: string; workUnitId?: string };
-          }
-        ).node;
-        if (node.kind === "application") {
-          return {
-            node: {
-              kind: "application",
-              value: { workUnitId: `${node.applicationId}:work-unit` },
-            },
-          } as never;
-        }
-        if (node.kind === "work-unit") {
-          const eventId = String(node.workUnitId).replace(/:application:work-unit$/u, "");
-          const source = events.get(eventId)?.source;
-          const externalSnapshot =
-            source?.["kind"] === "git"
-              ? {
-                  sourceKind: "git",
-                  sourceUri: source["url"],
-                  snapshotRevision: source["commit"],
-                  sourceSubdir: source["subdir"],
-                  canonicalSnapshot: source["snapshot"],
-                  snapshotDigest: `snapshot:${"f".repeat(64)}`,
-                  targetRepositoryIds: [],
-                }
-              : {
-                  sourceKind: "filesystem",
-                  sourceUri: source?.["uri"],
-                  snapshotRevision: source?.["snapshotRevision"],
-                  snapshotDigest: `snapshot:${"f".repeat(64)}`,
-                  targetRepositoryIds: [],
-                };
-          return {
-            node: { kind: "work-unit", value: { externalSnapshot } },
-          } as never;
-        }
-        const eventId = node.eventId!;
-        const event = events.get(eventId)!;
         return {
-          node: {
-            kind: "event",
-            value:
-              event.parent === null
-                ? { kind: "genesis", eventId }
-                : {
-                    kind: "commit",
-                    eventId,
-                    parentEventIds: [event.parent],
-                    applicationIds: [event.applicationId],
-                  },
+          kind: "complete",
+          result: {
+            node: {
+              kind: "event",
+              value: { kind: "genesis", eventId: "event:genesis" },
+            },
           },
-        } as never;
-      }
+        };
+      })
     );
-    const push = vi.fn(async (_method: string, _input: unknown) => ({
-      kind: "complete",
-      result: { eventId: "event:template" },
+    const initializeExactSnapshot = vi.fn(async () => ({
+      state: "ready" as const,
+      commandId: `workspace-source:${pin.commit}:${pin.snapshot}`,
+      receipt: {
+        commandId: `workspace-source:${pin.commit}:${pin.snapshot}`,
+        pin,
+        initializedEventId: "event:template",
+        initializedStateHash: EMPTY_STATE_HASH,
+      },
     }));
-    await templateVcs.attachGad({ call: push } as never);
+    templateVcs.attachWorkspaceSourceProvider({
+      initializeExactSnapshot,
+      resolveSource: vi.fn(),
+      currentSource: vi.fn(),
+      inspectInitialization: vi.fn(async () => ({ state: "empty" as const })),
+      health: vi.fn(),
+    } as never);
 
     await expect(templateVcs.activateWorkspaceFromSource()).resolves.toMatchObject({
       initialized: true,
     });
 
-    expect(imports).toHaveLength(1);
-    expect(imports[0]).toMatchObject({
-      commandId: expect.stringContaining(pin.commit),
-      source: {
-        kind: "git",
-        url: pin.url,
-        commit: pin.commit,
-        subdir: "panels/news",
-        snapshot: subtreeDigest,
-      },
-      repositories: [{ repoPath: "panels/news" }],
+    expect(initializeExactSnapshot).toHaveBeenCalledWith({
+      commandId: `workspace-source:${pin.commit}:${pin.snapshot}`,
+      pin,
+      repositories: [
+        expect.objectContaining({
+          repoPath: "panels/news",
+          subdir: "panels/news",
+          snapshot: subtreeDigest,
+        }),
+      ],
     });
-    expect(push.mock.calls.filter(([method]) => method === "vcsSemanticDispatch")).toHaveLength(1);
+  });
+
+  it("does not replay root initialization after semantic main has advanced", async () => {
+    const { deps } = await harness();
+    const pin = {
+      url: "https://example.test/root.git",
+      ref: "refs/tags/v1",
+      commit: "1".repeat(40),
+      snapshot: `v1-sha256:${"2".repeat(64)}` as const,
+    };
+    const prepared = { pin, repositories: [] };
+    const prepareInitialization = vi.fn(async () => prepared);
+    const vcs = new WorkspaceVcs({
+      ...deps,
+      rootTemplateBootstrap: {
+        prepareSource: vi.fn(async () => pin),
+        prepareInitialization,
+      },
+    });
+    const initializeExactSnapshot = vi.fn();
+    vcs.attachWorkspaceSourceProvider({
+      initializeExactSnapshot,
+      resolveSource: vi.fn(),
+      currentSource: vi.fn(),
+      inspectInitialization: vi.fn(async () => ({
+        state: "ready" as const,
+        commandId: "workspace-source:root",
+        receipt: {
+          commandId: "workspace-source:root",
+          pin,
+          initializedEventId: "event:root",
+          initializedStateHash: `state:${"3".repeat(64)}`,
+        },
+      })),
+      health: vi.fn(),
+    });
+    vi.spyOn(vcs, "ensureFresh").mockResolvedValue({ stateHash: `state:${"4".repeat(64)}` });
+
+    await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({
+      stateHash: `state:${"4".repeat(64)}`,
+      initialized: false,
+    });
+    expect(initializeExactSnapshot).not.toHaveBeenCalled();
+    expect(prepareInitialization).not.toHaveBeenCalled();
   });
 
   it("recovers an interrupted initial publication and recognizes the initialized workspace", async () => {
@@ -524,10 +506,9 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           eventId: importedEventId,
         });
       }
-      if (method !== "vcsSemanticDispatch") throw new Error(`unexpected ${method}`);
-      const dispatch = input as {
-        method: string;
-        request: { input: Record<string, unknown> };
+      const dispatch = {
+        method,
+        request: input as { input: Record<string, unknown> },
       };
       if (dispatch.method === "vcsInspect") {
         return {
@@ -557,7 +538,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`unexpected ${dispatch.method}`);
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.recoverPendingSemanticEffects()).resolves.toBe(1);
     await expect(vcs.activateWorkspaceFromSource()).resolves.toMatchObject({ initialized: false });
@@ -588,7 +569,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     vi.spyOn(refs, "readAppliedPublication").mockReturnValue(null);
     vi.spyOn(refs, "updateMains");
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.recoverPendingSemanticEffects()).resolves.toBe(0);
     expect(refs.updateMains).not.toHaveBeenCalled();
@@ -659,7 +640,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`unexpected ${method}`);
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.recoverPendingSemanticEffects()).resolves.toBe(2);
     expect(pending).toEqual([unauthorizedPublication]);
@@ -681,7 +662,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const { refs, vcs } = await harness();
     const updateMains = vi.spyOn(refs, "updateMains");
     const call = vi.fn(async (method: string) => {
-      if (method !== "vcsSemanticDispatch") throw new Error(`unexpected ${method}`);
+      if (method !== "vcsPush") throw new Error(`unexpected ${method}`);
       return {
         kind: "effects-pending",
         result: null,
@@ -703,7 +684,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         ],
       };
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.semanticDirectCall("vcsPush", {})).rejects.toThrow(
       "protected publication has no verified gate context"
@@ -717,9 +698,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const updateMains = vi
       .spyOn(refs, "updateMains")
       .mockImplementation(async () => heldPublication);
-    const call = vi.fn(async (method: string, request: unknown) => {
-      if (method !== "vcsSemanticDispatch") throw new Error(`unexpected ${method}`);
-      const semanticMethod = (request as { method: string }).method;
+    const call = vi.fn(async (method: string, _request: unknown) => {
+      const semanticMethod = method;
       if (semanticMethod === "vcsStatus") {
         return { kind: "complete", result: { recovered: true } };
       }
@@ -745,7 +725,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         ],
       };
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
     const controller = new AbortController();
     const caller = createVerifiedCaller("panel:test", "panel", {
       callerId: "panel:test",
@@ -787,8 +767,25 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const updateMains = vi.spyOn(refs, "updateMains");
     const semanticDirectCall = vi
       .spyOn(vcs, "semanticDirectCall")
-      .mockImplementation(async (method: string) => {
+      .mockImplementation(async (method: string, input: unknown) => {
         if (method === "vcsInspect") {
+          const node = (input as { node: { eventId?: string } }).node;
+          if (node.eventId === "event:genesis") {
+            return {
+              root: { kind: "event", eventId: "event:genesis" },
+              node: {
+                kind: "event",
+                value: {
+                  eventId: "event:genesis",
+                  kind: "genesis",
+                  parentEventIds: [],
+                  applicationIds: [],
+                },
+              },
+              edges: [],
+              hasMoreEdges: false,
+            };
+          }
           return {
             root: imported,
             node: {
@@ -814,7 +811,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         throw new Error(`unexpected ${method}`);
       });
     const call = vi.fn(async (method: string) => {
-      if (method === "vcsSemanticDispatch") {
+      if (method === "vcsPush") {
         return {
           kind: "effects-pending",
           result: { eventId: imported.eventId },
@@ -841,12 +838,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`unexpected ${method}`);
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.activateWorkspaceFromSource()).rejects.toThrow(
-      "meta/vibestudio.yml not found"
+      "workspace source is missing meta/vibestudio.yml"
     );
-    expect(semanticDirectCall).toHaveBeenCalledTimes(1);
+    expect(semanticDirectCall).toHaveBeenCalledTimes(4);
     expect(updateMains).not.toHaveBeenCalled();
   });
 
@@ -866,7 +863,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method !== "vcsEnsureContext") throw new Error(`unexpected ${method}`);
       return await pending;
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     const first = vcs.ensureContext("context:large");
     const second = vcs.ensureContext("context:large");
@@ -893,7 +890,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
         result: { working: { ref: { kind: "event", eventId: "event:main" } } },
       };
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.ensureSemanticContext(contextId)).resolves.toEqual({
       kind: "event",
@@ -928,7 +925,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`unexpected ${method}`);
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     const initialization = vcs.ensureContext(contextId);
     const deletion = vcs.dropContext(contextId);
@@ -988,7 +985,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     };
     let receipt: Record<string, unknown> | null = null;
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsSemanticDispatch") {
+      if (method === "vcsEdit") {
         return { kind: "effects-pending", result: { pending: true }, effects: [effect] };
       }
       if (method === "vcsSemanticEffectAck") {
@@ -998,12 +995,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`unexpected ${method}`);
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(
       vcs.semanticCall("vcsEdit", {
         input: {},
-        ingress: { causalParent: null },
+        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
       })
     ).resolves.toEqual({ ok: true });
     await expect(
@@ -1046,7 +1043,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`unexpected ${method}`);
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(vcs.ensureContext(command.contextId)).resolves.toEqual(command.targetState);
     expect(call.mock.calls.map(([method]) => method)).toEqual([
@@ -1068,7 +1065,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       throw new Error(`unexpected ${method}`);
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
     const firstGenerationMatches = vi.spyOn(
       (
         vcs as unknown as {
@@ -1083,7 +1080,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(firstGenerationMatches).not.toHaveBeenCalled();
 
     const restarted = new WorkspaceVcs(deps);
-    await restarted.attachGad({ call: call as never });
+    await restarted.attachGad(providerFromWireCall(call));
     const recoveredMatches = vi.spyOn(
       (
         restarted as unknown as {
@@ -1117,7 +1114,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       status: "pending" as const,
     };
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsSemanticDispatch") {
+      if (method === "vcsImportSnapshot") {
         return { kind: "effects-pending", result: null, effects: [observation] };
       }
       const receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } })
@@ -1134,12 +1131,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       });
       return { kind: "complete", result: { eventId: "event:import" } };
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await expect(
       vcs.semanticCall("vcsImportSnapshot", {
         input: {},
-        ingress: { causalParent: null },
+        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
       })
     ).resolves.toEqual({ eventId: "event:import" });
   });
@@ -1181,7 +1178,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     };
     let acknowledgements = 0;
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsSemanticDispatch") {
+      if (method === "vcsEdit") {
         return { kind: "effects-pending", result: null, effects: [observation] };
       }
       const acknowledgement = (input as { acknowledgement: { receipt: Record<string, unknown> } })
@@ -1195,11 +1192,11 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       }
       return { kind: "complete", result: { applicationId: "application:one" } };
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
     await expect(
       vcs.semanticCall("vcsEdit", {
         input: {},
-        ingress: { causalParent: null },
+        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
       })
     ).resolves.toEqual({ applicationId: "application:one" });
     expect(acknowledgements).toBe(2);
@@ -1251,18 +1248,18 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     };
     let receipt: Record<string, unknown> | null = null;
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsSemanticDispatch") {
+      if (method === "vcsMove") {
         return { kind: "effects-pending", result: null, effects: [effect] };
       }
       receipt = (input as { acknowledgement: { receipt: Record<string, unknown> } }).acknowledgement
         .receipt;
       return { kind: "complete", result: { ok: true } };
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
 
     await vcs.semanticCall("vcsMove", {
       input: {},
-      ingress: { causalParent: null },
+      ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
     });
 
     await expect(
@@ -1345,7 +1342,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const pendingEffects = [firstEffect, secondEffect];
     const updateMains = vi.spyOn(refs, "updateMains");
     const call = vi.fn(async (method: string, input: unknown) => {
-      if (method === "vcsSemanticDispatch") {
+      if (method === "vcsPush") {
         const effect = pendingEffects.shift();
         if (!effect) throw new Error("unexpected semantic dispatch after queued publications");
         return { kind: "effects-pending", result: null, effects: [effect] };
@@ -1356,12 +1353,12 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       expect(receipt).toEqual({ applied: true, appliedAt: expect.any(String) });
       return { kind: "complete", result: { eventId: "event:one" } };
     });
-    await vcs.attachGad({ call: call as never });
+    await vcs.attachGad(providerFromWireCall(call));
     await vcs.semanticCall(
       "vcsPush",
       {
         input: {},
-        ingress: { causalParent: null },
+        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
       },
       {
         kind: "caller",
@@ -1386,7 +1383,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
 
     await vcs.semanticCall(
       "vcsPush",
-      { input: {}, ingress: { causalParent: null } },
+      {
+        input: {},
+        ingress: { causalParent: null, contextIntegrity: { class: "internal", externalKeys: [] } },
+      },
       {
         kind: "caller",
         caller: createVerifiedCaller("panel:test", "panel", {

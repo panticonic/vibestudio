@@ -98,6 +98,14 @@ export type SerializedServiceDefinition = z.infer<typeof serializedServiceSchema
 
 export const docsMethods = defineServiceMethods({
   search: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "docs.control",
+      rationale:
+        "P-discovery: capability discovery and introspection; §2 default {code, session} family",
+    },
     description:
       "Search the capability catalog (services and runtime APIs) by keyword. Results are filtered to what the calling kind may invoke. Use docs.describe(id) for the full typed schema, access rules, and examples.",
     args: z.tuple([z.string(), searchOptsSchema]),
@@ -106,6 +114,14 @@ export const docsMethods = defineServiceMethods({
     examples: [{ args: ["store a blob and get a digest", { limit: 5 }] }],
   },
   describe: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "docs.control",
+      rationale:
+        "P-discovery: capability discovery and introspection; §2 default {code, session} family",
+    },
     description:
       "Return the full catalog entry for an id (typed args/returns schema, access/restrictedness, examples). Returns null if unknown or not visible to the caller.",
     args: z.tuple([z.string()]),
@@ -114,6 +130,14 @@ export const docsMethods = defineServiceMethods({
     examples: [{ args: ["service:blobstore.putText"] }],
   },
   getSchema: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "docs.read",
+      rationale:
+        "P-discovery: capability discovery and introspection; §2 default {code, session} family",
+    },
     description: "Return just the args/returns JSON Schema for a catalog id.",
     args: z.tuple([z.string()]),
     returns: z
@@ -125,12 +149,28 @@ export const docsMethods = defineServiceMethods({
     access: READONLY_ACCESS,
   },
   listSurfaces: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "docs.read",
+      rationale:
+        "P-discovery: capability discovery and introspection; §2 default {code, session} family",
+    },
     description: "List catalog surfaces and the number of entries the caller can see in each.",
     args: z.union([z.tuple([]), z.tuple([z.object({}).strict()])]),
     returns: z.array(z.object({ surface: catalogSurfaceSchema, count: z.number() })),
     access: READONLY_ACCESS,
   },
   listServices: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "docs.read",
+      rationale:
+        "P-discovery: capability discovery and introspection; §2 default {code, session} family",
+    },
     description:
       "List registered RPC services and their methods (per-service view with JSON-Schema args/returns), filtered to what the calling kind may invoke. Every service.method listed is callable as services.<service>.<method>(...).",
     args: z.union([z.tuple([]), z.tuple([z.object({}).strict()])]),
@@ -138,6 +178,14 @@ export const docsMethods = defineServiceMethods({
     access: READONLY_ACCESS,
   },
   describeService: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "docs.control",
+      rationale:
+        "P-discovery: capability discovery and introspection; §2 default {code, session} family",
+    },
     description:
       "Describe one registered RPC service by name: its policy and every method the caller may invoke (with JSON-Schema args/returns). Returns null for an unknown service.",
     args: z.tuple([z.string()]),

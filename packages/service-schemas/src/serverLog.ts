@@ -78,6 +78,24 @@ const ServerLogStatsSchema = z.object({
 
 export const serverLogMethods = defineServiceMethods({
   query: {
+    capability: "server-logs.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "observability",
+      family: "serverLog.read",
+      rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View server logs",
+      action: "view server logs",
+      description: "Allows {requesterKind} to view server logs.",
+      group: "host",
+      authorityCategory: {
+        domain: "computer",
+        verb: "see",
+      },
+    },
     description:
       "Query the server host log ring buffer with filters (sinceSeq cursor, time range, min level, subsystem tag, substring). Returns the most recent matches in ascending seq order plus process metadata (workspaceId, serverBootId, pid, latestSeq).",
     args: z.tuple([ServerLogQuerySchema.optional()]),
@@ -90,6 +108,24 @@ export const serverLogMethods = defineServiceMethods({
     ],
   },
   tail: {
+    capability: "server-logs.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "observability",
+      family: "serverLog.control",
+      rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Follow new server log entries",
+      action: "follow new server log entries",
+      description: "Allows {requesterKind} to follow new server log entries.",
+      group: "host",
+      authorityCategory: {
+        domain: "computer",
+        verb: "see",
+      },
+    },
     description:
       "Return the last N server host log records (default 500) in ascending seq order — the starting snapshot for a live tail; then subscribe to the server-log:append event and dedupe by seq.",
     args: z.tuple([z.number().int().min(1).max(5000).optional()]),
@@ -98,6 +134,24 @@ export const serverLogMethods = defineServiceMethods({
     examples: [{ args: [200] }],
   },
   stats: {
+    capability: "server-logs.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "observability",
+      family: "serverLog.control",
+      rationale: "G4: privacy or authority-map read; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View server log statistics",
+      action: "view server log statistics",
+      description: "Allows {requesterKind} to view server log statistics.",
+      group: "host",
+      authorityCategory: {
+        domain: "computer",
+        verb: "see",
+      },
+    },
     description:
       "Aggregate stats over the captured server host logs: buffer occupancy, total captured this boot, counts by level, and the top subsystem tags.",
     args: z.tuple([]),

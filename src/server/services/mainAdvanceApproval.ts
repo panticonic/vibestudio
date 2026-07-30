@@ -100,6 +100,11 @@ export function createMainRefAdvanceGate(deps: {
   workspaceViewWithReposAt(
     overrides: Array<{ repoPath: string; stateHash: string | null }>
   ): Promise<string>;
+  /** Reject candidate workspace-wide invariants before prompting or advancing refs. */
+  validateCandidateWorkspaceState?(
+    stateHash: string,
+    changedPaths: readonly string[]
+  ): Promise<void>;
   /** Host-computed dependents of a repo being DELETED (repos whose build unit
    *  imports it), for the severe deletion prompt's dependents warning (§5) —
    *  derived from the build dependency graph at the live workspace view. Absent
@@ -114,17 +119,6 @@ export function createMainRefAdvanceGate(deps: {
       throw new Error(`Protected main update carries no gate context`);
     }
     if (context.kind === "workspace-initialization") return;
-
-    if (batch.entries.length === 0) {
-      await deps.approvalGate.approveSemanticAdvance({
-        caller: context.caller,
-        ...(context.signal ? { signal: context.signal } : {}),
-        previousEventId: batch.publication.previousEventId,
-        publishedEventId: batch.publication.publishedEventId,
-        ...(context.via ? { via: context.via } : {}),
-      });
-      return;
-    }
 
     // ONE candidate workspace view for the whole batch: current mains ⊕ entries
     // (deletes remove the repo). The shared view hash is the dedup key that
@@ -142,8 +136,27 @@ export function createMainRefAdvanceGate(deps: {
             batch.entries.map((entry) => ({ repoPath: entry.repoPath, stateHash: entry.next }))
           )
       ));
+    // Seed validation from the advancing repository paths. The build system
+    // resolves each seed to its unit and reverse dependency closure; this
+    // keeps publication validation on the same topology as state-triggered
+    // builds without requiring a full workspace sweep.
+    await deps.validateCandidateWorkspaceState?.(
+      candidateView,
+      batch.entries.map((entry) => entry.repoPath)
+    );
 
-    // Build the whole-batch diff-review payload ONCE (one entry per batch entry,
+    if (batch.entries.length === 0) {
+      await deps.approvalGate.approveSemanticAdvance({
+        caller: context.caller,
+        ...(context.signal ? { signal: context.signal } : {}),
+        previousEventId: batch.publication.previousEventId,
+        publishedEventId: batch.publication.publishedEventId,
+        ...(context.via ? { via: context.via } : {}),
+      });
+      return;
+    }
+
+    // Build the whole-batch diff-review payload ONCE (one per batch entry,
     // §5.1). Every prompt in the batch carries the FULL payload so the reviewer
     // always sees the complete host-computed diff. Also yields the exact
     // workspace-rooted changed paths + file count per entry, reused below (so a

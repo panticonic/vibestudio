@@ -307,7 +307,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
    *
    * @param panel - The panel to add
    * @param parentId - Parent panel ID, or null for root placement
-   * @param opts.addAsRoot - If true and parentId is null, append to rootPanels
+   * @param opts.addAsRoot - If true and parentId is null, prepend to rootPanels
    *   without clearing the existing tree. When false (default) and parentId is
    *   null, the tree is replaced with this single panel.
    */
@@ -318,11 +318,11 @@ export class PanelRegistry implements PanelRelationshipProvider {
       if (!parent) {
         throw new Error(`Parent panel not found: ${parentId}`);
       }
-      parent.children.push(panel);
+      parent.children.unshift(panel);
       parent.selectedChildId = panel.id;
       this.panels.set(panel.id, panel);
     } else if (opts?.addAsRoot) {
-      this.rootPanels.push(panel);
+      this.rootPanels.unshift(panel);
       this.panels.set(panel.id, panel);
     } else {
       // Replace tree with single root
@@ -523,6 +523,44 @@ export class PanelRegistry implements PanelRelationshipProvider {
     // Artifacts are runtime-only — not persisted to DB
   }
 
+  /**
+   * Apply the server-sealed execution identity for the panel's current
+   * incarnation. Returns false for a stale event targeting a retired entity.
+   */
+  applyExecutionIdentity(
+    panelId: string,
+    identity: {
+      runtimeEntityId: string;
+      effectiveVersion: string;
+      buildKey: string;
+      executionDigest: string;
+      authorityRequests: NonNullable<Panel["authorityRequests"]>;
+    }
+  ): boolean {
+    const panel = this.panels.get(panelId);
+    if (!panel || panel.runtimeEntityId !== identity.runtimeEntityId) return false;
+    const alreadyPresented =
+      panel.buildKey === identity.buildKey &&
+      panel.executionDigest === identity.executionDigest &&
+      panel.artifacts.buildState === "ready" &&
+      Boolean(panel.artifacts.htmlPath);
+    panel.effectiveVersion = identity.effectiveVersion;
+    panel.buildKey = identity.buildKey;
+    panel.executionDigest = identity.executionDigest;
+    panel.authorityRequests = identity.authorityRequests;
+    if (!alreadyPresented) {
+      this.updateArtifacts(panelId, {
+        ...panel.artifacts,
+        htmlPath: undefined,
+        buildState: "building",
+        buildProgress: "Runtime image ready; loading panel...",
+        error: undefined,
+      });
+    }
+    this.notifyPanelTreeUpdate();
+    return true;
+  }
+
   setCurrentTheme(theme: "light" | "dark"): void {
     this.currentTheme = theme;
   }
@@ -708,8 +746,19 @@ export class PanelRegistry implements PanelRelationshipProvider {
 
   private serializePanel(panel: Panel): Panel {
     this.ensureExplicitState(panel);
+    const current = getCurrentSnapshot(panel);
+    const history = panel.history;
     return {
       ...panel,
+      snapshot: current,
+      history: { entries: [current], index: 0 },
+      navigation: {
+        ...(panel.navigation ?? {}),
+        canGoBack: Boolean(panel.navigation?.canGoBack || (history && history.index > 0)),
+        canGoForward: Boolean(
+          panel.navigation?.canGoForward || (history && history.index < history.entries.length - 1)
+        ),
+      },
       children: panel.children.map((child) => this.serializePanel(child)),
     };
   }

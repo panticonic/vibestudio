@@ -16,7 +16,7 @@ import {
   hashDevelopmentPackageClosure,
   type PreparedDevelopmentBuild,
 } from "./developmentExecutor.js";
-import { DevelopmentRecipeRegistry } from "./developmentRecipes.js";
+import { developmentRecipes } from "@panticonic/builtin/development/recipes";
 import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
 
 const roots: string[] = [];
@@ -57,10 +57,7 @@ function sourcePlan(): ExactRepositorySnapshotPlan {
     contentRoot: `state:${digest("a")}`,
     repositoryManifestDigest: digest("b"),
     materializedTreeDigest: digest("c"),
-    requiredFiles: [
-      { path: "pnpm-lock.yaml", contentHash: digest("d"), byteLength: 4 },
-      { path: "workspace/pnpm-lock.yaml", contentHash: digest("e"), byteLength: 4 },
-    ],
+    requiredFiles: [{ path: "pnpm-lock.yaml", contentHash: digest("d"), byteLength: 4 }],
     realization: {
       repository: {
         repositoryId: "repository:vibestudio",
@@ -102,7 +99,7 @@ function runFor(plan: PreparedDevelopmentBuild): DevelopmentRun {
 }
 
 async function manualPlan(runId: string, pnpmCliPath: string): Promise<PreparedDevelopmentBuild> {
-  const recipe = new DevelopmentRecipeRegistry().list()[0]!;
+  const recipe = developmentRecipes(process.platform, process.arch)[0]!;
   const pnpmRootPath = path.dirname(pnpmCliPath);
   const nodeDigest = createHash("sha256")
     .update(await fsp.readFile(process.execPath))
@@ -171,7 +168,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
-      semanticStateForContent: () => ({
+      executionStateForContent: () => ({
         kind: "application",
         applicationId: "application:dirty",
       }),
@@ -191,20 +188,20 @@ describe("DevelopmentExecutor exact private execution", () => {
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
       root: path.join(root, "runs"),
-      recipes: new DevelopmentRecipeRegistry(),
       planSource,
       materializeSource: vi.fn(),
     });
 
-    const first = await executor.prepare({
+    const recipe = developmentRecipes(process.platform, process.arch)[0]!;
+    const first = await executor.prepareExact({
       session: session(),
       runId: "run-one",
-      recipeId: "vibestudio-monorepo-build-v1",
+      recipe,
     });
-    const second = await executor.prepare({
+    const second = await executor.prepareExact({
       session: session(),
       runId: "run-two",
-      recipeId: "vibestudio-monorepo-build-v1",
+      recipe,
     });
 
     expect(first.snapshot.toolchain).toEqual(second.snapshot.toolchain);
@@ -225,7 +222,6 @@ describe("DevelopmentExecutor exact private execution", () => {
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
       root: path.join(root, "runs"),
-      recipes: new DevelopmentRecipeRegistry(),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         await fsp.writeFile(path.join(destination, "pnpm-lock.yaml"), "lock");
@@ -257,7 +253,7 @@ describe("DevelopmentExecutor exact private execution", () => {
 
     expect(artifact.buildKey).toBe(plan.snapshot.snapshotDigest);
     expect(stored?.metadata.sourceStateHash).toBe(plan.snapshot.contentRoot);
-    expect(stored?.metadata.sourceSemanticState).toEqual(plan.snapshot.repositoryState);
+    expect(stored?.metadata.sourceState).toEqual(plan.snapshot.repositoryState);
     const environment = stored?.artifacts.find((entry) => entry.path === "dist/environment.json");
     expect(environment?.encoding).toBe("utf8");
     expect(JSON.parse(environment?.content ?? "{}")).toEqual({
@@ -274,7 +270,6 @@ describe("DevelopmentExecutor exact private execution", () => {
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
       root: path.join(root, "runs"),
-      recipes: new DevelopmentRecipeRegistry(),
       planSource: async () => sourcePlan(),
       materializeSource: async () => {},
     });
@@ -304,7 +299,6 @@ describe("DevelopmentExecutor exact private execution", () => {
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
       root: path.join(root, "runs"),
-      recipes: new DevelopmentRecipeRegistry(),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         await fsp.writeFile(path.join(destination, "build.mjs"), "");
@@ -340,7 +334,6 @@ describe("DevelopmentExecutor exact private execution", () => {
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
       root: path.join(root, "runs"),
-      recipes: new DevelopmentRecipeRegistry(),
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         materializations += 1;

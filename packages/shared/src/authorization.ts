@@ -11,6 +11,21 @@ import type {
   ResourceScope,
 } from "@vibestudio/rpc";
 import { capabilityPatternCovers } from "./authorityManifest.js";
+import {
+  allOf,
+  anyOf,
+  capability,
+  relationship,
+  requirementForPrincipals,
+} from "./authorityRequirements.js";
+
+export {
+  allOf,
+  anyOf,
+  capability,
+  relationship,
+  requirementForPrincipals,
+} from "./authorityRequirements.js";
 
 export type {
   AuthorizationContext,
@@ -36,6 +51,8 @@ export interface AuthorityEvaluationInput {
   now?: number;
   /** Critical confirmation checks bind to the concrete invocation. */
   invocationDigest?: string;
+  /** Live receiver digest used only by version-scoped grant constraints. */
+  providerExecutionDigest?: string;
   /** Critical ignores ordinary grants and admits only a fresh confirmation. */
   tier?: "open" | "gated" | "critical";
   relation?: (input: {
@@ -131,36 +148,6 @@ export function authorityFailureForDecision(
   }
 }
 
-export function capability(
-  principal: PrincipalKind,
-  name: string,
-  options: { codeOnly?: boolean } = {}
-): AuthorityRequirement {
-  return {
-    kind: "capability",
-    principal,
-    capability: name,
-    ...(options.codeOnly ? { codeOnly: true as const } : {}),
-  };
-}
-
-export function allOf(...requirements: readonly AuthorityRequirement[]): AuthorityRequirement {
-  if (requirements.length === 0) throw new Error("allOf requires at least one requirement");
-  return { kind: "all", requirements };
-}
-
-export function anyOf(...requirements: readonly AuthorityRequirement[]): AuthorityRequirement {
-  if (requirements.length === 0) throw new Error("anyOf requires at least one requirement");
-  return { kind: "any", requirements };
-}
-
-export function relationship(
-  name: Extract<AuthorityRequirement, { kind: "relationship" }>["name"],
-  value?: string
-): AuthorityRequirement {
-  return { kind: "relationship", name, ...(value === undefined ? {} : { value }) };
-}
-
 /** Placeholder used by a declarative method policy before its canonical name is known. */
 export const METHOD_CAPABILITY = "$method";
 
@@ -187,50 +174,6 @@ export function bindMethodCapability(
     };
   }
   return requirement;
-}
-
-/**
- * Canonical requirement for a method's admitted principal families. A code
- * declaration admits both installed code and eval sessions unless explicitly
- * marked codeOnly during the method census.
- */
-export function requirementForPrincipals(
-  principals: readonly PrincipalKind[],
-  capabilityName: string,
-  options: { codeOnly?: boolean } = {}
-): AuthorityRequirement {
-  const unique = [...new Set(principals)];
-  if (unique.length === 0) throw new Error("An authority declaration requires a principal");
-  const requirements = unique.flatMap((principal): AuthorityRequirement[] => {
-    switch (principal) {
-      case "host":
-        return [capability("host", capabilityName)];
-      case "user":
-        return [allOf(capability("user", capabilityName), relationship("workspace-member"))];
-      case "code": {
-        const installed = allOf(
-          capability("code", capabilityName),
-          relationship("workspace-member")
-        );
-        return options.codeOnly
-          ? [
-              allOf(
-                capability("code", capabilityName, { codeOnly: true }),
-                relationship("workspace-member")
-              ),
-            ]
-          : [
-              installed,
-              allOf(capability("session", capabilityName), relationship("workspace-member")),
-            ];
-      }
-      case "session":
-        return [allOf(capability("session", capabilityName), relationship("workspace-member"))];
-      case "mission":
-        return [allOf(capability("mission", capabilityName), relationship("workspace-member"))];
-    }
-  });
-  return requirements.length === 1 ? requirements[0]! : anyOf(...requirements);
 }
 
 /**
@@ -398,10 +341,24 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
             scopeCovers(scope.resource, input.resourceKey)
         );
       if (!requested) {
+        const manifestDetail =
+          manifest === null
+            ? "no sealed code manifest was attached"
+            : manifest.principal !== principal
+              ? `the attached manifest belongs to ${manifest.principal}`
+              : (() => {
+                  const sameResourceCapabilities = manifest.requested
+                    .filter((scope) => scopeCovers(scope.resource, input.resourceKey))
+                    .map((scope) => scope.capability)
+                    .slice(0, 3);
+                  return sameResourceCapabilities.length > 0
+                    ? `same-resource declarations: ${sameResourceCapabilities.join(", ")}`
+                    : "no declaration covers the resource";
+                })();
         return {
           allowed: false,
           code: "fixed-code-not-requested",
-          reason: `${principal} did not request ${requirement.capability} for ${input.resourceKey}`,
+          reason: `${principal} did not request ${requirement.capability} for ${input.resourceKey} (${manifestDetail})`,
           requirement,
           principal,
         };
@@ -415,7 +372,12 @@ export function evaluateAuthority(input: AuthorityEvaluationInput): Authorizatio
         grant.createdAt <= now &&
         (grant.revokedAt === undefined || grant.revokedAt > now) &&
         (grant.expiresAt === undefined || grant.expiresAt > now) &&
-        grantConstraintsMatch(grant, input.context, input.invocationDigest) &&
+        grantConstraintsMatch(
+          grant,
+          input.context,
+          input.invocationDigest,
+          input.providerExecutionDigest
+        ) &&
         scopeCovers(grant.resource, input.resourceKey)
     );
 
@@ -493,10 +455,8 @@ export function subjectsForOrigin(
   ) {
     subjects.add(`agent:${context.executionSession.agentBinding.bindingId}`);
   }
-  if (context.authorizingOrigin.kind === "session" && context.session.mission) {
-    subjects.add(
-      `mission:${context.session.mission.missionId}@${context.session.mission.closureDigest}`
-    );
+  if (context.authorizingOrigin.kind === "session" && context.session.reviewedClosure) {
+    subjects.add(context.session.reviewedClosure.subject);
   }
   return subjects;
 }
@@ -512,8 +472,8 @@ function principalForRequirement(
   if (kind === "code" && origin.kind === "session" && requirement.codeOnly !== true) {
     return origin.principal;
   }
-  if (kind === "mission" && origin.kind === "session" && context.session.mission) {
-    return `mission:${context.session.mission.missionId}@${context.session.mission.closureDigest}`;
+  if (kind === "mission" && origin.kind === "session" && context.session.reviewedClosure) {
+    return context.session.reviewedClosure.subject as Principal;
   }
   return null;
 }
@@ -530,7 +490,7 @@ export function scopeCovers(scope: ResourceScope, key: string): boolean {
       // separator is already an explicit lexical namespace, which lets
       // manifests truthfully describe bounded dynamic names such as
       // `workspace-repo-delete:projects/system-test-*`.
-      return /[/:._-]$/u.test(scope.prefix) || key[scope.prefix.length] === "/";
+      return /[#/:._-]$/u.test(scope.prefix) || key[scope.prefix.length] === "/";
     }
     case "origin":
       return key === scope.origin;
@@ -637,7 +597,8 @@ function containsCapabilityRequirement(requirement: AuthorityRequirement): boole
 function grantConstraintsMatch(
   grant: AuthorityGrant,
   context: AuthorizationContext,
-  invocationDigest: string | undefined
+  invocationDigest: string | undefined,
+  providerExecutionDigest: string | undefined
 ): boolean {
   const constraints = grant.constraints;
   if (!constraints) return true;
@@ -655,11 +616,16 @@ function grantConstraintsMatch(
     constraints.invocationDigest !== invocationDigest
   )
     return false;
-  if (constraints.missionSubject !== undefined) {
-    const mission = context.session.mission;
+  if (
+    constraints.providerExecutionDigest !== undefined &&
+    constraints.providerExecutionDigest !== providerExecutionDigest
+  )
+    return false;
+  if (constraints.reviewedClosureSubject !== undefined) {
+    const closure = context.session.reviewedClosure;
     if (
-      !mission ||
-      constraints.missionSubject !== `mission:${mission.missionId}@${mission.closureDigest}`
+      !closure ||
+      constraints.reviewedClosureSubject !== closure.subject
     )
       return false;
   }

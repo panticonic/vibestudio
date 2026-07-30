@@ -50,7 +50,7 @@ describe("RuntimeImageStore sealed execution identity", () => {
           source: "workers/a",
           unitName: "@workspace-workers/a",
           artifact: artifact(),
-          authorityRequests: [],
+          authority: { provides: [], requests: [] },
         })
       ).toThrow(/identity mismatch/);
       expect(store.list()).toEqual([]);
@@ -68,26 +68,32 @@ describe("RuntimeImageStore sealed execution identity", () => {
         source: "workers/a",
         unitName: "@workspace-workers/a",
         artifact: artifact(),
-        authorityRequests: [
-          {
-            capability: "service:workspace-state.alarmClear",
-            resource: { kind: "exact", key: "workspace:test" },
-            tier: "gated",
-            evidence: "exact",
-          },
-        ],
+        authority: {
+          provides: [],
+          requests: [
+            {
+              capability: "service:workspace-state.alarmClear",
+              resource: { kind: "exact", key: "workspace:test" },
+              tier: "gated",
+              evidence: "exact",
+            },
+          ],
+        },
       });
 
       expect(new RuntimeImageStore(statePath).get("worker:workers/a:one")).toMatchObject({
         artifact: expect.objectContaining({ executionDigest: artifact().executionDigest }),
-        authorityRequests: [
-          {
-            capability: "service:workspace-state.alarmClear",
-            resource: { kind: "exact", key: "workspace:test" },
-            tier: "gated",
-            evidence: "exact",
-          },
-        ],
+        authority: {
+          provides: [],
+          requests: [
+            {
+              capability: "service:workspace-state.alarmClear",
+              resource: { kind: "exact", key: "workspace:test" },
+              tier: "gated",
+              evidence: "exact",
+            },
+          ],
+        },
       });
     } finally {
       fs.rmSync(statePath, { recursive: true, force: true });
@@ -118,15 +124,13 @@ describe("RuntimeImageStore sealed execution identity", () => {
         })
       );
 
-      expect(() => new RuntimeImageStore(statePath)).toThrow(
-        /schema version 1 predates the supported production baseline/
-      );
+      expect(() => new RuntimeImageStore(statePath)).toThrow(/schema version 1; expected 7/);
     } finally {
       fs.rmSync(statePath, { recursive: true, force: true });
     }
   });
 
-  it("rejects the previous authority-envelope epoch without a legacy migration", () => {
+  it("rejects a previous authority-envelope epoch", () => {
     const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-images-"));
     try {
       const filePath = stateLayout(statePath).runtimeImagesFile;
@@ -166,9 +170,7 @@ describe("RuntimeImageStore sealed execution identity", () => {
         })
       );
 
-      expect(() => new RuntimeImageStore(statePath)).toThrow(
-        /predates the supported production baseline/
-      );
+      expect(() => new RuntimeImageStore(statePath)).toThrow(/schema version 3; expected 7/);
     } finally {
       fs.rmSync(statePath, { recursive: true, force: true });
     }
@@ -182,14 +184,14 @@ describe("RuntimeImageStore sealed execution identity", () => {
       fs.writeFileSync(
         filePath,
         JSON.stringify({
-          version: 6,
+          version: 7,
           records: [
             {
               id: "worker:workers/a:one",
               source: "workers/a",
               unitName: "@workspace-workers/a",
               artifact: { ...artifact(), executionDigest: "not-a-digest" },
-              authorityRequests: [],
+              authority: { provides: [], requests: [] },
               generation: 1,
               updatedAt: 1,
             },

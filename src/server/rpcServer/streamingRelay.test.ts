@@ -79,7 +79,7 @@ describe("StreamingRelay HTTP response ownership", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target: "main",
-        message: { method: "events.watch", args: [["panel-tree-updated"]] },
+        message: { method: "events.watch", args: [["panel-tree-invalidated"]] },
       }),
       signal: controller.signal,
     });

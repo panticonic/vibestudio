@@ -32,7 +32,7 @@ function makePanelRecord(id: string): EntityRecord {
     source: { repoPath: "", effectiveVersion: "" },
     activeBuildKey: `build:${id}`,
     activeExecutionDigest: "a".repeat(64),
-    activeAuthority: { requests: [] },
+    activeAuthority: { requests: [], provides: [] },
     contextId: "",
     key: id,
     createdAt: Date.now(),

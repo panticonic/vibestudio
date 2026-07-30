@@ -47,6 +47,7 @@ import * as http from "node:http";
 import { Readable } from "node:stream";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
+import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
 import { GZIP_MARKER_HEADER, hasRangeRequestHeader } from "@vibestudio/shared/panel/assetHeaders";
@@ -152,8 +153,27 @@ function rawLoopbackFetch(
   });
 }
 
-const gatewayFetchMethods = {
+const gatewayFetchMethods = defineServiceMethods({
   fetch: {
+    capability: "workspace.gateway.access",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "gateway.control",
+      rationale:
+        "G1: external-system effect or listening surface; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Access a workspace gateway address",
+      action: "access a workspace gateway address",
+      description: "Allows {requesterKind} to access a workspace gateway address.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
     description:
       "Loopback-fetch a panel asset from the server's own gateway and stream the " +
       "Response back over the pipe's bulk channel (a streaming method). A request " +
@@ -165,7 +185,7 @@ const gatewayFetchMethods = {
     returns: z.instanceof(Response),
     access: { sensitivity: "read" as const },
   },
-};
+});
 
 function trustedMobileBootstrapTarget(
   ctx: Parameters<NonNullable<ServiceDefinition["handler"]>>[0],

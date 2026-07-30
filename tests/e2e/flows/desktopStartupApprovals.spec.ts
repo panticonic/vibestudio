@@ -4,6 +4,7 @@ import * as path from "node:path";
 import YAML from "yaml";
 
 import { CredentialStore } from "@vibestudio/credential-client/store";
+import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import {
   createManagedTestWorkspace,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
@@ -133,7 +134,7 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
           displayName: "E2E Approval Extension",
           entry: "index.ts",
           extension: { activationEvents: ["*"] },
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
         },
       },
       null,
@@ -222,28 +223,37 @@ async function shellHasApprovalUi(testApp: TestApp): Promise<boolean> {
     let hasHostedShellChrome = false;
     let hasApprovalSurface = false;
     let hasLaunchGateApproval = false;
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
+    const candidates = webContents.getAllWebContents().filter((contents) => {
+      if (contents.isDestroyed()) return false;
+      const title = contents.getTitle();
+      return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+    });
+    for (const contents of candidates) {
       try {
-        const result = (await contents.executeJavaScript(
-          `(() => {
-            const bodyText = document.body?.innerText ?? "";
-            return {
-              hasHostedShellChrome: Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
-                || document.querySelector('[aria-label="Menu"]')),
-              hasApprovalSurface: Boolean(document.querySelector(".approval-card, .approval-pill")),
-              hasLaunchGateApproval: Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
-                && Array.from(document.querySelectorAll("button")).some((button) =>
-                  /^(Trust and start|Approve and start|Deny)$/i.test(button.textContent?.trim() ?? "")
-                ),
-            };
-          })()`,
-          true
-        )) as {
+        const result = (await Promise.race([
+          contents.executeJavaScript(
+            `(() => {
+              const bodyText = document.body?.innerText ?? "";
+              return {
+                hasHostedShellChrome: Boolean(document.querySelector('[data-shell-top-chrome="titlebar"]')
+                  || document.querySelector(".titlebar-breadcrumb-scroll")
+                  || document.querySelector('[aria-label="Menu"]')),
+                hasApprovalSurface: Boolean(document.querySelector(".approval-card, .approval-pill")),
+                hasLaunchGateApproval: Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
+                  && Array.from(document.querySelectorAll("button")).some((button) =>
+                    /^(Trust and start|Approve and start|Deny)$/i.test(button.textContent?.trim() ?? "")
+                  ),
+              };
+            })()`,
+            true
+          ),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
+        ])) as {
           hasHostedShellChrome: boolean;
           hasApprovalSurface: boolean;
           hasLaunchGateApproval: boolean;
-        };
+        } | null;
+        if (!result) continue;
         hasHostedShellChrome ||= result.hasHostedShellChrome;
         hasApprovalSurface ||= result.hasApprovalSurface;
         hasLaunchGateApproval ||= result.hasLaunchGateApproval;
@@ -333,7 +343,8 @@ async function hostedShellHasApprovalUi(testApp: TestApp): Promise<boolean> {
       try {
         const result = (await contents.executeJavaScript(
           `(() => ({
-            hasHostedShellChrome: Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
+            hasHostedShellChrome: Boolean(document.querySelector('[data-shell-top-chrome="titlebar"]')
+              || document.querySelector(".titlebar-breadcrumb-scroll")
               || document.querySelector('[aria-label="Menu"]')),
             hasApprovalSurface: Boolean(document.querySelector(".approval-card, .approval-pill")),
           }))()`,
@@ -354,22 +365,27 @@ async function hostedShellHasApprovalUi(testApp: TestApp): Promise<boolean> {
 
 async function hostedShellHasChrome(testApp: TestApp): Promise<boolean> {
   return testApp.app.evaluate(async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const result = await contents.executeJavaScript(
+    const contents = webContents
+      .getAllWebContents()
+      .find(
+        (candidate) => !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
+      );
+    if (!contents) return false;
+    try {
+      return await Promise.race([
+        contents.executeJavaScript(
           `(() => Boolean(
-            document.querySelector(".titlebar-breadcrumb-scroll")
-              || document.querySelector('[aria-label="Menu"]')
-          ))()`,
+              document.querySelector('[data-shell-top-chrome="titlebar"]')
+                || document.querySelector(".titlebar-breadcrumb-scroll")
+                || document.querySelector('[aria-label="Menu"]')
+            ))()`,
           true
-        );
-        if (result) return true;
-      } catch {
-        // Ignore non-DOM webContents.
-      }
+        ),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+    } catch {
+      return false;
     }
-    return false;
   });
 }
 
@@ -380,26 +396,17 @@ async function callHostedShellService(
 ): Promise<unknown> {
   return testApp.app.evaluate(
     async ({ webContents }, request) => {
-      for (const contents of webContents.getAllWebContents()) {
-        if (contents.isDestroyed()) continue;
-        try {
-          const isHostedShell = await contents.executeJavaScript(
-            `Boolean(globalThis.__vibestudioApp?.serviceCall)
-              && Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
-                || document.querySelector('[aria-label="Menu"]'))`,
-            true
-          );
-          if (!isHostedShell) continue;
-          return await contents.executeJavaScript(
-            `globalThis.__vibestudioApp.serviceCall(${JSON.stringify(request.method)}, ...${JSON.stringify(request.args)})`,
-            true
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (!/execution context|destroyed|navigat/i.test(message)) throw error;
-        }
-      }
-      throw new Error("Hosted shell app WebContents was not found");
+      const contents = webContents
+        .getAllWebContents()
+        .find(
+          (candidate) =>
+            !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
+        );
+      if (!contents) throw new Error("Hosted shell app WebContents was not found");
+      return contents.executeJavaScript(
+        `globalThis.__vibestudioApp.serviceCall(${JSON.stringify(request.method)}, ...${JSON.stringify(request.args)})`,
+        true
+      );
     },
     { method, args }
   );
@@ -429,48 +436,35 @@ async function bootstrapLaunchGateHasCredentialApproval(testApp: TestApp): Promi
 
 async function clickShellButton(testApp: TestApp, label: RegExp): Promise<boolean> {
   return testApp.app.evaluate(async ({ webContents }, labelSource) => {
-    const label = new RegExp(labelSource, "i");
-    const candidates: Array<{ contents: Electron.WebContents; priority: number }> = [];
-    for (const contents of webContents.getAllWebContents()) {
+    const candidates = webContents
+      .getAllWebContents()
+      .filter((contents) => !contents.isDestroyed())
+      .sort((left, right) => {
+        const priority = (contents: Electron.WebContents) => {
+          const title = contents.getTitle();
+          if (title === "@workspace-apps/shell") return 0;
+          if (title === "Vibestudio Launch") return 1;
+          return 2;
+        };
+        return priority(left) - priority(right);
+      });
+    for (const contents of candidates) {
       if (contents.isDestroyed()) continue;
       try {
-        const priority = await contents.executeJavaScript(
-          `(() => {
-              const hasHostedShellChrome = Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
-                || document.querySelector('[aria-label="Menu"]'));
-              const hasApprovalBar = Boolean(document.querySelector(".approval-card, .approval-pill"));
-              const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
-                && Array.from(document.querySelectorAll("button")).some((button) =>
-                  /^(Trust and start|Approve and start|Deny)$/i.test(button.textContent?.trim() ?? "")
-                );
-              if (hasHostedShellChrome && hasApprovalBar) return 0;
-              if (hasApprovalBar) return 1;
-              if (hasLaunchGateApproval) return 2;
-              if (hasHostedShellChrome) return 2;
-              return 3;
-            })()`,
-          true
-        );
-        candidates.push({ contents, priority });
-      } catch {
-        // Ignore non-DOM webContents.
-      }
-    }
-    candidates.sort((a, b) => a.priority - b.priority);
-    for (const { contents } of candidates) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const clicked = await contents.executeJavaScript(
-          `(() => {
-              const label = new RegExp(${JSON.stringify(labelSource)}, "i");
-              const buttons = Array.from(document.querySelectorAll("button"));
-              const button = buttons.find((item) => label.test(item.textContent ?? ""));
-              if (!button) return false;
-              button.click();
-              return true;
-            })()`,
-          true
-        );
+        const clicked = await Promise.race([
+          contents.executeJavaScript(
+            `(() => {
+                const label = new RegExp(${JSON.stringify(labelSource)}, "i");
+                const buttons = Array.from(document.querySelectorAll("button"));
+                const button = buttons.find((item) => label.test(item.textContent ?? ""));
+                if (!button) return false;
+                button.click();
+                return true;
+              })()`,
+            true
+          ),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+        ]);
         if (clicked) return true;
       } catch {
         // Ignore non-DOM webContents.
@@ -516,7 +510,8 @@ async function listShellDomSnapshots(testApp: TestApp): Promise<
               );
             return {
               text: bodyText.slice(0, 4000),
-              hasTitlebar: Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
+              hasTitlebar: Boolean(document.querySelector('[data-shell-top-chrome="titlebar"]')
+                || document.querySelector(".titlebar-breadcrumb-scroll")
                 || document.querySelector('[aria-label="Menu"]')),
               hasApprovalBar: Boolean(approval),
               hasRecoveryApproval: hasLaunchGateApproval,
@@ -543,11 +538,13 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
   const pending = await listPendingApprovals(testApp).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error),
   }));
-  const launchResult = await rpcCall(testApp, "workspace", "hostTargets.launch", [
-    "electron",
-  ]).catch((error: unknown) => ({
-    error: error instanceof Error ? error.message : String(error),
-  }));
+  const launchResult = await new HostLaunchClient((service, method, args) =>
+    rpcCall(testApp, service, method, args)
+  )
+    .launch("electron")
+    .catch((error: unknown) => ({
+      error: error instanceof Error ? error.message : String(error),
+    }));
   const hostView = await testApp.app
     .evaluate(() => {
       const testApi = (
@@ -665,7 +662,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@vibestudio/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getParticipants", []))`
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getParticipants", []))`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -675,7 +672,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `(() => globalThis.__vibestudioRequireAsync__("@vibestudio/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }])).then((replay) => ({
+            `(() => globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [{ after: 0 }])).then((replay) => ({
               ready: replay?.ready,
               snapshots: replay?.snapshots,
               logEvents: (replay?.logEvents ?? []).map((event) => ({
@@ -707,7 +704,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `globalThis.__vibestudioRequireAsync__("@vibestudio/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
+            `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -847,7 +844,7 @@ async function collectStartupAgentCompletion(
       testApp.app,
       firstPanelId,
       `(async () => {
-        const { rpc } = await globalThis.__vibestudioRequireAsync__("@vibestudio/runtime");
+        const { rpc } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
         const hydrateStoredValue = async (value) => {
           if (
             !value ||
@@ -1036,7 +1033,7 @@ async function collectStartupAgentCompletion(
       const debugState = await executePanelScript(
         testApp.app,
         firstPanelId,
-        `globalThis.__vibestudioRequireAsync__("@vibestudio/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
+        `globalThis.__vibestudioRequireAsync__("@workspace/runtime").then(({ rpc }) => rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}]))`
       ).catch((error: unknown) => {
         return null;
       });

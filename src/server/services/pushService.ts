@@ -15,11 +15,7 @@ import type { PushApprovalDataPayload } from "@vibestudio/shared/approvalContrac
 import { pushMethods } from "@vibestudio/service-schemas/push";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import {
-  openCanonicalSqliteDatabase,
-  type CanonicalSqliteMigrationPlan,
-  type CanonicalSqliteSchema,
-} from "@vibestudio/sqlite";
+import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "@vibestudio/sqlite";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 export interface PushRegistration {
@@ -141,12 +137,6 @@ const PUSH_DATABASE_SCHEMA: CanonicalSqliteSchema = {
   ],
 };
 
-/** Version 1 is the first production baseline; future changes append migrations here. */
-const PUSH_DATABASE_MIGRATION_PLAN: CanonicalSqliteMigrationPlan = {
-  current: PUSH_DATABASE_SCHEMA,
-  migrations: [],
-};
-
 function getPushDatabasePath(): string {
   return path.join(getCentralDataPath(), "server-auth", "push.db");
 }
@@ -169,7 +159,7 @@ class PushRegistrationStore {
     this.db = new DatabaseSync(databasePath);
     this.db.exec("PRAGMA busy_timeout = 5000");
     try {
-      openCanonicalSqliteDatabase(this.db, PUSH_DATABASE_MIGRATION_PLAN, {
+      openCanonicalSqliteDatabase(this.db, PUSH_DATABASE_SCHEMA, {
         description: `push schema in ${databasePath}`,
       });
       this.db.exec("PRAGMA journal_mode = WAL");

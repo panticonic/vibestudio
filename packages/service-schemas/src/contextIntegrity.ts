@@ -22,6 +22,14 @@ const fact = z
 
 export const contextIntegrityMethods = defineServiceMethods({
   ingest: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "contextIntegrity.control",
+      rationale:
+        "A session may only tighten its own context classification through a registered chokepoint",
+    },
     description:
       "Record content entering this agent session through a registered ingestion chokepoint.",
     args: z.tuple([
@@ -38,6 +46,13 @@ export const contextIntegrityMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   fact: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "contextIntegrity.control",
+      rationale: "A session may inspect its own monotone ingestion latch",
+    },
     description: "Read this session's monotone context-integrity latch.",
     args: z.tuple([]),
     returns: fact,
@@ -45,6 +60,14 @@ export const contextIntegrityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   explain: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "contextIntegrity.control",
+      rationale:
+        "A session may inspect bounded verified lineage for its own monotone ingestion latch",
+    },
     description:
       "Explain one verified outside-lineage coordinate currently present in this session, returning a bounded page of exact leaf members and trust decisions.",
     args: z.tuple([

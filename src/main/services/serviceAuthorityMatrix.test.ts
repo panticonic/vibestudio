@@ -37,7 +37,13 @@ type AuthorityMatrix = Record<
     service: unknown;
     methods: Record<
       string,
-      { authority: { inherits: true } | unknown; access: unknown; tier?: unknown }
+      {
+        authority: { inherits: true } | unknown;
+        access: unknown;
+        tier: unknown;
+        capability: string | null;
+        presentation: unknown;
+      }
     >;
   }
 >;
@@ -78,7 +84,9 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
                 {
                   authority: schema.authority ?? { inherits: true },
                   access: schema.access ?? null,
-                  ...(schema.tier ? { tier: schema.tier } : {}),
+                  tier: schema.tier ?? null,
+                  capability: schema.capability ?? null,
+                  presentation: schema.presentation ?? null,
                 },
               ])
           ),

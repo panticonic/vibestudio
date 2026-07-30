@@ -221,6 +221,30 @@ export class PanelRuntimeCoordinator {
     return null;
   }
 
+  observeSlot(slotId: string): {
+    lease: PanelRuntimeLease | null;
+    observation: {
+      url: string;
+      loading: boolean;
+      boot: PanelBootObservation;
+    } | null;
+  } {
+    const lease = this.leaseForSlot(asPanelSlotId(slotId));
+    if (!lease) return { lease: null, observation: null };
+    const reported = this.reportedViews.get(lease.runtimeEntityId);
+    const observation = reported?.connectionId === lease.connectionId ? reported.observation : null;
+    return {
+      lease,
+      observation: observation
+        ? {
+            url: observation.view.url,
+            loading: observation.view.loading,
+            boot: observation.boot,
+          }
+        : null,
+    };
+  }
+
   /**
    * Resolve the shell caller that owns the host currently presenting a slot.
    *

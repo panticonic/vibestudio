@@ -10,8 +10,8 @@ describe("product bootstrap authority", () => {
     const base = {
       caller,
       principals: { user: "user:alice" as const },
-      capability: "service:workspace.hostTargets.launch",
-      resourceKey: "service:workspace.hostTargets.launch",
+      capability: "service:runtime.supervision.activate",
+      resourceKey: "service:runtime.supervision.activate",
       sessionId: "shell:device",
       now: 1,
     };
@@ -92,7 +92,7 @@ describe("product bootstrap authority", () => {
         caller,
         principals: { code: `code:workers/example@${digest}` },
         capability: GAD_CAPABILITY,
-        resourceKey: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+        resourceKey: "do:workers/workspace-source:GadWorkspaceDO:workspace",
         sessionId: "session-test",
         now: 1,
       })

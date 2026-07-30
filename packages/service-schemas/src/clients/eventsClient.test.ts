@@ -90,10 +90,10 @@ describe("EventsClient", () => {
     });
     const portableClient = new EventsClient(fixture.rpc);
 
-    await portableClient.subscribe("panel-tree-updated");
+    await portableClient.subscribe("panel-tree-invalidated");
 
     expect(fixture.stream.mock.calls.at(-1)?.[2]).toEqual([
-      ["panel-tree-updated"],
+      ["panel-tree-invalidated"],
       "2a".repeat(16),
     ]);
     await portableClient.unsubscribeAll();
@@ -128,7 +128,7 @@ describe("EventsClient", () => {
     );
     const mobileClient = new EventsClient({ stream, streamReadable } as never);
 
-    await mobileClient.subscribe("panel-tree-updated");
+    await mobileClient.subscribe("panel-tree-invalidated");
 
     expect(streamReadable).toHaveBeenCalledOnce();
     expect(stream).not.toHaveBeenCalled();
@@ -137,19 +137,19 @@ describe("EventsClient", () => {
 
   it("opens one response-owned watch and dispatches its records", async () => {
     const listener = vi.fn();
-    client.on("panel-tree-updated", listener);
+    client.on("panel-tree-invalidated", listener);
 
-    await client.subscribe("panel-tree-updated");
+    await client.subscribe("panel-tree-invalidated");
     expect(fixture.stream).toHaveBeenCalledWith(
       "main",
       "events.watch",
-      [["panel-tree-updated"], expect.any(String)],
+      [["panel-tree-invalidated"], expect.any(String)],
       expect.objectContaining({ signal: expect.any(AbortSignal), bodyIdleTimeoutMs: null })
     );
 
     fixture.emit(0, {
       kind: "event",
-      event: "panel-tree-updated",
+      event: "panel-tree-invalidated",
       payload: { revision: 1, forest: [] },
       sequence: 1,
     });
@@ -173,14 +173,14 @@ describe("EventsClient", () => {
 
   it("replaces the exact response with the complete sorted topic set", async () => {
     await client.subscribe("system-theme-changed");
-    await client.subscribe("panel-tree-updated");
+    await client.subscribe("panel-tree-invalidated");
 
     expect(fixture.signals[0]!.aborted).toBe(false);
     expect(fixture.stream).toHaveBeenNthCalledWith(
       2,
       "main",
       "events.watch",
-      [["panel-tree-updated", "system-theme-changed"], expect.any(String)],
+      [["panel-tree-invalidated", "system-theme-changed"], expect.any(String)],
       expect.anything()
     );
 
@@ -190,14 +190,14 @@ describe("EventsClient", () => {
       3,
       "main",
       "events.watch",
-      [["panel-tree-updated"], expect.any(String)],
+      [["panel-tree-invalidated"], expect.any(String)],
       expect.anything()
     );
     await client.unsubscribeAll();
   });
 
   it("unsubscribes only by aborting the owned response", async () => {
-    await client.subscribe("panel-tree-updated");
+    await client.subscribe("panel-tree-invalidated");
     await client.unsubscribeAll();
 
     expect(fixture.signals[0]!.aborted).toBe(true);
@@ -205,13 +205,13 @@ describe("EventsClient", () => {
   });
 
   it("reopens the desired topic set on transport recovery", async () => {
-    await client.subscribeAll(["system-theme-changed", "panel-tree-updated"]);
+    await client.subscribeAll(["system-theme-changed", "panel-tree-invalidated"]);
     await client.recover();
 
     expect(fixture.signals[0]!.aborted).toBe(false);
     expect(fixture.stream).toHaveBeenCalledTimes(2);
     expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
-      ["panel-tree-updated", "system-theme-changed"],
+      ["panel-tree-invalidated", "system-theme-changed"],
       expect.any(String),
     ]);
     await client.unsubscribeAll();
@@ -219,41 +219,49 @@ describe("EventsClient", () => {
 
   it("keeps desired topics discoverable after an opening failure", async () => {
     fixture.stream.mockRejectedValueOnce(new Error("transport unavailable"));
-    await expect(client.subscribe("panel-tree-updated")).rejects.toThrow("transport unavailable");
+    await expect(client.subscribe("panel-tree-invalidated")).rejects.toThrow(
+      "transport unavailable"
+    );
 
     await client.recover();
     expect(fixture.stream).toHaveBeenCalledTimes(2);
-    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([["panel-tree-updated"], expect.any(String)]);
+    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+      ["panel-tree-invalidated"],
+      expect.any(String),
+    ]);
     await client.unsubscribeAll();
   });
 
   it("reopens desired topics after an unexpected terminal close", async () => {
-    await client.subscribe("panel-tree-updated");
+    await client.subscribe("panel-tree-invalidated");
     fixture.close(0);
 
     await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(2));
-    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([["panel-tree-updated"], expect.any(String)]);
+    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+      ["panel-tree-invalidated"],
+      expect.any(String),
+    ]);
     await client.unsubscribeAll();
   });
 
   it("isolates listener failures without terminating the watch", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const healthy = vi.fn();
-    client.on("panel-tree-updated", () => {
+    client.on("panel-tree-invalidated", () => {
       throw new Error("broken listener");
     });
-    client.on("panel-tree-updated", healthy);
-    await client.subscribe("panel-tree-updated");
+    client.on("panel-tree-invalidated", healthy);
+    await client.subscribe("panel-tree-invalidated");
 
     fixture.emit(0, {
       kind: "event",
-      event: "panel-tree-updated",
+      event: "panel-tree-invalidated",
       payload: { revision: 1 },
       sequence: 1,
     });
     fixture.emit(0, {
       kind: "event",
-      event: "panel-tree-updated",
+      event: "panel-tree-invalidated",
       payload: { revision: 2 },
       sequence: 2,
     });
@@ -266,12 +274,12 @@ describe("EventsClient", () => {
 
   it("deduplicates sequenced broadcast records while draining a replacement", async () => {
     const listener = vi.fn();
-    client.on("panel-tree-updated", listener);
-    await client.subscribe("panel-tree-updated");
+    client.on("panel-tree-invalidated", listener);
+    await client.subscribe("panel-tree-invalidated");
 
     const record = {
       kind: "event" as const,
-      event: "panel-tree-updated" as const,
+      event: "panel-tree-invalidated" as const,
       payload: { revision: 1, forest: [] },
       sequence: 7,
     };
@@ -279,7 +287,7 @@ describe("EventsClient", () => {
     fixture.emit(0, record);
     fixture.emit(0, {
       kind: "snapshot",
-      event: "panel-tree-updated",
+      event: "panel-tree-invalidated",
       payload: { revision: 0, forest: [] },
       sequence: 6,
     });
@@ -290,12 +298,12 @@ describe("EventsClient", () => {
 
   it("accepts a fresh sequence namespace after the event server restarts", async () => {
     const listener = vi.fn();
-    client.on("panel-tree-updated", listener);
-    await client.subscribe("panel-tree-updated");
+    client.on("panel-tree-invalidated", listener);
+    await client.subscribe("panel-tree-invalidated");
 
     fixture.emit(0, {
       kind: "event",
-      event: "panel-tree-updated",
+      event: "panel-tree-invalidated",
       payload: { revision: 10, forest: [] },
       sequence: 10,
     });
@@ -305,13 +313,13 @@ describe("EventsClient", () => {
     await client.recover();
     fixture.emit(1, {
       kind: "snapshot",
-      event: "panel-tree-updated",
+      event: "panel-tree-invalidated",
       payload: { revision: 0, forest: [] },
       sequence: 0,
     });
     fixture.emit(1, {
       kind: "event",
-      event: "panel-tree-updated",
+      event: "panel-tree-invalidated",
       payload: { revision: 1, forest: [] },
       sequence: 1,
     });

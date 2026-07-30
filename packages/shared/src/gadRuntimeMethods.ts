@@ -7,8 +7,6 @@
  * name in this tuple exactly.
  */
 export const GAD_RUNTIME_METHOD_NAMES = [
-  "rawSql",
-  "query",
   "status",
   "ensureBlob",
   "listUserNotificationsForMe",
@@ -16,9 +14,12 @@ export const GAD_RUNTIME_METHOD_NAMES = [
   "putUserNotification",
   "deleteUserNotification",
   "getTrajectoryBranchHead",
+  "listTrajectoryBranches",
+  "listTrajectoryInvocations",
+  "listTrajectoryApprovals",
+  "listChannelEnvelopes",
   "listTrajectoryEvents",
   "appendChannelEnvelope",
-  "appendChannelEnvelopeWithRegistryMutation",
   "listMessageTypes",
   "getMessageType",
   "getChannelEnvelope",

@@ -109,9 +109,10 @@ function appBuild(overrides: Partial<BuildResult> = {}): BuildResult {
       sourcePath: "apps/shell",
       ev: EFFECTIVE_VERSION,
       sourceStateHash: SOURCE_STATE_HASH,
-      sourceSemanticState: { kind: "event", eventId: "event:test" },
+      sourceState: { kind: "event", eventId: "event:test" },
       sourcemap: true,
       authority: {
+        provides: [],
         requests: [
           {
             capability: "service:events.watch",
@@ -162,12 +163,15 @@ describe("app dist bake", () => {
         integrity: "sha256-shell",
         executionDigest: appBuild().metadata.execution?.executionDigest,
         execution: appBuild().metadata.execution,
-        authorityRequests: [
-          {
-            capability: "service:events.watch",
-            resource: { kind: "exact", key: "service:events.watch" },
-          },
-        ],
+        authority: {
+          provides: [],
+          requests: [
+            {
+              capability: "service:events.watch",
+              resource: { kind: "exact", key: "service:events.watch" },
+            },
+          ],
+        },
       },
     });
     expect(manifest.artifacts.map((artifact) => artifact.path)).toEqual([

@@ -16,6 +16,14 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
 
 export const workerLogMethods = defineServiceMethods({
   write: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "observability",
+      family: "workerLog.mutate",
+      rationale:
+        "Open bias: no C1-C4 or G1-G5 rule applies; §2 durable code identity or host approval plumbing",
+    },
     description:
       "Forward one DO console line (level + message, plus optional source) to the server terminal and the workspace-unit log stream.",
     args: z.tuple([

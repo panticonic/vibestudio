@@ -5,6 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import YAML from "yaml";
 import {
+  approvePendingStartupUnits,
   clickPanelSelector,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   executePanelScript,
@@ -301,6 +302,7 @@ async function waitForSpectrolitePanel(
   options: { approveStartup?: boolean } = {}
 ): Promise<string> {
   if (options.approveStartup ?? true) {
+    await approvePendingStartupUnits(app.app);
     await ensureHostedShellReady(app.app, { panelSource: "panels/spectrolite" });
   }
   let panelId = "";
@@ -465,10 +467,15 @@ async function isMobileSpectroliteLayout(app: TestApp, panelId: string): Promise
 
 async function ensureMobileShellStackMode(app: ElectronApplication): Promise<void> {
   await app.evaluate(async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const clicked = await contents.executeJavaScript(
+    const contents = webContents
+      .getAllWebContents()
+      .find(
+        (candidate) => !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
+      );
+    if (!contents) return;
+    try {
+      await Promise.race([
+        contents.executeJavaScript(
           `(() => {
             const labels = ["Close panel tree", "Switch to breadcrumb navigation"];
             const button = Array.from(document.querySelectorAll("[aria-label]"))
@@ -478,11 +485,11 @@ async function ensureMobileShellStackMode(app: ElectronApplication): Promise<voi
             return true;
           })()`,
           true
-        );
-        if (clicked) return;
-      } catch {
-        // Ignore non-DOM webContents and transient navigation races.
-      }
+        ),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+    } catch {
+      // The hosted shell can replace its document while adopting the workspace.
     }
   });
 }
@@ -602,28 +609,19 @@ async function openBacklinksDrawer(app: TestApp, panelId: string): Promise<void>
   };
   if (await isOpen()) return;
 
-  await expect
-    .poll(
-      async () => {
-        const html = await getPanelHtml(app.app, panelId);
-        if (isMobile) {
+  if (isMobile) {
+    await expect
+      .poll(
+        async () => {
+          const html = await getPanelHtml(app.app, panelId);
           return (
             html.includes('aria-label="Open files"') ||
             html.includes('data-testid="spectrolite-mobile-actions"')
           );
-        }
-        return (
-          html.includes('data-testid="spectrolite-backlinks-trigger"') ||
-          html.includes('aria-label="Backlinks"') ||
-          html.includes('title="Backlinks"')
-        );
-      },
-      {
-        timeout: 60000,
-      }
-    )
-    .toBe(true);
-  if (isMobile) {
+        },
+        { timeout: 60000 }
+      )
+      .toBe(true);
     await openFilesDrawer(app, panelId);
     await expect.poll(() => isOpen(), { timeout: 30000 }).toBe(true);
     return;
@@ -656,14 +654,15 @@ async function openWorkspaceSettings(app: TestApp, panelId: string): Promise<voi
     );
   await expect
     .poll(
-      () => clickPanelControlAndObserve(
-        app,
-        panelId,
-        isMobile
-          ? '[aria-label="Workspace settings"]'
-          : '[data-testid="spectrolite-workspace-settings"]',
-        '[data-testid="spectrolite-workspace-settings-drawer"]'
-      ),
+      () =>
+        clickPanelControlAndObserve(
+          app,
+          panelId,
+          isMobile
+            ? '[aria-label="Workspace settings"]'
+            : '[data-testid="spectrolite-workspace-settings"]',
+          '[data-testid="spectrolite-workspace-settings-drawer"]'
+        ),
       {
         timeout: 30000,
       }

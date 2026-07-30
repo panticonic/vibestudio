@@ -8,11 +8,9 @@ import type {
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingDeviceCodeApproval,
-  PendingExternalAgentApproval,
   PendingMissionReviewApproval,
   PendingSecretInputApproval,
   PendingUnitBatchApproval,
-  PendingUserlandApproval,
 } from "./approvals.js";
 import { HOST_APPROVAL_COPY } from "./hostApprovalCopy.js";
 
@@ -199,13 +197,6 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.kind === "secret-input") {
     return HOST_APPROVAL_COPY.categories.privilegedInput;
   }
-  if (approval.kind === "userland") {
-    if (approval.severity === "dangerous") return HOST_APPROVAL_COPY.categories.privilegedAction;
-    return `${userlandCallerKindLabel(approval.callerKind)} request`;
-  }
-  if (approval.kind === "external-agent") {
-    return HOST_APPROVAL_COPY.categories.agentTool;
-  }
   if (approval.kind === "device-code") {
     return HOST_APPROVAL_COPY.categories.deviceSignIn;
   }
@@ -282,7 +273,7 @@ export interface ApprovalActionCopy {
 
 export type StandardApprovalDecision = Extract<
   ApprovalDecision,
-  "once" | "session" | "task" | "agent" | "version" | "deny" | "lock"
+  "once" | "session" | "task" | "mission" | "agent" | "version" | "deny" | "lock"
 >;
 
 export interface StandardApprovalDecisionAction {
@@ -301,6 +292,7 @@ export function getAllowedStandardApprovalDecisions(
         decision === "once" ||
         decision === "session" ||
         decision === "task" ||
+        decision === "mission" ||
         decision === "agent" ||
         decision === "version" ||
         decision === "deny" ||
@@ -329,14 +321,40 @@ export function getStandardApprovalDecisionActions(
 ): StandardApprovalDecisionAction[] {
   const copy = getStandardActionCopy(approval);
   const critical = approval.kind === "capability" && approval.cardType === "confirm.critical";
+  const templateActions =
+    approval.kind === "capability" && approval.cardType?.startsWith("template.")
+      ? {
+          once:
+            approval.cardType === "template.add"
+              ? "Add template"
+              : approval.cardType === "template.update"
+                ? "Update"
+                : approval.cardType === "template.remove"
+                  ? "Remove"
+                  : "Send suggestion",
+          deny:
+            approval.cardType === "template.add" || approval.cardType === "template.update"
+              ? "Not now"
+              : "Cancel",
+        }
+      : null;
   const agentName = approvalAgentName(approval);
   const candidates: StandardApprovalDecisionAction[] = [
-    { decision: "once", ...copy.once },
+    {
+      decision: "once",
+      ...copy.once,
+      ...(templateActions ? { label: templateActions.once } : {}),
+    },
     ...(copy.session ? [{ decision: "session" as const, ...copy.session }] : []),
     {
       decision: "task",
       label: "Allow for this task",
       description: "Allow while the agent works on this task.",
+    },
+    {
+      decision: "mission",
+      label: "Allow for this mission",
+      description: "Allow until this reviewed automation changes or ends.",
     },
     {
       decision: "agent",
@@ -346,7 +364,7 @@ export function getStandardApprovalDecisionActions(
     ...(copy.version ? [{ decision: "version" as const, ...copy.version }] : []),
     {
       decision: "deny",
-      label: critical ? "Cancel" : "Don't allow",
+      label: templateActions?.deny ?? (critical ? "Cancel" : "Don't allow"),
       description: copy.denyDescription,
     },
     {
@@ -682,13 +700,6 @@ export interface ApprovalAttribution {
 }
 
 export function getApprovalAttribution(approval: PendingApproval): ApprovalAttribution {
-  if (approval.kind === "userland") {
-    const issuer = approval.issuer;
-    if (issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId)) {
-      return { relation: "for", target: issuer.label ?? prettifyApprovalId(issuer.id) };
-    }
-    return {};
-  }
   if (approval.kind === "credential") {
     // git + non-oauth use: the headline names the destination, so the chip
     // names the credential identity in play. OAuth connect headlines already
@@ -748,10 +759,6 @@ export function getApprovalCopy(approval: PendingApproval): {
         summary: approval.description ?? HOST_APPROVAL_COPY.headlines.secretInputFallback,
         warning: approval.warning,
       };
-    case "userland":
-      return getUserlandCopy(approval);
-    case "external-agent":
-      return getExternalAgentCopy(approval);
     case "device-code":
       return HOST_APPROVAL_COPY.headlines.deviceSignIn(
         approval.credentialLabel,
@@ -806,20 +813,6 @@ function getUnitBatchCopy(approval: PendingUnitBatchApproval) {
     summary: concreteBatchCopy(approval.description, fallbackSummary),
     ...(count > 0 ? { warning: unitBatchWarning(approval) } : {}),
   };
-}
-
-function getUserlandCopy(approval: PendingUserlandApproval) {
-  const subjectName = approval.subject.label ?? approval.subject.id;
-  return {
-    title: approval.title,
-    summary: approval.summary ?? `Decision about ${subjectName}.`,
-    warning: approval.warning,
-  };
-}
-
-function getExternalAgentCopy(approval: PendingExternalAgentApproval) {
-  const fallback = HOST_APPROVAL_COPY.headlines.externalAgent(approval.operationName);
-  return { title: fallback.title, summary: approval.description ?? fallback.summary };
 }
 
 type ApprovalCopyResult = { title: string; summary: string; warning?: string };
@@ -965,12 +958,6 @@ function getCredentialCopy(approval: PendingCredentialApproval): ApprovalCopyRes
 function concreteBatchCopy(value: string | undefined, fallback: string): string {
   const candidate = value?.trim();
   return candidate && !/\bunits?\b/iu.test(candidate) ? candidate : fallback;
-}
-
-function userlandCallerKindLabel(
-  kind: "panel" | "app" | "worker" | "do" | "extension" | "system"
-): string {
-  return callerKindToLabel(kind);
 }
 
 const CALLER_KIND_TO_CATEGORY: Record<string, keyof typeof HOST_APPROVAL_COPY.requesterCategories> = {

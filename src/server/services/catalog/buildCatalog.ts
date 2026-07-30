@@ -14,15 +14,12 @@ import type { AuthorityRequirement, PrincipalKind } from "@vibestudio/rpc";
 import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { CatalogEntry } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
-import { methodTier } from "@vibestudio/shared/authority/tierTable";
-import type { MethodTierDecision } from "@vibestudio/shared/authority/tierTable";
 import { resolveMethodTierPolicy } from "@vibestudio/shared/serviceAuthority";
 
 export interface BuildCatalogDeps {
   definitions: ServiceDefinition[];
   runtimeSurfaces?: { panel?: RuntimeSurface; workerRuntime?: RuntimeSurface };
   workspaceCapabilities?: readonly WorkspaceCapabilityCatalogEntry[];
-  tierLookup?: (method: string) => MethodTierDecision | null;
 }
 
 export interface WorkspaceCapabilityCatalogEntry {
@@ -71,11 +68,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
     });
     for (const [methodName, method] of agentFacingMethods) {
       const qualifiedMethod = `${def.name}.${methodName}`;
-      const reviewedTier = resolveMethodTierPolicy(
-        qualifiedMethod,
-        method.tier,
-        (deps.tierLookup ?? methodTier)(qualifiedMethod)
-      );
+      const reviewedTier = resolveMethodTierPolicy(qualifiedMethod, method.tier, null);
       const ser = serializeMethod(method);
       const principals = authorityPrincipals(method, def);
       const access = {
@@ -250,11 +243,7 @@ function runtimeMethodAccess(
   callers: CallerKind[]
 ): Record<string, unknown> {
   const qualifiedMethod = `${definition.name}.${methodName}`;
-  const reviewedTier = resolveMethodTierPolicy(
-    qualifiedMethod,
-    method.tier,
-    (deps.tierLookup ?? methodTier)(qualifiedMethod)
-  );
+  const reviewedTier = resolveMethodTierPolicy(qualifiedMethod, method.tier, null);
   return {
     ...(method.access ?? {}),
     principals: authorityPrincipals(method, definition),

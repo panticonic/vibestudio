@@ -46,7 +46,3 @@ export function browserEnvironmentIdentityFromContext(
 ): BrowserEnvironmentIdentity {
   return browserEnvironmentIdentity(workspaceId, verifiedInitiator(ctx));
 }
-
-export function isBrowserDataDurableObject(source: string, className: string): boolean {
-  return source === "vibestudio/internal" && className === "BrowserDataDO";
-}

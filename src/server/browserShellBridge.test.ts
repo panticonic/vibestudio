@@ -83,9 +83,9 @@ describe("installFallbackShellBridge", () => {
       const request = envelope.message;
       const method = request.method;
       const result =
-        method === "panelTree.metadata"
-          ? { id: "panel:tree/slot-a", title: "Slot A" }
-          : { panelId: "panel:tree/slot-b", status: "focused" };
+        method === "workspace-state.panelTree.detail"
+          ? null
+          : { panelId: "panel:tree/slot-b", status: "focused", focused: true, loaded: true };
       queueMicrotask(() => {
         for (const handler of handlers) {
           handler({
@@ -116,18 +116,17 @@ describe("installFallbackShellBridge", () => {
       },
     } as BrowserShellBridgeGlobals);
 
-    await expect(shell?.getInfo?.()).resolves.toEqual({
-      id: "panel:tree/slot-a",
-      title: "Slot A",
-    });
+    await expect(shell?.getInfo?.()).resolves.toBeNull();
     await expect(shell?.focusPanel?.("panel:tree/slot-b")).resolves.toEqual({
       panelId: "panel:tree/slot-b",
       status: "focused",
+      focused: true,
+      loaded: true,
     });
     expect(mocks.send).toHaveBeenCalledWith(
       expect.objectContaining({
         target: "main",
-        message: expect.objectContaining({ method: "panelTree.metadata" }),
+        message: expect.objectContaining({ method: "workspace-state.panelTree.detail" }),
       }),
       undefined
     );
@@ -135,8 +134,8 @@ describe("installFallbackShellBridge", () => {
       expect.objectContaining({
         target: "main",
         message: expect.objectContaining({
-          method: "panelTree.focus",
-          args: ["panel:tree/slot-b"],
+          method: "view.focusPanel",
+          args: ["panel:tree/slot-b", {}],
         }),
       }),
       undefined

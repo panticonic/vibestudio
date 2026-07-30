@@ -1,6 +1,6 @@
 /**
  * Runtime-neutral worktree content addressing. Host projections, blobstore
- * trees, agentic code, and the sealed semantic control plane all execute this
+ * trees, agentic code, and the manifest-declared workspace source provider all execute this
  * one implementation.
  *
  * Pure synchronous JavaScript SHA-256 is intentional: workerd has no

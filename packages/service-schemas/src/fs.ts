@@ -132,6 +132,14 @@ export type FsGrepResult = z.infer<typeof grepResultSchema>;
 export const fsMethods = defineServiceMethods({
   // File content
   readFile: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Read a file's contents. Managed workspace files are resolved through the semantic authority at the context's exact working head, so projected disk bytes are never treated as authoritative; scratch paths read directly from the context filesystem. Overloaded: with an encoding string (or Node-style `{ encoding: \"utf8\" }`) the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.)",
     args: z.union([
@@ -147,6 +155,14 @@ export const fsMethods = defineServiceMethods({
     ],
   },
   writeFile: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.mutate",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. Managed workspace files are recorded as semantic VCS operations before the accepted working head is projected; platform-excluded paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
     args: z.union([
@@ -161,6 +177,14 @@ export const fsMethods = defineServiceMethods({
     ],
   },
   appendFile: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. Managed workspace files are recorded as attributed semantic VCS operations before projection; platform-excluded paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope.",
     args: z.union([
@@ -173,6 +197,14 @@ export const fsMethods = defineServiceMethods({
   },
   // Directories
   readdir: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "List the entries of a directory; returns bare name strings, or Dirent-shaped objects with type flags when `withFileTypes` is set, optionally recursing into subdirectories.",
     args: z.union([
@@ -184,6 +216,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/"] }, { args: ["/src", { withFileTypes: true, recursive: true }] }],
   },
   mkdir: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Create a scratch directory directly on the context filesystem. Managed workspace paths reject mkdir because empty directories have no semantic fact; author a file instead and its parent directories are implicit. With `recursive`, scratch mkdir creates missing parents and returns the first-created path relative to the context root; otherwise it returns undefined.",
     args: z.union([
@@ -195,6 +235,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/.tmp/a/b/c", { recursive: true }] }],
   },
   rmdir: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Remove a directory. The semantic workspace records a managed subtree removal atomically before projection; a scratch directory is removed directly and throws if it is not empty.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
@@ -202,6 +250,14 @@ export const fsMethods = defineServiceMethods({
     access: DESTRUCTIVE_ACCESS,
   },
   rm: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths. The semantic workspace records managed removals atomically before projection; scratch paths are removed directly.",
     args: z.union([
@@ -214,6 +270,14 @@ export const fsMethods = defineServiceMethods({
   },
   // Stat / metadata
   stat: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Return metadata (type flags, size, mtime/ctime, mode) for a path, following symlinks to their target.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
@@ -221,6 +285,14 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   lstat: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Like stat, but reports on the symlink itself rather than following it to its target.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
@@ -228,12 +300,28 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   exists: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Return whether a path exists and is accessible to the caller.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
     returns: z.boolean(),
     access: READ_ACCESS,
   },
   access: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Test a path's accessibility against the given fs.constants mode bits; resolves on success, throws on failure.",
     args: z.union([
@@ -245,6 +333,14 @@ export const fsMethods = defineServiceMethods({
   },
   // File manipulation
   unlink: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Delete a single file (not a directory). The semantic workspace records a managed deletion before projection; a scratch path is deleted directly.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
@@ -252,6 +348,14 @@ export const fsMethods = defineServiceMethods({
     access: DESTRUCTIVE_ACCESS,
   },
   copyFile: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Copy a file between context-root-relative paths. Managed destinations must be vacant: managed-to-managed copies mint a distinct file identity with exact copy provenance, while scratch-to-managed copies author an ordinary file creation caused by this copy invocation. Scratch content has no earlier semantic origin to preserve. Scratch destinations retain ordinary filesystem overwrite semantics. A platform-excluded destination or one outside reserved workspace source roots stays context-local scratch. Routed destinations under reserved roots must use canonical casing and valid repo shape.",
     args: z.union([
@@ -263,6 +367,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: [".tmp/a.txt", ".tmp/b.txt"] }],
   },
   rename: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Move or rename a context-root-relative file or directory. Scratch-to-scratch renames are direct. The semantic workspace records managed-to-managed moves before projection and preserves stable file identity. Generic scratch-to-managed rename is refused because a path cannot prove new-import versus trusted atomic-replacement intent; use `copyFile` for a vacant managed import or an explicit managed write/edit for replacement, and the refused rename leaves the scratch source intact. Moving a tracked managed path out to scratch is also refused. Routed endpoints under reserved workspace source roots must use canonical casing and valid repo shape.",
     args: z.union([
@@ -277,6 +389,14 @@ export const fsMethods = defineServiceMethods({
     ],
   },
   realpath: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Resolve a path to its canonical form, returning it relative to the context root (sandboxed callers) or as an absolute host path (unrestricted callers).",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
@@ -284,6 +404,14 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   ensureMaterialized: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Materialize the given workspace path(s)/repo(s) (or 'all') into the context working folder. Context folders are SPARSE — only what is materialized exists on disk — so call this for the narrowest scope you need (a repo path like 'panels/chat', a section like 'panels', or specific paths) before reading them OUTSIDE the fs.* API (e.g. a grep/find subprocess). fs.* reads materialize on demand automatically.",
     args: z.tuple([z.union([z.string(), z.array(z.string()), z.literal("all")])]),
@@ -291,6 +419,14 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   truncate: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Truncate (or zero-extend) a file to the given byte length (default 0). The semantic workspace records a managed file update before projection; a scratch file is changed directly.",
     args: z.union([
@@ -302,6 +438,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/logs/run.log", 0] }],
   },
   readlink: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Read a symlink's target; absolute targets are relativized to the context root to avoid leaking host paths.",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
@@ -309,6 +453,14 @@ export const fsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   symlink: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Create a symbolic link inside context-local scratch. Both the link and its resolved target must remain inside the caller's context root; absolute-looking targets are interpreted relative to that virtual root and stored as contained relative targets. Managed workspace link paths are rejected because the semantic file manifest does not represent symlink entries.",
     args: z.union([
@@ -320,6 +472,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/.tmp/target.txt", "/.tmp/target-link.txt", "file"] }],
   },
   chmod: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Change a path's Unix permission bits (mode). The semantic workspace records a managed file mode change before projection; a scratch path is changed directly.",
     args: z.union([
@@ -331,6 +491,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/run.sh", 493] }],
   },
   utimes: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Set a path's access and modification timestamps (seconds since the epoch) directly on the context filesystem projection; timestamps carry no semantic workspace fact.",
     args: z.union([
@@ -342,6 +510,14 @@ export const fsMethods = defineServiceMethods({
   },
   // Search
   grep: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Search file contents under the context root for a regex pattern (the first argument), returning matching lines with optional context; uses ripgrep when available with a pure-JS fallback, skipping .git, node_modules, symlinks, and binary files.",
     args: z.union([
@@ -353,6 +529,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["TODO", { glob: "*.ts", contextLines: 2 }] }],
   },
   glob: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Find files whose path matches a glob pattern (the first argument) under the context root, returned newest-first by mtime; skips .git, node_modules, and symlinks.",
     args: z.union([
@@ -365,6 +549,14 @@ export const fsMethods = defineServiceMethods({
   },
   // File handles
   open: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.create",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose calls; handles are caller-scoped and auto-close after 5 minutes idle. For context-bound callers, write-capable flags are supported for scratch paths only and are rejected for GAD-tracked workspace-repo paths.",
     args: z.union([
@@ -380,6 +572,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: ["/data.bin", "r"] }],
   },
   handleRead: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Read up to `length` bytes from an open handle at the given position (null reads from the current offset), returning the bytes base64-encoded plus the count actually read.",
     args: z.union([
@@ -394,6 +594,14 @@ export const fsMethods = defineServiceMethods({
     examples: [{ args: [1, 4096, null] }],
   },
   handleWrite: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Write data (UTF-8 string or base64 binary envelope) to a write-capable handle at the given position (null uses the current offset), returning the byte count written. Context-bound callers cannot open GAD-tracked workspace-repo paths with write-capable flags, so their handle writes are scratch-only.",
     args: z.union([
@@ -404,6 +612,14 @@ export const fsMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   handleClose: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Close an open file handle and release its server-side resources; a no-op if the handle is already gone.",
     args: z.union([z.tuple([z.number()]), z.tuple([z.string(), z.number()])]),
@@ -413,6 +629,14 @@ export const fsMethods = defineServiceMethods({
     },
   },
   handleStat: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Return metadata (type flags, size, mtime/ctime, mode) for the file behind an open handle.",
     args: z.union([z.tuple([z.number()]), z.tuple([z.string(), z.number()])]),
@@ -421,6 +645,14 @@ export const fsMethods = defineServiceMethods({
   },
   // Tmp files
   mktemp: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Create the context's `.tmp/` directory if needed and return a fresh, unused root-relative scratch path under it (preferred for write-to-temp-then-rename patterns). The file itself is not created, the prefix is sanitized, and the path is not a tracked edit/VCS destination.",
     args: z.union([z.tuple([z.string().optional()]), z.tuple([z.string(), z.string().optional()])]),

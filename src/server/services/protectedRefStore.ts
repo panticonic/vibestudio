@@ -166,8 +166,6 @@ export function isRefConflictError(error: unknown): error is RefBatchConflictErr
 
 const REF_VALUE_RE = /^state:[0-9a-f]{64}$/;
 const STORE_VERSION = 6;
-/** Historical discriminator of the only production v5 shape. */
-const V5_WORKSPACE_SYSTEM_EPOCH = 56;
 const STORE_FILE_NAME = "protected-publication-state.json";
 const BASIS_DIGEST_RE = /^protected-ref-basis:[0-9a-f]{64}$/;
 
@@ -182,16 +180,6 @@ const PROTECTED_REF_STORE_CODEC: VersionedJsonCodec<StoredRefStore> = {
   schemaName: "Protected-main store",
   versionKey: "version",
   currentVersion: STORE_VERSION,
-  migrations: [
-    {
-      version: 6,
-      name: "decouple-protected-refs-from-workspace-system-epoch",
-      migrate(value) {
-        const v5 = decodeStoredRefStore(value, 5, V5_WORKSPACE_SYSTEM_EPOCH);
-        return encodeStoredRefStore(v5);
-      },
-    },
-  ],
   decodeCurrent: (value) => decodeStoredRefStore(value, 6),
   encode: encodeStoredRefStore,
 };

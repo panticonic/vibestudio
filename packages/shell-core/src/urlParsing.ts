@@ -14,7 +14,6 @@ export interface ParsedPanelUrl extends PanelLocation {
   options: {
     title?: string;
     slug?: string;
-    name?: string;
     contextId?: string;
     focus?: boolean;
     ref?: string;
@@ -163,7 +162,6 @@ export function parsePanelUrl(
   const ref = parsed.queryParams.get("ref");
   const title = parsed.queryParams.get("title");
   const slug = parsed.queryParams.get("slug");
-  const name = parsed.queryParams.get("name");
   const focus = parsed.queryParams.get("focus");
   if (focus !== undefined && focus !== "true" && focus !== "false") return null;
   const disposition = parsed.queryParams.get("disposition");
@@ -227,7 +225,6 @@ export function parsePanelUrl(
     ...(stateArgs !== undefined ? { stateArgs } : {}),
     ...(title !== undefined ? { title } : {}),
     ...(slug !== undefined ? { slug } : {}),
-    ...(name !== undefined ? { name } : {}),
     ...(focus !== undefined ? { focus: focus === "true" } : {}),
     ...(disposition !== undefined ? { disposition: disposition as PanelDisposition } : {}),
     ...(placement !== undefined ? { placement } : {}),
@@ -236,7 +233,6 @@ export function parsePanelUrl(
       ref: ref ?? undefined,
       title: title ?? undefined,
       slug: slug ?? undefined,
-      name: name ?? undefined,
       focus: focus !== undefined ? focus === "true" : undefined,
     },
   };

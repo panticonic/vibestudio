@@ -37,6 +37,7 @@ import {
   RPC_WEBSOCKET_MAX_PAYLOAD_BYTES,
 } from "./ingressLimits.js";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 
 describe("RPC WebSocket admission resolution deadline", () => {
   afterEach(() => vi.useRealTimers());
@@ -94,7 +95,7 @@ function makeRecord(
     ...(opts?.activeAuthority
       ? { activeAuthority: opts.activeAuthority }
       : executable
-        ? { activeAuthority: { requests: [] } }
+        ? { activeAuthority: { requests: [], provides: [] } }
         : {}),
     key: id,
     createdAt: Date.now(),
@@ -132,10 +133,13 @@ type TestRpcServer = {
     receiverRuntimeId: string,
     authorization: import("@vibestudio/rpc/internal").DirectAuthorityAttestation
   ): () => void;
-  testPolicyFromAuthorityParent(
+  authorityParentFor(
     callerRuntimeId: string,
     authorityParentNonce: string | undefined
-  ): import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
+  ): {
+    testPolicy: import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
+    requested: readonly import("@vibestudio/rpc").CapabilityScope[] | null;
+  } | null;
   connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
   reconnectWaiters: Map<
     string,
@@ -1365,7 +1369,7 @@ describe("RpcServer relay behavior", () => {
 
   it("projects the host-verified account subject into DO caller attribution", async () => {
     const { server, entityCache } = createServer();
-    const targetId = "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane";
+    const targetId = "do:workers/workspace-source:GadWorkspaceDO:workspace";
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
@@ -2041,6 +2045,7 @@ describe("RpcServer relay behavior", () => {
         effectiveVersion: "ev-chat",
         activeExecutionDigest: "a".repeat(64),
         activeAuthority: {
+          provides: [],
           requests: [
             {
               capability: "rpc:subscribe",
@@ -2119,7 +2124,11 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           capability: "workspace-service:channel",
-          methodEffect: { kind: "semantic", capability: "channel.members.remove" },
+          methodEffect: {
+            kind: "userland-capability",
+            capability: "channel.members.remove",
+            resource: { kind: "receiver-object" },
+          },
           methodCapability: "channel.members.remove",
           methodTier: "critical",
           principals: ["code"],
@@ -2183,13 +2192,98 @@ describe("RpcServer relay behavior", () => {
     );
   });
 
+  it("enforces a builtin method's catalog-declared prepared context boundary", async () => {
+    const request = vi.fn(() => ({
+      acquisitionId: "acq:context-boundary",
+      ownerRuntimeId: "panel:nav-a",
+      snapshotDigest: "d".repeat(64),
+      capability: "context.boundary",
+      resourceKey: "context/ctx-b/requester/panel%3Anav-a",
+      tier: "gated" as const,
+      cardType: "permission.gated" as const,
+      renderedAction: "Move panel in",
+      pending: true,
+    }));
+    const resolveProductBuiltinPreparedAuthority = vi.fn(() => [
+      fixedPreparedAuthoritySelection({
+        capability: "context.boundary",
+        resourceKey: "context/ctx-b/requester/panel%3Anav-a",
+        challenge: {
+          title: "Move panel in another context",
+          description: "Move the panel in another existing workspace branch.",
+          deniedReason: "Moving the panel was denied",
+          resource: { type: "context", label: "Workspace branch", value: "ctx-b" },
+          operation: {
+            kind: "panel",
+            verb: "Move panel in",
+            object: { type: "context", label: "Workspace branch", value: "ctx-b" },
+          },
+        },
+      }),
+    ]);
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [],
+      resolveProductBuiltinPreparedAuthority,
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const caller = createVerifiedCaller("panel:nav-a", "panel", {
+      callerId: "panel:nav-a",
+      callerKind: "panel",
+      repoPath: "panels/chat",
+      effectiveVersion: "ev-chat",
+      executionDigest: "a".repeat(64),
+      requested: [
+        { capability: "context.boundary", resource: { kind: "prefix", prefix: "context/" } },
+      ],
+    });
+    delete caller.codeApproved;
+
+    await expect(
+      testServer(server).directDOAuthorization({
+        caller,
+        ref: {
+          source: "vibestudio/internal",
+          className: "WorkspaceDO",
+          objectKey: "workspace",
+        },
+        method: "slotMove",
+        args: ["slot-a", "slot-b"],
+      })
+    ).rejects.toMatchObject({ code: "EACQUIRE" });
+    expect(resolveProductBuiltinPreparedAuthority).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "vibestudio/internal",
+        className: "WorkspaceDO",
+        method: "slotMove",
+        contextBoundary: { operation: "movePanel", targetArgument: 0 },
+      })
+    );
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caller,
+        renderedAction: "Move panel in",
+        presentation: expect.objectContaining({ title: "Move panel in another context" }),
+        resource: { kind: "exact", key: "context/ctx-b/requester/panel%3Anav-a" },
+        snapshot: expect.objectContaining({
+          capability: "context.boundary",
+          resourceKey: "context/ctx-b/requester/panel%3Anav-a",
+        }),
+      })
+    );
+  });
+
   it("returns a manifest remediation instead of prompting for unrequested direct authority", async () => {
     const request = vi.fn();
     const { server } = createServer({
       resolveWorkspaceDirectAuthority: async () => [
         {
           capability: "workspace-service:channel",
-          methodEffect: { kind: "workspace-service" },
+          methodEffect: { kind: "open" },
           methodCapability: "workspace-service:channel",
           methodTier: "open",
           principals: ["code"],
@@ -2256,7 +2350,7 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           capability: "workspace-service:probe",
-          methodEffect: { kind: "runtime-intrinsic" },
+          methodEffect: { kind: "open" },
           methodTier: "open",
           principals: ["code"],
           presentation: { domain: "automation", verb: "act" },
@@ -2290,7 +2384,7 @@ describe("RpcServer relay behavior", () => {
     });
 
     expect(attestation).toMatchObject({
-      effect: { kind: "runtime-intrinsic" },
+      effect: { kind: "open" },
       capability: "workspace-service:probe",
       targetCapability: "workspace-service:probe",
     });
@@ -2312,7 +2406,7 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           capability: "workspace-service:channel",
-          methodEffect: { kind: "workspace-service" },
+          methodEffect: { kind: "open" },
           methodCapability: "workspace-service:channel",
           methodTier: "open",
           principals: ["code"],
@@ -2380,7 +2474,7 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           capability: "workspace-service:models",
-          methodEffect: { kind: "workspace-service" },
+          methodEffect: { kind: "open" },
           methodTier: "open",
           principals: ["session"],
           presentation: { domain: "automation", verb: "manage" },
@@ -2433,7 +2527,7 @@ describe("RpcServer relay behavior", () => {
           runId: "doctor",
           authorityManifest: {
             mode: "adaptive",
-            effects: "mutable",
+            effects: "read-write",
             approvals: "prompt",
             requests: [],
             digest: "0".repeat(64),
@@ -2482,7 +2576,7 @@ describe("RpcServer relay behavior", () => {
       ownerRuntimeId: "do:workers/pubsub-channel:PubSubChannel:headless-test",
       snapshotDigest: "d".repeat(64),
       capability: "workspace-service:gad.workspace",
-      resourceKey: "do:workers/gad-workspace:GadWorkspaceDO:workspace",
+      resourceKey: "do:workers/workspace-source:GadWorkspaceDO:workspace",
       tier: "gated" as const,
       cardType: "permission.gated" as const,
       renderedAction: "use workspace history",
@@ -2497,13 +2591,13 @@ describe("RpcServer relay behavior", () => {
       resolveWorkspaceDirectAuthority: async () => [
         {
           capability: "workspace-service:gad.workspace",
-          methodEffect: { kind: "workspace-service" },
+          methodEffect: { kind: "open" },
           methodTier: "open",
           principals: ["code"],
           presentation: { domain: "automation", verb: "act" },
           title: "Workspace history",
           action: "use workspace history",
-          declaredBy: "workers/gad-workspace",
+          declaredBy: "workers/workspace-source",
         },
       ],
       directAuthorityAcquirer: {
@@ -2520,6 +2614,7 @@ describe("RpcServer relay behavior", () => {
         repoPath: "workers/pubsub-channel",
         activeExecutionDigest: "b".repeat(64),
         activeAuthority: {
+          provides: [],
           requests: [
             {
               capability: "workspace-service:gad.workspace",
@@ -2539,7 +2634,7 @@ describe("RpcServer relay behavior", () => {
       testServer(server).directDOAuthorization({
         caller,
         ref: {
-          source: "workers/gad-workspace",
+          source: "workers/workspace-source",
           className: "GadWorkspaceDO",
           objectKey: "workspace",
         },
@@ -2556,6 +2651,49 @@ describe("RpcServer relay behavior", () => {
         }),
       })
     );
+  });
+
+  it("admits hidden builtin test seams only for an attested system-test harness", async () => {
+    const capability = "service:development.faultFailBuildAfterSnapshotRetained";
+    const caller = createVerifiedCaller(
+      "do:vibestudio/internal:EvalDO:test-development-fault",
+      "do",
+      {
+        callerId: "do:vibestudio/internal:EvalDO:test-development-fault",
+        callerKind: "do",
+        repoPath: "workers/system-test-runner",
+        effectiveVersion: "ev-runner",
+        executionDigest: "c".repeat(64),
+        requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
+      }
+    );
+    const ref = {
+      source: "vibestudio/internal",
+      className: "DevelopmentDO",
+      objectKey: "workspace",
+    };
+    const invocation = {
+      caller,
+      ref,
+      method: "faultFailBuildAfterSnapshotRetained",
+      args: [
+        {
+          sessionId: "session:test",
+          runId: "run:test",
+          phase: "after-snapshot-retained",
+        },
+      ],
+    } as const;
+
+    const denied = createServer({ isAttestedSystemTestHarness: () => false }).server;
+    await expect(testServer(denied).directDOAuthorization(invocation)).rejects.toMatchObject({
+      code: "EACCES",
+    });
+
+    const admitted = createServer({ isAttestedSystemTestHarness: () => true }).server;
+    await expect(testServer(admitted).directDOAuthorization(invocation)).resolves.toMatchObject({
+      capability,
+    });
   });
 
   it("attributes only explicitly marked EvalDO effects to the admitted execution", () => {
@@ -2581,7 +2719,7 @@ describe("RpcServer relay behavior", () => {
         runId: "run:session-boundary",
         authorityManifest: {
           mode: "adaptive",
-          effects: "mutable",
+          effects: "read-write",
           approvals: "prompt",
           requests: [],
           digest: "0".repeat(64),
@@ -2643,7 +2781,7 @@ describe("RpcServer relay behavior", () => {
         contextId: "ctx:test-receiver",
         repoPath: "workers/pubsub-channel",
         activeExecutionDigest: "b".repeat(64),
-        activeAuthority: { requests: [] },
+        activeAuthority: { requests: [], provides: [] },
       })
     );
     const policy = {
@@ -2656,27 +2794,64 @@ describe("RpcServer relay behavior", () => {
       context: { testPolicy: policy },
     } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
 
-    expect(testServer(server).testPolicyFromAuthorityParent(receiver, nonce)).toEqual(policy);
+    expect(testServer(server).authorityParentFor(receiver, nonce)?.testPolicy).toEqual(policy);
     expect(() =>
-      testServer(server).testPolicyFromAuthorityParent(
-        "do:workers/other:OtherDO:headless-test",
-        nonce
-      )
+      testServer(server).authorityParentFor("do:workers/other:OtherDO:headless-test", nonce)
     ).toThrow(/another runtime/);
     const caller = testServer(server).verifiedCallerFor(
       receiver,
       "do",
       undefined,
       undefined,
-      testServer(server).testPolicyFromAuthorityParent(receiver, nonce)
+      testServer(server).authorityParentFor(receiver, nonce)?.testPolicy
     );
     expect(caller.executionSession).toBeUndefined();
     expect(caller.testPolicy).toEqual(policy);
 
     release();
-    expect(() => testServer(server).testPolicyFromAuthorityParent(receiver, nonce)).toThrow(
-      /not active/
-    );
+    expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(/not active/);
+  });
+
+  it("binds a builtin's outbound request ceiling to the exact active method", () => {
+    const { server } = createServer();
+    const receiver = "do:vibestudio/internal:EvalDO:owner";
+
+    const admittedNonce = "host-minted-eval-execute-run-nonce";
+    const releaseAdmitted = testServer(server).beginAuthorityParent(receiver, {
+      nonce: admittedNonce,
+      method: "executeRun",
+      context: {},
+    } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
+    expect(testServer(server).authorityParentFor(receiver, admittedNonce)?.requested).toEqual([
+      {
+        capability: "external.open",
+        resource: { kind: "prefix", prefix: "" },
+      },
+    ]);
+    releaseAdmitted();
+
+    const deniedNonce = "host-minted-eval-inspection-nonce";
+    const releaseDenied = testServer(server).beginAuthorityParent(receiver, {
+      nonce: deniedNonce,
+      method: "listRetainedExecutionRoots",
+      context: {},
+    } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
+    expect(testServer(server).authorityParentFor(receiver, deniedNonce)?.requested).toEqual([]);
+    releaseDenied();
+  });
+
+  it("does not inherit builtin requests for a userland class-name collision", () => {
+    const { server } = createServer();
+    const receiver = "do:workers/untrusted:EvalDO:owner";
+    const nonce = "host-minted-userland-eval-collision-nonce";
+    const release = testServer(server).beginAuthorityParent(receiver, {
+      nonce,
+      method: "executeRun",
+      context: {},
+    } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
+
+    expect(testServer(server).authorityParentFor(receiver, nonce)?.requested).toBeNull();
+    release();
   });
 
   it("keeps a receiver's exact case policy when its orchestrator invokes it", () => {
@@ -2696,7 +2871,6 @@ describe("RpcServer relay behavior", () => {
           fallback: "disabled",
         },
         authority: [],
-        userland: [],
         unexpectedPrompts: "fail",
       },
     };
@@ -2709,7 +2883,7 @@ describe("RpcServer relay behavior", () => {
         contextId: "ctx:test-case",
         repoPath: "workers/pubsub-channel",
         activeExecutionDigest: "b".repeat(64),
-        activeAuthority: { requests: [] },
+        activeAuthority: { requests: [], provides: [] },
       })
     );
     const nonce = "host-minted-direct-authority-case-nonce";
@@ -2718,14 +2892,14 @@ describe("RpcServer relay behavior", () => {
       context: { testPolicy: orchestrator },
     } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
 
-    expect(testServer(server).testPolicyFromAuthorityParent(receiver, nonce)).toBe(casePolicy);
+    expect(testServer(server).authorityParentFor(receiver, nonce)?.testPolicy).toBe(casePolicy);
     expect(
       testServer(server).verifiedCallerFor(
         receiver,
         "do",
         undefined,
         undefined,
-        testServer(server).testPolicyFromAuthorityParent(receiver, nonce)
+        testServer(server).authorityParentFor(receiver, nonce)?.testPolicy
       ).testPolicy
     ).toBe(casePolicy);
     release();
@@ -2748,7 +2922,6 @@ describe("RpcServer relay behavior", () => {
           fallback: "disabled",
         },
         authority: [],
-        userland: [],
         unexpectedPrompts: "fail",
       },
     });
@@ -2761,7 +2934,7 @@ describe("RpcServer relay behavior", () => {
         contextId: "ctx:system-test-orchestrator",
         repoPath: "workers/pubsub-channel",
         activeExecutionDigest: "b".repeat(64),
-        activeAuthority: { requests: [] },
+        activeAuthority: { requests: [], provides: [] },
       })
     );
 
@@ -2771,7 +2944,7 @@ describe("RpcServer relay behavior", () => {
         nonce,
         context: { testPolicy: policy },
       } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
-      expect(testServer(server).testPolicyFromAuthorityParent(receiver, nonce)).toBe(policy);
+      expect(testServer(server).authorityParentFor(receiver, nonce)?.testPolicy).toBe(policy);
       release();
     }
 
@@ -2780,7 +2953,7 @@ describe("RpcServer relay behavior", () => {
 
   it("keeps an agent binding as a relationship fact rather than inventing a session origin", async () => {
     const mission = {
-      missionId: "mission-local-model",
+      subject: "mission:mission-local-model@closure-1" as const,
       closureDigest: "closure-1",
       harness: { unit: "workers/agent-worker", ev: "ev-agent" },
     };
@@ -2790,7 +2963,8 @@ describe("RpcServer relay behavior", () => {
       externalKeys: ["web:models.example"],
     };
     const { server, entityCache } = createServer({
-      missionFactForSession: (sessionId) => (sessionId === "channel-stable" ? mission : null),
+      reviewedClosureFactForSession: (sessionId) =>
+        sessionId === "channel-stable" ? mission : null,
       contextIntegrityFactForSession: (sessionId) => {
         expect(sessionId).toBe("channel-stable");
         return contextIntegrity;
@@ -2828,7 +3002,7 @@ describe("RpcServer relay behavior", () => {
     const relayed = JSON.parse(String((init as RequestInit).body)) as RpcEnvelope;
     expect((relayed.delivery.caller as AttestedCaller).authorization?.context).toMatchObject({
       authorizingOrigin: { kind: "user", principal: "user:user-1" },
-      session: { id: "channel-stable", mission },
+      session: { id: "channel-stable", reviewedClosure: mission },
       contextIntegrity,
     });
   });
@@ -3080,6 +3254,7 @@ describe("RpcServer caller identity", () => {
         repoPath: "workers/review-me",
         effectiveVersion: "ev-review-me",
         activeAuthority: {
+          provides: [],
           requests: [
             {
               capability: "notifications",

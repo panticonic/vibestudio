@@ -38,7 +38,6 @@ import { createWorkspaceClient } from "@vibestudio/service-schemas/clients/works
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { UserlandApprovalChoice } from "@vibestudio/shared/approvals";
 
 /**
  * Build a recording RpcCaller that captures every (target, method, args) tuple
@@ -54,20 +53,12 @@ function recordingRpc(): {
   const callImpl = async (target: string, method: string, args: unknown[]): Promise<unknown> => {
     captured.push({ target, method, args });
     switch (method) {
-      case "workspace.units.list":
-      case "workspace.units.logs":
       case "workspace.recurring.list":
         return [];
       case "workspace.getActive":
         return "test-ws";
       case "workspace.getConfig":
         return { id: "test-ws", systemEpoch: WORKSPACE_SYSTEM_EPOCH, initPanels: [] };
-      case "workspace.units.inspector":
-        return null;
-      case "workspace.units.versions":
-        return { current: null, previous: [], retentionLimit: 5 };
-      case "workspace.units.rollback":
-        return {};
       default:
         return undefined;
     }
@@ -110,17 +101,12 @@ const unavailableContextFiles = {
   },
 };
 
-function grantedApproval(): UserlandApprovalChoice {
-  return { kind: "choice", choice: "allow" };
-}
-
 function makeService() {
   return createWorkspaceService({
     workspace: makeWorkspace(),
     contextFiles: unavailableContextFiles,
     getConfig: () => makeConfig(),
     setConfigField: vi.fn(),
-    approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
   });
 }
 
@@ -172,12 +158,6 @@ describe("workspace service ↔ client contract", () => {
     await client.getConfig();
     await client.setInitPanels([{ source: "panels/chat" }]);
     await client.setConfigField("title", "Test");
-    await client.units.list();
-    await client.units.inspector("extensions/foo");
-    await client.units.restart("extensions/foo");
-    await client.units.logs("extensions/foo");
-    await client.units.versions("apps/shell");
-    await client.units.rollback("apps/shell");
     await client.recurring.list();
 
     const service = makeService();
@@ -202,12 +182,6 @@ describe("workspace service ↔ client contract", () => {
       client.getConfig(),
       client.setInitPanels([]),
       client.setConfigField("title", "Test"),
-      client.units.list(),
-      client.units.inspector("extensions/foo"),
-      client.units.restart("extensions/foo"),
-      client.units.logs("extensions/foo"),
-      client.units.versions("apps/shell"),
-      client.units.rollback("apps/shell"),
       client.recurring.list(),
     ]);
 
@@ -252,7 +226,6 @@ describe("workspace service handler", () => {
       activeWorkspaceName: "dev",
       getConfig: () => makeConfig({ id: "ws_opaque" }),
       setConfigField: vi.fn(),
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
 
     expect(await service.handler(panelCtx, "getActive", [])).toBe("dev");
@@ -280,7 +253,6 @@ describe("workspace service handler", () => {
       contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField: vi.fn(),
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await expect(
       service.handler(panelCtx, "validateConfig", [
@@ -292,157 +264,6 @@ describe("workspace service handler", () => {
     ).resolves.toEqual({ valid: true });
   });
 
-  it("units.inspector returns the inspector URL for a matching unit", async () => {
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      contextFiles: unavailableContextFiles,
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      listUnits: vi.fn(() => [
-        {
-          name: "@workspace-extensions/git-tools",
-          kind: "extension" as const,
-          source: "extensions/git-tools",
-          status: "running" as const,
-          inspectorUrl: "ws://127.0.0.1:9229/abcdef",
-        },
-      ]),
-    });
-
-    await expect(
-      service.handler(panelCtx, "units.inspector", ["@workspace-extensions/git-tools"])
-    ).resolves.toEqual({ url: "ws://127.0.0.1:9229/abcdef" });
-    await expect(service.handler(panelCtx, "units.inspector", ["missing"])).resolves.toBeNull();
-  });
-
-  it("records external unit-log ingestion before returning diagnostics", async () => {
-    const recordContextIngestion = vi.fn();
-    const log = {
-      workspaceId: "test-ws",
-      unitName: "panels/example",
-      kind: "panel" as const,
-      timestamp: 1,
-      level: "error" as const,
-      message: "hostile page text",
-      source: "console" as const,
-    };
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      contextFiles: unavailableContextFiles,
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      listUnitLogs: () => [log],
-      recordContextIngestion,
-    });
-
-    await expect(
-      service.handler(panelCtx, "units.logs", ["panels/example", undefined])
-    ).resolves.toEqual([log]);
-    expect(recordContextIngestion).toHaveBeenCalledWith(panelCtx, {
-      key: "log:panel:panels/example",
-      via: "workspace-units:logs",
-      classification: "external",
-    });
-  });
-
-  it("units.bakeAppDist delegates only for shell callers", async () => {
-    const bakeAppDist = vi.fn(() => ({ build: { key: "app-key" } }));
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      contextFiles: unavailableContextFiles,
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      bakeAppDist,
-    });
-
-    await expect(
-      service.handler(shellCtx, "units.bakeAppDist", [
-        "apps/shell",
-        { outDir: "/tmp/vibestudio-dist" },
-      ])
-    ).resolves.toEqual({ build: { key: "app-key" } });
-    await expect(service.handler(panelCtx, "units.bakeAppDist", ["apps/shell"])).rejects.toThrow(
-      /not accessible to panel callers/
-    );
-    expect(bakeAppDist).toHaveBeenCalledWith("apps/shell", { outDir: "/tmp/vibestudio-dist" });
-    expect(bakeAppDist).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows shell to inspect and roll back any app unit", async () => {
-    const listAppVersions = vi.fn(() => ({ current: null, previous: [], retentionLimit: 5 }));
-    const rollbackAppVersion = vi.fn(() => ({ ok: true }));
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      contextFiles: unavailableContextFiles,
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      listUnits: vi.fn(() => [
-        {
-          name: "@workspace-apps/other",
-          kind: "app" as const,
-          source: "apps/other",
-          status: "running" as const,
-        },
-      ]),
-      listAppVersions,
-      rollbackAppVersion,
-    });
-
-    await expect(
-      service.handler(shellCtx, "units.versions", ["@workspace-apps/other"])
-    ).resolves.toEqual({ current: null, previous: [], retentionLimit: 5 });
-    await expect(
-      service.handler(shellCtx, "units.rollback", ["@workspace-apps/other"])
-    ).resolves.toEqual({ ok: true });
-  });
-
-  it("allows app callers to manage only their own app unit", async () => {
-    const listAppVersions = vi.fn(() => ({ current: null, previous: [], retentionLimit: 5 }));
-    const rollbackAppVersion = vi.fn(() => ({ ok: true }));
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      contextFiles: unavailableContextFiles,
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      listUnits: vi.fn(() => [
-        {
-          name: "@workspace-apps/self",
-          kind: "app" as const,
-          source: "apps/self",
-          status: "running" as const,
-        },
-        {
-          name: "@workspace-apps/other",
-          kind: "app" as const,
-          source: "apps/other",
-          status: "running" as const,
-        },
-      ]),
-      listAppVersions,
-      rollbackAppVersion,
-    });
-    const selfCtx: ServiceContext = {
-      caller: createVerifiedCaller("@workspace-apps/self", "app", {
-        callerId: "@workspace-apps/self",
-        callerKind: "app",
-        repoPath: "apps/self",
-        effectiveVersion: "ev-self",
-      }),
-    };
-
-    await expect(
-      service.handler(selfCtx, "units.versions", ["@workspace-apps/other"])
-    ).resolves.toEqual({ current: null, previous: [], retentionLimit: 5 });
-    await expect(
-      service.handler(selfCtx, "units.rollback", ["@workspace-apps/self"])
-    ).resolves.toEqual({ ok: true });
-    await expect(
-      service.handler(selfCtx, "units.rollback", ["@workspace-apps/other"])
-    ).rejects.toThrow(/can only manage the calling app/);
-    expect(rollbackAppVersion).toHaveBeenCalledTimes(1);
-    expect(listAppVersions).toHaveBeenCalledWith("@workspace-apps/other");
-  });
-
   it("setInitPanels delegates to setConfigField", async () => {
     const setConfigField = vi.fn();
     const service = createWorkspaceService({
@@ -450,7 +271,6 @@ describe("workspace service handler", () => {
       contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField,
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await service.handler(panelCtx, "setInitPanels", [[{ source: "panels/chat" }]]);
     expect(setConfigField).toHaveBeenCalledWith(
@@ -460,14 +280,13 @@ describe("workspace service handler", () => {
     );
   });
 
-  it("setConfigField delegates to setConfigField after approval", async () => {
+  it("setConfigField delegates to setConfigField after ingress authorization", async () => {
     const setConfigField = vi.fn();
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
       contextFiles: unavailableContextFiles,
       getConfig: () => makeConfig(),
       setConfigField,
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
     await service.handler(panelCtx, "setConfigField", ["title", "Test"]);
     expect(setConfigField).toHaveBeenCalledWith("title", "Test", panelCtx);

@@ -1,6 +1,6 @@
 /**
  * workspace service method schemas — current-workspace configuration,
- * lifecycle, units, and host targets. Server-wide workspace discovery and
+ * lifecycle, and semantic workspace data. Server-wide workspace discovery and
  * routing belong to the stable `hubControl` service, never to a workspace
  * child.
  * contract shared by the server registration (`src/server/services/
@@ -9,21 +9,14 @@
 
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
-import type {
-  HostTarget,
-  HostTargetCandidate,
-  HostTargetLaunchResult as SharedHostTargetLaunchResult,
-  HostTargetLaunchSessionSnapshot,
-  HostTargetSelection,
-  HostTargetSelectionInput,
-} from "@vibestudio/shared/hostTargets";
 import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceNode } from "@vibestudio/shared/types";
-import { APP_CAPABILITIES_BY_TARGET } from "@vibestudio/shared/unitManifest";
-import { authorityRowSchema, pendingUnitBatchApprovalSchema } from "./shellApproval.js";
-import { UnitAuthorityRequestSchema } from "./build.js";
 
 // ─── Access descriptors ───────────────────────────────────────────────────────
 // Mirrors the blobstore idiom of a shared `*_ACCESS` constant for the pure-read
@@ -38,199 +31,10 @@ const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
 
-// ─── Host target schemas ──────────────────────────────────────────────────────
-// Structural shapes live in `@vibestudio/shared/hostTargets`; these zod wrappers bind the
-// wire schemas to those types without redefining them field-for-field.
-
-export const HostTargetSchema = z.enum([
-  "electron",
-  "react-native",
-  "terminal",
-]) satisfies z.ZodType<HostTarget>;
-
-export const HostTargetSelectionInputSchema = z.object({
-  source: z.string().min(1),
-  mode: z.enum(["follow-ref", "pinned-build", "pinned-ref"]).optional(),
-  ref: z.string().min(1).optional(),
-  buildKey: z.string().min(1).optional(),
-  autoSelected: z.boolean().optional(),
-}) satisfies z.ZodType<HostTargetSelectionInput>;
-
-export const HostTargetSelectionSchema = z
-  .object({
-    workspaceId: z.string(),
-    target: HostTargetSchema,
-    source: z.string(),
-    appId: z.string(),
-    mode: z.enum(["follow-ref", "pinned-build", "pinned-ref"]),
-    ref: z.string().optional(),
-    buildKey: z.string().optional(),
-    updatedAt: z.number(),
-    autoSelected: z.boolean().optional(),
-  })
-  .strict() satisfies z.ZodType<HostTargetSelection>;
-
-export const HostTargetCandidateSchema = z
-  .object({
-    name: z.string(),
-    source: z.string(),
-    displayName: z.string().optional(),
-    target: HostTargetSchema,
-    declared: z.boolean(),
-    status: z.enum([
-      "not-built",
-      "pending-approval",
-      "building",
-      "available",
-      "running",
-      "stopped",
-      "error",
-    ]),
-    activeEv: z.string().nullable().optional(),
-    activeBundleKey: z.string().nullable().optional(),
-    capabilities: z.array(z.string()),
-    canRollback: z.boolean(),
-    previousVersions: z.array(JsonValueSchema),
-    lastError: z.string().nullable().optional(),
-    lastErrorDetails: JsonValueSchema.optional(),
-    compatibility: z
-      .object({
-        selectable: z.boolean(),
-        reasons: z.array(z.string()),
-        recommended: z.boolean(),
-      })
-      .strict(),
-  })
-  .strict() satisfies z.ZodType<HostTargetCandidate>;
-
-/** Result shape of `hostTargets.getSelection`. */
-export const HostTargetSelectionStatusSchema = z.object({
-  selection: HostTargetSelectionSchema.nullable(),
-  valid: z.boolean(),
-  reason: z.string().optional(),
-});
-export type HostTargetSelectionStatus = z.infer<typeof HostTargetSelectionStatusSchema>;
-
-const AppCapabilitySchema = z.enum([
-  ...APP_CAPABILITIES_BY_TARGET.electron,
-  ...APP_CAPABILITIES_BY_TARGET["react-native"],
-  ...APP_CAPABILITIES_BY_TARGET.terminal,
-]);
-
-export const HostTargetLaunchResultSchema = z.discriminatedUnion("status", [
-  z
-    .object({
-      status: z.literal("ready"),
-      launched: z.literal(true),
-      target: HostTargetSchema,
-      source: z.string(),
-      appId: z.string(),
-      buildKey: z.string(),
-      artifactRoute: z.string().optional(),
-      capabilities: z.array(AppCapabilitySchema).optional(),
-      effectiveVersion: z.string().nullable().optional(),
-      executionDigest: z.string().regex(/^[0-9a-f]{64}$/),
-      authorityRequests: z.array(UnitAuthorityRequestSchema).readonly(),
-      adoptionPolicy: z.enum(["immediate", "prompt", "artifact-only"]).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("approval-required"),
-      launched: z.literal(false),
-      target: HostTargetSchema,
-      approvals: z.array(pendingUnitBatchApprovalSchema),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("preparing"),
-      launched: z.literal(false),
-      target: HostTargetSchema,
-      reason: z.string(),
-      details: z.array(z.string()),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("unavailable"),
-      launched: z.literal(false),
-      target: HostTargetSchema,
-      reason: z.string(),
-      details: z.array(z.string()),
-    })
-    .strict(),
-]) satisfies z.ZodType<SharedHostTargetLaunchResult>;
-export type HostTargetLaunchResult = z.infer<typeof HostTargetLaunchResultSchema>;
-
-const HostTargetLaunchTimelinePhaseSchema = z
-  .object({
-    id: z.enum([
-      "pair",
-      "review-trust",
-      "start-units",
-      "build-app",
-      "activate-target",
-      "connected",
-    ]),
-    label: z.string(),
-    state: z.enum(["pending", "active", "complete", "blocked", "failed", "skipped"]),
-    detail: z.string().optional(),
-  })
-  .strict();
-
-const HostTargetLaunchApprovalViewSchema = z
-  .object({
-    approvalId: z.string(),
-    title: z.string(),
-    summary: z.string(),
-    chips: z.array(z.string()),
-    units: z.array(
-      z
-        .object({
-          name: z.string(),
-          source: z.string(),
-          capabilities: z.string(),
-          kind: z.string(),
-        })
-        .strict()
-    ),
-  })
-  .strict();
-
-export const HostTargetLaunchSessionSnapshotSchema = z
-  .object({
-    sessionId: z.string(),
-    target: HostTargetSchema,
-    status: z.enum([
-      "starting",
-      "approval-required",
-      "preparing",
-      "ready",
-      "unavailable",
-      "denied",
-    ]),
-    currentPhase: z.enum([
-      "pair",
-      "review-trust",
-      "start-units",
-      "build-app",
-      "activate-target",
-      "connected",
-    ]),
-    message: z.string(),
-    detail: z.string().optional(),
-    timeline: z.array(HostTargetLaunchTimelinePhaseSchema),
-    approvals: z.array(pendingUnitBatchApprovalSchema),
-    approvalViews: z.array(HostTargetLaunchApprovalViewSchema),
-    approvalsResolved: z.number().int().nonnegative(),
-    launch: HostTargetLaunchResultSchema.optional(),
-    startedAt: z.number(),
-    updatedAt: z.number(),
-    settled: z.boolean(),
-  })
-  .strict() satisfies z.ZodType<HostTargetLaunchSessionSnapshot>;
-export type HostTargetLaunchSession = z.infer<typeof HostTargetLaunchSessionSnapshotSchema>;
+export const WORKSPACE_PREPARED_CONFIG_CAPABILITY = "workspace.config.apply" as const;
+export const WORKSPACE_PREPARED_CONFIG_AUTHORITY_RESOLVER =
+  "workspace.applyPreparedConfig.mutation" as const;
+const WorkspaceConfigDigestSchema = z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u);
 
 // ─── Workspace data schemas ───────────────────────────────────────────────────
 
@@ -240,114 +44,6 @@ export const WorkspaceEntrySchema = z.object({
   lastOpened: z.number(),
 });
 export type WorkspaceEntry = z.infer<typeof WorkspaceEntrySchema>;
-
-export const WorkspaceAppVersionRecordSchema = z.object({
-  version: z.string(),
-  target: z.string(),
-  capabilities: z.array(z.string()),
-  activeEv: z.string().nullable(),
-  activeSourceHash: z.string().nullable(),
-  activeBundleKey: z.string(),
-  activeDependencyEvs: z.record(z.string()),
-  activeExternalDeps: z.record(z.string()),
-  activeRuntimeDepsKey: z.string().nullable(),
-  activatedAt: z.number(),
-});
-export type WorkspaceAppVersionRecord = z.infer<typeof WorkspaceAppVersionRecordSchema>;
-
-export const WorkspaceAppVersionsSchema = z.object({
-  current: WorkspaceAppVersionRecordSchema.nullable(),
-  previous: z.array(WorkspaceAppVersionRecordSchema),
-  retentionLimit: z.number(),
-});
-export type WorkspaceAppVersions = z.infer<typeof WorkspaceAppVersionsSchema>;
-
-export const WorkspaceUnitStatusSchema = z.object({
-  name: z.string(),
-  kind: z.enum(["panel", "worker", "extension", "app"]),
-  isAgent: z.boolean().optional(),
-  source: z.string(),
-  displayName: z.string().optional(),
-  status: z.enum(["running", "stopped", "error", "pending-approval", "building", "available"]),
-  version: z.string().optional(),
-  ev: z.string().nullable().optional(),
-  activeEv: z.string().nullable().optional(),
-  activeBundleKey: z.string().nullable().optional(),
-  activeRuntimeDepsKey: z.string().nullable().optional(),
-  /** Epoch ms when the currently active build was produced (best-effort; null if unknown). */
-  lastBuiltAt: z.number().nullable().optional(),
-  /** Worker bindings (DOs, env). Only populated for kind === "worker". */
-  bindings: z.record(z.unknown()).nullable().optional(),
-  /**
-   * Set when an extension install/update approval is currently in flight,
-   * so a "running units" panel can surface a "pending approval" affordance
-   * without polling the approval queue separately.
-   */
-  pendingApproval: z.object({ kind: z.string(), submittedAt: z.number() }).nullable().optional(),
-  /**
-   * Set when current workspace state would change the unit's runtime inputs
-   * (a dependency push, an external-dep bump). Driven by needsBuildRefresh
-   * for extensions; absent for workers/panels in v1.
-   */
-  availableUpdate: z
-    .object({ reason: z.literal("dependency"), checkedAt: z.number() })
-    .nullable()
-    .optional(),
-  lastError: z.string().nullable().optional(),
-  lastErrorDetails: z.unknown().optional(),
-  target: z.string().optional(),
-  canRollback: z.boolean().optional(),
-  rollbackRetentionLimit: z.number().optional(),
-  previousVersions: z.array(WorkspaceAppVersionRecordSchema).optional(),
-  health: z.unknown().optional(),
-  methods: z.array(z.string()).optional(),
-  hasFetch: z.boolean().optional(),
-  respawn: z
-    .object({ attempts: z.number(), nextAttemptAt: z.number().nullable() })
-    .nullable()
-    .optional(),
-  inspectorUrl: z.string().nullable().optional(),
-  /** Reviewed projection of the exact active/source version's declared authority. */
-  authorityRows: z.array(authorityRowSchema).optional(),
-});
-export type WorkspaceUnitStatus = z.infer<typeof WorkspaceUnitStatusSchema>;
-
-export const WorkspaceUnitLogRecordSchema = z.object({
-  workspaceId: z.string(),
-  unitName: z.string(),
-  kind: z.enum(["extension", "worker", "panel", "app"]),
-  timestamp: z.number(),
-  level: z.enum(["debug", "info", "warn", "error"]),
-  message: z.string(),
-  fields: z.record(z.unknown()).optional(),
-  source: z
-    .enum(["stdout", "stderr", "ctx.log", "console", "lifecycle", "system", "runner"])
-    .optional(),
-  /** Monotonic per-unit sequence — exact resume cursor for `sinceSeq` polling. */
-  seq: z.number().optional(),
-});
-export type WorkspaceUnitLogRecord = z.infer<typeof WorkspaceUnitLogRecordSchema>;
-
-export const WorkspaceUnitBuildEventSchema = z.object({
-  type: z.enum(["build-started", "build-complete", "build-error"]),
-  name: z.string(),
-  relativePath: z.string().optional(),
-  buildKey: z.string().optional(),
-  error: z.string().optional(),
-  timestamp: z.string(),
-});
-export type WorkspaceUnitBuildEvent = z.infer<typeof WorkspaceUnitBuildEventSchema>;
-
-export const WorkspaceUnitDiagnosticsSchema = z.object({
-  unit: WorkspaceUnitStatusSchema.nullable(),
-  logs: z.array(WorkspaceUnitLogRecordSchema),
-  errors: z.array(WorkspaceUnitLogRecordSchema),
-  /** Recent state-triggered build lifecycle events for the unit. */
-  builds: z.array(WorkspaceUnitBuildEventSchema),
-  dropped: z.object({ entries: z.number(), errors: z.number() }),
-  capacity: z.object({ entries: z.number(), errors: z.number() }),
-});
-export type WorkspaceUnitDiagnostics = z.infer<typeof WorkspaceUnitDiagnosticsSchema>;
 
 export const WorkspaceRecurringJobStatusSchema = z.object({
   name: z.string(),
@@ -480,6 +176,13 @@ const UnitLogsOptionsSchema = z.object({
 export const workspaceMethods = defineServiceMethods({
   // Read methods
   getInfo: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Filesystem paths (source, state, contexts) and resolved config for the active workspace.",
     args: z.tuple([]),
@@ -498,18 +201,40 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getActive: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "Name (id) of the currently active workspace.",
     args: z.tuple([]),
     returns: z.string(),
     access: READ_ACCESS,
   },
   getConfig: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "The active workspace's resolved config (meta/vibestudio.yml).",
     args: z.tuple([]),
     returns: WorkspaceConfigSchema,
     access: READ_ACCESS,
   },
   validateConfig: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspace.control",
+      rationale:
+        "Pure validation of caller-supplied candidate configuration has no workspace effect; §2 default {code, session} family",
+    },
     description:
       "Validate a complete flattened workspace runtime manifest without changing workspace state.",
     args: z.tuple([z.string().describe("Complete YAML document to validate.")]),
@@ -518,6 +243,25 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   setInitPanels: {
+    capability: "workspace.configure",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "protected-write",
+      family: "workspace.mutate",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Change startup panels",
+      action: "change startup panels",
+      description: "Allows {requesterKind} to change startup panels.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
     description:
       "Replace the set of panels opened when this workspace starts; approval-gated for userland.",
     args: z.tuple([
@@ -541,6 +285,25 @@ export const workspaceMethods = defineServiceMethods({
   // SECURITY: arbitrary config-field writes — server-internal use
   // by default, but userland can request a one-shot approval.
   setConfigField: {
+    capability: "workspace.configure",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "protected-write",
+      family: "workspace.mutate",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Change workspace settings",
+      action: "change workspace settings",
+      description: "Allows {requesterKind} to change workspace settings.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
     description:
       "Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland.",
     args: z.tuple([
@@ -552,10 +315,75 @@ export const workspaceMethods = defineServiceMethods({
     access: { sensitivity: "write" },
     examples: [{ args: ["title", "My Workspace"] }],
   },
+  applyPreparedConfig: {
+    capability: WORKSPACE_PREPARED_CONFIG_CAPABILITY,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspace.mutate",
+      rationale:
+        "The transport is open; code callers receive one prepared gated leaf bound to the exact config mutation digest.",
+    },
+    presentation: {
+      title: "Apply workspace configuration",
+      action: "apply workspace configuration",
+      description: "Allows {requesterKind} to apply an exact reviewed workspace configuration.",
+      group: "workspace",
+      authorityCategory: { domain: "automation", verb: "manage" },
+    },
+    description:
+      "Atomically apply a complete validated workspace configuration only when its base digest, result digest, and changed-path scope match.",
+    args: z.tuple([
+      z
+        .object({
+          expectedBaseDigest: WorkspaceConfigDigestSchema,
+          nextState: WorkspaceConfigSchema,
+          resultDigest: WorkspaceConfigDigestSchema,
+          allowedPathScope: z.array(z.string().min(1)).min(1),
+          summary: z.string().trim().min(1).max(240),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({
+        changed: z.boolean(),
+        resultDigest: WorkspaceConfigDigestSchema,
+        config: WorkspaceConfigSchema,
+      })
+      .strict(),
+    authority: {
+      requirement: requirementForPrincipals(
+        ["user", "host", "code"],
+        WORKSPACE_PREPARED_CONFIG_CAPABILITY
+      ),
+      resource: { kind: "literal", key: WORKSPACE_PREPARED_CONFIG_CAPABILITY },
+      prepared: {
+        resolver: WORKSPACE_PREPARED_CONFIG_AUTHORITY_RESOLVER,
+        leaves: [
+          {
+            capability: WORKSPACE_PREPARED_CONFIG_CAPABILITY,
+            requirement: fixedPreparedAuthorityRequirement(
+              requirementForPrincipals(["code"], WORKSPACE_PREPARED_CONFIG_CAPABILITY)
+            ),
+            tier: "gated",
+          },
+        ],
+      },
+    },
+    access: { sensitivity: "write" },
+  },
   // Agent resource loading — read AGENTS.md and skill definitions directly
   // from the workspace source tree. Kept server-side because they touch
   // the filesystem; panels/workers call these over the RPC transport.
   getAgentsMd: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent.",
     args: z.tuple([]),
@@ -563,6 +391,13 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listSkills: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId.",
     args: z.tuple([
@@ -579,6 +414,13 @@ export const workspaceMethods = defineServiceMethods({
     authority: { principals: ["host", "user", "code"] },
   },
   readSkill: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspace.semantic-read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId.",
     args: z.tuple([
@@ -596,12 +438,38 @@ export const workspaceMethods = defineServiceMethods({
     examples: [{ args: ["skills/code-review"] }, { args: ["packages/foo"] }, { args: ["meta"] }],
   },
   sourceTree: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspace.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "Return the workspace source tree, annotating units, launchables, and skills.",
     args: z.tuple([]),
     returns: WorkspaceTreeSchema,
     access: READ_ACCESS,
   },
   ensureContextFolder: {
+    capability: "context.materialize",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "workspace.context-materialization",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Prepare a task workspace folder",
+      action: "prepare a task workspace folder",
+      description: "Allows {requesterKind} to prepare a task workspace folder.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
     description:
       "Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree.",
     args: z.tuple([z.string().describe("Context id whose working folder to materialize.")]),
@@ -616,6 +484,13 @@ export const workspaceMethods = defineServiceMethods({
     examples: [{ args: ["ctx-abc"] }],
   },
   findUnitForPath: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspace.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it.",
     args: z.tuple([z.string().describe("Workspace-relative path to locate within the unit tree.")]),
@@ -623,99 +498,14 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
     examples: [{ args: ["panels/chat/index.tsx"] }],
   },
-  "units.list": {
-    description:
-      "List installed unit definitions and their aggregate build/runtime health. A worker row can show whether that source has a running instance, but does not enumerate instance ids; use runtime.listEntities({ kind: 'worker' }) or workers.list() for the exact live-instance roster.",
-    args: z.tuple([]),
-    returns: z.array(WorkspaceUnitStatusSchema),
-    access: READ_ACCESS,
-  },
-  "units.inspector": {
-    description:
-      "Return the devtools inspector URL for a unit by name or source, or null if it has none.",
-    args: z.tuple([z.string().describe("Unit name or source path.")]),
-    returns: z.object({ url: z.string().describe("Inspector websocket URL.") }).nullable(),
-    access: READ_ACCESS,
-    examples: [{ args: ["extensions/git-tools"] }],
-  },
-  "units.restart": {
-    description: "Restart a workspace unit through its owning manager.",
-    args: z.tuple([z.string().describe("Unit name or source path to restart.")]),
-    returns: z.void(),
-    access: { sensitivity: "write" },
-    examples: [{ args: ["extensions/git-tools"] }],
-  },
-  "units.logs": {
-    description:
-      "Query retained log records for a unit, optionally filtered by time/sequence cursor, level, and limit.",
-    args: z.tuple([
-      z.string().describe("Unit name or source path."),
-      UnitLogsOptionsSchema.optional(),
-    ]),
-    returns: z.array(WorkspaceUnitLogRecordSchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["extensions/git-tools", { level: "error", limit: 50 }] }],
-  },
-  "units.diagnostics": {
-    description:
-      "Return combined diagnostics for a unit: current status, recent logs, errors, build events, and buffer capacity.",
-    args: z.tuple([
-      z.string().describe("Unit name or source path."),
-      UnitLogsOptionsSchema.extend({
-        errorLimit: z
-          .number()
-          .int()
-          .positive()
-          .max(500)
-          .optional()
-          .describe("Max number of error records to include."),
-      }).optional(),
-    ]),
-    returns: WorkspaceUnitDiagnosticsSchema,
-    access: READ_ACCESS,
-  },
-  "units.versions": {
-    description:
-      "List the active build and retained previous versions for an app unit. This is read-only diagnostics and is available to every workspace caller; rollback remains ownership-restricted.",
-    args: z.tuple([z.string().describe("App unit name or source path.")]),
-    returns: WorkspaceAppVersionsSchema,
-    access: READ_ACCESS,
-    examples: [{ args: ["apps/shell"] }],
-  },
-  "units.rollback": {
-    description:
-      "Roll an app unit back to a previous active build (or a specific build key); userland is restricted to managing its own app.",
-    args: z.tuple([
-      z.string().describe("App unit name or source path."),
-      z
-        .object({
-          buildKey: z
-            .string()
-            .optional()
-            .describe("Specific build to roll back to; omit for the previous active build."),
-        })
-        .optional(),
-    ]),
-    returns: JsonObjectSchema,
-    access: { sensitivity: "write" },
-    examples: [{ args: ["apps/shell"] }],
-  },
-  "units.bakeAppDist": {
-    description:
-      "Bake an app unit's active approved build into a packaging payload directory; trusted-chrome callers only.",
-    args: z.tuple([
-      z.string().describe("App unit name or source path."),
-      z
-        .object({
-          outDir: z.string().optional().describe("Output directory for the baked dist payload."),
-        })
-        .optional(),
-    ]),
-    returns: JsonObjectSchema,
-    authority: { principals: ["user", "host"] },
-    access: { sensitivity: "write" },
-  },
   "recurring.list": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "workspace.semantic-read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "List declarative scheduled jobs from meta/vibestudio.yml with their durable run state (next/last run, failures, backoff).",
     args: z.tuple([]),
@@ -724,6 +514,13 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   "heartbeats.list": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace.heartbeat-supervision",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "List registered heartbeats with their schedule, channel binding, and run state.",
     args: z.tuple([]),
     returns: z.array(WorkspaceHeartbeatStatusSchema),
@@ -731,6 +528,25 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   "heartbeats.runNow": {
+    capability: "automations.control",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace.heartbeat-supervision",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Run recurring workspace tasks now",
+      action: "run recurring workspace tasks now",
+      description: "Allows {requesterKind} to run recurring workspace tasks now.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description: "Trigger a heartbeat tick immediately for the selected heartbeat.",
     args: z.tuple([
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
@@ -741,6 +557,25 @@ export const workspaceMethods = defineServiceMethods({
     examples: [{ args: ["news-briefing"] }],
   },
   "heartbeats.pause": {
+    capability: "automations.control",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace.heartbeat-supervision",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Pause recurring workspace tasks",
+      action: "pause recurring workspace tasks",
+      description: "Allows {requesterKind} to pause recurring workspace tasks.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description: "Pause the selected heartbeat so it stops ticking until resumed.",
     args: z.tuple([
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
@@ -751,6 +586,25 @@ export const workspaceMethods = defineServiceMethods({
     examples: [{ args: ["news-briefing"] }],
   },
   "heartbeats.resume": {
+    capability: "automations.control",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace.heartbeat-supervision",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Resume recurring workspace tasks",
+      action: "resume recurring workspace tasks",
+      description: "Allows {requesterKind} to resume recurring workspace tasks.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description: "Resume a paused heartbeat so it resumes its schedule.",
     args: z.tuple([
       WorkspaceHeartbeatSelectorSchema.describe("Heartbeat name or a selector object."),
@@ -759,115 +613,5 @@ export const workspaceMethods = defineServiceMethods({
     authority: { principals: ["user", "code", "host"] },
     access: { sensitivity: "write" },
     examples: [{ args: ["news-briefing"] }],
-  },
-  "hostTargets.list": {
-    description: "List app candidates selectable as the active app for a host target.",
-    args: z.tuple([HostTargetSchema.describe("Host target to list candidates for.")]),
-    returns: z.array(HostTargetCandidateSchema),
-    authority: { principals: ["user", "host"] },
-    access: READ_ACCESS,
-    examples: [{ args: ["electron"] }],
-  },
-  "hostTargets.getSelection": {
-    description:
-      "Read the active per-workspace selection for a host target along with whether it is still valid.",
-    args: z.tuple([HostTargetSchema.describe("Host target to read the selection for.")]),
-    returns: HostTargetSelectionStatusSchema,
-    authority: { principals: ["user", "host"] },
-    access: READ_ACCESS,
-    examples: [{ args: ["electron"] }],
-  },
-  "hostTargets.setSelection": {
-    description: "Persist the per-workspace app selection for a host target.",
-    args: z.tuple([
-      HostTargetSchema.describe("Host target to set the selection for."),
-      HostTargetSelectionInputSchema.describe("Selection input (source, mode, ref/buildKey)."),
-    ]),
-    returns: HostTargetSelectionSchema,
-    authority: { principals: ["user", "host"] },
-    access: { sensitivity: "write" },
-    examples: [{ args: ["electron", { source: "apps/shell" }] }],
-  },
-  "hostTargets.clearSelection": {
-    description: "Clear the persisted per-workspace app selection for a host target.",
-    args: z.tuple([HostTargetSchema.describe("Host target to clear the selection for.")]),
-    returns: z.void(),
-    authority: { principals: ["user", "host"] },
-    access: { sensitivity: "write" },
-    examples: [{ args: ["electron"] }],
-  },
-  "hostTargets.versions": {
-    description: "List retained versions for a specific host-target candidate.",
-    args: z.tuple([
-      HostTargetSchema.describe("Host target the candidate belongs to."),
-      z.string().describe("Candidate app source or name."),
-    ]),
-    returns: WorkspaceAppVersionsSchema,
-    authority: { principals: ["user", "host"] },
-    access: READ_ACCESS,
-    examples: [{ args: ["electron", "apps/shell"] }],
-  },
-  "hostTargets.preparePinnedRef": {
-    description:
-      "Materialize a retained build for a specific ref of a host-target candidate through the build system.",
-    args: z.tuple([
-      HostTargetSchema.describe("Host target the candidate belongs to."),
-      z.string().describe("Candidate app source or name."),
-      z.string().describe("Git ref (branch/tag/sha) to materialize a build for."),
-    ]),
-    returns: z.object({
-      buildKey: z.string(),
-      effectiveVersion: z.string(),
-      appId: z.string(),
-      source: z.string(),
-    }),
-    authority: { principals: ["user", "host"] },
-    access: { sensitivity: "write" },
-  },
-  "hostTargets.launch": {
-    description:
-      "Launch or reload the selected target app in this host, returning a ready/preparing/approval-required/unavailable status.",
-    args: z.tuple([HostTargetSchema.describe("Host target to launch.")]),
-    returns: HostTargetLaunchResultSchema,
-    authority: { principals: ["user", "code", "host"] },
-    access: { sensitivity: "write" },
-    examples: [{ args: ["electron"] }],
-  },
-  "hostTargets.beginLaunch": {
-    description:
-      "Begin an asynchronous launch session for a host target, returning the initial session snapshot.",
-    args: z.tuple([HostTargetSchema.describe("Host target to begin launching.")]),
-    returns: HostTargetLaunchSessionSnapshotSchema,
-    authority: { principals: ["user", "code", "host"] },
-    access: { sensitivity: "write" },
-    examples: [{ args: ["electron"] }],
-  },
-  "hostTargets.getLaunchSession": {
-    description: "Fetch the current snapshot of a launch session by id, or null if it is unknown.",
-    args: z.tuple([z.string().describe("Launch session id.")]),
-    returns: HostTargetLaunchSessionSnapshotSchema.nullable(),
-    authority: { principals: ["user", "code", "host"] },
-    access: READ_ACCESS,
-  },
-  "hostTargets.resolveLaunchSessionApproval": {
-    description:
-      "Resolve a pending approval on a launch session by allowing it once or denying it, returning the updated snapshot.",
-    args: z.tuple([
-      z.string().describe("Launch session id."),
-      z.enum(["once", "deny"]).describe("Approval decision for the pending launch."),
-    ]),
-    returns: HostTargetLaunchSessionSnapshotSchema,
-    authority: { principals: ["user", "code", "host"] },
-    access: {
-      sensitivity: "write",
-    },
-    examples: [{ args: ["session-123", "once"] }],
-  },
-  "hostTargets.cancelLaunchSession": {
-    description: "Cancel an in-flight launch session by id.",
-    args: z.tuple([z.string().describe("Launch session id to cancel.")]),
-    returns: z.void(),
-    authority: { principals: ["user", "code", "host"] },
-    access: { sensitivity: "write" },
   },
 });

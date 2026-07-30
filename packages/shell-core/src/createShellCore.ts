@@ -8,7 +8,6 @@ import {
   type PanelManagerServerInfo,
 } from "./panelManager.js";
 import type {
-  PanelTreeStateSnapshot,
   RuntimeClient,
   SlotHistoryRow,
   SlotRow,
@@ -30,11 +29,14 @@ export function createWorkspaceStateClient(callService: ShellServiceCall): Works
   const call = <T>(service: string, method: string, args: unknown[]) =>
     callService(service, method, args) as Promise<T>;
   return {
-    getPanelTreeStateSnapshot: () =>
-      call<PanelTreeStateSnapshot>("workspace-state", "panelTree.snapshot", []),
-    listSlots: () => call<SlotRow[]>("workspace-state", "slot.list", []),
+    getPanelTreeRootGroups: (input) => call("workspace-state", "panelTree.rootGroups", [input]),
+    getPanelTreePage: (input) => call("workspace-state", "panelTree.page", [input]),
+    getPanelTreePath: (slotId) => call("workspace-state", "panelTree.path", [slotId]),
+    getPanelDetail: (slotId) => call("workspace-state", "panelTree.detail", [slotId]),
+    searchPanelTree: (input) => call("workspace-state", "panelTree.search", [input]),
     getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
-    getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state", "slot.history", [slotId]),
+    getRelativeSlotHistory: (slotId, delta) =>
+      call<SlotHistoryRow | null>("workspace-state", "slot.historyRelative", [slotId, delta]),
     resolveActiveEntity: (id) =>
       call<EntityRecord | null>("workspace-state", "entity.resolveActive", [id]),
     resolveEntity: (id) => call<EntityRecord | null>("workspace-state", "entity.resolve", [id]),
@@ -45,13 +47,12 @@ export function createWorkspaceStateClient(callService: ShellServiceCall): Works
       call("workspace-state", "slot.commitPreparedNavigation", [input]),
     updateCurrentStateArgs: (slotId, stateArgs) =>
       call<void>("workspace-state", "slot.updateCurrentStateArgs", [slotId, stateArgs]),
-    setSlotParent: (slotId, parentSlotId) =>
-      call<void>("workspace-state", "slot.setParent", [slotId, parentSlotId]),
-    setSlotPosition: (slotId, positionId) =>
-      call<void>("workspace-state", "slot.setPosition", [slotId, positionId]),
-    moveSlot: (slotId, parentSlotId, positionId) =>
-      call<void>("workspace-state", "slot.move", [slotId, parentSlotId, positionId]),
-    closeSlot: (slotId) => call<void>("workspace-state", "slot.close", [slotId]),
+    moveSlot: (slotId, parentSlotId, placement) =>
+      call<void>("workspace-state", "slot.move", [slotId, parentSlotId, placement]),
+    closeSlot: (slotId) => call("workspace-state", "slot.close", [slotId]),
+    getCloseCleanupPage: (input) => call("workspace-state", "slot.closeCleanupPage", [input]),
+    acknowledgeCloseCleanup: (slotIds) =>
+      call<void>("workspace-state", "slot.closeCleanupAck", [slotIds]),
   };
 }
 

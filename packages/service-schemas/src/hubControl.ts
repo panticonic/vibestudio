@@ -199,12 +199,50 @@ const HubWorkspaceMemberSchema = HubWorkspaceMembershipSchema.extend({
 
 export const hubControlMethods = defineServiceMethods({
   listWorkspaces: {
+    capability: "workspaces.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View available workspaces",
+      action: "view available workspaces",
+      description: "Allows {requesterKind} to view available workspaces.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "files",
+        verb: "see",
+      },
+    },
     description: "List workspaces visible to the authenticated account.",
     args: z.tuple([]),
     returns: z.array(HubWorkspaceEntrySchema),
     access: readAccess,
   },
   routeWorkspace: {
+    capability: "workspaces.open",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Connect to a workspace",
+      action: "connect to a workspace",
+      description: "Allows {requesterKind} to connect to a workspace.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
     description:
       "Route one exact workspaceId and return only that child's workspaceReach; the caller keeps its existing hub control reach.",
     args: z.tuple([z.object({ workspaceId: z.string().min(1) }).strict()]),
@@ -212,6 +250,25 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   createWorkspace: {
+    capability: "workspaces.create",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.create",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Create a workspace",
+      action: "create a workspace",
+      description: "Allows {requesterKind} to create a workspace.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description:
       "Create and register a workspace from the packaged default, a fork, or one exact external root template.",
     args: z.tuple([
@@ -230,18 +287,75 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   ensureEphemeralWorkspace: {
+    capability: "workspaces.create",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Prepare a temporary workspace",
+      action: "prepare a temporary workspace",
+      description: "Allows {requesterKind} to prepare a temporary workspace.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description: "Ensure the canonical disposable development workspace exists on the live hub.",
     args: z.tuple([]),
     returns: HubWorkspaceEntrySchema,
     access: adminAccess,
   },
   deleteWorkspace: {
+    capability: "workspaces.delete",
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.retire",
+      rationale:
+        "C3: irreversible destruction outside VCS protection; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Delete a workspace",
+      action: "delete a workspace",
+      description: "Allows {requesterKind} to delete a workspace.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description: "Delete a workspace and cascade every membership row.",
     args: z.tuple([z.object({ workspace: z.string().min(1) }).strict()]),
     returns: z.object({ deleted: z.boolean(), workspaceId: z.string().nullable() }),
     access: destructiveAccess,
   },
   addWorkspaceMember: {
+    capability: "workspace.members.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Add a workspace member",
+      action: "add a workspace member",
+      description: "Allows {requesterKind} to add a workspace member.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description: "Add an existing account to a workspace.",
     args: z.tuple([
       z
@@ -256,6 +370,24 @@ export const hubControlMethods = defineServiceMethods({
     access: adminAccess,
   },
   removeWorkspaceMember: {
+    capability: "workspace.members.remove",
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.retire",
+      rationale: "C2: removes authority or identity membership; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Remove a workspace member",
+      action: "remove a workspace member",
+      description: "Allows {requesterKind} to remove a workspace member.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description: "Remove an account from a workspace and close its child sessions.",
     args: z.tuple([
       z
@@ -267,6 +399,25 @@ export const hubControlMethods = defineServiceMethods({
     access: destructiveAccess,
   },
   listWorkspaceMembers: {
+    capability: "workspace.members.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View workspace members",
+      action: "view workspace members",
+      description: "Allows {requesterKind} to view workspace members.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "see",
+      },
+    },
     description: "List the account membership projection for one workspace.",
     args: z.tuple([z.object({ workspace: z.string().min(1) }).strict()]),
     returns: z.object({
@@ -277,12 +428,50 @@ export const hubControlMethods = defineServiceMethods({
     access: readAccess,
   },
   listUserPresence: {
+    capability: "presence.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View who is currently active",
+      action: "view who is currently active",
+      description: "Allows {requesterKind} to view who is currently active.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "see",
+      },
+    },
     description: "List the visible workspaces where a user currently has a live human endpoint.",
     args: z.tuple([userRef]),
     returns: HubUserPresenceSchema,
     access: readAccess,
   },
   inviteUser: {
+    capability: "workspace.members.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Invite someone to the workspace",
+      action: "invite someone to the workspace",
+      description: "Allows {requesterKind} to invite someone to the workspace.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description: "Create an account, grant workspaces, and mint its first-device invite.",
     args: z.tuple([
       z
@@ -303,6 +492,25 @@ export const hubControlMethods = defineServiceMethods({
     access: adminAccess,
   },
   pairDevice: {
+    capability: "devices.pair",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Pair a device",
+      action: "pair a device",
+      description: "Allows {requesterKind} to pair a device.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description: "Mint another device invite for the authenticated account.",
     args: z.tuple([
       z
@@ -319,18 +527,73 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   listDevices: {
+    capability: "devices.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View connected devices",
+      action: "view connected devices",
+      description: "Allows {requesterKind} to view connected devices.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "see",
+      },
+    },
     description: "List the caller's paired devices; administrators see every account's devices.",
     args: z.tuple([]),
     returns: z.object({ serverId: z.string(), devices: z.array(HubDeviceSchema) }),
     access: readAccess,
   },
   revokeDevice: {
+    capability: "devices.revoke",
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.retire",
+      rationale: "C2: removes authority or identity membership; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Disconnect a device",
+      action: "disconnect a device",
+      description: "Allows {requesterKind} to disconnect a device.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description: "Revoke a device and close all of its child sessions.",
     args: z.tuple([z.string().min(1)]),
     returns: z.object({ revoked: z.boolean(), closedSessions: z.number() }),
     access: destructiveAccess,
   },
   revokeUser: {
+    capability: "users.revoke",
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.retire",
+      rationale: "C2: removes authority or identity membership; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Revoke a user's access",
+      action: "revoke a user's access",
+      description: "Allows {requesterKind} to revoke a user's access.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description: "Revoke an account, credentials, memberships, and live deputies.",
     args: z.tuple([userRef]),
     returns: z
@@ -345,6 +608,25 @@ export const hubControlMethods = defineServiceMethods({
     access: destructiveAccess,
   },
   setRole: {
+    capability: "workspace.members.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.mutate",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Change a workspace member's role",
+      action: "change a workspace member's role",
+      description: "Allows {requesterKind} to change a workspace member's role.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description: "Set an account role; root-only at the hub.",
     args: z.tuple([
       z
@@ -360,6 +642,25 @@ export const hubControlMethods = defineServiceMethods({
     access: adminAccess,
   },
   updateProfile: {
+    capability: "account.profile.update",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.mutate",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Change an account profile",
+      action: "change an account profile",
+      description: "Allows {requesterKind} to change an account profile.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "act",
+      },
+    },
     description: "Update the authenticated account profile, or another account as root.",
     args: z.tuple([
       z
@@ -376,6 +677,25 @@ export const hubControlMethods = defineServiceMethods({
     access: writeAccess,
   },
   getProfile: {
+    capability: "account.profile.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "hubControl.read",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View an account profile",
+      action: "view an account profile",
+      description: "Allows {requesterKind} to view an account profile.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "see",
+      },
+    },
     description: "Read the authenticated account profile, or a specified account.",
     args: z.tuple([z.object({ userId: z.string().optional() }).strict().optional()]),
     returns: HubUserSchema.extend({

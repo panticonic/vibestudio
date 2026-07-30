@@ -116,7 +116,7 @@ function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
-      authority: { requests: [] },
+      authority: { requests: [], provides: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -184,7 +184,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
         source,
         unitName: source,
         artifact,
-        authorityRequests: [],
+        authority: { requests: [], provides: [] },
       };
     },
     getBuildByKey: (key: string) => boundBuilds.get(key) ?? null,

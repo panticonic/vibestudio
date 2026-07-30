@@ -1,7 +1,7 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef, LifecycleDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
-import type { LifecycleKey, LifecycleOp } from "../internalDOs/workspaceDO.js";
+import type { LifecycleKey, LifecycleOp } from "@panticonic/builtin/workspace-state";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
 
 const log = createDevLogger("LifecycleDriver");

@@ -15,14 +15,17 @@ const PREPARED_SERVICE = {
   buildKey: "b".repeat(64),
   effectiveVersion: "ev-settings",
   executionDigest: "a".repeat(64),
-  authorityRequests: [
-    {
-      capability: "service:credentials.listStoredCredentials",
-      resource: { kind: "exact" as const, key: "workspace:test" },
-      tier: "gated" as const,
-      evidence: "exact" as const,
-    },
-  ],
+  authority: {
+    provides: [],
+    requests: [
+      {
+        capability: "service:credentials.listStoredCredentials",
+        resource: { kind: "exact" as const, key: "workspace:test" },
+        tier: "gated" as const,
+        evidence: "exact" as const,
+      },
+    ],
+  },
 };
 
 describe("requireActiveExecutionIdentity", () => {
@@ -30,18 +33,44 @@ describe("requireActiveExecutionIdentity", () => {
     expect(
       requireActiveExecutionIdentity({
         executionDigest: "a".repeat(64),
-        authorityRequests: [
-          {
-            capability: "service:workspace-state.alarmClear",
-            resource: { kind: "exact", key: "workspace:test" },
-            tier: "gated",
-            evidence: "exact",
-          },
-        ],
+        authority: {
+          provides: [
+            {
+              name: "workspace.graph.delete",
+              title: "Delete workspace graph data",
+              action: "delete workspace graph data",
+              tier: "critical",
+              sensitivity: "destructive",
+              resourceType: "workspace-graph",
+              presentation: { domain: "files", verb: "manage" },
+              grantScopes: ["once"],
+            },
+          ],
+          requests: [
+            {
+              capability: "service:workspace-state.alarmClear",
+              resource: { kind: "exact", key: "workspace:test" },
+              tier: "gated",
+              evidence: "exact",
+            },
+          ],
+        },
       })
     ).toEqual({
       activeExecutionDigest: "a".repeat(64),
       activeAuthority: {
+        provides: [
+          {
+            name: "workspace.graph.delete",
+            title: "Delete workspace graph data",
+            action: "delete workspace graph data",
+            tier: "critical",
+            sensitivity: "destructive",
+            resourceType: "workspace-graph",
+            presentation: { domain: "files", verb: "manage" },
+            grantScopes: ["once"],
+          },
+        ],
         requests: [
           {
             capability: "service:workspace-state.alarmClear",
@@ -55,9 +84,9 @@ describe("requireActiveExecutionIdentity", () => {
   });
 
   it.each([
-    { executionDigest: undefined, authorityRequests: [] },
-    { executionDigest: "effective-version", authorityRequests: [] },
-    { executionDigest: "a".repeat(64), authorityRequests: undefined },
+    { executionDigest: undefined, authority: { provides: [], requests: [] } },
+    { executionDigest: "effective-version", authority: { provides: [], requests: [] } },
+    { executionDigest: "a".repeat(64), authority: undefined },
   ])("fails closed for an incomplete identity: %o", (prepared) => {
     expect(() => requireActiveExecutionIdentity(prepared)).toThrow();
   });
@@ -77,7 +106,8 @@ describe("declaredWorkspaceServiceActivationInput", () => {
       activeBuildKey: "b".repeat(64),
       activeExecutionDigest: "a".repeat(64),
       activeAuthority: {
-        requests: PREPARED_SERVICE.authorityRequests,
+        provides: [],
+        requests: PREPARED_SERVICE.authority.requests,
       },
       className: "ModelSettingsDO",
       key: "workspace-model-settings",

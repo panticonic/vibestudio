@@ -78,7 +78,7 @@ export const evalPreauthorizationIntentSchema = z
   .strict();
 
 const evalAuthorityIntentShape = {
-  effects: z.enum(["read-only", "mutable"]).default("mutable"),
+  effects: z.enum(["read-only", "read-write"]).default("read-write"),
   approvals: z.enum(["prompt", "pregranted-only"]).default("prompt"),
   requests: z.array(CapabilityScopeSchema).max(256).optional(),
   preauthorize: z.array(evalPreauthorizationIntentSchema).max(64).optional(),
@@ -341,6 +341,13 @@ export const evalDeleteScopeValueArgsSchema = z
 
 export const evalMethods = defineServiceMethods({
   start: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.create",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     args: z.tuple([evalStartInputSchema]),
     returns: evalStartResultSchema,
     description:
@@ -348,6 +355,13 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   get: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     args: z.tuple([evalGetArgsSchema]),
     returns: evalRunStatusSchema,
     description:
@@ -355,6 +369,13 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   events: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.control",
+      rationale: "Owner-scoped bounded read of durable eval lifecycle events",
+    },
     args: z.tuple([evalEventsArgsSchema]),
     returns: evalEventsPageSchema,
     description:
@@ -362,6 +383,25 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   reset: {
+    capability: "code-runner.reset",
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.control",
+      rationale:
+        "C3: irreversible destruction outside VCS protection; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Reset the code runner",
+      action: "reset the code runner",
+      description: "Allows {requesterKind} to reset the code runner.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
     returns: z.object({ ok: z.boolean() }).strict(),
     description:
@@ -369,6 +409,14 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   dispose: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.control",
+      rationale:
+        "Owned-resource release: the host admits disposal only when this caller declared the isolated EvalDO finite at its immutable first activation",
+    },
     args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
     returns: z.object({ ok: z.boolean() }).strict(),
     description:
@@ -376,6 +424,13 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   readScopeTextPage: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     args: z.tuple([evalReadScopeTextPageArgsSchema]),
     returns: z
       .object({
@@ -389,6 +444,13 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   deleteScopeValue: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.retire",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     args: z.tuple([evalDeleteScopeValueArgsSchema]),
     returns: z.object({ ok: z.boolean(), existed: z.boolean() }).strict(),
     description:
@@ -396,10 +458,17 @@ export const evalMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   cancel: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.retire",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     args: z.tuple([evalCancelArgsSchema]),
     returns: z.object({ ok: z.literal(true), forcedReset: z.boolean() }).strict(),
     description:
-      "Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so evaluated-execution authority remains valid for teardown. Cooperative cancellation preserves other runs and scope and returns forcedReset:false. If the run or its cleanup does not settle within the recovery grace period, the EvalDO cancels all non-terminal runs, resets its shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false.",
+      "Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so the eval history and its owned cleanup remain one trust unit with valid teardown authority. Owned cleanup is awaited to real settlement and preserves other runs and scope. An unowned, non-cooperative guest run may trigger bounded recovery, which cancels all non-terminal runs, resets shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false.",
     access: { sensitivity: "write" },
   },
 });

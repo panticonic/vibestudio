@@ -150,7 +150,7 @@ export interface OrdinaryAuthorityAcquirer {
     signal?: AbortSignal
   ): Promise<{
     state: "decided" | "closed";
-    decision?: "once" | "session" | "task" | "agent" | "lock" | "version" | "deny";
+    decision?: "once" | "session" | "task" | "mission" | "agent" | "lock" | "version" | "deny";
     info?: AcquisitionInfo;
   }>;
   consume(grantId: string): boolean;
@@ -161,7 +161,7 @@ export interface OrdinaryAuthorityAcquirer {
     resource: ResourceScope;
   }): number;
   invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void;
-  proposeMissionRevision?(input: {
+  proposeReviewedClosureRevision?(input: {
     snapshot: InvocationSnapshot;
     tier: "gated" | "critical";
     renderedAction: string;
@@ -193,15 +193,15 @@ export function attachedHostAwareAuthorityAcquirer(
       : {}),
     invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
       ordinary.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
-    ...(ordinary.proposeMissionRevision
+    ...(ordinary.proposeReviewedClosureRevision
       ? {
-          proposeMissionRevision: (input: {
+          proposeReviewedClosureRevision: (input: {
             snapshot: InvocationSnapshot;
             tier: "gated" | "critical";
             renderedAction: string;
             resource: ResourceScope;
             presentation?: AuthorityChallengePresentation;
-          }) => ordinary.proposeMissionRevision!(input),
+          }) => ordinary.proposeReviewedClosureRevision!(input),
         }
       : {}),
   };

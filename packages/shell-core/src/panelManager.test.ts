@@ -44,7 +44,7 @@ function createWorkspaceMemory() {
   interface MemSlot {
     slot_id: PanelSlotId;
     parent_slot_id: PanelSlotId | null;
-    position_id: string;
+    sort_key: number;
     created_at: number;
     closed_at: number | null;
     current_entity_id: PanelEntityId | null;
@@ -69,13 +69,22 @@ function createWorkspaceMemory() {
     key: string;
     activeBuildKey: string;
     activeExecutionDigest: string;
-    activeAuthority: { requests: [] };
+    activeAuthority: { requests: []; provides: [] };
     displayTitle?: string | null;
   }
 
   const slots = new Map<PanelSlotId, MemSlot>();
   const history = new Map<PanelSlotId, MemHistoryEntry[]>();
   const entities = new Map<string, MemEntity>();
+  const closeCleanup = new Map<
+    PanelSlotId,
+    {
+      closeId: string;
+      ownerUserId: string | null;
+      slotId: PanelSlotId;
+      entityId: PanelEntityId | null;
+    }
+  >();
   let revision = 0;
 
   const retired: string[] = [];
@@ -127,30 +136,88 @@ function createWorkspaceMemory() {
   });
 
   const workspaceState: WorkspaceStateClient = {
-    async getPanelTreeStateSnapshot() {
-      const openSlots = [...slots.values()].filter((slot) => slot.closed_at === null);
-      const currentEntityIds = new Set(
-        openSlots.flatMap((slot) => (slot.current_entity_id ? [slot.current_entity_id] : []))
-      );
+    async getPanelTreeRootGroups() {
+      const owners = new Map<string | null, number>();
+      for (const slot of slots.values()) {
+        if (slot.closed_at === null && slot.parent_slot_id === null) {
+          owners.set(slot.owner_user_id, (owners.get(slot.owner_user_id) ?? 0) + 1);
+        }
+      }
       return {
         revision,
-        slots: openSlots.map(slotRow),
-        histories: openSlots.flatMap((slot) => historyRows(slot.slot_id)),
-        entities: [...currentEntityIds].flatMap((id) => {
-          const entity = entities.get(id);
-          return entity ? [entityRecord(entity)] : [];
-        }),
+        groups: [...owners].map(([ownerUserId, rootCount]) => ({ ownerUserId, rootCount })),
+        nextCursor: null,
       };
     },
-    async listSlots(): Promise<SlotRow[]> {
-      return [...slots.values()].map(slotRow);
+    async getPanelTreePage(input) {
+      const limit = input.limit ?? 50;
+      const cursor = input.cursor === undefined ? null : Number(input.cursor);
+      const matching = [...slots.values()]
+        .filter(
+          (slot) =>
+            slot.closed_at === null &&
+            (cursor === null || slot.sort_key > cursor) &&
+            (input.group.kind === "children"
+              ? slot.parent_slot_id === input.group.parentSlotId
+              : slot.parent_slot_id === null && slot.owner_user_id === input.group.ownerUserId)
+        )
+        .sort((a, b) => a.sort_key - b.sort_key);
+      const visible = matching.slice(0, limit);
+      const nodes = visible.map((slot) => ({
+        slotId: slot.slot_id,
+        parentSlotId: slot.parent_slot_id,
+        ownerUserId: slot.owner_user_id,
+        title: slotRow(slot).current_entity_title ?? slot.slot_id,
+        createdAt: slot.created_at,
+        childCount: [...slots.values()].filter(
+          (child) => child.closed_at === null && child.parent_slot_id === slot.slot_id
+        ).length,
+      }));
+      return {
+        revision,
+        group: input.group,
+        nodes,
+        nextCursor:
+          matching.length > limit && visible.length > 0 ? String(visible.at(-1)!.sort_key) : null,
+      };
+    },
+    async getPanelTreePath(slotId) {
+      const path = [];
+      let current = slots.get(slotId);
+      while (current?.closed_at === null) {
+        path.unshift({
+          slotId: current.slot_id,
+          parentSlotId: current.parent_slot_id,
+          ownerUserId: current.owner_user_id,
+          title: slotRow(current).current_entity_title ?? current.slot_id,
+          createdAt: current.created_at,
+          childCount: 0,
+        });
+        current = current.parent_slot_id ? slots.get(current.parent_slot_id) : undefined;
+      }
+      return path.length > 0 ? { revision, nodes: path } : null;
+    },
+    async getPanelDetail(slotId) {
+      const slot = slots.get(slotId);
+      const rows = historyRows(slotId);
+      const currentHistory = rows.find((row) => row.entry_key === slot?.current_entry_key);
+      const entity = slot?.current_entity_id ? entities.get(slot.current_entity_id) : undefined;
+      return slot && currentHistory && entity
+        ? { revision, slot: slotRow(slot), currentHistory, entity: entityRecord(entity) }
+        : null;
+    },
+    async searchPanelTree() {
+      return { revision, hits: [], nextCursor: null };
     },
     async getSlot(slotId): Promise<SlotRow | null> {
       const s = slots.get(slotId);
       return s ? slotRow(s) : null;
     },
-    async getSlotHistory(slotId): Promise<SlotHistoryRow[]> {
-      return historyRows(slotId);
+    async getRelativeSlotHistory(slotId, delta): Promise<SlotHistoryRow | null> {
+      const rows = historyRows(slotId);
+      const slot = slots.get(slotId);
+      const index = rows.findIndex((row) => row.entry_key === slot?.current_entry_key);
+      return rows[index + delta] ?? null;
     },
     async resolveActiveEntity(id) {
       const e = entities.get(id);
@@ -172,7 +239,7 @@ function createWorkspaceMemory() {
       slots.set(input.slotId, {
         slot_id: input.slotId,
         parent_slot_id: input.parentSlotId,
-        position_id: input.positionId,
+        sort_key: Math.min(0, ...[...slots.values()].map((slot) => slot.sort_key)) - 1,
         created_at: Date.now(),
         closed_at: null,
         current_entity_id: input.initialEntry?.entityId ?? null,
@@ -254,28 +321,53 @@ function createWorkspaceMemory() {
       if (row) row.state_args = stringifyStateArgs(stateArgs);
       revision += 1;
     },
-    async setSlotParent(slotId, parentSlotId) {
-      const slot = slots.get(slotId);
-      if (slot) slot.parent_slot_id = parentSlotId;
-      revision += 1;
-    },
-    async setSlotPosition(slotId, positionId) {
-      const slot = slots.get(slotId);
-      if (slot) slot.position_id = positionId;
-      revision += 1;
-    },
-    async moveSlot(slotId, parentSlotId, positionId) {
+    async moveSlot(slotId, parentSlotId) {
       const slot = slots.get(slotId);
       if (slot) {
         slot.parent_slot_id = parentSlotId;
-        slot.position_id = positionId;
       }
       revision += 1;
     },
     async closeSlot(slotId) {
-      const slot = slots.get(slotId);
-      if (slot) slot.closed_at = Date.now();
+      let closedCount = 0;
+      const close = (id: PanelSlotId) => {
+        for (const child of slots.values()) {
+          if (child.closed_at === null && child.parent_slot_id === id) close(child.slot_id);
+        }
+        const slot = slots.get(id);
+        if (!slot || slot.closed_at !== null) return;
+        slot.closed_at = Date.now();
+        closeCleanup.set(id, {
+          closeId: slotId,
+          ownerUserId: slot.owner_user_id,
+          slotId: id,
+          entityId: slot.current_entity_id,
+        });
+        closedCount += 1;
+      };
+      close(slotId);
       revision += 1;
+      return { closeId: slotId, closedCount };
+    },
+    async getCloseCleanupPage(input) {
+      const limit = input.limit ?? 200;
+      const matching = [...closeCleanup.values()]
+        .filter(
+          (item) =>
+            (!input.closeId || item.closeId === input.closeId) &&
+            (!Object.prototype.hasOwnProperty.call(input, "ownerUserId") ||
+              item.ownerUserId === input.ownerUserId) &&
+            (!input.cursor || item.slotId > input.cursor)
+        )
+        .sort((a, b) => a.slotId.localeCompare(b.slotId));
+      const items = matching.slice(0, limit);
+      return {
+        items: items.map(({ slotId, entityId }) => ({ slotId, entityId })),
+        nextCursor: matching.length > limit && items.length > 0 ? items.at(-1)!.slotId : null,
+      };
+    },
+    async acknowledgeCloseCleanup(slotIds) {
+      for (const slotId of slotIds) closeCleanup.delete(slotId);
     },
   };
 
@@ -301,7 +393,7 @@ function createWorkspaceMemory() {
           key,
           activeBuildKey: "b".repeat(64),
           activeExecutionDigest: "a".repeat(64),
-          activeAuthority: { requests: [] },
+          activeAuthority: { requests: [], provides: [] },
         });
       }
       created.push(id);
@@ -329,7 +421,7 @@ function createWorkspaceMemory() {
         key,
         activeBuildKey: "",
         activeExecutionDigest: "",
-        activeAuthority: { requests: [] },
+        activeAuthority: { requests: [], provides: [] },
       });
       created.push(id);
       revision += 1;
@@ -446,6 +538,45 @@ describe("PanelManager", () => {
     expect(mem.state.slots.size).toBe(2);
   });
 
+  it("projects one root when concurrent first reads resolve together", async () => {
+    const sourceRegistry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const sourceManager = new PanelManager({
+      registry: sourceRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await sourceManager.createBrowser(null, "about:blank", {
+      addAsRoot: true,
+    });
+
+    const projectedRegistry = new PanelRegistry({});
+    const projectedManager = new PanelManager({
+      registry: projectedRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const originalGetPanelDetail = deps.workspaceState.getPanelDetail.bind(deps.workspaceState);
+    let releaseReads!: () => void;
+    const readsBlocked = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    const detailRead = vi
+      .spyOn(deps.workspaceState, "getPanelDetail")
+      .mockImplementation(async (slotId) => {
+        await readsBlocked;
+        return originalGetPanelDetail(slotId);
+      });
+
+    const first = projectedManager.refreshPanel(created.panelId);
+    const second = projectedManager.refreshPanel(created.panelId);
+    await vi.waitFor(() => expect(detailRead).toHaveBeenCalledTimes(2));
+    releaseReads();
+    await Promise.all([first, second]);
+
+    expect(projectedRegistry.getRootPanels().map((panel) => panel.id)).toEqual([created.panelId]);
+  });
+
   it("places an external panel in an explicitly shared orchestration context", async () => {
     const registry = new PanelRegistry({});
     const { deps } = makeManagerDeps("/tmp/workspace");
@@ -480,9 +611,9 @@ describe("PanelManager", () => {
     );
   });
 
-  it("mirrors subtree ownership immediately when a panel moves between owner trees", async () => {
+  it("passes stable-neighbor placement to the durable tree", async () => {
     const registry = new PanelRegistry({});
-    const { deps } = makeManagerDeps("/tmp/workspace");
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({
       registry,
       ...deps,
@@ -493,29 +624,17 @@ describe("PanelManager", () => {
       addAsRoot: true,
       ownerUserId: "alice",
     });
-    const bobRoot = await manager.createBrowser(null, "https://bob.example", {
-      name: "bob-root",
+    const bobChild = await manager.createBrowser(null, "https://child.example", {
+      name: "bob-child",
       addAsRoot: true,
       ownerUserId: "bob",
     });
-    const bobChild = await manager.createBrowser(bobRoot.panelId, "https://child.example", {
-      name: "bob-child",
-      ownerUserId: "bob",
-    });
-    const bobGrandchild = await manager.createBrowser(
-      bobChild.panelId,
-      "https://grandchild.example",
-      { name: "bob-grandchild", ownerUserId: "bob" }
-    );
+    const move = vi.spyOn(mem.workspaceState, "moveSlot");
+    const placement = { afterSlotId: aliceRoot.panelId };
 
-    await manager.movePanel(bobChild.panelId, aliceRoot.panelId, 0, "bob");
+    await manager.movePanel(bobChild.panelId, null, placement, "bob");
 
-    expect(registry.getPanel(bobChild.panelId)?.owner).toBe("alice");
-    expect(registry.getPanel(bobGrandchild.panelId)?.owner).toBe("alice");
-
-    await manager.movePanel(bobChild.panelId, null, 1, "carol");
-    expect(registry.getPanel(bobChild.panelId)?.owner).toBe("carol");
-    expect(registry.getPanel(bobGrandchild.panelId)?.owner).toBe("carol");
+    expect(move).toHaveBeenCalledWith(bobChild.panelId, null, placement);
   });
 
   /** A workspace holding one trivial panel manifest, for identity/title tests. */
@@ -552,19 +671,6 @@ describe("PanelManager", () => {
     expect(created.panelId).not.toContain("StateArgs");
     expect(created.title).toBe("StateArgs CDP Test");
     expect(registry.getPanel(created.panelId)?.title).toBe("StateArgs CDP Test");
-  });
-
-  it("keeps name working as a deprecated alias for title", async () => {
-    const { registry, manager } = namedPanelWorkspace();
-
-    const created = await manager.create("panels/named", {
-      isRoot: true,
-      addAsRoot: true,
-      name: "Legacy Label",
-    });
-
-    expect(created.panelId).not.toContain("Legacy");
-    expect(registry.getPanel(created.panelId)?.title).toBe("Legacy Label");
   });
 
   it("falls back to the manifest title when no label is given", async () => {
@@ -709,6 +815,17 @@ describe("PanelManager", () => {
     unsubscribe();
     await manager.updateStateArgs(created.panelId, { greeting: "ignored" });
     expect(onStateArgsChanged).toHaveBeenCalledTimes(2);
+
+    const projectedStateArgs = vi.fn();
+    const unsubscribeProjection = manager.onStateArgsChanged(created.panelId, projectedStateArgs);
+    const persistedBeforeProjection = mem.state.history.get(created.panelId)?.[0]?.state_args;
+    manager.applyStateArgsProjection(created.panelId, { greeting: "projected" });
+    expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).stateArgs).toEqual({
+      greeting: "projected",
+    });
+    expect(projectedStateArgs).toHaveBeenCalledWith({ greeting: "projected" });
+    expect(mem.state.history.get(created.panelId)?.[0]?.state_args).toBe(persistedBeforeProjection);
+    unsubscribeProjection();
 
     await manager.close(created.panelId);
     expect(registry.getPanel(created.panelId)).toBeUndefined();
@@ -1010,13 +1127,63 @@ describe("PanelManager", () => {
     expect(mem.state.slots.get(child.panelId)?.closed_at).not.toBeNull();
     expect(mem.state.slots.get(grandchild.panelId)?.closed_at).not.toBeNull();
 
-    await manager.syncSnapshot();
     expect(registry.getRootPanels()).toEqual([]);
     expect(registry.getPanel(child.panelId)).toBeUndefined();
     expect(registry.getPanel(grandchild.panelId)).toBeUndefined();
   });
 
-  it("strictly archives only the revoked user's owned roots and is retryable", async () => {
+  it("drains recursive close cleanup across multiple bounded pages", async () => {
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const root = await manager.createBrowser(null, "https://root.example", {
+      name: "root",
+      addAsRoot: true,
+    });
+    for (let index = 0; index < 450; index += 1) {
+      await manager.createBrowser(root.panelId, `https://child-${index}.example`, {
+        name: `child-${index}`,
+      });
+    }
+    const retire = vi.spyOn(deps.runtime, "retireEntity");
+
+    await expect(manager.close(root.panelId)).resolves.toEqual({ closedCount: 451 });
+    expect(retire).toHaveBeenCalledTimes(451);
+    await expect(manager.close(root.panelId)).resolves.toEqual({ closedCount: 0 });
+  });
+
+  it("archives more than one page of owned roots without retaining their roster", async () => {
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    for (let index = 0; index < 450; index += 1) {
+      const created = await manager.createBrowser(null, `https://alice-${index}.example`, {
+        name: `alice-${index}`,
+        addAsRoot: true,
+        ownerUserId: "usr_alice",
+      });
+      mem.state.slots.get(created.panelId)!.owner_user_id = "usr_alice";
+    }
+    const bob = await manager.createBrowser(null, "https://bob.example", {
+      name: "bob",
+      addAsRoot: true,
+      ownerUserId: "usr_bob",
+    });
+    mem.state.slots.get(bob.panelId)!.owner_user_id = "usr_bob";
+
+    await expect(manager.archiveOwnedRoots("usr_alice")).resolves.toEqual({
+      archivedRootCount: 450,
+      closedCount: 450,
+    });
+    expect(
+      [...mem.state.slots.values()].filter(
+        (slot) => slot.owner_user_id === "usr_alice" && slot.closed_at === null
+      )
+    ).toHaveLength(0);
+    expect(mem.state.slots.get(bob.panelId)?.closed_at).toBeNull();
+  });
+
+  it("strictly reports runtime cleanup failure after atomically archiving only one owner's tree", async () => {
     const registry = new PanelRegistry({});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
     const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
@@ -1041,11 +1208,6 @@ describe("PanelManager", () => {
     const retire = vi.spyOn(deps.runtime, "retireEntity");
     retire.mockRejectedValueOnce(new Error("runtime busy"));
     await expect(manager.archiveOwnedRoots("usr_alice")).rejects.toThrow("runtime busy");
-    expect(mem.state.slots.get(aliceRoot.panelId)?.closed_at).toBeNull();
-
-    const result = await manager.archiveOwnedRoots("usr_alice");
-    expect(result.archivedRootIds).toEqual([aliceRoot.panelId]);
-    expect(result.closedIds).toEqual([aliceRoot.panelId, aliceChild.panelId]);
     expect(mem.state.slots.get(aliceRoot.panelId)?.closed_at).not.toBeNull();
     expect(mem.state.slots.get(aliceChild.panelId)?.closed_at).not.toBeNull();
     expect(mem.state.slots.get(bobRoot.panelId)?.closed_at).toBeNull();
@@ -1083,18 +1245,15 @@ describe("PanelManager", () => {
     const afterNavigate = registry.getPanel(created.panelId)!;
     expect(getCurrentSnapshot(afterNavigate).source).toBe("panels/second");
     expect(getCurrentSnapshot(afterNavigate).options.ref).toBe("feature");
-    expect(afterNavigate.history?.entries.map((e) => e.source)).toEqual([
-      "panels/first",
-      "panels/second",
-    ]);
-    expect(afterNavigate.history?.index).toBe(1);
+    expect(afterNavigate.history?.entries.map((e) => e.source)).toEqual(["panels/second"]);
+    expect(afterNavigate.navigation?.canGoBack).toBe(true);
     // Two distinct panel entities exist now; the first was retired.
     expect(mem.state.entities.size).toBe(2);
     expect(mem.state.retired.length).toBeGreaterThanOrEqual(1);
 
     await manager.navigateHistory(created.panelId, -1);
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).source).toBe("panels/first");
-    expect(registry.getPanel(created.panelId)?.history?.index).toBe(0);
+    expect(registry.getPanel(created.panelId)?.navigation?.canGoForward).toBe(true);
 
     await manager.navigateHistory(created.panelId, 1);
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).source).toBe("panels/second");
@@ -1241,10 +1400,7 @@ describe("PanelManager", () => {
       buildKey: currentBuildKey,
     });
     expect(getCurrentSnapshot(panel).source).toBe("panels/second");
-    expect(panel.history?.entries.map((entry) => entry.source)).toEqual([
-      "panels/first",
-      "panels/second",
-    ]);
+    expect(panel.history?.entries.map((entry) => entry.source)).toEqual(["panels/second"]);
     await expect(manager.getPanelInit(created.panelId)).resolves.toMatchObject({
       entityId: currentEntityId,
       sourceRepo: "panels/second",
@@ -1281,7 +1437,7 @@ describe("PanelManager", () => {
     );
     expect(mem.state.slots.get(created.panelId)?.current_entity_id).toBe(secondEntityId);
     expect(mem.state.entities.get(secondEntityId!)?.status).toBe("active");
-    expect(registry.getPanel(created.panelId)?.history?.index).toBe(1);
+    expect(registry.getPanel(created.panelId)?.history?.index).toBe(0);
     expect(retireEntity).not.toHaveBeenCalled();
   });
 
@@ -1312,9 +1468,9 @@ describe("PanelManager", () => {
     expect(getCurrentSnapshot(panel).source).toBe("browser:https://example.org/");
     expect(panel.title).toBe("example.org");
     expect(panel.history?.entries.map((entry) => entry.source)).toEqual([
-      "panels/chat",
       "browser:https://example.org/",
     ]);
+    expect(panel.navigation?.canGoBack).toBe(true);
     expect(manager.getIncarnationChurnSnapshot()).toMatchObject({
       committed: 2,
       retired: 1,
@@ -1324,519 +1480,29 @@ describe("PanelManager", () => {
     });
   });
 
-  it("keeps selected descendant path local while using collision-free sibling ranks", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    for (const name of ["root", "first", "second"]) {
-      const panelDir = path.join(workspacePath, "panels", name);
-      fs.mkdirSync(panelDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
-      );
-    }
-
+  it("keeps the runtime panel cache bounded and hydrates evicted panels by address", async () => {
     const registry = new PanelRegistry({});
-    const { deps } = makeManagerDeps(workspacePath);
-    const manager = new PanelManager({ registry, ...deps });
-
-    const root = await manager.create("panels/root", { isRoot: true, addAsRoot: true });
-    const first = await manager.create("panels/first", { parentId: root.panelId });
-    const second = await manager.create("panels/second", { parentId: root.panelId });
-
-    expect(registry.getPanel(root.panelId)?.children.map((c) => c.id)).toEqual([
-      first.panelId,
-      second.panelId,
-    ]);
-
-    await manager.notifyFocused(first.panelId);
-    expect(registry.getPanel(root.panelId)?.selectedChildId).toBe(first.panelId);
-
-    await manager.syncSnapshot();
-    expect(registry.getPanel(root.panelId)?.selectedChildId).toBe(first.panelId);
-  });
-
-  it("restores roots with duplicate persisted ranks in creation order", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    for (const name of ["first-root", "second-root"]) {
-      const panelDir = path.join(workspacePath, "panels", name);
-      fs.mkdirSync(panelDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
-      );
-    }
-
-    const seedRegistry = new PanelRegistry({});
-    const { mem, deps } = makeManagerDeps(workspacePath);
-    const seedManager = new PanelManager({ registry: seedRegistry, ...deps });
-
-    const first = await seedManager.create("panels/first-root", {
-      isRoot: true,
-      addAsRoot: true,
-    });
-    const second = await seedManager.create("panels/second-root", {
-      isRoot: true,
-      addAsRoot: true,
-    });
-    const firstSlot = mem.state.slots.get(first.panelId);
-    const secondSlot = mem.state.slots.get(second.panelId);
-    if (firstSlot) {
-      firstSlot.position_id = "000001000000";
-      firstSlot.created_at = 100;
-    }
-    if (secondSlot) {
-      secondSlot.position_id = "000001000000";
-      secondSlot.created_at = 200;
-    }
-
-    const restoredRegistry = new PanelRegistry({});
-    const restoredManager = new PanelManager({ registry: restoredRegistry, ...deps });
-    await restoredManager.syncSnapshot();
-
-    expect(restoredRegistry.getRootPanels().map((panel) => panel.id)).toEqual([
-      first.panelId,
-      second.panelId,
-    ]);
-  });
-
-  it("persists append root insertion order across restart", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    for (const name of ["first-root", "second-root"]) {
-      const panelDir = path.join(workspacePath, "panels", name);
-      fs.mkdirSync(panelDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
-      );
-    }
-
-    const liveRegistry = new PanelRegistry({});
-    const { deps } = makeManagerDeps(workspacePath);
-    const liveManager = new PanelManager({ registry: liveRegistry, ...deps });
-
-    const first = await liveManager.create("panels/first-root", {
-      isRoot: true,
-      addAsRoot: true,
-    });
-    const second = await liveManager.create("panels/second-root", {
-      isRoot: true,
-      addAsRoot: true,
-    });
-    expect(liveRegistry.getRootPanels().map((panel) => panel.id)).toEqual([
-      first.panelId,
-      second.panelId,
-    ]);
-
-    const restoredRegistry = new PanelRegistry({});
-    const restoredManager = new PanelManager({ registry: restoredRegistry, ...deps });
-    await restoredManager.syncSnapshot();
-
-    expect(restoredRegistry.getRootPanels().map((panel) => panel.id)).toEqual([
-      first.panelId,
-      second.panelId,
-    ]);
-  });
-
-  it("persists focused panel and cached titles in local view state", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    const panelDir = path.join(workspacePath, "panels", "chat");
-    fs.mkdirSync(panelDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "chat", vibestudio: { title: "Actual Chat Title" } })
-    );
-
-    const savedStates: unknown[] = [];
-    const registry = new PanelRegistry({});
-    const { deps } = makeManagerDeps(workspacePath);
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-      viewState: {
-        load: () => null,
-        save: (state) => {
-          savedStates.push(state);
-        },
-      },
-    });
-
-    const created = await manager.create("panels/chat", { isRoot: true, addAsRoot: true });
-    await manager.notifyFocused(created.panelId);
-
-    expect(savedStates[savedStates.length - 1]).toMatchObject({
-      focusedPanelId: created.panelId,
-      panelTitles: {
-        [created.panelId]: { source: "panels/chat", title: "Actual Chat Title" },
-      },
-    });
-  });
-
-  it("restores focused panel and title from local view state when manifests are unavailable", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    const seedRegistry = new PanelRegistry({});
-    const { deps } = makeManagerDeps(workspacePath);
-    const seedManager = new PanelManager({
-      registry: seedRegistry,
-      ...deps,
-      allowMissingManifests: true,
-    });
-    const created = await seedManager.create("panels/chat", {
-      isRoot: true,
-      addAsRoot: true,
-      name: "chat-root",
-    });
-
-    const registry = new PanelRegistry({});
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-      allowMissingManifests: true,
-      viewState: {
-        load: () => ({
-          collapsedIds: [],
-          focusedPanelId: created.panelId,
-          panelTitles: {
-            [created.panelId]: { source: "panels/chat", title: "Actual Chat Title" },
-          },
-        }),
-        save: () => {},
-      },
-    });
-
-    await manager.syncSnapshot();
-
-    expect(registry.getFocusedPanelId()).toBe(created.panelId);
-    expect(registry.getPanel(created.panelId)?.title).toBe("Actual Chat Title");
-  });
-
-  it("restores panel titles from server metadata when local manifests are unavailable", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    const seedRegistry = new PanelRegistry({});
-    const { deps } = makeManagerDeps(workspacePath);
-    const seedManager = new PanelManager({
-      registry: seedRegistry,
-      ...deps,
-      allowMissingManifests: true,
-    });
-    const created = await seedManager.create("panels/chat", {
-      isRoot: true,
-      addAsRoot: true,
-      name: "chat-root",
-    });
-
-    const registry = new PanelRegistry({});
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-      allowMissingManifests: true,
-      metadataResolver: {
-        getPanelMetadata: async (source) =>
-          source === "panels/chat" ? { title: "Server Chat Title" } : null,
-      },
-    });
-
-    await manager.syncSnapshot();
-
-    expect(registry.getPanel(created.panelId)?.title).toBe("Server Chat Title");
-  });
-
-  it("restores persisted entity titles ahead of manifest titles when rebuilding the tree", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    const panelDir = path.join(workspacePath, "panels", "chat");
-    fs.mkdirSync(panelDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "chat", vibestudio: { title: "Manifest Chat Title" } })
-    );
-
-    const seedRegistry = new PanelRegistry({});
-    const { mem, deps } = makeManagerDeps(workspacePath);
-    const seedManager = new PanelManager({
-      registry: seedRegistry,
-      ...deps,
-    });
-    const created = await seedManager.create("panels/chat", {
-      isRoot: true,
-      addAsRoot: true,
-      name: "chat-root",
-    });
-    const slot = mem.state.slots.get(created.panelId);
-    const entityId = slot?.current_entity_id;
-    if (!entityId) throw new Error("expected current entity id");
-    mem.state.entities.get(entityId)!.displayTitle = "Runtime Chat Title";
-
-    const registry = new PanelRegistry({});
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-    });
-
-    await manager.syncSnapshot();
-
-    expect(registry.getPanel(created.panelId)?.title).toBe("Runtime Chat Title");
-  });
-
-  it("does not resolve non-panel entity titles to panels by shared context", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    const panelDir = path.join(workspacePath, "panels", "chat");
-    fs.mkdirSync(panelDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "chat", vibestudio: { title: "Chat Panel" } })
-    );
-
-    const registry = new PanelRegistry({});
-    const { mem, deps } = makeManagerDeps(workspacePath);
-    const manager = new PanelManager({ registry, ...deps });
-    const created = await manager.create("panels/chat", {
-      isRoot: true,
-      addAsRoot: true,
-      name: "chat-root",
-      contextId: "ctx-shared",
-    });
-    const worker = await deps.runtime.createEntity({
-      kind: "worker",
-      execution: { surface: "code", source: "workers/agent" },
-      key: "agent",
-      contextId: "ctx-shared",
-    });
-    const panelEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
-    if (!panelEntityId) throw new Error("expected current panel entity id");
-
-    await expect(manager.resolveTitleTargetSlot(worker.id)).resolves.toBeNull();
-    await expect(manager.resolveTitleTargetSlot(panelEntityId)).resolves.toEqual({
-      slotId: created.panelId,
-      titleIsAlreadyPersistedForSlot: true,
-    });
-  });
-
-  it("closes parent subtrees with one workspace close and retires every panel entity", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    for (const name of ["root", "child"]) {
-      const panelDir = path.join(workspacePath, "panels", name);
-      fs.mkdirSync(panelDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
-      );
-    }
-
-    const registry = new PanelRegistry({});
-    const { mem, deps } = makeManagerDeps(workspacePath);
-    const manager = new PanelManager({ registry, ...deps });
-
-    const root = await manager.create("panels/root", { isRoot: true, addAsRoot: true });
-    const child = await manager.create("panels/child", { parentId: root.panelId });
-
-    await expect(manager.close(root.panelId)).resolves.toEqual({
-      closedIds: [root.panelId, child.panelId],
-    });
-    expect(mem.state.slots.get(root.panelId)?.closed_at).not.toBeNull();
-    expect(registry.getPanel(root.panelId)).toBeUndefined();
-    expect(registry.getPanel(child.panelId)).toBeUndefined();
-    // Both panel entities should be marked retired.
-    const activeRemaining = [...mem.state.entities.values()].filter((e) => e.status === "active");
-    expect(activeRemaining).toHaveLength(0);
-  });
-
-  it("restores persisted panel navigation history after a fresh manager sync", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
-    tempDirs.push(workspacePath);
-
-    for (const name of ["first", "second"]) {
-      const panelDir = path.join(workspacePath, "panels", name);
-      fs.mkdirSync(panelDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
-      );
-    }
-
-    const { mem, deps } = makeManagerDeps(workspacePath);
-    const managerA = new PanelManager({ registry: new PanelRegistry({}), ...deps });
-    const created = await managerA.create("panels/first", { isRoot: true, addAsRoot: true });
-    await managerA.navigate(created.panelId, "panels/second");
-
-    // Fresh manager that shares the same workspace state (same `mem`).
-    const registryB = new PanelRegistry({});
-    const managerB = new PanelManager({
-      registry: registryB,
-      workspaceState: mem.workspaceState,
-      runtime: mem.runtime,
-      workspacePath,
-      serverInfo: deps.serverInfo,
-      grantConnection: deps.grantConnection,
-    });
-    await managerB.syncSnapshot();
-
-    expect(getCurrentSnapshot(registryB.getPanel(created.panelId)!).source).toBe("panels/second");
-    await managerB.navigateHistory(created.panelId, -1);
-    expect(getCurrentSnapshot(registryB.getPanel(created.panelId)!).source).toBe("panels/first");
-  });
-
-  it("reconstructs startup state with one aggregate RPC instead of per-slot fanout", async () => {
-    const registryA = new PanelRegistry({});
     const { mem, deps } = makeManagerDeps("/tmp/workspace");
-    const managerA = new PanelManager({
-      registry: registryA,
+    const manager = new PanelManager({
+      registry,
       ...deps,
       allowMissingManifests: true,
     });
-    for (let index = 0; index < 64; index++) {
-      await managerA.createBrowser(null, `https://startup-${index}.example`, {
+    const created: PanelSlotId[] = [];
+    for (let index = 0; index < 300; index++) {
+      const panel = await manager.createBrowser(null, `https://history-.example`, {
         addAsRoot: true,
       });
+      created.push(panel.panelId);
     }
 
-    const aggregate = vi.spyOn(mem.workspaceState, "getPanelTreeStateSnapshot");
-    const list = vi.spyOn(mem.workspaceState, "listSlots");
-    const history = vi.spyOn(mem.workspaceState, "getSlotHistory");
-    const entity = vi.spyOn(mem.workspaceState, "resolveEntity");
-    const restored = new PanelRegistry({});
-    const managerB = new PanelManager({
-      registry: restored,
-      ...deps,
-      allowMissingManifests: true,
-    });
+    expect(registry.listPanels().length).toBeLessThanOrEqual(256);
+    const oldest = created[0]!;
+    expect(registry.getPanel(oldest)).toBeUndefined();
 
-    await managerB.syncSnapshot();
-
-    expect(restored.listPanels()).toHaveLength(64);
-    expect(aggregate).toHaveBeenCalledOnce();
-    expect(list).not.toHaveBeenCalled();
-    expect(history).not.toHaveBeenCalled();
-    expect(entity).not.toHaveBeenCalled();
-  });
-
-  it("returns preparing slots and their pending UX directly from the aggregate", async () => {
-    const { mem, deps } = makeManagerDeps("/tmp/workspace");
-    const reserved = await mem.runtime.reserveEntity({
-      kind: "panel",
-      execution: { surface: "code", source: "panels/preparing" },
-      key: "preparing-entry",
-      contextId: "ctx-preparing",
-    });
-    const slotId = "panel:tree/preparing" as PanelSlotId;
-    await mem.workspaceState.createSlot({
-      slotId,
-      parentSlotId: null,
-      positionId: "root",
-      initialEntry: {
-        entryKey: "preparing-entry",
-        entityId: reserved.id as PanelEntityId,
-        source: "panels/preparing",
-        contextId: "ctx-preparing",
-      },
-    });
-    const entity = vi.spyOn(mem.workspaceState, "resolveEntity");
-    const registry = new PanelRegistry({});
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-      allowMissingManifests: true,
-    });
-
-    const loaded = await manager.loadTree();
-
-    expect(loaded.preparingSlotIds).toEqual([slotId]);
-    expect(registry.getPanel(slotId)).toMatchObject({
-      runtimeEntityId: reserved.id,
-      buildKey: null,
-      executionDigest: null,
-      artifacts: {
-        buildState: "pending",
-        buildProgress: "Preparing panel runtime...",
-      },
-    });
-    expect(entity).not.toHaveBeenCalled();
-  });
-
-  it("keeps revision comparability after a forced aggregate sync", async () => {
-    const registry = new PanelRegistry({});
-    const { mem, deps } = makeManagerDeps("/tmp/workspace");
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-      allowMissingManifests: true,
-    });
-    await manager.createBrowser(null, "https://revision.example", { addAsRoot: true });
-    await manager.syncSnapshot();
-    const authoritativeRevision = mem.state.revision;
-
-    expect(
-      manager.applyForestSnapshot({
-        revision: authoritativeRevision,
-        forest: [],
-      })
-    ).toBe(false);
-    expect(
-      manager.applyForestSnapshot({
-        revision: authoritativeRevision - 1,
-        forest: [],
-      })
-    ).toBe(false);
-    expect(registry.listPanels()).toHaveLength(1);
-  });
-
-  it("applies complete forest events directly and rejects stale revisions", async () => {
-    const registry = new PanelRegistry({});
-    const { deps } = makeManagerDeps("/tmp/workspace");
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-      allowMissingManifests: true,
-    });
-    const created = await manager.createBrowser(null, "https://example.test", {
-      name: "event-root",
-      addAsRoot: true,
-      ownerUserId: "usr_alice",
-    });
-    const forest = registry.getPanelTreeSnapshot().forest;
-
-    expect(manager.applyForestSnapshot({ revision: 7, forest })).toBe(true);
-    expect(registry.getPanel(created.panelId)).toBeDefined();
-    expect(manager.applyForestSnapshot({ revision: 7, forest: [] })).toBe(false);
-    expect(registry.getPanel(created.panelId)).toBeDefined();
-    expect(manager.applyForestSnapshot({ revision: 8, forest: [] })).toBe(true);
-    expect(registry.getRootPanels()).toEqual([]);
-  });
-
-  it("reconciles the entity cache when a forest event replaces a panel runtime", async () => {
-    const registry = new PanelRegistry({});
-    const { deps } = makeManagerDeps("/tmp/workspace");
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-      allowMissingManifests: true,
-    });
-    const created = await manager.createBrowser(null, "https://example.test", {
-      addAsRoot: true,
-    });
-    const forest = structuredClone(registry.getPanelTreeSnapshot().forest);
-    const replacementEntityId = asPanelEntityId("panel:nav-replacement");
-    forest[0]!.rootPanels[0]!.runtimeEntityId = replacementEntityId;
-
-    expect(manager.applyForestSnapshot({ revision: 7, forest })).toBe(true);
-    await manager.getPanelInit(created.panelId);
-
-    expect(deps.grantConnection).toHaveBeenLastCalledWith(replacementEntityId);
+    const detail = vi.spyOn(mem.workspaceState, "getPanelDetail");
+    expect((await manager.getPanel(oldest))?.id).toBe(oldest);
+    expect(detail).toHaveBeenCalledWith(oldest);
+    expect(registry.listPanels().length).toBeLessThanOrEqual(256);
   });
 });

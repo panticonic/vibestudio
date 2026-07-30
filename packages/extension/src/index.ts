@@ -1,10 +1,6 @@
 import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
-import type {
-  UserlandApprovalChoice as SharedUserlandApprovalChoice,
-  UserlandApprovalRequest as SharedUserlandApprovalRequest,
-} from "@vibestudio/shared/approvals";
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
@@ -38,8 +34,6 @@ export interface ExtensionInvocation {
 }
 
 /** The one shared approval-card contract used by extensions, workers, desktop, and mobile. */
-export type UserlandApprovalRequest = SharedUserlandApprovalRequest;
-export type UserlandApprovalChoice = SharedUserlandApprovalChoice;
 
 export interface ExtensionSource {
   kind: "workspace-repo";
@@ -50,8 +44,6 @@ export interface ExtensionSource {
 export interface RegistryEntry extends UnitRegistryEntryBase {
   unitKind: "extension";
   source: ExtensionSource;
-  /** Present on extensions.list() wire results; registry persistence may omit it. */
-  shortName?: string;
 }
 
 /**
@@ -89,9 +81,6 @@ export interface ExtensionsClient {
     options?: { streamingMethods?: Iterable<string> }
   ): WorkspaceExtensions[K];
   on(name: ExtensionName, event: string, cb: (payload: unknown) => void): Disposable;
-  list(): Promise<RegistryEntry[]>;
-  /** Restart the active approved build (dev/diagnostics). Approval-gated. */
-  reload(name: ExtensionName): Promise<void>;
   /**
    * Call an extension method by name — the untyped primitive that `use(name).method(args)`
    * wraps. Useful when you don't have the extension's static types (e.g. server-side eval):
@@ -234,8 +223,6 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
         },
       };
     },
-    list: () => extensionsService.list(),
-    reload: (name) => extensionsService.reload(name),
     invoke: (name, method, args) => extensionsService.invoke(name, method, args),
     invokeProvider: (provider, method, args) =>
       extensionsService.invokeProvider(provider, method, args),
@@ -307,7 +294,7 @@ export interface HealthDetail {
 /**
  * Catch-all RPC client shape for host services not yet typed in this package.
  * Authors who want richer types can cast to the matching client interface
- * from `@vibestudio/runtime` (e.g. `WorkspaceClient`, `CredentialClient`,
+ * from `@workspace/runtime` (e.g. `WorkspaceClient`, `CredentialClient`,
  * `WebhookIngressClient`, `NotificationClient`).
  */
 export type ExtensionRpcSurface = Record<string, (...args: unknown[]) => Promise<unknown>>;
@@ -381,11 +368,6 @@ export interface ExtensionContext {
   readonly workers: ExtensionWorkersLike;
   readonly credentials: ExtensionRpcSurface;
   readonly webhooks: ExtensionRpcSurface;
-  readonly approvals: {
-    request(req: UserlandApprovalRequest): Promise<UserlandApprovalChoice>;
-    revoke(subjectId: string): Promise<boolean>;
-    list(): Promise<unknown[]>;
-  };
   readonly notifications: ExtensionNotificationsLike;
   readonly extensions: ExtensionsClient;
   readonly invocation: {

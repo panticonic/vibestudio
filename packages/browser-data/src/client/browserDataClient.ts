@@ -1,5 +1,9 @@
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { browserDataMethods } from "@vibestudio/service-schemas/browserData";
+import {
+  callTypedServiceMethod,
+  createTypedServiceClient,
+} from "@vibestudio/shared/typedServiceClient";
 import type {
   ApplyCookieMutationsRequest,
   BrowserEnvironmentIdentity,
@@ -169,76 +173,108 @@ export function createBrowserDataClient(rpc: RpcLike): BrowserDataClient {
     extensionsMethods,
     (service, method, args) => rpc.call(service, method, args)
   );
-  const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
+  const callNative = <T>(method: string, ...args: unknown[]): Promise<T> =>
     extensions.invokeProvider("browserData", method, args) as Promise<T>;
+  let resolvedTarget: Promise<string> | null = null;
+  const target = (): Promise<string> => {
+    resolvedTarget ??= rpc
+      .call("workers", "resolveService", ["vibestudio.browser-data.v1", null])
+      .then((resolved) => {
+        if (
+          !resolved ||
+          typeof resolved !== "object" ||
+          (resolved as { kind?: unknown }).kind !== "durable-object" ||
+          typeof (resolved as { targetId?: unknown }).targetId !== "string"
+        ) {
+          throw new Error("The browser.data builtin did not resolve to a Durable Object");
+        }
+        return (resolved as { targetId: string }).targetId;
+      })
+      .catch((error: unknown) => {
+        resolvedTarget = null;
+        throw error;
+      });
+    return resolvedTarget;
+  };
+  const callData = async <T>(
+    method: keyof typeof browserDataMethods & string,
+    ...args: unknown[]
+  ) =>
+    callTypedServiceMethod(
+      "browser.data",
+      browserDataMethods,
+      async (_service, wireMethod, wireArgs) => rpc.call(await target(), wireMethod, wireArgs),
+      method,
+      args
+    ) as Promise<T>;
 
   return {
-    getBrowserEnvironment: () => call("getBrowserEnvironment"),
-    listImportHosts: () => call("listImportHosts"),
-    listImportSources: (hostId) => call("listImportSources", hostId),
-    previewImport: (selection) => call("previewImport", selection),
-    startImport: (selection) => call("startImport", selection),
-    cancelImport: (jobId) => call("cancelImport", jobId),
-    getImportJob: (jobId) => call("getImportJob", jobId),
-    listImportJobs: () => call("listImportJobs"),
-    listOpenTabs: (hostId, sourceId) => call("listOpenTabs", { hostId, sourceId }),
-    openTabsAsPanels: (request) => call("openTabsAsPanels", request),
-    getSitePreferences: (origin) => call("getSitePreferences", origin),
-    setSiteZoom: (origin, zoomFactor) => call("setSiteZoom", origin, zoomFactor),
-    getBookmarks: (folderPath) => call("getBookmarks", folderPath),
-    addBookmark: (bookmark) => call("addBookmark", bookmark),
-    updateBookmark: (id, partial) => call("updateBookmark", id, partial),
-    deleteBookmark: (id) => call("deleteBookmark", id),
-    moveBookmark: (id, folderPath, position) => call("moveBookmark", id, folderPath, position),
-    searchBookmarks: (query) => call("searchBookmarks", query),
-    getHistory: (query) => call("getHistory", query),
-    deleteHistoryEntry: (id) => call("deleteHistoryEntry", id),
-    deleteHistoryRange: (startTime, endTime) => call("deleteHistoryRange", startTime, endTime),
-    clearAllHistory: () => call("clearAllHistory"),
-    searchHistory: (query, limit) => call("searchHistory", query, limit),
+    getBrowserEnvironment: () => callNative("getBrowserEnvironment"),
+    listImportHosts: () => callNative("listImportHosts"),
+    listImportSources: (hostId) => callNative("listImportSources", hostId),
+    previewImport: (selection) => callNative("previewImport", selection),
+    startImport: (selection) => callNative("startImport", selection),
+    cancelImport: (jobId) => callNative("cancelImport", jobId),
+    getImportJob: (jobId) => callNative("getImportJob", jobId),
+    listImportJobs: () => callNative("listImportJobs"),
+    listOpenTabs: (hostId, sourceId) => callNative("listOpenTabs", { hostId, sourceId }),
+    openTabsAsPanels: (request) => callNative("openTabsAsPanels", request),
+    getSitePreferences: (origin) => callData("getSitePreferences", origin),
+    setSiteZoom: (origin, zoomFactor) => callData("setSiteZoom", origin, zoomFactor),
+    getBookmarks: (folderPath) => callData("getBookmarks", folderPath),
+    addBookmark: (bookmark) => callData("addBookmark", bookmark),
+    updateBookmark: (id, partial) => callData("updateBookmark", id, partial),
+    deleteBookmark: (id) => callData("deleteBookmark", id),
+    moveBookmark: (id, folderPath, position) => callData("moveBookmark", id, folderPath, position),
+    searchBookmarks: (query) => callData("searchBookmarks", query),
+    getHistory: (query) => callData("getHistory", query),
+    deleteHistoryEntry: (id) => callData("deleteHistoryEntry", id),
+    deleteHistoryRange: (startTime, endTime) => callData("deleteHistoryRange", startTime, endTime),
+    clearAllHistory: () => callData("clearAllHistory"),
+    searchHistory: (query, limit) => callData("searchHistory", query, limit),
     searchHistoryForAutocomplete: (query, limit) =>
-      call("searchHistoryForAutocomplete", { query, limit }),
-    recordHistoryVisit: (request) => call("recordHistoryVisit", request),
-    updateHistoryTitle: (request) => call("updateHistoryTitle", request),
-    getPasswords: () => call("getPasswords"),
-    getPasswordForSite: (url) => call("getPasswordForSite", url),
-    addPassword: (password) => call("addPassword", password),
-    updatePassword: (id, partial) => call("updatePassword", id, partial),
-    deletePassword: (id) => call("deletePassword", id),
-    updatePasswordLastUsed: (id) => call("updatePasswordLastUsed", id),
-    addNeverSavePassword: (origin) => call("addNeverSavePassword", origin),
-    isNeverSavePassword: (origin) => call("isNeverSavePassword", origin),
-    getNeverSavePasswordOrigins: () => call("getNeverSavePasswordOrigins"),
-    removeNeverSavePassword: (origin) => call("removeNeverSavePassword", origin),
-    getFormFillSuggestions: (query) => call("getFormFillSuggestions", query),
-    addFormFillValue: (value) => call("addFormFillValue", value),
-    updateFormFillValue: (id, partial) => call("updateFormFillValue", id, partial),
-    markFormFillValueUsed: (id) => call("markFormFillValueUsed", id),
-    deleteFormFillValue: (id) => call("deleteFormFillValue", id),
-    clearFormFillValues: () => call("clearFormFillValues"),
-    getSearchEngines: () => call("getSearchEngines"),
-    setDefaultEngine: (id) => call("setDefaultEngine", id),
-    applyCookieMutations: (request) => call("applyCookieMutations", request),
-    getCookieSnapshot: (query) => call("getCookieSnapshot", query ?? {}),
-    getCookiesForOrigin: (origin) => call("getCookiesForOrigin", origin),
-    clearCookiesForOrigin: (origin) => call("clearCookiesForOrigin", origin),
-    clearAllCookies: () => call("clearAllCookies"),
-    endBrowserSession: () => call("endBrowserSession"),
-    getCookieSiteSummary: (origin) => call("getCookieSiteSummary", origin),
-    flushCookieProjection: (origins) => call("flushCookieProjection", origins ?? []),
-    getCookieProjectionDiagnostics: () => call("getCookieProjectionDiagnostics"),
-    listDownloads: () => call("listDownloads"),
-    listDownloadRecords: (hostId) => call("listDownloadRecords", hostId),
-    upsertDownloadRecord: (record) => call("upsertDownloadRecord", record),
-    pauseDownload: (id) => call("pauseDownload", id),
-    resumeDownload: (id) => call("resumeDownload", id),
-    cancelDownload: (id) => call("cancelDownload", id),
-    openDownload: (id) => call("openDownload", id),
-    revealDownload: (id) => call("revealDownload", id),
-    putPageFavicon: (favicon) => call("putPageFavicon", favicon),
-    getPageFavicon: (pageUrl) => call("getPageFavicon", pageUrl),
-    exportBookmarks: (format) => call("exportBookmarks", format),
-    exportPasswords: (format) => call("exportPasswords", format),
-    exportCookies: (format) => call("exportCookies", format),
+      callData("searchHistoryForAutocomplete", { query, limit }),
+    recordHistoryVisit: (request) => callData("recordHistoryVisit", request),
+    updateHistoryTitle: (request) => callData("updateHistoryTitle", request),
+    getPasswords: () => callData("getPasswords"),
+    getPasswordForSite: (url) => callData("getPasswordForSite", url),
+    addPassword: (password) => callData("addPassword", password),
+    updatePassword: (id, partial) => callData("updatePassword", id, partial),
+    deletePassword: (id) => callData("deletePassword", id),
+    updatePasswordLastUsed: (id) => callData("updateLastUsed", id),
+    addNeverSavePassword: (origin) => callData("addNeverSave", origin),
+    isNeverSavePassword: (origin) => callData("isNeverSave", origin),
+    getNeverSavePasswordOrigins: () => callData("getNeverSaveOrigins"),
+    removeNeverSavePassword: (origin) => callData("removeNeverSave", origin),
+    getFormFillSuggestions: (query) => callData("getFormFillSuggestions", query),
+    addFormFillValue: (value) => callData("addFormFillValue", value),
+    updateFormFillValue: (id, partial) => callData("updateFormFillValue", id, partial),
+    markFormFillValueUsed: (id) => callData("markFormFillValueUsed", id),
+    deleteFormFillValue: (id) => callData("deleteFormFillValue", id),
+    clearFormFillValues: () => callData("clearFormFillValues"),
+    getSearchEngines: () => callData("getSearchEngines"),
+    setDefaultEngine: (id) => callData("setDefaultEngine", id),
+    applyCookieMutations: (request) => callData("applyCookieMutations", request),
+    getCookieSnapshot: (query) => callData("getCookieSnapshot", query ?? {}),
+    getCookiesForOrigin: (origin) => callData("getCookiesForOrigin", origin),
+    clearCookiesForOrigin: (origin) => callData("clearCookiesForOrigin", origin),
+    clearAllCookies: () => callData("clearAllCookies"),
+    endBrowserSession: () => callData("endBrowserSession"),
+    getCookieSiteSummary: (origin) => callData("getCookieSiteSummary", origin),
+    flushCookieProjection: (origins) => callNative("flushCookieProjection", origins ?? []),
+    getCookieProjectionDiagnostics: () => callNative("getCookieProjectionDiagnostics"),
+    listDownloads: () => callNative("listDownloads"),
+    listDownloadRecords: (hostId) => callData("listDownloadRecords", hostId),
+    upsertDownloadRecord: (record) => callData("upsertDownloadRecord", record),
+    pauseDownload: (id) => callNative("pauseDownload", id),
+    resumeDownload: (id) => callNative("resumeDownload", id),
+    cancelDownload: (id) => callNative("cancelDownload", id),
+    openDownload: (id) => callNative("openDownload", id),
+    revealDownload: (id) => callNative("revealDownload", id),
+    putPageFavicon: (favicon) => callData("putPageFavicon", favicon),
+    getPageFavicon: (pageUrl) => callData("getPageFavicon", pageUrl),
+    exportBookmarks: (format) => callNative("exportBookmarks", format),
+    exportPasswords: (format) => callNative("exportPasswords", format),
+    exportCookies: (format) => callNative("exportCookies", format),
   };
 }

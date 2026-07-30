@@ -77,6 +77,13 @@ const LIST_ACCESS: MethodAccessDescriptor = {
 
 export const workspacePresenceMethods = defineServiceMethods({
   list: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspacePresence.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "List the users with ≥1 live human connection to this workspace, plus recently-departed users with a last-seen time (WP8 §4 host presence). Fed only by the session registry — carries no channel/conversation data.",
     args: z.tuple([]),

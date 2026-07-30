@@ -37,7 +37,7 @@ describe("server notification service", () => {
       service.handler(
         {
           caller: createVerifiedCaller(
-            "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+            "do:workers/workspace-source:GadWorkspaceDO:workspace",
             "do"
           ),
         },

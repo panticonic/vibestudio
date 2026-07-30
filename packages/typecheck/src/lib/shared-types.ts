@@ -1,7 +1,7 @@
 /**
  * Shared type definition fragments used across multiple virtual type files.
  *
- * This avoids duplication between fs shim types and @vibestudio/runtime types.
+ * This avoids duplication between fs shim types and @workspace/runtime types.
  */
 
 /**
@@ -15,7 +15,7 @@ type BufferEncoding =
 `;
 
 /**
- * FileStats interface - used by both fs module and @vibestudio/runtime.
+ * FileStats interface - used by both fs module and @workspace/runtime.
  */
 export const FILE_STATS_INTERFACE = `
 interface FileStats {

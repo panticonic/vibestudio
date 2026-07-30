@@ -8,17 +8,16 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { CapabilityScope } from "@vibestudio/rpc";
-import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type {
+  UnitAuthorityManifest,
+  UnitAuthorityRequest,
+  UserlandCapabilityDefinition,
+} from "@vibestudio/shared/authorityManifest";
 import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
+import { AuthorityResourceScopeSchema, authorityRowSchema } from "./authority.js";
 
-export const AuthorityResourceScopeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("exact"), key: z.string() }).strict(),
-  z.object({ kind: z.literal("prefix"), prefix: z.string() }).strict(),
-  z.object({ kind: z.literal("origin"), origin: z.string() }).strict(),
-  z.object({ kind: z.literal("domain"), domain: z.string() }).strict(),
-  z.object({ kind: z.literal("network"), value: z.literal("*") }).strict(),
-]);
+export { AuthorityResourceScopeSchema } from "./authority.js";
 
 export const CapabilityScopeSchema = z
   .object({
@@ -34,11 +33,42 @@ export const UnitAuthorityRequestSchema = CapabilityScopeSchema.extend({
   packages: z.array(z.string().min(1)).readonly().optional(),
 }).strict() satisfies z.ZodType<UnitAuthorityRequest>;
 
+export const UserlandCapabilityDefinitionSchema = z
+  .object({
+    name: z.string(),
+    title: z.string(),
+    action: z.string(),
+    description: z.string().optional(),
+    tier: z.enum(["gated", "critical"]),
+    sensitivity: z.enum(["read", "write", "admin", "destructive"]),
+    resourceType: z.string(),
+    presentation: z
+      .object({
+        domain: z.enum([
+          "files",
+          "web",
+          "sharing",
+          "accounts",
+          "automation",
+          "people",
+          "computer",
+          "safety",
+        ]),
+        verb: z.enum(["see", "act", "manage"]),
+      })
+      .strict(),
+    grantScopes: z
+      .array(z.enum(["once", "task", "agent", "mission", "version", "session"]))
+      .readonly(),
+  })
+  .strict() satisfies z.ZodType<UserlandCapabilityDefinition>;
+
 export const UnitAuthorityManifestSchema = z
   .object({
-    requests: z.array(UnitAuthorityRequestSchema),
+    requests: z.array(UnitAuthorityRequestSchema).readonly(),
+    provides: z.array(UserlandCapabilityDefinitionSchema).readonly(),
   })
-  .strict();
+  .strict() satisfies z.ZodType<UnitAuthorityManifest>;
 
 // Access descriptors classify build operations; compositional authority is
 // declared independently by the service and its method overrides.
@@ -81,7 +111,7 @@ export const buildMetadataSchema = z
     buildKey: z.string().min(1),
     ev: z.string(),
     sourceStateHash: z.string().nullable(),
-    sourceSemanticState: z
+    sourceState: z
       .discriminatedUnion("kind", [
         z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
         z.object({ kind: z.literal("application"), applicationId: z.string().min(1) }).strict(),
@@ -92,6 +122,10 @@ export const buildMetadataSchema = z
     sourcemap: z.boolean(),
     framework: z.string().optional(),
     authority: UnitAuthorityManifestSchema.optional(),
+    stateArgsSchema: z
+      .record(z.unknown())
+      .optional()
+      .describe("Panel state-argument schema sealed from this exact source artifact."),
     details: z.object({ kind: z.string() }).passthrough(),
     builtAt: z.string(),
   })
@@ -142,6 +176,12 @@ export const executionArtifactRefSchema = z
           state: z.discriminatedUnion("kind", [
             z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
             z.object({ kind: z.literal("application"), applicationId: z.string().min(1) }).strict(),
+            z
+              .object({
+                kind: z.literal("bootstrap-snapshot"),
+                snapshotHash: z.string().regex(/^state:[0-9a-f]{64}$/u),
+              })
+              .strict(),
           ]),
           contentRoots: z.array(executionSourceContentRootSchema).min(1),
           sourceClosureDigest: sha256Schema,
@@ -242,6 +282,8 @@ export const panelMetadataSchema = z
     title: z.string(),
     description: z.string().optional(),
     hiddenInLauncher: z.boolean(),
+    stateArgs: z.unknown().optional(),
+    autoArchiveWhenEmpty: z.boolean().optional(),
   })
   .strict();
 
@@ -282,25 +324,6 @@ export const buildProvenanceSchema = z
     recentBuildEvents: z.array(z.unknown()).optional(),
   })
   .passthrough();
-
-export const extensionDoctorReportSchema = z
-  .object({
-    name: z.string(),
-    kind: z.literal("extension"),
-    path: z.string(),
-    dependencyDiagnostics: z.unknown(),
-    buildMetadata: buildMetadataSchema.nullable(),
-    checks: z.array(
-      z
-        .object({
-          name: z.string(),
-          status: z.enum(["pass", "warn", "fail"]),
-          message: z.string(),
-        })
-        .strict()
-    ),
-  })
-  .strict();
 
 export const recentBuildEventSchema = z
   .object({
@@ -348,6 +371,36 @@ export const recentBuildEventSchema = z
   .strict();
 
 /**
+ * One declared executable source in the workspace build graph. This is source
+ * and artifact state, not a runtime-instance record; exact live entities are
+ * exposed only by runtime.supervision.
+ */
+export const buildUnitCatalogEntrySchema = z
+  .object({
+    name: z.string(),
+    kind: z.enum(["panel", "worker", "extension", "app"]),
+    target: z.enum(["electron", "react-native", "terminal"]).nullable(),
+    capabilities: z.array(z.string()),
+    source: z.string(),
+    displayName: z.string(),
+    isAgent: z.boolean(),
+    status: z.enum(["available", "building", "ready", "approval-required", "error"]),
+    effectiveVersion: z.string().nullable(),
+    activeBuildKey: z.string().nullable(),
+    lastError: z.string().nullable(),
+    pendingApproval: z
+      .object({
+        kind: z.string(),
+        submittedAt: z.number(),
+      })
+      .strict()
+      .nullable(),
+    authorityRows: z.array(authorityRowSchema),
+  })
+  .strict();
+export type BuildUnitCatalogEntry = z.infer<typeof buildUnitCatalogEntrySchema>;
+
+/**
  * Which execution environment will run a library bundle — selects the module
  * resolution conditions. `worker` covers any workerd isolate, including the eval
  * sandbox (a DO): it must NOT resolve a package's panel entry, whose top-level
@@ -359,7 +412,30 @@ export const libraryBuildTargetSchema = z.enum(["panel", "worker"]);
 export type LibraryBuildTarget = z.infer<typeof libraryBuildTargetSchema>;
 
 export const buildMethods = defineServiceMethods({
+  listUnits: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Read-only projection of declared workspace sources, immutable build identity, and reviewed authority",
+    },
+    description:
+      "List declared executable source units and their build readiness. This is not a process list: use runtime.supervision.list for exact live entities.",
+    args: z.tuple([]),
+    returns: z.array(buildUnitCatalogEntrySchema),
+    access: READ_ACCESS,
+  },
   getBuild: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Workspace-local compilation into an immutable cache; no publication, install, or external acquisition",
+    },
     description:
       "Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache.",
     args: z.tuple([
@@ -399,6 +475,26 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getBuildNpm: {
+    capability: "workspace.dependencies.inspect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "G5: external package acquisition is gated; installed code and explicitly approved eval sessions share the reviewed code family",
+    },
+    presentation: {
+      title: "Inspect installed packages for an app, panel, worker, or extension",
+      action: "inspect installed packages for an app, panel, worker, or extension",
+      description:
+        "Allows {requesterKind} to inspect installed packages for an app, panel, worker, or extension.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
     description:
       "Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled.",
     args: z.tuple([
@@ -414,6 +510,13 @@ export const buildMethods = defineServiceMethods({
     access: EXTERNAL_ACQUISITION_ACCESS,
   },
   getBuildMetadata: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Read-only inspection of an immutable local build record",
+    },
     description:
       "Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured.",
     args: z.tuple([z.string()]),
@@ -423,6 +526,14 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getBuildReport: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Workspace-local compilation and diagnostics; no publication, install, or external acquisition",
+    },
     description:
       "Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return a compact, agent-actionable report. Read all diagnostics from report.diagnostics or target-specific diagnostics from report.builds. Artifact manifests are intentionally excluded; inspect an immutable build key separately when artifact provenance is needed. This advisory projection does not publish source, authorize publication, or advance any head.",
     args: z.tuple([
@@ -476,6 +587,13 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getEffectiveVersion: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Read-only discovery of a content-derived local unit identity",
+    },
     description:
       "Effective version (content-derived identity) of a workspace unit, or null if unknown.",
     args: z.tuple([z.string()]),
@@ -483,6 +601,13 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   inspectBuildProvenance: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Read-only inspection of caller-visible local build provenance",
+    },
     description:
       "Resolve a workspace build unit (by name, relative path, or basename) and report its effective version, immutable build keys, and cached artifact metadata. Reports ambiguity when a basename matches multiple units.",
     args: z.tuple([z.string()]),
@@ -490,20 +615,40 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listRecentBuildEvents: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Read-only diagnostics for workspace-local build activity",
+    },
     description:
       "List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path.",
     args: z.tuple([z.string().optional()]),
     returns: z.array(recentBuildEventSchema),
     access: READ_ACCESS,
   },
-  doctorExtension: {
-    description:
-      "Inspect an extension manifest, dependency routing, cached metadata, and smoke/build status.",
-    args: z.tuple([z.string()]),
-    returns: extensionDoctorReportSchema,
-    access: { sensitivity: "read" },
-  },
   recompute: {
+    capability: "workspace.build-cache.manage",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "untrusted-execution",
+      family: "build.control",
+      rationale:
+        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Rebuild workspace apps, panels, workers, and extensions",
+      action: "rebuild workspace apps, panels, workers, and extensions",
+      description:
+        "Allows {requesterKind} to rebuild workspace apps, panels, workers, and extensions.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description:
       "Rediscover the package graph, recompute every unit's effective version, rebuild any changed buildable units, and return the set of changed/added/removed units.",
     args: z.tuple([]),
@@ -511,6 +656,26 @@ export const buildMethods = defineServiceMethods({
     access: RECOMPUTE_ACCESS,
   },
   gc: {
+    capability: "workspace.build-cache.manage",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "untrusted-execution",
+      family: "build.control",
+      rationale:
+        "G5: read-only host infrastructure diagnostics; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Inspect build cache retention",
+      action: "inspect build cache retention",
+      description:
+        "Allows {requesterKind} to inspect retained and unreferenced build files without removing them.",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description:
       "Inspect authoritative execution retention using host-owned roots without mutating artifacts or source content. Destructive collection is private to the coordinated host epoch.",
     args: z.tuple([]),
@@ -573,6 +738,14 @@ export const buildMethods = defineServiceMethods({
     ],
   },
   inspectExecution: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Read-only diagnosis of an immutable execution identity, its owners, and reconstructibility",
+    },
     description:
       "Explain one immutable execution identity, its authoritative owners, and whether its artifact and source closure remain reconstructible.",
     args: z.tuple([z.string().regex(/^[0-9a-f]{64}$/u)]),
@@ -595,18 +768,39 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getAboutPages: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Read-only discovery of workspace-local launcher metadata",
+    },
     description: "List available about pages for the launcher UI.",
     args: z.tuple([]),
     returns: z.array(aboutPageMetaSchema),
     access: READ_ACCESS,
   },
   hasUnit: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Read-only lookup in the caller-visible workspace graph",
+    },
     description: "Whether a build unit with this name exists in the workspace graph.",
     args: z.tuple([z.string()]),
     returns: z.boolean(),
     access: READ_ACCESS,
   },
   getPanelMetadata: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Read-only discovery of workspace-local panel metadata",
+    },
     description:
       "Launcher metadata (source path, title, description, launcher visibility) for a panel unit, or null if the name is absent or not a panel.",
     args: z.tuple([z.string()]),
@@ -614,6 +808,13 @@ export const buildMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listSkills: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale: "Read-only discovery of caller-visible workspace skill packages",
+    },
     description:
       "List available workspace skill packages that can be loaded via the eval imports parameter.",
     args: z.tuple([]),

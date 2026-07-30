@@ -86,7 +86,7 @@ describe("CredentialUseGrantStore", () => {
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual(persisted);
   });
 
-  it("atomically migrates the recognized unversioned object and array shapes", () => {
+  it("rejects unversioned object and array shapes without modifying them", () => {
     const grant = {
       credentialId: "cred_1",
       bindingId: "binding_fetch",
@@ -105,11 +105,8 @@ describe("CredentialUseGrantStore", () => {
       fs.writeFileSync(filePath, JSON.stringify(persisted));
 
       const store = new CredentialUseGrantStore({ statePath });
-      expect(store.list("cred_1")).toHaveLength(1);
-      expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({
-        schemaVersion: 2,
-        grants: [grant],
-      });
+      expect(() => store.list("cred_1")).toThrow(/has no schemaVersion/);
+      expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual(persisted);
     }
   });
 
@@ -131,7 +128,7 @@ describe("CredentialUseGrantStore", () => {
     expect(new CredentialUseGrantStore({ statePath }).list("cred_1")).toEqual([grant]);
   });
 
-  it("forward-migrates version-one code grants without widening them", () => {
+  it("rejects version-one code grants without modifying them", () => {
     const statePath = tempDir();
     const filePath = path.join(statePath, "credential-use-grants.json");
     const grant = {
@@ -149,21 +146,9 @@ describe("CredentialUseGrantStore", () => {
     fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 1, grants: [grant] }));
 
     const store = new CredentialUseGrantStore({ statePath });
-    expect(store.list("cred_1")).toEqual([
-      {
-        bindingId: grant.bindingId,
-        use: grant.use,
-        resource: grant.resource,
-        action: grant.action,
-        scope: grant.scope,
-        repoPath: grant.repoPath,
-        effectiveVersion: grant.effectiveVersion,
-        grantedAt: grant.grantedAt,
-        grantedBy: grant.grantedBy,
-      },
-    ]);
+    expect(() => store.list("cred_1")).toThrow(/schema version 1; expected 2/);
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 1,
       grants: [grant],
     });
   });
@@ -175,7 +160,7 @@ describe("CredentialUseGrantStore", () => {
     fs.writeFileSync(filePath, JSON.stringify(persisted));
 
     const store = new CredentialUseGrantStore({ statePath });
-    expect(() => store.listAll()).toThrow(/unsupported schema version 3/);
+    expect(() => store.listAll()).toThrow(/schema version 3; expected 2/);
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual(persisted);
   });
 });

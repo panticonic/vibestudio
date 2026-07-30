@@ -235,7 +235,7 @@ function createHarness(
           key: id.slice(id.lastIndexOf(":") + 1),
           activeBuildKey: EVAL_EXECUTION_IDENTITY.buildKey,
           activeExecutionDigest: EVAL_EXECUTION_IDENTITY.executionDigest,
-          activeAuthority: { requests: EVAL_EXECUTION_IDENTITY.authorityRequests },
+          activeAuthority: EVAL_EXECUTION_IDENTITY.authority,
           parentId: "session:default",
           stateArgs: {
             ownerPrincipalId: "session:default",
@@ -371,7 +371,7 @@ describe("createEvalService", () => {
           key: objectKey,
           activeBuildKey: EVAL_EXECUTION_IDENTITY.buildKey,
           activeExecutionDigest: EVAL_EXECUTION_IDENTITY.executionDigest,
-          activeAuthority: { requests: EVAL_EXECUTION_IDENTITY.authorityRequests },
+          activeAuthority: EVAL_EXECUTION_IDENTITY.authority,
           ownerUserId: "usr_test",
           agentBinding: undefined,
           // The EvalDO's launch parent IS its owner — bridges the lineage so entities spawned FROM an
@@ -693,10 +693,12 @@ describe("createEvalService", () => {
     ]);
     expect(executionSessions.resolve(runtimeId)).not.toBeNull();
     settleLiveEvent();
-    expect(executionSessions.resolve(runtimeId)).toBeNull();
+    expect(executionSessions.resolve(runtimeId)).toMatchObject({
+      eval: { runtimeId, runId },
+    });
   });
 
-  it("releases admission immediately after a definitive start rejection", async () => {
+  it("releases the cell slot after a definitive start rejection without discarding its history", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:rejected";
     const { service, calls, executionSessions, activity } = createHarness(
       { [ownerId]: "ctx_agent" },
@@ -715,11 +717,13 @@ describe("createEvalService", () => {
     ).objectKey;
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
     expect(calls.filter((call) => call.method === "startRun")).toHaveLength(1);
-    expect(executionSessions.resolve(runtimeId)).toBeNull();
+    expect(executionSessions.resolve(runtimeId)).toMatchObject({
+      eval: { runtimeId, runId: "effect:eval:rejected" },
+    });
     expect(activity.getActivity().activeRuns).toBe(0);
   });
 
-  it("does not poll after acceptance and closes admission once from the trusted terminal sink", async () => {
+  it("does not poll after acceptance and releases the cell once from the trusted terminal sink", async () => {
     const ownerId = "do:workers/agent-worker:AiChatWorker:live-terminal";
     const { service, calls, executionSessions, activity, settleLiveEvent } = createHarness({
       [ownerId]: "ctx_agent",
@@ -745,12 +749,14 @@ describe("createEvalService", () => {
 
     settleLiveEvent();
     settleLiveEvent();
-    expect(executionSessions.resolve(runtimeId)).toBeNull();
+    expect(executionSessions.resolve(runtimeId)).toMatchObject({
+      eval: { runtimeId, runId: "effect:eval:live-terminal" },
+    });
     expect(activity.getActivity().activeRuns).toBe(0);
     expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
   });
 
-  it("retains root and descendant test admissions through cancelling and revokes them at cancelled", async () => {
+  it("retains root and descendant test-history trust through cancellation", async () => {
     const ownerId = "session:default";
     const runId = "system-test-runner:cancel-lifecycle";
     const { service, calls, executionSessions, settleLiveEvent } = createHarness(
@@ -778,7 +784,6 @@ describe("createEvalService", () => {
         fallback: "disabled",
       },
       authority: [],
-      userland: [],
       unexpectedPrompts: "fail",
     });
     const casePolicy = executionSessions.testPolicyForContext("ctx:case");
@@ -800,7 +805,7 @@ describe("createEvalService", () => {
         runId: "system-test-runner:cancel-lifecycle-child",
         authorityManifest: {
           mode: "adaptive",
-          effects: "mutable",
+          effects: "read-write",
           approvals: "prompt",
           requests: [],
           digest: "0".repeat(64),
@@ -816,13 +821,13 @@ describe("createEvalService", () => {
     expect(executionSessions.resolve(child.eval.runtimeId)).not.toBeNull();
 
     settleLiveEvent();
-    expect(executionSessions.resolve(rootRuntimeId)).toBeNull();
-    expect(executionSessions.resolve(child.eval.runtimeId)).toBeNull();
-    expect(executionSessions.testPolicyForContext("ctx:orchestrator")).toBeNull();
-    expect(executionSessions.testPolicyForContext("ctx:case")).toBeNull();
+    expect(executionSessions.resolve(rootRuntimeId)).not.toBeNull();
+    expect(executionSessions.resolve(child.eval.runtimeId)).not.toBeNull();
+    expect(executionSessions.testPolicyForContext("ctx:orchestrator")).not.toBeNull();
+    expect(executionSessions.testPolicyForContext("ctx:case")).not.toBeNull();
   });
 
-  it("closes admission immediately for a start that returns its terminal snapshot", async () => {
+  it("releases the cell immediately when start returns its terminal snapshot", async () => {
     const ownerId = "session:default";
     const { service, calls, executionSessions, activity } = createHarness({
       [ownerId]: "ctx:held",
@@ -842,7 +847,9 @@ describe("createEvalService", () => {
       status: "terminal",
       snapshot: { status: "done", result: { success: true } },
     });
-    expect(executionSessions.resolve(runtimeId)).toBeNull();
+    expect(executionSessions.resolve(runtimeId)).toMatchObject({
+      eval: { runtimeId, runId: "run:held" },
+    });
     expect(activity.getActivity().activeRuns).toBe(0);
   });
 

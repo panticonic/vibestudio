@@ -40,11 +40,12 @@ export function stateLayout(statePath: string) {
       buildGcFile: path.join(statePath, "execution-retention", "build-gc.json"),
       buildTrashDir: path.join(statePath, "execution-retention", "build-trash"),
     },
-    hostTargetSelectionsFile: path.join(statePath, "host-targets", "selections.json"),
     ownerPanelSeedsDir: path.join(statePath, "panel-tree", "seeded-owners"),
     authority: {
       root: authority,
       grantsDb: path.join(authority, "grants.db"),
+      reviewedClosuresDb: path.join(authority, "reviewed-closures.db"),
+      resourceHandlesDb: path.join(authority, "resource-handles.db"),
       approvedUnitVersionsFile: path.join(authority, "approved-unit-versions.json"),
       conduitBlessingsFile: path.join(authority, "conduit-blessings.json"),
     },

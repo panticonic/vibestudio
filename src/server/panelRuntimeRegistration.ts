@@ -6,12 +6,7 @@
  */
 
 import { createDevLogger } from "@vibestudio/dev-log";
-import {
-  createOwnerPanelSeedStore,
-  createOwnerSeedingPanelTreeBridge,
-  createServerPanelTreeBridge,
-  waitForCdpTargetRegistered,
-} from "./ownerPanelTreeBridge.js";
+import type { CdpBridge } from "./cdpBridge.js";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import {
   createHostCaller,
@@ -21,16 +16,7 @@ import {
   type ServiceDispatcher,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { Workspace, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import type { HostConfig } from "@vibestudio/shared/hostConfig";
-import type {
-  HostTarget,
-  HostTargetCandidate,
-  HostTargetLaunchResult,
-  HostTargetLaunchSessionSnapshot,
-  HostTargetSelection,
-  HostTargetSelectionInput,
-} from "@vibestudio/shared/hostTargets";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
@@ -38,28 +24,26 @@ import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
-import { rpcErrorDataOf } from "@vibestudio/rpc";
-import { panelFailure, panelFailureBoundaryError } from "@vibestudio/shared/panel/observation";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 
+async function waitForCdpTargetRegistered(
+  bridge: CdpBridge,
+  panelId: string,
+  hostConnectionId: string,
+  timeoutMs = 30_000
+): Promise<void> {
+  if (bridge.isTargetRegisteredForHost(panelId, hostConnectionId)) return;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (bridge.isTargetRegisteredForHost(panelId, hostConnectionId)) return;
+  }
+  throw new Error(`CDP endpoint unavailable for panel: ${panelId}`);
+}
+
 type PanelAccessMetadata =
   import("./services/panelAccessPermission.js").PanelAccessPermissionTarget;
-
-function shouldValidateOpenPanelWorkspaceUnit(source: string): boolean {
-  if (!source) return false;
-  if (isBrowserPanelSource(source)) return false;
-  if (isAboutSource(source)) return false;
-  return source === "panels" || source.startsWith("panels/");
-}
-
-function panelOpenBuildRef(options: Record<string, unknown>): string | undefined {
-  if (typeof options["ref"] === "string" && options["ref"].length > 0) return options["ref"];
-  if (typeof options["contextId"] === "string" && options["contextId"].length > 0) {
-    return `ctx:${options["contextId"]}`;
-  }
-  return undefined;
-}
 
 export function cdpDefaultHostAssignmentError(
   panelId: string,
@@ -113,6 +97,16 @@ export interface CommonDeps {
   /** Live config reads and GAD-authoritative protected-main writes. */
   getWorkspaceConfig?: () => WorkspaceConfig;
   persistWorkspaceConfigField?: (ctx: ServiceContext, key: string, value: unknown) => Promise<void>;
+  applyPreparedWorkspaceConfig?: (
+    ctx: ServiceContext,
+    input: {
+      expectedBaseDigest: string;
+      nextState: WorkspaceConfig;
+      resultDigest: string;
+      allowedPathScope: string[];
+      summary: string;
+    }
+  ) => Promise<{ changed: boolean; resultDigest: string; config: WorkspaceConfig }>;
   recordContextIngestion?: ContextIngestionRecorder;
   treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
@@ -139,82 +133,9 @@ export interface CommonDeps {
   getGatewayPort?: () => number | null;
   /** Materialize a context's working folder; backs `workspace.ensureContextFolder`. */
   ensureContextFolder?: (contextId: string) => Promise<{ dir: string }>;
-  listWorkspaceUnits?: () =>
-    | Promise<import("./services/workspaceService.js").WorkspaceUnitStatus[]>
-    | import("./services/workspaceService.js").WorkspaceUnitStatus[];
-  restartWorkspaceUnit?: (
-    ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext,
-    name: string
-  ) => Promise<void>;
-  listWorkspaceUnitLogs?: (
-    name: string,
-    opts?: {
-      since?: number;
-      level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"];
-      limit?: number;
-    }
-  ) =>
-    | Promise<import("./services/workspaceService.js").WorkspaceUnitLogRecord[]>
-    | import("./services/workspaceService.js").WorkspaceUnitLogRecord[];
-  unitDiagnostics?: (
-    name: string,
-    opts?: {
-      since?: number;
-      level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"];
-      limit?: number;
-      errorLimit?: number;
-    }
-  ) =>
-    | Promise<import("./services/workspaceService.js").WorkspaceUnitDiagnostics>
-    | import("./services/workspaceService.js").WorkspaceUnitDiagnostics;
-  bakeAppDist?: (sourceOrName: string, opts?: { outDir?: string }) => Promise<unknown> | unknown;
-  listAppVersions?: (
-    sourceOrName: string
-  ) =>
-    | Promise<import("./services/workspaceService.js").WorkspaceAppVersions>
-    | import("./services/workspaceService.js").WorkspaceAppVersions;
-  rollbackAppVersion?: (sourceOrName: string, buildKey?: string) => Promise<unknown> | unknown;
   listRecurringJobs?: () =>
     | Promise<import("./services/workspaceService.js").WorkspaceRecurringJobStatus[]>
     | import("./services/workspaceService.js").WorkspaceRecurringJobStatus[];
-  listHostTargetCandidates?: (
-    target: HostTarget
-  ) => Promise<HostTargetCandidate[]> | HostTargetCandidate[];
-  getHostTargetSelection?: (
-    target: HostTarget
-  ) =>
-    | Promise<{ selection: HostTargetSelection | null; valid: boolean; reason?: string }>
-    | { selection: HostTargetSelection | null; valid: boolean; reason?: string };
-  setHostTargetSelection?: (
-    target: HostTarget,
-    input: HostTargetSelectionInput
-  ) => Promise<HostTargetSelection> | HostTargetSelection;
-  clearHostTargetSelection?: (target: HostTarget) => Promise<void> | void;
-  listHostTargetVersions?: (
-    target: HostTarget,
-    sourceOrName: string
-  ) =>
-    | Promise<import("./services/workspaceService.js").WorkspaceAppVersions>
-    | import("./services/workspaceService.js").WorkspaceAppVersions;
-  prepareHostTargetPinnedRef?: (
-    target: HostTarget,
-    sourceOrName: string,
-    ref: string
-  ) => Promise<unknown> | unknown;
-  launchHostTarget?: (
-    target: HostTarget
-  ) => Promise<HostTargetLaunchResult> | HostTargetLaunchResult;
-  beginHostTargetLaunch?: (
-    target: HostTarget
-  ) => Promise<HostTargetLaunchSessionSnapshot> | HostTargetLaunchSessionSnapshot;
-  getHostTargetLaunchSession?: (
-    sessionId: string
-  ) => Promise<HostTargetLaunchSessionSnapshot | null> | HostTargetLaunchSessionSnapshot | null;
-  resolveHostTargetLaunchSessionApproval?: (
-    sessionId: string,
-    decision: "once" | "deny"
-  ) => Promise<HostTargetLaunchSessionSnapshot> | HostTargetLaunchSessionSnapshot;
-  cancelHostTargetLaunchSession?: (sessionId: string) => Promise<void> | void;
   approvalQueue?: ApprovalQueue;
   getEffectiveVersion?: (source: string) => Promise<string | undefined>;
   registerEntityTitleListener?: (
@@ -227,45 +148,37 @@ export interface CommonDeps {
   /**
    * Register a listener fired whenever the authoritative panel slot/history tree
    * changes (any client). The panel-tree bridge uses it to re-sync its in-memory
-   * mirror and re-broadcast `panel-tree-updated` so every client converges.
+   * mirror and re-broadcast `panel-tree-invalidated` so every client converges.
    */
   registerSlotStateListener?: (listener: () => void) => () => void;
 }
 
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   const { container, workspace, workspaceConfig, adminToken, hostConfig } = deps;
-  let serverPanelTreeBridgePromise: Promise<
-    import("./services/panelTreeService.js").PanelTreeBridge
-  > | null = null;
-  const getPanelTreeBridge = () => {
-    serverPanelTreeBridgePromise ??= createServerPanelTreeBridge({
-      container: deps.container,
-      dispatcher: deps.dispatcher,
-      workspacePath: deps.workspacePath,
-      workspaceConfig: deps.workspaceConfig,
-      eventService: deps.eventService,
-      panelRuntimeCoordinator: deps.panelRuntimeCoordinator,
-      ensureDefaultHeadlessHost: deps.ensureDefaultHeadlessHost,
-      getGatewayPort: deps.getGatewayPort,
-      registerEntityTitleListener: deps.registerEntityTitleListener,
-      registerSlotStateListener: deps.registerSlotStateListener,
-    });
-    return serverPanelTreeBridgePromise;
-  };
   const isKnownPanelSlot = createKnownPanelSlotResolver(deps.dispatcher);
   const requestPanelMetadataForServices = async (
     panelId: string,
-    caller: { id: string; kind: CallerKind } = { id: "server", kind: "server" }
+    _caller: { id: string; kind: CallerKind } = { id: "server", kind: "server" }
   ): Promise<PanelAccessMetadata | null> => {
-    const bridge = await getPanelTreeBridge();
-    const meta = (await bridge({
-      callerId: caller.id,
-      callerKind: caller.kind,
-      method: "metadata",
-      args: [panelId],
-    })) as PanelAccessMetadata | null;
-    if (!meta) return null;
-    return { ...meta, id: panelId };
+    const detail = (await deps.dispatcher.dispatch(
+      { caller: createHostCaller("server") },
+      "workspace-state",
+      "panelTree.detail",
+      [panelId]
+    )) as {
+      slot: { current_entity_title?: string | null };
+      currentHistory: { source: string; context_id: string };
+      entity: { id: string };
+    } | null;
+    if (!detail) return null;
+    return {
+      id: panelId,
+      title: detail.slot.current_entity_title ?? panelId,
+      source: detail.currentHistory.source,
+      kind: isBrowserPanelSource(detail.currentHistory.source) ? "browser" : "workspace",
+      runtimeEntityId: detail.entity.id,
+      contextId: detail.currentHistory.context_id,
+    };
   };
   const resolveRequesterPanelMetadataForServices = async (
     caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller
@@ -332,6 +245,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           }
           await deps.persistWorkspaceConfigField(ctx, key, value);
         },
+        applyPreparedConfig: (input, ctx) => {
+          if (!deps.applyPreparedWorkspaceConfig) {
+            throw new Error("Prepared workspace config publishing is unavailable");
+          }
+          return deps.applyPreparedWorkspaceConfig(ctx, input);
+        },
         contextFiles: {
           readFile: async (ctx, filePath, contextId) => {
             const fsService =
@@ -353,27 +272,8 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           },
         },
         recordContextIngestion: deps.recordContextIngestion,
-        listUnits: deps.listWorkspaceUnits,
-        restartUnit: deps.restartWorkspaceUnit,
-        listUnitLogs: deps.listWorkspaceUnitLogs,
-        unitDiagnostics: deps.unitDiagnostics,
-        bakeAppDist: deps.bakeAppDist,
-        listAppVersions: deps.listAppVersions,
-        rollbackAppVersion: deps.rollbackAppVersion,
         listRecurringJobs: deps.listRecurringJobs,
-        listHostTargetCandidates: deps.listHostTargetCandidates,
-        getHostTargetSelection: deps.getHostTargetSelection,
-        setHostTargetSelection: deps.setHostTargetSelection,
-        clearHostTargetSelection: deps.clearHostTargetSelection,
-        listHostTargetVersions: deps.listHostTargetVersions,
-        prepareHostTargetPinnedRef: deps.prepareHostTargetPinnedRef,
-        launchHostTarget: deps.launchHostTarget,
-        beginHostTargetLaunch: deps.beginHostTargetLaunch,
-        getHostTargetLaunchSession: deps.getHostTargetLaunchSession,
-        resolveHostTargetLaunchSessionApproval: deps.resolveHostTargetLaunchSessionApproval,
-        cancelHostTargetLaunchSession: deps.cancelHostTargetLaunchSession,
         hasAppCapability: deps.hasAppCapability,
-        approvalQueue: deps.approvalQueue,
         ensureContextFolder: deps.ensureContextFolder,
       })
     );
@@ -473,14 +373,9 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     let panelCdpDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelCdp",
-      dependencies: ["cdpBridge", "shellPresence"],
+      dependencies: ["cdpBridge"],
       async start(resolve) {
         const bridge = assertPresent(resolve<import("./cdpBridge.js").CdpBridge>("cdpBridge"));
-        const shellPresence = assertPresent(
-          resolve<import("./services/shellPresenceService.js").ShellPresenceServiceResult>(
-            "shellPresence"
-          )
-        );
         const { createPanelCdpService } = await import("./services/panelCdpService.js");
         const { CdpHostProviderRpcChannel } = await import("./cdpHostProviderRpcChannel.js");
         const hostProviderChannel = new CdpHostProviderRpcChannel(bridge);
@@ -488,7 +383,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           ...panelGateDeps,
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
           hasAppCapability: deps.hasAppCapability,
-          hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
           recordContextIngestion: deps.recordContextIngestion,
           getTarget: (panelId) => requestPanelMetadataForServices(panelId),
           getEndpoint: async (panelId, requesterEntityId) => {
@@ -497,14 +391,9 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             if (!endpoint) throw new Error(`CDP endpoint unavailable for panel: ${panelId}`);
             return endpoint;
           },
-          drive: async (panelId, requesterEntityId, command, args) => {
+          stop: async (panelId, requesterEntityId) => {
             await ensureCdpTargetReady(panelId);
-            if (command === "navigate") {
-              const url = typeof args[0] === "string" ? args[0] : "";
-              if (!url) throw new Error("Panel navigation URL is required");
-              return bridge.sendTargetCommand(panelId, requesterEntityId, command, args);
-            }
-            return bridge.sendTargetCommand(panelId, requesterEntityId, command, args);
+            return bridge.sendTargetCommand(panelId, requesterEntityId, "stop", []);
           },
           consoleHistory: async (panelId, _requesterEntityId, options) => {
             await ensureCdpTargetReady(panelId);
@@ -536,16 +425,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         });
 
         async function ensureCdpTargetReady(panelId: string): Promise<void> {
-          const loadViaPanelTree = async () => {
-            const panelTreeBridge = await getPanelTreeBridge();
-            await panelTreeBridge({
-              callerId: "server",
-              callerKind: "server",
-              method: "ensureLoaded",
-              args: [panelId],
-            });
-          };
-
           const target = await requestPanelMetadataForServices(panelId);
           const runtimeEntityId = target?.runtimeEntityId ?? panelId;
           let holder = deps.panelRuntimeCoordinator?.resolveHostForSlot(panelId) ?? null;
@@ -593,8 +472,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           if (holder) {
             await waitForCdpTargetRegistered(bridge, panelId, holder.hostConnectionId);
           } else {
-            await loadViaPanelTree();
-            await waitForCdpTargetRegistered(bridge, panelId);
+            throw Object.assign(
+              new Error(`No presentation host is available for panel: ${panelId}`),
+              {
+                code: "cdp_no_default_host",
+              }
+            );
           }
           if (holder && !bridge.isTargetRegisteredForHost(panelId, holder.hostConnectionId)) {
             throw new Error(`CDP endpoint unavailable for panel: ${panelId}`);
@@ -613,99 +496,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       getServiceDefinition() {
         if (!panelCdpDefinition) throw new Error("panelCdp service not initialized");
         return panelCdpDefinition;
-      },
-    });
-  }
-
-  {
-    let panelTreeDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
-    container.registerManaged({
-      name: "panelTree",
-      dependencies: ["shellPresence", "buildSystem", "workspace-state", "runtime"],
-      async start(resolve) {
-        const shellPresence = assertPresent(
-          resolve<import("./services/shellPresenceService.js").ShellPresenceServiceResult>(
-            "shellPresence"
-          )
-        );
-        const buildSystem = assertPresent(
-          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-        );
-        const { createPanelTreeService } = await import("./services/panelTreeService.js");
-        const bridge = await getPanelTreeBridge();
-        // Seed lazily for each authenticated account on its first panel-tree
-        // request; there is no ownerless boot tree.
-        const ownerAwareBridge = createOwnerSeedingPanelTreeBridge(
-          bridge,
-          deps.workspaceConfig?.initPanels ?? [],
-          createOwnerPanelSeedStore(deps.workspace.statePath)
-        );
-        panelTreeDefinition = createPanelTreeService({
-          ...panelGateDeps,
-          resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
-          hasAppCapability: deps.hasAppCapability,
-          hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
-          validateOpenPanelSource: async ({ source, options }) => {
-            if (!shouldValidateOpenPanelWorkspaceUnit(source)) return;
-            const ref = panelOpenBuildRef(options);
-            let unit;
-            try {
-              unit = await buildSystem.resolveBuildUnit(source, ref);
-            } catch (error) {
-              const details = rpcErrorDataOf(error);
-              const message = error instanceof Error ? error.message : String(error);
-              throw panelFailureBoundaryError(
-                panelFailure({
-                  code:
-                    (details as { code?: unknown } | undefined)?.code === "package_not_found"
-                      ? "unit_not_found"
-                      : /ref|context|state/iu.test(message)
-                        ? "ref_not_found"
-                        : "dependency_resolution_failed",
-                  stage: "resolve",
-                  message,
-                  provenance: {
-                    source,
-                    contextId:
-                      typeof options["contextId"] === "string"
-                        ? options["contextId"]
-                        : "unassigned",
-                    requestedRef: ref ?? "main",
-                  },
-                  ...(details && typeof details === "object"
-                    ? { details: details as Record<string, unknown> }
-                    : {}),
-                }),
-                error
-              );
-            }
-            if (!unit) {
-              const message = ref
-                ? `Unknown build unit at ${ref}: ${source}`
-                : `Unknown build unit: ${source}`;
-              throw panelFailureBoundaryError(
-                panelFailure({
-                  code: "unit_not_found",
-                  stage: "resolve",
-                  message,
-                  provenance: {
-                    source,
-                    contextId:
-                      typeof options["contextId"] === "string"
-                        ? options["contextId"]
-                        : "unassigned",
-                    requestedRef: ref ?? "main",
-                  },
-                })
-              );
-            }
-          },
-          bridge: ownerAwareBridge,
-        });
-      },
-      getServiceDefinition() {
-        if (!panelTreeDefinition) throw new Error("panelTree service not initialized");
-        return panelTreeDefinition;
       },
     });
   }

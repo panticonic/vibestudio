@@ -19,9 +19,11 @@ function createHarness(
   const panelOrchestrator = {
     applyBuildComplete: vi.fn(),
     handleRuntimeLeaseChanged: vi.fn(async () => {}),
-    applyServerPanelTreeSnapshot: vi.fn(async () => undefined),
+    applyPanelExecutionActivated: vi.fn(async () => {}),
+    applyServerPanelStateArgsUpdate: vi.fn(),
     applyServerPanelTitleUpdate: vi.fn(),
     recoverShellSnapshot: vi.fn(async () => undefined),
+    createBrowserUrlPanel: vi.fn(async () => ({ panelId: "panel:tree/browser" })),
   };
   const appOrchestrator = {
     applyAppAvailable: vi.fn(async () => {}),
@@ -57,7 +59,7 @@ function createHarness(
 describe("createServerEventBridge", () => {
   it("binds host-owned OAuth handoffs on the direct server event channel", () => {
     const listeners = new Map<string, (payload: unknown) => void>();
-    const releases = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+    const releases = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
     const client = {
       onDirectEvent: vi.fn((event: string, listener: (payload: unknown) => void) => {
         listeners.set(event, listener);
@@ -78,6 +80,14 @@ describe("createServerEventBridge", () => {
       focus: true,
     });
     listeners.get("navigate-to-panel")?.({ panelId: "panel:tree/slot-a" });
+    listeners.get("panel:executionActivated")?.({
+      panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+    });
+    listeners.get("panel:stateArgsChanged")?.({
+      panelId: "panel:tree/slot-a",
+      stateArgs: { channelName: "chat-1234" },
+    });
 
     expect(handle).toHaveBeenNthCalledWith(1, "external-open:open", {
       url: "https://auth.example.test",
@@ -94,12 +104,54 @@ describe("createServerEventBridge", () => {
     expect(handle).toHaveBeenNthCalledWith(4, "navigate-to-panel", {
       panelId: "panel:tree/slot-a",
     });
+    expect(handle).toHaveBeenNthCalledWith(5, "panel:executionActivated", {
+      panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+    });
+    expect(handle).toHaveBeenNthCalledWith(6, "panel:stateArgsChanged", {
+      panelId: "panel:tree/slot-a",
+      stateArgs: { channelName: "chat-1234" },
+    });
 
     release();
     expect(releases[0]).toHaveBeenCalledOnce();
     expect(releases[1]).toHaveBeenCalledOnce();
     expect(releases[2]).toHaveBeenCalledOnce();
     expect(releases[3]).toHaveBeenCalledOnce();
+    expect(releases[4]).toHaveBeenCalledOnce();
+    expect(releases[5]).toHaveBeenCalledOnce();
+  });
+
+  it("converges an activated panel execution through its native host owner", async () => {
+    const { handle, eventService, panelOrchestrator } = createHarness();
+    const activation = {
+      panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+      effectiveVersion: "sha256:effective",
+      buildKey: "b".repeat(64),
+      executionDigest: "e".repeat(64),
+      authorityRequests: [],
+    };
+
+    handle("panel:executionActivated", activation);
+
+    await vi.waitFor(() =>
+      expect(panelOrchestrator.applyPanelExecutionActivated).toHaveBeenCalledWith(activation)
+    );
+    expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("converges durable state args through the presenting host projection", () => {
+    const { handle, eventService, panelOrchestrator } = createHarness();
+    const update = {
+      panelId: "panel:tree/slot-a",
+      stateArgs: { channelName: "chat-1234" },
+    };
+
+    handle("panel:stateArgsChanged", update);
+
+    expect(panelOrchestrator.applyServerPanelStateArgsUpdate).toHaveBeenCalledWith(update);
+    expect(eventService.emit).not.toHaveBeenCalled();
   });
 
   it("normalizes build completion into orchestrator state updates instead of emitting raw events", () => {
@@ -193,16 +245,21 @@ describe("createServerEventBridge", () => {
     });
   });
 
-  it("applies server panel tree snapshots without reloading the tree", async () => {
+  it("forwards panel-tree invalidations without reconstructing the tree", async () => {
     const { handle, eventService, panelOrchestrator } = createHarness();
-    const snapshot = { revision: 2, rootPanels: [] };
+    const snapshot = {
+      revision: 2,
+      reset: true,
+      groups: [],
+      changedSlotIds: [],
+      removedSlotIds: [],
+    };
 
-    handle("panel-tree-updated", snapshot);
+    handle("panel-tree-invalidated", snapshot);
     await Promise.resolve();
 
-    expect(panelOrchestrator.applyServerPanelTreeSnapshot).toHaveBeenCalledWith(snapshot);
     expect(panelOrchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
-    expect(eventService.emit).not.toHaveBeenCalled();
+    expect(eventService.emit).toHaveBeenCalledWith("panel-tree-invalidated", snapshot);
   });
 
   it("applies server panel title updates without forwarding raw events", () => {
@@ -222,8 +279,8 @@ describe("createServerEventBridge", () => {
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 
-  it("opens OAuth browser panels through authenticated panelTree RPC", async () => {
-    const { handle, eventService, serverClient, warn } = createHarness();
+  it("opens OAuth browser panels through the native panel orchestrator", async () => {
+    const { handle, eventService, panelOrchestrator, warn } = createHarness();
 
     handle("browser-panel:open", {
       url: "https://example.com/",
@@ -231,10 +288,11 @@ describe("createServerEventBridge", () => {
       transactionId: "oauth-1",
     });
     await vi.waitFor(() =>
-      expect(serverClient.call).toHaveBeenCalledWith("panelTree", "create", [
-        { surface: "external", url: "https://example.com/" },
-        { parentId: "panel:tree/slot-a", focus: true },
-      ])
+      expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
+        "panel:tree/slot-a",
+        "https://example.com/",
+        { focus: true, placement: "child" }
+      )
     );
 
     expect(warn).not.toHaveBeenCalled();
@@ -242,13 +300,10 @@ describe("createServerEventBridge", () => {
   });
 
   it("cancels OAuth when authenticated browser-panel creation fails", async () => {
-    const { handle, serverClient, warn } = createHarness();
-    serverClient.call.mockImplementation(async (service: string, method: string) => {
-      if (service === "panelTree" && method === "create") {
-        throw new Error("panel host unavailable");
-      }
-      return undefined;
-    });
+    const { handle, panelOrchestrator, serverClient, warn } = createHarness();
+    panelOrchestrator.createBrowserUrlPanel.mockRejectedValueOnce(
+      new Error("panel host unavailable")
+    );
 
     handle("browser-panel:open", {
       url: "https://example.com/",
@@ -327,21 +382,6 @@ describe("createServerEventBridge", () => {
     expect(appOrchestrator.applyAppAvailable).not.toHaveBeenCalled();
     expect(onAppHostTargetChanged).not.toHaveBeenCalled();
     expect(eventService.emit).not.toHaveBeenCalled();
-  });
-
-  it("only wakes desktop host sync for host-target changes that can affect Electron", () => {
-    const { handle, onAppHostTargetChanged } = createHarness();
-
-    handle("host-targets:changed", { target: "react-native", reason: "app-status" });
-    expect(onAppHostTargetChanged).not.toHaveBeenCalled();
-
-    const payload = { target: "electron", reason: "selection-changed" };
-    handle("host-targets:changed", payload);
-
-    expect(onAppHostTargetChanged).toHaveBeenCalledWith({
-      event: "host-targets:changed",
-      payload,
-    });
   });
 });
 

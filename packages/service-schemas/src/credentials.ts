@@ -1072,6 +1072,24 @@ export type CredentialAuditParams = AuditParams;
 
 export const credentialsMethods = defineServiceMethods({
   storeCredential: {
+    capability: "accounts.connect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Save a connected account",
+      action: "save a connected account",
+      description: "Allows {requesterKind} to save a connected account.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Persist a URL-bound credential (label, audience, injection, secret material); userland callers are prompted to approve it before it is stored, and the returned summary never echoes the secret.",
     agentFacing: false,
@@ -1093,6 +1111,24 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   connect: {
+    capability: "accounts.connect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.create",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Connect an account",
+      action: "connect an account",
+      description: "Allows {requesterKind} to connect an account.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Run a connection flow (OAuth2/OAuth1a/API-key/SSH/browser-session) to obtain and store a credential; interactive flows open a browser sign-in.",
     args: z.tuple([ConnectCredentialParamsSchema]),
@@ -1100,6 +1136,24 @@ export const credentialsMethods = defineServiceMethods({
     access: CONNECT_ACCESS,
   },
   configureClient: {
+    capability: "account-providers.configure",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Configure an account provider",
+      action: "configure an account provider",
+      description: "Allows {requesterKind} to configure an account provider.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Store (versioned) OAuth client configuration — authorize/token URLs and client fields such as client id/secret; userland callers are prompted to submit the material, and secrets are never returned in the status.",
     args: z.tuple([ConfigureClientParamsSchema]),
@@ -1123,6 +1177,24 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   requestCredentialInput: {
+    capability: "accounts.connect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Ask for account details",
+      action: "ask for account details",
+      description: "Allows {requesterKind} to ask for account details.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Prompt the user to enter exactly one secret field, then store the resulting credential; the submitted secret is never returned in the summary.",
     args: z.tuple([RequestCredentialInputParamsSchema]),
@@ -1148,6 +1220,14 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   getClientConfigStatus: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale:
+        "P-discovery: secret-free provider setup status used by onboarding; the config trust-scope check still applies",
+    },
     description:
       "Return the configured status of an OAuth client config (which fields are set, URLs, status) without revealing secret values; rejects callers outside the config's trust scope.",
     args: z.tuple([GetClientConfigStatusParamsSchema]),
@@ -1156,6 +1236,25 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ configId: "google-workspace" }] }],
   },
   deleteClientConfig: {
+    capability: "account-providers.delete",
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "secret",
+      family: "credentials.retire",
+      rationale:
+        "C1: destroys credential or client secret material; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Delete account-provider settings",
+      action: "delete account-provider settings",
+      description: "Allows {requesterKind} to delete account-provider settings.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Disable a client config (marks it deleted so it is no longer used for new connections or refreshes); requires critical account-provider deletion authority bound to the exact config id.",
     args: z.tuple([DeleteClientConfigParamsSchema]),
@@ -1168,6 +1267,24 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ configId: "google-workspace" }] }],
   },
   forwardOAuthCallback: {
+    capability: "accounts.connect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Complete account sign-in",
+      action: "complete account sign-in",
+      description: "Allows {requesterKind} to complete account sign-in.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Deliver an inbound OAuth provider callback (code/state, or a full callback URL) to its pending connection transaction, validating the caller against the transaction's redirect strategy.",
     args: z.tuple([ForwardOAuthCallbackParamsSchema]),
@@ -1175,12 +1292,38 @@ export const credentialsMethods = defineServiceMethods({
     access: FORWARD_OAUTH_CALLBACK_ACCESS,
   },
   cancelOAuth: {
+    capability: "accounts.connect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.retire",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Cancel account sign-in",
+      action: "cancel account sign-in",
+      description: "Allows {requesterKind} to cancel account sign-in.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description: "Cancel a pending interactive OAuth connection transaction.",
     args: z.tuple([z.object({ transactionId: z.string().min(1) }).strict()]),
     returns: z.void(),
     access: FORWARD_OAUTH_CALLBACK_ACCESS,
   },
   listStoredCredentials: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale:
+        "Secret-free lifecycle projection used by the open model-availability catalog; credential inspection and use remain gated",
+    },
     description:
       "List summaries of stored URL-bound credentials visible to the caller; secret material is never included.",
     args: z.tuple([]),
@@ -1189,6 +1332,14 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [] }],
   },
   summarizeStoredCredentials: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale:
+        "Bounded count/state aggregate contains no per-credential fields; detailed inspection and credential use remain gated",
+    },
     description:
       "Return only the aggregate count and represented lifecycle states for stored credentials; no per-credential fields are included.",
     args: z.tuple([]),
@@ -1197,6 +1348,24 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [] }],
   },
   inspectStoredCredentials: {
+    capability: "credentials.audit.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View which connected accounts are stored",
+      action: "view which connected accounts are stored",
+      description: "Allows {requesterKind} to view which connected accounts are stored.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "safety",
+        verb: "see",
+      },
+    },
     description:
       "List administrator-facing credential summaries with runtime usage metadata; secret material is never included.",
     args: z.tuple([]),
@@ -1204,6 +1373,25 @@ export const credentialsMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   revokeCredential: {
+    capability: "accounts.disconnect",
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "secret",
+      family: "credentials.retire",
+      rationale:
+        "C1: destroys credential or client secret material; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Disconnect an account",
+      action: "disconnect an account",
+      description: "Allows {requesterKind} to disconnect an account.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id.",
     args: z.tuple([CredentialIdParamsSchema]),
@@ -1216,6 +1404,24 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ credentialId: "cred-123" }] }],
   },
   resolveCredential: {
+    capability: "credential.use",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.read",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Use a matching connected account",
+      action: "use a matching connected account",
+      description: "Allows {requesterKind} to use a matching connected account.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "act",
+      },
+    },
     description:
       "Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches.",
     args: z.tuple([ResolveCredentialParamsSchema]),
@@ -1224,6 +1430,14 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ url: "https://api.example.test/v1" }] }],
   },
   proxyFetch: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale:
+        "The transport exposes no response before the egress proxy authorizes exactly one concrete credential-use or network.response.read effect",
+    },
     description:
       "Forward an outbound HTTP request through the egress proxy, injecting the resolved credential; returns status, ordered header pairs, final URL, and a base64 body.",
     agentFacing: false,
@@ -1233,6 +1447,24 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ url: "https://api.example.com/v1/me", method: "GET" }] }],
   },
   proxyGitHttp: {
+    capability: "credential.use",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Use a connected account with a Git remote",
+      action: "use a connected account with a Git remote",
+      description: "Allows {requesterKind} to use a connected account with a Git remote.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "act",
+      },
+    },
     description:
       "Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded.",
     agentFacing: false,
@@ -1244,6 +1476,24 @@ export const credentialsMethods = defineServiceMethods({
     ],
   },
   completeCapture: {
+    capability: "accounts.connect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Save submitted account details",
+      action: "save submitted account details",
+      description: "Allows {requesterKind} to save submitted account details.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell.",
     args: z.tuple([z.string(), z.record(z.string(), z.unknown())]),
@@ -1251,6 +1501,24 @@ export const credentialsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   audit: {
+    capability: "credentials.audit.read",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "secret",
+      family: "credentials.control",
+      rationale: "G2: credential mediation; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "View connected-account activity",
+      action: "view connected-account activity",
+      description: "Allows {requesterKind} to view connected-account activity.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "safety",
+        verb: "see",
+      },
+    },
     description:
       "Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after).",
     args: z.tuple([AuditParamsSchema]),

@@ -1,6 +1,5 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName } from "@vibestudio/shared/events";
-import type { PanelTreeSnapshot } from "@vibestudio/shared/types";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
@@ -38,12 +37,7 @@ export interface ServerEventBridgeDeps {
 }
 
 export interface ServerHostTargetChangeEvent {
-  event:
-    | "apps:available"
-    | "apps:status"
-    | "extensions:status"
-    | "host-targets:changed"
-    | "host-target-launch:session-changed";
+  event: "apps:available" | "apps:status" | "extensions:status";
   payload: unknown;
 }
 
@@ -52,6 +46,8 @@ const HOST_DIRECT_EVENT_NAMES = [
   "browser-panel:open",
   "panel-created",
   "navigate-to-panel",
+  "panel:executionActivated",
+  "panel:stateArgsChanged",
 ] as const;
 
 /**
@@ -219,10 +215,16 @@ export function createServerEventBridge(
         transactionId?: unknown;
       };
       const client = deps.getServerClient();
-      if (!client || typeof request.url !== "string" || typeof request.parentPanelId !== "string") {
-        const message = !client
-          ? "The workspace server connection is unavailable"
-          : "The OAuth browser handoff was malformed";
+      if (
+        !client ||
+        !panelOrchestrator ||
+        typeof request.url !== "string" ||
+        typeof request.parentPanelId !== "string"
+      ) {
+        const message =
+          !client || !panelOrchestrator
+            ? "The workspace panel host is unavailable"
+            : "The OAuth browser handoff was malformed";
         deps.warn(`[browserPanel] OAuth panel creation failed: ${message}`);
         deps.notifyError?.("Sign-in could not continue", message);
         if (client && typeof request.transactionId === "string") {
@@ -238,11 +240,11 @@ export function createServerEventBridge(
         }
         return;
       }
-      void client
-        .call("panelTree", "create", [
-          { surface: "external", url: request.url },
-          { parentId: request.parentPanelId, focus: true },
-        ])
+      void panelOrchestrator
+        .createBrowserUrlPanel(request.parentPanelId, request.url, {
+          focus: true,
+          placement: "child",
+        })
         .catch(async (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           deps.warn(`[browserPanel] OAuth panel creation failed: ${message}`);
@@ -275,6 +277,32 @@ export function createServerEventBridge(
         );
         deps.notifyError?.("Panel connection could not be updated", message);
       });
+      return;
+    }
+
+    if (bareEvent === "panel:executionActivated") {
+      const activation =
+        payload as import("@vibestudio/shared/events").EventPayloads["panel:executionActivated"];
+      void panelOrchestrator?.applyPanelExecutionActivated(activation).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.warn(
+          `[panelRuntime] failed to apply execution activation for ${activation.panelId}/${activation.runtimeEntityId}: ${message}`
+        );
+        deps.notifyError?.("Panel runtime could not be activated", message);
+      });
+      return;
+    }
+
+    if (bareEvent === "panel:stateArgsChanged") {
+      const update =
+        payload as import("@vibestudio/shared/events").EventPayloads["panel:stateArgsChanged"];
+      try {
+        panelOrchestrator?.applyServerPanelStateArgsUpdate(update);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.warn(`[panelRuntime] failed to apply state args for ${update.panelId}: ${message}`);
+        deps.notifyError?.("Panel state could not be updated", message);
+      }
       return;
     }
 
@@ -311,19 +339,6 @@ export function createServerEventBridge(
       return;
     }
 
-    if (
-      bareEvent === "host-targets:changed" ||
-      bareEvent === "host-target-launch:session-changed"
-    ) {
-      const target =
-        payload && typeof payload === "object" ? (payload as { target?: unknown }).target : null;
-      if (!target || target === "electron") {
-        deps.onAppHostTargetChanged?.({ event: bareEvent, payload });
-      }
-      emitNormalized(bareEvent, payload);
-      return;
-    }
-
     if (bareEvent === "apps:status" || bareEvent === "extensions:status") {
       deps.onAppHostTargetChanged?.({ event: bareEvent, payload });
     }
@@ -341,14 +356,8 @@ export function createServerEventBridge(
       deps.notifyError?.(`${source} failed`, message);
     }
 
-    if (bareEvent === "panel-tree-updated") {
-      void panelOrchestrator
-        ?.applyServerPanelTreeSnapshot(payload as PanelTreeSnapshot)
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          deps.warn(`[panelTree] failed to apply server tree snapshot: ${message}`);
-          deps.notifyError?.("Workspace panel tree is out of sync", message);
-        });
+    if (bareEvent === "panel-tree-invalidated") {
+      emitNormalized(bareEvent, payload);
       return;
     }
 

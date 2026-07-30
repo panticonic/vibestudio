@@ -13,7 +13,7 @@ describe("canonical CDP client build", () => {
   it("keeps the canonical CDP client free of any vendored browser engine", () => {
     const workspaceRoot = path.resolve("workspace");
     const graph = discoverPackageGraph(workspaceRoot);
-    const client = graph.get("@vibestudio/cdp-client");
+    const client = graph.get("@workspace/cdp-client");
 
     expect(client.dependencies).not.toHaveProperty("@workspace/playwright-core");
     expect(client.internalDeps).not.toContain("@workspace/playwright-core");
@@ -24,7 +24,7 @@ describe("canonical CDP client build", () => {
     try {
       const outfile = path.join(tempDir, "bundle.js");
       await esbuild.build({
-        entryPoints: [path.resolve("packages/cdp-client/src/index.ts")],
+        entryPoints: [path.resolve("workspace/packages/cdp-client/src/index.ts")],
         outfile,
         bundle: true,
         format: "esm",

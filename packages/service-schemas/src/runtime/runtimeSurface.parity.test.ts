@@ -40,9 +40,9 @@ describe("runtime surface schemaRef parity", () => {
   it("distinguishes workspace build health from live worker discovery", () => {
     const workspace = portableExports["workspace"];
     if (!workspace) throw new Error("missing workspace runtime surface");
-    expect(workspace.description).toContain("registered units and their build state");
+    expect(workspace.description).toContain("declared source/build readiness");
     expect(workspace.description).toContain("workers.listSources()");
-    expect(workspace.description).toContain("workers.list()");
+    expect(workspace.description).toContain("runtime.supervision.list()");
   });
 
   it("links the direct openExternal helper to its typed approval-gated contract", () => {
@@ -62,11 +62,13 @@ describe("runtime surface schemaRef parity", () => {
     if (!gad) throw new Error("missing GAD runtime surface");
     expect(gad.members).toEqual(GAD_MEMBERS);
     expect(Object.keys(gad.methodCatalog ?? {})).toEqual(GAD_MEMBERS);
-    expect(gad.methodCatalog?.["query"]).toMatchObject({
-      description: expect.stringContaining("read-oriented SQL query"),
+    expect(gad.methodCatalog?.["status"]).toMatchObject({
+      description: expect.stringContaining("storage and projection status"),
       argsSchema: expect.any(Object),
       returnsSchema: expect.any(Object),
     });
+    expect(gad.methodCatalog).not.toHaveProperty("query");
+    expect(gad.methodCatalog).not.toHaveProperty("rawSql");
   });
 
   it("derives the documented VCS namespace from the canonical semantic registry", () => {

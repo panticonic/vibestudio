@@ -39,7 +39,7 @@ export interface AppDistBakeManifest {
     provider: Extract<BuildMetadata["details"], { kind: "app" }>["provider"];
     executionDigest: string;
     execution: NonNullable<BuildMetadata["execution"]>;
-    authorityRequests: NonNullable<BuildMetadata["authority"]>["requests"];
+    authority: NonNullable<BuildMetadata["authority"]>;
   };
   artifacts: BuildArtifactManifestEntry[];
 }
@@ -107,7 +107,7 @@ export function createAppDistBakeManifest(opts: {
       provider: details.provider ?? null,
       executionDigest,
       execution,
-      authorityRequests: authority.requests,
+      authority,
     },
     artifacts,
   };

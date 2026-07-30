@@ -24,7 +24,6 @@ const casePolicy: AgentExecutionTestPolicy = {
       fallback: "disabled",
     },
     authority: [],
-    userland: [],
     unexpectedPrompts: "fail",
   },
 };
@@ -72,7 +71,7 @@ const executionSession = {
     runId: "system-test-runner:run-1",
     authorityManifest: {
       mode: "adaptive",
-      effects: "mutable",
+      effects: "read-write",
       approvals: "prompt",
       requests: [],
       digest: "0".repeat(64),

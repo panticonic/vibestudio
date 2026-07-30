@@ -62,7 +62,7 @@ function execution(): AgentExecutionSessionFact {
       runId,
       authorityManifest: {
         mode: "adaptive",
-        effects: "mutable",
+        effects: "read-write",
         approvals: "prompt",
         requests: [],
         digest: "f".repeat(64),

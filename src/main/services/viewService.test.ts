@@ -63,6 +63,7 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
     const request = {
       nativeSlotId: "panel-stack:primary",
+      bindingId: "binding-test",
       panelId: "panel-1",
       bounds: { x: 10, y: 20, width: 300, height: 200 },
       focused: true,
@@ -91,6 +92,7 @@ describe("view service", () => {
       service.handler({ caller: createVerifiedCaller(callerId, "app") }, "bindNativePanelSlot", [
         {
           nativeSlotId: "panel-stack:primary",
+          bindingId: "binding-test",
           panelId: "panel-1",
           bounds: { x: 10, y: 20, width: 300, height: 200 },
         },
@@ -109,6 +111,7 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
     const request = {
       nativeSlotId: "panel-stack:primary",
+      bindingId: "binding-test",
       bounds: { x: 10, y: 20, width: 300, height: 200 },
     };
 

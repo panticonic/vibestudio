@@ -2,11 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
-import {
-  openCanonicalSqliteDatabase,
-  type CanonicalSqliteMigrationPlan,
-  type CanonicalSqliteSchema,
-} from "@vibestudio/sqlite";
+import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "@vibestudio/sqlite";
 import {
   verifyExecutionArtifactRef,
   type ExecutionArtifactRefV1,
@@ -63,11 +59,6 @@ const PUBLICATION_SCHEMA: CanonicalSqliteSchema = {
   ],
 };
 
-const PUBLICATION_MIGRATIONS: CanonicalSqliteMigrationPlan = {
-  current: PUBLICATION_SCHEMA,
-  migrations: [],
-};
-
 function asNumber(value: SQLOutputValue | undefined): number {
   const result = Number(value);
   if (!Number.isSafeInteger(result) || result < 0) {
@@ -100,7 +91,7 @@ export class ExecutionPublicationJournal implements ExecutionPublicationPort {
     this.db.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs ?? 5_000}`);
     this.db.exec("PRAGMA foreign_keys = ON");
     try {
-      openCanonicalSqliteDatabase(this.db, PUBLICATION_MIGRATIONS, {
+      openCanonicalSqliteDatabase(this.db, PUBLICATION_SCHEMA, {
         description: `execution publication journal in ${databasePath}`,
       });
       this.db.exec("PRAGMA journal_mode = WAL");

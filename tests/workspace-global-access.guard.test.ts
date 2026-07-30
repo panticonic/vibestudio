@@ -7,10 +7,10 @@ import * as path from "node:path";
  * `globalThis["__vibestudioRequire__"]`.
  *
  * That's the PANEL convention — panels keep host modules (incl.
- * `@vibestudio/runtime`) in a per-isolate global module map. The eval sandbox is
+ * `@workspace/runtime`) in a per-isolate global module map. The eval sandbox is
  * a workerd DO that keeps each owner's runtime in a PER-OBJECT map (so owners
  * sharing an isolate can't leak runtimes into each other), so a global grab of
- * `@vibestudio/runtime` silently misses there — the `browserData` runtime client
+ * `@workspace/runtime` silently misses there — the `browserData` runtime client
  * bug. Resolve host modules through a normal import instead: the build
  * externalizes it and the bundle's own `require` maps to the right host (the
  * global singleton in a panel, the per-object map in eval).
@@ -25,6 +25,7 @@ const ALLOWLIST = new Set([
   "eval/src/sandbox.ts", // sandbox engine — implements the require
   "eval/src/execute.ts", // sandbox engine — implements the require
   "agentic-core/src/message-type-doctor.ts", // installs a shim require (diagnostics/util)
+  "runtime/src/panel/cdpAutomation.ts", // panel-only lazy CDP client loader
 ]);
 
 // The property-ACCESS form, `(...)["__vibestudioRequire__"]` — deliberately NOT a

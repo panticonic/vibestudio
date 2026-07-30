@@ -1,5 +1,3 @@
-import * as path from "path";
-
 /**
  * Normalizes a panel path to ensure it's relative and doesn't escape the workspace.
  * Returns the normalized relative path.
@@ -12,25 +10,30 @@ export function normalizeRelativePanelPath(
   panelPath: string,
   workspaceRoot: string
 ): { relativePath: string; absolutePath: string } {
-  if (path.isAbsolute(panelPath)) {
+  const portable = panelPath.replaceAll("\\", "/");
+  if (portable.startsWith("/") || /^[A-Za-z]:\//u.test(portable)) {
     throw new Error("Panel path must be relative to the workspace root");
   }
 
-  const normalized = path
-    .normalize(panelPath)
-    .replace(/\\/g, "/")
-    .replace(/^\.\//, "")
-    .replace(/\/+$/, "");
-
-  if (!normalized || normalized === "." || normalized.startsWith("..")) {
+  const segments: string[] = [];
+  for (const segment of portable.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) {
+        throw new Error(`Invalid panel path (must stay within workspace): ${panelPath}`);
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  const normalized = segments.join("/");
+  if (!normalized) {
     throw new Error(`Invalid panel path (must stay within workspace): ${panelPath}`);
   }
 
-  const absolutePath = path.join(workspaceRoot, normalized);
-  const relativeToRoot = path.relative(workspaceRoot, absolutePath);
-  if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
-    throw new Error(`Panel path escapes workspace root: ${panelPath}`);
-  }
+  const root = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/u, "");
+  const absolutePath = `${root}/${normalized}`;
 
   return { relativePath: normalized, absolutePath };
 }

@@ -28,9 +28,24 @@ const ownedPanelCtx: ServiceContext = {
 function createDeps() {
   const workspaceDecls: WorkspaceDeclarations = {
     singletons: new SingletonRegistry([
-      { source: "workers/example-store", className: "ExampleStoreDO", key: "channel" },
+      {
+        source: "workers/workspace-source",
+        className: "GadWorkspaceDO",
+        key: "workspace",
+      },
     ]),
     services: [
+      {
+        source: "workers/workspace-source",
+        name: "gad.workspace",
+        title: "Workspace source",
+        description: "Own the workspace's semantic source and history.",
+        action: "read or change semantic workspace state",
+        presentation: { domain: "files", verb: "manage" },
+        protocols: ["vibestudio.gad.workspace.v1", "vibestudio.workspace-source.v1"],
+        authority: { principals: ["host", "user", "code"] },
+        durableObject: { className: "GadWorkspaceDO" },
+      },
       {
         source: "workers/example-store",
         name: "channel",
@@ -68,6 +83,14 @@ function createDeps() {
   const workerNodes = [
     {
       kind: "worker",
+      name: "workspace-source",
+      relativePath: "workers/workspace-source",
+      manifest: {
+        durable: { classes: [{ className: "GadWorkspaceDO" }] },
+      },
+    },
+    {
+      kind: "worker",
       name: "example-store",
       relativePath: "workers/example-store",
       manifest: {
@@ -85,6 +108,7 @@ function createDeps() {
     workspaceId: "workspace-test",
     buildSystem: {
       getGraph: () => ({ allNodes: () => workerNodes }),
+      getEffectiveVersion: (source: string) => `ev:${source}`,
       listBuildUnits: async () =>
         workerNodes.map((node) => ({
           unitPath: node.relativePath,
@@ -150,7 +174,7 @@ function browserDataExtensionCaller() {
 }
 
 describe("workerService workspace service resolution", () => {
-  it("keeps product-sealed services out of dynamic userland-provider approval", async () => {
+  it("resolves workspace source exclusively from the workspace manifest", async () => {
     const deps = createDeps();
     const assertUserlandServiceExposure = vi.fn(async () => {});
     const dispatcher = createTestServiceDispatcher();
@@ -158,12 +182,6 @@ describe("workerService workspace service resolution", () => {
       createWorkerService({
         ...(deps as object),
         assertUserlandServiceExposure,
-        buildSystem: {
-          ...deps.buildSystem,
-          getEffectiveVersion: () => {
-            throw new Error("product services must not ask for a workspace EV");
-          },
-        },
       } as never)
     );
     dispatcher.markInitialized();
@@ -173,8 +191,17 @@ describe("workerService workspace service resolution", () => {
         "vibestudio.gad.workspace.v1",
         null,
       ])
-    ).resolves.toMatchObject({ origin: "product", source: "vibestudio/internal" });
-    expect(assertUserlandServiceExposure).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      origin: "workspace",
+      source: "workers/workspace-source",
+      objectKey: "workspace",
+      targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
+    });
+    expect(assertUserlandServiceExposure).toHaveBeenCalledWith(expect.anything(), {
+      name: "gad.workspace",
+      provider: "workers/workspace-source",
+      providerEv: expect.any(String),
+    });
   });
 
   it("binds dynamic workspace-service approval to the provider's exact EV", async () => {
@@ -225,6 +252,11 @@ describe("workerService workspace service resolution", () => {
     dispatcher.markInitialized();
 
     await expect(dispatcher.dispatch(panelCtx, "workers", "listSources", [])).resolves.toEqual([
+      expect.objectContaining({
+        name: "workspace-source",
+        source: "workers/workspace-source",
+        classes: [{ className: "GadWorkspaceDO" }],
+      }),
       expect.objectContaining({
         name: "example-store",
         source: "workers/example-store",
@@ -279,47 +311,74 @@ describe("workerService workspace service resolution", () => {
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
-    await expect(dispatcher.dispatch(panelCtx, "workers", "listServices", [])).resolves.toEqual([
-      {
-        origin: "product",
-        name: "gad.workspace",
-        title: "Workspace history",
-        description: "Read or update your workspace's collaboration and version history.",
-        action: "read or update your workspace's collaboration history",
-        presentation: { domain: "files", verb: "manage" },
-        protocols: ["vibestudio.gad.workspace.v1"],
-        source: "vibestudio/internal",
-        kind: "durable-object",
-        className: "GadWorkspaceDO",
-        defaultObjectKey: "workspace-semantic-control-plane",
-      },
-      expect.objectContaining({
-        origin: "workspace",
-        name: "channel",
-        kind: "durable-object",
-        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
-        protocols: ["example.store.v1"],
-        source: "workers/example-store",
-        docsId: "workspace:channel",
-        className: "ExampleStoreDO",
-      }),
-      expect.objectContaining({
-        name: "panel-channel",
-        kind: "durable-object",
-        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
-        protocols: ["example.panel-store.v1"],
-        source: "workers/example-store",
-        className: "ExampleStoreDO",
-      }),
-      expect.objectContaining({
-        name: "stateless-api",
-        kind: "worker",
-        ...TEST_WORKSPACE_SERVICE_PRESENTATION,
-        protocols: ["example.stateless.v1"],
-        source: "workers/stateless-api",
-        routePath: "/api",
-      }),
-    ]);
+    await expect(dispatcher.dispatch(panelCtx, "workers", "listServices", [])).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          origin: "workspace",
+          name: "gad.workspace",
+          title: "Workspace source",
+          description: "Own the workspace's semantic source and history.",
+          action: "read or change semantic workspace state",
+          docsId: "workspace:gad.workspace",
+          presentation: { domain: "files", verb: "manage" },
+          protocols: ["vibestudio.gad.workspace.v1", "vibestudio.workspace-source.v1"],
+          source: "workers/workspace-source",
+          kind: "durable-object",
+          className: "GadWorkspaceDO",
+          defaultObjectKey: "workspace",
+        },
+        {
+          origin: "product",
+          name: "workspace.state",
+          title: "Workspace state",
+          description: "Use the product-owned durable workspace state service.",
+          presentation: { domain: "computer", verb: "manage" },
+          protocols: ["vibestudio.workspace-state.v1"],
+          source: "vibestudio/internal",
+          kind: "durable-object",
+          className: "WorkspaceDO",
+          defaultObjectKey: null,
+        },
+        {
+          origin: "product",
+          name: "browser.data",
+          title: "Browser data",
+          description: "Use the current user's durable browser data.",
+          presentation: { domain: "web", verb: "see" },
+          protocols: ["vibestudio.browser-data.v1"],
+          source: "vibestudio/internal",
+          kind: "durable-object",
+          className: "BrowserDataDO",
+          defaultObjectKey: null,
+        },
+        expect.objectContaining({
+          origin: "workspace",
+          name: "channel",
+          kind: "durable-object",
+          ...TEST_WORKSPACE_SERVICE_PRESENTATION,
+          protocols: ["example.store.v1"],
+          source: "workers/example-store",
+          docsId: "workspace:channel",
+          className: "ExampleStoreDO",
+        }),
+        expect.objectContaining({
+          name: "panel-channel",
+          kind: "durable-object",
+          ...TEST_WORKSPACE_SERVICE_PRESENTATION,
+          protocols: ["example.panel-store.v1"],
+          source: "workers/example-store",
+          className: "ExampleStoreDO",
+        }),
+        expect.objectContaining({
+          name: "stateless-api",
+          kind: "worker",
+          ...TEST_WORKSPACE_SERVICE_PRESENTATION,
+          protocols: ["example.stateless.v1"],
+          source: "workers/stateless-api",
+          routePath: "/api",
+        }),
+      ])
+    );
 
     await expect(
       dispatcher.dispatch(panelCtx, "workers", "resolveService", ["example.store.v1", "chat-1"])
@@ -331,6 +390,33 @@ describe("workerService workspace service resolution", () => {
       className: "ExampleStoreDO",
       objectKey: "chat-1",
       targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
+    });
+
+    await expect(
+      dispatcher.dispatch(panelCtx, "workers", "resolveService", ["vibestudio.workspace-state.v1"])
+    ).resolves.toMatchObject({
+      origin: "product",
+      kind: "durable-object",
+      name: "workspace.state",
+      source: "vibestudio/internal",
+      className: "WorkspaceDO",
+      objectKey: "workspace-test",
+      targetId: "do:vibestudio/internal:WorkspaceDO:workspace-test",
+    });
+
+    await expect(
+      dispatcher.dispatch(ownedPanelCtx, "workers", "resolveService", [
+        "vibestudio.browser-data.v1",
+      ])
+    ).resolves.toMatchObject({
+      origin: "product",
+      kind: "durable-object",
+      name: "browser.data",
+      protocol: "vibestudio.browser-data.v1",
+      source: "vibestudio/internal",
+      className: "BrowserDataDO",
+      objectKey: expect.stringMatching(/^v1_[A-Za-z0-9_-]+$/),
+      targetId: expect.stringMatching(/^do:vibestudio\/internal:BrowserDataDO:v1_[A-Za-z0-9_-]+$/),
     });
 
     await expect(
@@ -506,7 +592,7 @@ describe("workerService workspace service resolution", () => {
     ).rejects.toThrow("No Durable Object class registered");
   });
 
-  it("resolves the exact reviewed GAD singleton for an authenticated user", async () => {
+  it("rejects the deleted workspace-source worker coordinates", async () => {
     const dispatcher = createProductionAuthorityDispatcher(createDeps());
     const caller = createVerifiedCaller("panel:gad", "panel", null, null, {
       userId: "usr_alice",
@@ -517,18 +603,12 @@ describe("workerService workspace service resolution", () => {
       dispatcher.dispatch({ caller }, "workers", "resolveDurableObject", [
         "vibestudio/internal",
         "GadWorkspaceDO",
-        "workspace-semantic-control-plane",
+        "workspace",
       ])
-    ).resolves.toEqual({
-      kind: "durable-object",
-      source: "vibestudio/internal",
-      className: "GadWorkspaceDO",
-      objectKey: "workspace-semantic-control-plane",
-      targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
-    });
+    ).rejects.toThrow("No Durable Object class registered");
   });
 
-  it("derives BrowserDataDO identity from the verified broker user and workspace", async () => {
+  it("does not expose BrowserDataDO through the raw internal resolver", async () => {
     const dispatcher = createProductionAuthorityDispatcher(createDeps());
     const caller = browserDataExtensionCaller();
     const authorizingCaller = createVerifiedCaller("shell:dev_alice", "shell", null, null, {
@@ -542,19 +622,7 @@ describe("workerService workspace service resolution", () => {
         "BrowserDataDO",
         "browser-environment",
       ])
-    ).resolves.toMatchObject({
-      targetId: expect.stringMatching(/^do:vibestudio\/internal:BrowserDataDO:v1_[A-Za-z0-9_-]+$/),
-    });
-
-    const second = await dispatcher.dispatch(
-      { caller, authorizingCaller },
-      "workers",
-      "resolveDurableObject",
-      ["vibestudio/internal", "BrowserDataDO", "caller-controlled-key"]
-    );
-    expect(second).toMatchObject({
-      targetId: expect.stringMatching(/^do:vibestudio\/internal:BrowserDataDO:v1_[A-Za-z0-9_-]+$/),
-    });
+    ).rejects.toThrow("No Durable Object class registered");
   });
 
   it("does not expose arbitrary internal classes or let users bypass broker authority", async () => {
@@ -578,7 +646,7 @@ describe("workerService workspace service resolution", () => {
         "BrowserDataDO",
         "browser-environment",
       ])
-    ).rejects.toMatchObject({ code: "EACCES" });
+    ).rejects.toThrow("No Durable Object class registered");
   });
 
   it("resolves concrete durable object targets declared only in the caller context", async () => {

@@ -5,6 +5,9 @@ import { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import { createPanelRuntimeService } from "./panelRuntimeService.js";
 
 describe("panelRuntimeService", () => {
+  const currentEntityForSlot = async () => null;
+  const observeHostSlot = async () => null;
+
   it("accepts headless CDP-capable clients with stable host ids", async () => {
     const coordinator = {
       registerClient: vi.fn(),
@@ -15,7 +18,11 @@ describe("panelRuntimeService", () => {
       release: vi.fn(),
       ownsClientSession: vi.fn(() => true),
     };
-    const service = createPanelRuntimeService({ coordinator: coordinator as never });
+    const service = createPanelRuntimeService({
+      coordinator: coordinator as never,
+      currentEntityForSlot,
+      observeHostSlot,
+    });
     const input = {
       clientSessionId: "headless-session",
       hostConnectionId: "headless-host",
@@ -39,7 +46,11 @@ describe("panelRuntimeService", () => {
   });
 
   it("accepts lease requests that carry a provider host id", () => {
-    const service = createPanelRuntimeService({ coordinator: {} as never });
+    const service = createPanelRuntimeService({
+      coordinator: {} as never,
+      currentEntityForSlot,
+      observeHostSlot,
+    });
 
     expect(() =>
       service.methods["acquire"]?.args.parse([
@@ -64,7 +75,11 @@ describe("panelRuntimeService", () => {
       release: vi.fn(),
       ownsClientSession: vi.fn(() => true),
     };
-    const service = createPanelRuntimeService({ coordinator: coordinator as never });
+    const service = createPanelRuntimeService({
+      coordinator: coordinator as never,
+      currentEntityForSlot,
+      observeHostSlot,
+    });
 
     expect(() =>
       service.methods["unregisterClient"]?.args.parse(["headless-session"])
@@ -81,7 +96,11 @@ describe("panelRuntimeService", () => {
 
   it("rejects lease mutations for client sessions owned by another caller", async () => {
     const coordinator = new PanelRuntimeCoordinator();
-    const service = createPanelRuntimeService({ coordinator });
+    const service = createPanelRuntimeService({
+      coordinator,
+      currentEntityForSlot,
+      observeHostSlot,
+    });
     const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
     const headlessCtx = { caller: createVerifiedCaller("shell:headless", "shell") };
 
@@ -158,6 +177,50 @@ describe("panelRuntimeService", () => {
     );
   });
 
+  it("reads and caches the active desktop host observation on demand", async () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    const hostObservation = {
+      url: "http://127.0.0.1/panels/chat/",
+      loading: false,
+      boot: { phase: "ready" as const },
+    };
+    const observeHost = vi.fn(async () => hostObservation);
+    const service = createPanelRuntimeService({
+      coordinator,
+      currentEntityForSlot,
+      observeHostSlot: observeHost,
+    });
+    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
+    await service.handler(desktopCtx, "registerClient", [
+      {
+        clientSessionId: "desktop-session",
+        hostConnectionId: "desktop-host",
+        label: "Desktop",
+        platform: "desktop",
+      },
+    ]);
+    await service.handler(desktopCtx, "acquire", [
+      "panel:nav-a",
+      {
+        slotId: "panel:tree/slot-a",
+        clientSessionId: "desktop-session",
+        connectionId: "desktop-runtime",
+      },
+    ]);
+
+    await expect(
+      service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])
+    ).resolves.toEqual({
+      lease: expect.objectContaining({ runtimeEntityId: "panel:nav-a" }),
+      observation: {
+        view: { url: hostObservation.url, loading: false },
+        boot: expect.objectContaining({ phase: "ready" }),
+      },
+    });
+    await service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"]);
+    expect(observeHost).toHaveBeenCalledTimes(1);
+  });
+
   it("lets userland callers read lease snapshots but not mutate leases", async () => {
     const coordinator = {
       registerClient: vi.fn(),
@@ -170,7 +233,13 @@ describe("panelRuntimeService", () => {
       getLease: vi.fn(() => null),
     };
     const dispatcher = createTestServiceDispatcher();
-    dispatcher.registerService(createPanelRuntimeService({ coordinator: coordinator as never }));
+    dispatcher.registerService(
+      createPanelRuntimeService({
+        coordinator: coordinator as never,
+        currentEntityForSlot,
+        observeHostSlot,
+      })
+    );
     dispatcher.markInitialized();
 
     for (const kind of ["panel", "worker", "do"] as const) {

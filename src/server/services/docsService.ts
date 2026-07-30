@@ -14,7 +14,6 @@ import { docsMethods, type SerializedServiceDefinition } from "@vibestudio/servi
 import { createCatalogIndex } from "./catalog/catalogIndex.js";
 import { isServiceMethodVisible } from "./catalog/buildCatalog.js";
 import { serializeDef } from "./catalog/serialize.js";
-import type { MethodTierDecision } from "@vibestudio/shared/authority/tierTable";
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
 
 export interface LiveWorkspaceServiceDoc {
@@ -40,7 +39,6 @@ export function createDocsService(deps: {
     ctx: Parameters<ServiceDefinition["handler"]>[0]
   ) => readonly LiveWorkspaceServiceDoc[] | Promise<readonly LiveWorkspaceServiceDoc[]>;
   reportWorkspaceDocsError?: (error: unknown) => void;
-  tierLookup?: (method: string) => MethodTierDecision | null;
 }): ServiceDefinition {
   const indexCache = new Map<string, ReturnType<typeof createCatalogIndex>>();
   let lastWorkspaceDocsError: string | null = null;
@@ -106,7 +104,6 @@ export function createDocsService(deps: {
       definitions: deps.dispatcher.getServiceDefinitions(),
       runtimeSurfaces: deps.runtimeSurfaces,
       workspaceCapabilities,
-      ...(deps.tierLookup ? { tierLookup: deps.tierLookup } : {}),
     }));
     indexCache.set(key, index);
     if (indexCache.size > 32) {

@@ -97,7 +97,7 @@ function resolveConditionValue(
 
 /** Parsed components of a `@workspace<scope>/name[/subpath]` import specifier. */
 export interface WorkspaceImportParts {
-  /** Full package name including scope, e.g. `"@vibestudio/runtime"`. */
+  /** Full package name including scope, e.g. `"@workspace/runtime"`. */
   packageName: string;
   /** Exports-map-style subpath, either `"."` or `"./subpath"`. */
   subpath: string;
@@ -111,8 +111,8 @@ export interface WorkspaceImportParts {
  * Returns `null` for specifiers that aren't workspace-scoped.
  *
  * Examples:
- *   "@vibestudio/runtime"                → { packageName: "@vibestudio/runtime", subpath: "." }
- *   "@vibestudio/runtime/config"         → { packageName: "@vibestudio/runtime", subpath: "./config" }
+ *   "@workspace/runtime"                → { packageName: "@workspace/runtime", subpath: "." }
+ *   "@workspace/runtime/config"         → { packageName: "@workspace/runtime", subpath: "./config" }
  *   "@workspace-panels/chat/index.tsx"  → { packageName: "@workspace-panels/chat", subpath: "./index.tsx" }
  */
 export function parseWorkspaceImport(importPath: string): WorkspaceImportParts | null {

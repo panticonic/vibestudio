@@ -216,6 +216,14 @@ export const DiffTreesResultSchema = z
 
 export const blobstoreMethods = defineServiceMethods({
   has: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Whether a blob with this content digest exists in the workspace store.",
     args: z.tuple([DigestSchema]),
     returns: z.boolean(),
@@ -229,6 +237,14 @@ export const blobstoreMethods = defineServiceMethods({
     ],
   },
   stat: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Size (bytes) and last-modified time of a blob, or null if it does not exist.",
     args: z.tuple([DigestSchema]),
     returns: z.object({ size: z.number(), mtime: z.number() }).nullable(),
@@ -236,6 +252,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putText: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Store a UTF-8 string; returns its content digest + byte size. Content-addressed, so identical text always yields the same digest (idempotent).",
     args: z.tuple([z.string()]),
@@ -245,6 +269,14 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: ["hello world"] }],
   },
   getText: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Full UTF-8 text of a blob, or null if absent.",
     args: z.tuple([DigestSchema]),
     returns: z.string().nullable(),
@@ -252,6 +284,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getRange: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "UTF-8 text slice. offset/length are BYTES (so they compose with stat.size); the returned string is UTF-8-decoded, so partial codepoints at slice boundaries become U+FFFD replacement chars. Use getRangeBytes for a raw binary slice.",
     args: z.tuple([DigestSchema, z.number().int().nonnegative(), z.number().int().positive()]),
@@ -260,6 +300,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getRangeBytes: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Raw byte slice, base64-encoded on the wire so binary blobs (PDFs, images) round-trip intact. Decode with Buffer.from(result.bytesBase64, 'base64').",
     args: z.tuple([DigestSchema, z.number().int().nonnegative(), z.number().int().positive()]),
@@ -268,6 +316,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   grep: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Search a blob's text for a regex pattern; returns matching lines with optional surrounding context, or null if the blob is absent.",
     args: z.tuple([
@@ -295,6 +351,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putBase64: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Store raw bytes from exactly one base64 string; returns content digest + byte size (idempotent by content). The blobstore stores bytes only: do not pass MIME/options metadata, and instead carry it alongside the returned digest.",
     args: z.tuple([Base64Schema]),
@@ -304,6 +368,14 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: ["iVBORw0KGgo="] }],
   },
   getBase64: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description: "Full blob contents as a base64 string, or null if absent.",
     args: z.tuple([DigestSchema]),
     returns: z.string().nullable(),
@@ -311,6 +383,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   putTree: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Store one immutable directory node in the content-addressed store and return its tree hash. Every referenced file blob and child tree must already exist, so a tree hash cannot name missing objects. Pass {root:true} to also store a content-state root pointer. Content states are build/projection inputs, never semantic revision or ancestry identities. Idempotent by content; build deep trees bottom-up.",
     args: z.tuple([z.array(TreeEntrySchema).max(100_000), PutTreeOptsSchema]),
@@ -320,6 +400,14 @@ export const blobstoreMethods = defineServiceMethods({
     examples: [{ args: [[], { root: true }] }],
   },
   getTree: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Entries of a tree object (one directory node), or null if absent. Accepts a `manifest:` node hash or a `state:` root pointer (resolved to its root node).",
     args: z.tuple([TreeRefSchema]),
@@ -328,6 +416,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listTree: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Exact keyset-paged recursive listing of an immutable tree. Each page is bound to the requested ref, resolved root manifest, normalized prefix, and canonical tree-preorder. A continuation names the last emitted path; cursor/basis mismatches and missing interior objects fail loudly. Returns null only when the requested root object is absent.",
     args: z.tuple([TreeRefSchema, ListTreeRequestSchema]),
@@ -336,6 +432,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   readFileAtTree: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Resolve a tree-relative file path to its content digest and mode, or null if the path is absent or not a file. Read the bytes via the ordinary blob APIs.",
     args: z.tuple([TreeRefSchema, NonEmptyTreeRelativePathSchema]),
@@ -344,6 +448,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   diffTrees: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "Bounded authoritative diff for host admission checks: added/removed/changed file paths, computed by Merkle walk (identical subtree hashes are skipped wholesale). Throws if either tree's objects are missing or the change set exceeds 100000 entries; semantic/user-facing comparison uses its exact paged projection.",
     args: z.tuple([TreeRefSchema, TreeRefSchema]),
@@ -352,6 +464,25 @@ export const blobstoreMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   materializeTree: {
+    capability: "workspace.storage.materialize",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Restore a stored folder tree",
+      action: "restore a stored folder tree",
+      description: "Allows {requesterKind} to restore a stored folder tree.",
+      group: "files",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
     description:
       "Project a tree onto disk at outDir (absolute path): hardlinks non-executable files from the CAS (copies executables so chmod never touches the shared CAS inode). Existing files with matching size are trusted and skipped. Admin-only — writes outside the store.",
     args: z.tuple([
@@ -364,6 +495,25 @@ export const blobstoreMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   delete: {
+    capability: "workspace.storage.delete",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "protected-write",
+      family: "blobstore.retire",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Delete stored workspace data",
+      action: "delete stored workspace data",
+      description: "Allows {requesterKind} to delete stored workspace data.",
+      group: "files",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
     description: "Delete a blob by digest; returns true if it existed. Destructive, admin-only.",
     args: z.tuple([DigestSchema]),
     returns: z.boolean(),
@@ -371,6 +521,14 @@ export const blobstoreMethods = defineServiceMethods({
     access: ADMIN_DESTRUCTIVE_ACCESS,
   },
   list: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "blobstore.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
     description:
       "List blob digests, optionally filtered by hex prefix and capped by limit. Admin-only.",
     args: ListArgsSchema,

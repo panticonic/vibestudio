@@ -53,7 +53,7 @@ describe("buildUnit terminal worker builds", () => {
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
-      semanticStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });
     // Resolve external npm deps (yoga-layout) from the repo's real node_modules.
     initBuilder([path.join(REPO_ROOT, "node_modules")]);

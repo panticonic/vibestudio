@@ -327,21 +327,79 @@ test.describe("Multi-column panel layout", () => {
       const panel2 = created.id;
 
       await test.step("open second panel beside the first via Ctrl-click on its tree row", async () => {
-        await expect
-          .poll(async () => {
-            const surfaces = await getSurfaceRects(app, wcId);
-            if (surfaces.length >= 2) return true;
-            // Retry the idempotent user action until the layout converges:
-            // Ctrl-click the second panel's tree row (guarded on <2 panes so a
-            // slow frame cannot open a third column).
-            const tree = await getPanelTree(app);
-            const title = tree.find((panel) => panel.id === panel2)?.title;
-            if (title) {
-              await clickTreeRowForPanel(app, wcId, title, { ctrlKey: true }).catch(() => false);
-            }
-            return false;
-          }, POLL)
-          .toBe(true);
+        try {
+          await expect
+            .poll(async () => {
+              const surfaces = await getSurfaceRects(app, wcId);
+              if (surfaces.length >= 2) return true;
+              // Retry the idempotent user action until the layout converges:
+              // Ctrl-click the second panel's tree row (guarded on <2 panes so a
+              // slow frame cannot open a third column).
+              const tree = await getPanelTree(app);
+              const title = tree.find((panel) => panel.id === panel2)?.title;
+              if (title) {
+                await clickTreeRowForPanel(app, wcId, title, { ctrlKey: true }).catch(() => false);
+              }
+              return false;
+            }, POLL)
+            .toBe(true);
+        } catch (error) {
+          const diagnostics = await Promise.all([
+            getPanelTree(app),
+            getSurfaceRects(app, wcId),
+            getNativePanelSlotDebugInfo(app),
+            shellEval(
+              app,
+              wcId,
+              `({
+                rows: Array.from(document.querySelectorAll('[data-panel-tree-row="true"]')).map(
+                  (node) => ({
+                    label: node.getAttribute('aria-label'),
+                    text: node.textContent,
+                  })
+                ),
+                panes: Array.from(document.querySelectorAll('[data-pane-id]')).map((node) => ({
+                  paneId: node.getAttribute('data-pane-id'),
+                  text: node.textContent,
+                })),
+              })`
+            ),
+            app.evaluate((_electron, panelId) => {
+              const testApi = (
+                globalThis as {
+                  __testApi?: {
+                    getPanel: (id: string) => unknown;
+                    getPanelReadiness: (id: string) => unknown;
+                    getFocusedPanelId: () => string | null;
+                  };
+                }
+              ).__testApi;
+              return {
+                panel: testApi?.getPanel(panelId) ?? null,
+                readiness: testApi?.getPanelReadiness(panelId) ?? null,
+                focusedPanelId: testApi?.getFocusedPanelId() ?? null,
+              };
+            }, panel2),
+          ]);
+          await test.info().attach("multi-column-open-beside-diagnostics.json", {
+            contentType: "application/json",
+            body: Buffer.from(
+              JSON.stringify(
+                {
+                  panel2,
+                  tree: diagnostics[0],
+                  surfaces: diagnostics[1],
+                  nativeSlots: diagnostics[2],
+                  shell: diagnostics[3],
+                  main: diagnostics[4],
+                },
+                null,
+                2
+              )
+            ),
+          });
+          throw error;
+        }
 
         const surfaces = await getSurfaceRects(app, wcId);
         expect(surfaces).toHaveLength(2);

@@ -4,7 +4,6 @@ import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { createHostCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { WorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
-import { PRODUCT_WORKSPACE_SERVICES } from "@vibestudio/shared/productWorkspaceServices.mjs";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import type { UserSubject } from "@vibestudio/identity/types";
 import { randomBytes } from "node:crypto";
@@ -14,12 +13,11 @@ import type { EgressProxy } from "../services/egressProxy.js";
 import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 import type { RouteRegistry } from "../routeRegistry.js";
 import { attestDirectRpc, attestWorkspaceDoRpc } from "../services/authorityRuntime.js";
-import { SEMANTIC_CONTROL_PLANE } from "../internalDOs/controlPlane.js";
 import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
 import type { DORef } from "../workerdRpcRelay.js";
 import type { RpcServer } from "../rpcServer.js";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
-import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/directMethodEffects";
+import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
 
 export interface WorkerdGatewayBootstrapConfig {
   getPort(): number | null;
@@ -43,6 +41,15 @@ export interface WorkerdBootstrapDeps {
   runtimeDiagnostics: Pick<RuntimeDiagnosticsStore, "record">;
   eventService: Pick<EventService, "emit">;
   executionPublicationPort?: ExecutionPublicationPort;
+  userlandResourceHandles: Pick<
+    import("../services/userlandResourceHandleStore.js").UserlandResourceHandleStore,
+    | "issueFromPreparation"
+    | "resolve"
+    | "reconcileProviders"
+    | "reconcileProviderDefinitions"
+    | "reconcileReceiverClasses"
+  >;
+  assertBootstrapSourceUnchanged(): Promise<void>;
   /**
    * Join a registered image identity to its current host-owned execution
    * session and context policy. Egress is long-lived, so these facts must be
@@ -83,9 +90,8 @@ export function resolveWorkerdServerAliasUrls(config: WorkerdGatewayBootstrapCon
 /**
  * One authority mediator for every host-originated direct DO call. Workspace
  * services are discovered from live declarations and their method effect is
- * resolved from the exact build bound to the object. Product-sealed services
- * use the same projection, with their reviewed topology as the sole static
- * input. Unknown workspace methods fail before crossing the receiver boundary.
+ * resolved from the exact build bound to the object. Unknown workspace methods
+ * fail before crossing the receiver boundary.
  */
 export function createHostDoAuthorityAttester(input: {
   manager: Pick<WorkerdManager, "resolveDoRpcMethodAuthority">;
@@ -93,8 +99,12 @@ export function createHostDoAuthorityAttester(input: {
   services: WorkspaceDeclarations["services"];
   callerId?: string;
   callerSubject?: UserSubject;
-}): (ref: DORef, method: string) => DirectAuthorityAttestation {
-  return (ref, method) => {
+  resourceHandles?: Pick<
+    import("../services/userlandResourceHandleStore.js").UserlandResourceHandleStore,
+    "resolve"
+  >;
+}): (ref: DORef, method: string, args: readonly unknown[]) => DirectAuthorityAttestation {
+  return (ref, method, args) => {
     const caller = createHostCaller(
       input.callerId ?? "main",
       "server",
@@ -115,7 +125,7 @@ export function createHostDoAuthorityAttester(input: {
     } as const;
     if (method.startsWith("__")) return attestDirectRpc(facts);
 
-    const matches = [...input.services, ...PRODUCT_WORKSPACE_SERVICES].filter((service) => {
+    const matches = input.services.filter((service) => {
       const durableObject = service.durableObject;
       return (
         service.source === ref.source &&
@@ -130,25 +140,83 @@ export function createHostDoAuthorityAttester(input: {
     }
     const service = matches[0];
     if (!service) return attestDirectRpc(facts);
-    const methodAuthority = isHostIntrinsicDirectMethod(method)
-      ? {
-          effect: { kind: "runtime-intrinsic" } as const,
-          access: { tier: "open" as const, sensitivity: "read" as const },
-        }
-      : input.manager.resolveDoRpcMethodAuthority(ref.source, ref.className, ref.objectKey, method);
+    const methodAuthority: ReturnType<WorkerdManager["resolveDoRpcMethodAuthority"]> =
+      isHostIntrinsicDirectMethod(method)
+        ? {
+            effect: { kind: "open" } as const,
+            access: { tier: "open" as const, sensitivity: "read" as const },
+            providerExecutionDigest: "-",
+          }
+        : input.manager.resolveDoRpcMethodAuthority(
+            ref.source,
+            ref.className,
+            ref.objectKey,
+            method
+          );
     if (!methodAuthority) {
       throw new Error(
         `Live workspace service ${ref.source}:${ref.className}.${method} has no exact build-catalog declaration`
       );
     }
-    return attestWorkspaceDoRpc({
+    const receiver = methodAuthority.userlandCapability;
+    const resolvedHandle =
+      methodAuthority.effect.kind === "userland-capability" &&
+      methodAuthority.effect.resource.kind === "opaque-handle" &&
+      receiver &&
+      input.resourceHandles
+        ? input.resourceHandles.resolve(
+            String(args[methodAuthority.effect.resource.argument] ?? ""),
+            {
+              workspaceId: input.workspaceId,
+              capability: receiver.canonicalCapability,
+              capabilityDefinitionDigest: receiver.definitionDigest,
+              provider: ref.source,
+              receiverSource: ref.source,
+              receiverClass: ref.className,
+              receiverObjectKey: ref.objectKey,
+              resourceType: receiver.resourceType,
+            }
+          )
+        : undefined;
+    const attestation = attestWorkspaceDoRpc({
       ...facts,
+      ...(resolvedHandle ? { resourceKey: resolvedHandle.resourceKey } : {}),
       service: { name: service.name, principals: service.authority.principals },
       methodAuthority: {
         effect: methodAuthority.effect,
+        ...(receiver ? { capability: receiver.canonicalCapability } : {}),
         tier: methodAuthority.access?.tier ?? "open",
       },
+      ...(receiver
+        ? {
+            receiverAuthority: {
+              capabilityDefinitionDigest: receiver.definitionDigest,
+              resourceType: receiver.resourceType,
+              provider: ref.source,
+              providerExecutionDigest: methodAuthority.providerExecutionDigest,
+            },
+          }
+        : {}),
     });
+    return {
+      ...attestation,
+      ...(resolvedHandle
+        ? {
+            resourceHandle: resolvedHandle.handle,
+            resourceSelector: resolvedHandle.selector,
+          }
+        : {}),
+      ...(methodAuthority.producesHandle
+        ? {
+            handleProduction: {
+              capability: methodAuthority.producesHandle.canonicalCapability,
+              capabilityDefinitionDigest: methodAuthority.producesHandle.definitionDigest,
+              resourceType: methodAuthority.producesHandle.resourceType,
+              provider: ref.source,
+            },
+          }
+        : {}),
+    };
   };
 }
 
@@ -167,11 +235,12 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
     // Workerd calls back into host RPC while activation work and lifecycle
     // release settle. Starting after RpcServer and stopping before it keeps
     // that return path available for the whole sandbox generation.
-    dependencies: ["fsService", "rpcServer"],
+    dependencies: ["fsService", "rpcServer", "bootstrapBuildSystem"],
     async start(resolve) {
       const { WorkerdManager } = await import("../workerdManager.js");
       const { getWorkerdProgramSources } = await import("../workerdProgramLoader.js");
       const fsService = assertPresent(resolve<FsService>("fsService"));
+      const bootstrapBuildSystem = assertPresent(resolve<BuildSystemV2>("bootstrapBuildSystem"));
       const egressSecret = randomBytes(32).toString("hex");
       const manager: WorkerdManager = new WorkerdManager({
         tokenManager: deps.tokenManager,
@@ -194,6 +263,24 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         unregisterEgressCaller: (callerId) => egressCallers.delete(callerId),
         egressSecret,
         getWorkerdGatewayToken: () => deps.gatewayToken,
+        resourceHandleLifecycle: {
+          reconcileProviderDefinitions: (provider, activeDefinitionDigests) => {
+            deps.userlandResourceHandles.reconcileProviderDefinitions(
+              deps.workspaceId,
+              provider,
+              activeDefinitionDigests,
+              "capability definitions reconciled"
+            );
+          },
+          reconcileReceiverClasses: (receiverSource, activeClassNames) => {
+            deps.userlandResourceHandles.reconcileReceiverClasses(
+              deps.workspaceId,
+              receiverSource,
+              activeClassNames,
+              "receiver classes reconciled"
+            );
+          },
+        },
         recordLifecycleEvent: (event) => {
           deps.runtimeDiagnostics.record({
             workspaceId: deps.workspaceId,
@@ -221,12 +308,30 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         return registered ? deps.resolveEgressCaller(registered) : null;
       });
 
-      await manager.registerAllDOClasses([
-        {
-          source: SEMANTIC_CONTROL_PLANE.source,
-          className: SEMANTIC_CONTROL_PLANE.className,
+      manager.bindWorkspaceProvider({
+        bindRuntimeImage: (unitPath, ref) => bootstrapBuildSystem.bindRuntimeImage(unitPath, ref),
+        getBuildByKey: (key) => bootstrapBuildSystem.getBuildByKey(key),
+        getManifestRoutes: (source) =>
+          deps.workspaceDeclarations.routes.filter((route) => route.source === source),
+        getManifestDoClasses: (source) => {
+          const node = bootstrapBuildSystem
+            .getGraph()
+            .allNodes()
+            .find((entry) => entry.kind === "worker" && entry.relativePath === source);
+          return node?.manifest.durable?.classes ?? [];
         },
-      ]);
+        singletonRegistry: deps.workspaceDeclarations.singletons,
+        getInternalDoEnv: deps.getInternalDoEnv,
+      });
+      const { INTERNAL_DO_SOURCE } = await import("../internalDOs/internalDoLoader.js");
+      const { PRODUCT_BUILTIN_CATALOG } =
+        await import("@vibestudio/shared/productBuiltinCatalog.generated");
+      await manager.registerAllDOClasses(
+        PRODUCT_BUILTIN_CATALOG.filter((entry) => entry.workerd.bootstrapPhase === "first").map(
+          (entry) => ({ source: INTERNAL_DO_SOURCE, className: entry.className })
+        )
+      );
+      await deps.assertBootstrapSourceUnchanged();
 
       return manager;
     },
@@ -256,8 +361,26 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           manager,
           workspaceId: deps.workspaceId,
           services: deps.workspaceDeclarations.services,
+          resourceHandles: deps.userlandResourceHandles,
         })
       );
+      dispatch.setAuthorityResultTransform((ref, authorization, result) => {
+        const production = authorization.handleProduction;
+        if (!production) return result;
+        return deps.userlandResourceHandles.issueFromPreparation(
+          {
+            workspaceId: deps.workspaceId,
+            capability: production.capability,
+            capabilityDefinitionDigest: production.capabilityDefinitionDigest,
+            provider: production.provider,
+            receiverSource: ref.source,
+            receiverClass: ref.className,
+            receiverObjectKey: ref.objectKey,
+            resourceType: production.resourceType,
+          },
+          result
+        );
+      });
       dispatch.setAuthorityParentRunner((receiverRuntimeId, authorization, invoke) =>
         rpcServer.withAuthorityParent(receiverRuntimeId, authorization, invoke)
       );
@@ -286,14 +409,29 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         singletonRegistry: deps.workspaceDeclarations.singletons,
         getInternalDoEnv: deps.getInternalDoEnv,
       };
-      manager.bindWorkspaceProvider(provider);
+      manager.replaceWorkspaceProvider(provider);
+
+      const graphNodes = buildSystem.getGraph().allNodes();
+      deps.userlandResourceHandles.reconcileProviders(
+        deps.workspaceId,
+        graphNodes.map((node) => node.relativePath),
+        "workspace providers reconciled"
+      );
+      for (const node of graphNodes) {
+        if (node.kind !== "worker") continue;
+        deps.userlandResourceHandles.reconcileReceiverClasses(
+          deps.workspaceId,
+          node.relativePath,
+          (node.manifest.durable?.classes ?? []).map(({ className }) => className),
+          "receiver classes reconciled"
+        );
+      }
 
       const { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } =
         await import("../internalDOs/internalDoLoader.js");
-      const remainingInternalClasses = INTERNAL_DO_CLASSES.filter(
-        (className) => className !== SEMANTIC_CONTROL_PLANE.className
-      ).map((className) => ({ source: INTERNAL_DO_SOURCE, className }));
-      await manager.registerAllDOClasses(remainingInternalClasses);
+      await manager.registerAllDOClasses(
+        INTERNAL_DO_CLASSES.map((className) => ({ source: INTERNAL_DO_SOURCE, className }))
+      );
 
       buildSystem.onPushBuild((source, trigger, buildKey) => {
         const node = buildSystem
@@ -309,7 +447,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         });
       });
 
-      for (const node of buildSystem.getGraph().allNodes()) {
+      for (const node of graphNodes) {
         if (node.kind !== "worker" || !node.manifest.durable) continue;
         for (const cls of node.manifest.durable.classes) {
           deps.routeRegistry.registerDoRoutes(
@@ -321,11 +459,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         }
       }
       manager.reconcileManifestRoutes(
-        buildSystem
-          .getGraph()
-          .allNodes()
-          .filter((node) => node.kind === "worker")
-          .map((node) => node.relativePath)
+        graphNodes.filter((node) => node.kind === "worker").map((node) => node.relativePath)
       );
       return manager;
     },

@@ -6,21 +6,38 @@ import {
   summarizeAuthorityRequests,
 } from "./authorityPresentation.js";
 import {
-  HOST_CAPABILITY_PRESENTATIONS,
-  HOST_SEMANTIC_CAPABILITY_PRESENTATIONS,
-  hostCapabilityPresentation,
-} from "./authority/hostCapabilityPresentations.js";
-import {
-  CAPABILITY_DOMAINS,
-  capabilityDomain,
-} from "./authority/capabilityDomains.js";
+  HOST_AUTHORITY_METHODS,
+  HOST_CAPABILITY_CATEGORIES,
+  HOST_SEMANTIC_PRESENTATIONS,
+} from "./authority/hostAuthorityCatalog.generated.js";
+import { capabilityDomain } from "./authority/authorityDomains.js";
 import { HOST_SEMANTIC_CAPABILITY_COPY } from "./hostApprovalCopy.js";
+
+const HOST_CAPABILITY_PRESENTATIONS = Object.fromEntries(
+  Object.entries(HOST_AUTHORITY_METHODS)
+    .filter(
+      (
+        entry
+      ): entry is [
+        string,
+        (typeof HOST_AUTHORITY_METHODS)[keyof typeof HOST_AUTHORITY_METHODS] & {
+          presentation: NonNullable<(typeof entry)[1]["presentation"]>;
+        },
+      ] => entry[1].presentation !== null
+    )
+    .map(([method, row]) => [method, row.presentation])
+);
 
 describe("authority request presentation", () => {
   it("has reviewed copy for every capability in the static authority census", () => {
     expect(
-      Object.keys(CAPABILITY_DOMAINS).filter(
-        (capability) => hostCapabilityPresentation(capability) === null
+      Object.keys(HOST_CAPABILITY_CATEGORIES).filter(
+        (capability) =>
+          !HOST_SEMANTIC_CAPABILITY_COPY.some(({ prefix }) =>
+            prefix.endsWith(":")
+              ? capability.startsWith(prefix)
+              : capability === prefix || capability.startsWith(`${prefix}:`)
+          ) && !(capability in HOST_SEMANTIC_PRESENTATIONS)
       )
     ).toEqual([]);
   });
@@ -138,18 +155,49 @@ describe("authority request presentation", () => {
     const result = summarizeAuthorityManifest(
       {
         requests: [scope("push.send")],
+        provides: [],
       },
       {
         requests: [scope("open-external")],
+        provides: [],
       }
     );
 
-    expect(result.diff.removed).toEqual([
-      expect.objectContaining({ capability: "open-external" }),
-    ]);
+    expect(result.diff.removed).toEqual([expect.objectContaining({ capability: "open-external" })]);
     expect(result.diff.added).toEqual([
       expect.objectContaining({ capability: "push.send", domain: "sharing" }),
     ]);
+  });
+
+  it("uses the declaring provider's sealed vocabulary for userland capabilities", () => {
+    const resolver = createCapabilityPresentationResolver(
+      () => [],
+      () => [
+        {
+          provider: "extensions/shell",
+          definition: {
+            name: "native.shell.execute",
+            title: "Run a command",
+            action: "run a command or open a terminal",
+            tier: "gated",
+            sensitivity: "write",
+            resourceType: "native.shell",
+            presentation: { domain: "computer", verb: "act" },
+            grantScopes: ["once", "session"],
+          },
+        },
+      ]
+    );
+
+    expect(resolver("userland:extensions/shell/native.shell.execute#*", "panel")).toMatchObject({
+      title: "Run a command",
+      action: "run a command or open a terminal",
+      authorityCategory: {
+        domain: "computer",
+        verb: "act",
+        declaredBy: "extensions/shell",
+      },
+    });
   });
 
   it("uses reviewed user effects instead of host transport method names", () => {
@@ -164,12 +212,29 @@ describe("authority request presentation", () => {
     expect(describeCapability("workspace-host.manage")).toMatchObject({
       action: "open and manage workspace apps",
     });
+    expect(describeCapability("workspace-units.manage")).toMatchObject({
+      action: "manage workspace apps, panels, workers, and extensions",
+    });
+    expect(describeCapability("workspace-units.publish")).toMatchObject({
+      action: "publish workspace apps, panels, workers, and extensions",
+    });
+    expect(describeCapability("extensions.reload")).toMatchObject({
+      action: "reload workspace extensions",
+    });
     expect(describeCapability("channel.members.remove")).toMatchObject({
       action: "remove a person from a shared conversation",
     });
     expect(describeCapability("approvals.read", "panel").description).toContain("this panel");
     expect(describeCapability("approvals.read", "worker").description).toContain("this worker");
     expect(describeCapability("approvals.read", "worker").description).not.toContain("unit");
+  });
+
+  it("resolves manifest capabilities from the generated method census", () => {
+    expect(describeCapability("context.clone")).toMatchObject({
+      title: "Copy another task's workspace",
+      action: "copy another task's workspace",
+      authorityCategory: { domain: "files", verb: "act" },
+    });
   });
 
   it("names the copy slot as a kind and resolves it before presentation", () => {
@@ -188,14 +253,6 @@ describe("authority request presentation", () => {
       expect(
         [presentation.title, presentation.action, presentation.description].join(" "),
         method
-      ).not.toMatch(banned);
-    }
-    for (const [capability, presentation] of Object.entries(
-      HOST_SEMANTIC_CAPABILITY_PRESENTATIONS
-    )) {
-      expect(
-        [presentation.title, presentation.action, presentation.description].join(" "),
-        capability
       ).not.toMatch(banned);
     }
     for (const { prefix, presentation } of HOST_SEMANTIC_CAPABILITY_COPY) {

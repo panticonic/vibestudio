@@ -58,7 +58,6 @@ function createHarness() {
       },
     },
     browserPermissions: {
-      ensureMigrated: vi.fn(async () => undefined),
       list: vi.fn(() => []),
       revokeById: vi.fn(() => false),
       idFor: vi.fn(() => "browser"),

@@ -6,10 +6,10 @@
  *
  * Usage:
  *   // Subscribe and listen through the response-owning typed client.
- *   await events.subscribe("panel-tree-updated");
+ *   await events.subscribe("panel-tree-invalidated");
  *
  *   // Listen for events
- *   events.on("panel-tree-updated", (data) => { ... });
+ *   events.on("panel-tree-invalidated", (data) => { ... });
  */
 
 import type { CallerKind } from "./serviceDispatcher.js";

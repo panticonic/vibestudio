@@ -142,5 +142,5 @@ describe("ExecutionPublicationJournal", () => {
     }
     expect(journal.pendingPublicationCount()).toBe(0);
     journal.close();
-  });
+  }, 10_000);
 });

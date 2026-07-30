@@ -73,7 +73,7 @@ maybeDescribe("image-service extension server smoke", () => {
 
       // Extensions are declared in meta/vibestudio.yml; the startup reconcile raises
       // one joint approval. Approve it as the shell would, then wait for the
-      // image-service process to come up.
+      // onInvoke image service to have an active build.
       const approvalId = await waitForUnitBatchApproval(ready, shellToken);
       await rpc(ready, shellToken, "shellApproval.resolve", [approvalId, "once"]);
       const provenance = await rpc<Array<{ approvalId: string; workspaceId: string }>>(
@@ -88,7 +88,7 @@ maybeDescribe("image-service extension server smoke", () => {
           workspaceId: ready.workspaces[0]!.workspaceId,
         })
       );
-      await waitForExtensionRunning(ready, shellToken, "@workspace-extensions/image-service");
+      await waitForExtensionAvailable(ready, shellToken, "@workspace-extensions/image-service");
 
       await expect(
         rpc(ready, shellToken, "extensions.invoke", [
@@ -97,6 +97,7 @@ maybeDescribe("image-service extension server smoke", () => {
           [[137, 80, 78, 71, 13, 10, 26, 10]],
         ])
       ).resolves.toBe("image/png");
+      await waitForExtensionRunning(ready, shellToken, "@workspace-extensions/image-service");
     } catch (error) {
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}\nServer output:\n${serverOutput}`,
@@ -127,7 +128,9 @@ async function waitForExtensionRunning(
   shellToken: string,
   name: string
 ): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  // A fresh workspace builds every approved extension from source. Keep this
+  // above the cold sequential reconcile time; subsequent invocations are fast.
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     const extensions = await rpc<Array<{ name: string; status: string; lastError: string | null }>>(
       ready,
@@ -141,6 +144,27 @@ async function waitForExtensionRunning(
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`${name} never reached running state`);
+}
+
+async function waitForExtensionAvailable(
+  ready: ReadyPayload,
+  shellToken: string,
+  name: string
+): Promise<void> {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    const extensions = await rpc<Array<{ name: string; status: string; lastError: string | null }>>(
+      ready,
+      shellToken,
+      "extensions.list",
+      []
+    );
+    const entry = extensions.find((extension) => extension.name === name);
+    if (entry?.status === "available" || entry?.status === "running") return;
+    if (entry?.status === "error") throw new Error(`${name} failed: ${entry.lastError}`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`${name} never acquired an active build`);
 }
 
 async function waitForReadyFile(

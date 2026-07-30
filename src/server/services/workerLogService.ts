@@ -36,7 +36,7 @@ export interface WorkerLogServiceDeps {
   /**
    * Optional structured-log sink. Called for every worker-emitted record in
    * addition to terminal logging. The server uses this to populate
-   * `workspace.units.logs` with worker output.
+   * runtime supervision with worker output.
    */
   onLog?: (record: WorkerLogRecord) => void;
 }

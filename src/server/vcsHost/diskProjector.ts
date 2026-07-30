@@ -5,7 +5,7 @@
  * current-epoch `.context-projections/vN/*` folders are DISPOSABLE PROJECTIONS
  * of content-addressed states. This module is the ONE narrow entry point that
  * writes them. It is invoked post-operation with a state hash the VCS
- * semantics (owned by the product-sealed semantic control plane) already decided on; nothing in
+ * semantics (owned by the workspace source provider) already decided on; nothing in
  * here decides WHAT a tree should be, only WHERE a given state lands on disk
  * and how (editable context projection via the content store, sidecar-tracked).
  *

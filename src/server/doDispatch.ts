@@ -324,6 +324,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
         invoke: () => Promise<T>
       ) => Promise<T>)
     | null = null;
+  private authorityResultTransform:
+    | ((
+        ref: DORef,
+        authorization: DirectAuthorityAttestation,
+        result: unknown
+      ) => unknown | Promise<unknown>)
+    | null = null;
   private workReadyObserver: ((hint: DurableWorkReadyHint) => void) | null = null;
 
   /**
@@ -379,6 +386,18 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     ) => Promise<T>
   ): void {
     this.authorityParentRunner = fn;
+  }
+
+  setAuthorityResultTransform(
+    transform:
+      | ((
+          ref: DORef,
+          authorization: DirectAuthorityAttestation,
+          result: unknown
+        ) => unknown | Promise<unknown>)
+      | null
+  ): void {
+    this.authorityResultTransform = transform;
   }
 
   setWorkReadyObserver(observer: ((hint: DurableWorkReadyHint) => void) | null): void {
@@ -513,15 +532,37 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     // DO's converged envelope dispatch surfaces `callerKind: "server"` (e.g. the
     // EvalDO server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
     const serverCaller = await this.serverCaller(ref, method, args);
-    return await postToDOWithToken(
-      ref,
-      method,
-      args,
-      this.buildPostDeps(ref),
-      "main",
-      serverCaller,
-      signal
+    const authorization = assertPresent(serverCaller.authorization);
+    const dispatchedArgs = [...args];
+    if (
+      authorization.effect.kind === "userland-capability" &&
+      authorization.effect.resource.kind === "opaque-handle"
+    ) {
+      if (authorization.resourceSelector === undefined) {
+        throw new Error("DODispatch could not resolve the opaque resource handle");
+      }
+      dispatchedArgs[authorization.effect.resource.argument] = authorization.resourceSelector;
+    }
+    if (!this.authorityParentRunner) {
+      throw new Error("DODispatch requires an authority parent runner");
+    }
+    const result = await this.authorityParentRunner(
+      `do:${ref.source}:${ref.className}:${ref.objectKey}`,
+      authorization,
+      () =>
+        postToDOWithToken(
+          ref,
+          method,
+          dispatchedArgs,
+          this.buildPostDeps(ref),
+          "main",
+          serverCaller,
+          signal
+        )
     );
+    return this.authorityResultTransform
+      ? await this.authorityResultTransform(ref, authorization, result)
+      : result;
   }
 
   async dispatchLifecycle(
@@ -550,13 +591,21 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
     const serverCaller = await this.serverCaller(ref, lifecycleMethod, [arg]);
-    return await postToDOWithToken(
-      ref,
-      lifecycleMethod,
-      [arg],
-      this.buildPostDeps(ref),
-      "main",
-      serverCaller
+    if (!serverCaller.authorization || !this.authorityParentRunner) {
+      throw new Error("DODispatch requires an authority parent runner");
+    }
+    return await this.authorityParentRunner(
+      `do:${ref.source}:${ref.className}:${ref.objectKey}`,
+      serverCaller.authorization,
+      () =>
+        postToDOWithToken(
+          ref,
+          lifecycleMethod,
+          [arg],
+          this.buildPostDeps(ref),
+          "main",
+          serverCaller
+        )
     );
   }
 
@@ -599,9 +648,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
         serverCaller,
         signal
       ) as Promise<DoAlarmDispatchResult>;
-    if (!testPolicy) return await invoke();
     if (!serverCaller.authorization || !this.authorityParentRunner) {
-      throw new Error("DODispatch requires an authority parent runner for test-scoped alarms");
+      throw new Error("DODispatch requires an authority parent runner");
     }
     return await this.authorityParentRunner(
       `do:${ref.source}:${ref.className}:${ref.objectKey}`,

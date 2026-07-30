@@ -7,6 +7,11 @@ import { verifiedInitiator, type ServiceContext } from "@vibestudio/shared/servi
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
+import {
+  assertWorkspaceConfigPathScope,
+  changedWorkspaceConfigPaths,
+  workspaceConfigDigest,
+} from "@vibestudio/workspace/preparedConfig";
 import type {
   VcsCommitResult,
   VcsInspectResult,
@@ -31,6 +36,14 @@ export interface WorkspaceConfigMainWriter {
     mutate: WorkspaceConfigMutation;
     summary: string;
   }): Promise<WorkspaceConfigMutationResult>;
+  applyPrepared(input: {
+    ctx: ServiceContext;
+    expectedBaseDigest: string;
+    nextState: WorkspaceConfig;
+    resultDigest: string;
+    allowedPathScope: readonly string[];
+    summary: string;
+  }): Promise<WorkspaceConfigMutationResult & { resultDigest: string }>;
 }
 
 export type WorkspaceConfigMutation = (currentConfig: WorkspaceConfig) => WorkspaceConfig;
@@ -394,6 +407,32 @@ export function createWorkspaceConfigMainWriter(deps: {
         return render(current, mutate).nextContent !== current.text;
       }),
     applyMutation,
+    applyPrepared: async (input) => {
+      const result = await applyMutation({
+        ctx: input.ctx,
+        summary: input.summary,
+        mutate: (currentConfig) => {
+          const baseDigest = workspaceConfigDigest(currentConfig);
+          if (baseDigest !== input.expectedBaseDigest) {
+            throw new Error(
+              `Prepared workspace-config base is stale: expected ${input.expectedBaseDigest}, current ${baseDigest}`
+            );
+          }
+          const resultDigest = workspaceConfigDigest(input.nextState);
+          if (resultDigest !== input.resultDigest) {
+            throw new Error(
+              `Prepared workspace-config result digest mismatch: expected ${input.resultDigest}, computed ${resultDigest}`
+            );
+          }
+          assertWorkspaceConfigPathScope(
+            changedWorkspaceConfigPaths(currentConfig, input.nextState),
+            input.allowedPathScope
+          );
+          return input.nextState;
+        },
+      });
+      return { ...result, resultDigest: workspaceConfigDigest(result.nextConfig) };
+    },
   };
 }
 

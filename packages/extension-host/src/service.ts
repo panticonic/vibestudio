@@ -4,7 +4,15 @@ import * as path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
+import {
+  EXTENSION_METHOD_AUTHORITY_RESOLVER,
+  extensionsMethods,
+} from "@vibestudio/service-schemas/extensions";
+import {
+  preparedAuthorityState,
+  selectedPreparedAuthoritySelection,
+} from "@vibestudio/shared/serviceDefinition";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import {
   ServiceError,
   verifiedInitiator,
@@ -27,10 +35,7 @@ import type {
 } from "@vibestudio/shared/buildProvider";
 import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
-import {
-  readWorkspaceConfig,
-  resolveDeclaredExtensions,
-} from "@vibestudio/workspace/configParser";
+import { readWorkspaceConfig, resolveDeclaredExtensions } from "@vibestudio/workspace/configParser";
 import {
   UnitManifestError,
   extensionUnitManifestDescriptor,
@@ -171,6 +176,7 @@ interface ExtensionBuildMetadataLike {
   execution?: { executionDigest: string };
   authority?: {
     requests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+    provides: readonly import("@vibestudio/shared/authorityManifest").UserlandCapabilityDefinition[];
   };
   details?:
     | {
@@ -179,6 +185,26 @@ interface ExtensionBuildMetadataLike {
         runtimeAbi?: string | null;
         externalDeps?: Record<string, string>;
         providerContracts?: Record<string, { methods: string[] }>;
+        methodAuthority?: Record<
+          string,
+          | { effect: { kind: "open" } }
+          | {
+              effect: {
+                kind: "userland-capability";
+                capability: string;
+                resource: { kind: "receiver" };
+              };
+              userlandCapability: {
+                canonicalCapability: string;
+                definitionDigest: string;
+                resourceType: string;
+                grantScopes: readonly import("@vibestudio/shared/authorityManifest").UserlandGrantScope[];
+                title: string;
+                action: string;
+                description?: string;
+              };
+            }
+        >;
       }
     | { kind: string };
 }
@@ -238,7 +264,9 @@ interface ApprovalQueueLike {
           units: PendingUnitBatchApproval["units"];
           configWrite?: PendingUnitBatchApproval["configWrite"];
         }
-  ): Promise<"once" | "task" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss">;
+  ): Promise<
+    "once" | "task" | "mission" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss"
+  >;
 }
 
 interface NotificationServiceLike {
@@ -274,11 +302,12 @@ export interface ExtensionHostDeps {
   /** Manifest provider slots whose selected extensions must declare a namespace. */
   providerSlots: readonly string[];
   /**
-   * Canonical host-owned provider contracts, keyed first by manifest provider
-   * slot and then by method. An implementing extension must declare the exact
-   * contract in its manifest; the approved build carries that declaration.
+   * Canonical provider contracts, keyed first by manifest provider slot and
+   * then by method. An implementing extension must declare the exact contract
+   * in its manifest; the approved build carries that declaration.
    */
-  hostProviderContracts: Readonly<Record<string, readonly string[]>>;
+  providerContracts: Readonly<Record<string, readonly string[]>>;
+  privateProviderMethods?: Readonly<Record<string, readonly string[]>>;
 }
 
 export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
@@ -372,7 +401,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
               id: "reload",
               label: "Reload",
               variant: "solid",
-              command: { type: "workspace.restartUnit", name },
+              command: {
+                type: "runtime.supervision.restart",
+                identity: { kind: "extension", entityId: name },
+              },
             },
           ],
         });
@@ -607,7 +639,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     declarations: ExtensionProviderContracts
   ): void {
     for (const [provider, declaration] of Object.entries(declarations)) {
-      const expected = this.deps.hostProviderContracts[provider];
+      const expected = this.deps.providerContracts[provider];
       if (expected && !sameStringArray(declaration.methods, expected)) {
         throw new UnitManifestError(
           `Extension ${unitName} providerContracts.${provider}.methods must exactly match the host contract: ${expected.join(", ")}`,
@@ -681,8 +713,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       const previousAuthority = active?.activeBundleKey
         ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
             requests: [],
+            provides: [],
           })
-        : { requests: [] };
+        : { requests: [], provides: [] };
       units.push({
         ...createUnitBatchEntryBase({
           unitKind: "extension",
@@ -723,6 +756,114 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       description: "Installed extension management and invocation",
       authority: { principals: ["code", "user", "host"] },
       methods: extensionsMethods,
+      authorityPreparation: {
+        [EXTENSION_METHOD_AUTHORITY_RESOLVER]: async (_ctx, args) => {
+          const [name, method] = args;
+          if (typeof name !== "string" || typeof method !== "string") {
+            throw new ServiceError(
+              "extensions",
+              "invoke",
+              "Extension method authority requires a validated name and method",
+              "EINVAL"
+            );
+          }
+          await this.whenDeclarationsStaged();
+          const entry = this.lookupForInvoke(name);
+          if (!entry?.activeBundleKey) {
+            throw new ServiceError(
+              "extensions",
+              "invoke",
+              this.extensionNotInstalledMessage(name),
+              "ENOEXT"
+            );
+          }
+          const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+          const details = extensionMetadataDetails(build?.metadata);
+          const declaration = details?.methodAuthority?.[method];
+          const executionDigest = build?.metadata.execution?.executionDigest;
+          if (!declaration || !executionDigest) {
+            throw new ServiceError(
+              "extensions",
+              "invoke",
+              `Extension ${entry.name}.${method} has no sealed public-method authority`,
+              "EPROTO"
+            );
+          }
+          if (declaration.effect.kind === "open") {
+            return preparedAuthorityState([], {
+              extension: entry.name,
+              method,
+              effect: "open",
+            });
+          }
+          if (!("userlandCapability" in declaration)) {
+            throw new ServiceError(
+              "extensions",
+              "invoke",
+              `Extension ${entry.name}.${method} has an invalid protected-method declaration`,
+              "EPROTO"
+            );
+          }
+          const receiver = declaration.userlandCapability;
+          const localCapability = declaration.effect.capability;
+          const definition = build.metadata.authority?.provides.find(
+            (candidate) => candidate.name === localCapability
+          );
+          if (!definition) {
+            throw new ServiceError(
+              "extensions",
+              "invoke",
+              `Extension ${entry.name}.${method} lost its sealed capability definition`,
+              "EPROTO"
+            );
+          }
+          const resourceKey = `${receiver.resourceType}:extension:${entry.name}`;
+          return preparedAuthorityState(
+            [
+              selectedPreparedAuthoritySelection({
+                capability: receiver.canonicalCapability,
+                resourceKey,
+                requirement: requirementForPrincipals(
+                  ["code", "user", "host"],
+                  receiver.canonicalCapability
+                ),
+                tier: definition.tier,
+                receiverAuthority: {
+                  capabilityDefinitionDigest: receiver.definitionDigest,
+                  resourceType: receiver.resourceType,
+                  provider: entry.source.repo,
+                  providerExecutionDigest: executionDigest,
+                },
+                challenge: {
+                  title: receiver.title,
+                  description: receiver.description ?? `Provided by ${entry.source.repo}.`,
+                  deniedReason: `${receiver.title} was not allowed`,
+                  resource: {
+                    type: receiver.resourceType,
+                    label: "Extension",
+                    value: entry.name,
+                  },
+                  operation: {
+                    kind: "unknown",
+                    verb: receiver.action,
+                    object: {
+                      type: receiver.resourceType,
+                      label: "Extension",
+                      value: entry.name,
+                    },
+                  },
+                  authorityVocabulary: {
+                    ...definition.presentation,
+                    declaredBy: entry.source.repo,
+                  },
+                  allowedDecisions: [...receiver.grantScopes, "deny"],
+                },
+              }),
+            ],
+            { extension: entry.name, method, effect: "userland-capability" }
+          );
+        },
+      },
       handler: defineServiceHandler("extensions", extensionsMethods, {
         // JavaScript extension methods naturally use `undefined` for successful
         // command-style calls. `undefined` is not a JSON value, so represent
@@ -735,21 +876,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
         },
         invokeStream: (ctx, [name, method, args]) => this.invokeStream(ctx, name, method, args),
         streamingMethods: (_ctx, [name]) => this.streamingMethodsFor(name),
-        list: () =>
-          this.registry.list().map((entry) => ({
-            ...entry,
-            shortName:
-              entry.source.repo.split("/").filter(Boolean).at(-1) ??
-              entry.name.split("/").filter(Boolean).at(-1) ??
-              entry.name,
-          })),
-        ready: (ctx, [ready]) => this.readyFromExtension(ctx, ready),
         emit: (ctx, [event, payload]) => this.emitFromExtension(ctx, event, payload),
         fetchRequestBodyChunk: (ctx, [streamId]) => this.fetchRequestBodyChunk(ctx, streamId),
         fetchRequestBodyClose: (ctx, [streamId]) => this.fetchRequestBodyClose(ctx, streamId),
-        health: (ctx, [state, details]) => this.healthFromExtension(ctx, state, details),
-        log: (ctx, [level, message, fields]) => this.logFromExtension(ctx, level, message, fields),
-        reload: (ctx, [name]) => this.reload(ctx, name),
       }),
     };
   }
@@ -869,11 +998,11 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
   }
 
   private assertPublicProviderInvocationAllowed(provider: string, method: string): void {
-    if (!this.isHostProviderMethod(provider, method)) return;
+    if (!this.isPrivateProviderMethod(provider, method)) return;
     throw new ServiceError(
       "extensions",
       "invokeProvider",
-      `Provider method providers.${provider}.${method} is host-owned; call the owning host service instead`,
+      `Provider method providers.${provider}.${method} is private and cannot be invoked directly`,
       "EACCES"
     );
   }
@@ -893,8 +1022,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     );
   }
 
-  private isHostProviderMethod(provider: string, method: string): boolean {
-    return this.deps.hostProviderContracts[provider]?.includes(method) ?? false;
+  private isPrivateProviderMethod(provider: string, method: string): boolean {
+    return this.deps.privateProviderMethods?.[provider]?.includes(method) ?? false;
   }
 
   private activeProviderOwner(
@@ -945,7 +1074,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       );
     }
     for (const [provider, declaration] of Object.entries(details.providerContracts)) {
-      const expected = this.deps.hostProviderContracts[provider];
+      const expected = this.deps.providerContracts[provider];
       if (expected && !sameStringArray(declaration.methods, expected)) {
         throw new ServiceError(
           "extensions",
@@ -1127,7 +1256,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
   private lookupForInvoke(name: string): RegistryEntry | null {
     const direct = this.registry.get(name);
     if (direct?.activeBundleKey) return direct;
-    // `extensions.list` advertises shortName and source repo as accepted
+    // Invocation accepts the canonical name, short name, or source repo.
     // identifiers. Resolve those from the active registry itself; graph lookup
     // only understands canonical names/paths and previously made the advertised
     // short-name contract false (e.g. `local-models`). Require uniqueness so a
@@ -1240,7 +1369,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
         `Workspace extension source exists at ${node.relativePath}, but it is not available in the active extension registry.${status}${activeBuild}`,
         "To install it at runtime, declare it in meta/vibestudio.yml under `extensions:`:",
         `  - source: ${node.relativePath}`,
-        "Then commit/push the meta repo (or otherwise reconcile workspace config), approve the elevated native-code extension install/update prompt, and retry once `extensions.list` reports it as `running`.",
+        "Then commit/push the meta repo (or otherwise reconcile workspace config), approve the elevated native-code extension install/update prompt, and retry once runtime supervision reports it as running.",
       ].join(" ");
     } catch {
       return [
@@ -1438,20 +1567,28 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     return null;
   }
 
-  private readyFromExtension(ctx: ServiceContext, ready: ExtensionReadyState): null {
+  reportActivation(ctx: ServiceContext, ready: ExtensionReadyState): void {
     if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError(
-        "extensions",
-        "ready",
+        "runtime",
+        "supervision.reportReady",
         "Only extensions can complete extension startup",
         "EACCES"
+      );
+    }
+    if (!this.processes.isActive(ctx.caller.runtime.id)) {
+      throw new ServiceError(
+        "runtime",
+        "supervision.reportReady",
+        `Extension ${ctx.caller.runtime.id} has no active runtime generation`,
+        "ENOENT"
       );
     }
     const entry = this.registry.get(ctx.caller.runtime.id);
     if (!entry?.activeBundleKey) {
       throw new ServiceError(
-        "extensions",
-        "ready",
+        "runtime",
+        "supervision.reportReady",
         `Extension ${ctx.caller.runtime.id} has no active approved build`,
         "ENOTREADY"
       );
@@ -1460,8 +1597,8 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     const reportedProviders = Object.keys(ready.providerMethods);
     if (!sameStringArray(reportedProviders, Object.keys(declared))) {
       throw new ServiceError(
-        "extensions",
-        "ready",
+        "runtime",
+        "supervision.reportReady",
         `Extension ${entry.name} reported provider namespaces that do not match its approved manifest`,
         "EPROTO"
       );
@@ -1470,37 +1607,48 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       const reported = ready.providerMethods[provider];
       if (!reported || !sameStringArray(reported, declaration.methods)) {
         throw new ServiceError(
-          "extensions",
-          "ready",
-          `Extension ${entry.name} did not expose the approved providers.${provider} contract`,
+          "runtime",
+          "supervision.reportReady",
+          `Extension ${entry.name} did not expose the approved providers.${provider} contract: ` +
+            `reported ${JSON.stringify(reported ?? [])}, ` +
+            `approved ${JSON.stringify(declaration.methods)}`,
           "EPROTO"
         );
       }
       if (declaration.methods.some((method) => ready.methods.includes(method))) {
         throw new ServiceError(
-          "extensions",
-          "ready",
+          "runtime",
+          "supervision.reportReady",
           `Extension ${entry.name} exposed providers.${provider} methods on its flat public API`,
           "EPROTO"
         );
       }
     }
+    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    const methodAuthority = extensionMetadataDetails(build?.metadata)?.methodAuthority;
+    if (!methodAuthority || !sameStringArray(ready.methods, Object.keys(methodAuthority))) {
+      throw new ServiceError(
+        "runtime",
+        "supervision.reportReady",
+        `Extension ${entry.name} public methods do not match its sealed method-authority set`,
+        "EPROTO"
+      );
+    }
     this.processes.markReady(ctx.caller.runtime.id, {
       methods: ready.methods,
       hasFetch: ready.hasFetch,
     });
-    return null;
   }
 
-  private healthFromExtension(
+  reportHealth(
     ctx: ServiceContext,
     state: ExtensionHealth["state"],
     detail: unknown
-  ): null {
+  ): void {
     if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError(
-        "extensions",
-        "health",
+        "runtime",
+        "supervision.reportHealth",
         "Only extensions can report extension health",
         "EACCES"
       );
@@ -1515,30 +1663,35 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       retryAt: healthDetail?.retryAt,
       reportedAt: Date.now(),
     });
-    return null;
   }
 
-  private logFromExtension(
+  appendRuntimeLog(
     ctx: ServiceContext,
     level: UnitLogRecord["level"],
     message: string,
     fields?: Record<string, unknown>
-  ): null {
+  ): void {
     if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError(
-        "extensions",
-        "log",
+        "runtime",
+        "supervision.appendLog",
         "Only extensions can write extension logs",
         "EACCES"
       );
     }
     this.recordExtensionLog(ctx.caller.runtime.id, level, message, fields, "ctx.log");
-    return null;
   }
 
   async reload(ctx: ServiceContext, name: string): Promise<void> {
     await this.reloadApproval(ctx, name);
     await this.activate(name);
+  }
+
+  async retire(name: string): Promise<void> {
+    const entry = this.registry.get(name);
+    if (!entry) throw new Error(`Unknown extension: ${name}`);
+    await this.processes.stop(entry.name);
+    this.registry.patch(entry.name, { status: "stopped", lastError: null });
   }
 
   listWorkspaceUnits(): Array<{
@@ -1649,8 +1802,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     const previousAuthority = active?.activeBundleKey
       ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
           requests: [],
+          provides: [],
         })
-      : { requests: [] };
+      : { requests: [], provides: [] };
     return {
       ...createUnitBatchEntryBase({
         unitKind: "extension",
@@ -2289,28 +2443,22 @@ async function writeInlineResponseBody(
   res.end();
 }
 
-function extensionMetadataDetails(metadata: ExtensionBuildMetadataLike | undefined): {
-  kind: "extension";
-  runtimeDepsKey?: string | null;
-  runtimeAbi?: string | null;
-  externalDeps?: Record<string, string>;
-  providerContracts?: ExtensionProviderContracts;
-} | null {
+function extensionMetadataDetails(
+  metadata: ExtensionBuildMetadataLike | undefined
+): Extract<NonNullable<ExtensionBuildMetadataLike["details"]>, { kind: "extension" }> | null {
   const details = metadata?.details;
   if (details?.kind !== "extension") return null;
-  return details as {
-    kind: "extension";
-    runtimeDepsKey?: string | null;
-    runtimeAbi?: string | null;
-    externalDeps?: Record<string, string>;
-    providerContracts?: ExtensionProviderContracts;
-  };
+  return details as Extract<
+    NonNullable<ExtensionBuildMetadataLike["details"]>,
+    { kind: "extension" }
+  >;
 }
 
 function sameStringArray(actual: readonly string[], expected: readonly string[]): boolean {
-  return (
-    actual.length === expected.length && actual.every((value, index) => value === expected[index])
-  );
+  if (actual.length !== expected.length) return false;
+  const canonicalActual = [...actual].sort();
+  const canonicalExpected = [...expected].sort();
+  return canonicalActual.every((value, index) => value === canonicalExpected[index]);
 }
 
 function isExtensionProviderContracts(value: unknown): value is ExtensionProviderContracts {

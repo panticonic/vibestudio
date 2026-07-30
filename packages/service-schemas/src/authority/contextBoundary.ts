@@ -12,22 +12,56 @@ export function contextBoundaryAuthority(input: {
   primaryCapability?: string;
   principals: readonly PrincipalKind[];
   resolver?: string;
+  operation?:
+    | "openPanel"
+    | "replacePanel"
+    | "reload"
+    | "unload"
+    | "close"
+    | "movePanel"
+    | "takeOver"
+    | "rebuildPanel"
+    | "updatePanelState";
+  targetArgument?: number;
+  targetPath?: readonly (string | number)[];
+  requestedContextPath?: readonly (string | number)[];
+  requestedContextLookup?: {
+    method: string;
+    arguments: readonly {
+      argument: number;
+      path?: readonly (string | number)[];
+    }[];
+    resultPath: readonly (string | number)[];
+  };
   tier: "gated" | "critical";
 }) {
   const primary = input.primaryCapability ?? `service:${input.service}.${input.method}`;
   return {
+    principals: input.principals,
     requirement: requirementForPrincipals(input.principals, primary),
     resource: { kind: "literal" as const, key: primary },
     prepared: {
       resolver: input.resolver ?? `${input.service}.${input.method}.contextBoundary`,
+      ...(input.operation
+        ? {
+            contextBoundary: {
+              operation: input.operation,
+              targetArgument: input.targetArgument ?? 0,
+              ...(input.targetPath ? { targetPath: input.targetPath } : {}),
+              ...(input.requestedContextPath
+                ? { requestedContextPath: input.requestedContextPath }
+                : {}),
+              ...(input.requestedContextLookup
+                ? { requestedContextLookup: input.requestedContextLookup }
+                : {}),
+            },
+          }
+        : {}),
       leaves: [
         {
           capability: CONTEXT_BOUNDARY_CAPABILITY,
           requirement: fixedPreparedAuthorityRequirement(
-            requirementForPrincipals(
-              ["host", "user", "code"],
-              CONTEXT_BOUNDARY_CAPABILITY
-            )
+            requirementForPrincipals(["host", "user", "code"], CONTEXT_BOUNDARY_CAPABILITY)
           ),
           tier: input.tier,
         },

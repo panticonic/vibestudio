@@ -36,7 +36,7 @@ function attestation(
   return {
     audience: "do:x",
     method: "read",
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     capability: "rpc:read",
     resourceKey: "do:x",
     issuedAt: 10,
@@ -45,6 +45,10 @@ function attestation(
     context,
     grants: [],
     ...overrides,
+    capabilityDefinitionDigest: overrides.capabilityDefinitionDigest ?? "-",
+    resourceType: overrides.resourceType ?? "rpc:read",
+    provider: overrides.provider ?? "-",
+    providerExecutionDigest: overrides.providerExecutionDigest ?? "-",
   };
 }
 
@@ -82,7 +86,28 @@ describe("directRpcDenial", () => {
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
-          effect: { kind: "runtime-intrinsic" },
+          effect: { kind: "open" },
+        },
+        audience: "do:x",
+        resourceKey: "do:x",
+        capability: "rpc:read",
+        now: 100,
+      })
+    ).toBeNull();
+  });
+
+  it("does not use attestation timestamps as an authority decision", () => {
+    expect(
+      directRpcDenial({
+        kind: "call",
+        method: "read",
+        caller: null,
+        attestation: attestation({ issuedAt: 200, expiresAt: 50 }),
+        declaration: {
+          tier: "open",
+          principals: ["code"],
+          sensitivity: "read",
+          effect: { kind: "open" },
         },
         audience: "do:x",
         resourceKey: "do:x",
@@ -98,12 +123,19 @@ describe("directRpcDenial", () => {
         kind: "call",
         method: "read",
         caller: null,
-        attestation: attestation({ effect: { kind: "workspace-service" } }),
+        attestation: attestation({
+          effect: {
+            kind: "host-capability",
+            capability: "files.read",
+            resource: { kind: "receiver-object" },
+          },
+          capability: "files.read",
+        }),
         declaration: {
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
-          effect: { kind: "runtime-intrinsic" },
+          effect: { kind: "open" },
         },
         audience: "do:x",
         resourceKey: "do:x",
@@ -124,7 +156,7 @@ describe("directRpcDenial", () => {
           tier: "open",
           principals: ["code"],
           sensitivity: "read",
-          effect: { kind: "runtime-intrinsic" },
+          effect: { kind: "open" },
         },
         audience: "do:x",
         resourceKey: "do:x",
@@ -145,7 +177,7 @@ describe("directRpcDenial", () => {
           tier: "open",
           principals: ["code"],
           sensitivity: "write",
-          effect: { kind: "runtime-intrinsic" },
+          effect: { kind: "open" },
         },
         audience: "do:x",
         resourceKey: "do:x",
@@ -171,7 +203,7 @@ describe("directRpcDenial", () => {
       },
     };
     const dynamic = attestation({
-      effect: { kind: "workspace-service" },
+      effect: { kind: "open" },
       capability,
       context: dynamicContext,
       targetRequirement: { kind: "capability", principal: "code", capability },
@@ -199,7 +231,7 @@ describe("directRpcDenial", () => {
           tier: "open",
           principals: ["code", "user"],
           sensitivity: "read",
-          effect: { kind: "workspace-service" },
+          effect: { kind: "open" },
         },
         audience: "do:x",
         resourceKey: "do:x",
@@ -220,7 +252,7 @@ describe("directRpcDenial", () => {
           tier: "open",
           principals: ["code", "user"],
           sensitivity: "read",
-          effect: { kind: "workspace-service" },
+          effect: { kind: "open" },
         },
         audience: "do:x",
         resourceKey: "do:x",
@@ -241,7 +273,11 @@ describe("directRpcDenial", () => {
       },
     };
     const critical = attestation({
-      effect: { kind: "semantic", capability },
+      effect: {
+        kind: "host-capability",
+        capability,
+        resource: { kind: "receiver-object" },
+      },
       capability,
       invocationDigest,
       context: criticalContext,
@@ -268,7 +304,11 @@ describe("directRpcDenial", () => {
         tier: "critical" as const,
         principals: ["code" as const],
         sensitivity: "destructive" as const,
-        effect: { kind: "semantic" as const, capability },
+        effect: {
+          kind: "host-capability" as const,
+          capability,
+          resource: { kind: "receiver-object" as const },
+        },
       },
       audience: "do:x",
       resourceKey: "do:x",
@@ -284,10 +324,92 @@ describe("directRpcDenial", () => {
     ).toBe("EACCES");
   });
 
+  it("pins only version-scoped userland grants to the receiver execution digest", () => {
+    const canonical = `userland:workers/notes/notes.write#${"d".repeat(64)}`;
+    const userlandContext: AuthorizationContext = {
+      ...context,
+      authorizingOrigin: { kind: "session", principal: "session:s" },
+      executingCode: null,
+    };
+    const declaration = {
+      tier: "gated" as const,
+      principals: ["session" as const],
+      sensitivity: "write" as const,
+      effect: {
+        kind: "userland-capability" as const,
+        capability: "notes.write",
+        resource: { kind: "receiver-object" as const },
+      },
+    };
+    const base = attestation({
+      effect: declaration.effect,
+      capability: canonical,
+      capabilityDefinitionDigest: "d".repeat(64),
+      resourceType: "note-store",
+      provider: "workers/notes",
+      providerExecutionDigest: "a".repeat(64),
+      context: userlandContext,
+      grants: [
+        {
+          subject: "session:s",
+          capability: canonical,
+          resource: { kind: "exact", key: "note-store:do:x" },
+          effect: "allow",
+          issuedBy: "user:test",
+          createdAt: 1,
+          scope: "session",
+          constraints: { sessionId: "s", lineageAtConsent: [] },
+          provenance: "acquisition",
+        },
+      ],
+      resourceKey: "note-store:do:x",
+    });
+    expect(
+      directRpcDenial({
+        kind: "call",
+        method: "read",
+        caller: null,
+        attestation: base,
+        declaration,
+        audience: "do:x",
+        resourceKey: "note-store:do:x",
+        capability: canonical,
+        now: 100,
+      })
+    ).toBeNull();
+
+    const versionGrant = {
+      ...base.grants[0]!,
+      scope: "version" as const,
+      constraints: {
+        lineageAtConsent: [],
+        providerExecutionDigest: "b".repeat(64),
+      },
+    };
+    expect(
+      directRpcDenial({
+        kind: "call",
+        method: "read",
+        caller: null,
+        attestation: { ...base, grants: [versionGrant] },
+        declaration,
+        audience: "do:x",
+        resourceKey: "note-store:do:x",
+        capability: canonical,
+        now: 100,
+      })
+    ).toMatchObject({ code: "EACCES" });
+  });
+
   it("consumes each attestation nonce at most once", () => {
     const window = new DirectRpcNonceWindow();
     expect(window.consume(attestation().nonce, 1_000, 100)).toBe(true);
     expect(window.consume(attestation().nonce, 1_000, 101)).toBe(false);
+  });
+
+  it("rejects a nonce after its retention bound because unusedness is no longer provable", () => {
+    const window = new DirectRpcNonceWindow();
+    expect(window.consume(attestation().nonce, 99, 100)).toBe(false);
   });
 });
 
@@ -299,7 +421,7 @@ describe("event intake", () => {
           topicPrefix: "channel:",
           tier: "open",
           sensitivity: "write",
-          effect: { kind: "runtime-intrinsic" },
+          effect: { kind: "open" },
           requires: () =>
             ({ kind: "capability", principal: "host", capability: "ignored" }) as const,
         },
@@ -322,7 +444,7 @@ describe("event intake", () => {
             topicPrefix: "*",
             tier: "open",
             sensitivity: "write",
-            effect: { kind: "runtime-intrinsic" },
+            effect: { kind: "open" },
             principals: ["host"],
           },
         ],
@@ -335,7 +457,7 @@ describe("event intake", () => {
             topicPrefix: "channel:",
             tier: "open",
             sensitivity: "write",
-            effect: { kind: "runtime-intrinsic" },
+            effect: { kind: "open" },
             principals: ["host"],
             requires: { kind: "capability", principal: "host", capability: "x" },
           },

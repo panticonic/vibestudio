@@ -17,8 +17,6 @@ import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import {
   createExtensionProxy,
   type ExtensionsClient,
-  type RegistryEntry,
-  type UserlandApprovalRequest,
 } from "@vibestudio/extension";
 import { createCredentialClient } from "@vibestudio/credential-client";
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
@@ -225,10 +223,6 @@ function createExtensionsClient(): ExtensionsClient {
           }
         },
       };
-    },
-    list: () => rpcCall<RegistryEntry[]>("extensions.list", []),
-    reload: async (name) => {
-      await rpcCall("extensions.reload", [name]);
     },
     invoke: (name, method, args) => rpcCall<unknown>("extensions.invoke", [name, method, args]),
     invokeProvider: (provider, method, args) =>
@@ -446,13 +440,6 @@ function createContext() {
     webhooks: serviceProxy("webhookIngress"),
     notifications: serviceProxy("notification"),
     extensions: createExtensionsClient(),
-    approvals: {
-      async request(req: UserlandApprovalRequest) {
-        return rpcCall("userlandApproval.request", [req]);
-      },
-      revoke: (subjectId: string) => rpcCall("userlandApproval.revoke", [subjectId]),
-      list: () => rpcCall("userlandApproval.list", []),
-    },
     invocation: {
       current: () => invocationStore.getStore()?.invocation ?? null,
       signal: () => invocationStore.getStore()?.signal ?? null,
@@ -482,22 +469,22 @@ function createContext() {
     },
     health: {
       report: (state: "healthy" | "degraded" | "unhealthy", detail?: HealthDetail) => {
-        void rpcCall("extensions.health", [state, detail]).catch((err) => {
+        void rpcCall("runtime.supervision.reportHealth", [{ state, detail }]).catch((err) => {
           console.error("[ExtensionRuntime] Failed to report health:", err);
         });
       },
       healthy: (detail?: HealthDetail) => {
-        void rpcCall("extensions.health", ["healthy", detail]).catch((err) => {
+        void rpcCall("runtime.supervision.reportHealth", [{ state: "healthy", detail }]).catch((err) => {
           console.error("[ExtensionRuntime] Failed to report health:", err);
         });
       },
       degraded: (detail: HealthDetail) => {
-        void rpcCall("extensions.health", ["degraded", detail]).catch((err) => {
+        void rpcCall("runtime.supervision.reportHealth", [{ state: "degraded", detail }]).catch((err) => {
           console.error("[ExtensionRuntime] Failed to report health:", err);
         });
       },
       unhealthy: (detail: HealthDetail) => {
-        void rpcCall("extensions.health", ["unhealthy", detail]).catch((err) => {
+        void rpcCall("runtime.supervision.reportHealth", [{ state: "unhealthy", detail }]).catch((err) => {
           console.error("[ExtensionRuntime] Failed to report health:", err);
         });
       },
@@ -684,10 +671,9 @@ function writeExtensionLog(
   message: string,
   fields?: Record<string, unknown>
 ): Promise<unknown> {
-  return rpcCall(
-    "extensions.log",
-    fields === undefined ? [level, message] : [level, message, fields]
-  );
+  return rpcCall("runtime.supervision.appendLog", [
+    fields === undefined ? { level, message } : { level, message, fields },
+  ]);
 }
 
 async function readNextResponseBodyChunk(id: string): Promise<StreamChunkEnvelope> {
@@ -1002,10 +988,14 @@ async function main(): Promise<void> {
     }
   });
 
-  await rpcCall("extensions.health", ["healthy", { summary: "Activated" }]).catch((err) => {
+  await rpcCall("runtime.supervision.reportHealth", [
+    { state: "healthy", detail: { summary: "Activated" } },
+  ]).catch((err) => {
     console.error("[ExtensionRuntime] Failed to report initial health:", err);
   });
-  await rpcCall("extensions.ready", [{ methods, providerMethods, hasFetch: !!fetchHandler }]);
+  await rpcCall("runtime.supervision.reportReady", [
+    { methods, providerMethods, hasFetch: !!fetchHandler },
+  ]);
 }
 
 function importExtensionModule(bundlePath: string): Promise<Record<string, unknown>> {

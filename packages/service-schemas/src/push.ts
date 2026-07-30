@@ -58,6 +58,24 @@ export type PushRegisterRequest = z.infer<typeof PushRegisterRequestSchema>;
 
 export const pushMethods = defineServiceMethods({
   register: {
+    capability: "push.manage",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "transport",
+      family: "push.create",
+      rationale: "G5: push registration is device and approval plumbing; §3 push precedent",
+    },
+    presentation: {
+      title: "Enable notifications on a device",
+      action: "enable notifications on a device",
+      description: "Allows {requesterKind} to enable notifications on a device.",
+      group: "notifications",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description:
       "Register a device's push token for a client id, persisting it so it survives server restarts.",
     args: z.tuple([PushRegisterRequestSchema]),
@@ -71,6 +89,25 @@ export const pushMethods = defineServiceMethods({
     ],
   },
   unregister: {
+    capability: "push.manage",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "transport",
+      family: "push.control",
+      rationale:
+        "G5: push registration lifecycle is device and approval plumbing; §3 push precedent",
+    },
+    presentation: {
+      title: "Disable notifications on a device",
+      action: "disable notifications on a device",
+      description: "Allows {requesterKind} to disable notifications on a device.",
+      group: "notifications",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description:
       "Remove the persisted push registration for a client id; returns whether one existed.",
     args: z.tuple([z.string()]),
@@ -79,6 +116,24 @@ export const pushMethods = defineServiceMethods({
     examples: [{ args: ["client-1"], returns: { unregistered: true } }],
   },
   send: {
+    capability: "push.send",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "transport",
+      family: "push.control",
+      rationale: "G1/G5: external push delivery is host approval plumbing; §3 push precedent",
+    },
+    presentation: {
+      title: "Send a notification",
+      action: "send a notification",
+      description: "Allows {requesterKind} to send a notification.",
+      group: "notifications",
+      authorityCategory: {
+        domain: "sharing",
+        verb: "act",
+      },
+    },
     description:
       "Deliver a push notification to a registered device via Firebase, degrading to log-only when credentials are unavailable. Server-only.",
     args: z.tuple([PushSendOptionsSchema]),
@@ -87,6 +142,24 @@ export const pushMethods = defineServiceMethods({
     access: WRITE_ACCESS,
   },
   listRegistrations: {
+    capability: "push.manage",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "transport",
+      family: "push.read",
+      rationale: "G4/G5: push-token inventory is private approval plumbing; §3 push precedent",
+    },
+    presentation: {
+      title: "View devices registered for notifications",
+      action: "view devices registered for notifications",
+      description: "Allows {requesterKind} to view devices registered for notifications.",
+      group: "notifications",
+      authorityCategory: {
+        domain: "people",
+        verb: "manage",
+      },
+    },
     description: "List all currently persisted push registrations. Server-only.",
     args: z.tuple([]),
     returns: z.array(PushRegistrationSchema),

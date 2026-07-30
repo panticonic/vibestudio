@@ -8,10 +8,11 @@ import { workerRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtim
 import { callableEntry } from "@vibestudio/shared/runtimeSurface";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 
-const testTierLookup = (method: string) =>
-  method.startsWith("demo.")
-    ? { tier: "open" as const, session: "family" as const, rationale: "Explicit catalog fixture" }
-    : null;
+const TEST_OPEN_TIER = {
+  tier: "open" as const,
+  session: "family" as const,
+  rationale: "Explicit catalog fixture",
+};
 
 const demo: ServiceDefinition = {
   name: "demo",
@@ -22,22 +23,26 @@ const demo: ServiceDefinition = {
       description: "Get a value.",
       args: z.tuple([z.string()]),
       returns: z.object({ v: z.number() }),
+      tier: TEST_OPEN_TIER,
     },
     "admin.wipe": {
       description: "Destroy everything (server only).",
       args: z.tuple([]),
       authority: { principals: ["host"] },
+      tier: TEST_OPEN_TIER,
     },
     probe: {
       description: "A probe method.",
       args: z.tuple([]),
       authority: { principals: ["code"] },
       access: { sensitivity: "read" },
+      tier: TEST_OPEN_TIER,
     },
     internalTransport: {
       description: "Implementation detail.",
       args: z.tuple([]),
       agentFacing: false,
+      tier: TEST_OPEN_TIER,
     },
   },
   handler: async () => undefined,
@@ -69,7 +74,6 @@ describe("buildCatalog", () => {
   const entries = buildCatalog({
     definitions: [demo],
     runtimeSurfaces: { panel: panelSurface, workerRuntime: workerSurface },
-    tierLookup: testTierLookup,
   });
 
   it("emits a service parent + one entry per agent-facing method", () => {
@@ -126,7 +130,6 @@ describe("buildCatalog", () => {
   it("projects hidden transport schemas under the modern runtime namespace", () => {
     const projected = buildCatalog({
       definitions: [demo],
-      tierLookup: testTierLookup,
       runtimeSurfaces: {
         workerRuntime: {
           target: "workerRuntime",
@@ -159,7 +162,6 @@ describe("buildCatalog", () => {
   it("projects a direct callable runtime value with its full transport contract", () => {
     const projected = buildCatalog({
       definitions: [demo],
-      tierLookup: testTierLookup,
       runtimeSurfaces: {
         workerRuntime: {
           target: "workerRuntime",
@@ -188,7 +190,6 @@ describe("buildCatalog", () => {
     expect(() =>
       buildCatalog({
         definitions: [demo],
-        tierLookup: testTierLookup,
         runtimeSurfaces: {
           workerRuntime: {
             target: "workerRuntime",
@@ -377,7 +378,6 @@ describe("isCatalogEntryVisible", () => {
   const entries = buildCatalog({
     definitions: [demo],
     runtimeSurfaces: { panel: panelSurface, workerRuntime: workerSurface },
-    tierLookup: testTierLookup,
   });
   const get = byId(entries, "service:demo.get");
   const wipe = byId(entries, "service:demo.admin.wipe");

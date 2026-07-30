@@ -32,7 +32,7 @@ describe("buildUnit extension builds", () => {
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
-      semanticStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });
   });
 
@@ -56,6 +56,9 @@ describe("buildUnit extension builds", () => {
           sourcemap: true,
           extension: {
             activationEvents: ["*"],
+            methodAuthority: {
+              ping: { effect: { kind: "open" } },
+            },
             providerContracts: {
               gitInterop: { methods: ["ping"] },
             },
@@ -103,6 +106,7 @@ describe("buildUnit extension builds", () => {
         },
       },
       authority: {
+        provides: [],
         requests: [],
       },
     });
@@ -128,7 +132,12 @@ describe("buildUnit extension builds", () => {
           displayName: "CJS Extension",
           entry: "index.ts",
           sourcemap: true,
-          extension: { activationEvents: ["*"] },
+          extension: {
+            activationEvents: ["*"],
+            methodAuthority: {
+              basename: { effect: { kind: "open" } },
+            },
+          },
         },
       })
     );

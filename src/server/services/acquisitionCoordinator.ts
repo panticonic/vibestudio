@@ -3,7 +3,10 @@ import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AuthorityChallengePresentation } from "@vibestudio/shared/serviceDispatcher";
 import type { OperationSubstance } from "@vibestudio/shared/approvals";
-import type { AuthorityPromptCardType } from "@vibestudio/shared/authority/promptRegistry";
+import {
+  authorityPromptCardType,
+  type AuthorityPromptCardType,
+} from "@vibestudio/shared/authority/promptRegistry";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import {
   approvalScopeForAuthorityResource,
@@ -17,6 +20,7 @@ type AuthorityAcquisitionDecision =
   | "once"
   | "session"
   | "task"
+  | "mission"
   | "agent"
   | "lock"
   | "version"
@@ -531,6 +535,10 @@ export class AcquisitionCoordinator {
     input: AcquisitionRequestInput,
     decision: AuthorityAcquisitionDecision
   ): void {
+    const capabilityDefinition =
+      input.snapshot.capabilityDefinitionDigest === "-"
+        ? {}
+        : { capabilityDefinitionDigest: input.snapshot.capabilityDefinitionDigest };
     if (decision === "deny") {
       if (input.tier === "critical") return;
       this.deps.grantStore.issue({
@@ -540,11 +548,14 @@ export class AcquisitionCoordinator {
         subject: input.snapshot.callerPrincipal,
         constraints: {
           sessionId: input.snapshot.sessionId,
-          ...(input.snapshot.mission === "-" ? {} : { missionSubject: input.snapshot.mission }),
+          ...(input.snapshot.reviewedClosureSubject === "-"
+            ? {}
+            : { reviewedClosureSubject: input.snapshot.reviewedClosureSubject }),
           lineageAtConsent: [],
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
+        ...capabilityDefinition,
       });
       return;
     }
@@ -565,11 +576,14 @@ export class AcquisitionCoordinator {
           ...(input.snapshot.agentBindingId
             ? { agentBindingId: input.snapshot.agentBindingId }
             : {}),
-          ...(input.snapshot.mission === "-" ? {} : { missionSubject: input.snapshot.mission }),
+          ...(input.snapshot.reviewedClosureSubject === "-"
+            ? {}
+            : { reviewedClosureSubject: input.snapshot.reviewedClosureSubject }),
           lineageAtConsent,
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: input.tier === "critical" ? "critical-confirmation" : "acquisition",
+        ...capabilityDefinition,
       });
       return;
     }
@@ -584,11 +598,14 @@ export class AcquisitionCoordinator {
           ...(input.snapshot.agentBindingId
             ? { agentBindingId: input.snapshot.agentBindingId }
             : {}),
-          ...(input.snapshot.mission === "-" ? {} : { missionSubject: input.snapshot.mission }),
+          ...(input.snapshot.reviewedClosureSubject === "-"
+            ? {}
+            : { reviewedClosureSubject: input.snapshot.reviewedClosureSubject }),
           lineageAtConsent,
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
+        ...capabilityDefinition,
         scope: "session",
         ...(input.presentation?.grantExpiresAt
           ? { expiresAt: input.presentation.grantExpiresAt }
@@ -611,11 +628,14 @@ export class AcquisitionCoordinator {
           ...(input.snapshot.agentBindingId
             ? { agentBindingId: input.snapshot.agentBindingId }
             : {}),
-          ...(input.snapshot.mission === "-" ? {} : { missionSubject: input.snapshot.mission }),
+          ...(input.snapshot.reviewedClosureSubject === "-"
+            ? {}
+            : { reviewedClosureSubject: input.snapshot.reviewedClosureSubject }),
           lineageAtConsent,
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
+        ...capabilityDefinition,
         scope: "task",
       });
       return;
@@ -639,10 +659,31 @@ export class AcquisitionCoordinator {
         },
         issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         provenance: "acquisition",
+        ...capabilityDefinition,
         scope: "agent",
         lastUsedAt: Date.now(),
         decidedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
         decisionSurface: "card",
+      });
+      return;
+    }
+    if (decision === "mission") {
+      if (input.snapshot.reviewedClosureSubject === "-") {
+        throw new Error("Mission approval requires an attested mission");
+      }
+      this.deps.grantStore.issue({
+        effect: "allow",
+        capability: input.snapshot.capability,
+        resource: input.resource,
+        subject: input.snapshot.reviewedClosureSubject,
+        constraints: {
+          reviewedClosureSubject: input.snapshot.reviewedClosureSubject,
+          lineageAtConsent,
+        },
+        issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
+        provenance: "acquisition",
+        scope: "mission",
+        ...capabilityDefinition,
       });
       return;
     }
@@ -668,9 +709,16 @@ export class AcquisitionCoordinator {
       capability: input.snapshot.capability,
       resource: input.resource,
       subject: input.snapshot.callerPrincipal,
-      constraints: { lineageAtConsent: [] },
+      constraints: {
+        lineageAtConsent: [],
+        ...(decision === "version" && input.snapshot.providerExecutionDigest !== "-"
+          ? { providerExecutionDigest: input.snapshot.providerExecutionDigest }
+          : {}),
+      },
       issuedBy: input.caller.subject ? `user:${input.caller.subject.userId}` : "user:system",
       provenance: "acquisition",
+      scope: "version",
+      ...capabilityDefinition,
       ...(input.presentation?.grantExpiresAt
         ? { expiresAt: input.presentation.grantExpiresAt }
         : {}),
@@ -739,10 +787,11 @@ function acquisitionRuleKey(input: AcquisitionRequestInput): string {
 }
 
 function cardTypeFor(input: AcquisitionRequestInput): AuthorityPromptCardType {
-  if (input.tier === "critical") return "confirm.critical";
-  return input.snapshot.contextLineage?.class === "external"
-    ? "permission.outside"
-    : "permission.gated";
+  return authorityPromptCardType({
+    tier: input.tier,
+    capability: input.snapshot.capability,
+    outsideContent: input.snapshot.contextLineage?.class === "external",
+  });
 }
 
 function approvalCallerKind(
@@ -771,6 +820,7 @@ function decisionsForOrigin(
       "once",
       "session",
       "task",
+      ...(input.snapshot.reviewedClosureSubject === "-" ? [] : (["mission"] as const)),
       ...(input.snapshot.agentBindingId && input.snapshot.agentScopeEligible
         ? (["agent", "lock"] as const)
         : []),
@@ -808,6 +858,7 @@ function isAuthorityAcquisitionDecision(
     decision === "once" ||
     decision === "session" ||
     decision === "task" ||
+    decision === "mission" ||
     decision === "agent" ||
     decision === "lock" ||
     decision === "version" ||

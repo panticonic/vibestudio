@@ -14,9 +14,7 @@ import type {
 } from "@vibestudio/rpc";
 import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
 import { invocationSnapshotDigest } from "@vibestudio/shared/authority/invocationSnapshot";
-import { hostMethodCapability } from "@vibestudio/shared/authority/hostMethodCapabilities";
-import { methodTier } from "@vibestudio/shared/authority/tierTable";
-import { describeCapability } from "@vibestudio/shared/authorityPresentation";
+import { generatedHostMethodAuthority } from "@vibestudio/shared/authority/hostAuthorityCatalog.generated";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
   createTypedServiceClient,
@@ -775,8 +773,9 @@ export function resolveStaticAttachedHostApprovalPresentation(
 ): AttachedHostCanonicalApprovalPresentation | null {
   const snapshot = challenge.invocationSnapshot;
   const qualifiedMethod = `${snapshot.service}.${snapshot.method}`;
-  const resolvedCapability = hostMethodCapability(qualifiedMethod);
-  const resolvedTier = methodTier(qualifiedMethod)?.tier;
+  const authority = generatedHostMethodAuthority(qualifiedMethod);
+  const resolvedCapability = authority?.capability;
+  const resolvedTier = authority?.tier.tier;
   if (
     !resolvedCapability ||
     resolvedCapability !== challenge.capability ||
@@ -785,7 +784,8 @@ export function resolveStaticAttachedHostApprovalPresentation(
   ) {
     return null;
   }
-  const metadata = describeCapability(resolvedCapability);
+  const metadata = authority.presentation;
+  if (!metadata) return null;
   return {
     title: metadata.title,
     action: metadata.action,
@@ -1033,7 +1033,7 @@ function assertChallengeSnapshotBindings(
 ): void {
   const snapshot = challenge.invocationSnapshot;
   if (
-    snapshot.v !== 1 ||
+    snapshot.v !== 2 ||
     invocationSnapshotDigest(snapshot) !== challenge.invocationSnapshotDigest ||
     snapshot.capability !== challenge.capability ||
     snapshot.resourceKey !== challenge.resourceKey ||

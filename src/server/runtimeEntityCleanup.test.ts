@@ -48,6 +48,9 @@ function deps() {
       stopWorker: vi.fn(async () => {}),
       retireDOEntity: vi.fn(async () => {}),
     },
+    resourceHandles: {
+      revokeReceiver: vi.fn(() => 1),
+    },
   };
 }
 
@@ -101,6 +104,8 @@ describe("cleanupRuntimeEntity", () => {
       credentialSessionGrantStore: doDeps.credentialSessionGrantStore,
       tokenManager: doDeps.tokenManager,
       connectionGrants: doDeps.connectionGrants,
+      resourceHandles: doDeps.resourceHandles,
+      workspaceId: "workspace:test",
       getFsService: () => doDeps.fsService as never,
       getWebhookIngress: () => doDeps.webhookIngress,
       getWorkerdManager: () => doDeps.workerdManager as never,
@@ -110,6 +115,15 @@ describe("cleanupRuntimeEntity", () => {
       className: "ExampleDO",
       objectKey: "one",
     });
+    expect(doDeps.resourceHandles.revokeReceiver).toHaveBeenCalledWith(
+      "workspace:test",
+      {
+        source: "dos/example",
+        className: "ExampleDO",
+        objectKey: "one",
+      },
+      "logical receiver retired"
+    );
   });
 
   it("attempts every cleanup step and reports failures to the durable reaper", async () => {

@@ -36,7 +36,7 @@ function fakeWorkspaceSource(
     async resolveContextState() {
       return TEST_STATE;
     },
-    semanticStateForContent(stateHash) {
+    executionStateForContent(stateHash) {
       return { kind: "event", eventId: `event:${stateHash}` };
     },
     async discoverGraph() {
@@ -79,7 +79,7 @@ function fakeMultiStateWorkspaceSource(
     async resolveContextState(contextId) {
       return heads[`ctx:${contextId}`] ?? TEST_STATE;
     },
-    semanticStateForContent(stateHash) {
+    executionStateForContent(stateHash) {
       return { kind: "event", eventId: `event:${stateHash}` };
     },
     async discoverGraph(stateHash) {
@@ -362,7 +362,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       APP_NODE_MODULES
     );
 
-    const result = await buildSystem.getBuild("@vibestudio/runtime/hosted", undefined, {
+    const result = await buildSystem.getBuild("@workspace/runtime/hosted", undefined, {
       library: true,
       libraryTarget: "worker",
     });

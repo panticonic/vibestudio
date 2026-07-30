@@ -37,7 +37,9 @@ import {
   extensionUnitManifestDescriptor,
   validateUnitManifest,
   isTerminalWorker,
+  parseExtensionMethodAuthority,
 } from "@vibestudio/shared/unitManifest";
+import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
@@ -82,6 +84,7 @@ import type {
   BuildProviderInput,
 } from "@vibestudio/shared/buildProvider";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
+import { workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 import { createPanelBundleReport } from "./panelBundleReport.js";
 
 /**
@@ -335,7 +338,7 @@ function createWorkspaceResolvePlugin(
   // which runs AFTER plugins — so a workspace specifier this plugin resolves to
   // source would be bundled even when listed in `external`. Honor the externals
   // here (exact match) so caller-provided externals actually win. Used by eval
-  // library builds to keep `@vibestudio/runtime` (and other host-provided modules)
+  // library builds to keep `@workspace/runtime` (and other host-provided modules)
   // OUT of the bundle: they must resolve at runtime to the EvalDO's hosted `rt`,
   // not the panel entry (whose top-level `initRuntime()` crashes in a DO isolate).
   const externalSet = new Set(externalSpecifiers);
@@ -785,7 +788,6 @@ export const gatewayConfig = {};
 export const gatewayFetch = unavailable;
 export const openExternal = unavailable;
 export const openPanel = unavailable;
-export const listPanels = unavailable;
 export const getPanelHandle = unavailable;
 export const panelTree = ${ns};
 // --- Portable authoring helpers ---
@@ -1648,6 +1650,7 @@ export async function buildUnit(
 
 const EMPTY_UNIT_AUTHORITY: UnitAuthorityManifest = Object.freeze({
   requests: Object.freeze([]),
+  provides: Object.freeze([]),
 });
 
 /**
@@ -2199,6 +2202,9 @@ async function buildPanel(
       sourceStateHash,
       sourcemap,
       authority,
+      ...(node.kind === "panel" && extractedManifest.stateArgs
+        ? { stateArgsSchema: extractedManifest.stateArgs }
+        : {}),
       framework: resolved.framework,
       ...(bundleReport ? { bundleReport } : {}),
       ...(sharedStyleMetadata ? { sharedStyles: sharedStyleMetadata } : {}),
@@ -2233,7 +2239,7 @@ const EXTENSION_CONDITIONS = ["import", "default"] as const;
  * Map a library bundle's execution target to esbuild/package-export resolution
  * conditions. This is what lets a workerd-hosted import (incl. the eval sandbox)
  * pick up a package's worker entry instead of its panel entry — the panel entry
- * of `@vibestudio/runtime` runs `initRuntime()` at module load, which throws
+ * of `@workspace/runtime` runs `initRuntime()` at module load, which throws
  * outside a panel. No default: the caller MUST state the host.
  */
 function conditionsForLibraryTarget(target: LibraryBuildTarget): readonly string[] {
@@ -2617,10 +2623,27 @@ async function buildWorker(
   // Read the manifest from the materialized source state rather than
   // `node.manifest`, so exact-state builds never observe mutable source directories.
   const workerSourcePath = path.join(sourceRoot, node.relativePath);
-  const workspaceRpcCatalog = await collectWorkspaceRpcCatalog(workerSourcePath);
   const extractedPkgPath = path.join(workerSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
   const extractedManifest = extractedPkg.vibestudio ?? {};
+  const rpcSchemas = Object.fromEntries(
+    (extractedManifest.durable?.classes ?? [])
+      .filter((entry: { rpcSchema?: unknown }) => typeof entry.rpcSchema === "string")
+      .map((entry: { className: string; rpcSchema: string }) => {
+        const schema = workspaceRpcSchema(entry.rpcSchema);
+        if (!schema) {
+          throw new Error(
+            `${node.relativePath}:${entry.className} names unknown workspace RPC schema ${entry.rpcSchema}`
+          );
+        }
+        return [entry.className, schema];
+      })
+  );
+  const workspaceRpcCatalog = await collectWorkspaceRpcCatalog(workerSourcePath, {
+    provider: node.relativePath,
+    authority,
+    rpcSchemas,
+  });
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList(extractedManifest.dedupeModules);
   const terminalWorker = isTerminalWorker(extractedManifest);
@@ -3011,6 +3034,81 @@ function extensionProviderContracts(
   );
 }
 
+function sealedExtensionMethodAuthority(
+  extensionManifest: Record<string, unknown> | undefined,
+  provider: string,
+  authority: UnitAuthorityManifest
+): import("./buildStore.js").ExtensionMethodAuthority {
+  const declarations = parseExtensionMethodAuthority(
+    extensionManifest?.["methodAuthority"],
+    `Extension ${provider} methodAuthority`
+  );
+  const definitions = new Map(
+    authority.provides.map((definition) => [definition.name, definition])
+  );
+  const bound = new Map<string, string[]>();
+  const result: import("./buildStore.js").ExtensionMethodAuthority = {};
+  for (const [method, declaration] of Object.entries(declarations)) {
+    if (declaration.effect.kind === "open") {
+      result[method] = { effect: { kind: "open" } };
+      continue;
+    }
+    const definition = definitions.get(declaration.effect.capability);
+    if (!definition) {
+      throw new Error(
+        `${provider}.${method} references undeclared userland capability ${declaration.effect.capability}`
+      );
+    }
+    const methods = bound.get(definition.name) ?? [];
+    methods.push(method);
+    bound.set(definition.name, methods);
+  }
+  for (const definition of authority.provides) {
+    const methods = bound.get(definition.name)?.sort();
+    if (!methods?.length) {
+      throw new Error(
+        `${provider} provides ${definition.name}, but no public extension method binds it`
+      );
+    }
+    const definitionDigest = sha256Canonical({
+      definition,
+      bindings: methods.map((method) => ({
+        method,
+        resource: { kind: "receiver" },
+        inputContractDigest: sha256Canonical({
+          service: "extensions",
+          method,
+          args: "unknown[]",
+        }),
+      })),
+    });
+    const canonicalCapability = `userland:${provider}/${definition.name}#${definitionDigest}`;
+    for (const method of methods) {
+      const declaration = declarations[method]!;
+      if (declaration.effect.kind !== "userland-capability") {
+        throw new Error(`${provider}.${method} lost its userland capability binding`);
+      }
+      result[method] = {
+        effect: {
+          kind: "userland-capability",
+          capability: declaration.effect.capability,
+          resource: { kind: "receiver" },
+        },
+        userlandCapability: {
+          canonicalCapability,
+          definitionDigest,
+          resourceType: definition.resourceType,
+          grantScopes: definition.grantScopes,
+          title: definition.title,
+          action: definition.action,
+          ...(definition.description ? { description: definition.description } : {}),
+        },
+      };
+    }
+  }
+  return result;
+}
+
 async function buildExtension(
   node: GraphNode,
   ev: string,
@@ -3036,6 +3134,11 @@ async function buildExtension(
   validateExtensionManifest(node, extractedManifest);
   const extensionManifest = extractedManifest["extension"] as Record<string, unknown> | undefined;
   const providerContracts = extensionProviderContracts(extensionManifest);
+  const methodAuthority = sealedExtensionMethodAuthority(
+    extensionManifest,
+    node.relativePath,
+    authority
+  );
   const dependencyMode = normalizeExtensionDependencyMode(extensionManifest?.["dependencyMode"]);
   const dependencyDiagnostics = analyzeExtensionDependencies(
     env.externalDeps,
@@ -3119,6 +3222,7 @@ async function buildExtension(
           runtimeDepsKey: runtimeDeps.key,
           runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
           providerContracts,
+          methodAuthority,
           dependencyMode,
           externalDeps: runtimeExternalDeps,
           dependencyOverrides: env.dependencyOverrides,
@@ -3146,6 +3250,7 @@ async function buildExtension(
         runtimeDepsKey: runtimeDeps.key,
         runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
         providerContracts,
+        methodAuthority,
         dependencyMode,
         externalDeps: runtimeExternalDeps,
         dependencyOverrides: env.dependencyOverrides,

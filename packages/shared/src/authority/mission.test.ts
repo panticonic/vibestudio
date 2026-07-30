@@ -3,7 +3,6 @@ import {
   missionAllowsService,
   missionClosureDigest,
   missionEventMatches,
-  missionSubject,
   type MissionCharter,
 } from "./mission.js";
 
@@ -30,9 +29,6 @@ describe("mission closure", () => {
   it("changes for behavioral edits but not registry identity", () => {
     const first = closure(charter());
     expect(closure({ ...charter(), trigger: { kind: "cron", cron: "0 3 * * *" } })).not.toBe(first);
-    expect(missionSubject({ missionId: "msn_one", closureDigest: first })).not.toBe(
-      missionSubject({ missionId: "msn_two", closureDigest: first })
-    );
   });
 
   it("changes when approved allows or standing denies change", () => {

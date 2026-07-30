@@ -23,6 +23,7 @@ const identity = {
   repoPath: "workers/example",
   effectiveVersion: "ev-example",
   authority: {
+    provides: [],
     requests: [
       {
         capability: "notifications",
@@ -53,6 +54,7 @@ describe("UnitVersionApprovalStore", () => {
       new UnitVersionApprovalStore({ statePath: root }).has({
         ...identity,
         authority: {
+          provides: [],
           requests: [
             {
               capability: "network",

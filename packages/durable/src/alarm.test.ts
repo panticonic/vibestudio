@@ -5,6 +5,8 @@ import { createTestDO, createTestDirectAuthority } from "./test-utils.js";
 
 class AlarmProbeDO extends DurableObjectBase {
   nextAlarm: AlarmSchedule | null = null;
+  releaseDeferred!: () => void;
+  deferredOutbound: Promise<unknown> | null = null;
 
   protected createTables(): void {}
 
@@ -18,13 +20,30 @@ class AlarmProbeDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
   schedule(wakeAt: number): string {
     this.setAlarmAt(wakeAt);
     return "scheduled";
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  deferOutbound(): string {
+    const released = new Promise<void>((resolve) => {
+      this.releaseDeferred = resolve;
+    });
+    this.deferredOutbound = released.then(() =>
+      this.rpc.call("main", "probe.deferred", [])
+    );
+    this.ctx.waitUntil?.(this.deferredOutbound);
+    return "deferred";
   }
 }
 
@@ -49,7 +68,7 @@ describe("DurableObjectBase alarm dispatch", () => {
     await expect(call("durableWorkCapabilities")).resolves.toEqual([]);
     expect(rpcMethodAuthority(instance, "durableWorkCapabilities")).toMatchObject({
       principals: ["host"],
-      effect: { kind: "runtime-intrinsic" },
+      effect: { kind: "open" },
       tier: "open",
       sensitivity: "read",
     });
@@ -149,6 +168,21 @@ describe("DurableObjectBase alarm dispatch", () => {
         },
       },
     });
+  });
+
+  it("does not leak a consumed host attestation into deferred waitUntil work", async () => {
+    let outboundBody = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      outboundBody = String(init?.body ?? "");
+      return new Response("deferred probe stopped", { status: 500 });
+    });
+    const { instance, call } = await createTestDO(AlarmProbeDO);
+
+    await expect(call("deferOutbound")).resolves.toBe("deferred");
+    instance.releaseDeferred();
+    await expect(instance.deferredOutbound).rejects.toThrow();
+
+    expect(outboundBody).not.toContain("authorityParentNonce");
   });
 
   it("fails the request when its durable scheduling write fails", async () => {

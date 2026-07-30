@@ -9,7 +9,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Runtime property, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create.";
+  "Runtime property, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read.";
 
 export const workerRuntimeSurface: RuntimeSurface = {
   target: "workerRuntime",
@@ -27,7 +27,6 @@ export const workerRuntimeSurface: RuntimeSurface = {
         PANEL_HANDLE_AUTOMATION_GUIDE,
       OPEN_PANEL_SIGNATURE
     ),
-    listPanels: valueEntry("Alias for runtime.panelTree.list()."),
     getPanelHandle: valueEntry("Alias for runtime.panelTree.get(id, kind?)."),
     panelTree: namespaceEntry(PANEL_TREE_MEMBERS, panelTreeDescription),
     // Worker-only target extras.

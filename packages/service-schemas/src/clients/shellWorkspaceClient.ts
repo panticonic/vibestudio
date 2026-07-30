@@ -7,24 +7,21 @@
  * absent from this current-workspace client.
  */
 import type { RpcClient } from "@vibestudio/rpc";
-import type {
-  HostTarget,
-  HostTargetCandidate,
-  HostTargetLaunchResult,
-  HostTargetLaunchSessionSnapshot,
-  HostTargetSelection,
-  HostTargetSelectionInput,
-} from "@vibestudio/shared/hostTargets";
 import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "../workspace.js";
+import { runtimeMethods } from "../runtime.js";
 
 export class WorkspaceClient {
   private typed: TypedServiceClient<typeof workspaceMethods>;
+  private runtime: TypedServiceClient<typeof runtimeMethods>;
   constructor(rpc: Pick<RpcClient, "call">) {
     this.typed = createTypedServiceClient("workspace", workspaceMethods, (service, method, args) =>
+      rpc.call("main", `${service}.${method}`, args)
+    );
+    this.runtime = createTypedServiceClient("runtime", runtimeMethods, (service, method, args) =>
       rpc.call("main", `${service}.${method}`, args)
     );
   }
@@ -37,57 +34,9 @@ export class WorkspaceClient {
   appVersions(
     name: string
   ): Promise<{ current: unknown; previous: unknown[]; retentionLimit: number }> {
-    return this.typed.units.versions(name);
+    return this.runtime.supervision.versions({ kind: "app", releaseId: name });
   }
   rollbackApp(name: string, opts?: { buildKey?: string }): Promise<unknown> {
-    return this.typed.units.rollback(name, opts);
-  }
-  listHostTargetCandidates(target: HostTarget): Promise<HostTargetCandidate[]> {
-    return this.typed.hostTargets.list(target);
-  }
-  getHostTargetSelection(
-    target: HostTarget
-  ): Promise<{ selection: HostTargetSelection | null; valid: boolean; reason?: string }> {
-    return this.typed.hostTargets.getSelection(target);
-  }
-  setHostTargetSelection(
-    target: HostTarget,
-    input: HostTargetSelectionInput
-  ): Promise<HostTargetSelection> {
-    return this.typed.hostTargets.setSelection(target, input);
-  }
-  clearHostTargetSelection(target: HostTarget): Promise<void> {
-    return this.typed.hostTargets.clearSelection(target);
-  }
-  hostTargetVersions(
-    target: HostTarget,
-    sourceOrName: string
-  ): Promise<{ current: unknown; previous: unknown[]; retentionLimit: number }> {
-    return this.typed.hostTargets.versions(target, sourceOrName);
-  }
-  prepareHostTargetPinnedRef(
-    target: HostTarget,
-    sourceOrName: string,
-    ref: string
-  ): Promise<unknown> {
-    return this.typed.hostTargets.preparePinnedRef(target, sourceOrName, ref);
-  }
-  launchHostTarget(target: HostTarget): Promise<HostTargetLaunchResult> {
-    return this.typed.hostTargets.launch(target);
-  }
-  beginHostTargetLaunch(target: HostTarget): Promise<HostTargetLaunchSessionSnapshot> {
-    return this.typed.hostTargets.beginLaunch(target);
-  }
-  getHostTargetLaunchSession(sessionId: string): Promise<HostTargetLaunchSessionSnapshot | null> {
-    return this.typed.hostTargets.getLaunchSession(sessionId);
-  }
-  resolveHostTargetLaunchSessionApproval(
-    sessionId: string,
-    decision: "once" | "deny"
-  ): Promise<HostTargetLaunchSessionSnapshot> {
-    return this.typed.hostTargets.resolveLaunchSessionApproval(sessionId, decision);
-  }
-  cancelHostTargetLaunchSession(sessionId: string): Promise<void> {
-    return this.typed.hostTargets.cancelLaunchSession(sessionId);
+    return this.runtime.supervision.rollback({ kind: "app", releaseId: name }, opts);
   }
 }

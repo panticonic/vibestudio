@@ -8,7 +8,6 @@ import { setUserDataPath } from "@vibestudio/env-paths";
 import {
   artifactFilePath,
   collectRetention,
-  dedupeBuildArtifacts,
   get,
   has,
   primaryArtifact,
@@ -23,7 +22,7 @@ import {
 beforeEach(() => {
   setBuildExecutionIdentityContext({
     workspaceId: "workspace:test",
-    semanticStateForContent: (stateHash) => ({
+    executionStateForContent: (stateHash) => ({
       kind: "event",
       eventId: `event:${stateHash}`,
     }),
@@ -43,7 +42,7 @@ function build(overrides: Partial<BuildResult> = {}): BuildResult {
       ev: "ev-worker",
       sourceStateHash: null,
       sourcemap: false,
-      authority: { requests: [] },
+      authority: { requests: [], provides: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -373,7 +372,7 @@ describe("build artifact helpers", () => {
           sourcePath: "workers/a",
           ev: "8".repeat(64),
           sourceStateHash: `state:${"7".repeat(64)}`,
-          sourceSemanticState: { kind: "event", eventId: "event:gc" },
+          sourceState: { kind: "event", eventId: "event:gc" },
         }
       );
       const base = {
@@ -448,7 +447,7 @@ describe("build artifact helpers", () => {
           sourcePath: "workers/a",
           ev: "5".repeat(64),
           sourceStateHash: `state:${"4".repeat(64)}`,
-          sourceSemanticState: { kind: "event", eventId: "event:rescue" },
+          sourceState: { kind: "event", eventId: "event:rescue" },
         }
       );
       const first = await collectRetention({
@@ -501,7 +500,7 @@ describe("build artifact helpers", () => {
           sourcePath: "workers/a",
           ev: "2".repeat(64),
           sourceStateHash: `state:${"1".repeat(64)}`,
-          sourceSemanticState: { kind: "event", eventId: "event:recovery" },
+          sourceState: { kind: "event", eventId: "event:recovery" },
         }
       );
       await collectRetention({
@@ -551,7 +550,7 @@ describe("build artifact helpers", () => {
           sourcePath: "workers/a",
           ev: "3".repeat(64),
           sourceStateHash: `state:${"4".repeat(64)}`,
-          sourceSemanticState: { kind: "event", eventId: "event:report" },
+          sourceState: { kind: "event", eventId: "event:report" },
         }
       );
       await collectRetention({
@@ -605,7 +604,7 @@ describe("build artifact helpers", () => {
             sourcePath: `workers/${key}`,
             ev: "6".repeat(64),
             sourceStateHash: `state:${"7".repeat(64)}`,
-            sourceSemanticState: { kind: "event", eventId: `event:${key}` },
+            sourceState: { kind: "event", eventId: `event:${key}` },
           }
         );
       }
@@ -808,49 +807,6 @@ describe("build artifact helpers", () => {
       } else {
         process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = previousSharedCache;
       }
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("migrates existing independent artifacts into the shared CAS", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
-    const previousPool = process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
-    try {
-      delete process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
-      const stateA = path.join(root, "a");
-      const stateB = path.join(root, "b");
-      setUserDataPath(stateA);
-      const resultA = put(
-        "build-a",
-        { entries: build().artifacts },
-        {
-          ...build().metadata,
-          buildKey: "build-a",
-        }
-      );
-      setUserDataPath(stateB);
-      const resultB = put(
-        "build-b",
-        { entries: build().artifacts },
-        {
-          ...build().metadata,
-          buildKey: "build-b",
-        }
-      );
-      const fileA = path.join(resultA.dir, "worker.js");
-      const fileB = path.join(resultB.dir, "worker.js");
-      expect(fs.statSync(fileA).ino).not.toBe(fs.statSync(fileB).ino);
-
-      const pool = path.join(root, "artifact-cas");
-      const first = dedupeBuildArtifacts(path.join(stateA, "builds"), pool);
-      const second = dedupeBuildArtifacts(path.join(stateB, "builds"), pool);
-
-      expect(first.alreadyShared).toBe(1);
-      expect(second.linked).toBe(1);
-      expect(fs.statSync(fileA).ino).toBe(fs.statSync(fileB).ino);
-    } finally {
-      if (previousPool === undefined) delete process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
-      else process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"] = previousPool;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

@@ -36,6 +36,18 @@ describe("resource prefix scopes", () => {
     expect(scopeCovers(scope, "workspace-repo-delete:projects/customer-data")).toBe(false);
     expect(scopeCovers(scope, "workspace-repo-delete:packages/system-test-helper")).toBe(false);
   });
+
+  it("covers digest-qualified capability namespaces terminated by a hash separator", () => {
+    expect(
+      scopeCovers(
+        {
+          kind: "prefix",
+          prefix: "userland:extensions/shell/native.shell.execute#",
+        },
+        `userland:extensions/shell/native.shell.execute#${"a".repeat(64)}`
+      )
+    ).toBe(true);
+  });
 });
 
 describe("resource scope containment", () => {
@@ -59,10 +71,7 @@ describe("resource scope containment", () => {
       )
     ).toBe(false);
     expect(
-      resourceScopeContains(
-        { kind: "network", value: "*" },
-        { kind: "prefix", prefix: "" }
-      )
+      resourceScopeContains({ kind: "network", value: "*" }, { kind: "prefix", prefix: "" })
     ).toBe(false);
   });
 });
@@ -109,7 +118,7 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
         runId: "run:s1",
         authorityManifest: {
           mode: "adaptive",
-          effects: "mutable",
+          effects: "read-write",
           approvals: "prompt",
           requests: [],
           digest: "0".repeat(64),
@@ -135,8 +144,8 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       audience: "host",
       version: "2.1",
       expiresAt: 10_000,
-      mission: {
-        missionId: "nightly",
+      reviewedClosure: {
+        subject: `mission:nightly@${"b".repeat(64)}`,
         closureDigest: "b".repeat(64),
         harness: { unit: "workers/system-agent", ev: "c".repeat(64) },
       },
@@ -183,6 +192,40 @@ function grant(
 }
 
 describe("compositional authority", () => {
+  it("lets a provider-bound userland definition family cover its exact sealed revision", () => {
+    const capabilityName = `userland:extensions/shell/native.shell.execute#${"5".repeat(64)}`;
+    const context = codeContext();
+    context.executingCode = {
+      ...context.executingCode!,
+      requested: [
+        {
+          capability: "userland:extensions/shell/native.shell.execute#*",
+          resource: {
+            kind: "exact",
+            key: "native.shell:extension:@workspace-extensions/shell",
+          },
+        },
+      ],
+    };
+    expect(
+      evaluateAuthority({
+        context,
+        requirement: capability("code", capabilityName),
+        resourceKey: "native.shell:extension:@workspace-extensions/shell",
+        grants: [
+          {
+            ...grant(code, capabilityName),
+            resource: {
+              kind: "exact",
+              key: "native.shell:extension:@workspace-extensions/shell",
+            },
+          },
+        ],
+        now: 100,
+      })
+    ).toMatchObject({ allowed: true });
+  });
+
   it("distinguishes an immutable installed-code declaration from a promptable missing grant", () => {
     const undeclared = codeContext();
     undeclared.executingCode = { ...undeclared.executingCode!, requested: [] };

@@ -48,6 +48,12 @@ interface TestDOResult<T> {
   alarms: number[];
   acceptedWebSockets: AcceptedWebSocket[];
   call: <R = unknown>(method: string, ...args: unknown[]) => Promise<R>;
+  callAs: <R = unknown>(
+    caller: Pick<AuthenticatedCaller, "callerId" | "callerKind"> &
+      Partial<Pick<AuthenticatedCaller, "callerPanelId" | "userId">>,
+    method: string,
+    ...args: unknown[]
+  ) => Promise<R>;
 }
 
 let sqlJsPromise: Promise<SqlJsStatic> | null = null;
@@ -124,9 +130,12 @@ export function createTestDirectAuthority(input: {
   source?: string;
   className?: string;
   objectKey?: string;
+  tier?: "open" | "gated" | "critical";
   now?: number;
 }): DirectAuthorityAttestation {
   const now = input.now ?? Date.now();
+  const invocationDigest =
+    input.tier === "critical" ? `test-invocation:${crypto.randomUUID()}` : undefined;
   const audience = `do:${input.source ?? "test"}:${input.className ?? "TestDO"}:${input.objectKey ?? "test-key"}`;
   const isHost = input.callerKind === "server";
   const principal = isHost
@@ -162,8 +171,15 @@ export function createTestDirectAuthority(input: {
     method: input.method,
     effect:
       input.effect ??
-      (input.capability ? { kind: "semantic", capability } : { kind: "runtime-intrinsic" }),
+      (input.capability
+        ? { kind: "host-capability", capability, resource: { kind: "receiver-object" } }
+        : { kind: "open" }),
     capability,
+    capabilityDefinitionDigest: "-",
+    resourceType: capability,
+    provider: "-",
+    providerExecutionDigest: "-",
+    ...(invocationDigest ? { invocationDigest } : {}),
     resourceKey: audience,
     issuedAt: now,
     expiresAt: now + 60_000,
@@ -178,8 +194,11 @@ export function createTestDirectAuthority(input: {
         resource: { kind: "exact", key: audience },
         issuedBy: "test-fixture",
         createdAt: now,
-        constraints: { lineageAtConsent: [] },
-        provenance: "explicit-test-fixture",
+        constraints: {
+          lineageAtConsent: [],
+          ...(invocationDigest ? { invocationDigest } : {}),
+        },
+        provenance: invocationDigest ? "critical-confirmation" : "explicit-test-fixture",
       },
     ],
   };
@@ -252,15 +271,46 @@ export async function createTestDO<T>(
   const mergedEnv = { ...AGENTIC_ENV_DEFAULTS, ...env };
   const instance = new DOClass(ctx, mergedEnv);
 
-  const call = async <R = unknown>(method: string, ...args: unknown[]): Promise<R> => {
+  const dispatch = async <R = unknown>(
+    caller: Pick<AuthenticatedCaller, "callerId" | "callerKind"> &
+      Partial<Pick<AuthenticatedCaller, "callerPanelId" | "userId">>,
+    method: string,
+    args: unknown[]
+  ): Promise<R> => {
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
     if (typeof fetchable.fetch !== "function") {
       throw new Error("DO instance does not have a fetch() method");
     }
     const url = `http://test/${encodeURIComponent(objectKey)}/${encodeURIComponent(method)}`;
-    const declaration = rpcMethodAuthority(instance as object, method);
+    const localDeclaration = rpcMethodAuthority(instance as object, method);
+    const schemaMethod = (
+      (instance as object).constructor as unknown as {
+        rpcMethods?: Record<
+          string,
+          {
+            capability?: string;
+            directEffect?: DirectAuthorityAttestation["effect"];
+            tier?: { tier: "open" | "gated" | "critical" };
+          }
+        >;
+      }
+    ).rpcMethods?.[method];
     const capability =
-      declaration?.effect.kind === "semantic" ? declaration.effect.capability : undefined;
+      schemaMethod?.capability ??
+      (localDeclaration?.effect.kind !== "open"
+        ? localDeclaration?.effect.capability
+        : undefined);
+    const effect =
+      schemaMethod?.directEffect ??
+      (schemaMethod?.capability
+        ? {
+            kind: "host-capability" as const,
+            capability: schemaMethod.capability,
+            resource: { kind: "receiver-object" as const },
+          }
+        : localDeclaration?.effect);
+    const attestedCapability =
+      effect?.kind === "userland-capability" ? `userland:${effect.capability}` : capability;
     const request = new Request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -271,12 +321,13 @@ export async function createTestDO<T>(
         __instanceToken: "token",
         __instanceId: "do:internal/WorkspaceDO:test-key",
         __caller: {
-          callerId: "main",
-          callerKind: "server",
+          ...caller,
           authorization: createTestDirectAuthority({
-            callerKind: "server",
+            callerKind: caller.callerKind,
             method,
-            capability,
+            capability: attestedCapability,
+            ...(effect ? { effect } : {}),
+            tier: schemaMethod?.tier?.tier ?? localDeclaration?.tier,
             source: String(mergedEnv["WORKER_SOURCE"]),
             className: String(mergedEnv["WORKER_CLASS_NAME"]),
             objectKey,
@@ -297,6 +348,16 @@ export async function createTestDO<T>(
     return (text ? JSON.parse(text) : undefined) as R;
   };
 
+  const call = <R = unknown>(method: string, ...args: unknown[]): Promise<R> =>
+    dispatch<R>({ callerId: "main", callerKind: "server" }, method, args);
+
+  const callAs = <R = unknown>(
+    caller: Pick<AuthenticatedCaller, "callerId" | "callerKind"> &
+      Partial<Pick<AuthenticatedCaller, "callerPanelId" | "userId">>,
+    method: string,
+    ...args: unknown[]
+  ): Promise<R> => dispatch<R>(caller, method, args);
+
   return {
     instance,
     sql: sqlProxy,
@@ -304,5 +365,6 @@ export async function createTestDO<T>(
     alarms,
     acceptedWebSockets,
     call,
+    callAs,
   };
 }

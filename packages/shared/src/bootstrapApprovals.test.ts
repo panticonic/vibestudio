@@ -47,7 +47,7 @@ function unitBatch(
 }
 
 describe("bootstrap approvals", () => {
-  it("includes startup privileged unit approvals and legacy app meta approvals", () => {
+  it("includes startup and manifest-change privileged unit approvals", () => {
     const credentialApproval: PendingApproval = {
       kind: "credential",
       allowedDecisions: ["once", "session", "version", "deny"],
@@ -155,7 +155,7 @@ describe("bootstrap approvals", () => {
     expect(filterRuntimeApprovals([mixedStartup])).toEqual([]);
   });
 
-  it("can still narrow app meta approvals to one host target", () => {
+  it("narrows manifest-change app approvals to one host target", () => {
     expect(
       filterBootstrapApprovalsForTarget(
         [

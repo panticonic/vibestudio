@@ -31,15 +31,12 @@ import {
 import * as buildStore from "./buildStore.js";
 import { primaryTextArtifactContent, type BuildResult } from "./buildStore.js";
 import {
-  analyzeExtensionDependencies,
   buildUnit,
   computeBuildUnitKey,
   buildNpmLibrary,
   buildPlatformLibrary,
   initBuilder,
-  normalizeExtensionDependencyMode,
   type BuildUnitOptions,
-  type ExtensionDependencyDiagnostics,
 } from "./builder.js";
 import {
   setBuildSourceProvider,
@@ -67,12 +64,7 @@ import {
   type WorkspaceStateSource,
 } from "./stateTrigger.js";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
-import {
-  collectTransitiveDependencyOverrides,
-  collectTransitiveExternalDeps,
-  ensureExternalDeps,
-} from "./externalDeps.js";
-import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
+import { collectTransitiveExternalDeps } from "./externalDeps.js";
 import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
@@ -97,15 +89,6 @@ export interface AboutPageMeta {
   hiddenInLauncher: boolean;
 }
 
-export interface ExtensionDoctorReport {
-  name: string;
-  kind: "extension";
-  path: string;
-  dependencyDiagnostics: ExtensionDependencyDiagnostics;
-  buildMetadata: BuildResult["metadata"] | null;
-  checks: Array<{ name: string; status: "pass" | "warn" | "fail"; message: string }>;
-}
-
 export interface BuildSystemBuildEvent {
   type: "build-started" | "build-complete" | "build-error";
   name: string;
@@ -127,7 +110,8 @@ export interface RuntimeImageBinding {
   unitName: string;
   /** Complete immutable identity, verified from the exact built artifact. */
   artifact: ExecutionArtifactRefV1;
-  authorityRequests: UnitAuthorityManifest["requests"];
+  /** Complete sealed authority envelope for this exact executable build. */
+  authority: UnitAuthorityManifest;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +293,15 @@ export interface BuildSystemV2 {
     kinds?: readonly GraphNode["kind"][]
   ): Promise<BuildUnitCatalogEntry[]>;
 
+  /**
+   * List the build units affected by workspace-relative source changes at an
+   * exact state, including the complete transitive reverse-dependency closure.
+   * Candidate and published graphs both participate so dependency removal,
+   * package renaming, and deletion cannot hide consumers that still need
+   * validation. Paths outside both graphs have no build closure.
+   */
+  listAffectedBuildUnits(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
+
   /** Get an immutable build-store artifact by build key. */
   getBuildByKey(key: string): BuildResult | null;
 
@@ -356,9 +349,6 @@ export interface BuildSystemV2 {
       };
     }) => void
   ): () => void;
-
-  /** Inspect an extension manifest, dependency routing, cached metadata, and smoke/build status. */
-  doctorExtension(unitName: string): Promise<ExtensionDoctorReport>;
 
   /** Force recompute all effective versions */
   recompute(): Promise<ChangeSet>;
@@ -464,7 +454,7 @@ export async function initBuildSystemV2(
   setBuildSourceProvider(source);
   buildStore.setBuildExecutionIdentityContext({
     workspaceId: source.workspaceId,
-    semanticStateForContent: (stateHash) => source.semanticStateForContent?.(stateHash) ?? null,
+    executionStateForContent: (stateHash) => source.executionStateForContent?.(stateHash) ?? null,
   });
 
   // Step 1: Snapshot the workspace + discover package graph from that state
@@ -741,7 +731,7 @@ export async function initBuildSystemV2(
         source: node.relativePath,
         unitName: node.name,
         artifact: executionArtifactRefFromBuild(source.workspaceId, build),
-        authorityRequests: authority.requests,
+        authority,
       };
       runtimeBindingCache.set(identityKey, binding);
       return binding;
@@ -792,7 +782,9 @@ export async function initBuildSystemV2(
       buildError = error;
     }
 
-    // Fold typecheck diagnostics from the materialized source (best effort).
+    // Fold typecheck diagnostics from the exact materialized source. This is
+    // fail-closed: typecheck engine/materialization failures become errors in
+    // the report and therefore cannot pass a protected-main build gate.
     // The same source root gives esbuild failure paths workspace coordinates
     // instead of cache/temp checkout paths.
     try {
@@ -822,10 +814,16 @@ export async function initBuildSystemV2(
       );
       diagnostics = [...diagnostics, ...tsc];
     } catch (err) {
-      console.warn(
-        `[BuildV2] typecheck materialize failed for ${node.name}:`,
-        err instanceof Error ? err.message : String(err)
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[BuildV2] typecheck materialize failed for ${node.name}:`, message);
+      diagnostics.push({
+        source: "tsc",
+        severity: "error",
+        file: node.relativePath,
+        line: 1,
+        column: 1,
+        message: `Typecheck could not complete: ${message}`,
+      });
     }
     if (buildError != null && diagnostics.length === 0) {
       diagnostics = diagnosticsFromError(buildError, {
@@ -1363,104 +1361,40 @@ export async function initBuildSystemV2(
       });
     },
 
-    async doctorExtension(unitName: string): Promise<ExtensionDoctorReport> {
-      const { graph, evMap } = currentState();
-      const node = resolveUnit(graph, unitName, workspaceRoot);
-      if (!node) {
-        throw new Error(`Unknown extension: ${unitName}`);
-      }
-      if (node.kind !== "extension") {
-        throw new Error(`Build unit is not an extension: ${unitName}`);
-      }
+    async listAffectedBuildUnits(
+      stateHash: string,
+      changedPaths: readonly string[]
+    ): Promise<string[]> {
+      const ref = validateBuildRef(stateHash);
+      if (!ref) throw new Error(`Missing exact state for affected-unit lookup`);
+      const view = await viewAt(ref);
+      const publishedGraph = currentState().graph;
+      const candidateSeeds = unitsForChangedPaths(view.graph, [...changedPaths]).units;
+      const publishedSeeds = unitsForChangedPaths(publishedGraph, [...changedPaths]).units;
+      const names = new Set<string>();
 
-      const dependencyMode = normalizeExtensionDependencyMode(
-        node.manifest.extension?.dependencyMode
-      );
-      const externalDeps = collectTransitiveExternalDeps(
-        node,
-        graph,
-        workspaceRoot,
-        appNodeModuleRoots
-      );
-      const dependencyOverrides = collectTransitiveDependencyOverrides(
-        node,
-        graph,
-        workspaceRoot,
-        appNodeModuleRoots
-      );
-      const nodeModulesDir = await ensureExternalDeps(externalDeps, dependencyOverrides);
-      const nodePaths = [...(nodeModulesDir ? [nodeModulesDir] : []), ...appNodeModuleRoots];
-      const dependencyDiagnostics = analyzeExtensionDependencies(
-        externalDeps,
-        nodePaths,
-        dependencyMode
-      );
-      const ev = evMap[node.name] ?? null;
-      const buildKey = ev
-        ? computeBuildKey(
-            node.name,
-            `${ev}:extension-runtime-abi:${EXTENSION_RUNTIME_ABI_VERSION}`,
-            true
-          )
-        : null;
-      const build = buildKey ? buildStore.get(buildKey) : null;
-      const extensionDetails =
-        build?.metadata.details.kind === "extension" ? build.metadata.details : null;
-      const checks: ExtensionDoctorReport["checks"] = [
-        { name: "manifest", status: "pass", message: "Extension manifest was discovered." },
-        {
-          name: "dependency-mode",
-          status: "pass",
-          message: `dependencyMode=${dependencyDiagnostics.dependencyMode}`,
-        },
-        {
-          name: "runtime-deps",
-          status: "pass",
-          message: Object.keys(dependencyDiagnostics.runtimeExternalDeps).length
-            ? `External runtime deps: ${Object.keys(dependencyDiagnostics.runtimeExternalDeps).join(", ")}`
-            : "No external runtime deps are required.",
-        },
-        {
-          name: "build-cache",
-          status: build ? "pass" : "warn",
-          message: build
-            ? `Cached build found with ABI ${extensionDetails?.runtimeAbi ?? "unknown"}.`
-            : "No cached build found for the current runtime ABI.",
-        },
-      ];
-      if (extensionDetails?.smokeTest?.passed) {
-        checks.push({
-          name: "smoke-test",
-          status: "pass",
-          message: `Build smoke test passed in ${extensionDetails.smokeTest.mode}.`,
-        });
-      } else if (build) {
-        checks.push({
-          name: "smoke-test",
-          status: "warn",
-          message: "Cached build has no recorded smoke-test result.",
-        });
-      }
-      for (const dep of dependencyDiagnostics.classifiedDeps) {
-        checks.push({
-          name: `dependency:${dep.name}`,
-          status:
-            dep.reasons.includes("missing-package-json") ||
-            dep.reasons.includes("unreadable-package-json")
-              ? "warn"
-              : "pass",
-          message: dep.explanation,
-        });
-      }
-
-      return {
-        name: node.name,
-        kind: "extension",
-        path: node.relativePath,
-        dependencyDiagnostics,
-        buildMetadata: build?.metadata ?? null,
-        checks,
+      const addReverseClosure = (graph: PackageGraph, seeds: Iterable<string>): void => {
+        const pending = [...seeds];
+        const visited = new Set<string>();
+        while (pending.length > 0) {
+          const name = pending.shift()!;
+          if (visited.has(name)) continue;
+          visited.add(name);
+          if (view.graph.has(name)) names.add(name);
+          for (const dependent of graph.getReverseDeps(name)) pending.push(dependent);
+        }
       };
+
+      // The candidate graph catches newly introduced edges; the currently
+      // published graph catches removed/renamed/deleted edges. Their union is
+      // the exact conservative closure—never an unrelated whole-workspace
+      // sweep.
+      addReverseClosure(view.graph, candidateSeeds);
+      addReverseClosure(publishedGraph, publishedSeeds);
+      return view.graph
+        .topologicalOrder()
+        .filter((node) => names.has(node.name) && node.kind !== "template")
+        .map((node) => node.name);
     },
 
     async recompute(): Promise<ChangeSet> {

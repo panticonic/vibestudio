@@ -40,7 +40,7 @@ export const runtimeFoundationEvidence = Object.freeze({
       path: "packages/extension-host/src/service.test.ts",
     },
     "execution.panel": {
-      path: "src/main/hostTargetLaunchAdapter.test.ts",
+      path: "workspace/packages/runtime/src/shared/panelRuntime.test.ts",
     },
     "execution.react-native-app": {
       path: "src/server/appHost.test.ts",
@@ -52,7 +52,7 @@ export const runtimeFoundationEvidence = Object.freeze({
       path: "src/server/terminalAppRunner.test.ts",
     },
     "execution.vcs-store": {
-      path: "src/server/internalDOs/workspaceDO.test.ts",
+      path: "packages/builtin/src/workspace-state/WorkspaceDO.test.ts",
     },
     "execution.worker-push-rebuild": {
       path: "src/server/workerdManager.test.ts",

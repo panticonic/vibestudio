@@ -13,6 +13,7 @@
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./loader": "./src/loader.ts",
     "./pathPolicy": "./src/pathPolicy.ts",
+    "./preparedConfig": "./src/preparedConfig.ts",
     "./remoteUrl": "./src/remoteUrl.ts",
     "./remotes": "./src/remotes.ts",
     "./singletonRegistry": "./src/singletonRegistry.ts",

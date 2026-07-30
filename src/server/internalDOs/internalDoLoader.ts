@@ -14,18 +14,14 @@ import {
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
 import executionCatalog from "./internalDoExecutionCatalog.json";
+import {
+  INTERNAL_DO_CLASSES,
+  productBuiltinByIdentity,
+  type InternalDOClassName,
+} from "@vibestudio/shared/productBuiltinCatalog.generated";
 
 export const INTERNAL_DO_SOURCE = "vibestudio/internal";
-
-export const INTERNAL_DO_CLASSES = [
-  "WebhookStoreDO",
-  "WorkspaceDO",
-  "BrowserDataDO",
-  "EvalDO",
-  "GadWorkspaceDO",
-] as const;
-
-export type InternalDOClassName = (typeof INTERNAL_DO_CLASSES)[number];
+export { INTERNAL_DO_CLASSES };
 export const INTERNAL_DO_PRODUCT_SEED_ID = "product:vibestudio-internal-do";
 
 export interface InternalDOBundle {
@@ -41,7 +37,7 @@ export interface InternalDOExecutionIdentity {
   effectiveVersion: string;
   executionDigest: string;
   artifact: ExecutionArtifactRefV1;
-  authorityRequests: UnitAuthorityManifest["requests"];
+  authority: UnitAuthorityManifest;
 }
 
 declare const globalThis: { __VIBESTUDIO_INTERNAL_DO_BUNDLE__?: string };
@@ -77,8 +73,13 @@ export function internalDOExecutionIdentity(
     throw new Error("Internal Durable Object bundle build key does not match its exact bytes");
   }
   const rawManifest = executionCatalog.classes[reviewedClassName];
+  const builtin = productBuiltinByIdentity(INTERNAL_DO_SOURCE, reviewedClassName);
+  if (!builtin) throw new Error(`Internal Durable Object ${className} is not cataloged`);
   const authority = parseUnitAuthorityManifest(
-    rawManifest,
+    {
+      requests: rawManifest.requests,
+      provides: rawManifest.provides,
+    },
     `internal Durable Object ${className} authority`
   );
   const effectiveVersion = domainHash(
@@ -91,6 +92,7 @@ export function internalDOExecutionIdentity(
       version: 1,
       source: INTERNAL_DO_SOURCE,
       className,
+      builtin,
       authority,
     })
   );
@@ -116,13 +118,13 @@ export function internalDOExecutionIdentity(
   });
   return Object.freeze({
     source: INTERNAL_DO_SOURCE,
-    unitName: `@vibestudio/internal-do/${className}`,
+    unitName: `@panticonic/builtin/${builtin.name}`,
     stateHash,
     buildKey: artifact.buildKey,
     effectiveVersion: artifact.sourceState.effectiveVersion,
     executionDigest: artifact.executionDigest,
     artifact,
-    authorityRequests: authority.requests,
+    authority,
   });
 }
 

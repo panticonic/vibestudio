@@ -8,9 +8,9 @@ const ROOTS = [
   "workspace/packages/agentic-chat",
   "workspace/packages/agentic-core",
   "workspace/packages/agentic-do",
-  "packages/agentic-protocol",
+  "workspace/packages/agentic-protocol",
   "workspace/packages/pubsub/src",
-  "packages/semantic-control-plane/src",
+  "workspace/workers/workspace-source",
   "workspace/workers/pubsub-channel",
   "workspace/workers/test-agent",
 ] as const;

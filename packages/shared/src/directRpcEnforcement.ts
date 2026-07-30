@@ -183,16 +183,6 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
     const reason = `${method}: host authority attestation nonce is malformed`;
     return { code: "EACCES", reason, failure: directRpcInvalidAttestationFailure(reason) };
   }
-  if (attestation.issuedAt > now || attestation.expiresAt <= now) {
-    const reason =
-      `${method}: host authority attestation was stale at trusted dispatch ingress ` +
-      `(issuedAt=${attestation.issuedAt} expiresAt=${attestation.expiresAt} acceptedAt=${now})`;
-    return {
-      code: "EACCES",
-      reason,
-      failure: directRpcInvalidAttestationFailure(reason),
-    };
-  }
   if (attestation.readOnly === true && declaration.sensitivity !== "read") {
     const reason = `${method}: EVAL_READ_ONLY — direct method is ${declaration.sensitivity}`;
     return {
@@ -210,20 +200,21 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
     };
   }
   const declaredCapability =
-    declaration.effect.kind === "semantic" ? declaration.effect.capability : input.capability;
+    declaration.effect.kind === "open" ? input.capability : attestation.capability;
   const effectMatches =
     attestation.effect.kind === declaration.effect.kind &&
-    (declaration.effect.kind !== "semantic" ||
-      (attestation.effect.kind === "semantic" &&
-        attestation.effect.capability === declaration.effect.capability));
+    (declaration.effect.kind === "open" ||
+      (attestation.effect.kind !== "open" &&
+        attestation.effect.capability === declaration.effect.capability &&
+        JSON.stringify(attestation.effect.resource) ===
+          JSON.stringify(declaration.effect.resource)));
   if (
     !effectMatches ||
-    (declaration.effect.kind === "semantic" && attestation.capability !== declaredCapability) ||
-    (declaration.effect.kind === "workspace-service" &&
-      (attestation.capability !== attestation.targetCapability ||
-        !(attestation.targetCapability ?? "").startsWith("workspace-service:") ||
-        !attestation.targetRequirement)) ||
-    (declaration.effect.kind === "runtime-intrinsic" && declaration.tier !== "open")
+    (declaration.effect.kind === "host-capability" &&
+      attestation.capability !== declaration.effect.capability) ||
+    (declaration.effect.kind === "userland-capability" &&
+      !attestation.capability.startsWith("userland:")) ||
+    (declaration.effect.kind === "open" && declaration.tier !== "open")
   ) {
     const reason = `${method}: attested effect does not match the receiver declaration`;
     return {
@@ -247,6 +238,7 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
     now,
     tier: declaration.tier,
     invocationDigest,
+    providerExecutionDigest: attestation.providerExecutionDigest,
   });
   if (!methodDecision.allowed) {
     return {
@@ -280,6 +272,7 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
       now,
       tier: attestation.targetTier,
       invocationDigest,
+      providerExecutionDigest: attestation.providerExecutionDigest,
     });
     if (!targetDecision.allowed) {
       return {

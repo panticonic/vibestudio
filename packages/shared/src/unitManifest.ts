@@ -9,6 +9,88 @@
 export type UnitKind = "extension" | "app";
 export type WorkspaceAppTarget = "electron" | "react-native" | "terminal";
 
+export type ExtensionMethodAuthorityDeclaration =
+  | { effect: { kind: "open" } }
+  | {
+      effect: {
+        kind: "userland-capability";
+        capability: string;
+        resource: { kind: "receiver" };
+      };
+    };
+
+/** Parse the exact public extension-method set without executing extension code. */
+export function parseExtensionMethodAuthority(
+  value: unknown,
+  label: string
+): Readonly<Record<string, ExtensionMethodAuthorityDeclaration>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new UnitManifestError(
+      `${label} must be an object keyed by public method`,
+      "MANIFEST_METHOD_AUTHORITY"
+    );
+  }
+  const result: Record<string, ExtensionMethodAuthorityDeclaration> = {};
+  for (const [method, raw] of Object.entries(value)) {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(method)) {
+      throw new UnitManifestError(
+        `${label} key ${JSON.stringify(method)} is not a method name`,
+        "MANIFEST_METHOD_AUTHORITY"
+      );
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new UnitManifestError(
+        `${label}.${method} must contain exactly one effect`,
+        "MANIFEST_METHOD_AUTHORITY"
+      );
+    }
+    const declaration = raw as Record<string, unknown>;
+    if (Object.keys(declaration).length !== 1 || !("effect" in declaration)) {
+      throw new UnitManifestError(
+        `${label}.${method} must contain exactly one effect`,
+        "MANIFEST_METHOD_AUTHORITY"
+      );
+    }
+    const effect = declaration["effect"];
+    if (!effect || typeof effect !== "object" || Array.isArray(effect)) {
+      throw new UnitManifestError(
+        `${label}.${method}.effect is invalid`,
+        "MANIFEST_METHOD_AUTHORITY"
+      );
+    }
+    const record = effect as Record<string, unknown>;
+    if (record["kind"] === "open" && Object.keys(record).length === 1) {
+      result[method] = { effect: { kind: "open" } };
+      continue;
+    }
+    const resource = record["resource"];
+    if (
+      record["kind"] !== "userland-capability" ||
+      Object.keys(record).sort().join(",") !== "capability,kind,resource" ||
+      typeof record["capability"] !== "string" ||
+      !/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/u.test(record["capability"]) ||
+      !resource ||
+      typeof resource !== "object" ||
+      Array.isArray(resource) ||
+      (resource as Record<string, unknown>)["kind"] !== "receiver" ||
+      Object.keys(resource as Record<string, unknown>).length !== 1
+    ) {
+      throw new UnitManifestError(
+        `${label}.${method}.effect must be open or a receiver-bound userland capability`,
+        "MANIFEST_METHOD_AUTHORITY"
+      );
+    }
+    result[method] = {
+      effect: {
+        kind: "userland-capability",
+        capability: record["capability"],
+        resource: { kind: "receiver" },
+      },
+    };
+  }
+  return Object.freeze(result);
+}
+
 /**
  * Optional worker manifest fields for terminal-renderable workers.
  *
@@ -169,6 +251,7 @@ function validateExtensionBlock(
         dependencyMode?: unknown;
         streamingMethods?: unknown;
         providerContracts?: unknown;
+        methodAuthority?: unknown;
         contributes?: unknown;
       }
     | undefined;
@@ -258,6 +341,17 @@ function validateExtensionBlock(
       }
     }
   }
+
+  if (extension?.methodAuthority === undefined) {
+    throw new UnitManifestError(
+      `Extension ${options.unitName} must declare methodAuthority for every public method`,
+      "MANIFEST_METHOD_AUTHORITY"
+    );
+  }
+  parseExtensionMethodAuthority(
+    extension.methodAuthority,
+    `Extension ${options.unitName} methodAuthority`
+  );
 
   const contributes = extension?.contributes;
   if (contributes !== undefined) {

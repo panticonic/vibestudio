@@ -43,6 +43,7 @@ function makeDoRecord(
     activeBuildKey: `build:${effectiveVersion}`,
     activeExecutionDigest: "a".repeat(64),
     activeAuthority: {
+      provides: [],
       requests: requestedMethods.map((method) => ({
         capability: method === "credentials.proxyFetch" ? "credential.use" : `service:${method}`,
         resource:
@@ -161,7 +162,17 @@ function registerRpcTestService(
   const methodEntries = Object.fromEntries(
     Object.entries(methods).map(([method, sensitivity]) => [
       method,
-      { args: z.tuple([]).rest(z.unknown()), access: { sensitivity } },
+      {
+        args: z.tuple([]).rest(z.unknown()),
+        access: { sensitivity },
+        tier: {
+          tier: "open",
+          session: "family",
+          residency: "identity",
+          family: `test.${name}`,
+          rationale: "Explicit synthetic service contract for HTTP transport tests",
+        },
+      },
     ])
   ) as ServiceDefinition["methods"];
   dispatcher.registerService({ name, authority: { principals }, methods: methodEntries, handler });

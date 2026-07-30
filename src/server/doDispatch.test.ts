@@ -5,6 +5,8 @@ import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import { getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
 import { DURABLE_WORK_READY_HEADER } from "@vibestudio/shared/durableWork";
+import type { AuthorizationContext } from "@vibestudio/rpc";
+import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 
 /** Expected workerd path for a userland DO ref (UniversalDO facet host). */
 function userlandUrl(ref: DORef, methodPath: string): string {
@@ -18,6 +20,50 @@ function makeRef(overrides: Partial<DORef> = {}): DORef {
     source: "workers/agent-worker",
     className: "AiChatWorker",
     objectKey: "ch-123",
+    ...overrides,
+  };
+}
+
+const testCode = `code:workers/agent-worker@${"a".repeat(64)}` as const;
+const testAuthorizationContext: AuthorizationContext = {
+  authorizingOrigin: { kind: "code", principal: testCode },
+  host: null,
+  actingUser: "user:test",
+  entity: null,
+  incarnation: null,
+  executingCode: {
+    principal: testCode,
+    requested: [],
+    sourceLineage: { class: "internal", externalKeys: [] },
+  },
+  initiatorChain: [testCode],
+  ownerChain: ["user:test"],
+  agentBinding: null,
+  executionSession: null,
+  testPolicy: null,
+  workspace: { workspaceId: "ws", member: true, role: "member", revision: "1" },
+  session: { id: "s", audience: "do:x", version: "1", expiresAt: 10_000 },
+  contextIntegrity: { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+};
+
+function testAttestation(
+  overrides: Partial<DirectAuthorityAttestation> = {}
+): DirectAuthorityAttestation {
+  return {
+    audience: "do:workers/agent-worker:AiChatWorker:ch-123",
+    method: "test",
+    effect: { kind: "open" },
+    capability: "rpc:test",
+    resourceKey: "do:workers/agent-worker:AiChatWorker:ch-123",
+    issuedAt: 10,
+    expiresAt: 1_000,
+    nonce: "12345678-1234-4123-8123-123456789abc",
+    context: testAuthorizationContext,
+    grants: [],
+    capabilityDefinitionDigest: "-",
+    resourceType: "rpc:test",
+    provider: "-",
+    providerExecutionDigest: "-",
     ...overrides,
   };
 }
@@ -76,7 +122,10 @@ describe("DODispatch", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     dispatch = new DODispatch();
-    dispatch.setAuthorityAttester(() => ({}) as never);
+    dispatch.setAuthorityAttester(() => testAttestation());
+    dispatch.setAuthorityParentRunner(async (_receiverRuntimeId, _authorization, invoke) =>
+      invoke()
+    );
   });
 
   afterEach(() => {
@@ -227,10 +276,9 @@ describe("DODispatch", () => {
           headers: { "Content-Type": "application/json" },
         })
       );
-      const authorization = {
+      const authorization = testAttestation({
         nonce: "alarm-parent-nonce",
-        context: {},
-      } as never;
+      });
       const policy = {
         policyId: "system-test:permissions-list",
         kind: "orchestrator" as const,
@@ -260,7 +308,7 @@ describe("DODispatch", () => {
           receiverRuntimeId: "do:workers/agent-worker:AiChatWorker:ch-123",
           authorization: expect.objectContaining({
             nonce: "alarm-parent-nonce",
-            context: { testPolicy: policy },
+            context: expect.objectContaining({ testPolicy: policy }),
           }),
         },
       ]);
@@ -352,7 +400,9 @@ describe("DODispatch", () => {
         `http://127.0.0.1:10001${userlandUrl(ref, "__lifecycle/resume")}`
       );
       expect(body["__caller"]).toMatchObject({ callerId: "main", callerKind: "server" });
-      expect((body["__caller"] as { authorization?: unknown }).authorization).toEqual({});
+      expect((body["__caller"] as { authorization?: unknown }).authorization).toEqual(
+        testAttestation()
+      );
       expect(body["__parentId"]).toBe("main");
     });
 

@@ -9,17 +9,17 @@
  *
  * REDUCTION (intentional, per task brief): rather than copying the *real*
  * `workspace/panels/hello-vanilla` / `hello-svelte` example panels and their
- * heavy transitive workspace graph (`@vibestudio/runtime` alone pulls in ~10
+ * heavy transitive workspace graph (`@workspace/runtime` alone pulls in ~10
  * workspace packages + npm deps), this test builds equivalent MINIMAL INLINE
  * fixtures in the temp workspace. They are named `hello-vanilla` / `hello-svelte`
  * and exercise the exact same adapter code paths the real panels do:
- *   - vanilla: own index.html + only `@vibestudio/runtime` ⇒ vanilla framework,
+ *   - vanilla: own index.html + only `@workspace/runtime` ⇒ vanilla framework,
  *     entry wrapper with NO mount helper, bundle free of any framework runtime.
  *   - svelte: `template: "svelte"` + `@workspace/svelte` ⇒ svelte framework, a
  *     compiled `.svelte` component, and the Svelte 5 `mount()` auto-mount path.
  *
  * What was reduced and why:
- *   - `@vibestudio/runtime` is a tiny stub (no transitive deps) so the build is
+ *   - `@workspace/runtime` is a tiny stub (no transitive deps) so the build is
  *     fast/hermetic; the resolve plugin + bundling are still exercised.
  *   - `@workspace/svelte` is a tiny stub whose `autoMountSveltePanel` uses
  *     Svelte 5 `mount()` from "svelte" (the behavior the real package targets).
@@ -78,7 +78,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
-      semanticStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });
     // Resolve esbuild-svelte / svelte (and any other npm deps) from the repo's
     // real node_modules instead of a fresh install.
@@ -94,10 +94,10 @@ describe("buildUnit framework-agnostic panel builds", () => {
    * minimal — see the file header for the reduction rationale.
    */
   function scaffoldStubPackages(): void {
-    // Stub @vibestudio/runtime — no transitive deps.
+    // Stub @workspace/runtime — no transitive deps.
     const runtimeDir = path.join(workspaceRoot, "packages", "runtime");
     writeJson(path.join(runtimeDir, "package.json"), {
-      name: "@vibestudio/runtime",
+      name: "@workspace/runtime",
       version: "0.1.0",
       private: true,
       type: "module",
@@ -153,7 +153,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
   it("builds a vanilla panel: framework=vanilla, no framework runtime, no mount helper", async () => {
     scaffoldStubPackages();
 
-    // Own index.html ⇒ self-contained; only @vibestudio/runtime ⇒ vanilla framework.
+    // Own index.html ⇒ self-contained; only @workspace/runtime ⇒ vanilla framework.
     const panelDir = path.join(workspaceRoot, "panels", "hello-vanilla");
     writeJson(path.join(panelDir, "package.json"), {
       name: "@workspace-panels/hello-vanilla",
@@ -161,12 +161,12 @@ describe("buildUnit framework-agnostic panel builds", () => {
       private: true,
       type: "module",
       vibestudio: { title: "Hello Vanilla", entry: "index.ts" },
-      dependencies: { "@vibestudio/runtime": "workspace:*" },
+      dependencies: { "@workspace/runtime": "workspace:*" },
     });
     fs.writeFileSync(
       path.join(panelDir, "index.ts"),
       [
-        'import { greet } from "@vibestudio/runtime";',
+        'import { greet } from "@workspace/runtime";',
         'const el = document.getElementById("root");',
         'if (el) el.textContent = greet("vanilla");',
         "",
@@ -216,7 +216,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
       private: true,
       type: "module",
       vibestudio: { title: "Hello Svelte", entry: "index.ts", template: "svelte" },
-      dependencies: { "@vibestudio/runtime": "workspace:*", "@workspace/svelte": "workspace:*" },
+      dependencies: { "@workspace/runtime": "workspace:*", "@workspace/svelte": "workspace:*" },
     });
     // Entry re-exports the component as default; the svelte adapter's generated
     // wrapper auto-mounts it.

@@ -18,6 +18,7 @@ import type {
 const log = createDevLogger("CdpHostProvider");
 const CONSOLE_LOG_HISTORY_CAPACITY = 1_000;
 const CONSOLE_ERROR_HISTORY_CAPACITY = 500;
+const PANEL_PAGE_OBSERVATION_TIMEOUT_MS = 2_000;
 
 export interface CdpHostProviderSocket {
   readonly readyState: number;
@@ -91,7 +92,7 @@ export interface CdpHostProviderOptions {
   onHostCommand?: (targetId: string, action: string, args: unknown[]) => unknown | Promise<unknown>;
   /**
    * Forward a panel diagnostic to the server so it lands in the per-unit
-   * diagnostics store (queryable via `workspace.units.diagnostics`). Invoked
+   * diagnostics store (queryable via runtime supervision). Invoked
    * for warn/error console output and all lifecycle events; full console
    * history stays local to the shell, served via the CDP host.
    */
@@ -281,7 +282,22 @@ export class CdpHostProvider {
    */
   async getBootObservation(targetId: string): Promise<PanelBootObservation> {
     const contents = this.requireTargetContents(targetId);
-    const result = await contents.executeJavaScript(PANEL_PAGE_OBSERVATION_EXPRESSION, true);
+    const unavailable = Symbol("panel-page-observation-unavailable");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      contents.executeJavaScript(PANEL_PAGE_OBSERVATION_EXPRESSION, true),
+      new Promise<typeof unavailable>((resolve) => {
+        timer = setTimeout(() => resolve(unavailable), PANEL_PAGE_OBSERVATION_TIMEOUT_MS);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+    // Electron can strand an executeJavaScript promise when the renderer
+    // crosses a navigation/boot boundary even though subsequent evaluations
+    // succeed. Observation is a live probe, so an overdue read is unavailable
+    // rather than a terminal panel failure; the caller's next observation
+    // retries against the current document.
+    if (result === unavailable) return { phase: "unavailable" };
     return parsePanelPageObservation(result).boot;
   }
 

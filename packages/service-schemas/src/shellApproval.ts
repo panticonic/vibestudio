@@ -17,11 +17,15 @@ import type { AuthorityRequirement, InvocationSnapshot } from "@vibestudio/rpc";
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import { AUTHORITY_DOMAINS, AUTHORITY_VERBS } from "@vibestudio/shared/authority/capabilityDomains";
-import type { AuthorityRow } from "@vibestudio/shared/authority/authorityRows";
+import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/authorityDomains";
 import type { AuthorityRowDiff } from "@vibestudio/shared/authority/authorityRowDiff";
-import { AuthorityResourceScopeSchema, UnitAuthorityRequestSchema } from "./build.js";
-import { missionCharterSchema } from "./mission.js";
+import {
+  UnitAuthorityRequestSchema,
+  UserlandCapabilityDefinitionSchema,
+} from "./build.js";
+import { authorityRowSchema } from "./authority.js";
+export { authorityRowSchema } from "./authority.js";
+import { missionCharterSchema } from "./missions.js";
 
 export const shellApprovalValuesSchema = z
   .record(z.string().min(1).max(128), z.string().max(4096))
@@ -111,8 +115,6 @@ const approvalOperationSchema = z
       "worker-lifecycle",
       "workspace",
       "service-setup",
-      "userland",
-      "external-agent",
       "device-code",
       "unknown",
     ]),
@@ -166,47 +168,6 @@ const pendingApprovalBaseShape = {
   diffReview: z.array(diffReviewSchema).optional(),
 };
 
-export const authorityRowSchema = z
-  .object({
-    capability: z.string(),
-    domain: z.enum(
-      Object.keys(AUTHORITY_DOMAINS) as [
-        keyof typeof AUTHORITY_DOMAINS,
-        ...(keyof typeof AUTHORITY_DOMAINS)[],
-      ]
-    ),
-    verb: z.enum(
-      Object.keys(AUTHORITY_VERBS) as [
-        keyof typeof AUTHORITY_VERBS,
-        ...(keyof typeof AUTHORITY_VERBS)[],
-      ]
-    ),
-    action: z.string(),
-    resource: z.string(),
-    resourceScope: AuthorityResourceScopeSchema,
-    tier: z.enum(["gated", "critical"]),
-    statement: z.enum(["declared", "allowed", "snapshot", "prospective"]),
-    state: z.enum(["active", "suspended", "locked"]).optional(),
-    provenance: z
-      .object({
-        source: z.enum(["manifest", "approval", "profile", "mission", "receiver"]),
-        decidedAt: z.number().optional(),
-        decidedBy: z.string().optional(),
-        surface: z.string().optional(),
-        lineageClasses: z.array(z.string()).readonly().optional(),
-      })
-      .strict(),
-    flags: z
-      .object({
-        lineageTainted: z.boolean().optional(),
-        irreversible: z.boolean().optional(),
-        newInDiff: z.boolean().optional(),
-        removedInDiff: z.boolean().optional(),
-      })
-      .strict(),
-  })
-  .strict() satisfies z.ZodType<AuthorityRow>;
-
 export const authorityRowDiffSchema = z
   .object({
     added: z.array(authorityRowSchema),
@@ -231,6 +192,8 @@ const unitBatchEntrySchema = z
     authority: z
       .object({
         requests: z.array(UnitAuthorityRequestSchema).readonly(),
+        provides: z.array(UserlandCapabilityDefinitionSchema).readonly(),
+        previousProvides: z.array(UserlandCapabilityDefinitionSchema).readonly(),
         rows: z.array(authorityRowSchema),
         diff: authorityRowDiffSchema,
       })
@@ -404,10 +367,14 @@ const authorityRequirementSchema: z.ZodType<AuthorityRequirement> = z.lazy(() =>
 );
 export const invocationSnapshotSchema = z
   .object({
-    v: z.literal(1),
+    v: z.literal(2),
     service: z.string(),
     method: z.string(),
     capability: z.string(),
+    capabilityDefinitionDigest: z.string(),
+    resourceType: z.string(),
+    provider: z.string(),
+    providerExecutionDigest: z.string(),
     targetRequirement: authorityRequirementSchema.optional(),
     targetCapability: z.string().optional(),
     resourceKey: z.string(),
@@ -421,7 +388,9 @@ export const invocationSnapshotSchema = z
     lineageClasses: z.array(z.string()).readonly().optional(),
     irreversible: z.boolean().optional(),
     agentScopeEligible: z.boolean().optional(),
-    mission: z.string() as z.ZodType<InvocationSnapshot["mission"]>,
+    reviewedClosureSubject: z.string() as z.ZodType<
+      InvocationSnapshot["reviewedClosureSubject"]
+    >,
     snippetDigest: z.string(),
     codeLineage: z
       .object({
@@ -537,13 +506,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
         .optional(),
       details: z.array(approvalDetailSchema).optional(),
       snapshot: invocationSnapshotSchema.optional(),
-      cardType: z
-        .enum([
-          "permission.gated",
-          "permission.outside",
-          "confirm.critical",
-        ])
-        .optional(),
+      cardType: z.enum(["permission.gated", "permission.outside", "confirm.critical"]).optional(),
       allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).optional(),
       authorityRow: authorityRowSchema.optional(),
       operationSubstance: z
@@ -623,66 +586,6 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
   z
     .object({
       ...pendingApprovalBaseShape,
-      kind: z.literal("userland"),
-      issuer: z
-        .object({
-          kind: z.enum(["panel", "app", "worker", "do", "extension"]),
-          id: z.string(),
-          label: z.string().optional(),
-        })
-        .strict()
-        .optional(),
-      subject: z.object({ id: z.string(), label: z.string().optional() }).strict(),
-      title: z.string(),
-      summary: z.string().optional(),
-      warning: z.string().optional(),
-      details: z.array(approvalDetailSchema).optional(),
-      sealedDetails: z
-        .array(
-          z
-            .object({
-              label: z.string(),
-              digest: z.string().regex(/^[0-9a-f]{64}$/),
-              byteLength: z.number().int().nonnegative(),
-              format: z.enum(["plain", "code"]).optional(),
-              disclosure: z.enum(["review", "sealed-only"]).optional(),
-            })
-            .strict()
-        )
-        .optional(),
-      positiveEvidence: z.array(approvalDetailSchema).optional(),
-      severity: z.enum(["standard", "dangerous"]).optional(),
-      defaultAction: z.enum(["allow", "deny"]).optional(),
-      promptOptions: z.enum(["scoped", "choices"]),
-      options: z.array(
-        z
-          .object({
-            value: z.string(),
-            label: z.string(),
-            description: z.string().optional(),
-            tone: z.enum(["primary", "danger", "neutral"]).optional(),
-          })
-          .strict()
-      ),
-    })
-    .strict(),
-  z
-    .object({
-      ...pendingApprovalBaseShape,
-      kind: z.literal("external-agent"),
-      entityId: z.string(),
-      channelId: z.string(),
-      capability: z.string(),
-      operationName: z.string(),
-      description: z.string().optional(),
-      preview: z.string().optional(),
-      requestId: z.string(),
-      resolveToken: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      ...pendingApprovalBaseShape,
       kind: z.literal("device-code"),
       credentialLabel: z.string(),
       userCode: z.string(),
@@ -708,6 +611,25 @@ const LIST_PENDING_ACCESS: MethodAccessDescriptor = {
 
 export const shellApprovalMethods = defineServiceMethods({
   resolve: {
+    capability: "approvals.decide",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale:
+        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Respond to a workspace request",
+      action: "respond to a workspace request",
+      description: "Allows {requesterKind} to respond to a workspace request.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
     description:
       "Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request.",
     args: z.tuple([z.string(), z.enum(APPROVAL_DECISIONS)]),
@@ -716,6 +638,24 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", "once"] }],
   },
   resolveMissionReview: {
+    capability: "approvals.decide",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale: "G5: trusted approval plumbing resolving an exact queued mission closure",
+    },
+    presentation: {
+      title: "Respond to an automation plan",
+      action: "respond to an automation plan",
+      description: "Allows {requesterKind} to respond to a queued automation plan.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
     description:
       "Approve an exact pending mission closure with the selected new authority rows, or leave it unapproved.",
     args: z.tuple([
@@ -735,6 +675,25 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { decision: "dismiss" }] }],
   },
   resolveBootstrap: {
+    capability: "approvals.decide",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale:
+        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Approve initial workspace access",
+      action: "approve initial workspace access",
+      description: "Allows {requesterKind} to approve initial workspace access.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
     description:
       "Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval.",
     args: z.tuple([z.string(), z.enum(["once", "deny"])]),
@@ -742,60 +701,26 @@ export const shellApprovalMethods = defineServiceMethods({
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", "deny"] }],
   },
-  resolveUserland: {
-    description:
-      "Resolve a pending userland approval by selecting one of the presented option values (or 'dismiss'); rejects if the choice was not offered to the user.",
-    args: z.tuple([z.string(), z.union([z.string().min(1).max(40), z.literal("dismiss")])]),
-    returns: z.void(),
-    access: RESOLVE_ACCESS,
-    examples: [{ args: ["approval-123", "dismiss"] }],
-  },
-  resolveExternalAgent: {
-    description:
-      "Record the user's allow/deny verdict on a pending external-agent tool-use approval, resolving the relayed permission request.",
-    args: z.tuple([z.string(), z.enum(["allow", "deny"])]),
-    returns: z.void(),
-    access: RESOLVE_ACCESS,
-    examples: [{ args: ["approval-123", "allow"] }],
-  },
-  resolveExternalAgentByRequest: {
-    description:
-      "Record the user's allow/deny verdict on a pending external-agent approval matched by (channelId, requestId, resolveToken) rather than approvalId — the inline conversation card knows the requestId and opaque resolve token, not the internal approvalId. Records a real verdict (unlike the quiet settle-elsewhere path). Returns whether a matching pending approval was resolved.",
-    args: z.tuple([
-      z
-        .object({
-          channelId: z.string().min(1).max(200),
-          requestId: z
-            .string()
-            .min(1)
-            .max(200)
-            .regex(/^[A-Za-z0-9._:/-]+$/),
-          resolveToken: z
-            .string()
-            .min(16)
-            .max(200)
-            .regex(/^[A-Za-z0-9._:/-]+$/),
-        })
-        .strict(),
-      z.enum(["allow", "deny"]),
-    ]),
-    returns: z.object({ resolved: z.boolean() }),
-    // Method-level gate: the inline approve/deny card lives in the chat panel, so
-    // `panel` is admitted here (the service-level policy is shell/app/server for
-    // the trusted approval bar). Resolution is scoped to
-    // (channelId, requestId, resolveToken).
-    authority: { principals: ["code", "user", "host"] },
-    access: RESOLVE_ACCESS,
-    examples: [
-      {
-        args: [
-          { channelId: "channel-1", requestId: "req-1", resolveToken: "token-1234567890" },
-          "allow",
-        ],
-      },
-    ],
-  },
   submitClientConfig: {
+    capability: "protected-input.submit",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.control",
+      rationale:
+        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Submit account-provider settings",
+      action: "submit account-provider settings",
+      description: "Allows {requesterKind} to submit account-provider settings.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "act",
+      },
+    },
     description:
       "Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request.",
     args: z.tuple([z.string(), shellApprovalValuesSchema]),
@@ -804,6 +729,25 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { clientId: "abc", clientSecret: "shh" }] }],
   },
   submitCredentialInput: {
+    capability: "protected-input.submit",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.control",
+      rationale:
+        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Submit account details",
+      action: "submit account details",
+      description: "Allows {requesterKind} to submit account details.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "act",
+      },
+    },
     description:
       "Submit the user-entered credential/secret field values for a pending approval, fulfilling its credential-input request.",
     args: z.tuple([z.string(), shellApprovalValuesSchema]),
@@ -812,6 +756,25 @@ export const shellApprovalMethods = defineServiceMethods({
     examples: [{ args: ["approval-123", { token: "secret-value" }] }],
   },
   submitSecretInput: {
+    capability: "protected-input.submit",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.control",
+      rationale:
+        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Submit a protected value",
+      action: "submit a protected value",
+      description: "Allows {requesterKind} to submit a protected value.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "act",
+      },
+    },
     description:
       "Submit the user-entered secret field values for a pending secret-input approval, fulfilling its feedback-form request.",
     args: z.tuple([z.string(), shellApprovalValuesSchema]),
@@ -819,20 +782,26 @@ export const shellApprovalMethods = defineServiceMethods({
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { value: "secret-value" }] }],
   },
-  getUserlandSealedDetail: {
-    description:
-      "Fetch one bounded human-review detail for a pending userland approval. The digest must name a review-disclosed detail on that approval; sealed-only invocation payloads are never exposed, and content disappears when the request settles.",
-    args: z.tuple([z.string(), z.string().regex(/^[0-9a-f]{64}$/)]),
-    returns: z.string().nullable(),
-    access: LIST_PENDING_ACCESS,
-    examples: [
-      {
-        args: ["approval-123", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
-        returns: "",
-      },
-    ],
-  },
   listPending: {
+    capability: "approvals.read",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale:
+        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "View requests awaiting your decision",
+      action: "view requests awaiting your decision",
+      description: "Allows {requesterKind} to view requests awaiting your decision.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
     description:
       "List the approvals currently awaiting a decision, used to rehydrate the consent approval bar on mount.",
     args: z.tuple([]),

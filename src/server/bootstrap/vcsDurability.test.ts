@@ -2,6 +2,7 @@ import type { ManagedService } from "@vibestudio/shared/managedService";
 import { describe, expect, it, vi } from "vitest";
 import type { DODispatch } from "../doDispatch.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import type { WorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import type { WorkerdManager } from "../workerdManager.js";
 import { wireVcsDurability, type VcsDurabilityBootstrapDeps } from "./vcsDurability.js";
 
@@ -19,7 +20,13 @@ function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
       protectedBuildKeys: vi.fn(() => new Set()),
       completeEpoch: vi.fn(),
     } as never,
-    registerControlPlanePrincipal: vi.fn(),
+    workspaceSourceProvider: {
+      source: "workers/workspace-source",
+      className: "GadWorkspaceDO",
+      objectKey: "workspace",
+    },
+    bootstrapSourceState: vi.fn(async () => `state:${"d".repeat(64)}`),
+    registerBootstrapEntity: vi.fn(),
     activateSemanticWorkspace: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -44,33 +51,30 @@ describe("wireVcsDurability", () => {
     ]);
   });
 
-  it("attaches the sealed authority and registers its control-plane principal", async () => {
+  it("attaches the manifest source provider and registers its bootstrap entity", async () => {
     const dispatch = {
       dispatch: vi.fn(async () => "direct-result"),
     } as unknown as DODispatch;
     const manager = {
       ensureDurableObjectEntity: vi.fn(async () => ({
-        targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+        targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
         effectiveVersion: "a".repeat(64),
         buildKey: "c".repeat(64),
         executionDigest: "b".repeat(64),
-        authorityRequests: [],
+        authority: { provides: [], requests: [] },
       })),
     } as unknown as WorkerdManager;
-    let gadClient:
-      | {
-          call<T>(method: string, input: unknown): Promise<T>;
-        }
-      | undefined;
+    let gadClient: WorkspaceSemanticPort | undefined;
     const workspaceVcs = {
       attachGad: vi.fn(async (client) => {
         gadClient = client;
       }),
+      attachWorkspaceSourceProvider: vi.fn(),
     } as unknown as WorkspaceVcs;
-    const registerControlPlanePrincipal = vi.fn();
+    const registerBootstrapEntity = vi.fn();
     const { services } = captureServices({
       workspaceVcs,
-      registerControlPlanePrincipal,
+      registerBootstrapEntity,
     });
     const attach = services.find((service) => service.name === "vcsAttach");
     const resolve = <D>(name: string): D | undefined =>
@@ -81,28 +85,30 @@ describe("wireVcsDurability", () => {
     await expect(attach?.start?.(resolve)).resolves.toBe(workspaceVcs);
 
     const gadRef = {
-      source: "vibestudio/internal",
+      source: "workers/workspace-source",
       className: "GadWorkspaceDO",
-      objectKey: "workspace-semantic-control-plane",
+      objectKey: "workspace",
     };
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledWith({
       source: gadRef.source,
+      ref: `state:${"d".repeat(64)}`,
       className: gadRef.className,
       key: gadRef.objectKey,
-      contextId: "control-plane:workspace-semantic-control-plane",
+      contextId: "workspace-source:workspace",
     });
-    expect(registerControlPlanePrincipal).toHaveBeenCalledWith({
+    expect(registerBootstrapEntity).toHaveBeenCalledWith({
       ...gadRef,
-      targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+      targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
       effectiveVersion: "a".repeat(64),
       buildKey: "c".repeat(64),
       executionDigest: "b".repeat(64),
-      authorityRequests: [],
+      authority: { provides: [], requests: [] },
     });
     expect(workspaceVcs.attachGad).toHaveBeenCalledOnce();
+    expect(workspaceVcs.attachWorkspaceSourceProvider).toHaveBeenCalledOnce();
 
-    await expect(gadClient?.call("read", { key: "a" })).resolves.toBe("direct-result");
-    expect(dispatch.dispatch).toHaveBeenCalledWith(gadRef, "read", { key: "a" });
+    await expect(gadClient?.listContexts({ prefix: "a" })).resolves.toBe("direct-result");
+    expect(dispatch.dispatch).toHaveBeenCalledWith(gadRef, "vcsListContexts", { prefix: "a" });
   });
 
   it("does not release semanticWorkspace until initialization completes", async () => {

@@ -14,6 +14,11 @@ const TEST_WORKSPACE_SERVICE_PRESENTATION = {
   action: "use the test service",
   presentation: { domain: "automation" as const, verb: "act" as const },
 };
+const TEST_OPEN_TIER = {
+  tier: "open" as const,
+  session: "family" as const,
+  rationale: "Explicit docs fixture",
+};
 
 const blobstore: ServiceDefinition = {
   name: "blobstore",
@@ -24,16 +29,19 @@ const blobstore: ServiceDefinition = {
       description: "Store a UTF-8 string and return its digest",
       args: z.tuple([z.string()]),
       returns: z.object({ digest: z.string() }),
+      tier: TEST_OPEN_TIER,
     },
     "admin.wipe": {
       description: "Delete everything",
       args: z.tuple([]),
       authority: { principals: ["host"] },
+      tier: TEST_OPEN_TIER,
     },
     internalTransport: {
       description: "Internal transport that has a higher-level runtime API",
       args: z.tuple([]),
       agentFacing: false,
+      tier: TEST_OPEN_TIER,
     },
   },
   handler: async () => undefined,
@@ -58,10 +66,6 @@ const surface = (target: "panel" | "workerRuntime", name: string): RuntimeSurfac
 const svc = createDocsService({
   dispatcher,
   runtimeSurfaces: { panel: emptySurface("panel"), workerRuntime: emptySurface("workerRuntime") },
-  tierLookup: (method) =>
-    method.startsWith("blobstore.")
-      ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
-      : null,
 });
 
 const ctx = (kind: CallerKind): ServiceContext =>
@@ -142,10 +146,6 @@ describe("docs service (caller-aware)", () => {
         panel: surface("panel", "panelOnly"),
         workerRuntime: surface("workerRuntime", "workerOnly"),
       },
-      tierLookup: (method) =>
-        method.startsWith("blobstore.")
-          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
-          : null,
     });
 
     const panelHits = (await runtimeSvc.handler(ctx("panel"), "search", [
@@ -179,10 +179,6 @@ describe("docs service (caller-aware)", () => {
         workspaceLoads += 1;
         throw new Error("workspace provider build must not run for stable docs");
       },
-      tierLookup: (method) =>
-        method.startsWith("blobstore.")
-          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
-          : null,
     });
 
     expect(
@@ -212,10 +208,6 @@ describe("docs service (caller-aware)", () => {
       },
       workspaceServicesForCaller: (callerCtx) =>
         servicesByCaller.get(callerCtx.caller.runtime.id) ?? [],
-      tierLookup: (method) =>
-        method.startsWith("blobstore.")
-          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
-          : null,
     });
     const author = ctx("worker");
     author.caller.runtime.id = "worker:author";
@@ -266,10 +258,6 @@ describe("docs service (caller-aware)", () => {
         throw new Error("notes provider has an invalid RPC declaration");
       },
       reportWorkspaceDocsError: (error) => reported.push(error),
-      tierLookup: (method) =>
-        method.startsWith("blobstore.")
-          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
-          : null,
     });
 
     const hits = (await repairing.handler(ctx("worker"), "search", [
@@ -302,10 +290,6 @@ describe("docs service (caller-aware)", () => {
           methods: [],
         },
       ],
-      tierLookup: (method) =>
-        method.startsWith("blobstore.")
-          ? { tier: "open", session: "family", rationale: "Explicit docs fixture" }
-          : null,
     });
 
     const entry = await dynamic.handler(ctx("worker"), "describe", ["workspace:notes"]);

@@ -1,0 +1,30 @@
+{
+  "name": "@panticonic/builtin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    "./browser-data": "./src/browser-data/index.ts",
+    "./workspace-state": "./src/workspace-state/index.ts",
+    "./workspace-state/test-fixture": "./src/workspace-state/testFixture.ts",
+    "./eval-engine": "./src/eval-engine/index.ts",
+    "./webhook-engine": "./src/webhook-engine/index.ts",
+    "./missions": "./src/missions/index.ts",
+    "./phone-provisioning": "./src/phone-provisioning/index.ts",
+    "./development": "./src/development/index.ts",
+    "./development/recipes": "./src/development/recipes.ts"
+  },
+  "dependencies": {
+    "@vibestudio/content-addressing": "workspace:*",
+    "@vibestudio/durable": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@vibestudio/trajectory-identity": "workspace:*",
+    "@vibestudio/workspace-contracts": "workspace:*",
+    "sql.js": "^1.14.0"
+  }
+}

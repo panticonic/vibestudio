@@ -7,23 +7,15 @@ import type {
   AuthorityGrant,
   AuthorityGrantSubject,
   AuthorityLock,
-  Principal,
   ResourceScope,
 } from "@vibestudio/rpc";
 import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
 import { scopeCovers } from "@vibestudio/shared/authorization";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { capabilityDomain } from "@vibestudio/shared/authority/capabilityDomains";
+import { capabilityDomain } from "@vibestudio/shared/authority/authorityDomains";
 import type { ApprovalResourceScope } from "@vibestudio/shared/approvals";
-import type {
-  ApprovalPrincipal,
-  UserlandApprovalGrant,
-  UserlandApprovalGrantScope,
-  UserlandApprovalIssuer,
-  UserlandApprovalSubject,
-} from "@vibestudio/shared/approvals";
 import { stateLayout } from "../stateLayout.js";
-import { AUTHORITY_GRANTS_MIGRATION_PLAN } from "./authorityGrantSchema.js";
+import { AUTHORITY_GRANTS_SCHEMA } from "./authorityGrantSchema.js";
 
 export interface IssueAuthorityGrantInput {
   id?: string;
@@ -41,13 +33,14 @@ export interface IssueAuthorityGrantInput {
   lastUsedAt?: number;
   decidedBy?: string;
   decisionSurface?: string;
+  capabilityDefinitionDigest?: string;
 }
 
 export interface PreauthorizationEnvelopeInput {
   envelopeId?: string;
   sessionId: string;
   taskRef: string;
-  missionSubject?: `mission:${string}`;
+  reviewedClosureSubject?: AuthorityGrantSubject;
   createdBy: `user:${string}`;
   createdAt?: number;
   rules: readonly {
@@ -72,7 +65,7 @@ export class CapabilityGrantStore {
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
     try {
-      openCanonicalSqliteDatabase(this.db, AUTHORITY_GRANTS_MIGRATION_PLAN, {
+      openCanonicalSqliteDatabase(this.db, AUTHORITY_GRANTS_SCHEMA, {
         description: `authority grant store in ${this.databasePath}`,
       });
       this.db.exec("PRAGMA journal_mode = WAL");
@@ -97,23 +90,26 @@ export class CapabilityGrantStore {
     this.db
       .prepare(
         `INSERT INTO authority_grants (
-          id, effect, capability, resource_key, resource_scope, subject,
-          session_id, invocation_digest, mission_subject, envelope_id,
+          id, effect, capability, capability_definition_digest,
+          resource_key, resource_scope, subject,
+          session_id, invocation_digest, provider_execution_digest, reviewed_closure_subject, envelope_id,
           agent_binding_id, lineage_at_consent, issued_by, provenance, created_at, expires_at,
           revoked_at, consumed_at, scope, suspended_at, last_used_at,
           decided_by, decision_surface, task_ref
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
         input.effect,
         input.capability,
+        input.capabilityDefinitionDigest ?? null,
         resourceKeyOf(input.resource),
         input.resource.kind,
         input.subject,
         constraints.sessionId ?? null,
         constraints.invocationDigest ?? null,
-        constraints.missionSubject ?? null,
+        constraints.providerExecutionDigest ?? null,
+        constraints.reviewedClosureSubject ?? null,
         constraints.envelopeId ?? null,
         constraints.agentBindingId ?? null,
         canonicalJson([...(constraints.lineageAtConsent ?? [])].sort()),
@@ -144,6 +140,9 @@ export class CapabilityGrantStore {
       ...(input.lastUsedAt === undefined ? {} : { lastUsedAt: input.lastUsedAt }),
       ...(input.decidedBy === undefined ? {} : { decidedBy: input.decidedBy }),
       ...(input.decisionSurface === undefined ? {} : { decisionSurface: input.decisionSurface }),
+      ...(input.capabilityDefinitionDigest === undefined
+        ? {}
+        : { capabilityDefinitionDigest: input.capabilityDefinitionDigest }),
     };
   }
 
@@ -566,14 +565,14 @@ export class CapabilityGrantStore {
       this.db
         .prepare(
           `INSERT INTO preauth_envelopes
-           (envelope_id, session_id, task_ref, mission_subject, state, created_by, created_at, closed_at)
+           (envelope_id, session_id, task_ref, reviewed_closure_subject, state, created_by, created_at, closed_at)
            VALUES (?, ?, ?, ?, 'active', ?, ?, NULL)`
         )
         .run(
           envelopeId,
           input.sessionId,
           input.taskRef,
-          input.missionSubject ?? null,
+          input.reviewedClosureSubject ?? null,
           input.createdBy,
           createdAt
         );
@@ -599,7 +598,7 @@ export class CapabilityGrantStore {
     envelopeId: string;
     sessionId: string;
     taskRef: string;
-    missionSubject?: `mission:${string}`;
+    reviewedClosureSubject?: AuthorityGrantSubject;
     capability: string;
     resourceKey: string;
   }): boolean {
@@ -608,14 +607,14 @@ export class CapabilityGrantStore {
         `SELECT r.* FROM envelope_rules r
          JOIN preauth_envelopes e ON e.envelope_id = r.envelope_id
          WHERE e.envelope_id = ? AND e.state = 'active' AND e.session_id = ? AND e.task_ref = ?
-           AND ((e.mission_subject IS NULL AND ? IS NULL) OR e.mission_subject = ?)`
+           AND ((e.reviewed_closure_subject IS NULL AND ? IS NULL) OR e.reviewed_closure_subject = ?)`
       )
       .all(
         input.envelopeId,
         input.sessionId,
         input.taskRef,
-        input.missionSubject ?? null,
-        input.missionSubject ?? null
+        input.reviewedClosureSubject ?? null,
+        input.reviewedClosureSubject ?? null
       ) as EnvelopeRuleRow[];
     return rows.some(
       (row) =>
@@ -649,158 +648,6 @@ export class CapabilityGrantStore {
     return changed;
   }
 
-  lookupUserland(
-    principal: ApprovalPrincipal,
-    subjectId: string,
-    issuer?: UserlandApprovalIssuer,
-    reviewDigest?: string
-  ): UserlandApprovalGrant | null {
-    return (
-      this.userlandRows(principal, subjectId, issuer, reviewDigest, true).find(
-        (entry) => entry.grant.scope === "session"
-      )?.grant ??
-      this.userlandRows(principal, subjectId, issuer, reviewDigest, true).find(
-        (entry) => entry.grant.scope === "caller"
-      )?.grant ??
-      this.userlandRows(principal, subjectId, issuer, reviewDigest, true).find(
-        (entry) => entry.grant.scope === "version"
-      )?.grant ??
-      null
-    );
-  }
-
-  async recordUserland(
-    principal: ApprovalPrincipal,
-    subject: UserlandApprovalSubject,
-    choice: string,
-    now = Date.now(),
-    issuer?: UserlandApprovalIssuer,
-    scope: UserlandApprovalGrantScope = "caller",
-    decision?: {
-      provenance: IssueAuthorityGrantInput["provenance"];
-      decidedBy: string;
-    },
-    reviewDigest?: string
-  ): Promise<void> {
-    const effectiveIssuer = issuer ?? {
-      kind: principal.callerKind,
-      id: scope === "version" ? principal.repoPath : principal.callerId,
-    };
-    const subjectPrincipal = userlandSubject(principal, scope);
-    this.transaction(() => {
-      this.revokeUserlandRows(principal, subject.id, effectiveIssuer, scope, now, reviewDigest);
-      this.issue({
-        effect: choice === "deny" ? "deny" : "allow",
-        capability: userlandCapability(effectiveIssuer, choice),
-        resource: { kind: "exact", key: userlandResourceKey(subject.id, reviewDigest) },
-        subject: subjectPrincipal,
-        constraints:
-          scope === "session"
-            ? { sessionId: principal.callerId, lineageAtConsent: [] }
-            : { lineageAtConsent: [] },
-        issuedBy: userlandIssuedBy(principal),
-        provenance: decision?.provenance ?? "acquisition",
-        createdAt: now,
-        ...(decision?.decidedBy ? { decidedBy: decision.decidedBy } : {}),
-      });
-    });
-  }
-
-  async revokeUserland(
-    principal: ApprovalPrincipal,
-    subjectId: string,
-    issuer?: UserlandApprovalIssuer,
-    now = Date.now(),
-    reviewDigest?: string,
-    exactReview = false
-  ): Promise<boolean> {
-    const rows = this.userlandRows(principal, subjectId, issuer, reviewDigest, exactReview);
-    let changed = false;
-    this.transaction(() => {
-      for (const row of rows) changed = this.revoke(row.id, now) || changed;
-    });
-    return changed;
-  }
-
-  listUserland(
-    principal: ApprovalPrincipal,
-    issuer?: UserlandApprovalIssuer
-  ): UserlandApprovalGrant[] {
-    return this.userlandRows(principal, undefined, issuer).map((entry) => entry.grant);
-  }
-
-  listPersistentUserland(): Array<{ id: string; grant: UserlandApprovalGrant }> {
-    return this.allUserlandRows()
-      .filter((entry) => entry.grant.scope !== "session")
-      .map(({ id, grant }) => ({ id, grant }));
-  }
-
-  revokePersistentUserland(id: string, now = Date.now()): boolean {
-    const row = this.db
-      .prepare(
-        `SELECT id FROM authority_grants
-         WHERE id = ? AND capability LIKE 'userland.choice/%' AND session_id IS NULL`
-      )
-      .get(id);
-    return row ? this.revoke(id, now) : false;
-  }
-
-  private userlandRows(
-    principal: ApprovalPrincipal,
-    subjectId?: string,
-    issuer?: UserlandApprovalIssuer,
-    reviewDigest?: string,
-    exactReview = false
-  ): Array<{ id: string; grant: UserlandApprovalGrant }> {
-    const candidates = this.allUserlandRows().filter(({ grant }) => {
-      if (subjectId !== undefined && grant.subject.id !== subjectId) return false;
-      if (exactReview && grant.reviewDigest !== reviewDigest) return false;
-      if (!exactReview && reviewDigest !== undefined && grant.reviewDigest !== reviewDigest) {
-        return false;
-      }
-      if (!userlandGrantApplies(grant, principal)) return false;
-      const effectiveIssuer = userlandEffectiveIssuer(grant);
-      const expectedIssuer =
-        issuer ??
-        (grant.scope === "version"
-          ? { kind: principal.callerKind, id: principal.repoPath }
-          : { kind: principal.callerKind, id: principal.callerId });
-      return (
-        effectiveIssuer.kind === expectedIssuer.kind && effectiveIssuer.id === expectedIssuer.id
-      );
-    });
-    return candidates.sort((left, right) => right.grant.grantedAt - left.grant.grantedAt);
-  }
-
-  private allUserlandRows(): Array<{ id: string; grant: UserlandApprovalGrant }> {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM authority_grants
-         WHERE capability LIKE 'userland.choice/%'
-           AND revoked_at IS NULL
-           AND (expires_at IS NULL OR expires_at > ?)
-         ORDER BY created_at DESC, id DESC`
-      )
-      .all(Date.now()) as GrantRow[];
-    return rows.map((row) => ({
-      id: String(row["id"]),
-      grant: userlandGrantFromRow(row),
-    }));
-  }
-
-  private revokeUserlandRows(
-    principal: ApprovalPrincipal,
-    subjectId: string,
-    issuer: UserlandApprovalIssuer,
-    scope: UserlandApprovalGrantScope,
-    now: number,
-    reviewDigest?: string
-  ): void {
-    for (const row of this.userlandRows(principal, subjectId, issuer, reviewDigest, true)) {
-      if (row.grant.scope === scope) this.revoke(row.id, now);
-    }
-  }
-
   private transaction(work: () => void): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -816,181 +663,6 @@ export class CapabilityGrantStore {
 type GrantRow = Record<string, SQLOutputValue>;
 type EnvelopeRuleRow = Record<string, SQLOutputValue>;
 
-const USERLAND_CAPABILITY_PREFIX = "userland.choice/";
-const USERLAND_REVIEW_SEPARATOR = "#review:";
-
-function userlandResourceKey(subjectId: string, reviewDigest?: string): string {
-  return reviewDigest ? `${subjectId}${USERLAND_REVIEW_SEPARATOR}${reviewDigest}` : subjectId;
-}
-
-function parseUserlandResourceKey(value: string): {
-  subjectId: string;
-  reviewDigest?: string;
-} {
-  const separator = value.lastIndexOf(USERLAND_REVIEW_SEPARATOR);
-  if (separator < 0) return { subjectId: value };
-  const subjectId = value.slice(0, separator);
-  const reviewDigest = value.slice(separator + USERLAND_REVIEW_SEPARATOR.length);
-  if (!subjectId || !/^[0-9a-f]{64}$/u.test(reviewDigest)) {
-    throw new Error("Invalid userland sealed-review resource key");
-  }
-  return { subjectId, reviewDigest };
-}
-
-function encoded(value: string): string {
-  return Buffer.from(value, "utf8").toString("base64url");
-}
-
-function decoded(value: string, label: string): string {
-  try {
-    const result = Buffer.from(value, "base64url").toString("utf8");
-    if (encoded(result) !== value) throw new Error("non-canonical encoding");
-    return result;
-  } catch (error) {
-    throw new Error(`Invalid ${label} encoding`, { cause: error });
-  }
-}
-
-function userlandCapability(issuer: UserlandApprovalIssuer, choice: string): string {
-  return `${USERLAND_CAPABILITY_PREFIX}${issuer.kind}/${encoded(issuer.id)}/${encoded(choice)}`;
-}
-
-function parseUserlandCapability(capability: string): {
-  issuer: UserlandApprovalIssuer;
-  choice: string;
-} {
-  const parts = capability.split("/");
-  const [prefix, kind, issuerId, choice] = parts;
-  if (
-    parts.length !== 4 ||
-    prefix !== "userland.choice" ||
-    !kind ||
-    !issuerId ||
-    !choice ||
-    !["panel", "app", "worker", "do", "extension"].includes(kind)
-  ) {
-    throw new Error(`Invalid userland approval capability ${capability}`);
-  }
-  return {
-    issuer: {
-      kind: kind as UserlandApprovalIssuer["kind"],
-      id: decoded(issuerId, "userland issuer"),
-    },
-    choice: decoded(choice, "userland choice"),
-  };
-}
-
-function userlandIssuedBy(principal: ApprovalPrincipal): string {
-  return [
-    "userland",
-    principal.callerKind,
-    encoded(principal.callerId),
-    encoded(principal.repoPath),
-    encoded(principal.effectiveVersion),
-  ].join(":");
-}
-
-function parseUserlandIssuedBy(value: string): ApprovalPrincipal {
-  const parts = value.split(":");
-  const [prefix, callerKind, callerId, repoPath, effectiveVersion] = parts;
-  if (
-    parts.length !== 5 ||
-    prefix !== "userland" ||
-    !callerKind ||
-    !callerId ||
-    !repoPath ||
-    !effectiveVersion ||
-    !["panel", "app", "worker", "do", "extension"].includes(callerKind)
-  ) {
-    throw new Error(`Invalid userland approval issuer principal ${value}`);
-  }
-  return {
-    callerKind: callerKind as ApprovalPrincipal["callerKind"],
-    callerId: decoded(callerId, "userland caller"),
-    repoPath: decoded(repoPath, "userland repository"),
-    effectiveVersion: decoded(effectiveVersion, "userland effective version"),
-  };
-}
-
-function userlandSubject(
-  principal: ApprovalPrincipal,
-  scope: UserlandApprovalGrantScope
-): Principal {
-  if (scope === "version") {
-    const caller = userlandVersionGrantRequiresCaller(principal)
-      ? encoded(principal.callerId)
-      : "-";
-    return `code:userland/${encoded(principal.repoPath)}/${caller}@${encoded(principal.effectiveVersion)}`;
-  }
-  return `session:userland/${encoded(principal.callerId)}`;
-}
-
-function userlandGrantFromRow(row: GrantRow): UserlandApprovalGrant {
-  const { issuer, choice } = parseUserlandCapability(String(row["capability"]));
-  const principal = parseUserlandIssuedBy(String(row["issued_by"]));
-  const subject = String(row["subject"]);
-  const scope: UserlandApprovalGrantScope = subject.startsWith("code:userland/")
-    ? "version"
-    : row["session_id"] === null
-      ? "caller"
-      : "session";
-  if (scope === "version") {
-    const match = /^code:userland\/([^/]+)\/([^@]+)@(.+)$/.exec(subject);
-    if (!match) throw new Error(`Invalid version-scoped userland subject ${subject}`);
-    const [, repository, , effectiveVersion] = match;
-    if (!repository || !effectiveVersion) {
-      throw new Error(`Invalid version-scoped userland subject ${subject}`);
-    }
-    principal.repoPath = decoded(repository, "userland subject repository");
-    principal.effectiveVersion = decoded(effectiveVersion, "userland subject effective version");
-  } else if (!subject.startsWith("session:userland/")) {
-    throw new Error(`Invalid caller-scoped userland subject ${subject}`);
-  }
-  const resource = parseUserlandResourceKey(String(row["resource_key"]));
-  return {
-    principal: {
-      callerId: principal.callerId,
-      callerKind: principal.callerKind,
-      repoPath: principal.repoPath,
-      effectiveVersion: principal.effectiveVersion,
-    },
-    issuer,
-    subject: { id: resource.subjectId },
-    ...(resource.reviewDigest ? { reviewDigest: resource.reviewDigest } : {}),
-    choice,
-    grantedAt: Number(row["created_at"]),
-    ...(row["decided_by"] === null ? {} : { grantedBy: String(row["decided_by"]) }),
-    scope,
-  };
-}
-
-function userlandEffectiveIssuer(grant: UserlandApprovalGrant): UserlandApprovalIssuer {
-  if (grant.issuer) return grant.issuer;
-  if ((grant.scope ?? "caller") === "version" && grant.principal.repoPath) {
-    return { kind: grant.principal.callerKind, id: grant.principal.repoPath };
-  }
-  return { kind: grant.principal.callerKind, id: grant.principal.callerId };
-}
-
-function userlandGrantApplies(grant: UserlandApprovalGrant, principal: ApprovalPrincipal): boolean {
-  if ((grant.scope ?? "caller") !== "version") {
-    return grant.principal.callerId === principal.callerId;
-  }
-  return (
-    grant.principal.callerKind === principal.callerKind &&
-    (!userlandVersionGrantRequiresCaller(grant.principal) ||
-      grant.principal.callerId === principal.callerId) &&
-    grant.principal.repoPath === principal.repoPath &&
-    grant.principal.effectiveVersion === principal.effectiveVersion
-  );
-}
-
-function userlandVersionGrantRequiresCaller(
-  principal: Pick<UserlandApprovalGrant["principal"], "repoPath" | "effectiveVersion">
-): boolean {
-  return principal.effectiveVersion === "internal" || principal.repoPath === "vibestudio/internal";
-}
-
 function rowToGrant(row: GrantRow): AuthorityGrant {
   const subject = String(row["subject"]) as AuthorityGrantSubject;
   if (!/^(host|user|code|session|mission|agent):/.test(subject))
@@ -1004,9 +676,14 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
     ...(row["invocation_digest"] === null
       ? {}
       : { invocationDigest: String(row["invocation_digest"]) }),
-    ...(row["mission_subject"] === null
+    ...(row["provider_execution_digest"] === null
       ? {}
-      : { missionSubject: String(row["mission_subject"]) as `mission:${string}` }),
+      : { providerExecutionDigest: String(row["provider_execution_digest"]) }),
+    ...(row["reviewed_closure_subject"] === null
+      ? {}
+      : {
+          reviewedClosureSubject: String(row["reviewed_closure_subject"]) as AuthorityGrantSubject,
+        }),
     ...(row["agent_binding_id"] === null
       ? {}
       : { agentBindingId: String(row["agent_binding_id"]) }),
@@ -1033,6 +710,9 @@ function rowToGrant(row: GrantRow): AuthorityGrant {
     ...(row["decision_surface"] === null
       ? {}
       : { decisionSurface: String(row["decision_surface"]) }),
+    ...(row["capability_definition_digest"] === null
+      ? {}
+      : { capabilityDefinitionDigest: String(row["capability_definition_digest"]) }),
     scope: String(row["scope"]) as NonNullable<AuthorityGrant["scope"]>,
   };
 }

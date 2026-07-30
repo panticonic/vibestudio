@@ -17,7 +17,7 @@ import {
   type LineageEntry,
 } from "@vibestudio/shared/authority/contextIntegrity";
 import { stateLayout } from "../stateLayout.js";
-import { CONTEXT_INTEGRITY_MIGRATION_PLAN } from "./contextIntegritySchema.js";
+import { CONTEXT_INTEGRITY_SCHEMA } from "./contextIntegritySchema.js";
 
 export interface ContextIngestionInput {
   key: string;
@@ -67,7 +67,7 @@ export class ContextIntegrityStore {
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
     try {
-      openCanonicalSqliteDatabase(this.db, CONTEXT_INTEGRITY_MIGRATION_PLAN, {
+      openCanonicalSqliteDatabase(this.db, CONTEXT_INTEGRITY_SCHEMA, {
         description: `content trust store in ${databasePath}`,
       });
       this.db.exec("PRAGMA journal_mode = WAL");

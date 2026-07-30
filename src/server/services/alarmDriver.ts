@@ -6,7 +6,7 @@ import {
 } from "@vibestudio/shared/doDispatcher";
 import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
-import type { LifecycleKey } from "../internalDOs/workspaceDO.js";
+import type { LifecycleKey } from "@panticonic/builtin/workspace-state";
 
 const log = createDevLogger("AlarmDriver");
 

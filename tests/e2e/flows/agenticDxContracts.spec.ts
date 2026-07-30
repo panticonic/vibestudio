@@ -19,8 +19,11 @@ test.describe("agentic DX contracts", () => {
     const workspacePath = createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp.app);
-      await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
+      await approvePendingStartupUnits(testApp.app, 75_000);
+      await ensureHostedShellReady(testApp.app, {
+        panelSource: "panels/chat",
+        timeoutMs: 75_000,
+      });
       const panel = (await getPanelTree(testApp.app))[0];
       expect(panel).toBeTruthy();
 
@@ -48,16 +51,26 @@ test.describe("agentic DX contracts", () => {
         testApp.app,
         panel!.id,
         `(async () => {
-          const { fs, gad } = await globalThis.__vibestudioRequireAsync__("@vibestudio/runtime");
-          const entries = await fs.readdir("panels");
-          const diagnostic = await gad.diagnoseInvocation({
+          const bounded = (stage, operation) => Promise.race([
+            operation(),
+            new Promise((_, reject) => setTimeout(
+              () => reject(new Error("Timed out during " + stage)),
+              30_000,
+            )),
+          ]);
+          const { fs, gad } = await bounded(
+            "runtime module load",
+            () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
+          );
+          const entries = await bounded("fs.readdir", () => fs.readdir("panels"));
+          const diagnostic = await bounded("gad.diagnoseInvocation", () => gad.diagnoseInvocation({
             trajectoryId: "electron-diagnostic-missing",
             branchId: "main",
             invocationId: "invocation-missing",
             eventLimit: 3,
             commandLimit: 2,
             effectLimit: 2,
-          });
+          }));
           return { entries, diagnostic };
         })()`
       );
@@ -94,8 +107,11 @@ test.describe("agentic DX contracts", () => {
     const workspacePath = createManagedTestWorkspace();
     const testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
     try {
-      await approvePendingStartupUnits(testApp.app);
-      await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
+      await approvePendingStartupUnits(testApp.app, 75_000);
+      await ensureHostedShellReady(testApp.app, {
+        panelSource: "panels/chat",
+        timeoutMs: 75_000,
+      });
       const panel = (await getPanelTree(testApp.app))[0];
       expect(panel).toBeTruthy();
 
@@ -127,15 +143,39 @@ test.describe("agentic DX contracts", () => {
         testApp.app,
         panel!.id,
         `(async () => {
-          const { blobstore, openPanel } =
-            await globalThis.__vibestudioRequireAsync__("@vibestudio/runtime");
-          const handle = await openPanel("panels/hello-vanilla");
+          const bounded = (stage, operation) => Promise.race([
+            operation(),
+            new Promise((_, reject) => setTimeout(
+              () => reject(new Error("Timed out during " + stage)),
+              30_000,
+            )),
+          ]);
+          const { blobstore, openPanel } = await bounded(
+            "runtime module load",
+            () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
+          );
+          const handle = await bounded(
+            "hello-svelte open",
+            () => openPanel("panels/hello-svelte"),
+          );
           try {
-            const observation = await handle.observe();
-            const screenshot = await handle.cdp.screenshot({ format: "png" });
-            const stored = await blobstore.putBase64(screenshot.data);
-            const restored = await blobstore.getBase64(stored.digest);
-            const history = await handle.cdp.consoleHistory({ limit: 50, errorLimit: 20 });
+            const observation = await bounded("panel observation", () => handle.observe());
+            const screenshot = await bounded(
+              "panel screenshot",
+              () => handle.cdp.screenshot({ format: "png" }),
+            );
+            const stored = await bounded(
+              "screenshot blob write",
+              () => blobstore.putBase64(screenshot.data),
+            );
+            const restored = await bounded(
+              "screenshot blob read",
+              () => blobstore.getBase64(stored.digest),
+            );
+            const history = await bounded(
+              "console history",
+              () => handle.cdp.consoleHistory({ limit: 50, errorLimit: 20 }),
+            );
             return {
               screenshot: {
                 mimeType: screenshot.mimeType,
@@ -162,7 +202,7 @@ test.describe("agentic DX contracts", () => {
               },
             };
           } finally {
-            await handle.close();
+            await bounded("hello-svelte close", () => handle.close());
           }
         })()`
       );
@@ -187,7 +227,7 @@ test.describe("agentic DX contracts", () => {
       expect(result.console.errorCount).toBe(0);
       expect(result.console.dropped).toBeTruthy();
       expect(result.observation).toMatchObject({
-        source: "panels/hello-vanilla",
+        source: "panels/hello-svelte",
         phase: "ready",
         runtimeEntityId: expect.any(String),
         buildKey: expect.any(String),

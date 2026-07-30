@@ -81,13 +81,26 @@ export function wireCredentialService(
           "slot.resolveByEntity",
           [entityId]
         )) as string | null,
-      listPanels: async () =>
-        (await deps.dispatcher.dispatch(
-          { caller: createVerifiedCaller("server", "server") },
-          "panelTree",
-          "list",
-          [null]
-        )) as CredentialRuntimePanelInfo[],
+      listPanels: async () => {
+        const panels = deps.entityCache.listActive().filter((entity) => entity.kind === "panel");
+        return Promise.all(
+          panels.map(async (entity): Promise<CredentialRuntimePanelInfo> => {
+            const panelId = (await deps.dispatcher.dispatch(
+              { caller: createVerifiedCaller("server", "server") },
+              "workspace-state",
+              "slot.resolveByEntity",
+              [entity.id]
+            )) as string | null;
+            return {
+              panelId: panelId ?? entity.id,
+              source: entity.source.repoPath,
+              contextId: entity.contextId,
+              runtimeEntityId: entity.id,
+              effectiveVersion: entity.source.effectiveVersion,
+            };
+          })
+        );
+      },
     },
     sessionCredentialCapture: {
       captureCookies: async (params) => {

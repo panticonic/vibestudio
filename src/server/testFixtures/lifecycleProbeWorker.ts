@@ -47,7 +47,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -69,7 +69,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -83,7 +83,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
    *  is not a regular Worker with the ~30s wall limit). */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -94,7 +94,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -127,7 +127,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
    */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -164,7 +164,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })

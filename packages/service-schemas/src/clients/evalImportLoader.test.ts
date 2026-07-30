@@ -6,7 +6,10 @@ describe("createEvalImportLoader", () => {
     const call = vi.fn(async () => ({ bundle: "npm-bundle", format: "cjs" as const }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
-    await expect(loadImport("left-pad", "npm:1.3.0", ["react"])).resolves.toEqual({ bundle: "npm-bundle", format: "cjs" });
+    await expect(loadImport("left-pad", "npm:1.3.0", ["react"])).resolves.toEqual({
+      bundle: "npm-bundle",
+      format: "cjs",
+    });
 
     expect(call).toHaveBeenCalledWith("build", "getBuildNpm", ["left-pad", "1.3.0", ["react"]]);
   });
@@ -15,8 +18,14 @@ describe("createEvalImportLoader", () => {
     const call = vi.fn(async () => ({ bundle: "npm-bundle", format: "cjs" as const }));
     const loadImport = createEvalImportLoader(createBuildServiceClient(call), "worker");
 
-    await expect(loadImport("left-pad", "npm:left-pad@1.3.0", [])).resolves.toEqual({ bundle: "npm-bundle", format: "cjs" });
-    await expect(loadImport("@scope/pkg", "npm:@scope/pkg@2.0.0", [])).resolves.toEqual({ bundle: "npm-bundle", format: "cjs" });
+    await expect(loadImport("left-pad", "npm:left-pad@1.3.0", [])).resolves.toEqual({
+      bundle: "npm-bundle",
+      format: "cjs",
+    });
+    await expect(loadImport("@scope/pkg", "npm:@scope/pkg@2.0.0", [])).resolves.toEqual({
+      bundle: "npm-bundle",
+      format: "cjs",
+    });
 
     expect(call).toHaveBeenNthCalledWith(1, "build", "getBuildNpm", ["left-pad", "1.3.0", []]);
     expect(call).toHaveBeenNthCalledWith(2, "build", "getBuildNpm", ["@scope/pkg", "2.0.0", []]);
@@ -58,7 +67,10 @@ describe("createEvalImportLoader", () => {
     });
 
     for (const ref of [undefined, "latest", "workspace", "workspace:*", "workspace:^"]) {
-      await expect(loadImport("@workspace/pkg", ref, [])).resolves.toEqual({ bundle: "workspace-bundle", format: "cjs" });
+      await expect(loadImport("@workspace/pkg", ref, [])).resolves.toEqual({
+        bundle: "workspace-bundle",
+        format: "cjs",
+      });
     }
 
     for (let index = 1; index <= 5; index += 1) {

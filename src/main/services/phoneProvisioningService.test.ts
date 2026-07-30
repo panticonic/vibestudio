@@ -73,10 +73,7 @@ describe("desktop phone provisioning service", () => {
       runScript: async () => ({ stdout: "", stderr: "" }),
       hubControlClient: hubControlClient(),
     });
-    const dispatcher = new ServiceDispatcher({
-      tierLookup: () => null,
-      capabilityLookup: () => null,
-    });
+    const dispatcher = new ServiceDispatcher();
 
     expect(() => dispatcher.registerService(definition)).not.toThrow();
   });

@@ -46,14 +46,11 @@ describe("resolveWorkspaceService — factory vs singleton DO services", () => {
     });
   });
 
-  it("honours an explicit objectKey override even when a singleton row exists", () => {
+  it("rejects an objectKey override when a singleton row exists", () => {
     const decls = makeDecls({ withSingleton: true });
-    const resolved = resolveWorkspaceService(decls, "example.store.v1", "chat-1");
-    expect(resolved).toMatchObject({
-      kind: "durable-object",
-      objectKey: "chat-1",
-      targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
-    });
+    expect(() => resolveWorkspaceService(decls, "example.store.v1", "chat-1")).toThrow(
+      /singleton.*not permitted/i
+    );
   });
 
   it("returns the caller-supplied objectKey for a factory service (no singleton row)", () => {
@@ -79,46 +76,74 @@ describe("resolveWorkspaceService — factory vs singleton DO services", () => {
   });
 });
 
-describe("sealed semantic control-plane services", () => {
-  const empty: WorkspaceDeclarations = {
-    singletons: new SingletonRegistry([]),
-    services: [],
+describe("manifest-declared workspace source service", () => {
+  const declarations: WorkspaceDeclarations = {
+    singletons: new SingletonRegistry([
+      {
+        source: "workers/workspace-source",
+        className: "GadWorkspaceDO",
+        key: "workspace",
+      },
+    ]),
+    services: [
+      {
+        source: "workers/workspace-source",
+        name: "gad.workspace",
+        title: "Workspace history",
+        description: "Read or update your workspace's collaboration and version history.",
+        action: "read or update your workspace's collaboration history",
+        presentation: { domain: "files", verb: "manage" },
+        protocols: [
+          GAD_WORKSPACE_SERVICE_PROTOCOL,
+          "vibestudio.vcs.v1",
+          "vibestudio.workspace-source.v1",
+        ],
+        authority: { principals: ["host", "user", "code", "session", "mission"] },
+        durableObject: { className: "GadWorkspaceDO" },
+      },
+    ],
     routes: [],
   };
 
-  it("does not expose a duplicate VCS service through workspace declarations", () => {
-    expect(() => resolveWorkspaceService(empty, "vibestudio.vcs.v1")).toThrow(
-      /No workspace service registered/
-    );
+  it("resolves VCS through the same manifest-declared provider", () => {
+    expect(resolveWorkspaceService(declarations, "vibestudio.vcs.v1")).toMatchObject({
+      name: "gad.workspace",
+      protocol: "vibestudio.vcs.v1",
+      objectKey: "workspace",
+    });
   });
 
-  it("resolves the GAD graph as the sealed workspace service authority", () => {
+  it("resolves GAD from the workspace manifest", () => {
     const expected = {
       kind: "durable-object",
-      origin: "product",
+      origin: "workspace",
       name: "gad.workspace",
       title: "Workspace history",
       description: "Read or update your workspace's collaboration and version history.",
       action: "read or update your workspace's collaboration history",
       presentation: { domain: "files", verb: "manage" },
-      protocols: [GAD_WORKSPACE_SERVICE_PROTOCOL],
-      source: "vibestudio/internal",
+      protocols: [
+        GAD_WORKSPACE_SERVICE_PROTOCOL,
+        "vibestudio.vcs.v1",
+        "vibestudio.workspace-source.v1",
+      ],
+      source: "workers/workspace-source",
       authority: { principals: ["host", "user", "code", "session", "mission"] },
       className: "GadWorkspaceDO",
-      objectKey: "workspace-semantic-control-plane",
-      targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+      objectKey: "workspace",
+      targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
     };
 
-    expect(resolveWorkspaceService(empty, GAD_WORKSPACE_SERVICE_PROTOCOL)).toEqual({
+    expect(resolveWorkspaceService(declarations, GAD_WORKSPACE_SERVICE_PROTOCOL)).toEqual({
       ...expected,
       protocol: GAD_WORKSPACE_SERVICE_PROTOCOL,
     });
-    expect(resolveWorkspaceService(empty, "gad.workspace")).toEqual(expected);
+    expect(resolveWorkspaceService(declarations, "gad.workspace")).toEqual(expected);
   });
 
   it("does not permit fan-out object keys for the control plane", () => {
-    expect(() => resolveWorkspaceService(empty, "vibestudio.gad.workspace.v1", "other")).toThrow(
-      /one sealed object key/i
-    );
+    expect(() =>
+      resolveWorkspaceService(declarations, "vibestudio.gad.workspace.v1", "other")
+    ).toThrow(/singleton.*not permitted/i);
   });
 });

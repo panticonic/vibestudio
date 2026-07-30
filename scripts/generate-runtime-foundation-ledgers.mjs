@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { format, resolveConfig } from "prettier";
 import YAML from "yaml";
-import { PRODUCT_WORKSPACE_SERVICES } from "../packages/shared/src/productWorkspaceServices.mjs";
 import { runtimeFoundationEvidence } from "./runtime-foundation-evidence.mjs";
 import {
   assertNoOrphanEvidence,
@@ -13,6 +12,13 @@ import {
   testEvidence,
   validateEvidenceRegistry,
 } from "./lib/runtime-foundation-evidence.mjs";
+import { buildHostResidencyCensus } from "./lib/host-residency-census.mjs";
+import {
+  PRODUCT_BUILTIN_CATALOG,
+  productBuiltinByIdentity,
+  productBuiltinMethodCapability,
+} from "../packages/shared/src/productBuiltinCatalog.node.generated.mjs";
+import { gadWireMethods } from "../packages/service-schemas/src/workspaceSource.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const prettierOptions = (await resolveConfig(path.join(root, "src", "server", "index.ts"))) ?? {};
@@ -61,6 +67,9 @@ for (const [service, entry] of Object.entries(mainServiceAuthority)) {
     methods: { ...existing.methods, ...entry.methods },
   };
 }
+const { decisions: hostResidencyCensus } = buildHostResidencyCensus({
+  matrices: [serverServiceAuthority, mainServiceAuthority],
+});
 
 const principalExpression = (principals, capability) => {
   const requirements = [];
@@ -102,6 +111,14 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
   for (const [method, methodCensus] of Object.entries(entry.methods).sort(([a], [b]) =>
     a.localeCompare(b)
   )) {
+    const qualifiedMethod = `${service}.${method}`;
+    const hostReview = methodCensus.tier;
+    if (!hostReview) {
+      throw new Error(`${qualifiedMethod} has no reviewed host residency decision`);
+    }
+    if (!hostReview.residency || !hostReview.family) {
+      throw new Error(`${qualifiedMethod} has incomplete reviewed host residency metadata`);
+    }
     const override = methodCensus.authority;
     const declaration = override?.inherits ? entry.service : override;
     const sensitivity = methodCensus.access?.sensitivity;
@@ -115,6 +132,11 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
       rpcPlane: "host-service",
       owner: service,
       method,
+      tier: hostReview.tier,
+      sessionAdmission: hostReview.session,
+      residency: hostReview.residency,
+      mechanismFamily: hostReview.family,
+      reviewRationale: hostReview.rationale,
       resourceDerivation: declaration.resource ?? { kind: "literal", key: capability },
       authorityPrincipals: principals,
       sensitivity: sensitivity ?? "unknown",
@@ -144,6 +166,11 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
         rpcPlane: "host-service",
         owner: service,
         method,
+        tier: additional.tier ?? hostReview.tier,
+        sessionAdmission: hostReview.session,
+        residency: hostReview.residency,
+        mechanismFamily: hostReview.family,
+        reviewRationale: hostReview.rationale,
         capability: additional.capability,
         resourceDerivation: additional.resource,
         authorityPrincipals: requirementPrincipals(additional.requirement),
@@ -184,6 +211,14 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
         rpcPlane: "host-service",
         owner: service,
         method,
+        tier:
+          typeof leaf.tier === "string"
+            ? leaf.tier
+            : (leaf.tier?.selectedFrom?.join("|") ?? hostReview.tier),
+        sessionAdmission: hostReview.session,
+        residency: hostReview.residency,
+        mechanismFamily: hostReview.family,
+        reviewRationale: hostReview.rationale,
         ...(selector.kind === "capability"
           ? { capability: selector.value }
           : { capabilitySelector: selector }),
@@ -214,22 +249,12 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
 }
 
 const directRoots = [
-  path.join(root, "src", "server", "internalDOs"),
-  path.join(root, "packages", "runtime"),
-  path.join(root, "packages", "semantic-control-plane"),
+  path.join(root, "packages", "builtin"),
   path.join(root, "workspace", "workers"),
   path.join(root, "workspace", "packages"),
 ];
-const internalDirectSources = new Map([
-  ["browserDataDO.ts", "product/browser-data"],
-  ["evalDO.ts", "product/eval"],
-  ["webhookStoreDO.ts", "product/webhook-store"],
-  ["workspaceDO.ts", "product/bootstrap"],
-]);
+const schemaRpcCatalog = new Map([["vibestudio.gad.workspace.v1", gadWireMethods]]);
 const directSource = (file) => {
-  if (file.startsWith(path.join(root, "src/server/internalDOs"))) {
-    return internalDirectSources.get(path.basename(file)) ?? "product/bootstrap";
-  }
   const sealedPackagesRoot = path.join(root, "packages");
   if (file.startsWith(sealedPackagesRoot)) {
     let directory = path.dirname(file);
@@ -253,26 +278,25 @@ const directSource = (file) => {
   throw new Error(`Direct RPC source ${path.relative(root, file)} has no owning package`);
 };
 const directCapability = (source, method, sensitivity, declaration = "") => {
-  const semantic = declaration.match(
-    /effect:\s*\{\s*kind:\s*["']semantic["']\s*,\s*capability:\s*["']([^"']+)["']/
+  const declaredCapability = declaration.match(
+    /effect:\s*\{\s*kind:\s*["'](?:userland-capability|host-capability)["']\s*,\s*capability:\s*["']([^"']+)["']/
   )?.[1];
-  if (semantic) return semantic;
-  if (/effect:\s*\{\s*kind:\s*["']workspace-service["']/.test(declaration)) {
-    return "workspace-service:<live-declaration>";
-  }
-  if (/effect:\s*\{\s*kind:\s*["']runtime-intrinsic["']/.test(declaration)) {
+  if (declaredCapability) return declaredCapability;
+  if (/effect:\s*\{\s*kind:\s*["']open["']/.test(declaration)) {
     return null;
   }
-  if (source === "product/browser-data") {
-    return sensitivity === "read"
-      ? "browser-data.read"
-      : sensitivity === "destructive"
-        ? "browser-data.delete"
-        : "browser-data.write";
+  return null;
+};
+const builtinClassForFile = (file) => {
+  if (!file.startsWith(path.join(root, "packages", "builtin"))) return null;
+  for (const className of ["WorkspaceDO", "BrowserDataDO", "EvalDO", "WebhookStoreDO"]) {
+    if (
+      path.basename(file) === `${className}.ts` &&
+      productBuiltinByIdentity("vibestudio/internal", className)
+    ) {
+      return className;
+    }
   }
-  if (source === "product/eval") return "runtime.code-execution.manage";
-  if (source === "product/webhook-store") return "webhooks.manage";
-  if (source === "product/bootstrap") return "workspace.runtime-state.manage";
   return null;
 };
 const walk = (directory) => {
@@ -333,7 +357,13 @@ for (const file of directRoots.flatMap(walk).sort()) {
       authorityPrincipals: principals,
       sensitivity: sensitivity ?? "unknown",
       tier,
-      capability: directCapability(sourceName, method, sensitivity, match[0]),
+      capability:
+        productBuiltinMethodCapability(
+          "vibestudio/internal",
+          builtinClassForFile(file),
+          method
+        ) ??
+        directCapability(sourceName, method, sensitivity, match[0]),
       authenticatedFacts: [
         "session",
         "acting-user-relay",
@@ -388,7 +418,13 @@ for (const file of directRoots.flatMap(walk).sort()) {
       authorityPrincipals: principals,
       sensitivity,
       tier,
-      capability: directCapability(sourceName, method, sensitivity, declarationSource),
+      capability:
+        productBuiltinMethodCapability(
+          "vibestudio/internal",
+          builtinClassForFile(file),
+          method
+        ) ??
+        directCapability(sourceName, method, sensitivity, declarationSource),
       authenticatedFacts: [
         "session",
         "acting-user-relay",
@@ -445,7 +481,13 @@ for (const file of directRoots.flatMap(walk).sort()) {
       authorityPrincipals: principals,
       sensitivity,
       tier,
-      capability: directCapability(sourceName, method, sensitivity),
+      capability:
+        productBuiltinMethodCapability(
+          "vibestudio/internal",
+          builtinClassForFile(file),
+          method
+        ) ??
+        directCapability(sourceName, method, sensitivity),
       authenticatedFacts: [
         "session",
         "acting-user-relay",
@@ -466,6 +508,161 @@ for (const file of directRoots.flatMap(walk).sort()) {
       ],
       r3aRequirement: `factory:${factory}`,
       r3b: { review: "instance-resolved-parity", change: null },
+      evidence: generatedCensusEvidence("direct-authority"),
+    });
+  }
+}
+
+const workspacePackageRoots = [
+  path.join(root, "workspace", "workers"),
+  path.join(root, "workspace", "packages"),
+];
+const walkPackageManifests = (directory) => {
+  if (!fs.existsSync(directory)) return [];
+  const manifests = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) manifests.push(...walkPackageManifests(absolute));
+    else if (entry.isFile() && entry.name === "package.json") manifests.push(absolute);
+  }
+  return manifests;
+};
+const workspacePackageManifests = workspacePackageRoots.flatMap(walkPackageManifests);
+for (const manifestPath of workspacePackageManifests.sort()) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const packageDirectory = path.dirname(manifestPath);
+  const entry = manifest.vibestudio?.entry;
+  const durableClasses = manifest.vibestudio?.durable?.classes ?? [];
+  if (typeof entry !== "string" || durableClasses.length === 0) continue;
+  const sourceFile = path.join(packageDirectory, entry);
+  const source = fs.readFileSync(sourceFile, "utf8");
+  const exposed = [
+    ...source.matchAll(
+      /@schemaRpc\(\)\s+(?:async\s+)?(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))\s*\(/g
+    ),
+  ].map((match) => match[1] ?? match[2]);
+  for (const durableClass of durableClasses) {
+    const schemaId = durableClass.rpcSchema;
+    if (typeof schemaId !== "string") continue;
+    const methods = schemaRpcCatalog.get(schemaId);
+    if (!methods) throw new Error(`Unknown workspace RPC schema ${schemaId} in ${manifestPath}`);
+    if (!source.includes(`class ${durableClass.className}`)) {
+      throw new Error(`${manifestPath} declares missing durable class ${durableClass.className}`);
+    }
+    const declared = Object.keys(methods);
+    const missing = declared.filter((method) => !exposed.includes(method));
+    const undeclared = exposed.filter((method) => !declared.includes(method));
+    if (missing.length > 0 || undeclared.length > 0) {
+      throw new Error(
+        `${durableClass.className} schema RPC exposure differs from ${schemaId}: ` +
+          `missing=[${missing.join(",")}], undeclared=[${undeclared.join(",")}]`
+      );
+    }
+    const owner = path.relative(root, sourceFile).replaceAll(path.sep, "/");
+    const sourceName = path.relative(path.join(root, "workspace"), packageDirectory).replaceAll(
+      path.sep,
+      "/"
+    );
+    for (const method of declared) {
+      const policy = methods[method];
+      const principals = [...(policy.authority?.principals ?? [])].sort();
+      const sensitivity = policy.access?.sensitivity;
+      const tier = policy.tier?.tier;
+      if (!sensitivity || !tier || principals.length === 0 || !policy.capability) {
+        throw new Error(`${schemaId}.${method} has incomplete schema-owned authority`);
+      }
+      authorityRows.push({
+        id: `direct:${owner}:${method}`,
+        rpcPlane: "workspace-do",
+        owner,
+        source: sourceName,
+        method,
+        resourceDerivation: { kind: "direct-target", owner },
+        authorityPrincipals: principals,
+        sensitivity,
+        tier,
+        sessionAdmission: policy.tier.session,
+        capability: policy.capability,
+        authenticatedFacts: [
+          "session",
+          "acting-user-relay",
+          "runtime-entity",
+          "exact-code-artifact",
+          "owner-chain",
+          "agent-binding",
+          "audience-bound-attestation",
+        ],
+        currentOutcomes: {
+          allowed: "schema-declared direct-RPC requirement satisfied",
+          denied: "missing attested facts or requirement failure is EACCES",
+        },
+        predicates: [
+          "live-owner-service-relationship",
+          "exact-resource-scope",
+          "next-dispatch-revocation",
+        ],
+        r3aRequirement:
+          policy.directEffect?.kind === "open"
+            ? "schema-open"
+            : principalExpression(principals, policy.capability),
+        r3b: { review: "schema-authority", change: null },
+        evidence: generatedCensusEvidence("direct-authority"),
+      });
+    }
+  }
+}
+
+for (const builtin of PRODUCT_BUILTIN_CATALOG) {
+  if (!builtin.directMethods) continue;
+  const file = path.join(root, builtin.sourceFile);
+  const source = fs.readFileSync(file, "utf8");
+  const exposed = [
+    ...source.matchAll(/@schemaRpc\(\)\s+(?:async\s+)?(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))\s*\(/g),
+  ].map((match) => match[1] ?? match[2]);
+  if (exposed.length === 0) continue;
+  const declared = Object.keys(builtin.directMethods);
+  const missing = declared.filter((method) => !exposed.includes(method));
+  const undeclared = exposed.filter((method) => !declared.includes(method));
+  if (missing.length > 0 || undeclared.length > 0) {
+    throw new Error(
+      `${builtin.className} schema RPC exposure differs from its catalog: ` +
+        `missing=[${missing.join(",")}], undeclared=[${undeclared.join(",")}]`
+    );
+  }
+  for (const method of declared) {
+    const policy = builtin.directMethods[method];
+    authorityRows.push({
+      id: `direct:${builtin.sourceFile}:${method}`,
+      rpcPlane: "workspace-do",
+      owner: builtin.sourceFile,
+      source: "vibestudio/internal",
+      method,
+      resourceDerivation: { kind: "direct-target", owner: builtin.sourceFile },
+      authorityPrincipals: [...policy.principals].sort(),
+      sensitivity: policy.sensitivity,
+      tier: policy.tier,
+      sessionAdmission: policy.session,
+      capability: policy.capability,
+      authenticatedFacts: [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation",
+      ],
+      currentOutcomes: {
+        allowed: "schema-declared direct-RPC requirement satisfied",
+        denied: "missing attested facts or requirement failure is EACCES",
+      },
+      predicates: [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation",
+      ],
+      r3aRequirement: "catalog-schema",
+      r3b: { review: "schema-authority", change: null },
       evidence: generatedCensusEvidence("direct-authority"),
     });
   }
@@ -506,6 +703,9 @@ const reviewProjection = authorityRows.map((row) => ({
   authorityPrincipals: row.authorityPrincipals,
   sensitivity: row.sensitivity,
   ...(row.tier ? { tier: row.tier } : {}),
+  ...(row.sessionAdmission ? { sessionAdmission: row.sessionAdmission } : {}),
+  ...(row.residency ? { residency: row.residency } : {}),
+  ...(row.mechanismFamily ? { mechanismFamily: row.mechanismFamily } : {}),
   ...(row.capability ? { capability: row.capability } : {}),
   ...(row.capabilitySelector ? { capabilitySelector: row.capabilitySelector } : {}),
   r3aRequirement: row.r3aRequirement,
@@ -520,10 +720,11 @@ if (authorityReview.censusDigest !== censusDigest) {
   );
 }
 const rowsById = new Map(authorityRows.map((row) => [row.id, row]));
+const unknownReviewRows = Object.keys(authorityReview.decisions).filter((id) => !rowsById.has(id));
+if (unknownReviewRows.length > 0) {
+  throw new Error(`Runtime authority review names unknown rows: ${unknownReviewRows.join(", ")}`);
+}
 for (const [id, decision] of Object.entries(authorityReview.decisions)) {
-  if (!rowsById.has(id)) {
-    throw new Error(`Runtime authority review names unknown row ${id}`);
-  }
   if (
     !decision ||
     typeof decision !== "object" ||
@@ -613,7 +814,7 @@ const sortedDirectSurfaceReachability = Object.fromEntries(
 const workspaceManifest = YAML.parse(
   fs.readFileSync(path.join(root, "workspace", "meta", "vibestudio.yml"), "utf8")
 );
-const workspaceServices = [...(workspaceManifest.services ?? []), ...PRODUCT_WORKSPACE_SERVICES]
+const workspaceServices = [...(workspaceManifest.services ?? [])]
   .map((service) => ({
     name: service.name,
     principals: service.authority?.principals,

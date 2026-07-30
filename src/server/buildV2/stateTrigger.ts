@@ -13,6 +13,7 @@
 
 import { EventEmitter } from "events";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
+import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import {
   computeEffectiveVersions,
@@ -64,9 +65,7 @@ export interface WorkspaceStateSource {
   /** Resolve a semantic context's exact working frontier to workspace content. */
   resolveContextState(contextId: string): Promise<string>;
   /** Exact semantic coordinate paired with a previously resolved content view. */
-  semanticStateForContent?(
-    stateHash: string
-  ): { kind: "event"; eventId: string } | { kind: "application"; applicationId: string } | null;
+  executionStateForContent?(stateHash: string): ExecutionSourceStateRef | null;
   /**
    * Side-effect-free verification of a content root and every object in its
    * closure. Retention inspection treats an unavailable verifier as missing

@@ -30,47 +30,6 @@ const CREDENTIAL_USE_GRANT_CODEC: VersionedJsonCodec<CredentialUseGrantFile> = {
     }
     return { grants: record["grants"] };
   },
-  migrations: [
-    {
-      version: 2,
-      name: "add-agent-identity-credential-grants",
-      migrate(value) {
-        const record = value as Record<string, unknown>;
-        if (
-          Object.keys(record).some((key) => key !== "schemaVersion" && key !== "grants") ||
-          !Array.isArray(record["grants"]) ||
-          !record["grants"].every(isStoredVersionCredentialUseGrant)
-        ) {
-          throw new Error("version 1 grant store contains invalid data");
-        }
-        return { grants: record["grants"] };
-      },
-    },
-  ],
-  unversionedMigration: {
-    version: 1,
-    name: "recognize-pre-versioning-credential-grants",
-    migrate(value) {
-      if (Array.isArray(value)) {
-        if (!value.every(isStoredVersionCredentialUseGrant)) {
-          throw new Error("legacy grant array contains an invalid grant");
-        }
-        return { grants: value };
-      }
-      if (!value || typeof value !== "object") {
-        throw new Error("expected a credential grant object");
-      }
-      const record = value as Record<string, unknown>;
-      if (
-        Object.keys(record).length !== 1 ||
-        !Array.isArray(record["grants"]) ||
-        !record["grants"].every(isStoredVersionCredentialUseGrant)
-      ) {
-        throw new Error("unversioned grant store does not match the recognized { grants } schema");
-      }
-      return { grants: record["grants"] };
-    },
-  },
   encode: (value) => ({ grants: value.grants }),
 };
 
@@ -190,37 +149,6 @@ function isStoredCredentialUseGrant(value: unknown): value is StoredCredentialUs
         grant.agentId.length > 0 &&
         !("repoPath" in grant) &&
         !("effectiveVersion" in grant)))
-  );
-}
-
-function isStoredVersionCredentialUseGrant(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const grant = value as Record<string, unknown>;
-  return (
-    Object.keys(grant).every((key) =>
-      [
-        "credentialId",
-        "bindingId",
-        "use",
-        "resource",
-        "action",
-        "scope",
-        "repoPath",
-        "effectiveVersion",
-        "grantedAt",
-        "grantedBy",
-      ].includes(key)
-    ) &&
-    typeof grant["credentialId"] === "string" &&
-    typeof grant["bindingId"] === "string" &&
-    (grant["use"] === "fetch" || grant["use"] === "git-http" || grant["use"] === "git-ssh") &&
-    typeof grant["resource"] === "string" &&
-    (grant["action"] === "read" || grant["action"] === "write" || grant["action"] === "use") &&
-    grant["scope"] === "version" &&
-    Number.isFinite(grant["grantedAt"]) &&
-    typeof grant["grantedBy"] === "string" &&
-    typeof grant["repoPath"] === "string" &&
-    typeof grant["effectiveVersion"] === "string"
   );
 }
 

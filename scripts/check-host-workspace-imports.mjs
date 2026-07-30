@@ -5,8 +5,7 @@
 //
 //   - HOST code (src/, packages/, apps/, scripts/, tests/, build.mjs) must never
 //     depend on or assume WORKSPACE (userland, workspace/) code beyond defined
-//     interfaces. Product-sealed code lives in root @vibestudio packages and
-//     therefore needs no exception to this rule.
+//     interfaces. Package scope is never residency evidence.
 //   - WORKSPACE code must never import host-private implementation roots
 //     (`src/`, `apps/`, `scripts/`, or root `tests/`). Shared public packages
 //     such as `@vibestudio/shared` are intentionally not host-private.
@@ -19,33 +18,22 @@
 //      `@workspace-panels/...`, etc.) or is a relative path that resolves into
 //      `workspace/`. These are always real violations.
 //
-//   2. "workspace-reference" - a soft/latent reference: any *string literal* in
-//      host source that (a) begins with a `@workspace` scope or (b) is a
-//      path-like literal that resolves into `workspace/`. This catches
-//      hard-coded workspace paths and dynamically-built module ids that the AST
-//      import analysis cannot see. It is inherently noisy (caller ids, event
-//      names, build constants, log strings all match), so it is governed
-//      entirely by the allowlist and reported as a distinct category.
-//
-//   3. "workspace-host-import" - a workspace file importing a relative path that
+//   2. "workspace-host-import" - a workspace file importing a relative path that
 //      resolves into a host-private root. This is always a real violation.
+//
+//   3. "workspace-package-identity" - a package physically owned by workspace/
+//      declaring an @vibestudio/* package name. Workspace-owned packages use
+//      the @workspace* scopes; @vibestudio/* is reserved for host-supplied
+//      platform packages.
 //
 // Cross-boundary integration tests live under `tests/workspace-integration/`;
 // that neutral harness is intentionally excluded from both directions.
-//
-// Soft workspace-reference findings are checked against
-// scripts/host-boundary-allowlist.json. Hard import findings are never
-// allowlistable.
-//
-// Flags:
-//   (none)              check mode; exit 1 if any non-allowlisted finding.
-//   --update-allowlist  regenerate the allowlist to cover current soft findings
-//                       (preserving existing reasons); always exit 0.
 //
 // Dependency-free apart from `typescript` (already a repo dependency).
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
@@ -61,14 +49,7 @@ const NEUTRAL_BOUNDARY_TEST_ROOTS = new Set(["tests/workspace-integration"]);
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const IGNORED_DIRS = new Set(["node_modules", "dist", "dist-publish", ".git"]);
 
-// The checker and its data file describe the boundary; scanning them just
-// produces self-referential noise, so exclude them explicitly.
-const SELF_FILES = new Set([
-  "scripts/check-host-workspace-imports.mjs",
-  "scripts/host-boundary-allowlist.json",
-]);
-
-const ALLOWLIST_PATH = "scripts/host-boundary-allowlist.json";
+const SELF_FILES = new Set(["scripts/check-host-workspace-imports.mjs"]);
 // ---------------------------------------------------------------------------
 // Pure matching helpers (exported for unit testing).
 // ---------------------------------------------------------------------------
@@ -79,18 +60,9 @@ const ALLOWLIST_PATH = "scripts/host-boundary-allowlist.json";
 // trailing "/" because a real import/export specifier always has a subpath.
 const WORKSPACE_IMPORT_SCOPE_RE = /^@workspace(-[a-z-]+)?\//;
 
-// For loose string literals we also accept a bare scope with no subpath
-// ("@workspace", "@workspace-apps") - e.g. caller ids - hence "/" | "-" | end.
-const WORKSPACE_SCOPE_LITERAL_RE = /^@workspace([/-]|$)/;
-
 /** True if `specifier` is an import/export/require target inside a workspace scope. */
 export function isWorkspaceImportScope(specifier) {
   return WORKSPACE_IMPORT_SCOPE_RE.test(specifier);
-}
-
-/** True if a raw string literal begins with a workspace scope. */
-export function startsWithWorkspaceScope(specifier) {
-  return WORKSPACE_SCOPE_LITERAL_RE.test(specifier);
 }
 
 /**
@@ -106,33 +78,6 @@ export function resolvesIntoWorkspace(absFile, specifier, workspaceRoot) {
 export function resolvesIntoAnyRoot(absFile, specifier, roots) {
   const resolved = path.resolve(path.dirname(absFile), specifier);
   return roots.some((root) => resolved === root.slice(0, -1) || resolved.startsWith(root));
-}
-
-/**
- * Cheap heuristic: is a string literal "path-like" enough to be worth resolving
- * as a potential workspace reference? We require a "/" separator and reject
- * obvious non-paths - URLs ("://"), scoped package ids ("@...", handled by the
- * scope rule), and prose (whitespace). This keeps log messages and free text
- * from being resolved into spurious references.
- */
-export function looksPathLike(specifier) {
-  if (!specifier.includes("/")) return false;
-  if (specifier.startsWith("@")) return false;
-  if (specifier.includes("://")) return false;
-  if (/\s/.test(specifier)) return false;
-  return true;
-}
-
-/**
- * Does this file count as a test context? Used to skip the noisy
- * workspace-reference (string-literal) category entirely, since fixtures and
- * assertions routinely embed `@workspace...` strings.
- */
-export function isTestContext(relFile) {
-  return (
-    /\.(test|spec)\.[cm]?[jt]sx?$/.test(relFile) ||
-    /(^|\/)(tests|__tests__|__fixtures__|fixtures)\//.test(relFile)
-  );
 }
 
 /**
@@ -166,10 +111,15 @@ export function getImportSpecifier(node) {
  * Collect boundary findings from a single file's source text.
  * @returns {Array<{file:string, line:number, specifier:string, category:string}>}
  */
-export function collectFindings({ text, absFile, root = DEFAULT_ROOT }) {
+export function collectFindings({
+  text,
+  absFile,
+  root = DEFAULT_ROOT,
+  workspacePackageNames = new Set(),
+  resolveImport,
+}) {
   const workspaceRoot = path.join(root, "workspace") + path.sep;
   const relFile = path.relative(root, absFile).split(path.sep).join("/");
-  const testContext = isTestContext(relFile);
   const sourceFile = ts.createSourceFile(
     absFile,
     text,
@@ -177,20 +127,19 @@ export function collectFindings({ text, absFile, root = DEFAULT_ROOT }) {
     /* setParentNodes */ true
   );
   const findings = [];
-  // Literal nodes already consumed as import specifiers, so we don't
-  // double-report them under the workspace-reference category.
-  const consumed = new Set();
-
   const lineOf = (node) =>
     sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
 
   const visit = (node) => {
     const imported = getImportSpecifier(node);
     if (imported) {
-      consumed.add(imported.literalNode);
       const { specifier } = imported;
       const crossesWorkspaceBoundary =
         isWorkspaceImportScope(specifier) ||
+        [...workspacePackageNames].some(
+          (packageName) => specifier === packageName || specifier.startsWith(`${packageName}/`)
+        ) ||
+        Boolean(resolveImport?.(specifier, absFile)) ||
         (specifier.startsWith(".") && resolvesIntoWorkspace(absFile, specifier, workspaceRoot));
       if (crossesWorkspaceBoundary) {
         findings.push({
@@ -198,26 +147,6 @@ export function collectFindings({ text, absFile, root = DEFAULT_ROOT }) {
           line: lineOf(node),
           specifier,
           category: "import-violation",
-        });
-      }
-    } else if (
-      !testContext &&
-      (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
-      !consumed.has(node)
-    ) {
-      // workspace-reference category: string literals only, and never in test
-      // contexts (too noisy). Rule (a) scope prefix or (b) path-like resolving
-      // into workspace/.
-      const literal = node.text;
-      const isRef =
-        startsWithWorkspaceScope(literal) ||
-        (looksPathLike(literal) && resolvesIntoWorkspace(absFile, literal, workspaceRoot));
-      if (isRef) {
-        findings.push({
-          file: relFile,
-          line: lineOf(node),
-          specifier: literal,
-          category: "workspace-reference",
         });
       }
     }
@@ -265,34 +194,6 @@ export function collectWorkspaceFindings({ text, absFile, root = DEFAULT_ROOT })
 }
 
 // ---------------------------------------------------------------------------
-// Allowlist handling.
-// ---------------------------------------------------------------------------
-
-/**
- * A finding matches an allowlist entry when the file matches and, if present,
- * the specifier and category match. An entry with no `specifier` covers the
- * whole file (optionally scoped to a category).
- */
-export function matchesAllowlistEntry(finding, entry) {
-  if (entry.file !== finding.file) return false;
-  if (entry.specifier != null && entry.specifier !== finding.specifier) return false;
-  if (entry.category != null && entry.category !== finding.category) return false;
-  return true;
-}
-
-export function isAllowlisted(finding, allowlist) {
-  if (finding.category === "import-violation" || finding.category === "workspace-host-import") {
-    return false;
-  }
-  return allowlist.some((entry) => matchesAllowlistEntry(finding, entry));
-}
-
-/** Reason assigned to a freshly-seeded finding (see task description). */
-export function defaultReason(finding) {
-  return "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope";
-}
-
-// ---------------------------------------------------------------------------
 // Filesystem walk.
 // ---------------------------------------------------------------------------
 
@@ -325,11 +226,75 @@ function* walkSourceFiles(root, scannedRoots, scannedFiles = []) {
 
 export function scanRepository(root = DEFAULT_ROOT) {
   const findings = [];
+  const workspacePackageNames = new Set();
+  const workspacePackageRoots = [];
+  const workspaceDirectory = path.join(root, "workspace");
+  for (const manifest of walkPackageManifests(workspaceDirectory)) {
+    const parsed = JSON.parse(fs.readFileSync(manifest, "utf8"));
+    if (typeof parsed.name === "string" && parsed.name.length > 0) {
+      workspacePackageNames.add(parsed.name);
+      if (parsed.name.startsWith("@vibestudio/")) {
+        findings.push({
+          file: path.relative(root, manifest).split(path.sep).join("/"),
+          line: 1,
+          specifier: parsed.name,
+          category: "workspace-package-identity",
+        });
+      }
+      if (path.dirname(manifest) !== workspaceDirectory) {
+        workspacePackageRoots.push(`${fs.realpathSync(path.dirname(manifest))}${path.sep}`);
+      }
+    }
+  }
+  const resolveImport = (specifier, absFile) => {
+    if (specifier.startsWith(".") || specifier.startsWith("node:")) return false;
+    try {
+      const resolved = createRequire(pathToFileURL(absFile)).resolve(specifier);
+      const real = fs.realpathSync(resolved);
+      return workspacePackageRoots.some(
+        (packageRoot) => real === packageRoot.slice(0, -1) || real.startsWith(packageRoot)
+      );
+    } catch {
+      return false;
+    }
+  };
   for (const absFile of walkSourceFiles(root, HOST_SCANNED_ROOTS, HOST_SCANNED_FILES)) {
     const relFile = path.relative(root, absFile).split(path.sep).join("/");
     if (SELF_FILES.has(relFile)) continue;
     const text = fs.readFileSync(absFile, "utf8");
-    findings.push(...collectFindings({ text, absFile, root }));
+    findings.push(
+      ...collectFindings({
+        text,
+        absFile,
+        root,
+        workspacePackageNames,
+        resolveImport,
+      })
+    );
+  }
+  for (const manifest of [
+    path.join(root, "package.json"),
+    ...walkPackageManifests(path.join(root, "packages")),
+    ...walkPackageManifests(path.join(root, "apps")),
+  ]) {
+    if (!fs.existsSync(manifest)) continue;
+    const parsed = JSON.parse(fs.readFileSync(manifest, "utf8"));
+    for (const section of [
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+    ]) {
+      for (const packageName of Object.keys(parsed[section] ?? {})) {
+        if (!workspacePackageNames.has(packageName)) continue;
+        findings.push({
+          file: path.relative(root, manifest).split(path.sep).join("/"),
+          line: 1,
+          specifier: packageName,
+          category: "import-violation",
+        });
+      }
+    }
   }
   for (const absFile of walkSourceFiles(root, WORKSPACE_SCANNED_ROOTS)) {
     const relFile = path.relative(root, absFile).split(path.sep).join("/");
@@ -345,60 +310,23 @@ export function scanRepository(root = DEFAULT_ROOT) {
   return findings;
 }
 
-function loadAllowlist(root) {
-  const file = path.join(root, ALLOWLIST_PATH);
-  if (!fs.existsSync(file)) return [];
-  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-  return Array.isArray(parsed) ? parsed : (parsed.entries ?? []);
+function* walkPackageManifests(directory) {
+  if (!fs.existsSync(directory)) return;
+  const stack = [directory];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (shouldSkipDir(DEFAULT_ROOT, current)) continue;
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const absolute = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(absolute);
+      else if (entry.isFile() && entry.name === "package.json") yield absolute;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
 // CLI.
 // ---------------------------------------------------------------------------
-
-function dedupeKey(f) {
-  return `${f.file}\0${f.category}\0${f.specifier}`;
-}
-
-function updateAllowlist(root) {
-  const findings = scanRepository(root);
-  const existing = loadAllowlist(root);
-  const seen = new Set();
-  const entries = [];
-  for (const finding of findings) {
-    if (finding.category !== "workspace-reference") continue;
-    const key = dedupeKey(finding);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    // Preserve a human-edited reason if an existing entry already covers this finding.
-    const prior = existing.find(
-      (e) => matchesAllowlistEntry(finding, e) && e.specifier != null && e.category != null
-    );
-    entries.push({
-      file: finding.file,
-      specifier: finding.specifier,
-      category: finding.category,
-      reason: prior?.reason ?? defaultReason(finding),
-    });
-  }
-  entries.sort(
-    (a, b) =>
-      a.file.localeCompare(b.file) ||
-      a.category.localeCompare(b.category) ||
-      a.specifier.localeCompare(b.specifier)
-  );
-  const out = {
-    $comment:
-      "Host/workspace boundary allowlist for soft workspace-reference findings only. Hard import findings from scripts/check-host-workspace-imports.mjs are never allowlistable. Regenerate soft references with `node scripts/check-host-workspace-imports.mjs --update-allowlist`. An entry with no `specifier` covers the whole file; `category` is optional.",
-    entries,
-  };
-  const target = path.join(root, ALLOWLIST_PATH);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, JSON.stringify(out, null, 2) + "\n");
-  const byCategory = countByCategory(entries);
-  console.log(`Wrote ${entries.length} allowlist entries to ${ALLOWLIST_PATH}`);
-  console.log(`  workspace-reference: ${byCategory["workspace-reference"] ?? 0}`);
-}
 
 function countByCategory(items) {
   const counts = {};
@@ -408,48 +336,39 @@ function countByCategory(items) {
 
 function check(root) {
   const findings = scanRepository(root);
-  const allowlist = loadAllowlist(root);
-  const violations = findings.filter((f) => !isAllowlisted(f, allowlist));
-  const allowedCount = findings.length - violations.length;
-
-  if (violations.length === 0) {
-    console.log(
-      `Host/workspace boundary OK (${findings.length} finding(s); ${allowedCount} soft reference(s) covered; hard import violations: 0).`
-    );
+  if (findings.length === 0) {
+    console.log("Host/workspace boundary OK (zero exemptions, zero violations).");
     return 0;
   }
 
-  const categories = ["import-violation", "workspace-reference", "workspace-host-import"];
-  console.error("Host/workspace boundary violations (not allowlisted):\n");
+  const categories = [
+    "import-violation",
+    "workspace-reference",
+    "workspace-host-import",
+    "workspace-package-identity",
+  ];
+  console.error("Host/workspace boundary violations:\n");
   for (const category of categories) {
-    const group = violations.filter((f) => f.category === category);
+    const group = findings.filter((f) => f.category === category);
     if (group.length === 0) continue;
     console.error(`  ${category} (${group.length}):`);
     for (const f of group) console.error(`    ${f.file}:${f.line}: ${f.specifier}`);
     console.error("");
   }
-  const counts = countByCategory(violations);
+  const counts = countByCategory(findings);
   console.error(
-    `Summary: ${violations.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-reference: ${counts["workspace-reference"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}. (${allowedCount} soft reference(s) covered.)`
-  );
-  console.error(
-    `\nSoft workspace-reference findings can be added to ${ALLOWLIST_PATH} (or regenerated with --update-allowlist). Hard import findings must be removed.`
+    `Summary: ${findings.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}, workspace-package-identity: ${counts["workspace-package-identity"] ?? 0}.`
   );
   return 1;
 }
 
-function main(argv) {
-  const root = DEFAULT_ROOT;
-  if (argv.includes("--update-allowlist")) {
-    updateAllowlist(root);
-    return 0;
-  }
-  return check(root);
+function main() {
+  return check(DEFAULT_ROOT);
 }
 
 // Run only when invoked directly (not when imported by tests).
 const invokedDirectly =
   process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
 if (invokedDirectly) {
-  process.exit(main(process.argv.slice(2)));
+  process.exit(main());
 }

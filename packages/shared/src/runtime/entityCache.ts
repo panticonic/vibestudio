@@ -21,7 +21,7 @@ export type EntityChangeKind = "activate" | "retire" | "delete";
 
 export class EntityCache {
   private readonly records = new Map<string, EntityRecord>();
-  private readonly controlPlaneRecords = new Map<string, EntityRecord>();
+  private readonly bootstrapRecords = new Map<string, EntityRecord>();
   private readonly listeners = new Set<(id: string, change: EntityChangeKind) => void>();
 
   hydrate(records: EntityRecord[]): void {
@@ -29,7 +29,7 @@ export class EntityCache {
     for (const record of records) {
       this.records.set(record.id, record);
     }
-    for (const record of this.controlPlaneRecords.values()) {
+    for (const record of this.bootstrapRecords.values()) {
       this.records.set(record.id, record);
     }
   }
@@ -102,11 +102,11 @@ export class EntityCache {
   }
 
   /**
-   * Register a product-sealed DO principal that exists before WorkspaceDO and
-   * therefore is deliberately not a workspace-authored runtime entity row.
-   * Hydration preserves these records across the later WorkspaceDO reconcile.
+   * Register the manifest-declared bootstrap service before WorkspaceDO can
+   * mirror runtime entity rows. Hydration preserves this ordinary userland
+   * entity across the later WorkspaceDO reconcile.
    */
-  registerControlPlane(record: {
+  registerBootstrapEntity(record: {
     id: string;
     source: EntitySource;
     activeBuildKey: string;
@@ -123,7 +123,7 @@ export class EntityCache {
       status: "active",
       cleanupComplete: true,
     };
-    this.controlPlaneRecords.set(entry.id, entry);
+    this.bootstrapRecords.set(entry.id, entry);
     this.records.set(entry.id, entry);
     this.emit(entry.id, "activate");
   }
@@ -136,7 +136,7 @@ export class EntityCache {
   /** Clear the cache. Tests only. */
   _clear(): void {
     this.records.clear();
-    this.controlPlaneRecords.clear();
+    this.bootstrapRecords.clear();
   }
 
   private emit(id: string, change: EntityChangeKind): void {

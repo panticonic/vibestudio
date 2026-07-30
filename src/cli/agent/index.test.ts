@@ -495,25 +495,30 @@ describe("vibestudio agent commands", () => {
     expect(rpcBodies[1]).toEqual({ method: "docs.describeService", args: ["runtime"] });
   });
 
-  it("diag hits workspace.units.diagnostics and prints JSON", async () => {
+  it("diag resolves an exact runtime entity and prints its supervised health", async () => {
     writeCredentials(tmpDir);
     const { main } = await import("../client.js");
+    const entity = {
+      identity: { kind: "worker", entityId: "worker:foo" },
+      source: "workers/foo",
+      displayName: "foo",
+      status: "error",
+      lastError: "boom",
+      artifact: { effectiveVersion: "version-1", buildKey: "build-1", executionDigest: "digest-1" },
+      facets: { activation: false, release: false, inspector: false },
+    };
     const diagnostics = {
-      unit: {
-        name: "foo",
-        kind: "worker",
-        source: "workers/foo",
-        status: "error",
-        lastError: "boom",
-      },
+      entity,
+      state: "unhealthy",
+      summary: "boom",
       logs: [],
       errors: [],
-      builds: [],
       dropped: { entries: 0, errors: 0 },
       capacity: { entries: 1_000, errors: 500 },
     };
     const { rpcBodies } = stubServer((body) => {
-      if (body.method === "workspace.units.diagnostics") return diagnostics;
+      if (body.method === "runtime.supervision.list") return [entity];
+      if (body.method === "runtime.supervision.health") return diagnostics;
       throw new Error(`unexpected method ${body.method}`);
     });
 
@@ -522,15 +527,36 @@ describe("vibestudio agent commands", () => {
     );
 
     expect(rpcBodies).toEqual([
-      { method: "workspace.units.diagnostics", args: ["workers/foo", { limit: 10 }] },
+      { method: "runtime.supervision.list", args: [] },
+      {
+        method: "runtime.supervision.health",
+        args: [{ kind: "worker", entityId: "worker:foo" }, { limit: 10 }],
+      },
     ]);
     expect(jsonOutput()).toEqual(diagnostics);
   });
 
-  it("skills and logs hit the workspace service with the right shapes", async () => {
+  it("skills use workspace semantics while logs use runtime supervision", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir, "docs", "ctx_docs");
     const { main } = await import("../client.js");
+    const entity = {
+      identity: { kind: "worker", entityId: "worker:foo" },
+      source: "workers/foo",
+      displayName: "foo",
+      status: "running",
+      lastError: null,
+      artifact: { effectiveVersion: "version-1", buildKey: "build-1", executionDigest: "digest-1" },
+      facets: { activation: false, release: false, inspector: false },
+    };
+    const records = [
+      {
+        identity: entity.identity,
+        timestamp: 1,
+        level: "info",
+        message: "hi",
+      },
+    ];
     const { rpcBodies } = stubServer((body) => {
       if (body.method === "workspace.listSkills") {
         return [
@@ -543,18 +569,8 @@ describe("vibestudio agent commands", () => {
         ];
       }
       if (body.method === "workspace.readSkill") return "# alpha skill";
-      if (body.method === "workspace.units.logs") {
-        return [
-          {
-            workspaceId: "ws_dev",
-            unitName: "workers/foo",
-            kind: "worker",
-            timestamp: 1,
-            level: "info",
-            message: "hi",
-          },
-        ];
-      }
+      if (body.method === "runtime.supervision.list") return [entity];
+      if (body.method === "runtime.supervision.logs") return records;
       throw new Error(`unexpected method ${body.method}`);
     });
 
@@ -569,7 +585,14 @@ describe("vibestudio agent commands", () => {
     expect(rpcBodies).toEqual([
       { method: "workspace.listSkills", args: [{ contextId: "ctx_docs" }] },
       { method: "workspace.readSkill", args: ["alpha", { contextId: "ctx_docs" }] },
-      { method: "workspace.units.logs", args: ["workers/foo", { level: "info", limit: 10 }] },
+      { method: "runtime.supervision.list", args: [] },
+      {
+        method: "runtime.supervision.logs",
+        args: [
+          { kind: "worker", entityId: "worker:foo" },
+          { level: "info", limit: 10 },
+        ],
+      },
     ]);
   });
 

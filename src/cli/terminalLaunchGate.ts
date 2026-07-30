@@ -5,24 +5,12 @@ import {
   targetLabel,
   type BootstrapDecision,
 } from "@vibestudio/shared/bootstrapLaunchGate";
-import { createRpcClient } from "@vibestudio/rpc";
-import { NodeWsLike } from "@vibestudio/rpc/transports/nodeWsLike";
-import { createServerWsTransport } from "@vibestudio/shell-core/transport/serverWsTransport";
-import { WebSocket } from "ws";
+import type { HostTarget } from "@vibestudio/shared/hostTargets";
 import {
-  HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS,
-  isLaunchSessionEventForTarget,
-} from "@vibestudio/shared/hostTargetLaunchGate";
-import type {
-  HostTarget,
-  HostTargetLaunchResult,
-  HostTargetLaunchSessionSnapshot,
-} from "@vibestudio/shared/hostTargets";
-import { workspaceMethods } from "@vibestudio/service-schemas/workspace";
-import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
-import { isWebRtcCredential } from "./credentialStore.js";
-import { typedClient } from "./typedClients.js";
-import { refreshShell, RpcClient, type DeviceCredential } from "./rpcClient.js";
+  HostLaunchClient,
+  type HostLaunchResult,
+} from "@vibestudio/service-schemas/clients/hostLaunchClient";
+import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { TimeoutError } from "./output.js";
 
 export interface TerminalLaunchGateOptions {
@@ -35,9 +23,9 @@ export interface TerminalLaunchGateOptions {
 
 export interface TerminalLaunchGateResult {
   target: HostTarget;
-  status: HostTargetLaunchResult["status"] | "denied";
+  status: HostLaunchResult["status"] | "denied";
   approvalsResolved: number;
-  launch?: HostTargetLaunchResult;
+  launch?: HostLaunchResult;
 }
 
 export async function runTerminalLaunchGate(
@@ -47,91 +35,49 @@ export async function runTerminalLaunchGate(
 ): Promise<TerminalLaunchGateResult> {
   const target = options.target ?? "terminal";
   const rpc = new RpcClient(creds);
-  const workspace = typedClient("workspace", workspaceMethods, rpc);
-  const eventsRef: { current: TerminalLaunchEventClient | null } = { current: null };
+  const launchClient = new HostLaunchClient((service, method, args) =>
+    rpc.call(`${service}.${method}`, args)
+  );
+  const startedAt = Date.now();
+  const timeoutMs = options.timeoutMs ?? 10 * 60_000;
+  let approvalsResolved = 0;
+  let lastProgress = "";
 
   try {
-    const startedAt = Date.now();
-    const timeoutMs = options.timeoutMs ?? 10 * 60_000;
-    let session = await workspace.hostTargets.beginLaunch(target);
-    let lastProgress = "";
     for (;;) {
-      if (session.status === "ready") {
-        return {
-          target,
-          status: "ready",
-          approvalsResolved: session.approvalsResolved,
-          launch: session.launch,
-        };
+      const launch = await launchClient.launch(target);
+      if (launch.status === "ready" || launch.status === "unavailable") {
+        return { target, status: launch.status, approvalsResolved, launch };
       }
-      if (session.status === "unavailable") {
-        return {
-          target,
-          status: "unavailable",
-          approvalsResolved: session.approvalsResolved,
-          launch: session.launch,
-        };
-      }
-      if (session.status === "denied") {
-        return { target, status: "denied", approvalsResolved: session.approvalsResolved };
-      }
-      if (session.status === "approval-required") {
+      if (launch.status === "approval-required") {
         if (!options.json) {
-          output.write(`${formatLaunchGateForTerminal(session.approvals, target)}\n\n`);
+          output.write(`${formatLaunchGateForTerminal(launch.approvals, target)}\n\n`);
         }
         const decision = await getDecision(target, options);
-        session = await workspace.hostTargets.resolveLaunchSessionApproval(
-          session.sessionId,
-          decision
-        );
+        await launchClient.resolveApprovals(launch.approvals, decision);
+        if (decision === "deny") {
+          return { target, status: "denied", approvalsResolved };
+        }
+        approvalsResolved += launch.approvals.length;
         lastProgress = "";
         continue;
       }
-      if (session.status === "preparing" || session.status === "starting") {
-        if (!options.json) {
-          const progress = formatLaunchSessionProgress(session);
-          if (progress && progress !== lastProgress) {
-            output.write(`${progress}\n`);
-            lastProgress = progress;
-          }
-        }
-        eventsRef.current ??= await createTerminalLaunchEventClient(creds, target);
-        const elapsed = Date.now() - startedAt;
-        const remaining = timeoutMs - elapsed;
-        if (remaining <= 0) {
-          throw new TimeoutError(
-            `terminal startup timed out after ${formatElapsed(elapsed)}; last phase: ${formatLaunchSessionProgress(session) || session.status}. ` +
-              "Run `vibestudio agent diag <unit>` for build/runtime details."
-          );
-        }
-        const update = await eventsRef.current.waitForLaunchSessionChange(
-          session.sessionId,
-          Math.min(30_000, remaining)
+
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= timeoutMs) {
+        throw new TimeoutError(
+          `terminal startup timed out after ${formatElapsed(elapsed)}; last status: ${launch.reason}. ` +
+            "Run `vibestudio agent diag <unit>` for build/runtime details."
         );
-        if (update) {
-          session = update;
-          continue;
-        }
-        const refreshed = await workspace.hostTargets.getLaunchSession(session.sessionId);
-        if (refreshed) {
-          session = refreshed;
-          if (!options.json) {
-            output.write(
-              `Still ${session.status} after ${formatElapsed(Date.now() - startedAt)} — ${formatLaunchSessionProgress(session) || "waiting for the workspace host"}. Press Ctrl-C to stop waiting.\n`
-            );
-          }
-          continue;
-        }
-        return {
-          target,
-          status: "preparing",
-          approvalsResolved: session.approvalsResolved,
-          launch: session.launch,
-        };
       }
+      if (!options.json && launch.reason !== lastProgress) {
+        output.write(`${launch.reason}\n`);
+        lastProgress = launch.reason;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, timeoutMs - elapsed)));
     }
   } finally {
-    await eventsRef.current?.close();
+    await rpc.close();
   }
 }
 
@@ -165,193 +111,4 @@ async function getDecision(
   } finally {
     rl.close();
   }
-}
-
-interface TerminalLaunchEventClient {
-  waitForLaunchSessionChange(
-    sessionId: string,
-    timeoutMs: number
-  ): Promise<HostTargetLaunchSessionSnapshot | null>;
-  close(): Promise<void>;
-}
-
-interface EventServerClient {
-  stream(
-    targetId: string,
-    method: string,
-    args: unknown[],
-    options?: { signal?: AbortSignal }
-  ): Promise<Response>;
-  on(
-    event: string,
-    listener: (event: import("@vibestudio/rpc").RpcEventContext) => void
-  ): () => void;
-  close(): Promise<void>;
-}
-
-async function createEventServerClient(
-  shellToken: string,
-  opts: {
-    serverUrl: string;
-    refreshAuthToken: () => Promise<string>;
-    onRecovery: () => void | Promise<void>;
-  }
-): Promise<EventServerClient> {
-  let activeToken = shellToken;
-  const transport = createServerWsTransport({
-    selfId: "admin",
-    serverUrl: opts.serverUrl,
-    reconnect: true,
-    logPrefix: "TerminalLaunchGate",
-    onRecovery: opts.onRecovery,
-    adapter: {
-      now: () => Date.now(),
-      getAuthToken: async () => activeToken,
-      refreshAuthToken: async () => {
-        activeToken = await opts.refreshAuthToken();
-        return activeToken;
-      },
-      createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
-    },
-  });
-  await transport.connectAndWait();
-  const rpc = createRpcClient({ selfId: "admin", callerKind: "server", transport });
-  return {
-    stream: (targetId, method, args, options) => rpc.stream(targetId, method, args, options),
-    on: (event, listener) => rpc.on(event, listener),
-    close() {
-      return transport.close();
-    },
-  };
-}
-
-async function createTerminalLaunchEventClient(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-    Partial<Pick<DeviceCredential, "workspacePairing">>,
-  target: HostTarget
-): Promise<TerminalLaunchEventClient> {
-  if (isWebRtcCredential(creds)) {
-    return await createWebRtcTerminalLaunchEventClient(creds, target);
-  }
-  const eventNames = HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS;
-  const waiters = new Set<() => void>();
-  let lastSession: HostTargetLaunchSessionSnapshot | null = null;
-  let revision = 0;
-  let observedRevision = 0;
-  const notify = () => {
-    revision += 1;
-    for (const waiter of [...waiters]) waiter();
-  };
-  const shellToken = (await refreshShell(creds)).shellToken;
-  let client: EventServerClient | null = null;
-  let events: EventsClient | null = null;
-  client = await createEventServerClient(shellToken, {
-    serverUrl: creds.url,
-    refreshAuthToken: async () => (await refreshShell(creds)).shellToken,
-    onRecovery: () => events?.recover(),
-  });
-  events = new EventsClient(client);
-  for (const event of eventNames) {
-    events.on(event, (payload) => {
-      if (isLaunchSessionEventForTarget(target, event, payload)) {
-        lastSession = payload;
-        notify();
-      }
-    });
-  }
-  await events.subscribeAll(eventNames);
-  return {
-    waitForLaunchSessionChange(sessionId, timeoutMs) {
-      if (lastSession?.sessionId === sessionId && revision !== observedRevision) {
-        observedRevision = revision;
-        return Promise.resolve(lastSession);
-      }
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          waiters.delete(done);
-          resolve(null);
-        }, timeoutMs);
-        const done = () => {
-          observedRevision = revision;
-          clearTimeout(timer);
-          waiters.delete(done);
-          resolve(lastSession?.sessionId === sessionId ? lastSession : null);
-        };
-        waiters.add(done);
-      });
-    },
-    async close() {
-      await events?.unsubscribeAll().catch(() => {});
-      await client?.close();
-    },
-  };
-}
-
-async function createWebRtcTerminalLaunchEventClient(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-    Partial<Pick<DeviceCredential, "workspacePairing">>,
-  target: HostTarget
-): Promise<TerminalLaunchEventClient> {
-  const eventNames = HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS;
-  const waiters = new Set<() => void>();
-  let lastSession: HostTargetLaunchSessionSnapshot | null = null;
-  let revision = 0;
-  let observedRevision = 0;
-  const notify = () => {
-    revision += 1;
-    for (const waiter of [...waiters]) waiter();
-  };
-  const rpc = new RpcClient(creds);
-  const events = new EventsClient(rpc);
-  const cleanups: Array<() => void> = [];
-  try {
-    for (const event of eventNames) {
-      cleanups.push(
-        events.on(event, (payload) => {
-          if (isLaunchSessionEventForTarget(target, event, payload)) {
-            lastSession = payload;
-            notify();
-          }
-        })
-      );
-    }
-    cleanups.push(await rpc.onRecovery(() => events.recover()));
-    await events.subscribeAll(eventNames);
-  } catch (error) {
-    for (const cleanup of cleanups.splice(0)) cleanup();
-    await rpc.close();
-    throw error;
-  }
-
-  return {
-    waitForLaunchSessionChange(sessionId, timeoutMs) {
-      if (lastSession?.sessionId === sessionId && revision !== observedRevision) {
-        observedRevision = revision;
-        return Promise.resolve(lastSession);
-      }
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          waiters.delete(done);
-          resolve(null);
-        }, timeoutMs);
-        const done = () => {
-          observedRevision = revision;
-          clearTimeout(timer);
-          waiters.delete(done);
-          resolve(lastSession?.sessionId === sessionId ? lastSession : null);
-        };
-        waiters.add(done);
-      });
-    },
-    async close() {
-      for (const cleanup of cleanups.splice(0)) cleanup();
-      await events.unsubscribeAll().catch(() => {});
-      await rpc.close();
-    },
-  };
-}
-
-function formatLaunchSessionProgress(session: HostTargetLaunchSessionSnapshot): string {
-  const active = session.timeline.find((phase) => phase.state === "active");
-  return [session.message, active?.detail, session.detail].filter(Boolean).join("\n");
 }

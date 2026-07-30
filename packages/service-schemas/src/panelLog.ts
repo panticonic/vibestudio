@@ -38,6 +38,13 @@ export type PanelLogRecord = z.infer<typeof PanelLogRecordSchema>;
 
 export const panelLogMethods = defineServiceMethods({
   append: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "panelLog.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Forward a batch of panel console/lifecycle records (max 200) from the Electron shell into the server's runtime-diagnostics store.",
     args: z.tuple([z.array(PanelLogRecordSchema).max(200)]),

@@ -323,7 +323,6 @@ describe("canonical vcsService", () => {
           fallback: "disabled" as const,
         },
         authority: [],
-        userland: [],
         unexpectedPrompts: "fail" as const,
       },
     };
@@ -387,7 +386,6 @@ describe("canonical vcsService", () => {
             fallback: "disabled",
           },
           authority: [],
-          userland: [],
           unexpectedPrompts: "fail",
         },
       }),

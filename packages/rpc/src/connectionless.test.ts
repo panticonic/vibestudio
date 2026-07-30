@@ -98,6 +98,34 @@ describe("createConnectionlessRpcClient", () => {
     ).toEqual([undefined, "evaluated-session-nonce-1"]);
   });
 
+  it("does not couple evaluated execution to a transient invocation parent", async () => {
+    const seen: RpcEnvelope[] = [];
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const envelope = JSON.parse(String(init?.body)) as RpcEnvelope;
+      seen.push(envelope);
+      const requestId = (envelope.message as { requestId: string }).requestId;
+      return new Response(JSON.stringify(responseEnvelope(requestId, { result: "ok" })), {
+        status: 200,
+      });
+    });
+    const { client } = makeClient(
+      fetchMock as unknown as typeof fetch,
+      () => "host-invocation-parent-1"
+    );
+
+    await client.call(
+      "main",
+      "x.evaluated",
+      [],
+      bindExecutionSession({}, "evaluated-session-nonce-1")
+    );
+
+    expect(seen[0]?.message).toMatchObject({
+      executionSessionNonce: "evaluated-session-nonce-1",
+    });
+    expect(seen[0]?.message).not.toHaveProperty("authorityParentNonce");
+  });
+
   describe("respond (inbound request → response envelope, no POST)", () => {
     it("dispatches an exposed method and captures the response synchronously", async () => {
       const fetchMock = vi.fn();
@@ -158,7 +186,7 @@ class FrameworkBase {
 }
 class IntermediateBase extends FrameworkBase {
   @rpc({
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     principals: ["code"],
     sensitivity: "write",
@@ -169,7 +197,7 @@ class IntermediateBase extends FrameworkBase {
 }
 class ConcreteDO extends IntermediateBase {
   @rpc({
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     principals: ["code"],
     sensitivity: "write",
@@ -222,7 +250,7 @@ describe("@rpc opt-in exposure (default-deny, enforced)", () => {
 class PolicyBase {
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
@@ -233,7 +261,7 @@ class PolicyBase {
 class PolicyDO extends PolicyBase {
   @rpc({
     principals: ["user", "code"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -247,13 +275,13 @@ describe("@rpc direct authority declaration", () => {
     const inst = new PolicyDO();
     expect(rpcMethodAuthority(inst, "broad")).toEqual({
       principals: ["user", "code"],
-      effect: { kind: "runtime-intrinsic" },
+      effect: { kind: "open" },
       tier: "open",
       sensitivity: "read",
     });
     expect(rpcMethodAuthority(inst, "serverOnly")).toEqual({
       principals: ["host"],
-      effect: { kind: "runtime-intrinsic" },
+      effect: { kind: "open" },
       tier: "open",
       sensitivity: "write",
     });

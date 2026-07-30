@@ -9,7 +9,7 @@ export interface DORefParam {
 }
 
 export type ResolvedWorkspaceService = {
-  origin: "product" | "workspace";
+  origin: "workspace";
   name?: string;
   title?: string;
   description?: string;
@@ -33,17 +33,9 @@ export interface DurableObjectServiceClient {
   call<T = unknown>(method: string, ...args: unknown[]): Promise<T>;
 }
 
-const gadWorkspaceService = findProductWorkspaceService("gad.workspace");
-if (!gadWorkspaceService) {
-  throw new Error("Product workspace service catalog is missing gad.workspace");
-}
-const [gadWorkspaceProtocol] = gadWorkspaceService.protocols;
-if (!gadWorkspaceProtocol) {
-  throw new Error("Product workspace service gad.workspace has no protocol");
-}
-export const GAD_WORKSPACE_SERVICE_PROTOCOL = gadWorkspaceProtocol;
+export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
 
-/** The product-sealed semantic VCS protocol implemented by the control plane. */
+/** Shared wire contract implemented by the manifest-declared workspace source provider. */
 export const VCS_SERVICE_PROTOCOL = "vibestudio.vcs.v1";
 
 export function doTargetId(ref: DORefParam): string {
@@ -109,4 +101,3 @@ export function createDurableObjectServiceClient(
 export function createGadServiceClient(rpc: RpcCallerLike): DurableObjectServiceClient {
   return createDurableObjectServiceClient(rpc, GAD_WORKSPACE_SERVICE_PROTOCOL);
 }
-import { findProductWorkspaceService } from "./productWorkspaceServices.mjs";

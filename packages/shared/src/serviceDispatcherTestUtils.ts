@@ -12,7 +12,6 @@ import {
   lineageClasses,
   type AuthorityRequirement,
 } from "./authorization.js";
-import { methodTier } from "./authority/tierTable.js";
 
 const TEST_DIGEST = "0".repeat(64);
 const TEST_HOST = "host:test" as const;
@@ -65,7 +64,7 @@ export function createTestExecutionSession(input: {
       runId: `run:${input.runtimeId}`,
       authorityManifest: {
         mode: "adaptive",
-        effects: "mutable",
+        effects: "read-write",
         approvals: "prompt",
         requests: [],
         digest: "0".repeat(64),
@@ -83,23 +82,120 @@ export function createTestExecutionSession(input: {
  * must install a resolver backed by live identity, membership, manifests, and
  * grants; this helper deliberately lives in a test-only module.
  */
-export function createTestServiceDispatcher(opts: { openMethods?: readonly string[] } = {}): ServiceDispatcher {
+export function createTestServiceDispatcher(opts: {
+  openMethods?: readonly string[];
+  methods?: Readonly<
+    Record<
+      string,
+      {
+        tier: "open" | "gated" | "critical";
+        session?: "family" | "codeOnly";
+        capability?: string;
+      }
+    >
+  >;
+} = {}): ServiceDispatcher {
+  const dispatcher = new ServiceDispatcher();
   const openMethods = new Set(opts.openMethods ?? []);
-  const dispatcher = new ServiceDispatcher({
-    tierLookup: (method) =>
-      methodTier(method) ??
-      (openMethods.has(method)
-        ? {
-            tier: "open",
-            session: "family",
-            rationale: "Explicit unit-test-only open method",
-          }
-        : null),
-  });
+  if (openMethods.size > 0 || opts.methods) {
+    const register = dispatcher.registerService.bind(dispatcher);
+    dispatcher.registerService = (definition) =>
+      register({
+        ...definition,
+        methods: Object.fromEntries(
+          Object.entries(definition.methods).map(([method, schema]) => {
+            const qualified = `${definition.name}.${method}`;
+            return [
+              method,
+              (openMethods.has(qualified) || opts.methods?.[qualified]) && !schema.tier
+                ? {
+                    ...schema,
+                    ...(opts.methods?.[qualified]?.capability
+                      ? { capability: opts.methods[qualified].capability }
+                      : {}),
+                    tier: {
+                      tier: opts.methods?.[qualified]?.tier ?? ("open" as const),
+                      session: opts.methods?.[qualified]?.session ?? ("family" as const),
+                      rationale: "Explicit unit-test fixture method",
+                    },
+                  }
+                : schema,
+            ];
+          })
+        ),
+      });
+  }
   dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
     testAuthority(caller, capability, resourceKey)
   );
   return dispatcher;
+}
+
+/** Add explicit schema authority to compact test-only service fixtures. */
+export function withTestMethodAuthority(
+  definition: ServiceDefinition,
+  decisions: Readonly<
+    Record<
+      string,
+      {
+        tier: "open" | "gated" | "critical";
+        session?: "family" | "codeOnly";
+        capability?: string;
+      }
+    >
+  >
+): ServiceDefinition {
+  return {
+    ...definition,
+    methods: Object.fromEntries(
+      Object.entries(definition.methods).map(([method, schema]) => {
+        const decision = decisions[method];
+        if (!decision) return [method, schema];
+        return [
+          method,
+          {
+            ...schema,
+            ...(decision.capability ? { capability: decision.capability } : {}),
+            tier: {
+              tier: decision.tier,
+              session: decision.session ?? "family",
+              rationale: "Explicit unit-test fixture method",
+            },
+          },
+        ];
+      })
+    ),
+  };
+}
+
+export function withTestSchemaAuthority(
+  definition: ServiceDefinition,
+  decision: {
+    tier: "open" | "gated" | "critical";
+    session?: "family" | "codeOnly";
+    capability?: string | ((method: string) => string);
+  }
+): ServiceDefinition {
+  return withTestMethodAuthority(
+    definition,
+    Object.fromEntries(
+      Object.keys(definition.methods).map((method) => [
+        method,
+        {
+          tier: decision.tier,
+          session: decision.session,
+          ...(decision.capability
+            ? {
+                capability:
+                  typeof decision.capability === "function"
+                    ? decision.capability(method)
+                    : decision.capability,
+              }
+            : {}),
+        },
+      ])
+    )
+  );
 }
 
 /**

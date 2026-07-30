@@ -400,23 +400,6 @@ export class FormFillManager {
           await this.handleConfirmFormFill(panelId, action);
           return;
         },
-        listSavedPasswords: async () => {
-          const rows = await this.formFillStore.getPasswords();
-          return rows.map((row) => ({
-            id: row.id,
-            origin: row.origin_url,
-            username: row.username,
-          }));
-        },
-        deleteSavedPassword: async (_ctx, [id]) => {
-          await this.formFillStore.deletePassword(id);
-          return;
-        },
-        listNeverSaveOrigins: async () => await this.formFillStore.getNeverSavePasswordOrigins(),
-        removeNeverSaveOrigin: async (_ctx, [origin]) => {
-          await this.formFillStore.removeNeverSavePassword(origin);
-          return;
-        },
       }),
     };
   }

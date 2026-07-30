@@ -181,11 +181,37 @@ export type AttachedHostApprovalAuditEvent = z.infer<typeof attachedHostApproval
 
 const transportAuthority: ServiceAuthorityPolicy = { principals: ["host"] };
 const bootstrapAuthority: ServiceAuthorityPolicy = { principals: ["host", "user"] };
-const internalOpenTier = {
+const transportTier = {
   tier: "open" as const,
   session: "family" as const,
+  residency: "transport" as const,
+  family: "attachedHosts.transport",
   rationale:
-    "Internal attached-host transport; authority is enforced by exact signed session envelopes.",
+    "Opaque attached-host transport; authority is enforced by exact signed session envelopes.",
+};
+const bootstrapTier = {
+  ...transportTier,
+  residency: "identity" as const,
+  family: "attachedHosts.identity",
+  rationale: "Mutually signed exact-generation bootstrap establishes an authenticated host identity.",
+};
+const auditTier = {
+  ...transportTier,
+  residency: "observability" as const,
+  family: "attachedHosts.audit",
+  rationale: "Bounded immutable approval receipts expose transport audit state.",
+};
+const approvalTier = {
+  ...transportTier,
+  residency: "grant-authority" as const,
+  family: "attachedHosts.approval",
+  rationale: "The canonical parent approval queue settles a child-signed authority challenge.",
+};
+const closeTier = {
+  ...transportTier,
+  residency: "supervision" as const,
+  family: "attachedHosts.control",
+  rationale: "Closes one exact authenticated transport route and its pending work.",
 };
 const ownerAuthority: ServiceAuthorityPolicy = {
   principals: ["user", "code", "session"],
@@ -211,7 +237,7 @@ export const attachedHostsMethods = defineServiceMethods({
       })
       .strict(),
     authority: ownerAuthority,
-    tier: internalOpenTier,
+    tier: transportTier,
     agentFacing: false,
     access: { sensitivity: "read" },
   },
@@ -229,7 +255,7 @@ export const attachedHostsMethods = defineServiceMethods({
     ]),
     returns: wireValueSchema,
     authority: ownerAuthority,
-    tier: internalOpenTier,
+    tier: transportTier,
     agentFacing: false,
     access: { sensitivity: "write" },
   },
@@ -258,7 +284,7 @@ export const attachedHostsMethods = defineServiceMethods({
       })
       .strict(),
     authority: ownerAuthority,
-    tier: internalOpenTier,
+    tier: auditTier,
     agentFacing: false,
     access: { sensitivity: "read" },
   },
@@ -268,7 +294,7 @@ export const attachedHostsMethods = defineServiceMethods({
     args: z.tuple([attachedHostParentHelloSchema]),
     returns: attachedHostChildAcceptanceSchema,
     authority: bootstrapAuthority,
-    tier: internalOpenTier,
+    tier: bootstrapTier,
     agentFacing: false,
     access: { sensitivity: "write" },
   },
@@ -278,7 +304,7 @@ export const attachedHostsMethods = defineServiceMethods({
     args: z.tuple([attachedHostSessionProofSchema]),
     returns: z.object({ attachedHostSessionId: nonEmpty }).strict(),
     authority: bootstrapAuthority,
-    tier: internalOpenTier,
+    tier: bootstrapTier,
     agentFacing: false,
     access: { sensitivity: "write" },
   },
@@ -294,7 +320,7 @@ export const attachedHostsMethods = defineServiceMethods({
     ]),
     returns: wireValueSchema,
     authority: transportAuthority,
-    tier: internalOpenTier,
+    tier: transportTier,
     agentFacing: false,
     access: { sensitivity: "write" },
   },
@@ -304,7 +330,7 @@ export const attachedHostsMethods = defineServiceMethods({
     args: z.tuple([attachedHostApprovalChallengeSchema]),
     returns: attachedHostApprovalDecisionSchema,
     authority: transportAuthority,
-    tier: internalOpenTier,
+    tier: approvalTier,
     agentFacing: false,
     access: { sensitivity: "write" },
   },
@@ -315,7 +341,7 @@ export const attachedHostsMethods = defineServiceMethods({
     ]),
     returns: z.void(),
     authority: transportAuthority,
-    tier: internalOpenTier,
+    tier: closeTier,
     agentFacing: false,
     access: { sensitivity: "write" },
   },

@@ -3,11 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   internalDOExecutionArtifacts,
   internalDOExecutionIdentity,
+  INTERNAL_DO_CLASSES,
   type InternalDOBundle,
 } from "./internalDoLoader.js";
 import { verifyExecutionArtifactRef } from "@vibestudio/shared/execution/retention";
 
-function bundle(content = "export class GadWorkspaceDO {};"): InternalDOBundle {
+function bundle(content = "export class EvalDO {};"): InternalDOBundle {
   return {
     bundle: content,
     buildKey: createHash("sha256").update(content).digest("hex"),
@@ -16,31 +17,21 @@ function bundle(content = "export class GadWorkspaceDO {};"): InternalDOBundle {
 
 describe("internalDOExecutionIdentity", () => {
   it("seals exact bundle bytes, class entrypoint, and reviewed authority", () => {
-    const gad = internalDOExecutionIdentity(bundle(), "GadWorkspaceDO");
     const evalDo = internalDOExecutionIdentity(bundle(), "EvalDO");
     const workspace = internalDOExecutionIdentity(bundle(), "WorkspaceDO");
 
-    expect(gad).toMatchObject({
+    expect(evalDo).toMatchObject({
       source: "vibestudio/internal",
-      unitName: "@vibestudio/internal-do/GadWorkspaceDO",
+      unitName: "@panticonic/builtin/eval.engine",
       stateHash: `state:${bundle().buildKey}`,
       buildKey: bundle().buildKey,
       effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
       executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
-    expect(gad.authorityRequests).toEqual([]);
-    expect(evalDo.authorityRequests).toEqual([
-      {
-        capability: "external.open",
-        resource: { kind: "prefix", prefix: "" },
-        tier: "gated",
-        evidence: "intentional-broad",
-      },
-    ]);
-    expect(workspace.executionDigest).not.toBe(gad.executionDigest);
-    expect(evalDo.executionDigest).not.toBe(gad.executionDigest);
-    expect(verifyExecutionArtifactRef(gad.artifact)).toEqual(gad.artifact);
-    expect(gad.artifact.sourceState).toMatchObject({
+    expect(evalDo.authority.requests).toEqual([]);
+    expect(workspace.executionDigest).not.toBe(evalDo.executionDigest);
+    expect(verifyExecutionArtifactRef(evalDo.artifact)).toEqual(evalDo.artifact);
+    expect(evalDo.artifact.sourceState).toMatchObject({
       kind: "product-seed",
       state: null,
       contentRoots: [{ repoPath: null, stateHash: `state:${bundle().buildKey}` }],
@@ -49,11 +40,13 @@ describe("internalDOExecutionIdentity", () => {
 
   it("enumerates every reviewed product-seed entrypoint with one shared bundle key", () => {
     const artifacts = internalDOExecutionArtifacts(bundle());
-    expect(artifacts).toHaveLength(5);
+    expect(artifacts).toHaveLength(INTERNAL_DO_CLASSES.length);
     expect(new Set(artifacts.map((artifact) => artifact.buildKey))).toEqual(
       new Set([bundle().buildKey])
     );
-    expect(new Set(artifacts.map((artifact) => artifact.executionDigest))).toHaveLength(5);
+    expect(new Set(artifacts.map((artifact) => artifact.executionDigest))).toHaveLength(
+      INTERNAL_DO_CLASSES.length
+    );
   });
 
   it("rejects mismatched bytes and unreviewed internal exports", () => {

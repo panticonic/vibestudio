@@ -33,16 +33,11 @@ import {
   executionSourceClosureDigest,
   verifyExecutionArtifactRef,
   type ExecutionArtifactRefV1,
-  type ExecutionSemanticStateRef,
+  type ExecutionSourceStateRef,
   type ExecutionSourceContentRoot,
 } from "@vibestudio/shared/execution/retention";
 import { assertPresent } from "../../lintHelpers";
-import {
-  blobCasPath,
-  centralBlobCasDir,
-  linkBlobFileSync,
-  putBlobBytesSync,
-} from "../storage/blobCas.js";
+import { blobCasPath, centralBlobCasDir, putBlobBytesSync } from "../storage/blobCas.js";
 import { stateLayout } from "../stateLayout.js";
 
 // ---------------------------------------------------------------------------
@@ -95,12 +90,34 @@ export type BuildArtifactWithContent = BuildArtifactManifestEntry & { content: s
  */
 export type BuildExecutionIdentity = ExecutionArtifactRefV1;
 
+export type ExtensionMethodAuthority = Record<
+  string,
+  | { effect: { kind: "open" } }
+  | {
+      effect: {
+        kind: "userland-capability";
+        capability: string;
+        resource: { kind: "receiver" };
+      };
+      userlandCapability: {
+        canonicalCapability: string;
+        definitionDigest: string;
+        resourceType: string;
+        grantScopes: readonly import("@vibestudio/shared/authorityManifest").UserlandGrantScope[];
+        title: string;
+        action: string;
+        description?: string;
+      };
+    }
+>;
+
 export type BuildMetadataDetails =
   | {
       kind: "extension";
       runtimeDepsKey: string | null;
       runtimeAbi: string | null;
       providerContracts: Record<string, { methods: string[] }>;
+      methodAuthority: ExtensionMethodAuthority;
       dependencyMode?: "auto" | "bundle" | "external";
       externalDeps?: Record<string, string>;
       dependencyOverrides?: Record<string, string>;
@@ -143,11 +160,8 @@ export interface BuildMetadata {
   ev: string;
   /** Workspace state this artifact was materialized from; null for non-workspace builds. */
   sourceStateHash: string | null;
-  /** Exact semantic provenance paired with sourceStateHash. */
-  sourceSemanticState?:
-    | { kind: "event"; eventId: string }
-    | { kind: "application"; applicationId: string }
-    | null;
+  /** Exact immutable source provenance paired with sourceStateHash. */
+  sourceState?: ExecutionSourceStateRef | null;
   sourcemap: boolean;
   framework?: string;
   /** Deterministic report-only panel payload baseline derived from esbuild. */
@@ -160,6 +174,8 @@ export interface BuildMetadata {
   }>;
   /** Authority sealed from the exact materialized source manifest. */
   authority?: UnitAuthorityManifest;
+  /** Panel state-argument schema sealed from the exact materialized manifest. */
+  stateArgsSchema?: import("@vibestudio/shared/stateArgs").StateArgsSchema;
   /**
    * Caller-facing direct-RPC documentation extracted from this exact worker
    * source state. Discovery only: grants and receiver enforcement never consume it.
@@ -515,8 +531,8 @@ function createBuildExecutionIdentity(
   if (!metadata.sourcePath) {
     throw new Error(`Workspace build ${metadata.buildKey} is missing its source path`);
   }
-  if (!metadata.sourceSemanticState) {
-    throw new Error(`Workspace build ${metadata.buildKey} is missing exact semantic source state`);
+  if (!metadata.sourceState) {
+    throw new Error(`Workspace build ${metadata.buildKey} is missing exact source state`);
   }
   if (!activeExecutionIdentityContext) {
     throw new Error(`Workspace build ${metadata.buildKey} has no execution identity context`);
@@ -531,7 +547,7 @@ function createBuildExecutionIdentity(
     kind: "workspace" as const,
     workspaceId: activeExecutionIdentityContext.workspaceId,
     effectiveVersion: parseSha256(metadata.ev, "build effective version"),
-    state: metadata.sourceSemanticState,
+    state: metadata.sourceState,
     contentRoots,
     sourceClosureDigest: executionSourceClosureDigest(contentRoots),
   };
@@ -765,21 +781,21 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
   if (metadata.sourceStateHash !== null && metadata.authority === undefined) {
     throw new Error(`Workspace build ${key} is missing sealed authority metadata`);
   }
-  const metadataWithSemanticState: BuildMetadata =
+  const metadataWithSourceState: BuildMetadata =
     metadata.sourceStateHash === null
-      ? { ...metadata, sourceSemanticState: null }
+      ? { ...metadata, sourceState: null }
       : {
           ...metadata,
-          sourceSemanticState:
-            metadata.sourceSemanticState ??
-            activeExecutionIdentityContext?.semanticStateForContent(metadata.sourceStateHash) ??
+          sourceState:
+            metadata.sourceState ??
+            activeExecutionIdentityContext?.executionStateForContent(metadata.sourceStateHash) ??
             null,
         };
   const sealedMetadata: BuildMetadata =
     metadata.authority === undefined
-      ? metadataWithSemanticState
+      ? metadataWithSourceState
       : {
-          ...metadataWithSemanticState,
+          ...metadataWithSourceState,
           authority: parseUnitAuthorityManifest(metadata.authority, `build ${key} authority`),
         };
   const dir = getBuildDir(key);
@@ -875,7 +891,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
 
 let activeExecutionIdentityContext: {
   workspaceId: string;
-  semanticStateForContent: (stateHash: string) => ExecutionSemanticStateRef | null;
+  executionStateForContent: (stateHash: string) => ExecutionSourceStateRef | null;
 } | null = null;
 
 export function setBuildExecutionIdentityContext(
@@ -983,7 +999,7 @@ function sourceRootsForStoredBuild(key: string): ExecutionSourceContentRoot[] | 
   if (
     !build?.metadata.execution ||
     build.metadata.execution.sourceState.kind !== "workspace" ||
-    !build.metadata.sourceSemanticState
+    !build.metadata.sourceState
   ) {
     return null;
   }
@@ -1275,128 +1291,4 @@ export async function scanRetention(): Promise<BuildStoreRetentionScan> {
   }
 
   return { builds, failures };
-}
-
-export interface BuildArtifactDedupeResult {
-  scanned: number;
-  linked: number;
-  alreadyShared: number;
-  skipped: number;
-  estimatedBytesFreed: number;
-  errors: string[];
-}
-
-function sameInode(a: fs.Stats, b: fs.Stats): boolean {
-  // ino is documented as zero on some Windows filesystems. Treat zero as
-  // unknown instead of incorrectly declaring every file shared.
-  return a.dev === b.dev && a.ino !== 0 && a.ino === b.ino;
-}
-
-function ensureArtifactBlobFromFile(
-  poolDir: string,
-  integrity: string,
-  sourcePath: string
-): string {
-  const digest = integrityHex(integrity);
-  if (!digest) throw new Error("Invalid artifact integrity");
-  return linkBlobFileSync(poolDir, digest, sourcePath);
-}
-
-function replaceWithHardlink(filePath: string, blobPath: string): void {
-  const tmpPath = `${filePath}.dedupe.${crypto.randomBytes(16).toString("hex")}`;
-  fs.linkSync(blobPath, tmpPath);
-  try {
-    // Atomic on the managed-workspace filesystems we support: readers see
-    // either the old complete file or the shared complete inode.
-    fs.renameSync(tmpPath, filePath);
-  } catch (error) {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch (cleanupError) {
-      if (!isFileSystemErrorCode(cleanupError, ["ENOENT"])) {
-        warnCleanupFailure(tmpPath, cleanupError);
-      }
-    }
-    throw error;
-  }
-}
-
-/**
- * Relink existing build payloads into the shared artifact CAS.
- *
- * This intentionally leaves metadata.json, artifacts.json and package.json in
- * the workspace build directory. They are tiny and metadata is workspace-local.
- */
-export function dedupeBuildArtifacts(
-  buildsDir = getBuildsDir(),
-  poolDir = getCentralBuildArtifactPoolDir()
-): BuildArtifactDedupeResult {
-  const result: BuildArtifactDedupeResult = {
-    scanned: 0,
-    linked: 0,
-    alreadyShared: 0,
-    skipped: 0,
-    estimatedBytesFreed: 0,
-    errors: [],
-  };
-  if (!fs.existsSync(buildsDir)) return result;
-
-  for (const buildEntry of fs.readdirSync(buildsDir, { withFileTypes: true })) {
-    if (!buildEntry.isDirectory()) continue;
-    const buildDir = path.join(buildsDir, buildEntry.name);
-    const manifestPath = path.join(buildDir, "artifacts.json");
-    if (!fs.existsSync(manifestPath)) continue;
-
-    let manifest: BuildArtifactManifestEntry[];
-    try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as BuildArtifactManifestEntry[];
-    } catch (error) {
-      result.errors.push(
-        `${manifestPath}: ${error instanceof Error ? error.message : String(error)}`
-      );
-      continue;
-    }
-
-    for (const entry of manifest) {
-      result.scanned++;
-      if (
-        !entry.integrity ||
-        path.isAbsolute(entry.path) ||
-        entry.path.split(/[\\/]/).includes("..")
-      ) {
-        result.skipped++;
-        continue;
-      }
-      const blobPath = artifactBlobPath(poolDir, entry.integrity);
-      const filePath = path.join(buildDir, entry.path);
-      if (!blobPath || !fs.existsSync(filePath)) {
-        result.skipped++;
-        continue;
-      }
-
-      try {
-        ensureArtifactBlobFromFile(poolDir, entry.integrity, filePath);
-        const fileStat = fs.statSync(filePath);
-        const blobStat = fs.statSync(blobPath);
-        if (sameInode(fileStat, blobStat)) {
-          result.alreadyShared++;
-          continue;
-        }
-        if (fileStat.size !== blobStat.size) {
-          throw new Error(
-            `integrity collision or corrupt artifact (${fileStat.size} != ${blobStat.size})`
-          );
-        }
-        replaceWithHardlink(filePath, blobPath);
-        result.linked++;
-        if (fileStat.nlink === 1) result.estimatedBytesFreed += fileStat.blocks * 512;
-      } catch (error) {
-        result.errors.push(
-          `${filePath}: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    }
-  }
-
-  return result;
 }

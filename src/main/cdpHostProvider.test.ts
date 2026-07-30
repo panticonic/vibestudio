@@ -41,6 +41,10 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
       canGoForward: vi.fn(() => false),
     },
     stop: vi.fn(),
+    executeJavaScript: vi.fn(async () => ({
+      view: { url: "https://example.com/app", loading: false },
+      boot: { phase: "ready" },
+    })),
     debugger: debuggerApi,
   });
   // `Page.captureScreenshot` is routed through ViewManager.captureView (which
@@ -490,6 +494,18 @@ describe("CdpHostProvider", () => {
       requestId: "h1",
       result: null,
     });
+  });
+
+  it("bounds a stranded panel page observation as unavailable", async () => {
+    vi.useFakeTimers();
+    const { provider, contents } = createHarness();
+    provider.registerTarget("panel-1", 42);
+    contents.executeJavaScript.mockImplementationOnce(() => new Promise<never>(() => undefined));
+
+    const observation = provider.getBootObservation("panel-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(observation).resolves.toEqual({ phase: "unavailable" });
   });
 
   it("serves accessibility trees as a built-in host command", async () => {

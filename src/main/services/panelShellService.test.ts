@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
-import { createPanelShellService } from "./panelShellService.js";
+import { buildPanelViewHandler } from "./panelShellService.js";
+import { panelMethods } from "@vibestudio/service-schemas/panel";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel:chat", "panel") };
@@ -35,8 +37,6 @@ function createServiceHarness(appCapabilities: string[] = []) {
   const markBrowserNavigationIntent = vi.fn();
   const reload = vi.fn();
   const forceReload = vi.fn();
-  const treeSnapshot = { revision: 7, rootPanels: [] };
-  const getPanelTreeSnapshot = vi.fn(() => treeSnapshot);
   const getFocusedPanelId = vi.fn(() => "panel-1");
   const getViewInfo = vi.fn(() => ({
     type: "app",
@@ -49,7 +49,7 @@ function createServiceHarness(appCapabilities: string[] = []) {
     callAs: vi.fn(),
   };
 
-  const service = createPanelShellService({
+  const handler = buildPanelViewHandler({
     panelOrchestrator: {
       setCurrentTheme,
       broadcastTheme,
@@ -58,6 +58,14 @@ function createServiceHarness(appCapabilities: string[] = []) {
       getThemeConfig,
       ensureLoaded,
       takeOverPanel,
+      getPanelViewRevision: vi.fn(() => 4),
+      refreshPanelProjection: vi.fn(async () => ({
+        id: "panel-1",
+        title: "Panel 1",
+        children: [],
+        snapshot: { source: "about/new", contextId: "ctx-1", options: {} },
+        artifacts: {},
+      })),
     } as never,
     panelRegistry: {
       getPanel: vi.fn(() => ({
@@ -69,8 +77,9 @@ function createServiceHarness(appCapabilities: string[] = []) {
         artifacts: {},
       })),
       getSerializablePanelTree: vi.fn(() => []),
-      getPanelTreeSnapshot,
       getFocusedPanelId,
+      findParentId: vi.fn(() => null),
+      getRootPanels: vi.fn(() => []),
     } as never,
     panelView: {
       markBrowserNavigationIntent,
@@ -85,7 +94,12 @@ function createServiceHarness(appCapabilities: string[] = []) {
   });
 
   return {
-    service,
+    service: {
+      name: "view",
+      authority: { principals: ["user", "code"] },
+      methods: panelMethods,
+      handler,
+    } satisfies ServiceDefinition,
     setCurrentTheme,
     broadcastTheme,
     setCurrentThemeConfig,
@@ -97,8 +111,6 @@ function createServiceHarness(appCapabilities: string[] = []) {
     markBrowserNavigationIntent,
     reload,
     forceReload,
-    treeSnapshot,
-    getPanelTreeSnapshot,
     getFocusedPanelId,
     serverClient,
   };
@@ -113,10 +125,6 @@ describe("PanelShellService", () => {
       "panel-1",
       { transition: "reload" },
     ]);
-    await harness.service.handler(appCtx, "ensureLoaded", ["panel-1"]);
-    await harness.service.handler(appCtx, "takeOver", ["panel-1"]);
-    await harness.service.handler(appCtx, "reloadView", ["panel-1"]);
-    await harness.service.handler(appCtx, "forceReloadView", ["panel-1"]);
 
     expect(harness.setCurrentTheme).toHaveBeenCalledWith("dark");
     expect(harness.broadcastTheme).toHaveBeenCalledWith("dark");
@@ -132,24 +140,6 @@ describe("PanelShellService", () => {
     expect(harness.markBrowserNavigationIntent).toHaveBeenCalledWith("panel-1", {
       transition: "reload",
     });
-    expect(harness.ensureLoaded).toHaveBeenCalledWith("panel-1");
-    expect(harness.takeOverPanel).toHaveBeenCalledWith("panel-1");
-    expect(harness.reload).toHaveBeenCalledWith("panel-1");
-    expect(harness.forceReload).toHaveBeenCalledWith("panel-1");
-    expect(harness.serverClient.call).not.toHaveBeenCalled();
-    expect(harness.serverClient.callAs).not.toHaveBeenCalled();
-  });
-
-  it("serves panel tree reads from the Electron host mirror", async () => {
-    const harness = createServiceHarness(["panel-hosting"]);
-
-    await expect(harness.service.handler(appCtx, "getTreeSnapshot", [])).resolves.toBe(
-      harness.treeSnapshot
-    );
-    await expect(harness.service.handler(appCtx, "getFocusedPanelId", [])).resolves.toBe("panel-1");
-
-    expect(harness.getPanelTreeSnapshot).toHaveBeenCalled();
-    expect(harness.getFocusedPanelId).toHaveBeenCalled();
     expect(harness.serverClient.call).not.toHaveBeenCalled();
     expect(harness.serverClient.callAs).not.toHaveBeenCalled();
   });
@@ -157,18 +147,13 @@ describe("PanelShellService", () => {
   it("denies apps without panel-hosting capability", async () => {
     const harness = createServiceHarness();
 
-    await expect(harness.service.handler(appCtx, "ensureLoaded", ["panel-1"])).rejects.toThrow(
-      /panel-hosting/
-    );
-    await expect(harness.service.handler(appCtx, "takeOver", ["panel-1"])).rejects.toThrow(
-      /panel-hosting/
-    );
-    await expect(harness.service.handler(appCtx, "reloadView", ["panel-1"])).rejects.toThrow(
-      /panel-hosting/
-    );
-    expect(harness.ensureLoaded).not.toHaveBeenCalled();
-    expect(harness.takeOverPanel).not.toHaveBeenCalled();
-    expect(harness.reload).not.toHaveBeenCalled();
+    await expect(
+      harness.service.handler(appCtx, "markBrowserNavigationIntent", [
+        "panel-1",
+        { transition: "reload" },
+      ])
+    ).rejects.toThrow(/panel-hosting/);
+    expect(harness.markBrowserNavigationIntent).not.toHaveBeenCalled();
   });
 
   it("allows panel runtimes to read the live theme config", async () => {
@@ -185,41 +170,46 @@ describe("PanelShellService", () => {
     dispatcher.registerService(harness.service);
     dispatcher.markInitialized();
 
-    await expect(dispatcher.dispatch(panelCtx, "panel", "getThemeConfig", [])).resolves.toEqual(
+    await expect(dispatcher.dispatch(panelCtx, "view", "getThemeConfig", [])).resolves.toEqual(
       harness.themeConfig
     );
 
     await expect(
-      dispatcher.dispatch(panelCtx, "panel", "reloadView", ["panel-1"])
+      dispatcher.dispatch(panelCtx, "view", "markBrowserNavigationIntent", [
+        "panel-1",
+        { transition: "reload" },
+      ])
     ).rejects.toMatchObject({
       code: "EACCES",
     });
-    expect(harness.reload).not.toHaveBeenCalled();
+    expect(harness.markBrowserNavigationIntent).not.toHaveBeenCalled();
   });
 
   it("denies bootstrap shell callers", async () => {
     const harness = createServiceHarness(["panel-hosting"]);
 
     await expect(
-      harness.service.handler({ caller: createVerifiedCaller("shell", "shell") }, "reloadView", [
-        "panel-1",
-      ])
+      harness.service.handler(
+        { caller: createVerifiedCaller("shell", "shell") },
+        "markBrowserNavigationIntent",
+        ["panel-1", { transition: "reload" }]
+      )
     ).rejects.toThrow(/restricted to app callers/);
-    expect(harness.reload).not.toHaveBeenCalled();
+    expect(harness.markBrowserNavigationIntent).not.toHaveBeenCalled();
   });
 
   it("does not expose panel-tree mutation proxy methods", async () => {
     const harness = createServiceHarness(["panel-hosting"]);
 
     await expect(harness.service.handler(appCtx, "archive", ["panel-1"])).rejects.toThrow(
-      /Unknown panel method/
+      /Unknown view method/
     );
     await expect(harness.service.handler(appCtx, "create", ["about/new"])).rejects.toThrow(
-      /Unknown panel method/
+      /Unknown view method/
     );
     await expect(
       harness.service.handler(appCtx, "navigate", ["panel-1", "about/new"])
-    ).rejects.toThrow(/Unknown panel method/);
+    ).rejects.toThrow(/Unknown view method/);
     expect(harness.serverClient.call).not.toHaveBeenCalled();
     expect(harness.serverClient.callAs).not.toHaveBeenCalled();
   });

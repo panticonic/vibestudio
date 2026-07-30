@@ -36,10 +36,8 @@ export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
    */
   resolveSubjectCaller(entityId: string): VerifiedCaller | null;
   hasAppCapability?(callerId: string, capability: AppCapability): boolean;
-  /** Used by panelTreeService.targetForCreate to resolve a panel caller's own slot. */
+  /** Resolve a panel caller's own slot for generic context-boundary preparation. */
   resolveRequesterPanel?(caller: VerifiedCaller): Promise<PanelAccessPermissionTarget | null>;
-  /** Retained for wiring compatibility; the context-boundary gate no longer reads it. */
-  hasApprovalSession?(): boolean;
 }
 
 /** Ops that change a panel's context (gate against the DESTINATION, not the current, context). */

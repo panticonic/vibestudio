@@ -5,6 +5,7 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { eventsMethods } from "../events.js";
+import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 
 export type EventSnapshotProviders = {
   [E in EventName]?: () => EventPayloads[E] | undefined;
@@ -18,6 +19,7 @@ export interface EventsServiceDefinitionOptions {
     events: readonly EventName[],
     context: ServiceContext
   ) => (() => void) | undefined;
+  methods?: ServiceMethodSchemas;
 }
 
 /** Bind the events wire contract to an existing in-process event service. */
@@ -26,14 +28,15 @@ export function createEventsServiceDefinition(
   opts: EventsServiceDefinitionOptions = {}
 ): ServiceDefinition {
   const serviceName = opts.serviceName ?? "events";
+  const methods = opts.methods ?? eventsMethods;
   return {
     name: serviceName,
     description: "Event subscriptions",
     authority: { principals: ["user", "code", "host"] },
-    methods: eventsMethods,
-    handler: defineServiceHandler(serviceName, eventsMethods, {
+    methods,
+    handler: defineServiceHandler(serviceName, methods, {
       watch: (ctx, [requestedEvents, watchId]) => {
-        const events = requestedEvents.map((eventName) => {
+        const events = (requestedEvents as string[]).map((eventName: string) => {
           if (!isValidEventName(eventName)) throw new Error(`Unknown event: ${eventName}`);
           return eventName;
         });

@@ -666,10 +666,13 @@ export async function getSharedPanelAddressOptions(args: {
 
 export async function getSharedBrowserAddressOptions(args: {
   query: string;
-  panels: Panel[];
+  panels?: Panel[];
+  sessionRows?: BrowserHistoryAddressRow[];
   browserData?: AddressProviderBrowserDataAdapter | null;
 }): Promise<BrowserAddressOptions> {
-  const sessionSuggestions = collectBrowserAddressSuggestionsFromPanels(args.panels);
+  const sessionSuggestions = args.sessionRows
+    ? normalizeBrowserAddressSuggestions(args.sessionRows, "session")
+    : collectBrowserAddressSuggestionsFromPanels(args.panels ?? []);
   const browserData = args.browserData;
   if (!browserData) {
     return {

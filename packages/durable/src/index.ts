@@ -13,6 +13,7 @@ import {
   type RpcEnvelope,
   type RpcEvent,
   type RpcRequest,
+  type ResolvedRpcAuthority,
 } from "@vibestudio/rpc";
 import {
   DIRECT_AUTHORITY_ACCEPTED_AT_HEADER,
@@ -30,14 +31,20 @@ import {
 } from "@vibestudio/shared/directRpcEnforcement";
 import type { DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import {
-  migrateDurableObjectSchema,
-  type DurableObjectSchemaBaseline,
-  type DurableObjectSchemaMigration,
-} from "./schema.js";
+  bindMethodCapability,
+  allOf,
+  anyOf,
+  capability,
+} from "@vibestudio/shared/authorization";
+import type {
+  MethodSchema,
+  ServiceMethodSchemas,
+} from "@vibestudio/shared/typedServiceClient";
+import { installExactDurableObjectSchema } from "./schema.js";
 import { InvocationContext } from "./invocation-context.js";
 
 // Re-export the `@rpc` exposure decorator so DO authors import it alongside the base.
-export { rpc } from "@vibestudio/rpc";
+export { rpc, schemaRpc } from "@vibestudio/rpc";
 
 export interface DurableObjectContext {
   id: { toString(): string; name?: string };
@@ -69,11 +76,7 @@ export interface DORef {
   objectKey: string;
 }
 
-export type {
-  DurableObjectSchemaBaseline,
-  DurableObjectSchemaMigration,
-  SchemaSqlStorage,
-} from "./schema.js";
+export type { SchemaSqlStorage } from "./schema.js";
 export { InvocationContext } from "./invocation-context.js";
 
 export interface LifecyclePrepareInput {
@@ -87,6 +90,11 @@ export interface LifecyclePrepareInput {
 
 interface RpcInvocationContext {
   verifiedCaller: AttestedCaller | null;
+  /**
+   * The host attestation is a one-invocation continuation, not ambient
+   * authority for async resources spawned by that invocation.
+   */
+  authorityActive: boolean;
   callerId: string | null;
   callerKind: string | null;
   callerPanelId: string | null;
@@ -116,6 +124,7 @@ export interface AlarmSchedule {
 export abstract class DurableObjectBase {
   static schemaVersion = 1;
   static eventIntake: readonly EventIntakeRule[] = [];
+  static rpcMethods?: ServiceMethodSchemas;
 
   protected ctx: DurableObjectContext;
   protected sql: SqlStorage;
@@ -139,14 +148,76 @@ export abstract class DurableObjectBase {
 
   protected abstract createTables(): void;
 
-  /** Explicit persisted-state upgrades. Fresh databases never replay these. */
-  protected schemaMigrations(): readonly DurableObjectSchemaMigration[] {
-    return [];
+  /**
+   * Optional receiver binding for schema-declared code principals. Product
+   * policy remains in `rpcMethods`; a concrete service may bind that generic
+   * relationship to one provider source from its sealed environment.
+   */
+  protected rpcSchemaCodeSource(): string | null {
+    return null;
   }
 
-  /** Oldest production schema shape this class can open without data loss. */
-  protected schemaProductionBaseline(): DurableObjectSchemaBaseline | undefined {
-    return undefined;
+  protected rpcAuthorityDeclaration(
+    method: string,
+    wireMethod: MethodSchema | undefined
+  ): ResolvedRpcAuthority | null {
+    if (!wireMethod) return rpcMethodAuthority(this, method) ?? null;
+    const authority = wireMethod.authority;
+    const tier = wireMethod.tier;
+    const sensitivity = wireMethod.access?.sensitivity;
+    const methodCapability = wireMethod.capability;
+    if (!authority || !tier || !sensitivity || !methodCapability) {
+      throw new Error(
+        `${this.constructor.name}.${method} has an incomplete typed receiver authority declaration`
+      );
+    }
+    const effect = wireMethod.directEffect ?? {
+      kind: "host-capability" as const,
+      capability: methodCapability,
+      resource: { kind: "receiver-object" as const },
+    };
+    if (!("principals" in authority)) {
+      if (authority.additional?.length || authority.prepared) {
+        throw new Error(
+          `${this.constructor.name}.${method} uses host-service-only prepared authority`
+        );
+      }
+      return {
+        requires: bindMethodCapability(authority.requirement, methodCapability),
+        effect,
+        tier: tier.tier,
+        sensitivity,
+        ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),
+      };
+    }
+    const codeSource = this.rpcSchemaCodeSource();
+    if (!codeSource || !authority.principals.includes("code")) {
+      return {
+        principals: authority.principals,
+        effect,
+        tier: tier.tier,
+        sensitivity,
+        ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),
+      };
+    }
+    const unconstrained = authority.principals.filter((principal) => principal !== "code");
+    return {
+      requires: anyOf(
+        ...unconstrained.map((principal) => capability(principal, methodCapability)),
+        allOf(
+          capability("code", methodCapability),
+          {
+            kind: "relationship",
+            name: "code-source",
+            value: codeSource,
+          }
+        )
+      ),
+      effect,
+      tier: tier.tier,
+      sensitivity,
+      ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),
+    };
   }
 
   protected requiredTables(): readonly string[] {
@@ -169,12 +240,10 @@ export abstract class DurableObjectBase {
 
   protected ensureReady(): void {
     if (this.schemaReady) return;
-    migrateDurableObjectSchema({
+    installExactDurableObjectSchema({
       className: this.constructor.name,
-      targetVersion: (this.constructor as typeof DurableObjectBase).schemaVersion,
+      version: (this.constructor as typeof DurableObjectBase).schemaVersion,
       storage: this.ctx.storage,
-      migrations: this.schemaMigrations(),
-      productionBaseline: this.schemaProductionBaseline(),
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });
@@ -294,10 +363,10 @@ export abstract class DurableObjectBase {
         // Continue only the currently executing host-attested invocation.
         // The callback is evaluated when an outbound envelope is created, so
         // alarms and later requests cannot retain a completed parent's nonce.
-        authorityParentNonce: () => {
-          const authorization = this.invocationContext.current()?.verifiedCaller?.authorization;
-          return authorization?.context.testPolicy ? authorization.nonce : undefined;
-        },
+        authorityParentNonce: () =>
+          this.invocationContext.current()?.authorityActive
+            ? this.invocationContext.current()?.verifiedCaller?.authorization?.nonce
+            : undefined,
         ...(this.respondTimeoutMs !== undefined ? { respondTimeoutMs: this.respondTimeoutMs } : {}),
       });
       // Expose ONLY this DO's `@rpc`-marked methods (opt-in / default-deny). Private/protected helpers
@@ -445,9 +514,7 @@ export abstract class DurableObjectBase {
 
   /** Clear this activation's durable lifecycle ownership declaration. */
   protected async clearLifecycleRelease(): Promise<void> {
-    await this.rpc.call<void>("main", "workspace-state.lifecycleLeaseClear", [
-      this.lifecycleKey(),
-    ]);
+    await this.rpc.call<void>("main", "workspace-state.lifecycleLeaseClear", [this.lifecycleKey()]);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -622,7 +689,9 @@ export abstract class DurableObjectBase {
       !attestation ||
       !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
     ) {
-      const reason = `${method}: host authority attestation was replayed`;
+      const reason =
+        `${method}: host authority attestation nonce was replayed or is outside ` +
+        "the receiver's retention bound";
       return {
         code: "EACCES",
         reason,
@@ -672,7 +741,9 @@ export abstract class DurableObjectBase {
         !attestation ||
         !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
       ) {
-        const reason = `${method}: host authority attestation was replayed`;
+        const reason =
+          `${method}: host authority attestation nonce was replayed or is outside ` +
+          "the receiver's retention bound";
         return jsonResponse(
           {
             error: reason,
@@ -740,15 +811,46 @@ export abstract class DurableObjectBase {
     const caller = rawCaller && rawCaller.callerId !== "" ? (rawCaller as AttestedCaller) : null;
     const message = envelope.message as RpcRequest;
     const method = message?.method;
+    const wireMethod = method
+      ? (this.constructor as typeof DurableObjectBase).rpcMethods?.[method]
+      : undefined;
+    if (wireMethod && message) {
+      const tupleItems = (wireMethod.args as unknown as { _def?: { items?: readonly unknown[] } })
+        ._def?.items;
+      const args = message.args ?? [];
+      const paddedArgs = tupleItems
+        ? [...args, ...Array(Math.max(0, tupleItems.length - args.length))]
+        : args;
+      const parsedArgs = wireMethod.args.safeParse(paddedArgs);
+      if (!parsedArgs.success) {
+        return this.schemaDenialResponse(
+          envelope,
+          message,
+          `Invalid arguments for ${method}: ${parsedArgs.error.message}`
+        );
+      }
+      message.args = parsedArgs.data as unknown[];
+    }
     const audience = this.rpcSelfId;
+    const declaration = method
+      ? this.rpcAuthorityDeclaration(method, wireMethod)
+      : null;
+    const attestation = caller?.authorization ?? null;
+    const resourceKey =
+      declaration?.effect.kind === "userland-capability" &&
+      declaration.effect.resource.kind === "opaque-handle" &&
+      attestation?.resourceSelector !== undefined &&
+      message?.args?.[declaration.effect.resource.argument] === attestation.resourceSelector
+        ? attestation.resourceKey
+        : audience;
     const denial = directRpcDenial({
       kind: "call",
       method: method ?? "",
       caller,
-      attestation: caller?.authorization ?? null,
-      declaration: method ? (rpcMethodAuthority(this, method) ?? null) : null,
+      attestation,
+      declaration,
       audience,
-      resourceKey: audience,
+      resourceKey,
       capability: caller?.authorization?.capability ?? "",
       now: authorityAcceptedAt,
     });
@@ -768,12 +870,13 @@ export abstract class DurableObjectBase {
         },
       } as RpcEnvelope;
     }
-    const attestation = caller?.authorization;
     if (
       !attestation ||
       !this.directRpcNonces.consume(attestation.nonce, attestation.expiresAt, authorityAcceptedAt)
     ) {
-      const reason = `${method ?? "<unknown>"}: host authority attestation was replayed`;
+      const reason =
+        `${method ?? "<unknown>"}: host authority attestation nonce was replayed or is outside ` +
+        "the receiver's retention bound";
       return {
         from: envelope.target,
         target: envelope.from,
@@ -791,7 +894,45 @@ export abstract class DurableObjectBase {
         },
       } as RpcEnvelope;
     }
-    return this.withRpcCaller(caller, message, envelope, () => connectionless.respond(envelope));
+    const response = await this.withRpcCaller(caller, message, envelope, () =>
+      connectionless.respond(envelope)
+    );
+    if (
+      wireMethod?.returns &&
+      response?.message.type === "response" &&
+      !("error" in response.message)
+    ) {
+      const parsedResult = wireMethod.returns.safeParse(response.message.result);
+      if (!parsedResult.success) {
+        return this.schemaDenialResponse(
+          envelope,
+          message,
+          `Invalid result from ${method}: ${parsedResult.error.message}`
+        );
+      }
+      response.message.result = parsedResult.data;
+    }
+    return response;
+  }
+
+  private schemaDenialResponse(
+    envelope: RpcEnvelope,
+    message: RpcRequest,
+    reason: string
+  ): RpcEnvelope {
+    return {
+      from: envelope.target,
+      target: envelope.from,
+      delivery: envelope.delivery,
+      provenance: envelope.provenance ?? [],
+      message: {
+        type: "response",
+        requestId: message.requestId,
+        error: reason,
+        errorCode: "EINVAL",
+        errorKind: "protocol",
+      },
+    } as RpcEnvelope;
   }
 
   protected handleWebSocketUpgrade(_request: Request): Response {
@@ -822,7 +963,7 @@ export abstract class DurableObjectBase {
 
   @rpc({
     principals: ["host"],
-    effect: { kind: "runtime-intrinsic" },
+    effect: { kind: "open" },
     tier: "open",
     sensitivity: "read",
   })
@@ -843,17 +984,20 @@ export abstract class DurableObjectBase {
     caller: AttestedCaller | null,
     callback: () => Promise<Response>
   ): Promise<Response> {
-    return this.invocationContext.run(
-      {
-        verifiedCaller: caller,
-        callerId: caller?.callerId ?? null,
-        callerKind: caller?.callerKind ?? null,
-        callerPanelId: caller?.callerPanelId ?? null,
-        requestId: null,
-        idempotencyKey: null,
-      },
-      callback
-    );
+    const context: RpcInvocationContext = {
+      verifiedCaller: caller,
+      authorityActive: true,
+      callerId: caller?.callerId ?? null,
+      callerKind: caller?.callerKind ?? null,
+      callerPanelId: caller?.callerPanelId ?? null,
+      requestId: null,
+      idempotencyKey: null,
+    };
+    try {
+      return await this.invocationContext.run(context, callback);
+    } finally {
+      context.authorityActive = false;
+    }
   }
 
   private async withRpcCaller<T>(
@@ -862,17 +1006,20 @@ export abstract class DurableObjectBase {
     envelope: RpcEnvelope,
     callback: () => Promise<T>
   ): Promise<T> {
-    return this.invocationContext.run(
-      {
-        verifiedCaller: caller,
-        callerId: caller?.callerId ?? null,
-        callerKind: caller?.callerKind ?? null,
-        callerPanelId: caller?.callerPanelId ?? null,
-        requestId: message?.requestId ?? null,
-        idempotencyKey: envelope.delivery.idempotencyKey ?? null,
-      },
-      callback
-    );
+    const context: RpcInvocationContext = {
+      verifiedCaller: caller,
+      authorityActive: true,
+      callerId: caller?.callerId ?? null,
+      callerKind: caller?.callerKind ?? null,
+      callerPanelId: caller?.callerPanelId ?? null,
+      requestId: message?.requestId ?? null,
+      idempotencyKey: envelope.delivery.idempotencyKey ?? null,
+    };
+    try {
+      return await this.invocationContext.run(context, callback);
+    } finally {
+      context.authorityActive = false;
+    }
   }
 }
 

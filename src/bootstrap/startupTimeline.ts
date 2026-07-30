@@ -2,15 +2,18 @@ import type {
   StartupConnectionProgress,
   StartupConnectionPhaseId,
 } from "../startupConnectionProgress.js";
-import type {
-  HostTargetLaunchPhaseState,
-  HostTargetLaunchTimelinePhase,
-} from "@vibestudio/shared/hostTargets";
+type BootstrapPhaseState = "pending" | "active" | "complete" | "blocked" | "failed" | "skipped";
 
 export interface BootstrapTimelinePhase {
-  id: StartupConnectionPhaseId | HostTargetLaunchTimelinePhase["id"];
+  id:
+    | StartupConnectionPhaseId
+    | "review-trust"
+    | "start-units"
+    | "build-app"
+    | "activate-target"
+    | "connected";
   label: string;
-  state: HostTargetLaunchPhaseState;
+  state: BootstrapPhaseState;
   detail?: string;
 }
 
@@ -52,15 +55,5 @@ export function startupTimeline(
     { id: "build-app", label: "Build desktop app", state: "pending" },
     { id: "activate-target", label: "Activate desktop", state: "pending" },
     { id: "connected", label: "Connected", state: "pending" },
-  ];
-}
-
-export function launchTimelineWithConnection(
-  progress: StartupConnectionProgress | null | undefined,
-  launchTimeline: readonly HostTargetLaunchTimelinePhase[]
-): BootstrapTimelinePhase[] {
-  return [
-    ...connectionTimeline(progress, "complete"),
-    ...launchTimeline.filter((phase) => phase.id !== "pair"),
   ];
 }

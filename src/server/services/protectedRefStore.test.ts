@@ -326,7 +326,7 @@ describe("ProtectedRefStore", () => {
     expect(replayGate).not.toHaveBeenCalled();
   });
 
-  it("migrates the exact v5 store to v6 without losing refs or publication evidence", async () => {
+  it("rejects an exact v5 store without modifying it", async () => {
     const { statePath, store } = await makeStore();
     await store.updateMains({
       entries: [{ repoPath: "packages/a", expectedOld: null, next: A }],
@@ -341,15 +341,11 @@ describe("ProtectedRefStore", () => {
     const persisted = JSON.parse(await fsp.readFile(filePath, "utf8")) as Record<string, unknown>;
     await fsp.writeFile(filePath, JSON.stringify({ ...persisted, version: 5, systemEpoch: 56 }));
 
-    const migrated = createProtectedRefStore({ statePath, gate: async () => undefined });
-
-    expect(migrated.readMain("packages/a")).toMatchObject({ contentRoot: A });
-    expect(migrated.readAppliedPublication("publication:old-epoch")).toMatchObject({
-      publishedEventId: "event:old-after",
-    });
-    const v6 = JSON.parse(await fsp.readFile(filePath, "utf8"));
-    expect(v6).toMatchObject({ version: 6, mains: [{ repoPath: "packages/a", contentRoot: A }] });
-    expect(v6).not.toHaveProperty("systemEpoch");
+    const before = await fsp.readFile(filePath, "utf8");
+    expect(() => createProtectedRefStore({ statePath, gate: async () => undefined })).toThrow(
+      /schema version 5; expected 6/
+    );
+    expect(await fsp.readFile(filePath, "utf8")).toBe(before);
   });
 
   it("rejects unsupported, future, and corrupt persistence without modifying it", async () => {

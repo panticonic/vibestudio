@@ -1,15 +1,13 @@
-import type { UnitAuthorityManifest, UnitAuthorityRequest } from "./authorityManifest.js";
-import { hostCapabilityPresentation } from "./authority/hostCapabilityPresentations.js";
-import {
-  HOST_SEMANTIC_CAPABILITY_COPY,
-  type EditableCapabilityCopy,
-} from "./hostApprovalCopy.js";
+import type {
+  UnitAuthorityManifest,
+  UnitAuthorityRequest,
+  UserlandCapabilityDefinition,
+} from "./authorityManifest.js";
+import { generatedHostCapabilityPresentation } from "./authority/hostAuthorityCatalog.generated.js";
+import { HOST_SEMANTIC_CAPABILITY_COPY, type EditableCapabilityCopy } from "./hostApprovalCopy.js";
 import { authorityRow, type AuthorityRow } from "./authority/authorityRows.js";
 import { diffAuthorityRows, type AuthorityRowDiff } from "./authority/authorityRowDiff.js";
-import type {
-  AuthorityDomainId,
-  AuthorityVerb,
-} from "./authority/capabilityDomains.js";
+import type { AuthorityDomainId, AuthorityVerb } from "./authority/authorityDomains.js";
 
 export interface CapabilityPresentation extends EditableCapabilityCopy {
   authorityCategory?: { domain: AuthorityDomainId; verb: AuthorityVerb; declaredBy?: string };
@@ -72,10 +70,14 @@ export function summarizeAuthorityRequests(
 /** One progressive-disclosure review for installed code's declared effects. */
 export function summarizeAuthorityManifest(
   manifest: UnitAuthorityManifest,
-  previous: UnitAuthorityManifest = { requests: [] },
+  previous: UnitAuthorityManifest = { requests: [], provides: [] },
   presentationFor?: (capability: string) => CapabilityPresentation
 ) {
-  return summarizeAuthorityRequests(manifest.requests, previous.requests, presentationFor);
+  return {
+    ...summarizeAuthorityRequests(manifest.requests, previous.requests, presentationFor),
+    provides: manifest.provides,
+    previousProvides: previous.provides,
+  };
 }
 
 export function describeCapability(
@@ -102,7 +104,7 @@ export function describeCapability(
     }
     return renderRequester(semantic.presentation, requesterKind);
   }
-  const reviewedHostEffect = hostCapabilityPresentation(capability);
+  const reviewedHostEffect = generatedHostCapabilityPresentation(capability);
   if (reviewedHostEffect) return renderRequester(reviewedHostEffect, requesterKind);
   if (capability.startsWith("service:")) {
     const address = capability.slice("service:".length);
@@ -144,9 +146,39 @@ export function createCapabilityPresentationResolver(
     description?: string;
     presentation?: { domain: AuthorityDomainId; verb: AuthorityVerb };
     source?: string;
-  }[]
+  }[],
+  userlandCapabilities: () => readonly {
+    provider: string;
+    definition: UserlandCapabilityDefinition;
+  }[] = () => []
 ): CapabilityPresentationResolver {
   return (capability, requesterKind) => {
+    if (capability.startsWith("userland:")) {
+      const identity = capability.slice("userland:".length).replace(/#\*$/u, "");
+      const separator = identity.lastIndexOf("/");
+      const provider = separator < 0 ? "" : identity.slice(0, separator);
+      const localName = separator < 0 ? "" : identity.slice(separator + 1).split("#", 1)[0]!;
+      const declared = userlandCapabilities().find(
+        (candidate) => candidate.provider === provider && candidate.definition.name === localName
+      );
+      if (declared) {
+        const { definition } = declared;
+        return renderRequester(
+          {
+            group: "runtime",
+            title: definition.title,
+            action: definition.action,
+            description:
+              definition.description ?? `${definition.title}, provided by ${declared.provider}`,
+            authorityCategory: {
+              ...definition.presentation,
+              declaredBy: declared.provider,
+            },
+          },
+          requesterKind
+        );
+      }
+    }
     if (!capability.startsWith("workspace-service:")) {
       return describeCapability(capability, requesterKind);
     }

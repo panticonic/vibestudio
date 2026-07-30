@@ -46,6 +46,11 @@ const methods = defineServiceMethods({
     args: z.tuple([z.object({ value: z.string() }).strict()]),
     returns: z.object({ written: z.string() }).strict(),
     capability: CAPABILITY,
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale: "Attached-host transport test effect",
+    },
     authority: {
       requirement: requirementForPrincipals(["user"], CAPABILITY),
       resource: { kind: "literal" as const, key: RESOURCE },
@@ -73,14 +78,7 @@ async function fixture(queueDecision: "once" | "deny" | "reject" = "once") {
   const effect = vi.fn(async (_ctx, [_input]: [{ value: string }]) => ({
     written: _input.value,
   }));
-  const dispatcher = new ServiceDispatcher({
-    tierLookup: () => ({
-      tier: "gated",
-      session: "family",
-      rationale: "attached transport test",
-    }),
-    capabilityLookup: () => CAPABILITY,
-  });
+  const dispatcher = new ServiceDispatcher();
   dispatcher.setAuthorityResolver(({ caller }) => {
     const baseline = testAuthority(caller, CAPABILITY, RESOURCE);
     return { ...baseline, grants: grants as never[] };

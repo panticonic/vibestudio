@@ -17,6 +17,14 @@ export interface RuntimeEntityCleanupDeps {
   tokenManager: Pick<TokenManager, "revokeToken">;
   connectionGrants?: Pick<ConnectionGrantService, "revokeForPrincipal">;
   entityTitleService?: Pick<EntityTitleService, "clear">;
+  resourceHandles?: {
+    revokeReceiver(
+      workspaceId: string,
+      receiver: { source: string; className: string; objectKey: string },
+      reason: string
+    ): number;
+  };
+  workspaceId?: string;
   getWorkerdManager(): Pick<WorkerdManager, "stopWorker" | "retireDOEntity"> | null;
   getFsService(): FsService | null;
   getWebhookIngress(): {
@@ -64,6 +72,21 @@ export async function cleanupRuntimeEntity(
     if (!className || !objectKey) {
       failures.push(new Error(`Durable Object entity ${record.id} has no class or object key`));
     } else {
+      const resourceHandles = deps.resourceHandles;
+      const workspaceId = deps.workspaceId;
+      if (resourceHandles && workspaceId) {
+        await attempt(() =>
+          resourceHandles.revokeReceiver(
+            workspaceId,
+            {
+              source: record.source.repoPath,
+              className,
+              objectKey,
+            },
+            "logical receiver retired"
+          )
+        );
+      }
       await attempt(() =>
         workerdManager?.retireDOEntity({
           source: record.source.repoPath,

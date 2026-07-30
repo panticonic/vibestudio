@@ -15,6 +15,25 @@ const CONFIRM_SAVE_ACCESS: MethodAccessDescriptor = {
 
 export const autofillMethods = defineServiceMethods({
   confirmSave: {
+    capability: "browser-passwords.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "autofill.control",
+      rationale: "Stores or suppresses a credential only after an explicit browser save prompt.",
+    },
+    presentation: {
+      title: "Save this password choice",
+      action: "save this password choice",
+      description:
+        "Allows {requesterKind} to save a password or remember that password saving is disabled for this site.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Resolve a pending password save/update prompt for a panel: 'save' stores the credential, 'never' permanently suppresses saves for its origin, 'dismiss' snoozes the prompt.",
     args: z.tuple([z.string(), z.enum(["save", "never", "dismiss"])]),
@@ -23,36 +42,31 @@ export const autofillMethods = defineServiceMethods({
     examples: [{ args: ["panel-abc123", "save"] }],
   },
   confirmFormFill: {
+    capability: "browser-form-fill.manage",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "native-effect",
+      family: "autofill.control",
+      rationale:
+        "Stores personal form-fill values only after an explicit post-submission browser prompt.",
+    },
+    presentation: {
+      title: "Save form-fill values",
+      action: "save personal form-fill values",
+      description:
+        "Allows {requesterKind} to save the personal form values shown in a browser submission prompt.",
+      group: "credentials",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "act",
+      },
+    },
     description:
       "Resolve a pending structured form-fill learning prompt. Values remain in trusted main-process memory until this call.",
     args: z.tuple([z.string(), z.enum(["save", "dismiss"])]),
     returns: z.void(),
     access: CONFIRM_SAVE_ACCESS,
     examples: [{ args: ["panel-abc123", "save"] }],
-  },
-  listSavedPasswords: {
-    description:
-      "List secret-free saved browser-password summaries for the trusted Credentials page.",
-    args: z.tuple([]),
-    returns: z.array(z.object({ id: z.number(), origin: z.string(), username: z.string() })),
-    access: { sensitivity: "read" },
-  },
-  deleteSavedPassword: {
-    description: "Delete one saved browser password by id.",
-    args: z.tuple([z.number()]),
-    returns: z.void(),
-    access: CONFIRM_SAVE_ACCESS,
-  },
-  listNeverSaveOrigins: {
-    description: "List sites for which browser password saving is disabled.",
-    args: z.tuple([]),
-    returns: z.array(z.string()),
-    access: { sensitivity: "read" },
-  },
-  removeNeverSaveOrigin: {
-    description: "Allow browser password save prompts for a site again.",
-    args: z.tuple([z.string()]),
-    returns: z.void(),
-    access: CONFIRM_SAVE_ACCESS,
   },
 });

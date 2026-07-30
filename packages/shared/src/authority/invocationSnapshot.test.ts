@@ -6,12 +6,16 @@ const base = () =>
     service: "fs",
     method: "writeFile",
     capability: "service:fs.writeFile",
+    capabilityDefinitionDigest: "-",
+    resourceType: "filesystem",
+    provider: "-",
+    providerExecutionDigest: "-",
     resourceKey: "workspace:/a.txt",
     args: ["/a.txt", "ok", undefined],
     preparedStateDigest: "-",
     callerPrincipal: "session:conversation-1",
     sessionId: "conversation-1",
-    mission: "-",
+    reviewedClosureSubject: "-",
     snippetDigest: "a".repeat(64),
     codeLineage: { class: "internal", chain: ["repo:x@y"] },
     contextLineage: { class: "external", latchEpoch: 2, externalKeys: ["web:example.com"] },
@@ -33,11 +37,22 @@ describe("invocation snapshot", () => {
     expect(invocationSnapshotDigest(left)).toBe(invocationSnapshotDigest(right));
   });
 
-  it("changes when the prepared state, mission, or code-lineage class changes", () => {
+  it("changes when receiver, prepared state, mission, or code-lineage facts change", () => {
     const snapshot = base();
     const digest = invocationSnapshotDigest(snapshot);
+    expect(
+      invocationSnapshotDigest({ ...snapshot, providerExecutionDigest: "b".repeat(64) })
+    ).not.toBe(digest);
+    expect(
+      invocationSnapshotDigest({ ...snapshot, capabilityDefinitionDigest: "c".repeat(64) })
+    ).not.toBe(digest);
     expect(invocationSnapshotDigest({ ...snapshot, preparedStateDigest: "b".repeat(64) })).not.toBe(digest);
-    expect(invocationSnapshotDigest({ ...snapshot, mission: "mission:m@closure" })).not.toBe(digest);
+    expect(
+      invocationSnapshotDigest({
+        ...snapshot,
+        reviewedClosureSubject: "mission:m@closure",
+      })
+    ).not.toBe(digest);
     expect(invocationSnapshotDigest({ ...snapshot, codeLineage: { class: "external", chain: [] } })).not.toBe(digest);
   });
 });

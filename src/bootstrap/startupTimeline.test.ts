@@ -4,11 +4,7 @@ import {
   LOCAL_STARTUP_CONNECTION_PHASES,
   startupConnectionProgress,
 } from "../startupConnectionProgress.js";
-import {
-  connectionTimeline,
-  launchTimelineWithConnection,
-  startupTimeline,
-} from "./startupTimeline.js";
+import { connectionTimeline, startupTimeline } from "./startupTimeline.js";
 
 describe("startup timeline", () => {
   it("keeps completed local connection stages as the next stage becomes active", () => {
@@ -43,33 +39,6 @@ describe("startup timeline", () => {
       { id: "resolve-workspace", state: "failed" },
       { id: "connect-workspace", state: "pending" },
       { id: "prepare-workspace-session", state: "pending" },
-    ]);
-  });
-
-  it("preserves connection stages when the host launch timeline takes over", () => {
-    const progress = startupConnectionProgress(
-      LOCAL_STARTUP_CONNECTION_PHASES,
-      "prepare-workspace-session"
-    );
-
-    const timeline = launchTimelineWithConnection(progress, [
-      { id: "pair", label: "Connect", state: "complete" },
-      { id: "review-trust", label: "Review trust", state: "active" },
-      { id: "start-units", label: "Start privileged units", state: "pending" },
-      { id: "build-app", label: "Build desktop app", state: "pending" },
-      { id: "activate-target", label: "Activate desktop", state: "pending" },
-      { id: "connected", label: "Connected", state: "pending" },
-    ]);
-
-    expect(timeline.map(({ id, state }) => ({ id, state }))).toEqual([
-      { id: "start-local-server", state: "complete" },
-      { id: "connect-workspace", state: "complete" },
-      { id: "prepare-workspace-session", state: "complete" },
-      { id: "review-trust", state: "active" },
-      { id: "start-units", state: "pending" },
-      { id: "build-app", state: "pending" },
-      { id: "activate-target", state: "pending" },
-      { id: "connected", state: "pending" },
     ]);
   });
 

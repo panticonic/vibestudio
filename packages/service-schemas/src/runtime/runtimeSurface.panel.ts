@@ -9,7 +9,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Top-level export, not workspace.panelTree. self/get are synchronous handle factories. navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. Use list/roots/children/get for existing panels and openPanel to create.";
+  "Top-level export, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read.";
 
 // Panel-only affordances, grouped under one `panel` namespace (was ~16 flat
 // top-level exports). Identity/introspection/theme/focus/lifecycle + stateArgs.
@@ -32,7 +32,7 @@ const PANEL_MEMBERS = [
 
 export const panelRuntimeSurface: RuntimeSurface = {
   target: "panel",
-  description: "Top-level value exports available from @vibestudio/runtime in panel eval contexts.",
+  description: "Top-level value exports available from @workspace/runtime in panel eval contexts.",
   exports: {
     ...coreRuntimeSurface,
     // Entries whose description is panel-specific (member arrays shared with core).
@@ -46,7 +46,6 @@ export const panelRuntimeSurface: RuntimeSurface = {
         PANEL_HANDLE_AUTOMATION_GUIDE,
       OPEN_PANEL_SIGNATURE
     ),
-    listPanels: valueEntry(),
     getPanelHandle: valueEntry(),
     panelTree: namespaceEntry(PANEL_TREE_MEMBERS, panelTreeDescription),
     // Portable authoring helpers (also on worker + eval — pure, target-independent).

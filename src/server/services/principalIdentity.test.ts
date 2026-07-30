@@ -17,6 +17,7 @@ function makeDoRecord(id: string, repoPath: string, effectiveVersion: string): E
     activeBuildKey: "b".repeat(64),
     activeExecutionDigest: "a".repeat(64),
     activeAuthority: {
+      provides: [],
       requests: [
         {
           capability: "service:workspace-state.alarmClear",
@@ -113,7 +114,7 @@ describe("resolveCodeIdentity", () => {
       "workers/agent-worker",
       "owner-ev"
     );
-    owner.activeAuthority = { requests: [] };
+    owner.activeAuthority = { requests: [], provides: [] };
     cache._onActivate(owner);
     const evalId = "do:vibestudio/internal:EvalDO:eval-owner";
     cache._onActivate({
@@ -152,7 +153,7 @@ describe("resolveCodeIdentity", () => {
       "workers/agent-worker",
       "owner-ev"
     );
-    owner.activeAuthority = { requests: [] };
+    owner.activeAuthority = { requests: [], provides: [] };
     cache._onActivate(owner);
     const evalId = "do:vibestudio/internal:EvalDO:forged";
     const evalRecord: EntityRecord = {

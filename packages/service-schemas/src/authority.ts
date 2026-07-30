@@ -1,6 +1,62 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
+import type { AuthorityRow } from "@vibestudio/shared/authority/authorityRows";
+import {
+  AUTHORITY_DOMAINS,
+  AUTHORITY_VERBS,
+} from "@vibestudio/shared/authority/authorityDomains";
+
+/** Shared authority wire primitives live with the authority service schema so
+ * consumers do not create an initialization cycle between build and approval. */
+export const AuthorityResourceScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("exact"), key: z.string() }).strict(),
+  z.object({ kind: z.literal("prefix"), prefix: z.string() }).strict(),
+  z.object({ kind: z.literal("origin"), origin: z.string() }).strict(),
+  z.object({ kind: z.literal("domain"), domain: z.string() }).strict(),
+  z.object({ kind: z.literal("network"), value: z.literal("*") }).strict(),
+]);
+
+export const authorityRowSchema = z
+  .object({
+    capability: z.string(),
+    domain: z.enum(
+      Object.keys(AUTHORITY_DOMAINS) as [
+        keyof typeof AUTHORITY_DOMAINS,
+        ...(keyof typeof AUTHORITY_DOMAINS)[],
+      ]
+    ),
+    verb: z.enum(
+      Object.keys(AUTHORITY_VERBS) as [
+        keyof typeof AUTHORITY_VERBS,
+        ...(keyof typeof AUTHORITY_VERBS)[],
+      ]
+    ),
+    action: z.string(),
+    resource: z.string(),
+    resourceScope: AuthorityResourceScopeSchema,
+    tier: z.enum(["gated", "critical"]),
+    statement: z.enum(["declared", "allowed", "snapshot", "prospective"]),
+    state: z.enum(["active", "suspended", "locked"]).optional(),
+    provenance: z
+      .object({
+        source: z.enum(["manifest", "approval", "profile", "mission", "receiver"]),
+        decidedAt: z.number().optional(),
+        decidedBy: z.string().optional(),
+        surface: z.string().optional(),
+        lineageClasses: z.array(z.string()).readonly().optional(),
+      })
+      .strict(),
+    flags: z
+      .object({
+        lineageTainted: z.boolean().optional(),
+        irreversible: z.boolean().optional(),
+        newInDiff: z.boolean().optional(),
+        removedInDiff: z.boolean().optional(),
+      })
+      .strict(),
+  })
+  .strict() satisfies z.ZodType<AuthorityRow>;
 
 const EVERY_ORIGIN: ServiceAuthorityPolicy = {
   principals: ["host", "user", "code", "session", "mission"],
@@ -63,6 +119,14 @@ const leafSchema = z
 
 export const authorityMethods = defineServiceMethods({
   awaitDecision: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "An acquisition owner may wait on its existing human-decision lifecycle; the wait grants nothing",
+    },
     description: "Wait without a deadline for one acquisition owned by this session.",
     args: z.tuple([z.object({ acquisitionId: z.string().min(1) }).strict()]),
     returns: z
@@ -75,6 +139,14 @@ export const authorityMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   preflight: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "authority.control",
+      rationale:
+        "Pure authority inspection; it neither prompts, mints, consumes, nor invokes a handler",
+    },
     description:
       "Dry-run a service method's complete authority contract without prompting or consuming authority.",
     args: z.tuple([
@@ -93,11 +165,7 @@ export const authorityMethods = defineServiceMethods({
         severityPreview: z.enum(["routine", "sensitive", "critical"]).optional(),
         wouldPrompt: z
           .object({
-            cardType: z.enum([
-              "permission.gated",
-              "permission.outside",
-              "confirm.critical",
-            ]),
+            cardType: z.enum(["permission.gated", "permission.outside", "confirm.critical"]),
             renderedAction: z.string(),
           })
           .strict()

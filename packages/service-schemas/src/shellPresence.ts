@@ -13,6 +13,13 @@ const SHELL_PRESENCE_WRITE_ACCESS: MethodAccessDescriptor = {
 
 export const shellPresenceMethods = defineServiceMethods({
   heartbeat: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "shellPresence.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "Mark the calling shell active and return the current active-shell count.",
     args: z.tuple([]),
     returns: z.object({ activeShellCount: z.number().int().nonnegative() }).strict(),

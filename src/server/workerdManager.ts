@@ -22,7 +22,6 @@ import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/se
 import type { FsService } from "@vibestudio/shared/fsService";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { productDirectMethodCapability } from "@vibestudio/shared/authority/directMethodEffects";
 import { primaryTextArtifactContent, type BuildResult } from "./buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "./executionRootProviders.js";
 import type { WorkspaceRpcMethodDoc } from "./buildV2/workspaceRpcCatalog.js";
@@ -31,6 +30,7 @@ import { validateBuildRef } from "./buildV2/refs.js";
 import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
 import type { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { createDevLogger } from "@vibestudio/dev-log";
+import { productBuiltinByIdentity } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import {
   getPhysicalPathForAsarPath,
   getPlatformPackageBinaryPath,
@@ -41,10 +41,6 @@ import {
   isInternalDOSource,
   type InternalDOBundle,
 } from "./internalDOs/internalDoLoader.js";
-import {
-  SEMANTIC_CONTROL_PLANE,
-  semanticControlPlaneEnvironment,
-} from "./internalDOs/controlPlane.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
@@ -136,7 +132,7 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-/** DO reference — matches DORef from @vibestudio/runtime/worker. */
+/** DO reference — matches DORef from @workspace/runtime/worker. */
 interface DORef {
   source: string;
   className: string;
@@ -259,8 +255,8 @@ export interface WorkerdManagerDeps {
   fsService: FsService;
   /**
    * Opaque workspace identity issued by the hub. The manager hosts exactly one
-   * workspace, and binds this process-owned identity into product-sealed
-   * authorities; a Durable Object id is a storage coordinate, not a workspace
+   * workspace, and binds this process-owned identity into host-sealed
+   * authority attestations; a Durable Object id is a storage coordinate, not a workspace
    * identity.
    */
   workspaceId: string;
@@ -307,10 +303,17 @@ export interface WorkerdManagerDeps {
   /** Override for tests; production uses the default router readiness window. */
   workerdStartupReadyTimeoutMs?: number;
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
+  resourceHandleLifecycle?: {
+    reconcileProviderDefinitions(
+      provider: string,
+      activeDefinitionDigests: readonly string[]
+    ): void;
+    reconcileReceiverClasses(receiverSource: string, activeClassNames: readonly string[]): void;
+  };
   /**
    * Structured lifecycle sink (start/stop/update/failure per worker). The
    * server feeds this into the runtime-diagnostics store so worker startup
-   * failures are queryable via `workspace.units.diagnostics` instead of
+   * failures are queryable through runtime supervision instead of
    * living only in the server console.
    */
   recordLifecycleEvent?: (event: {
@@ -449,6 +452,14 @@ export class WorkerdManager {
     this.workspaceProvider = provider;
   }
 
+  /** Replace the bootstrap snapshot view with the semantic source provider. */
+  replaceWorkspaceProvider(provider: WorkerdWorkspaceProvider): void {
+    if (!this.workspaceProvider) {
+      throw new Error("Cannot replace a workspace provider before bootstrap binding");
+    }
+    this.workspaceProvider = provider;
+  }
+
   private requireWorkspaceProvider(operation: string): WorkerdWorkspaceProvider {
     if (!this.workspaceProvider) {
       throw new Error(
@@ -456,14 +467,6 @@ export class WorkerdManager {
       );
     }
     return this.workspaceProvider;
-  }
-
-  private isSemanticControlPlane(source: string, className: string, objectKey?: string): boolean {
-    return (
-      source === SEMANTIC_CONTROL_PLANE.source &&
-      className === SEMANTIC_CONTROL_PLANE.className &&
-      (objectKey === undefined || objectKey === SEMANTIC_CONTROL_PLANE.objectKey)
-    );
   }
 
   private ensureWorkerBearer(callerId: string): string {
@@ -502,7 +505,7 @@ export class WorkerdManager {
       source: binding.source,
       unitName: binding.unitName,
       artifact: binding.artifact,
-      authorityRequests: binding.authorityRequests,
+      authority: binding.authority,
       ...(scopeRef ? { scopeRef } : {}),
     });
   }
@@ -514,7 +517,7 @@ export class WorkerdManager {
       source: identity.source,
       unitName: identity.unitName,
       artifact: identity.artifact,
-      authorityRequests: identity.authorityRequests,
+      authority: identity.authority,
     });
   }
 
@@ -743,11 +746,9 @@ export class WorkerdManager {
     effectiveVersion: string;
     buildKey: string;
     executionDigest: string;
-    authorityRequests: RuntimeImageRecord["authorityRequests"];
+    authority: RuntimeImageRecord["authority"];
   }> {
-    if (!this.isSemanticControlPlane(args.source, args.className, args.key)) {
-      this.requireWorkspaceProvider("Durable Object entity activation");
-    }
+    this.requireWorkspaceProvider("Durable Object entity activation");
     const targetId = canonicalEntityId({
       kind: "do",
       source: args.source,
@@ -781,7 +782,7 @@ export class WorkerdManager {
       effectiveVersion: image.artifact.sourceState.effectiveVersion,
       buildKey: image.artifact.buildKey,
       executionDigest: image.artifact.executionDigest,
-      authorityRequests: image.authorityRequests,
+      authority: image.authority,
     };
   }
 
@@ -806,14 +807,11 @@ export class WorkerdManager {
     if (!persistedImage) {
       throw new Error(`Durable Object ${record.id} has no persisted runtime image`);
     }
-    const persistedAuthority = {
-      requests: persistedImage.authorityRequests,
-    };
     if (
       persistedImage.artifact.buildKey !== record.activeBuildKey ||
       persistedImage.artifact.executionDigest !== record.activeExecutionDigest ||
       persistedImage.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
-      JSON.stringify(persistedAuthority) !== JSON.stringify(record.activeAuthority)
+      JSON.stringify(persistedImage.authority) !== JSON.stringify(record.activeAuthority)
     ) {
       throw new Error(
         `Durable Object ${record.id} has a persisted runtime image that does not match its sealed active execution identity`
@@ -832,14 +830,11 @@ export class WorkerdManager {
     }
 
     const restored = this.runtimeImages.get(record.id) ?? persistedImage;
-    const restoredAuthority = {
-      requests: restored.authorityRequests,
-    };
     if (
       restored.artifact.buildKey !== record.activeBuildKey ||
       restored.artifact.executionDigest !== record.activeExecutionDigest ||
       restored.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
-      JSON.stringify(restoredAuthority) !== JSON.stringify(record.activeAuthority)
+      JSON.stringify(restored.authority) !== JSON.stringify(record.activeAuthority)
     ) {
       throw new Error(
         `Durable Object ${record.id} could not restore its sealed active execution identity`
@@ -919,7 +914,7 @@ export class WorkerdManager {
     effectiveVersion: string;
     buildKey: string;
     executionDigest: string;
-    authorityRequests: RuntimeImageRecord["authorityRequests"];
+    authority: RuntimeImageRecord["authority"];
   }> {
     this.requireWorkspaceProvider("worker start");
     const targetId = canonicalEntityId({ kind: "worker", source: args.source, key: args.key });
@@ -959,7 +954,7 @@ export class WorkerdManager {
           effectiveVersion: image.artifact.sourceState.effectiveVersion,
           buildKey: image.artifact.buildKey,
           executionDigest: image.artifact.executionDigest,
-          authorityRequests: image.authorityRequests,
+          authority: image.authority,
         };
       }
       throw new Error(
@@ -1051,7 +1046,7 @@ export class WorkerdManager {
         effectiveVersion: image.artifact.sourceState.effectiveVersion,
         buildKey: image.artifact.buildKey,
         executionDigest: image.artifact.executionDigest,
-        authorityRequests: image.authorityRequests,
+        authority: image.authority,
       };
     } catch (error) {
       instance.status = "error";
@@ -1126,7 +1121,7 @@ export class WorkerdManager {
 
   private async abortUserlandDOFacet(
     ref: DORef,
-    operation: "__vibestudio_retire" | "__vibestudio_fault_abort"
+    operation: "__vibestudio_retire" | "__vibestudio_restart" | "__vibestudio_fault_abort"
   ): Promise<void> {
     if (!this.process || this.process.exitCode !== null || !this.port) return;
     const key = encodeUniversalKey(ref);
@@ -1144,7 +1139,13 @@ export class WorkerdManager {
     );
     if (!response.ok) {
       throw new Error(
-        `Failed to ${operation === "__vibestudio_retire" ? "retire" : "fault-abort"} ` +
+        `Failed to ${
+          operation === "__vibestudio_retire"
+            ? "retire"
+            : operation === "__vibestudio_restart"
+              ? "restart"
+              : "fault-abort"
+        } ` +
           `userland DO facet ${ref.source}:${ref.className}/${ref.objectKey} ` +
           `(${response.status}): ${await response.text()}`
       );
@@ -1165,6 +1166,16 @@ export class WorkerdManager {
       );
     }
     await this.abortUserlandDOFacet(ref, "__vibestudio_fault_abort");
+  }
+
+  async restartUserlandDOFacet(ref: DORef): Promise<void> {
+    if (!this.process || this.process.exitCode !== null || !this.port) {
+      throw new Error(
+        `Cannot restart userland DO facet ${ref.source}:${ref.className}/${ref.objectKey}: ` +
+          "workerd is not running"
+      );
+    }
+    await this.abortUserlandDOFacet(ref, "__vibestudio_restart");
   }
 
   /**
@@ -1216,7 +1227,7 @@ export class WorkerdManager {
       repoPath: instance.source,
       effectiveVersion: image.artifact.sourceState.effectiveVersion,
       executionDigest: image.artifact.executionDigest,
-      requested: image.authorityRequests,
+      requested: image.authority.requests,
     });
     this.deps.registerEgressCaller(instance.callerId, caller);
   }
@@ -1529,30 +1540,18 @@ export class WorkerdManager {
     return image ? String(image.generation) : svc.buildKey;
   }
 
-  /**
-   * Resolve a userland DO method from the exact build currently bound to this
-   * object. Product-sealed GAD is the only static exception: it is a reviewed
-   * host workspace service, while all workspace-built classes fail closed
-   * without an exact artifact catalog entry.
-   */
+  /** Resolve a userland DO method from the exact build bound to this object. */
   resolveDoRpcMethodAuthority(
     source: string,
     className: string,
     objectKey: string,
     method: string
-  ): Pick<WorkspaceRpcMethodDoc, "effect" | "access"> | null {
-    if (this.isSemanticControlPlane(source, className, objectKey)) {
-      const capability = productDirectMethodCapability(className, method);
-      return capability
-        ? {
-            effect: { kind: "semantic", capability },
-            access: { tier: "critical", sensitivity: "destructive" },
-          }
-        : {
-            effect: { kind: "workspace-service" },
-            access: { tier: "open", sensitivity: "read" },
-          };
-    }
+  ):
+    | (Pick<
+        WorkspaceRpcMethodDoc,
+        "effect" | "access" | "userlandCapability" | "producesHandle"
+      > & { providerExecutionDigest: string })
+    | null {
     if (isInternalDOSource(source)) return null;
     const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
     const service = this.doServices.get(doServiceKey(source, className));
@@ -1560,11 +1559,16 @@ export class WorkerdManager {
     if (!buildKey) return null;
     const build = this.requireWorkspaceProvider("direct DO authority").getBuildByKey(buildKey);
     if (!build || build.metadata.kind !== "worker") return null;
-    return (
+    const declaration =
       build.metadata.workspaceRpcCatalog?.find(
         (entry) => entry.className === className && entry.name === method
-      ) ?? null
-    );
+      ) ?? null;
+    return declaration && build.metadata.execution?.executionDigest
+      ? {
+          ...declaration,
+          providerExecutionDigest: build.metadata.execution.executionDigest,
+        }
+      : null;
   }
 
   /**
@@ -1636,6 +1640,7 @@ export class WorkerdManager {
       WORKERD_SESSION_ID: this.sessionId,
       WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
       GATEWAY_URL: this.deps.getServerUrl(),
+      WORKSPACE_ID: this.deps.workspaceId,
     };
     if (process.env["VIBESTUDIO_TEST_MODE"]) {
       env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
@@ -1676,7 +1681,7 @@ export class WorkerdManager {
       repoPath: source,
       effectiveVersion: image.artifact.sourceState.effectiveVersion,
       executionDigest: image.artifact.executionDigest,
-      requested: image.authorityRequests,
+      requested: image.authority.requests,
     });
     this.deps.registerEgressCaller(identity, caller);
   }
@@ -1699,6 +1704,10 @@ export class WorkerdManager {
     for (const [serviceKey, doService] of this.doServices) {
       if (!isInternalDOSource(doService.source)) continue;
       const { className } = doService;
+      const builtin = productBuiltinByIdentity(doService.source, className);
+      if (!builtin) {
+        throw new Error(`Internal Durable Object ${className} has no builtin catalog entry`);
+      }
       // Internal DOs ship as a single pre-built bundle (no wasm artifacts).
       const internalBundle = this.internalDOBundle();
       const bundleContent = internalBundle.bundle;
@@ -1724,7 +1733,7 @@ export class WorkerdManager {
         repoPath: serviceIdentity.source,
         effectiveVersion: serviceIdentity.effectiveVersion,
         executionDigest: serviceIdentity.executionDigest,
-        requested: serviceIdentity.authorityRequests,
+        requested: serviceIdentity.authority.requests,
       });
       const bindings: object[] = [
         { name: "RPC_AUTH_TOKEN", text: serviceToken },
@@ -1736,12 +1745,8 @@ export class WorkerdManager {
         { name: "WORKERD_BOOT_GENERATION", text: String(this.configBootGeneration()) },
       ];
 
-      if (this.isSemanticControlPlane(doService.source, className)) {
-        for (const [name, text] of Object.entries(
-          semanticControlPlaneEnvironment(this.deps.workspaceId)
-        )) {
-          bindings.push({ name, text });
-        }
+      if (builtin.workerd.injectWorkspaceId) {
+        bindings.push({ name: "WORKSPACE_ID", text: this.deps.workspaceId });
       }
 
       // Gateway URL for RPC bridge (DOs use HttpRpcBridge via POST /rpc)
@@ -1755,11 +1760,9 @@ export class WorkerdManager {
       // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO,
       // BROWSER_DATA_BROKER_SOURCE for BrowserDataDO). Injected here so internal
       // DOs consume workspace unit identities only through the manifest.
-      const internalEnv = this.isSemanticControlPlane(doService.source, className)
-        ? {}
-        : this.requireWorkspaceProvider(
-            `internal Durable Object environment for ${className}`
-          ).getInternalDoEnv(className);
+      const internalEnv = this.requireWorkspaceProvider(
+        `internal Durable Object environment for ${className}`
+      ).getInternalDoEnv(className);
       for (const [name, text] of Object.entries(internalEnv)) {
         bindings.push({ name, text });
       }
@@ -1769,7 +1772,7 @@ export class WorkerdManager {
       // passed at spawn. `unsafeEval` is a Void union member in workerd's schema, so
       // it must render as `unsafeEval = void` — `null` triggers that in capnpValue
       // (an empty struct `{}` would emit `()`, which workerd rejects: "expected Void").
-      if (className === "EvalDO") {
+      if (builtin.workerd.unsafeEval) {
         bindings.push({ name: "UNSAFE_EVAL", unsafeEval: null });
       }
 
@@ -2489,7 +2492,7 @@ export class WorkerdManager {
       const serviceKey = doServiceKey(source, className);
       if (this.doServices.has(serviceKey)) continue;
 
-      if (!this.isSemanticControlPlane(source, className)) {
+      if (!isInternalDOSource(source)) {
         this.requireWorkspaceProvider(`Durable Object class ${source}:${className}`);
       }
       const imageId = `do-service:${serviceKey}`;
@@ -2589,7 +2592,7 @@ export class WorkerdManager {
       stateArgs?: unknown;
     } = {}
   ): Promise<string | undefined> {
-    if (!this.isSemanticControlPlane(source, className, opts.objectKey)) {
+    if (!isInternalDOSource(source)) {
       this.requireWorkspaceProvider(`Durable Object class ${source}:${className}`);
     }
     const serviceKey = doServiceKey(source, className);
@@ -2863,6 +2866,26 @@ export class WorkerdManager {
     // No workerd restart — concurrent agents keep running.
 
     const completed = completedBuildKey ? provider.getBuildByKey(completedBuildKey) : null;
+    if (completed?.metadata.kind === "worker") {
+      const activeDefinitionDigests = new Set<string>();
+      for (const method of completed.metadata.workspaceRpcCatalog ?? []) {
+        if (method.userlandCapability) {
+          activeDefinitionDigests.add(method.userlandCapability.definitionDigest);
+        }
+        if (method.producesHandle) {
+          activeDefinitionDigests.add(method.producesHandle.definitionDigest);
+        }
+      }
+      this.deps.resourceHandleLifecycle?.reconcileProviderDefinitions(source, [
+        ...activeDefinitionDigests,
+      ]);
+    }
+    if (doClasses !== null) {
+      this.deps.resourceHandleLifecycle?.reconcileReceiverClasses(
+        source,
+        doClasses.map(({ className }) => className)
+      );
+    }
     const updateImageFromCompleted = (
       imageId: string,
       scopeRef: string | undefined
@@ -2873,7 +2896,7 @@ export class WorkerdManager {
         source,
         unitName: completed.metadata.name,
         artifact: executionArtifactRefFromBuild(this.deps.workspaceId, completed),
-        authorityRequests: assertPresent(completed.metadata.authority).requests,
+        authority: assertPresent(completed.metadata.authority),
         ...(scopeRef ? { scopeRef } : {}),
       });
     };

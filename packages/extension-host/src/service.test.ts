@@ -74,7 +74,7 @@ function makeHost(
     getContextIdForCaller?: (callerId: string) => string | null;
     resolveProviderExtensionName?: (provider: string) => string | null;
     providerSlots?: readonly string[];
-    hostProviderContracts?: ExtensionHostDeps["hostProviderContracts"];
+    providerContracts?: ExtensionHostDeps["providerContracts"];
     sourceProviderContracts?: Record<string, { methods: string[] }>;
     activeProviderContracts?: Record<string, { methods: string[] }>;
     candidateProviderContracts?: Record<string, { methods: string[] }>;
@@ -94,7 +94,7 @@ function makeHost(
     relativePath: "extensions/git-tools",
     path: path.join(statePath, "source", "extensions", "git-tools"),
     dependencies: overrides.candidateExternalDeps ?? {},
-    internalDeps: ["@vibestudio/runtime"],
+    internalDeps: ["@workspace/runtime"],
     manifest: {
       displayName: "Git Tools",
       extension: {
@@ -116,12 +116,15 @@ function makeHost(
         displayName: "Git Tools",
         extension: {
           activationEvents: overrides.activationEvents ?? ["*"],
+          methodAuthority: {
+            confirm: { effect: { kind: "open" } },
+          },
           providerContracts: overrides.sourceProviderContracts ?? {},
           ...(overrides.buildTargets
             ? { contributes: { buildTargets: overrides.buildTargets } }
             : {}),
         },
-        authority: { requests: [] },
+        authority: { requests: [], provides: [] },
       },
     })
   );
@@ -167,6 +170,7 @@ function makeHost(
         sourceStateHash: "state:test",
         execution: { executionDigest: "c".repeat(64) },
         authority: {
+          provides: [],
           requests: [
             {
               capability: "notifications",
@@ -182,6 +186,9 @@ function makeHost(
           runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
           providerContracts:
             overrides.candidateProviderContracts ?? overrides.sourceProviderContracts ?? {},
+          methodAuthority: {
+            confirm: { effect: { kind: "open" as const } },
+          },
           externalDeps: {},
         },
       },
@@ -201,6 +208,7 @@ function makeHost(
                       executionDigest: (key === "candidate-key" ? "c" : "a").repeat(64),
                     },
                     authority: {
+                      provides: [],
                       requests: [
                         {
                           capability: "notifications",
@@ -221,6 +229,9 @@ function makeHost(
                       overrides.sourceProviderContracts ??
                       {})
                     : (overrides.activeProviderContracts ?? {}),
+                methodAuthority: {
+                  confirm: { effect: { kind: "open" as const } },
+                },
                 externalDeps: overrides.activeExternalDeps ?? {},
               },
             },
@@ -229,14 +240,14 @@ function makeHost(
     ),
     getEffectiveVersion: vi.fn((name: string) => {
       if (name === extensionNode.name) return overrides.activeEv ?? "ev-current";
-      if (name === "@vibestudio/runtime") return overrides.depEv ?? "ev-runtime";
+      if (name === "@workspace/runtime") return overrides.depEv ?? "ev-runtime";
       return null;
     }),
     resolveBuildUnitIdentity: vi.fn(async () => ({
       unitPath: extensionNode.relativePath,
       unitName: extensionNode.name,
       effectiveVersion: overrides.activeEv ?? "ev-current",
-      dependencyEvs: { "@vibestudio/runtime": overrides.depEv ?? "ev-runtime" },
+      dependencyEvs: { "@workspace/runtime": overrides.depEv ?? "ev-runtime" },
       externalDeps: overrides.candidateExternalDeps ?? {},
     })),
     getExternalDeps: vi.fn((name: string) => {
@@ -258,7 +269,7 @@ function makeHost(
     getContextIdForCaller: overrides.getContextIdForCaller,
     resolveProviderExtensionName: overrides.resolveProviderExtensionName ?? (() => null),
     providerSlots: overrides.providerSlots ?? [],
-    hostProviderContracts: overrides.hostProviderContracts ?? {},
+    providerContracts: overrides.providerContracts ?? {},
     readWorkspaceFileAtState: async (stateHash, filePath) =>
       filePath === "extensions/git-tools/package.json"
         ? fs.readFileSync(path.join(extensionNode.path, "package.json"), "utf8")
@@ -284,7 +295,7 @@ function makeHost(
       activeBundleKey:
         overrides.activeBundleKey === undefined ? "bundle-key" : overrides.activeBundleKey,
       activeDependencyEvs: {
-        "@vibestudio/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
+        "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
       },
       activeExternalDeps: overrides.activeExternalDeps ?? {},
       activeRuntimeDepsKey:
@@ -325,19 +336,6 @@ describe("ExtensionHost invocation attribution", () => {
     expect(host.resolveCodeIdentity(extensionNode.name)).toBeNull();
   });
 
-  it("lists canonical and short extension identifiers", async () => {
-    const { host, extensionNode } = makeHost();
-    const service = host.createServiceDefinition();
-
-    await expect(service.handler(panelCtx(), "list", [])).resolves.toEqual([
-      expect.objectContaining({
-        name: extensionNode.name,
-        shortName: "git-tools",
-        source: expect.objectContaining({ repo: "extensions/git-tools" }),
-      }),
-    ]);
-  });
-
   it("invokes extensions through a configured provider slot", async () => {
     const extensionTransport = {
       call: vi.fn(async () => "ok"),
@@ -346,7 +344,7 @@ describe("ExtensionHost invocation attribution", () => {
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
-      hostProviderContracts: { gitInterop: ["upstreamStatus"] },
+      providerContracts: { gitInterop: ["upstreamStatus"] },
       activeProviderContracts: {
         gitInterop: { methods: ["upstreamStatus"] },
       },
@@ -378,7 +376,7 @@ describe("ExtensionHost invocation attribution", () => {
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
-      hostProviderContracts: { gitInterop: ["upstreamStatus"] },
+      providerContracts: { gitInterop: ["upstreamStatus"] },
       activeProviderContracts: {},
     });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
@@ -393,7 +391,7 @@ describe("ExtensionHost invocation attribution", () => {
     const extensionTransport = { call: vi.fn(async () => "unexpected") };
     const { host } = makeHost({
       extensionTransport,
-      hostProviderContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
+      providerContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
       activeProviderContracts: {
         gitInterop: { methods: ["upstreamStatus", "publishRepo"] },
       },
@@ -424,13 +422,16 @@ describe("ExtensionHost invocation attribution", () => {
     expect(extensionTransport.call).not.toHaveBeenCalled();
   });
 
-  it("rejects public provider invocation by provider slot and method", async () => {
-    const extensionTransport = { call: vi.fn(async () => "unexpected") };
+  it("allows public invocation of a manifest-selected provider method", async () => {
+    const extensionTransport = { call: vi.fn(async () => "published") };
     const { host } = makeHost({
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
-      hostProviderContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
+      providerContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
+      activeProviderContracts: {
+        gitInterop: { methods: ["upstreamStatus", "publishRepo"] },
+      },
     });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
@@ -438,8 +439,17 @@ describe("ExtensionHost invocation attribution", () => {
       host
         .createServiceDefinition()
         .handler(panelCtx("panel-1"), "invokeProvider", ["gitInterop", "publishRepo", []])
-    ).rejects.toMatchObject({ code: "EACCES" });
-    expect(extensionTransport.call).not.toHaveBeenCalled();
+    ).resolves.toBe("published");
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      "@workspace-extensions/git-tools",
+      "extension.invokeProvider",
+      [
+        "gitInterop",
+        "publishRepo",
+        [],
+        expect.objectContaining({ method: "providers.gitInterop.publishRepo" }),
+      ]
+    );
   });
 
   it("does not reserve the same method name on a different provider slot", async () => {
@@ -448,7 +458,7 @@ describe("ExtensionHost invocation attribution", () => {
       extensionTransport,
       resolveProviderExtensionName: (provider) =>
         provider === "claudeCode" ? "@workspace-extensions/git-tools" : null,
-      hostProviderContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
+      providerContracts: { gitInterop: ["upstreamStatus", "publishRepo"] },
       activeProviderContracts: {
         claudeCode: { methods: ["prepare", "publishRepo"] },
       },
@@ -518,7 +528,7 @@ describe("ExtensionHost invocation attribution", () => {
     const extensionTransport = { call: vi.fn(async () => "ok") };
     const { host } = makeHost({
       extensionTransport,
-      hostProviderContracts: { gitInterop: ["publishRepo"] },
+      providerContracts: { gitInterop: ["publishRepo"] },
       activeProviderContracts: {},
     });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
@@ -1455,24 +1465,23 @@ describe("ExtensionHost activation", () => {
     );
   });
 
-  it("accepts extension event, health, and log requests over RPC", async () => {
+  it("accepts extension activation, health, and log reports from supervision", async () => {
     const recordUnitLog = vi.fn();
     const { host, extensionNode, eventService } = makeHost({ recordUnitLog });
     const service = host.createServiceDefinition();
     const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
 
+    vi.spyOn(host.processes, "isActive").mockReturnValue(true);
     const markReady = vi.spyOn(host.processes, "markReady");
 
-    await service.handler(extensionCtx as any, "ready", [
-      { methods: ["confirm"], providerMethods: {}, hasFetch: true },
-    ]);
+    host.reportActivation(extensionCtx as any, {
+      methods: ["confirm"],
+      providerMethods: {},
+      hasFetch: true,
+    });
     await service.handler(extensionCtx as any, "emit", ["changed", { ok: true }]);
-    await service.handler(extensionCtx as any, "health", ["degraded", { summary: "Waiting" }]);
-    await service.handler(extensionCtx as any, "log", [
-      "warn",
-      "Something happened",
-      { code: "TEST" },
-    ]);
+    host.reportHealth(extensionCtx as any, "degraded", { summary: "Waiting" });
+    host.appendRuntimeLog(extensionCtx as any, "warn", "Something happened", { code: "TEST" });
 
     expect(markReady).toHaveBeenCalledWith(extensionNode.name, {
       methods: ["confirm"],
@@ -1506,21 +1515,56 @@ describe("ExtensionHost activation", () => {
     );
   });
 
+  it("treats the sealed public method contract as a set, independent of declaration order", async () => {
+    const { host, extensionNode, buildSystem } = makeHost();
+    const activeBuild = buildSystem.getBuildByKey("bundle-key");
+    if (!activeBuild || activeBuild.metadata.details?.kind !== "extension") {
+      throw new Error("expected active extension build");
+    }
+    (
+      activeBuild.metadata.details as {
+        methodAuthority: Record<string, { effect: { kind: "open" } }>;
+      }
+    ).methodAuthority = {
+      first: { effect: { kind: "open" } },
+      second: { effect: { kind: "open" } },
+    };
+    vi.mocked(buildSystem.getBuildByKey).mockReturnValue(activeBuild);
+    vi.spyOn(host.processes, "isActive").mockReturnValue(true);
+    const markReady = vi.spyOn(host.processes, "markReady");
+    const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
+    vi.spyOn(host.processes, "isActive").mockReturnValue(true);
+
+    expect(() =>
+      host.reportActivation(extensionCtx as any, {
+        methods: ["second", "first"],
+        providerMethods: {},
+        hasFetch: false,
+      })
+    ).not.toThrow();
+    expect(markReady).toHaveBeenCalledWith(extensionNode.name, {
+      methods: ["second", "first"],
+      hasFetch: false,
+    });
+  });
+
   it("rejects ready when runtime provider namespaces differ from the approved build", async () => {
     const { host, extensionNode } = makeHost({
-      hostProviderContracts: { gitInterop: ["upstreamStatus"] },
+      providerContracts: { gitInterop: ["upstreamStatus"] },
       activeProviderContracts: {
         gitInterop: { methods: ["upstreamStatus"] },
       },
     });
-    const service = host.createServiceDefinition();
     const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
+    vi.spyOn(host.processes, "isActive").mockReturnValue(true);
 
-    await expect(
-      service.handler(extensionCtx as any, "ready", [
-        { methods: ["upstreamStatus"], providerMethods: {}, hasFetch: false },
-      ])
-    ).rejects.toMatchObject({ code: "EPROTO" });
+    expect(() =>
+      host.reportActivation(extensionCtx as any, {
+        methods: ["upstreamStatus"],
+        providerMethods: {},
+        hasFetch: false,
+      })
+    ).toThrow(expect.objectContaining({ code: "EPROTO" }));
   });
 
   it("allows server callers to invoke extension providers through the dispatcher", () => {

@@ -20,11 +20,13 @@
 
 import type { z } from "zod";
 import type {
+  HostResidencyPolicy,
   MethodAccessDescriptor,
   MethodTierPolicy,
   ServiceAuthorityPolicy,
 } from "./serviceAuthority.js";
 import type { AuthorityRequirement, PrincipalKind } from "./authorization.js";
+import type { CapabilityPresentation } from "./authorityPresentation.js";
 
 export type AuthorityResourceDerivation =
   | { kind: "literal"; key: string }
@@ -119,6 +121,30 @@ export interface MethodAuthorityDescriptor {
   }[];
   prepared?: {
     resolver: string;
+    /** Generic context-boundary selection owned by the host authority layer. */
+    contextBoundary?: {
+      operation:
+        | "openPanel"
+        | "replacePanel"
+        | "reload"
+        | "unload"
+        | "close"
+        | "movePanel"
+        | "takeOver"
+        | "rebuildPanel"
+        | "updatePanelState";
+      targetArgument: number;
+      targetPath?: readonly (string | number)[];
+      requestedContextPath?: readonly (string | number)[];
+      requestedContextLookup?: {
+        method: string;
+        arguments: readonly {
+          argument: number;
+          path?: readonly (string | number)[];
+        }[];
+        resultPath: readonly (string | number)[];
+      };
+    };
     leaves: readonly (PreparedAuthoritySelector & {
       requirement: PreparedAuthorityRequirement;
       /** Dynamic leaves may be stricter than the discovery method that selects them. */
@@ -160,17 +186,39 @@ export interface MethodSchema {
    * user authority. Static host methods may use the reviewed host mapping.
    */
   capability?: string;
+  /** Reviewed prompt copy and semantic category for this exact host effect. */
+  presentation?: CapabilityPresentation;
+  /** Direct Durable Object receiver effect when it differs from the ordinary
+   * host-capability effect derived from `capability`. */
+  directEffect?:
+    | { kind: "open" }
+    | {
+        kind: "userland-capability";
+        capability: string;
+        resource: { kind: "receiver-object" } | { kind: "opaque-handle"; argument: number };
+      }
+    | {
+        kind: "host-capability";
+        capability: string;
+        resource: { kind: "receiver-object" };
+      };
   /** Whether this wire method belongs in agent-facing capability discovery.
    *  Defaults to true. Set false for implementation transports that remain
    *  callable by typed runtime clients but have a higher-level public API. */
   agentFacing?: boolean;
+  /**
+   * Additional host-attested execution identity required before a direct
+   * receiver invocation is dispatched. This is an authenticated runtime fact,
+   * never a caller-provided flag or a substitute for method authority.
+   */
+  execution?: { harness: "attested-system-test" };
   /** Complete compositional authority contract for this method. */
   authority?: ServiceAuthorityPolicy | MethodAuthorityDescriptor;
   /**
    * Colocated reviewed tier. Required for services outside the static host
    * census and preferred for dynamically discovered/userland services.
    */
-  tier?: MethodTierPolicy;
+  tier?: MethodTierPolicy & Partial<HostResidencyPolicy>;
   /** Unified access & restrictedness descriptor (caller kinds, conditional
    *  restrictions, sensitivity, side-effects, approval/grant gates). */
   access?: MethodAccessDescriptor;
@@ -253,14 +301,12 @@ function schemaFailure(
   return failure;
 }
 
-function expectedCallShape(
-  service: string,
-  method: string,
-  definition: MethodSchema
-): string {
-  const tupleItems = (definition.args as unknown as {
-    _def?: { items?: readonly z.ZodTypeAny[] };
-  })._def?.items;
+function expectedCallShape(service: string, method: string, definition: MethodSchema): string {
+  const tupleItems = (
+    definition.args as unknown as {
+      _def?: { items?: readonly z.ZodTypeAny[] };
+    }
+  )._def?.items;
   if (!tupleItems) return `${service}.${method}(...)`;
   const args = tupleItems.map((schema, index) => {
     const shape = (schema as unknown as { shape?: Record<string, unknown> }).shape;

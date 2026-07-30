@@ -14,7 +14,7 @@ describe("createKnownPanelSlotResolver", () => {
       parent_slot_id: null,
       current_entity_id: "panel:nav-slot-a",
       current_entry_key: "entry-a",
-      position_id: "root",
+      sort_key: 0,
       owner_user_id: "root",
       created_at: Date.now(),
       closed_at: null,
@@ -44,6 +44,12 @@ describe("createKnownPanelSlotResolver", () => {
       createWorkspaceStateService({
         doDispatch,
         workspaceId: "ws-test",
+        panelAccess: {
+          contextExists: () => false,
+          resolveCallerContext: async () => null,
+          resolveEntityContext: () => null,
+          resolveSubjectCaller: () => null,
+        },
       })
     );
     dispatcher.markInitialized();

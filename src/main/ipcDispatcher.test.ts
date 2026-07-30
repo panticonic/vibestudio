@@ -261,7 +261,7 @@ describe("IpcDispatcher", () => {
     });
   });
 
-  it("serves workspace shell panel-tree reads through the Electron-local panel service", async () => {
+  it("serves workspace shell focused-panel reads through the Electron-local panel service", async () => {
     // The desktop workspace shell renders as the apps/shell app view, but core
     // chrome state is host-owned. Tree reads come from Electron main's mirror
     // instead of depending on an app-scoped server grant during startup.
@@ -269,7 +269,7 @@ describe("IpcDispatcher", () => {
     const call = vi.fn();
     const callAs = vi.fn();
     const onServerRpcResult = vi.fn();
-    const panelHandler = vi.fn(async () => ({ revision: 4, forest: [] }));
+    const panelHandler = vi.fn(async () => "panel-1");
     makeDispatcher({
       resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
       call,
@@ -292,7 +292,7 @@ describe("IpcDispatcher", () => {
         type: "request",
         requestId: "req-paneltree",
         fromId: "@workspace-apps/shell",
-        method: "panel.getTreeSnapshot",
+        method: "panel.getFocusedPanelId",
         args: [],
       } satisfies RpcMessage) as never
     );
@@ -307,7 +307,7 @@ describe("IpcDispatcher", () => {
             }),
           }),
         }),
-        "getTreeSnapshot",
+        "getFocusedPanelId",
         []
       );
     });
@@ -319,7 +319,7 @@ describe("IpcDispatcher", () => {
           callerId: "@workspace-apps/shell",
           callerKind: "app",
           service: "panel",
-          method: "getTreeSnapshot",
+          method: "getFocusedPanelId",
         })
       );
     });
@@ -327,7 +327,7 @@ describe("IpcDispatcher", () => {
       expectSentRpcMessage(shellWc, "@workspace-apps/shell", {
         type: "response",
         requestId: "req-paneltree",
-        result: { revision: 4, forest: [] },
+        result: "panel-1",
       });
     });
   });
@@ -351,13 +351,15 @@ describe("IpcDispatcher", () => {
         type: "request",
         requestId: "req-shell-server",
         fromId: "shell",
-        method: "workspace.hostTargets.beginLaunch",
-        args: ["electron"],
+        method: "runtime.supervision.activate",
+        args: [{ kind: "app", releaseId: "desktop-shell" }],
       } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() => {
-      expect(call).toHaveBeenCalledWith("workspace", "hostTargets.beginLaunch", ["electron"]);
+      expect(call).toHaveBeenCalledWith("runtime", "supervision.activate", [
+        { kind: "app", releaseId: "desktop-shell" },
+      ]);
     });
     expect(callAs).not.toHaveBeenCalled();
   });

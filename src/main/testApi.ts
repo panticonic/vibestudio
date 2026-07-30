@@ -9,6 +9,7 @@ import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelView } from "./panelView.js";
 import type { Panel, PanelFocusResult, PanelLifecycleResult } from "@vibestudio/shared/types";
+import type { HostedCodeIdentity } from "@vibestudio/shared/panelInterfaces";
 import { webContents as electronWebContents } from "electron";
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { panelReadinessSnapshot, type PanelReadinessSnapshot } from "./panelReadiness.js";
@@ -61,6 +62,9 @@ export interface TestApi {
 
   /** Get a specific panel by ID */
   getPanel(id: string): Panel | undefined;
+
+  /** Get the authority identity currently attached to a native panel view. */
+  getPanelCodeIdentity(id: string): HostedCodeIdentity | null;
 
   /** Get the currently focused panel ID */
   getFocusedPanelId(): string | null;
@@ -232,6 +236,10 @@ export function setupTestApi(
 
     getPanel(id: string): Panel | undefined {
       return panelRegistry.getPanel(id);
+    },
+
+    getPanelCodeIdentity(id: string): HostedCodeIdentity | null {
+      return panelView?.getViewManager().getViewInfo(id)?.codeIdentity ?? null;
     },
 
     getFocusedPanelId(): string | null {

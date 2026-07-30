@@ -2,13 +2,12 @@
  * coreRuntimeSurface — the entries byte-identical in BOTH the panel and worker
  * runtime manifests, derived from `portableRuntimeSurface` (the single source of
  * truth) by dropping the few entries whose description differs per target
- * (workspace / openPanel / listPanels / getPanelHandle / panelTree), which the
+ * (workspace / openPanel / getPanelHandle / panelTree), which the
  * per-target manifests re-add with their own wording.
  *
  * The portable surface now includes `callMain` + `parent`/`getParent`/
  * `getParentWithContract` (real on eval too) and NO longer includes `expose`
- * (use `rpc.expose`) or the `requestApproval`/`revokeApproval`/`listApprovals`
- * aliases (use `approvals.*`).
+ * (use `rpc.expose`) or any advisory approval API.
  */
 
 import type { RuntimeSurfaceEntry } from "@vibestudio/shared/runtimeSurface";
@@ -26,7 +25,6 @@ export {
   GAD_MEMBERS,
   WEBHOOKS_MEMBERS,
   EXTENSIONS_MEMBERS,
-  APPROVALS_MEMBERS,
   NOTIFICATIONS_MEMBERS,
   PANEL_TREE_MEMBERS,
   OPEN_PANEL_SIGNATURE,

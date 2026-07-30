@@ -6,16 +6,14 @@
  * privileged setup prompts all share this user-decision rendezvous point.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
-import { USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES } from "@vibestudio/shared/approvals";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type {
   ApprovalDecision,
   ApprovalOperationDescriptor,
-  ApprovalPrincipal,
   ApprovalRequesterCategory,
   ApprovalRequesterIdentity,
   DiffReviewEntry,
@@ -27,15 +25,8 @@ import type {
   PendingSecretInputApproval,
   PendingClientConfigApproval,
   PendingDeviceCodeApproval,
-  PendingExternalAgentApproval,
   PendingMissionReviewApproval,
   PendingUnitBatchApproval,
-  PendingUserlandApproval,
-  ExternalAgentApprovalResult,
-  UserlandApprovalChoice,
-  UserlandApprovalOption,
-  UserlandApprovalSealedDetailRef,
-  UserlandApprovalSubject,
 } from "@vibestudio/shared/approvals";
 import type {
   AccountIdentity,
@@ -57,6 +48,7 @@ import type {
 export type GrantedDecision =
   | "once"
   | "task"
+  | "mission"
   | "agent"
   | "lock"
   | "session"
@@ -68,6 +60,7 @@ export type GrantedDecision =
 export type ApprovalQueueDecision =
   | "once"
   | "task"
+  | "mission"
   | "agent"
   | "lock"
   | "session"
@@ -227,42 +220,6 @@ export interface SecretInputApprovalQueueRequest extends ApprovalQueueRequestBas
   fields: PendingSecretInputApproval["fields"];
 }
 
-export interface UserlandApprovalQueueRequest {
-  principal: ApprovalPrincipal;
-  /** The requesting user's `subject.userId` (WP5 §5.1); attribution only. */
-  requestedByUserId?: string;
-  /** Issuer of the request — defaults to principal when omitted. */
-  issuer?: import("@vibestudio/shared/approvals").UserlandApprovalIssuer;
-  subject: UserlandApprovalSubject;
-  title: string;
-  summary?: string;
-  warning?: string;
-  details?: PendingUserlandApproval["details"];
-  sealedDetails?: Array<{
-    ref: UserlandApprovalSealedDetailRef;
-    content: string;
-  }>;
-  positiveEvidence?: PendingUserlandApproval["positiveEvidence"];
-  severity?: PendingUserlandApproval["severity"];
-  defaultAction?: PendingUserlandApproval["defaultAction"];
-  promptOptions: PendingUserlandApproval["promptOptions"];
-  options: UserlandApprovalOption[];
-  signal?: AbortSignal;
-}
-
-export interface ExternalAgentApprovalQueueRequest extends ApprovalQueueRequestBase {
-  kind: "external-agent";
-  entityId: string;
-  channelId: string;
-  capability: string;
-  /** Tool/operation name (runtime-facing request field `operation`). */
-  operationName: string;
-  description?: string;
-  preview?: string;
-  requestId: string;
-  resolveToken: string;
-}
-
 export interface DeviceCodeApprovalQueueRequest extends ApprovalQueueRequestBase {
   kind: "device-code";
   credentialLabel: string;
@@ -313,8 +270,6 @@ export type ClientConfigApprovalResult =
   | { decision: "submit"; values: Record<string, string> }
   | { decision: "deny" };
 export type FieldInputApprovalResult = ClientConfigApprovalResult;
-export type UserlandApprovalResult = UserlandApprovalChoice;
-
 interface QueueWaiter {
   resolve: (decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision) => void;
   signal?: AbortSignal;
@@ -327,20 +282,8 @@ interface FieldInputQueueWaiter {
   onAbort?: () => void;
 }
 
-interface UserlandQueueWaiter {
-  resolve: (result: UserlandApprovalResult) => void;
-  signal?: AbortSignal;
-  onAbort?: () => void;
-}
-
 interface DeviceCodeQueueWaiter {
   cancel: () => void;
-}
-
-interface ExternalAgentQueueWaiter {
-  resolve: (result: ExternalAgentApprovalResult) => void;
-  signal?: AbortSignal;
-  onAbort?: () => void;
 }
 
 interface MissionReviewQueueWaiter {
@@ -354,15 +297,9 @@ interface QueueEntry {
   dedupKey: string;
   /** The requesting user's `subject.userId`, captured at enqueue time (WP5 §5.1). */
   requestedByUserId?: string;
-  /** Exact host-sealed bytes, retained only for the lifetime of this prompt. */
-  userlandSealedDetails?: ReadonlyMap<string, string>;
-  /** UTF-8 bytes charged to the pending sealed-detail budgets. */
-  userlandSealedDetailBytes?: number;
   waiters: Map<number, QueueWaiter>;
   fieldInputWaiters: Map<number, FieldInputQueueWaiter>;
-  userlandWaiters: Map<number, UserlandQueueWaiter>;
   deviceCodeWaiters: Map<number, DeviceCodeQueueWaiter>;
-  externalAgentWaiters: Map<number, ExternalAgentQueueWaiter>;
   missionReviewWaiters: Map<number, MissionReviewQueueWaiter>;
   nextWaiterId: number;
   /** The single in-flight human settlement; competing verdicts are rejected. */
@@ -379,10 +316,6 @@ export interface ApprovalQueue {
     req: CredentialInputApprovalQueueRequest
   ): Promise<FieldInputApprovalResult>;
   requestSecretInput(req: SecretInputApprovalQueueRequest): Promise<FieldInputApprovalResult>;
-  requestUserland(req: UserlandApprovalQueueRequest): Promise<UserlandApprovalResult>;
-  requestExternalAgent(
-    req: ExternalAgentApprovalQueueRequest
-  ): Promise<ExternalAgentApprovalResult>;
   requestMissionReview(
     req: MissionReviewApprovalQueueRequest
   ): Promise<MissionReviewApprovalResult>;
@@ -393,45 +326,14 @@ export interface ApprovalQueue {
     decision: ApprovalDecision,
     resolver?: ApprovalResolver
   ): Promise<void>;
-  resolveUserland(approvalId: string, choice: string, resolver?: ApprovalResolver): Promise<void>;
-  resolveExternalAgent(
-    approvalId: string,
-    behavior: "allow" | "deny",
-    resolver?: ApprovalResolver
-  ): Promise<void>;
   resolveMissionReview(
     approvalId: string,
     resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" },
     resolver: ApprovalResolver
   ): Promise<void>;
-  /**
-   * Record a user verdict on the external-agent approval matched by
-   * (channelId, requestId, resolveToken) — the inline conversation card
-   * resolution path, which knows the runtime requestId and opaque token but not
-   * the internal approvalId. Resolves the
-   * pending request with the given `behavior` (a real verdict, NOT the quiet
-   * settle-elsewhere path). Returns the number of approvals resolved.
-   */
-  resolveExternalAgentByRequest(
-    channelId: string,
-    requestId: string,
-    resolveToken: string,
-    behavior: "allow" | "deny",
-    resolver?: ApprovalResolver
-  ): Promise<number>;
-  /**
-   * Quiet-settle every external-agent approval matching `predicate` (answered at
-   * the terminal / bridge detached): removes the card and resolves the pending
-   * request as `deny` WITHOUT the UI recording a user deny. Returns the count.
-   */
-  settleExternalAgent(predicate: (approval: PendingExternalAgentApproval) => boolean): number;
   resolveMatching?(
     predicate: (approval: PendingApproval) => boolean,
     decision: GrantedDecision
-  ): number;
-  resolveMatchingUserland?(
-    predicate: (approval: PendingApproval) => boolean,
-    choice: string
   ): number;
   submitClientConfig(
     approvalId: string,
@@ -449,7 +351,6 @@ export interface ApprovalQueue {
     resolver?: ApprovalResolver
   ): Promise<void>;
   listPending(): PendingApproval[];
-  getUserlandSealedDetail(approvalId: string, digest: string): string | null;
   /** Cleanup hook: cancel any pending approvals associated with a caller id. */
   cancelForCaller(callerId: string): void;
 }
@@ -460,23 +361,9 @@ export interface ApprovalQueueWithListeners extends ApprovalQueue {
     predicate: (approval: PendingApproval) => boolean,
     decision: GrantedDecision
   ): number;
-  resolveMatchingUserland(
-    predicate: (approval: PendingApproval) => boolean,
-    choice: string
-  ): number;
 }
 
 export type SensitiveActionQueue = ApprovalQueue;
-
-/**
- * Retained sealed details are intentionally bounded independently of the RPC
- * request limit. A caller can always keep one maximum-sized legitimate plan
- * pending; the aggregate admits four such callers concurrently.
- */
-export const USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER =
-  USERLAND_APPROVAL_SEALED_DETAILS_MAX_BYTES;
-export const USERLAND_APPROVAL_PENDING_SEALED_BYTES_AGGREGATE =
-  USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER * 4;
 
 export function createApprovalQueue(deps: {
   eventService: EventService;
@@ -509,8 +396,6 @@ export function createApprovalQueue(deps: {
   const entriesById = new Map<string, QueueEntry>();
   const entriesByDedupKey = new Map<string, QueueEntry>();
   const pendingListeners = new Set<(pending: PendingApproval[]) => void>();
-  const pendingUserlandSealedBytesByCaller = new Map<string, number>();
-  let pendingUserlandSealedBytes = 0;
 
   function emitPendingChanged(): void {
     const pending = Array.from(entriesById.values()).map((e) => e.approval);
@@ -528,54 +413,6 @@ export function createApprovalQueue(deps: {
     if (entriesById.get(entry.approval.approvalId) !== entry) return;
     entriesById.delete(entry.approval.approvalId);
     entriesByDedupKey.delete(entry.dedupKey);
-    const sealedBytes = entry.userlandSealedDetailBytes ?? 0;
-    if (sealedBytes > 0) {
-      const callerId = entry.approval.callerId;
-      const callerBytes = pendingUserlandSealedBytesByCaller.get(callerId) ?? 0;
-      const remainingCallerBytes = callerBytes - sealedBytes;
-      if (remainingCallerBytes > 0) {
-        pendingUserlandSealedBytesByCaller.set(callerId, remainingCallerBytes);
-      } else {
-        pendingUserlandSealedBytesByCaller.delete(callerId);
-      }
-      pendingUserlandSealedBytes -= sealedBytes;
-    }
-  }
-
-  function userlandSealedDetailBytes(req: UserlandApprovalQueueRequest): number {
-    return (req.sealedDetails ?? []).reduce(
-      (total, detail) => total + Buffer.byteLength(detail.content, "utf8"),
-      0
-    );
-  }
-
-  function reserveUserlandSealedDetailBytes(callerId: string, sealedBytes: number): void {
-    if (sealedBytes === 0) return;
-    const callerBytes = pendingUserlandSealedBytesByCaller.get(callerId) ?? 0;
-    if (
-      sealedBytes > USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER ||
-      callerBytes + sealedBytes > USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER
-    ) {
-      throw new Error(
-        `Pending approval sealed-detail budget exceeded for caller '${callerId}' ` +
-          `(${callerBytes + sealedBytes} > ` +
-          `${USERLAND_APPROVAL_PENDING_SEALED_BYTES_PER_CALLER} bytes). ` +
-          "Resolve or cancel an existing approval before submitting another sealed plan."
-      );
-    }
-    if (
-      pendingUserlandSealedBytes + sealedBytes >
-      USERLAND_APPROVAL_PENDING_SEALED_BYTES_AGGREGATE
-    ) {
-      throw new Error(
-        "Pending approval aggregate sealed-detail budget exceeded " +
-          `(${pendingUserlandSealedBytes + sealedBytes} > ` +
-          `${USERLAND_APPROVAL_PENDING_SEALED_BYTES_AGGREGATE} bytes). ` +
-          "Wait for an existing approval to resolve or cancel it before retrying."
-      );
-    }
-    pendingUserlandSealedBytesByCaller.set(callerId, callerBytes + sealedBytes);
-    pendingUserlandSealedBytes += sealedBytes;
   }
 
   /**
@@ -625,10 +462,6 @@ export function createApprovalQueue(deps: {
         return { value: approval.configId };
       case "device-code":
         return { value: approval.credentialLabel };
-      case "userland":
-        return { subjectId: approval.subject.id };
-      case "external-agent":
-        return { capability: approval.capability, value: approval.operationName };
       case "secret-input":
       case "unit-batch":
         return { value: approval.title };
@@ -733,6 +566,7 @@ export function createApprovalQueue(deps: {
   /** Grant scope the server persisted for a decision (null for once/deny/dismiss). */
   function grantScopeFor(decision: GrantedDecision): GrantScopeStored {
     return decision === "task" ||
+      decision === "mission" ||
       decision === "agent" ||
       decision === "lock" ||
       decision === "session" ||
@@ -848,28 +682,6 @@ export function createApprovalQueue(deps: {
       req.effectiveVersion,
       req.credentialId,
     ]);
-  }
-
-  function userlandDedupKeyFor(req: UserlandApprovalQueueRequest): string {
-    const issuer = req.issuer ?? {
-      kind: req.principal.callerKind,
-      id: req.principal.callerId,
-    };
-    return canonicalKey([
-      "userland",
-      req.principal.callerId,
-      issuer.kind,
-      issuer.id,
-      req.subject.id,
-      userlandReviewDigest(req.sealedDetails?.map((detail) => detail.ref)) ?? "",
-    ]);
-  }
-
-  function userlandReviewDigest(
-    details: PendingUserlandApproval["sealedDetails"]
-  ): string | undefined {
-    if (!details?.length) return undefined;
-    return createHash("sha256").update(JSON.stringify(details), "utf8").digest("hex");
   }
 
   function resolveRequesterFor(
@@ -1144,9 +956,7 @@ export function createApprovalQueue(deps: {
         requestedByUserId: req.requestedByUserId,
         waiters: new Map(),
         fieldInputWaiters: new Map(),
-        userlandWaiters: new Map(),
         deviceCodeWaiters: new Map(),
-        externalAgentWaiters: new Map(),
         missionReviewWaiters: new Map(),
         nextWaiterId: 0,
       };
@@ -1173,11 +983,7 @@ export function createApprovalQueue(deps: {
           }
           if (e.settlement) return;
           e.fieldInputWaiters.delete(waiterId);
-          if (
-            e.waiters.size === 0 &&
-            e.fieldInputWaiters.size === 0 &&
-            e.userlandWaiters.size === 0
-          ) {
+          if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0) {
             removeEntry(e);
             emitPendingChanged();
           }
@@ -1217,20 +1023,6 @@ export function createApprovalQueue(deps: {
       waiter.resolve("deny");
     }
     entry.waiters.clear();
-    for (const waiter of entry.userlandWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({ kind: "dismissed" });
-    }
-    entry.userlandWaiters.clear();
-    for (const waiter of entry.externalAgentWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({ behavior: "deny" });
-    }
-    entry.externalAgentWaiters.clear();
     dismissMissionReviewWaiters(entry);
   }
 
@@ -1269,87 +1061,10 @@ export function createApprovalQueue(deps: {
       waiter.resolve({ decision: "deny" });
     }
     entry.fieldInputWaiters.clear();
-    for (const waiter of entry.userlandWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({ kind: "dismissed" });
-    }
-    entry.userlandWaiters.clear();
     for (const waiter of entry.deviceCodeWaiters.values()) {
       waiter.cancel();
     }
     entry.deviceCodeWaiters.clear();
-    for (const waiter of entry.externalAgentWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({ behavior: "deny" });
-    }
-    entry.externalAgentWaiters.clear();
-    dismissMissionReviewWaiters(entry);
-  }
-
-  function settleUserlandEntry(entry: QueueEntry, choice: string): void {
-    removeEntry(entry);
-    const sealedDetails =
-      entry.approval.kind === "userland"
-        ? entry.approval.sealedDetails?.map((detail) => {
-            const content = entry.userlandSealedDetails?.get(detail.digest);
-            if (content === undefined) {
-              throw new Error(`Missing sealed userland approval detail ${detail.digest}`);
-            }
-            return { digest: detail.digest, content };
-          })
-        : undefined;
-    for (const waiter of entry.userlandWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({
-        kind: "choice",
-        choice,
-        ...(sealedDetails?.length ? { sealedDetails } : {}),
-      });
-    }
-    entry.userlandWaiters.clear();
-    for (const waiter of entry.waiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve("deny");
-    }
-    entry.waiters.clear();
-    for (const waiter of entry.fieldInputWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({ decision: "deny" });
-    }
-    entry.fieldInputWaiters.clear();
-    for (const waiter of entry.deviceCodeWaiters.values()) {
-      waiter.cancel();
-    }
-    entry.deviceCodeWaiters.clear();
-    for (const waiter of entry.externalAgentWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({ behavior: "deny" });
-    }
-    entry.externalAgentWaiters.clear();
-    dismissMissionReviewWaiters(entry);
-  }
-
-  function settleExternalAgentEntry(entry: QueueEntry, behavior: "allow" | "deny"): void {
-    removeEntry(entry);
-    for (const waiter of entry.externalAgentWaiters.values()) {
-      if (waiter.signal && waiter.onAbort) {
-        waiter.signal.removeEventListener("abort", waiter.onAbort);
-      }
-      waiter.resolve({ behavior });
-    }
-    entry.externalAgentWaiters.clear();
     dismissMissionReviewWaiters(entry);
   }
 
@@ -1387,9 +1102,7 @@ export function createApprovalQueue(deps: {
         requestedByUserId: req.requestedByUserId,
         waiters: new Map(),
         fieldInputWaiters: new Map(),
-        userlandWaiters: new Map(),
         deviceCodeWaiters: new Map(),
-        externalAgentWaiters: new Map(),
         missionReviewWaiters: new Map(),
         nextWaiterId: 0,
       };
@@ -1412,11 +1125,7 @@ export function createApprovalQueue(deps: {
           }
           if (e.settlement) return;
           e.waiters.delete(waiterId);
-          if (
-            e.waiters.size === 0 &&
-            e.fieldInputWaiters.size === 0 &&
-            e.userlandWaiters.size === 0
-          ) {
+          if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0) {
             removeEntry(e);
             emitPendingChanged();
           }
@@ -1452,9 +1161,7 @@ export function createApprovalQueue(deps: {
         requestedByUserId: req.requestedByUserId,
         waiters: new Map(),
         fieldInputWaiters: new Map(),
-        userlandWaiters: new Map(),
         deviceCodeWaiters: new Map(),
-        externalAgentWaiters: new Map(),
         missionReviewWaiters: new Map(),
         nextWaiterId: 0,
       };
@@ -1480,7 +1187,6 @@ export function createApprovalQueue(deps: {
         if (
           current.waiters.size === 0 &&
           current.fieldInputWaiters.size === 0 &&
-          current.userlandWaiters.size === 0 &&
           current.missionReviewWaiters.size === 0
         ) {
           removeEntry(current);
@@ -1560,9 +1266,7 @@ export function createApprovalQueue(deps: {
         requestedByUserId: req.requestedByUserId,
         waiters: new Map(),
         fieldInputWaiters: new Map(),
-        userlandWaiters: new Map(),
         deviceCodeWaiters: new Map(),
-        externalAgentWaiters: new Map(),
         missionReviewWaiters: new Map(),
         nextWaiterId: 0,
       };
@@ -1594,221 +1298,6 @@ export function createApprovalQueue(deps: {
         },
       };
       return handle;
-    },
-
-    requestUserland(req) {
-      const dedupKey = userlandDedupKeyFor(req);
-      let entry = entriesByDedupKey.get(dedupKey);
-      let newEntry = false;
-      if (!entry) {
-        const sealedDetailBytes = userlandSealedDetailBytes(req);
-        const principalBase = {
-          callerId: req.principal.callerId,
-          callerKind: req.principal.callerKind,
-          repoPath: req.principal.repoPath,
-          effectiveVersion: req.principal.effectiveVersion,
-          ...(req.principal.requesterCategory
-            ? { requesterCategory: req.principal.requesterCategory }
-            : {}),
-        };
-        const requester = req.principal.requester ?? resolveRequesterFor(principalBase);
-        const callerTitle =
-          req.principal.callerTitle ?? requester?.title ?? resolveTitle(req.principal.callerId);
-        const enrichedIssuer = req.issuer
-          ? {
-              ...req.issuer,
-              ...(req.issuer.label === undefined
-                ? (() => {
-                    const resolved = resolveTitle(req.issuer.id);
-                    return resolved !== undefined ? { label: resolved } : {};
-                  })()
-                : {}),
-            }
-          : undefined;
-        const approval = {
-          approvalId: randomUUID(),
-          callerId: req.principal.callerId,
-          callerKind: req.principal.callerKind,
-          repoPath: req.principal.repoPath,
-          effectiveVersion: req.principal.effectiveVersion,
-          requestedAt: Date.now(),
-          ...(callerTitle !== undefined ? { callerTitle } : {}),
-          ...(requester ? { requester } : {}),
-          operation: {
-            kind: "userland",
-            verb: req.title,
-            object: {
-              type: "userland-subject",
-              label: req.subject.label ?? "Subject",
-              value: req.subject.id,
-            },
-          },
-          kind: "userland",
-          ...(enrichedIssuer ? { issuer: enrichedIssuer } : {}),
-          subject: req.subject,
-          title: req.title,
-          summary: req.summary,
-          warning: req.warning,
-          details: req.details,
-          sealedDetails: req.sealedDetails?.map((detail) => detail.ref),
-          positiveEvidence: req.positiveEvidence,
-          severity: req.severity,
-          defaultAction: req.defaultAction,
-          promptOptions: req.promptOptions,
-          options: req.options,
-        } satisfies PendingUserlandApproval;
-        entry = {
-          approval,
-          dedupKey,
-          requestedByUserId: req.requestedByUserId,
-          userlandSealedDetails: req.sealedDetails
-            ? new Map(req.sealedDetails.map((detail) => [detail.ref.digest, detail.content]))
-            : undefined,
-          ...(sealedDetailBytes > 0 ? { userlandSealedDetailBytes: sealedDetailBytes } : {}),
-          waiters: new Map(),
-          fieldInputWaiters: new Map(),
-          userlandWaiters: new Map(),
-          deviceCodeWaiters: new Map(),
-          externalAgentWaiters: new Map(),
-          missionReviewWaiters: new Map(),
-          nextWaiterId: 0,
-        };
-        reserveUserlandSealedDetailBytes(req.principal.callerId, sealedDetailBytes);
-        entriesById.set(approval.approvalId, entry);
-        entriesByDedupKey.set(dedupKey, entry);
-        newEntry = true;
-      }
-
-      if (entry.approval.kind !== "userland") {
-        throw new Error("Approval dedup collision for userland request");
-      }
-
-      const bound = entry;
-      return new Promise<UserlandApprovalResult>((resolve) => {
-        const waiterId = bound.nextWaiterId++;
-        const waiter: UserlandQueueWaiter = { resolve, signal: req.signal };
-
-        if (req.signal) {
-          const onAbort = () => {
-            const e = entriesById.get(bound.approval.approvalId);
-            if (!e) {
-              resolve({ kind: "dismissed" });
-              return;
-            }
-            if (e.settlement) return;
-            e.userlandWaiters.delete(waiterId);
-            if (
-              e.waiters.size === 0 &&
-              e.fieldInputWaiters.size === 0 &&
-              e.userlandWaiters.size === 0
-            ) {
-              removeEntry(e);
-              emitPendingChanged();
-            }
-            resolve({ kind: "dismissed" });
-          };
-          waiter.onAbort = onAbort;
-          if (req.signal.aborted) {
-            queueMicrotask(onAbort);
-          } else {
-            req.signal.addEventListener("abort", onAbort, { once: true });
-          }
-        }
-
-        bound.userlandWaiters.set(waiterId, waiter);
-
-        if (newEntry) {
-          emitPendingChanged();
-        }
-      });
-    },
-
-    requestExternalAgent(req) {
-      // Each relayed permission is its own one-shot decision — never deduped, so
-      // one verdict can't release another tool call. Keyed by the unique
-      // requestId (plus a nonce) for defensive isolation.
-      const dedupKey = canonicalKey([
-        "external-agent",
-        req.entityId,
-        req.channelId,
-        req.requestId,
-        randomUUID(),
-      ]);
-      const requester = resolveRequesterFor(req);
-      const callerTitle = requester?.title ?? resolveTitle(req.callerId);
-      const descriptor: ApprovalOperationDescriptor = {
-        kind: "external-agent",
-        verb: `run ${req.operationName}`,
-        object: { type: "tool", label: "Tool", value: req.operationName },
-      };
-      const approval: PendingExternalAgentApproval = {
-        approvalId: randomUUID(),
-        callerId: req.callerId,
-        callerKind: req.callerKind,
-        repoPath: req.repoPath,
-        effectiveVersion: req.effectiveVersion,
-        requestedAt: Date.now(),
-        ...(callerTitle !== undefined ? { callerTitle } : {}),
-        ...(requester ? { requester } : {}),
-        operation: descriptor,
-        kind: "external-agent",
-        entityId: req.entityId,
-        channelId: req.channelId,
-        capability: req.capability,
-        operationName: req.operationName,
-        ...(req.description !== undefined ? { description: req.description } : {}),
-        ...(req.preview !== undefined ? { preview: req.preview } : {}),
-        requestId: req.requestId,
-        resolveToken: req.resolveToken,
-      };
-
-      const entry: QueueEntry = {
-        approval,
-        dedupKey,
-        requestedByUserId: req.requestedByUserId,
-        waiters: new Map(),
-        fieldInputWaiters: new Map(),
-        userlandWaiters: new Map(),
-        deviceCodeWaiters: new Map(),
-        externalAgentWaiters: new Map(),
-        missionReviewWaiters: new Map(),
-        nextWaiterId: 0,
-      };
-      entriesById.set(approval.approvalId, entry);
-      entriesByDedupKey.set(dedupKey, entry);
-
-      return new Promise<ExternalAgentApprovalResult>((resolve) => {
-        const waiterId = entry.nextWaiterId++;
-        const waiter: ExternalAgentQueueWaiter = { resolve, signal: req.signal };
-
-        if (req.signal) {
-          // Auto-deny on expiry (the service currently arms a ten-minute timeout) or caller
-          // cancellation: the card disappears and the relay is denied.
-          const onAbort = () => {
-            const e = entriesById.get(entry.approval.approvalId);
-            if (!e) {
-              resolve({ behavior: "deny" });
-              return;
-            }
-            if (e.settlement) return;
-            e.externalAgentWaiters.delete(waiterId);
-            if (e.externalAgentWaiters.size === 0) {
-              removeEntry(e);
-              emitPendingChanged();
-            }
-            resolve({ behavior: "deny" });
-          };
-          waiter.onAbort = onAbort;
-          if (req.signal.aborted) {
-            queueMicrotask(onAbort);
-          } else {
-            req.signal.addEventListener("abort", onAbort, { once: true });
-          }
-        }
-
-        entry.externalAgentWaiters.set(waiterId, waiter);
-        emitPendingChanged();
-      });
     },
 
     onPendingChanged(listener) {
@@ -1864,49 +1353,6 @@ export function createApprovalQueue(deps: {
       );
     },
 
-    async resolveUserland(approvalId, choice, resolver) {
-      const entry = entriesById.get(approvalId);
-      if (!entry || entry.approval.kind !== "userland") return;
-
-      if (!entry.approval.options.some((option) => option.value === choice)) {
-        throw new Error(`Unknown userland approval choice: ${choice}`);
-      }
-
-      // A userland choice is a one-shot allow; the chosen option value rides in
-      // `resource.key` so provenance records WHICH option was picked. Hoist the
-      // subject id before `settle` so the narrowing survives the closure arg.
-      const subjectId = entry.approval.subject.id;
-      const reviewDigest = userlandReviewDigest(entry.approval.sealedDetails);
-      await settle(
-        entry,
-        {
-          decision: "once",
-          granted: true,
-          resolver,
-          resource: {
-            subjectId,
-            key: choice,
-            ...(reviewDigest ? { value: `sha256:${reviewDigest}` } : {}),
-          },
-        },
-        (e) => settleUserlandEntry(e, choice)
-      );
-    },
-
-    async resolveExternalAgent(approvalId, behavior, resolver) {
-      const entry = entriesById.get(approvalId);
-      if (!entry || entry.approval.kind !== "external-agent") return;
-      await settle(
-        entry,
-        {
-          decision: behavior === "allow" ? "once" : "deny",
-          granted: behavior === "allow",
-          resolver,
-        },
-        (e) => settleExternalAgentEntry(e, behavior)
-      );
-    },
-
     async resolveMissionReview(approvalId, resolution, resolver) {
       const entry = entriesById.get(approvalId);
       if (!entry || entry.approval.kind !== "mission-review") return;
@@ -1943,66 +1389,12 @@ export function createApprovalQueue(deps: {
       );
     },
 
-    async resolveExternalAgentByRequest(channelId, requestId, resolveToken, behavior, resolver) {
-      const matching = Array.from(entriesById.values()).filter(
-        (entry) =>
-          entry.approval.kind === "external-agent" &&
-          entry.approval.channelId === channelId &&
-          entry.approval.requestId === requestId &&
-          entry.approval.resolveToken === resolveToken
-      );
-      // Real verdict (allow/deny) — the waiter resolves with the user's choice,
-      // exactly as the by-approvalId path does, but keyed on the runtime's
-      // (channelId, requestId, resolveToken) that the inline conversation card
-      // carries. Routed through the same `settle` coordinator so this inline path
-      // is attributed too (WP5 §4/§6).
-      for (const entry of matching) {
-        await settle(
-          entry,
-          {
-            decision: behavior === "allow" ? "once" : "deny",
-            granted: behavior === "allow",
-            resolver,
-          },
-          (e) => settleExternalAgentEntry(e, behavior)
-        );
-      }
-      return matching.length;
-    },
-
-    settleExternalAgent(predicate) {
-      const matching = Array.from(entriesById.values()).filter(
-        (entry) =>
-          !entry.settlement && entry.approval.kind === "external-agent" && predicate(entry.approval)
-      );
-      // Quiet settle: the request resolves as `deny` (the caller already has its
-      // answer from elsewhere and ignores this) but no user-facing deny is
-      // recorded — the card simply disappears.
-      for (const entry of matching) {
-        settleExternalAgentEntry(entry, "deny");
-      }
-      if (matching.length > 0) emitPendingChanged();
-      return matching.length;
-    },
-
     resolveMatching(predicate, decision) {
       const matching = Array.from(entriesById.values()).filter(
         (entry) => !entry.settlement && predicate(entry.approval)
       );
       for (const entry of matching) {
         settleDecisionEntry(entry, decision);
-      }
-      if (matching.length > 0) emitPendingChanged();
-      return matching.length;
-    },
-
-    resolveMatchingUserland(predicate, choice) {
-      const matching = Array.from(entriesById.values()).filter(
-        (entry) =>
-          !entry.settlement && entry.approval.kind === "userland" && predicate(entry.approval)
-      );
-      for (const entry of matching) {
-        settleUserlandEntry(entry, choice);
       }
       if (matching.length > 0) emitPendingChanged();
       return matching.length;
@@ -2022,19 +1414,6 @@ export function createApprovalQueue(deps: {
 
     listPending() {
       return Array.from(entriesById.values()).map((e) => e.approval);
-    },
-
-    getUserlandSealedDetail(approvalId, digest) {
-      const entry = entriesById.get(approvalId);
-      if (!entry || entry.approval.kind !== "userland") return null;
-      if (
-        !entry.approval.sealedDetails?.some(
-          (detail) => detail.digest === digest && (detail.disclosure ?? "review") === "review"
-        )
-      ) {
-        return null;
-      }
-      return entry.userlandSealedDetails?.get(digest) ?? null;
     },
 
     cancelForCaller(callerId) {
@@ -2059,24 +1438,10 @@ export function createApprovalQueue(deps: {
           waiter.resolve({ decision: "deny" });
         }
         entry.fieldInputWaiters.clear();
-        for (const waiter of entry.userlandWaiters.values()) {
-          if (waiter.signal && waiter.onAbort) {
-            waiter.signal.removeEventListener("abort", waiter.onAbort);
-          }
-          waiter.resolve({ kind: "dismissed" });
-        }
-        entry.userlandWaiters.clear();
         for (const waiter of entry.deviceCodeWaiters.values()) {
           waiter.cancel();
         }
         entry.deviceCodeWaiters.clear();
-        for (const waiter of entry.externalAgentWaiters.values()) {
-          if (waiter.signal && waiter.onAbort) {
-            waiter.signal.removeEventListener("abort", waiter.onAbort);
-          }
-          waiter.resolve({ behavior: "deny" });
-        }
-        entry.externalAgentWaiters.clear();
         dismissMissionReviewWaiters(entry);
       }
       if (matching.length > 0) emitPendingChanged();

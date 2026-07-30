@@ -15,7 +15,7 @@ const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 
 describe("ServiceDispatcher.registerService", () => {
   it("requires a colocated semantic capability for promptable methods outside the static census", () => {
-    const sd = new ServiceDispatcher({ tierLookup: () => null, capabilityLookup: () => null });
+    const sd = new ServiceDispatcher();
     const definition: ServiceDefinition = {
       name: "dynamic",
       authority: { principals: ["user"] },
@@ -41,7 +41,7 @@ describe("ServiceDispatcher.registerService", () => {
   });
 
   it("accepts a colocated reviewed tier without a global census entry", () => {
-    const sd = new ServiceDispatcher({ tierLookup: () => null });
+    const sd = new ServiceDispatcher();
     sd.registerService({
       name: "dynamic",
       authority: { principals: ["user"] },

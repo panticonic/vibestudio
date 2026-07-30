@@ -35,7 +35,11 @@ export interface EntityTitleService {
    * Local cache refresh for writes that already landed in the DO via another
    * path (e.g. `workspace-state.panel.updateTitle`). Does NOT re-dispatch.
    */
-  mirrorCachedTitle(entityId: string, title: string | undefined | null): void;
+  mirrorCachedTitle(
+    entityId: string,
+    title: string | undefined | null,
+    options?: { explicit?: boolean }
+  ): void;
   /** Subscribe to cache changes (used to refresh in-flight approvals). */
   onChanged(
     listener: (entityId: string, title: string | undefined, origin: EntityTitleChangeOrigin) => void
@@ -144,9 +148,9 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
       return titles.get(entityId);
     },
 
-    mirrorCachedTitle(entityId, title) {
+    mirrorCachedTitle(entityId, title, options) {
       const next = sanitizeTitle(title);
-      applyToCache(entityId, next, "mirror");
+      applyToCache(entityId, next, options?.explicit ? "set-explicit" : "mirror");
     },
 
     onChanged(listener) {

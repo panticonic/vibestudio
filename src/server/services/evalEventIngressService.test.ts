@@ -29,7 +29,7 @@ function execution(): AgentExecutionSessionFact {
       eventSinkNonce: sinkNonce,
       authorityManifest: {
         mode: "adaptive",
-        effects: "mutable",
+        effects: "read-write",
         approvals: "prompt",
         requests: [],
         digest: "b".repeat(64),

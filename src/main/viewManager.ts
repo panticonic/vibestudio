@@ -178,6 +178,7 @@ export type NativePanelSlotSyncResult =
 
 interface NativePanelSlotState {
   nativeSlotId: string;
+  bindingId: string;
   panelId: string;
   bounds: ViewBounds;
   focused: boolean;
@@ -554,18 +555,23 @@ export class ViewManager {
     // Browser panels share BROWSER_SESSION_PARTITION for cookies/auth.
     // Workspace panels use the default session (no external sites).
     const ses = config.partition ? session.fromPartition(config.partition) : session.defaultSession;
+    const hostChrome =
+      config.type === "app" &&
+      (config.hostChrome ?? false) &&
+      isAuthorizedChromeAppCaller(config.id, config.codeIdentity?.source);
 
     // All panels run in safe sandboxed mode
+    const runtimeMustRemainSchedulable = hostChrome || config.type === "panel";
     const webPreferences: Electron.WebPreferences = {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
       session: ses,
       webviewTag: false,
-      // Allow Chromium to throttle hidden views (saves CPU/battery).
-      // Compositor stalls on *visible* panels are handled by the periodic
-      // keepalive and forceRepaint, not this setting.
-      backgroundThrottling: true,
+      // Host chrome owns native panel residency, and an unbound panel must boot
+      // while it is still hidden. Both control plane and loaded panel runtimes
+      // therefore remain schedulable; ordinary non-hosting apps may throttle.
+      backgroundThrottling: !runtimeMustRemainSchedulable,
     };
 
     // Set preload if explicitly provided (e.g. adblock preload for browser panels)
@@ -574,6 +580,11 @@ export class ViewManager {
     }
 
     const view = new WebContentsView({ webPreferences });
+    if (runtimeMustRemainSchedulable) {
+      // Enforce the lifecycle scheduling policy on the live WebContents as
+      // well as at construction.
+      view.webContents.setBackgroundThrottling(false);
+    }
 
     // Start invisible at origin with zero size
     view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
@@ -582,11 +593,6 @@ export class ViewManager {
     // Add to window's content view. This appends at the top of the stack, so
     // re-assert layer order below once the view is tracked.
     this.window.contentView.addChildView(view);
-
-    const hostChrome =
-      config.type === "app" &&
-      (config.hostChrome ?? false) &&
-      isAuthorizedChromeAppCaller(config.id, config.codeIdentity?.source);
 
     // Track the managed view
     const managed: ManagedView = {
@@ -896,7 +902,7 @@ export class ViewManager {
 
     managed.bounds = bounds;
     managed.view.setBounds(
-      this.shouldHidePanelViewForBootstrap(managed) ? this.hiddenBounds() : bounds
+      this.shouldHideUnslottedPanelView(managed) ? this.hiddenBounds() : bounds
     );
   }
 
@@ -939,6 +945,11 @@ export class ViewManager {
       this.clearAllPanelSlots();
       this.nativePanelSlots.activeHostedShellViewId = ownerViewId;
       this.nativePanelSlots.hostedShellReady = true;
+      for (const managed of this.views.values()) {
+        if (managed.type !== "panel") continue;
+        managed.view.setBounds(this.hiddenBounds());
+        managed.view.setVisible(false);
+      }
       this.hideBootstrapShell();
       this.setViewVisible(ownerViewId, true);
       this.reconcileNativeLayerOrder();
@@ -969,6 +980,7 @@ export class ViewManager {
     ownerViewId: string,
     request: {
       nativeSlotId: string;
+      bindingId: string;
       panelId: string;
       bounds: NativePanelSlotBounds;
       focused?: boolean;
@@ -976,6 +988,7 @@ export class ViewManager {
   ): void {
     this.assertActiveHostedShellOwner(ownerViewId);
     const nativeSlotId = this.validateNonEmptyId(request.nativeSlotId, "nativeSlotId");
+    const bindingId = this.validateNonEmptyId(request.bindingId, "bindingId");
     const panelId = this.validateNonEmptyId(request.panelId, "panelId");
     const managed = this.views.get(panelId);
     if (!managed || managed.type !== "panel") {
@@ -1016,6 +1029,7 @@ export class ViewManager {
     wc.on("focus", onViewFocus);
     this.nativePanelSlots.activeSlots.set(nativeSlotId, {
       nativeSlotId,
+      bindingId,
       panelId,
       bounds,
       focused,
@@ -1043,7 +1057,12 @@ export class ViewManager {
 
   updatePanelSlot(
     ownerViewId: string,
-    request: { nativeSlotId: string; bounds?: NativePanelSlotBounds; focused?: boolean }
+    request: {
+      nativeSlotId: string;
+      bindingId: string;
+      bounds?: NativePanelSlotBounds;
+      focused?: boolean;
+    }
   ): NativePanelSlotSyncResult {
     this.assertActiveHostedShellOwner(ownerViewId);
     const nativeSlotId = this.validateNonEmptyId(request.nativeSlotId, "nativeSlotId");
@@ -1054,6 +1073,12 @@ export class ViewManager {
       return { status: "missing", reason };
     }
     this.assertSlotOwner(slot, ownerViewId);
+    if (slot.bindingId !== request.bindingId) {
+      return {
+        status: "missing",
+        reason: `native panel slot binding changed: ${nativeSlotId}`,
+      };
+    }
 
     const managed = this.views.get(slot.panelId);
     if (!managed || managed.type !== "panel") {
@@ -1082,10 +1107,16 @@ export class ViewManager {
     return { status: "updated" };
   }
 
-  clearPanelSlot(ownerViewId: string, nativeSlotId: string): void {
+  clearPanelSlot(ownerViewId: string, nativeSlotId: string, bindingId: string): void {
     this.assertActiveHostedShellOwner(ownerViewId);
     const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (slot) this.assertSlotOwner(slot, ownerViewId);
+    if (slot && slot.bindingId !== bindingId) {
+      log.verbose(
+        ` Ignore stale native panel slot clear ${nativeSlotId} (${bindingId}; active=${slot.bindingId})`
+      );
+      return;
+    }
     log.verbose(` Clear native panel slot ${nativeSlotId} (was ${slot?.panelId ?? "empty"})`);
     // The shell explicitly released this slot — drop any remembered binding.
     for (const [pendingPanelId, pending] of this.pendingSlotRestores) {
@@ -1278,12 +1309,12 @@ export class ViewManager {
     this.shellContentOverlay.hide();
   }
 
-  private shouldHidePanelViewForBootstrap(managed: ManagedView): boolean {
-    return (
-      this.hidePanelViewsUntilHostedShellReady &&
-      managed.type === "panel" &&
-      !this.nativePanelSlots.hostedShellReady
-    );
+  private shouldHideUnslottedPanelView(managed: ManagedView): boolean {
+    if (managed.type !== "panel") return false;
+    if (this.nativePanelSlots.hostedShellReady) {
+      return !this.nativePanelSlots.panelToSlot.has(managed.id);
+    }
+    return this.hidePanelViewsUntilHostedShellReady;
   }
 
   private hiddenBounds(): ViewBounds {
@@ -1291,7 +1322,7 @@ export class ViewManager {
   }
 
   private applyNativePanelVisibility(managed: ManagedView, bounds: ViewBounds): boolean {
-    if (this.shouldHidePanelViewForBootstrap(managed)) {
+    if (this.shouldHideUnslottedPanelView(managed)) {
       managed.view.setBounds(this.hiddenBounds());
       managed.view.setVisible(false);
       return false;
@@ -1541,10 +1572,10 @@ export class ViewManager {
    * raises, or creates a view routes through here instead of re-adding child
    * views directly — distributed remove/add calls are how the hosted shell
    * ended up stacked over slotted panels. Re-asserts, bottom to top:
-   * host chrome app views, the active unslotted panel, slotted
-   * panels with the focused slot last, then the bootstrap launch gate while
-   * the hosted shell is not ready. The gate must stay above unslotted panels
-   * until a hosted shell explicitly reports ready.
+   * host chrome app views, an active legacy-shell panel, slotted panels with
+   * the focused slot last, then the bootstrap launch gate while the hosted
+   * shell is not ready. Once hosted chrome owns presentation, an unbound panel
+   * is never part of the native stack.
    */
   private reconcileNativeLayerOrder(): void {
     if (this.window.isDestroyed()) return;
@@ -1571,7 +1602,7 @@ export class ViewManager {
     }
 
     const allowFallbackPanels =
-      this.nativePanelSlots.hostedShellReady || !this.hidePanelViewsUntilHostedShellReady;
+      !this.nativePanelSlots.hostedShellReady && !this.hidePanelViewsUntilHostedShellReady;
 
     if (
       allowFallbackPanels &&
@@ -1582,15 +1613,13 @@ export class ViewManager {
       if (managed?.visible) plan(this.visiblePanelId);
     }
 
-    if (allowFallbackPanels) {
-      for (const slot of this.nativePanelSlots.activeSlots.values()) {
-        if (slot.nativeSlotId === this.nativePanelSlots.focusedNativeSlotId) continue;
-        plan(slot.panelId);
-      }
-      const focusedSlotId = this.nativePanelSlots.focusedNativeSlotId;
-      if (focusedSlotId) {
-        plan(this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId);
-      }
+    for (const slot of this.nativePanelSlots.activeSlots.values()) {
+      if (slot.nativeSlotId === this.nativePanelSlots.focusedNativeSlotId) continue;
+      plan(slot.panelId);
+    }
+    const focusedSlotId = this.nativePanelSlots.focusedNativeSlotId;
+    if (focusedSlotId) {
+      plan(this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId);
     }
     if (!this.nativePanelSlots.hostedShellReady) {
       plan("shell");

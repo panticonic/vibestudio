@@ -1,6 +1,6 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { buildMethods } from "@vibestudio/service-schemas/build";
+import { buildMethods, type BuildUnitCatalogEntry } from "@vibestudio/service-schemas/build";
 import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
@@ -12,13 +12,17 @@ const SKILLS_PACKAGE_SCOPE = (() => {
   return scope;
 })();
 
-export function createBuildService(deps: { buildSystem: BuildSystemV2 }): ServiceDefinition {
+export function createBuildService(deps: {
+  buildSystem: BuildSystemV2;
+  listUnits: () => BuildUnitCatalogEntry[];
+}): ServiceDefinition {
   return {
     name: "build",
     description: "Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)",
     authority: { principals: ["code", "user", "host"] },
     methods: buildMethods,
     handler: defineServiceHandler("build", buildMethods, {
+      listUnits: () => deps.listUnits(),
       getBuild: (_ctx, [unit, ref, options]) => {
         const bs = deps.buildSystem;
         return options?.library
@@ -118,7 +122,6 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
         };
       },
       listRecentBuildEvents: (_ctx, [unit]) => deps.buildSystem.listRecentBuildEvents(unit),
-      doctorExtension: (_ctx, [source]) => deps.buildSystem.doctorExtension(source),
       recompute: () => deps.buildSystem.recompute(),
       gc: () => deps.buildSystem.gc(),
       inspectExecution: (_ctx, [executionDigest]) =>
@@ -126,13 +129,18 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
       getAboutPages: () => deps.buildSystem.getAboutPages(),
       hasUnit: (_ctx, [unit]) => deps.buildSystem.hasUnit(unit),
       getPanelMetadata: (_ctx, [unit]) => {
-        const node = deps.buildSystem.getGraph().tryGet(unit);
+        const graph = deps.buildSystem.getGraph();
+        const node =
+          graph.tryGet(unit) ??
+          graph.allNodes().find((candidate) => candidate.relativePath === unit);
         if (!node || node.kind !== "panel") return null;
         return {
           source: node.relativePath,
           title: node.manifest.title ?? node.name,
           description: node.manifest.description,
           hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
+          stateArgs: node.manifest.stateArgs,
+          autoArchiveWhenEmpty: node.manifest.autoArchiveWhenEmpty,
         };
       },
       listSkills: () =>

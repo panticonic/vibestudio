@@ -55,7 +55,6 @@ describe("parsePanelUrl()", () => {
     expect(result).not.toBeNull();
     expect(result!.source).toBe("panels/chat");
     expect(result!.contextId).toBeUndefined();
-    expect(result!.options.name).toBeUndefined();
     expect(result!.options.focus).toBeUndefined();
     expect(result!.stateArgs).toBeUndefined();
   });
@@ -72,27 +71,16 @@ describe("parsePanelUrl()", () => {
     expect(result!.options.contextId).toBe("ctx-123");
   });
 
-  it("parses URL with name query param", () => {
+  it("parses title and slug independently", () => {
     const result = parsePanelUrl(
-      "https://vibestudio.example.com/panels/chat?name=My%20Panel",
-      host
-    );
-
-    expect(result).not.toBeNull();
-    expect(result!.options.name).toBe("My Panel");
-  });
-
-  it("parses title and slug independently from the deprecated name alias", () => {
-    const result = parsePanelUrl(
-      "https://vibestudio.example.com/panels/chat?title=Research&slug=research&name=Legacy",
+      "https://vibestudio.example.com/panels/chat?title=Research&slug=research",
       host
     );
 
     expect(result).toMatchObject({
       title: "Research",
       slug: "research",
-      name: "Legacy",
-      options: { title: "Research", slug: "research", name: "Legacy" },
+      options: { title: "Research", slug: "research" },
     });
   });
 
@@ -184,13 +172,13 @@ describe("parsePanelUrl()", () => {
 
   it("parses URL with multiple query params", () => {
     const result = parsePanelUrl(
-      "https://vibestudio.example.com/panels/chat?contextId=ctx-1&name=Test&focus=true",
+      "https://vibestudio.example.com/panels/chat?contextId=ctx-1&title=Test&focus=true",
       host
     );
 
     expect(result).not.toBeNull();
     expect(result!.contextId).toBe("ctx-1");
-    expect(result!.options.name).toBe("Test");
+    expect(result!.options.title).toBe("Test");
     expect(result!.options.focus).toBe(true);
   });
 

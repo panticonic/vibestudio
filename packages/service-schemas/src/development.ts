@@ -108,7 +108,7 @@ export type DevelopmentSession = z.infer<typeof developmentSessionSchema>;
 
 const commandSchema = z
   .object({
-    id: z.enum(["install-root", "install-workspace", "build-host"]),
+    id: z.enum(["install-root", "build-host"]),
     executable: z.enum(["pnpm", "node"]),
     args: z.array(z.string()),
   })
@@ -139,13 +139,13 @@ export const developmentRecipeSchema = z
     executor: z.literal("node-pnpm"),
     install: z
       .object({
-        lockfiles: z.tuple([z.literal("pnpm-lock.yaml"), z.literal("workspace/pnpm-lock.yaml")]),
+        lockfiles: z.tuple([z.literal("pnpm-lock.yaml")]),
         mode: z.literal("frozen"),
         network: z.literal("approved-registry"),
         registry: z.literal("https://registry.npmjs.org"),
       })
       .strict(),
-    commands: z.tuple([commandSchema, commandSchema, commandSchema]),
+    commands: z.tuple([commandSchema, commandSchema]),
     declaredEnvironment: z
       .object({ CI: z.literal("1"), NODE_ENV: z.literal("production") })
       .strict(),
@@ -395,6 +395,12 @@ const adaptiveOpenAuthority = {
 
 export const developmentMethods = defineServiceMethods({
   openSession: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Adaptive boundary: semantic mode is a reversible source-only fork; native-tool mode selects exact prepared gated local-tool authority",
+    },
     description:
       "Fork the caller's exact semantic working state. Semantic mode stays in the control plane; native-tool mode launches the selected reviewed local tool in a private owned terminal and tree.",
     args: z.tuple([
@@ -420,6 +426,11 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   getSession: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "Owner-scoped read of one semantic development session",
+    },
     description: "Read an owned development session.",
     args: z.tuple([z.object({ sessionId: nonEmpty }).strict()]),
     returns: developmentSessionSchema.nullable(),
@@ -427,6 +438,11 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   listSessions: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "Owner-scoped listing of semantic development sessions",
+    },
     description: "Page development sessions owned by the caller in stable newest-first order.",
     args: z.tuple([
       z
@@ -459,6 +475,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   closeSession: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped lifecycle reduction that closes the session record while retaining its semantic child context",
+    },
     description:
       "Close a development session idempotently while retaining its semantic child context.",
     args: z.tuple([z.object({ sessionId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -467,6 +489,23 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   destroySession: {
+    capability: "development.sessions.destroy",
+    tier: {
+      tier: "critical",
+      session: "family",
+      rationale: "C3: permanently retires an owned semantic development context",
+    },
+    presentation: {
+      title: "Destroy a development workspace",
+      action: "permanently destroy a development workspace",
+      description:
+        "Allows {requesterKind} to permanently destroy this isolated semantic working copy.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
     description:
       "Close a development session and destroy its owned semantic child context. Active runs are refused.",
     args: z.tuple([z.object({ sessionId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -475,6 +514,24 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   retrySessionCleanup: {
+    capability: "development.sessions.cleanup.retry",
+    tier: {
+      tier: "critical",
+      session: "family",
+      rationale:
+        "C3: retries the prior explicit destruction of an owned semantic development context",
+    },
+    presentation: {
+      title: "Retry development-workspace cleanup",
+      action: "retry permanent cleanup of a development workspace",
+      description:
+        "Allows {requesterKind} to retry the previously requested cleanup of this isolated semantic working copy.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "files",
+        verb: "act",
+      },
+    },
     description:
       "Retry the previously requested destruction of a session's owned semantic child context.",
     args: z.tuple([z.object({ sessionId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -483,6 +540,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   keepSessionRepair: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped acknowledgement that retains the session context and diagnostics unchanged",
+    },
     description:
       "Keep a session repair record without performing cleanup. Read the session to inspect it.",
     args: z.tuple([z.object({ sessionId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -491,6 +554,11 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   listRecipes: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "Read-only discovery of reviewed development build recipes",
+    },
     description: "List the reviewed build recipes. No method accepts a command line.",
     args: z.tuple([]),
     returns: z.array(developmentRecipeSchema),
@@ -498,6 +566,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   listNativeTools: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Read-only live discovery of reviewed native tools and executor-supplied availability reasons",
+    },
     description:
       "List reviewed native development tools with live executor availability and an actionable unavailable reason.",
     args: z.tuple([]),
@@ -516,6 +590,24 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   start: {
+    capability: "development.native.execute",
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale:
+        "G1: runs reviewed project build code with local OS authority through the exact prepared development.native.execute capability",
+    },
+    presentation: {
+      title: "Build the current workspace source",
+      action: "run a reviewed build of the current workspace source",
+      description:
+        "Allows {requesterKind} to install frozen dependencies and run the reviewed build for one exact workspace snapshot.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description:
       "Build one exact semantic snapshot in a private root. A caller-owned runId is the sole start idempotency key.",
     args: z.tuple([
@@ -567,14 +659,22 @@ export const developmentMethods = defineServiceMethods({
     authority: { principals: ["code"] },
     tier: {
       tier: "open",
-      session: "codeOnly",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "development.test-fault",
       rationale:
-        "Hidden system-test transport; the host verifies the attested harness and the service binds the fault to one owned development run.",
+        "Hidden system-test transport admitted only through a sealed code-bearing session; the host verifies the blessed harness and the service binds the fault to one owned development run.",
     },
     agentFacing: false,
+    execution: { harness: "attested-system-test" },
     access: { sensitivity: "write" },
   },
   get: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "Owner-scoped read of one durable development build record",
+    },
     description: "Read one owned development run.",
     args: z.tuple([z.object({ runId: nonEmpty }).strict()]),
     returns: developmentRunSchema.nullable(),
@@ -582,6 +682,11 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   list: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "Owner-scoped listing of durable development builds",
+    },
     description:
       "Page owned development runs with stable newest-first cursors and optional session/state filters.",
     args: z.tuple([
@@ -617,6 +722,11 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   events: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "Owner-scoped bounded read of durable development build events",
+    },
     description:
       "Page bounded durable run events. Subscribe to development:run-event for live delivery.",
     args: z.tuple([
@@ -638,6 +748,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   stop: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped effect reduction that terminates only the run's proven-owned process group",
+    },
     description: "Stop an owned build process and record exact cleanup outcome.",
     args: z.tuple([z.object({ runId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
     returns: developmentRunSchema,
@@ -645,6 +761,24 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   retry: {
+    capability: "development.native.execute",
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale:
+        "G1: re-runs reviewed project build code through the same exact prepared development.native.execute authority",
+    },
+    presentation: {
+      title: "Retry a development build",
+      action: "retry a reviewed build of the exact workspace source",
+      description:
+        "Allows {requesterKind} to run the reviewed build again with the same exact prepared native authority.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
     description:
       "Retry a failed exact build from its retained snapshot under the same native-execution authority contract.",
     args: z.tuple([z.object({ runId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -661,6 +795,12 @@ export const developmentMethods = defineServiceMethods({
     },
   },
   keepRunRepair: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped acknowledgement that retains all run effects and diagnostics unchanged",
+    },
     description: "Keep a run repair record. Read the run to inspect it.",
     args: z.tuple([z.object({ runId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
     returns: developmentRunSchema,
@@ -668,6 +808,23 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   forceRetire: {
+    capability: "development.runs.force-retire",
+    tier: {
+      tier: "critical",
+      session: "family",
+      rationale: "C3: permanently abandons a retained development execution and its recovery path",
+    },
+    presentation: {
+      title: "Abandon development-build recovery",
+      action: "permanently abandon recovery of a development build",
+      description:
+        "Allows {requesterKind} to permanently retire a development run whose remaining native effects can no longer be proven.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "computer",
+        verb: "manage",
+      },
+    },
     description:
       "Abandon a failed run and remove only execution effects whose ownership is proven.",
     args: z.tuple([z.object({ runId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -676,6 +833,23 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   forceRetireSession: {
+    capability: "development.sessions.force-retire",
+    tier: {
+      tier: "critical",
+      session: "family",
+      rationale: "C3: permanently abandons a semantic development context and its recovery path",
+    },
+    presentation: {
+      title: "Abandon development-workspace recovery",
+      action: "permanently abandon recovery of a development workspace",
+      description:
+        "Allows {requesterKind} to retire an isolated semantic working copy whose ownership can no longer be proven.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "files",
+        verb: "manage",
+      },
+    },
     description:
       "Abandon a broken session after attempting cleanup of its proven-owned semantic context.",
     args: z.tuple([z.object({ sessionId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -684,6 +858,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "destructive" },
   },
   checkpoint: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped Save operation inside an already approved native session; freezes, snapshots, imports, and resumes only its proven-owned tree and process",
+    },
     description:
       "Freeze an owned native tool, import one exact external snapshot into the development child, and resume the tool.",
     args: z.tuple([z.object({ sessionId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -692,6 +872,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   inspectNative: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped bounded read of native tool ownership, checkpoint, terminal, and repair state",
+    },
     description:
       "Inspect native session ownership, checkpoint, repair, and optionally exact pending-change state.",
     args: z.tuple([
@@ -707,6 +893,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   stopNativeTool: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped effect reduction that terminates only the native session's proven-owned process group",
+    },
     description:
       "Stop the exact owned native tool process group while retaining its terminal and writable tree for inspection.",
     args: z.tuple([z.object({ sessionId: nonEmpty, idempotencyKey: nonEmpty }).strict()]),
@@ -715,6 +907,11 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   readNativeTerminal: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "Owner-scoped cursor-based bounded read of a development terminal",
+    },
     description: "Read bounded scrollback from the native session's owned terminal.",
     args: z.tuple([
       z
@@ -749,6 +946,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   writeNativeTerminal: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped idempotent interactive input within an already approved native tool session",
+    },
     description: "Write interactive input to the native session's owned terminal.",
     args: z.tuple([
       z
@@ -764,6 +967,12 @@ export const developmentMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   resizeNativeTerminal: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale:
+        "Owner-scoped idempotent terminal geometry update within an already approved native tool session",
+    },
     description: "Resize the native session's owned terminal.",
     args: z.tuple([
       z
@@ -778,4 +987,89 @@ export const developmentMethods = defineServiceMethods({
     authority: DEVELOPMENT_PRINCIPALS,
     access: { sensitivity: "write" },
   },
+  snapshotExecutionRoots: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "supervision",
+      family: "development.retention",
+      rationale:
+        "Feeds the generic execution-artifact retention census from durable builtin ownership",
+    },
+    description: "Return the exact retained development artifacts for one GC epoch.",
+    args: z.tuple([z.object({ epoch: z.number().int().nonnegative() }).strict()]),
+    returns: z.array(
+      z
+        .object({
+          owner: z.literal("development-run"),
+          ownerId: nonEmpty,
+          reason: z.literal("retained-result"),
+          artifact: executionArtifactRefSchema,
+        })
+        .strict()
+    ),
+    agentFacing: false,
+    authority: { principals: ["host"] },
+    access: { sensitivity: "read" },
+  },
+  nativeRunEvent: {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "supervision",
+      family: "development.native-event",
+      rationale:
+        "Accepts one exact lifecycle event emitted by the host-owned process or route handle",
+    },
+    description: "Apply one exact host-native lifecycle event to its durable run.",
+    args: z.tuple([
+      z.discriminatedUnion("kind", [
+        z
+          .object({
+            kind: z.literal("attached-route-lost"),
+            runId: nonEmpty,
+            sessionId: nonEmpty,
+            childGenerationId: nonEmpty,
+          })
+          .strict(),
+      ]),
+    ]),
+    returns: z.void(),
+    agentFacing: false,
+    authority: { principals: ["host"] },
+    access: { sensitivity: "write" },
+  },
 });
+
+/**
+ * Direct receiver authority for the product builtin. Prepared host authority
+ * belongs to the downstream exact native primitive, so the durable receiver
+ * never attempts to interpret host approval payloads.
+ */
+export const developmentBuiltinMethods = Object.fromEntries(
+  Object.entries(developmentMethods).map(([name, method]) => [
+    name,
+    {
+      ...method,
+      capability:
+        (["start", "retry"].includes(name)
+          ? `service:development.${name}`
+          : "capability" in method
+            ? method.capability
+            : undefined) ?? `service:development.${name}`,
+      ...(["start", "retry"].includes(name)
+        ? {
+            tier: {
+              ...method.tier,
+              tier: "open" as const,
+              rationale:
+                "Durable builtin bookkeeping is open; the exact downstream native build handle owns the gated execution effect",
+            },
+          }
+        : {}),
+      ...(["openSession", "start", "retry"].includes(name)
+        ? { authority: DEVELOPMENT_PRINCIPALS }
+        : {}),
+    },
+  ])
+) as unknown as typeof developmentMethods;

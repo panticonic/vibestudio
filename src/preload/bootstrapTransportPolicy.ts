@@ -1,8 +1,11 @@
 const BOOTSTRAP_UNARY_METHODS = new Set([
-  "workspace.hostTargets.beginLaunch",
-  "workspace.hostTargets.getLaunchSession",
-  "workspace.hostTargets.resolveLaunchSessionApproval",
-  "workspace.hostTargets.cancelLaunchSession",
+  "build.listUnits",
+  "workspace.getConfig",
+  "runtime.supervision.activate",
+  "runtime.supervision.prepare",
+  "runtime.supervision.rollback",
+  "shellApproval.listPending",
+  "shellApproval.resolveBootstrap",
 ]);
 
 export function assertBootstrapRpcMessageAllowed(targetId: string, message: unknown): void {
@@ -12,9 +15,7 @@ export function assertBootstrapRpcMessageAllowed(targetId: string, message: unkn
   if (!isBootstrapRpcRequest(message)) {
     throw new Error("Bootstrap launch gate can only send RPC requests");
   }
-  const allowed =
-    (message.type === "stream-request" && message.method === "events.watch") ||
-    (message.type === "request" && BOOTSTRAP_UNARY_METHODS.has(message.method));
+  const allowed = message.type === "request" && BOOTSTRAP_UNARY_METHODS.has(message.method);
   if (!allowed) {
     throw new Error(`Bootstrap launch gate is not allowed to call ${message.method}`);
   }

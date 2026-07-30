@@ -26,9 +26,9 @@ import {
 
 describe("platform module names (contract values)", () => {
   it("declares the runtime SDK and its worker companions", () => {
-    expect(RUNTIME_MODULE).toBe("@vibestudio/runtime");
-    expect(CDP_CLIENT_MODULE).toBe("@vibestudio/cdp-client");
-    expect(WORKER_RUNTIME_COMPANION_MODULES).toEqual(["@vibestudio/cdp-client"]);
+    expect(RUNTIME_MODULE).toBe("@workspace/runtime");
+    expect(CDP_CLIENT_MODULE).toBe("@workspace/cdp-client");
+    expect(WORKER_RUNTIME_COMPANION_MODULES).toEqual(["@workspace/cdp-client"]);
   });
 
   it("declares the terminal-shim subpaths the builder substitutes", () => {
@@ -76,7 +76,7 @@ describe("detectFrameworkFromDependencies", () => {
 
   it("returns null when no framework module is declared", () => {
     expect(detectFrameworkFromDependencies({})).toBeNull();
-    expect(detectFrameworkFromDependencies({ "@vibestudio/runtime": "workspace:*" })).toBeNull();
+    expect(detectFrameworkFromDependencies({ "@workspace/runtime": "workspace:*" })).toBeNull();
   });
 
   it("prefers the first contract entry when multiple modules are declared", () => {

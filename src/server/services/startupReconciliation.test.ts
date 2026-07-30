@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { vi } from "vitest";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 
-import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
-import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
+import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
+import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import { runStartupReconciliation } from "./startupReconciliation.js";
@@ -142,7 +142,7 @@ describe("runStartupReconciliation", () => {
       source: { repoPath: "workers/agent-worker", effectiveVersion: "v1" },
       activeBuildKey: "b".repeat(64),
       activeExecutionDigest: "a".repeat(64),
-      activeAuthority: { requests: [] },
+      activeAuthority: { requests: [], provides: [] },
       contextId: "ctx-agent",
       className: "AiChatWorker",
       key: "agent-1",

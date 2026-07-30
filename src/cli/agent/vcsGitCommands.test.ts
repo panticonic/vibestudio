@@ -70,8 +70,8 @@ describe("vcs git CLI", () => {
 
     expect(fixture.calls).toEqual([
       {
-        method: "gitInterop.detachUpstream",
-        args: testCase.expectedArgs,
+        method: "extensions.invokeProvider",
+        args: ["gitInterop", "detachUpstream", testCase.expectedArgs],
       },
     ]);
   });
@@ -242,7 +242,12 @@ describe("vcs git CLI", () => {
 
     await expect(run(...testCase.args)).resolves.toBe(0);
 
-    expect(fixture.calls).toEqual([{ method: testCase.method, args: testCase.expected }]);
+    expect(fixture.calls).toEqual([
+      {
+        method: "extensions.invokeProvider",
+        args: ["gitInterop", testCase.method.slice("gitInterop.".length), testCase.expected],
+      },
+    ]);
   });
 
   it("rejects conflicting credential selection before invoking Git interop", async () => {

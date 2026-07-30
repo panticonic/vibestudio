@@ -5,6 +5,14 @@ import { executionArtifactRefSchema } from "./build.js";
 /** Host-internal retention ingress for immutable eval execution artifacts. */
 export const evalExecutionRootsMethods = defineServiceMethods({
   retain: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "evalExecutionRoots.control",
+      rationale:
+        "Host-internal execution-retention ingress; exact EvalDO/run/session binding and immutable artifact identity are re-derived and verified",
+    },
     args: z.tuple([z.string().min(1), z.string().min(1), executionArtifactRefSchema]),
     returns: z.object({ retained: z.literal(true) }).strict(),
     description:

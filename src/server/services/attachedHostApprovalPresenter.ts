@@ -1,14 +1,10 @@
 import type { AttachedHostApprovalChallenge } from "@vibestudio/service-schemas/attachedHosts";
-import { describeCapability } from "@vibestudio/shared/authorityPresentation";
-import { hostMethodCapability } from "@vibestudio/shared/authority/hostMethodCapabilities";
-import { methodTier } from "@vibestudio/shared/authority/tierTable";
 import type { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import {
   AttachedHostEndpoint,
   type AttachedHostApprovalDecision,
   type AttachedHostCanonicalApprovalPresentation,
-  resolveStaticAttachedHostApprovalPresentation,
 } from "./attachedHostProtocol.js";
 
 /**
@@ -96,13 +92,10 @@ export function createAttachedHostApprovalResolver(
   dispatcher: Pick<ServiceDispatcher, "getMethodSchema">
 ): (challenge: AttachedHostApprovalChallenge) => AttachedHostCanonicalApprovalPresentation | null {
   return (challenge) => {
-    const reviewed = resolveStaticAttachedHostApprovalPresentation(challenge);
-    if (reviewed) return reviewed;
     const snapshot = challenge.invocationSnapshot;
     const schema = dispatcher.getMethodSchema(snapshot.service, snapshot.method);
-    const qualified = `${snapshot.service}.${snapshot.method}`;
-    const capability = schema?.capability ?? hostMethodCapability(qualified);
-    const tier = schema?.tier?.tier ?? methodTier(qualified)?.tier;
+    const capability = schema?.capability;
+    const tier = schema?.tier?.tier;
     if (
       !schema ||
       capability !== challenge.capability ||
@@ -111,7 +104,8 @@ export function createAttachedHostApprovalResolver(
     ) {
       return null;
     }
-    const metadata = describeCapability(capability);
+    const metadata = schema.presentation;
+    if (!metadata) return null;
     return {
       title: metadata.title,
       action: metadata.action,

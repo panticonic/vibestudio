@@ -22,6 +22,39 @@ export interface MethodTierPolicy {
   scopeSplit?: string;
 }
 
+/** The irreducible kernel operation performed by one reviewed host method. */
+export type KernelResidency =
+  | "identity"
+  | "secret"
+  | "protected-write"
+  | "grant-authority"
+  | "untrusted-execution"
+  | "native-effect"
+  | "supervision"
+  | "transport"
+  | "observability";
+
+/** Machine-checked host-residency review attached to every kernel method. */
+export interface HostResidencyPolicy {
+  residency: KernelResidency;
+  /** Mechanism family used to detect duplicate-shaped kernel methods. */
+  family: string;
+}
+
+export function isKernelResidency(value: string): value is KernelResidency {
+  return (
+    value === "identity" ||
+    value === "secret" ||
+    value === "protected-write" ||
+    value === "grant-authority" ||
+    value === "untrusted-execution" ||
+    value === "native-effect" ||
+    value === "supervision" ||
+    value === "transport" ||
+    value === "observability"
+  );
+}
+
 export function resolveMethodTierPolicy(
   method: string,
   declared: MethodTierPolicy | undefined,

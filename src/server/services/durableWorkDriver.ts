@@ -159,8 +159,13 @@ export function createDurableWorkHandlers(
   doDispatch: Pick<DODispatch, "dispatch" | "dispatchHeldWithSignal">
 ): Record<DurableWorkQueue, DurableWorkHandler> {
   const common = (queue: DurableWorkQueue): Omit<DurableWorkHandler, "execute"> => ({
-    claim: (owner, request) =>
-      doDispatch.dispatch(owner, "claimReadyWork", queue, request) as Promise<WorkClaim[]>,
+    claim: async (owner, request) => {
+      // Adoption is the activation-recovery boundary, not merely a startup
+      // scan optimization. A facet may have died after journaling an outcome
+      // but before deriving its next row, while this host driver stays alive.
+      await doDispatch.dispatch(owner, "adoptDurableWorkWorker", request.workerId);
+      return doDispatch.dispatch(owner, "claimReadyWork", queue, request) as Promise<WorkClaim[]>;
+    },
     laneKey: (owner, claim) => {
       const supplied = (claim.payload as DriverClaimPayload | null)?.laneKey;
       return typeof supplied === "string" && supplied.length > 0

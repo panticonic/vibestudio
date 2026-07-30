@@ -6,7 +6,6 @@
  * beyond `crypto.randomBytes`.
  */
 
-import { randomBytes } from "crypto";
 import { panelPrincipalId } from "./principalIds.js";
 
 /**
@@ -54,7 +53,9 @@ export function panelIdSegmentFromName(name: string): string {
  * Format: base36-timestamp-hexrandom (e.g., "lk2f8g-3a1b9c4e")
  */
 export function generatePanelNonce(): string {
-  return `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
+  const bytes = new Uint8Array(4);
+  globalThis.crypto.getRandomValues(bytes);
+  return `${Date.now().toString(36)}-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 /**

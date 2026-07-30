@@ -739,28 +739,41 @@ describe("vibestudio CLI", () => {
   });
 
   it("pairs inline before starting the terminal app", async () => {
-    webrtcMock.handlers.set("workspace.hostTargets.beginLaunch", () => ({
-      sessionId: "launch_terminal",
-      target: "terminal",
-      status: "ready",
-      currentPhase: "connected",
-      message: "Terminal app is ready.",
-      timeline: [],
-      approvals: [],
-      approvalViews: [],
-      approvalsResolved: 0,
-      startedAt: 1,
-      updatedAt: 2,
-      settled: true,
-      launch: {
-        status: "ready",
-        launched: true,
+    webrtcMock.handlers.set("workspace.getConfig", () => ({
+      id: "ws_dev",
+      hostTargets: { terminal: { app: "apps/remote-cli" } },
+    }));
+    webrtcMock.handlers.set("build.listUnits", () => [
+      {
+        name: "@workspace-apps/remote-cli",
+        kind: "app",
         target: "terminal",
+        capabilities: [],
         source: "apps/remote-cli",
-        appId: "@workspace-apps/remote-cli",
-        buildKey: "build-terminal",
-        executionDigest: "a".repeat(64),
-        authorityRequests: [],
+        displayName: "Remote CLI",
+        isAgent: false,
+        status: "ready",
+        effectiveVersion: "ev-terminal",
+        activeBuildKey: "build-terminal",
+        lastError: null,
+        pendingApproval: null,
+        authorityRows: [],
+      },
+    ]);
+    webrtcMock.handlers.set("runtime.supervision.activate", () => ({
+      status: "ready",
+      entity: {
+        identity: { kind: "app", entityId: "@workspace-apps/remote-cli" },
+        source: "apps/remote-cli",
+        displayName: "Remote CLI",
+        status: "running",
+        lastError: null,
+        artifact: {
+          effectiveVersion: "ev-terminal",
+          buildKey: "build-terminal",
+          executionDigest: "a".repeat(64),
+        },
+        facets: { activation: true, release: true, inspector: false },
       },
     }));
     const { main } = await import("./client.js");

@@ -5,7 +5,6 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 import { RuntimeDiagnosticsStore, type RuntimeDiagnosticKind } from "../runtimeDiagnosticsStore.js";
 import { createPanelLogService } from "../services/panelLogService.js";
 import { createWorkerLogService } from "../services/workerLogService.js";
-import type { WorkspaceUnitLogRecord } from "../services/workspaceService.js";
 
 export interface RuntimeObservabilityBootstrapDeps {
   container: Pick<ServiceContainer, "registerManaged" | "registerRpc" | "get" | "has">;
@@ -102,7 +101,7 @@ export function wireRuntimeObservability(
           level: entry.level,
           message: entry.message,
           source: "console",
-        } satisfies WorkspaceUnitLogRecord);
+        });
       },
     })
   );
@@ -139,7 +138,7 @@ export function wireRuntimeObservability(
             level: entry.level,
             message: entry.message,
             source: entry.source === "lifecycle" ? "console" : entry.source,
-          } satisfies WorkspaceUnitLogRecord);
+          });
         }
       },
     })

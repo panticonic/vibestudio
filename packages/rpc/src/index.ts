@@ -70,7 +70,7 @@ export type {
   Principal,
   PrincipalKind,
   ResourceScope,
-  SessionMissionFact,
+  SessionReviewedClosureFact,
   AgentExecutionMode,
   AgentExecutionTestAuthorityRule,
   AgentExecutionTestCapabilityScope,
@@ -78,10 +78,12 @@ export type {
   AgentExecutionTestCasePolicy,
   AgentExecutionTestPolicy,
   AgentExecutionTestPolicySpec,
-  AgentExecutionTestUserlandRule,
   AgentExecutionSessionFact,
   AttachedHostExecutionFact,
+  OpaqueHandlePreparation,
+  OpaqueHandlePresentation,
 } from "./authority.js";
+export { prepareOpaqueHandle } from "./authority.js";
 export { isParentPortEnvelope } from "./types.js";
 export { createRpcClient, defineContract, withCausalParent } from "./client.js";
 export { bytesToBase64, base64ToBytes } from "./base64.js";
@@ -99,6 +101,7 @@ export {
   createConnectionlessRpcClient,
   collectExposableMethods,
   rpc,
+  schemaRpc,
   rpcExposedMethodNames,
   rpcMethodAuthority,
   type RpcAuthorityPolicy,

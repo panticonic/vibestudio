@@ -39,7 +39,6 @@ function approvalQueueMock(
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
-    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
     requestMissionReview: vi.fn(async () => ({
       decision: "dismiss" as const,
       decidedBy: "user:test" as const,
@@ -50,17 +49,11 @@ function approvalQueueMock(
       dispose: vi.fn(),
     })),
     resolve: vi.fn(),
-    resolveUserland: vi.fn(),
     resolveMissionReview: vi.fn(),
-    requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
-    resolveExternalAgent: vi.fn(),
-    settleExternalAgent: vi.fn(() => 0),
-    resolveExternalAgentByRequest: vi.fn(async () => 0),
     submitClientConfig: vi.fn(),
     submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
     listPending: vi.fn(() => []),
-    getUserlandSealedDetail: vi.fn(() => null),
     cancelForCaller: vi.fn(),
   };
 }
@@ -382,73 +375,6 @@ describe("panelCdpService", () => {
     );
   });
 
-  it("gates drive verbs with the context-boundary capability", async () => {
-    const approvalQueue = approvalQueueMock("version");
-    const drive = vi.fn(async () => undefined);
-    const service = cdpService({
-      approvalQueue,
-      getTarget: () => ({
-        id: "target",
-        title: "Target",
-        kind: "browser",
-        contextId: "ctx-target",
-      }),
-      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target", token: "t" })),
-      drive,
-    });
-
-    await expect(
-      dispatchCdp(service, ctx(), "navigate", ["target", "https://example.com"])
-    ).resolves.toBeUndefined();
-
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
-    );
-    expect(drive).toHaveBeenCalledWith("target", "panel:requester", "navigate", [
-      "https://example.com",
-    ]);
-  });
-
-  it("allows panel caller drive verbs against cross-context workspace panels with approval", async () => {
-    const approvalQueue = approvalQueueMock("version");
-    const drive = vi.fn(async () => undefined);
-    const logAccess = vi.fn();
-    const service = cdpService({
-      approvalQueue,
-      getTarget: () => ({
-        id: "chat-panel",
-        title: "Chat",
-        source: "panels/chat",
-        kind: "workspace",
-        contextId: "ctx-target",
-      }),
-      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target", token: "t" })),
-      drive,
-      logAccess,
-    });
-
-    await expect(
-      dispatchCdp(service, ctx(), "navigate", ["chat-panel", "https://example.com"])
-    ).resolves.toBeUndefined();
-
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
-    );
-    expect(drive).toHaveBeenCalledWith("chat-panel", "panel:requester", "navigate", [
-      "https://example.com",
-    ]);
-    expect(logAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "navigate",
-        requesterId: "panel:requester",
-        requesterKind: "panel",
-        targetId: "chat-panel",
-        targetKind: "workspace",
-        targetSource: "panels/chat",
-      })
-    );
-  });
-
   it("allows panel caller raw CDP endpoints against cross-context workspace panels with approval", async () => {
     const approvalQueue = approvalQueueMock("version");
     const endpoint = { wsEndpoint: "ws://server/cdp/chat", token: "t" };
@@ -473,25 +399,6 @@ describe("panelCdpService", () => {
       expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
     );
     expect(getEndpoint).toHaveBeenCalledWith("chat-panel", "panel:requester");
-  });
-
-  it("allows non-panel callers to drive same-context workspace panels without prompting", async () => {
-    const approvalQueue = approvalQueueMock("version");
-    const drive = vi.fn(async () => undefined);
-    const service = cdpService({
-      approvalQueue,
-      // No contextId on the target ⇒ no context change ⇒ free.
-      getTarget: () => ({ id: "target", title: "Target", kind: "workspace" }),
-      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target", token: "t" })),
-      drive,
-    });
-
-    await expect(
-      service.handler(runtimeCtx("worker", "worker:agent"), "reload", ["target"])
-    ).resolves.toBeUndefined();
-
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(drive).toHaveBeenCalledWith("target", "worker:agent", "reload", []);
   });
 
   it("gates historical console access with the context-boundary capability", async () => {
@@ -547,24 +454,6 @@ describe("panelCdpService", () => {
       /denied/i
     );
     expect(consoleHistory).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-http navigation before prompting or driving", async () => {
-    const approvalQueue = approvalQueueMock("version");
-    const drive = vi.fn(async () => undefined);
-    const service = cdpService({
-      approvalQueue,
-      getTarget: () => ({ id: "target", title: "Target", contextId: "ctx-target" }),
-      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target", token: "t" })),
-      drive,
-    });
-
-    await expect(
-      service.handler(ctx(), "navigate", ["target", "file:///etc/passwd"])
-    ).rejects.toThrow("Invalid URL");
-
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(drive).not.toHaveBeenCalled();
   });
 
   it("captures a screenshot through deps.screenshot with the cdp gate", async () => {

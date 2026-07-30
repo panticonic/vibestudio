@@ -83,6 +83,25 @@ export const ConnectionInfoResponseSchema = z
 
 export const authMethods = defineServiceMethods({
   grantConnection: {
+    capability: "connections.approve",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "grant-authority",
+      family: "auth.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
+    },
+    presentation: {
+      title: "Allow a new client connection",
+      action: "allow a new client connection",
+      description: "Allows {requesterKind} to allow a new client connection.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "computer",
+        verb: "manage",
+      },
+    },
     description:
       "Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway.",
     args: z.tuple([z.string()]),
@@ -91,6 +110,13 @@ export const authMethods = defineServiceMethods({
     access: AUTH_GRANT_ACCESS,
   },
   getConnectionInfo: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "auth.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace.",
     args: z.tuple([]),
@@ -99,18 +125,39 @@ export const authMethods = defineServiceMethods({
     access: AUTH_READ_ACCESS,
   },
   mintAgentCredential: {
+    capability: "agent.credentials.manage",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "auth.control",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Create a sign-in key for an agent",
+      action: "create a sign-in key for an agent",
+      description: "Allows {requesterKind} to create a sign-in key for an agent.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Rotate the authentication secret for a live self-bound agent session. The credential proves only the exact entity id; context, channel, and owner are resolved from the session entity whenever it authenticates. Returns { agentId, agentToken }. Callable only by the server or by the extension that owns the target session.",
     args: z.tuple([
-      z.object({
-        entityId: z.string().describe("Runtime entity id the credential is bound to."),
-        ttlMs: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe("Credential lifetime in milliseconds; omit for no expiry (entity-lifetime)."),
-      }).strict(),
+      z
+        .object({
+          entityId: z.string().describe("Runtime entity id the credential is bound to."),
+          ttlMs: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe("Credential lifetime in milliseconds; omit for no expiry (entity-lifetime)."),
+        })
+        .strict(),
     ]),
     returns: z.object({ agentId: z.string(), agentToken: z.string() }),
     authority: { principals: ["code", "host"] },
@@ -118,6 +165,25 @@ export const authMethods = defineServiceMethods({
     examples: [{ args: [{ entityId: "session:s1" }] }],
   },
   revokeAgentCredential: {
+    capability: "agent.credentials.manage",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "auth.retire",
+      rationale:
+        "G3: state change exceeds the calling task's scratch; §2 durable code identity or host approval plumbing",
+    },
+    presentation: {
+      title: "Revoke an agent's sign-in key",
+      action: "revoke an agent's sign-in key",
+      description: "Allows {requesterKind} to revoke an agent's sign-in key.",
+      group: "accounts",
+      authorityCategory: {
+        domain: "accounts",
+        verb: "manage",
+      },
+    },
     description:
       "Revoke a single entity-scoped agent credential by agentId. Callable only by the server or by the extension that owns the target session. Returns whether a credential was revoked.",
     args: z.tuple([z.string().describe("Agent credential id (agt_…).")]),

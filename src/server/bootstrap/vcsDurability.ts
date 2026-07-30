@@ -2,9 +2,10 @@ import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { assertPresent } from "../../lintHelpers";
 import type { DODispatch } from "../doDispatch.js";
 import {
-  createSemanticControlPlaneCaller,
-  SEMANTIC_CONTROL_PLANE,
-} from "../internalDOs/controlPlane.js";
+  createWorkspaceSemanticPort,
+  createWorkspaceSourceProviderV1,
+  type WorkspaceSourceProviderRef,
+} from "../workspaceSourceProvider.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { WorkerdManager } from "../workerdManager.js";
 import type { GcEpochCoordinator } from "../services/gcEpochCoordinator.js";
@@ -15,7 +16,9 @@ export interface VcsDurabilityBootstrapDeps {
   container: Pick<ServiceContainer, "registerManaged">;
   workspaceVcs: WorkspaceVcs;
   executionPublicationJournal: ExecutionPublicationJournal;
-  registerControlPlanePrincipal(input: {
+  workspaceSourceProvider: WorkspaceSourceProviderRef;
+  bootstrapSourceState(): Promise<string>;
+  registerBootstrapEntity(input: {
     targetId: string;
     source: string;
     className: string;
@@ -23,7 +26,7 @@ export interface VcsDurabilityBootstrapDeps {
     effectiveVersion: string;
     buildKey: string;
     executionDigest: string;
-    authorityRequests: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+    authority: import("@vibestudio/shared/authorityManifest").UnitAuthorityManifest;
   }): void;
   activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
 }
@@ -36,21 +39,22 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
     async start(resolve) {
       const doDispatch = assertPresent(resolve<DODispatch>("doDispatch"));
       const workerdManager = assertPresent(resolve<WorkerdManager>("workerdManager"));
-      const gadRef = {
-        source: SEMANTIC_CONTROL_PLANE.source,
-        className: SEMANTIC_CONTROL_PLANE.className,
-        objectKey: SEMANTIC_CONTROL_PLANE.objectKey,
-      };
+      const gadRef = deps.workspaceSourceProvider;
+      const bootstrapSourceState = await deps.bootstrapSourceState();
       const prepared = await workerdManager.ensureDurableObjectEntity({
         source: gadRef.source,
+        ref: bootstrapSourceState,
         className: gadRef.className,
         key: gadRef.objectKey,
-        contextId: `control-plane:${SEMANTIC_CONTROL_PLANE.objectKey}`,
+        contextId: `workspace-source:${gadRef.objectKey}`,
       });
-      deps.registerControlPlanePrincipal({ ...gadRef, ...prepared });
-      await deps.workspaceVcs.attachGad(createSemanticControlPlaneCaller(doDispatch));
+      deps.registerBootstrapEntity({ ...gadRef, ...prepared });
+      await deps.workspaceVcs.attachGad(createWorkspaceSemanticPort(doDispatch, gadRef));
+      deps.workspaceVcs.attachWorkspaceSourceProvider(
+        createWorkspaceSourceProviderV1(doDispatch, gadRef)
+      );
       console.log(
-        `[Vcs] Attached sealed semantic control plane (${gadRef.source}:${gadRef.className})`
+        `[Vcs] Attached manifest-declared workspace source provider (${gadRef.source}:${gadRef.className})`
       );
       return deps.workspaceVcs;
     },
@@ -58,7 +62,7 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
 
   deps.container.registerManaged({
     name: "semanticWorkspace",
-    // Activation uses only the already-sealed semantic control-plane DO. The
+    // Activation uses only the exact manifest-declared source-provider DO. The
     // build system and remaining internal DO classes start afterward, so their
     // planned workerd restart cannot race semantic initialization.
     dependencies: ["vcsAttach"],

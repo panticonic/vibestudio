@@ -53,6 +53,8 @@ describe("workerd bootstrap policy", () => {
       statePath: "/workspace/state",
       workspaceId: "workspace-1",
       workspaceDeclarations: inert as WorkerdBootstrapDeps["workspaceDeclarations"],
+      userlandResourceHandles: inert as WorkerdBootstrapDeps["userlandResourceHandles"],
+      assertBootstrapSourceUnchanged: vi.fn(async () => undefined),
       routeRegistry: inert as WorkerdBootstrapDeps["routeRegistry"],
       egressProxy: inert as WorkerdBootstrapDeps["egressProxy"],
       gatewayToken: "gateway-token",
@@ -70,7 +72,10 @@ describe("workerd bootstrap policy", () => {
     });
 
     expect(services.map(({ name, dependencies }) => ({ name, dependencies }))).toEqual([
-      { name: "workerdManager", dependencies: ["fsService", "rpcServer"] },
+      {
+        name: "workerdManager",
+        dependencies: ["fsService", "rpcServer", "bootstrapBuildSystem"],
+      },
       { name: "doDispatch", dependencies: ["workerdManager", "rpcServer"] },
       { name: "workerdWorkspace", dependencies: ["workerdManager", "buildSystem"] },
     ]);
@@ -81,6 +86,7 @@ describe("workerd bootstrap policy", () => {
     const onSourceRebuilt = vi.fn(async () => undefined);
     const manager = {
       bindWorkspaceProvider: vi.fn(),
+      replaceWorkspaceProvider: vi.fn(),
       registerAllDOClasses: vi.fn(async () => undefined),
       reconcileManifestRoutes: vi.fn(),
       onSourceRebuilt,
@@ -105,6 +111,10 @@ describe("workerd bootstrap policy", () => {
       },
     } as unknown as BuildSystemV2;
     const routeRegistry = { registerDoRoutes: vi.fn() };
+    const userlandResourceHandles = {
+      reconcileProviders: vi.fn(),
+      reconcileReceiverClasses: vi.fn(),
+    };
     const inert = {};
     wireWorkerdCore({
       container: { registerManaged: (service) => services.push(service) },
@@ -116,6 +126,9 @@ describe("workerd bootstrap policy", () => {
         routes: [],
         singletons: [],
       } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"],
+      userlandResourceHandles:
+        userlandResourceHandles as unknown as WorkerdBootstrapDeps["userlandResourceHandles"],
+      assertBootstrapSourceUnchanged: vi.fn(async () => undefined),
       routeRegistry: routeRegistry as unknown as WorkerdBootstrapDeps["routeRegistry"],
       egressProxy: inert as WorkerdBootstrapDeps["egressProxy"],
       gatewayToken: "gateway-token",
@@ -139,6 +152,17 @@ describe("workerd bootstrap policy", () => {
       return undefined;
     });
     expect(onPushBuild).toBeTypeOf("function");
+    expect(userlandResourceHandles.reconcileProviders).toHaveBeenCalledWith(
+      "workspace-1",
+      ["workers/example"],
+      "workspace providers reconciled"
+    );
+    expect(userlandResourceHandles.reconcileReceiverClasses).toHaveBeenCalledWith(
+      "workspace-1",
+      "workers/example",
+      ["ExampleDO"],
+      "receiver classes reconciled"
+    );
 
     const publication: ProtectedPublicationEvent = {
       publicationId: "publication:test",

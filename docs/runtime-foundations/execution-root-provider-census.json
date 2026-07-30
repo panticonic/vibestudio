@@ -4,17 +4,17 @@
     { "id": "runtime-entity", "backingSources": ["src/server/workspaceEntityStore.ts"] },
     {
       "id": "panel-history",
-      "backingSources": ["src/server/internalDOs/workspaceDO.ts"],
-      "reviewedReaders": [
-        "src/server/panelHttpServer.ts",
-        "src/server/panelRuntimeRegistration.ts"
-      ]
+      "backingSources": ["packages/builtin/src/workspace-state/WorkspaceDO.ts"],
+      "reviewedReaders": ["src/server/panelHttpServer.ts", "src/server/panelRuntimeRegistration.ts"]
     },
     {
       "id": "app-generation",
-      "backingSources": ["src/server/appHost.ts", "packages/unit-host/src/index.ts"]
+      "backingSources": ["src/server/appHost.ts", "packages/unit-host/src/index.ts"],
+      "reviewedReaders": [
+        "src/server/services/appUnitDriver.ts",
+        "src/server/services/buildUnitCatalog.ts"
+      ]
     },
-    { "id": "host-target-selection", "backingSources": ["src/server/hostTargetSelection.ts"] },
     {
       "id": "terminal-app",
       "backingSources": ["src/server/appHost.ts"],
@@ -30,17 +30,21 @@
       "backingSources": [
         "packages/extension-host/src/service.ts",
         "packages/unit-host/src/index.ts"
+      ],
+      "reviewedReaders": [
+        "src/server/services/extensionUnitDriver.ts",
+        "src/server/services/buildUnitCatalog.ts"
       ]
     },
     {
       "id": "eval-run",
-      "backingSources": ["src/server/internalDOs/evalDO.ts"],
+      "backingSources": ["packages/builtin/src/eval-engine/EvalDO.ts"],
       "note": "EvalDO persists run semantics and module values, not BuildStore refs; active harness code is covered by runtime-entity."
     },
     {
       "id": "development-run",
       "backingSources": [
-        "src/server/services/developmentSessionStore.ts",
+        "packages/builtin/src/development/DevelopmentDO.ts",
         "src/server/services/developmentClientExecutorService.ts",
         "src/main/currentHostDevelopmentClientExecutor.ts"
       ],

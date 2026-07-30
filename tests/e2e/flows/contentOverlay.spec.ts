@@ -18,26 +18,47 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 async function callShellView(testApp: TestApp, method: string, arg?: unknown): Promise<unknown> {
   return testApp.app.evaluate(
     async ({ webContents }, request) => {
-      for (const contents of webContents.getAllWebContents()) {
-        if (contents.isDestroyed()) continue;
-        try {
-          // The hosted shell app is the one exposing the privileged app bridge
-          // (the bootstrap gate does not).
-          const isShell = await contents.executeJavaScript(
-            `!!(globalThis.__vibestudioApp && globalThis.__vibestudioApp.serviceCall)`,
-            true
-          );
-          if (!isShell) continue;
-          const call =
-            request.arg === undefined
-              ? `globalThis.__vibestudioApp.serviceCall(${JSON.stringify("view." + request.method)})`
-              : `globalThis.__vibestudioApp.serviceCall(${JSON.stringify("view." + request.method)}, ${JSON.stringify(request.arg)})`;
-          return await contents.executeJavaScript(call, true);
-        } catch {
-          // Try the next webContents.
+      const candidates = webContents
+        .getAllWebContents()
+        .filter(
+          (candidate) =>
+            !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
+        );
+      let contents: Electron.WebContents | undefined;
+      for (const candidate of candidates) {
+        const hasAppBridge = await Promise.race([
+          candidate
+            .executeJavaScript(`Boolean(globalThis.__vibestudioApp?.serviceCall)`, true)
+            .catch(() => false),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+        ]);
+        if (hasAppBridge) {
+          contents = candidate;
+          break;
         }
       }
-      throw new Error("hosted shell webContents not found");
+      if (!contents) throw new Error("hosted shell webContents not found");
+      const call =
+        request.arg === undefined
+          ? `globalThis.__vibestudioApp.serviceCall(${JSON.stringify("view." + request.method)})`
+          : `globalThis.__vibestudioApp.serviceCall(${JSON.stringify("view." + request.method)}, ${JSON.stringify(request.arg)})`;
+      const result = (await Promise.race([
+        contents.executeJavaScript(
+          `(async () => {
+            try {
+              return { ok: true, value: await ${call} };
+            } catch (error) {
+              return { ok: false, error: String(error?.stack ?? error) };
+            }
+          })()`,
+          true
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Timed out calling view.${request.method}`)), 5_000)
+        ),
+      ])) as { ok: true; value: unknown } | { ok: false; error: string };
+      if (!result.ok) throw new Error(result.error);
+      return result.value;
     },
     { method, arg }
   );
@@ -49,20 +70,27 @@ async function waitHostedShellReady(testApp: TestApp): Promise<void> {
     .poll(
       async () =>
         testApp.app.evaluate(async ({ webContents }) => {
-          for (const contents of webContents.getAllWebContents()) {
-            if (contents.isDestroyed()) continue;
+          const candidates = webContents.getAllWebContents().filter((contents) => {
+            if (contents.isDestroyed()) return false;
+            const title = contents.getTitle();
+            return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+          });
+          for (const contents of candidates) {
             try {
-              const result = await contents.executeJavaScript(
-                `(() => {
-                  if (document.querySelector(".titlebar-breadcrumb-scroll")
-                    || document.querySelector('[aria-label="Menu"]')) return "ready";
-                  const approve = Array.from(document.querySelectorAll("button"))
-                    .find((b) => /^(Trust and start|Approve and start)$/.test((b.textContent ?? "").trim()));
-                  if (approve) { approve.click(); return "approved"; }
-                  return "waiting";
-                })()`,
-                true
-              );
+              const result = await Promise.race([
+                contents.executeJavaScript(
+                  `(() => {
+                    if (document.querySelector(".titlebar-breadcrumb-scroll")
+                      || document.querySelector('[aria-label="Menu"]')) return "ready";
+                    const approve = Array.from(document.querySelectorAll("button"))
+                      .find((b) => /^(Trust and start|Approve and start)$/.test((b.textContent ?? "").trim()));
+                    if (approve) { approve.click(); return "approved"; }
+                    return "waiting";
+                  })()`,
+                  true
+                ),
+                new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 2_000)),
+              ]);
               // Only "ready" ends the wait — "approved" just clicks the gate and
               // keeps polling until the hosted shell chrome actually loads.
               if (result === "ready") return true;

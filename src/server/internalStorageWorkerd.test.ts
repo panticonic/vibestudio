@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -10,7 +10,11 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
 import { DODispatch } from "./doDispatch.js";
-import { SEMANTIC_CONTROL_PLANE } from "./internalDOs/controlPlane.js";
+const WORKSPACE_SOURCE_PROVIDER = {
+  source: "workers/workspace-source",
+  className: "GadWorkspaceDO",
+  objectKey: "workspace",
+} as const;
 import { INTERNAL_DO_SOURCE, type InternalDOBundle } from "./internalDOs/internalDoLoader.js";
 import { postToDurableObject, streamFromDurableObject, type DORef } from "./workerdRpcRelay.js";
 import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
@@ -30,11 +34,13 @@ import {
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
 import { sha256 } from "@vibestudio/shared/execution/identity";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { BuildResult } from "./buildV2/buildStore.js";
 import {
   collectWorkspaceRpcCatalog,
   type WorkspaceRpcMethodDoc,
 } from "./buildV2/workspaceRpcCatalog.js";
+import { workspaceRpcSchema } from "./buildV2/workspaceRpcSchemas.js";
 import { createHostDoAuthorityAttester } from "./bootstrap/workerd.js";
 import {
   buildWorkerdPrograms,
@@ -43,6 +49,7 @@ import {
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
 let compiledInternalDOBundle: InternalDOBundle;
+let compiledWorkspaceSourceBuild: BuildResult;
 
 function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   const contentRoots = [
@@ -78,7 +85,7 @@ const PUBSUB_WORKSPACE_SERVICE = {
 } satisfies WorkspaceServiceDecl;
 
 beforeAll(async () => {
-  const [internalDoBuild, programs] = await Promise.all([
+  const [internalDoBuild, programs, workspaceSourceBuild] = await Promise.all([
     esbuild.build({
       entryPoints: ["src/server/internalDOs/index.ts"],
       bundle: true,
@@ -92,6 +99,11 @@ beforeAll(async () => {
       write: false,
     }),
     buildWorkerdPrograms({ write: false }),
+    bundleWorker(
+      WORKSPACE_SOURCE_PROVIDER.source,
+      "workspace/workers/workspace-source/index.ts",
+      "workspace-source-test"
+    ),
   ]);
   const bundle = internalDoBuild.outputFiles?.[0]?.text;
   if (!bundle) throw new Error("Internal DO test bundle did not produce an in-memory output");
@@ -100,6 +112,7 @@ beforeAll(async () => {
     buildKey: createHash("sha256").update(bundle).digest("hex"),
   };
   compiledWorkerdPrograms = programs;
+  compiledWorkspaceSourceBuild = workspaceSourceBuild;
 });
 
 // Loader gateway servers started by harnesses; closed in afterEach. Userland
@@ -151,14 +164,19 @@ async function createWorkerdHarness(
         source,
         unitName: source,
         artifact,
-        authorityRequests: [],
+        authority: { requests: [], provides: [] },
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
-    getInternalDoEnv: () => ({}),
+    getInternalDoEnv: (className): Record<string, string> => {
+      if (className === "BrowserDataDO") {
+        return { BROWSER_DATA_BROKER_SOURCE: "extensions/browser-data" };
+      }
+      return {};
+    },
   };
   manager.bindWorkspaceProvider(provider);
   const attestHostDoCall = createHostDoAuthorityAttester({
@@ -265,7 +283,7 @@ async function createWorkerdHarness(
       callerId: "internal-workerd-test",
       callerKind: "server",
       userId: "internal-workerd-test-user",
-      authorization: attestHostDoCall(ref, method),
+      authorization: attestHostDoCall(ref, method, args),
     });
   };
 
@@ -290,10 +308,46 @@ function createDODispatch(manager: WorkerdManager, tokenManager: TokenManager): 
       callerId: "internal-workerd-test",
     })
   );
+  // These transport integration tests do not instantiate RpcServer. Production
+  // wires this callback to RpcServer.withAuthorityParent so nested RPC remains
+  // authorized for exactly the awaited durable-object invocation.
+  dispatch.setAuthorityParentRunner(async (_receiverRuntimeId, _authorization, invoke) => invoke());
   return dispatch;
 }
 
-async function bundleWorker(source: string, entryPoint: string, ev: string): Promise<BuildResult> {
+async function bundleWorker(
+  source: string,
+  entryPoint: string,
+  ev: string,
+  unitRoot = dirname(entryPoint)
+): Promise<BuildResult> {
+  const packageJsonPath = join(unitRoot, "package.json");
+  const manifest = existsSync(packageJsonPath)
+    ? (
+        JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+          vibestudio?: {
+            authority?: unknown;
+            durable?: { classes?: Array<{ className: string; rpcSchema?: string }> };
+          };
+        }
+      ).vibestudio
+    : undefined;
+  const authority =
+    manifest?.authority === undefined
+      ? { requests: [], provides: [] }
+      : parseUnitAuthorityManifest(manifest.authority);
+  const rpcSchemas = Object.fromEntries(
+    (manifest?.durable?.classes ?? [])
+      .filter(
+        (entry): entry is { className: string; rpcSchema: string } =>
+          typeof entry.rpcSchema === "string"
+      )
+      .map((entry) => {
+        const schema = workspaceRpcSchema(entry.rpcSchema);
+        if (!schema) throw new Error(`Unknown workspace RPC schema ${entry.rpcSchema}`);
+        return [entry.className, schema];
+      })
+  );
   const result = await esbuild.build({
     entryPoints: [entryPoint],
     bundle: true,
@@ -309,7 +363,11 @@ async function bundleWorker(source: string, entryPoint: string, ev: string): Pro
     source,
     ev,
     result.outputFiles[0]!.text,
-    await collectWorkspaceRpcCatalog(dirname(entryPoint))
+    await collectWorkspaceRpcCatalog(unitRoot, {
+      provider: source,
+      authority,
+      rpcSchemas,
+    })
   );
 }
 
@@ -332,8 +390,9 @@ function buildResult(
       ev,
       sourceStateHash: "state:test",
       sourcemap: false,
-      authority: { requests: [] },
+      authority: { requests: [], provides: [] },
       workspaceRpcCatalog,
+      execution: runtimeArtifact(source, ev),
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -572,7 +631,11 @@ describe("internal storage DOs under workerd", () => {
 
     // The first call acknowledges the newly inserted row before background guest work runs.
     expect(
-      await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "1+1" })
+      await harness.callDurableObject(ref, "startRun", {
+        runId: "run-1",
+        code: "1+1",
+        gatewayToken: "gateway-job-queue-test",
+      })
     ).toMatchObject({
       runId: "run-1",
       status: "pending",
@@ -586,11 +649,16 @@ describe("internal storage DOs under workerd", () => {
     const replay = (await harness.callDurableObject(ref, "startRun", {
       runId: "run-1",
       code: "1+1",
+      gatewayToken: "gateway-job-queue-test",
     })) as { runId: string; status: string };
     expect(replay.runId).toBe("run-1");
     expect(["pending", "running", "done"]).toContain(replay.status);
     await expect(
-      harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "DIFFERENT" })
+      harness.callDurableObject(ref, "startRun", {
+        runId: "run-1",
+        code: "DIFFERENT",
+        gatewayToken: "gateway-job-queue-test",
+      })
     ).rejects.toThrow("runId run-1 was reused with different input");
 
     // getRun reaches the canonical terminal without relying on a held executeRun response.
@@ -613,7 +681,11 @@ describe("internal storage DOs under workerd", () => {
 
     // A fresh run after reset is independent.
     expect(
-      await harness.callDurableObject(ref, "startRun", { runId: "run-2", code: "2+2" })
+      await harness.callDurableObject(ref, "startRun", {
+        runId: "run-2",
+        code: "2+2",
+        gatewayToken: "gateway-job-queue-test",
+      })
     ).toMatchObject({ runId: "run-2" });
   }, 30_000);
 
@@ -842,15 +914,16 @@ describe("internal storage DOs under workerd", () => {
       "pubsub-alarm-relay-test"
     );
     const gadRef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_SOURCE_PROVIDER.source,
       className: "GadWorkspaceDO",
-      objectKey: SEMANTIC_CONTROL_PLANE.objectKey,
+      objectKey: WORKSPACE_SOURCE_PROVIDER.objectKey,
     };
     const gadTarget = `do:${gadRef.source}:${gadRef.className}:${gadRef.objectKey}`;
     let doDispatch: DODispatch | null = null;
     const harness = await createWorkerdHarness({
       getBuild: async (source: string) => {
         if (source === "workers/pubsub-channel") return pubsubBuild;
+        if (source === WORKSPACE_SOURCE_PROVIDER.source) return compiledWorkspaceSourceBuild;
         throw new Error(`unexpected build source ${source}`);
       },
       mainRpc: async (method, args, target) => {
@@ -879,9 +952,11 @@ describe("internal storage DOs under workerd", () => {
     };
 
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "GadWorkspaceDO" },
+      { source: WORKSPACE_SOURCE_PROVIDER.source, className: "GadWorkspaceDO" },
       { source: channelRef.source, className: channelRef.className },
     ]);
+    await manager.ensureDO(gadRef.source, gadRef.className, gadRef.objectKey);
+    await manager.ensureDO(channelRef.source, channelRef.className, channelRef.objectKey);
 
     await expect(doDispatch.dispatchAlarm(channelRef)).resolves.toEqual({ nextAlarm: null });
   }, 30_000);
@@ -893,15 +968,16 @@ describe("internal storage DOs under workerd", () => {
       "pubsub-subscription-relay-test"
     );
     const gadRef = {
-      source: INTERNAL_DO_SOURCE,
+      source: WORKSPACE_SOURCE_PROVIDER.source,
       className: "GadWorkspaceDO",
-      objectKey: SEMANTIC_CONTROL_PLANE.objectKey,
+      objectKey: WORKSPACE_SOURCE_PROVIDER.objectKey,
     };
     const gadTarget = `do:${gadRef.source}:${gadRef.className}:${gadRef.objectKey}`;
     let doDispatch: DODispatch | null = null;
     const harness = await createWorkerdHarness({
       getBuild: async (source: string) => {
         if (source === "workers/pubsub-channel") return pubsubBuild;
+        if (source === WORKSPACE_SOURCE_PROVIDER.source) return compiledWorkspaceSourceBuild;
         throw new Error(`unexpected build source ${source}`);
       },
       mainRpc: async (method, args, target) => {
@@ -938,9 +1014,11 @@ describe("internal storage DOs under workerd", () => {
     };
 
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "GadWorkspaceDO" },
+      { source: WORKSPACE_SOURCE_PROVIDER.source, className: "GadWorkspaceDO" },
       { source: channelRef.source, className: channelRef.className },
     ]);
+    await manager.ensureDO(gadRef.source, gadRef.className, gadRef.objectKey);
+    await manager.ensureDO(channelRef.source, channelRef.className, channelRef.objectKey);
 
     const controller = new AbortController();
     let response: Response | null = null;
@@ -987,6 +1065,9 @@ describe("internal storage DOs under workerd", () => {
               },
               methodAuthority: {
                 effect: methodAuthority.effect,
+                ...(methodAuthority.userlandCapability
+                  ? { capability: methodAuthority.userlandCapability.canonicalCapability }
+                  : {}),
                 tier: methodAuthority.access?.tier ?? "open",
               },
             });
@@ -1052,7 +1133,6 @@ describe("internal storage DOs under workerd", () => {
     await harness.callDurableObject(ref, "slotCreate", {
       slotId: "slot-alpha",
       parentSlotId: null,
-      positionId: "000001000000",
       initialEntry: {
         entryKey: "entry-a",
         entityId: "panel:entry-a",
@@ -1063,7 +1143,6 @@ describe("internal storage DOs under workerd", () => {
     await harness.callDurableObject(ref, "slotCreate", {
       slotId: "slot-beta",
       parentSlotId: null,
-      positionId: "000002000000",
       initialEntry: {
         entryKey: "entry-b",
         entityId: "panel:entry-b",
@@ -1163,16 +1242,21 @@ describe("internal storage DOs under workerd", () => {
   }, 30_000);
 
   it("persists the GAD trajectory ledger through real workerd DO dispatch", async () => {
-    const harness = await createWorkerdHarness();
+    const harness = await createWorkerdHarness({
+      getBuild: async (source: string) => {
+        if (source === WORKSPACE_SOURCE_PROVIDER.source) return compiledWorkspaceSourceBuild;
+        throw new Error(`unexpected build source ${source}`);
+      },
+    });
     manager = harness.manager;
     await manager.registerAllDOClasses([
       {
-        source: SEMANTIC_CONTROL_PLANE.source,
-        className: SEMANTIC_CONTROL_PLANE.className,
+        source: WORKSPACE_SOURCE_PROVIDER.source,
+        className: WORKSPACE_SOURCE_PROVIDER.className,
       },
     ]);
 
-    const ref = { ...SEMANTIC_CONTROL_PLANE };
+    const ref = { ...WORKSPACE_SOURCE_PROVIDER };
     const userMessageId = "01900000-0000-7000-8000-000000000001";
     await harness.callDurableObject(ref, "appendLogEvent", {
       logId: "trajectory-live",

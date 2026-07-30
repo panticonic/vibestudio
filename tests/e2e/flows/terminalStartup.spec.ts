@@ -97,44 +97,40 @@ async function getTerminalPanelId(app: ElectronApplication, window: Page): Promi
 async function clickLaunchApprovalButton(app: ElectronApplication): Promise<boolean> {
   return app.evaluate(
     async ({ webContents }, source) => {
-      const candidates = [];
-      for (const contents of webContents.getAllWebContents()) {
+      const candidates = webContents
+        .getAllWebContents()
+        .filter((contents) => {
+          if (contents.isDestroyed()) return false;
+          const title = contents.getTitle();
+          return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+        })
+        .sort((left, right) =>
+          left.getTitle() === "Vibestudio Launch"
+            ? -1
+            : right.getTitle() === "Vibestudio Launch"
+              ? 1
+              : 0
+        );
+      for (const contents of candidates) {
         if (contents.isDestroyed()) continue;
         try {
-          const score = await contents.executeJavaScript(
-            `(() => {
-              const hasLaunchGate = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'));
-              const hasButtons = Array.from(document.querySelectorAll("button")).length;
-              if (hasLaunchGate && hasButtons > 0) return 0;
-              const hasApproval = Boolean(document.querySelector(".approval-card, .approval-pill"));
-              if (hasApproval) return 1;
-              return 2;
-            })()`,
-            true
-          );
-          candidates.push({ contents, score });
-        } catch {
-          // Ignore non-DOM webContents.
-        }
-      }
-      candidates.sort((a, b) => a.score - b.score);
-      for (const { contents } of candidates) {
-        if (contents.isDestroyed()) continue;
-        try {
-          const clicked = await contents.executeJavaScript(
-            `(() => {
-              const pattern = new RegExp(${JSON.stringify(source)}, "i");
-              const buttons = Array.from(document.querySelectorAll("button"));
-              const button = buttons.find((item) => pattern.test((item.textContent ?? "").trim()));
-              if (!button) return false;
-              button.click();
-              return true;
-            })()`,
-            true
-          );
+          const clicked = await Promise.race([
+            contents.executeJavaScript(
+              `(() => {
+                const pattern = new RegExp(${JSON.stringify(source)}, "i");
+                const buttons = Array.from(document.querySelectorAll("button"));
+                const button = buttons.find((item) => pattern.test((item.textContent ?? "").trim()));
+                if (!button) return false;
+                button.click();
+                return true;
+              })()`,
+              true
+            ),
+            new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+          ]);
           if (clicked) return true;
         } catch {
-          // Ignore non-DOM webContents.
+          // The shell can navigate while startup authority is being committed.
         }
       }
       return false;
@@ -311,6 +307,54 @@ async function requestTerminalSession(
   return result.sessionId;
 }
 
+async function terminalAuthorityRequests(
+  app: ElectronApplication,
+  panelId: string
+): Promise<Array<{ capability: string; resource: unknown }>> {
+  return app.evaluate(async (_electron, id) => {
+    const testApi = (
+      globalThis as {
+        __testApi?: {
+          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+        };
+      }
+    ).__testApi;
+    if (!testApi) throw new Error("Test API not available");
+    const slot = (await testApi.rpcCall("workspace-state", "slot.get", [id])) as {
+      current_entity_id?: string | null;
+    } | null;
+    const runtimeEntityId = slot?.current_entity_id;
+    if (!runtimeEntityId) throw new Error(`Terminal panel ${id} has no active runtime entity`);
+    const entity = (await testApi.rpcCall("workspace-state", "entity.resolveActive", [
+      runtimeEntityId,
+    ])) as {
+      activeAuthority?: {
+        requests?: Array<{ capability: string; resource: unknown }>;
+      };
+    } | null;
+    return entity?.activeAuthority?.requests ?? [];
+  }, panelId);
+}
+
+async function terminalNativeAuthorityRequests(
+  app: ElectronApplication,
+  panelId: string
+): Promise<Array<{ capability: string; resource: unknown }>> {
+  return app.evaluate(async (_electron, id) => {
+    const testApi = (
+      globalThis as {
+        __testApi?: {
+          getPanelCodeIdentity: (panelId: string) => {
+            requested?: Array<{ capability: string; resource: unknown }>;
+          } | null;
+        };
+      }
+    ).__testApi;
+    if (!testApi) throw new Error("Test API not available");
+    return testApi.getPanelCodeIdentity(id)?.requested ?? [];
+  }, panelId);
+}
+
 async function waitForUsableTerminalSession(
   app: ElectronApplication,
   panelId: string,
@@ -334,9 +378,26 @@ async function waitForUsableTerminalSession(
         const now = Date.now();
         if (now - startedAt > 5_000 && now - lastOpenRequestAt > 5_000) {
           lastOpenRequestAt = now;
-          const opened = await requestTerminalSession(app, panelId).catch(() => undefined);
+          let openError: unknown;
+          const opened = await requestTerminalSession(app, panelId).catch((error: unknown) => {
+            openError = error;
+            return undefined;
+          });
           await approvePendingTerminalWork(app, window);
           if (opened) return opened;
+          const openErrorMessage = openError instanceof Error ? openError.message : "";
+          const panelHtml = await getPanelHtml(app, panelId).catch(() => "");
+          if (
+            openErrorMessage.includes("did not request") ||
+            panelHtml.includes("did not request")
+          ) {
+            const nativeRequests = await terminalNativeAuthorityRequests(app, panelId);
+            throw new Error(
+              `Terminal authority failed with native requests ${JSON.stringify(nativeRequests)}: ${
+                openErrorMessage || panelHtml
+              }`
+            );
+          }
           sessions = await listTerminalSessions(app, panelId).catch(() => []);
         }
         return sessions.find((session) => session.alive !== false)?.sessionId ?? "";
@@ -598,6 +659,29 @@ test.describe("Terminal Startup", () => {
     const { app } = testApp;
     let terminalPanelId = await waitForTerminalPanel(app, testApp.window);
     await startPanelDiagnostics(app, terminalPanelId);
+    expect(await terminalAuthorityRequests(app, terminalPanelId)).toContainEqual(
+      expect.objectContaining({
+        capability: "userland:extensions/shell/native.shell.execute#*",
+        resource: {
+          kind: "exact",
+          key: "native.shell:extension:@workspace-extensions/shell",
+        },
+      })
+    );
+    await expect
+      .poll(async () => terminalNativeAuthorityRequests(app, terminalPanelId), {
+        timeout: 10_000,
+        intervals: [250, 500, 1000],
+      })
+      .toContainEqual(
+        expect.objectContaining({
+          capability: "userland:extensions/shell/native.shell.execute#*",
+          resource: {
+            kind: "exact",
+            key: "native.shell:extension:@workspace-extensions/shell",
+          },
+        })
+      );
 
     const session = await waitForUsableTerminalSession(app, terminalPanelId, testApp.window);
     const sessionRef: TerminalSessionRef = { sessionId: session.sessionId };

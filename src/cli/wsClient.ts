@@ -149,6 +149,7 @@ export class WsRpcClient {
       selfId: this.config.callerId,
       callerKind: this.config.callerKind,
       transport,
+      authorityAcquisition: "wait",
     });
     return { transport, core };
   }

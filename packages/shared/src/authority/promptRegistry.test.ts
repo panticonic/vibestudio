@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertAuthorityPromptRegistry,
   AUTHORITY_PROMPT_REGISTRY,
+  authorityPromptCardType,
 } from "./promptRegistry.js";
 
 describe("authority prompt registry", () => {
@@ -11,6 +12,29 @@ describe("authority prompt registry", () => {
       "confirm.critical",
       "permission.gated",
       "permission.outside",
+      "template.add",
+      "template.remove",
+      "template.suggest",
+      "template.update",
     ]);
+  });
+
+  it("selects operation-specific template cards from sealed capabilities", () => {
+    for (const operation of ["add", "update", "remove", "suggest"] as const) {
+      expect(
+        authorityPromptCardType({
+          tier: "gated",
+          capability: `userland:extensions/template-composer/workspace.templates.${operation}#abc`,
+          outsideContent: false,
+        })
+      ).toBe(`template.${operation}`);
+    }
+    expect(
+      authorityPromptCardType({
+        tier: "critical",
+        capability: "userland:any/workspace.templates.remove#abc",
+        outsideContent: false,
+      })
+    ).toBe("confirm.critical");
   });
 });

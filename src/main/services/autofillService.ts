@@ -18,10 +18,6 @@ export function createAutofillService(deps: {
     handler: defineServiceHandler("autofill", autofillMethods, {
       confirmSave: (ctx, args) => deps.invoke(ctx, "confirmSave", args),
       confirmFormFill: (ctx, args) => deps.invoke(ctx, "confirmFormFill", args),
-      listSavedPasswords: (ctx, args) => deps.invoke(ctx, "listSavedPasswords", args),
-      deleteSavedPassword: (ctx, args) => deps.invoke(ctx, "deleteSavedPassword", args),
-      listNeverSaveOrigins: (ctx, args) => deps.invoke(ctx, "listNeverSaveOrigins", args),
-      removeNeverSaveOrigin: (ctx, args) => deps.invoke(ctx, "removeNeverSaveOrigin", args),
     }),
   };
 }

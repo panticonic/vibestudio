@@ -10,10 +10,6 @@ const INPUT_ROOTS = [
   "packages",
   "skills/vibestudio-agent",
   "src",
-  "workspace/apps",
-  "workspace/packages",
-  "workspace/panels",
-  "workspace/workers",
 ];
 
 const INPUT_FILES = [
@@ -32,9 +28,6 @@ const INPUT_FILES = [
   "scripts/infrastructure-package-cache.mjs",
   "tsconfig.json",
   "tsconfig.workers.json",
-  "workspace/package.json",
-  "workspace/pnpm-lock.yaml",
-  "workspace/tsconfig.json",
 ];
 
 const IGNORED_DIRECTORIES = new Set([

@@ -125,16 +125,20 @@ function fixture() {
 
 function approvalSnapshot(index: number): InvocationSnapshot {
   return {
-    v: 1,
+    v: 2,
     service: "files",
     method: "write",
     capability: "workspace.file.write",
+    capabilityDefinitionDigest: "-",
+    resourceType: "filesystem",
+    provider: "-",
+    providerExecutionDigest: "-",
     resourceKey: `context:one/file-${index}.txt`,
     argsDigest: "a".repeat(64),
     preparedStateDigest: "b".repeat(64),
     callerPrincipal: "session:attached-owner",
     sessionId: "attached-authority-session",
-    mission: "-",
+    reviewedClosureSubject: "-",
     snippetDigest: "c".repeat(64),
     codeLineage: { class: "internal", chain: [] },
     contextLineage: null,

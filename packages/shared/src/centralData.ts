@@ -14,7 +14,7 @@ import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqli
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import type { WorkspaceEntry } from "./types.js";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
-import { IDENTITY_DATABASE_MIGRATION_PLAN } from "@vibestudio/identity/identitySchema";
+import { IDENTITY_DATABASE_SCHEMA } from "@vibestudio/identity/identitySchema";
 
 export interface CentralDataManagerOptions {
   databasePath?: string;
@@ -140,7 +140,7 @@ export class CentralDataManager {
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA foreign_keys = ON");
     try {
-      openCanonicalSqliteDatabase(this.db, IDENTITY_DATABASE_MIGRATION_PLAN, {
+      openCanonicalSqliteDatabase(this.db, IDENTITY_DATABASE_SCHEMA, {
         description: `hub-control schema in ${databasePath}`,
       });
       // WAL changes the file, so enable it only after an existing DB has passed

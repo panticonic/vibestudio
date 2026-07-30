@@ -10,7 +10,7 @@ function makePanelRecord(id: string): EntityRecord {
     source: { repoPath: "", effectiveVersion: "" },
     activeBuildKey: "1".repeat(64),
     activeExecutionDigest: "a".repeat(64),
-    activeAuthority: { requests: [] },
+    activeAuthority: { requests: [], provides: [] },
     contextId: "",
     key: id,
     createdAt: Date.now(),
@@ -26,13 +26,25 @@ function makeAppRecord(id: string): EntityRecord {
     source: { repoPath: "apps/example", effectiveVersion: "1.0.0" },
     activeBuildKey: "2".repeat(64),
     activeExecutionDigest: "b".repeat(64),
-    activeAuthority: { requests: [] },
+    activeAuthority: { requests: [], provides: [] },
     contextId: "device-1",
     key: "device-1",
     createdAt: Date.now(),
     status: "active",
     cleanupComplete: true,
   };
+}
+
+function makeExternalPanelRecord(id: string): EntityRecord {
+  const record = makePanelRecord(id);
+  record.source = {
+    repoPath: "browser:https://example.com/",
+    effectiveVersion: "",
+  };
+  delete record.activeBuildKey;
+  delete record.activeExecutionDigest;
+  delete record.activeAuthority;
+  return record;
 }
 
 describe("ConnectionGrantService", () => {
@@ -64,6 +76,22 @@ describe("ConnectionGrantService", () => {
     expect(() => grants.grant(incomplete.id, "native-mobile:device-1")).toThrow(
       /sealed active incarnation/
     );
+    grants.stop();
+  });
+
+  it("binds an external-document panel grant to its active navigation entity", () => {
+    const entityCache = new EntityCache();
+    const record = makeExternalPanelRecord("panel:external");
+    entityCache._onActivate(record);
+    const grants = new ConnectionGrantService({ entityCache });
+    const { token } = grants.grant(record.id, "shell:test");
+
+    expect(grants.redeem(token)).toEqual({
+      principalId: record.id,
+      issuedBy: "shell:test",
+    });
+    entityCache._onRetire({ ...record, status: "retired", retiredAt: Date.now() });
+    expect(grants.validate(token)).toBeNull();
     grants.stop();
   });
 

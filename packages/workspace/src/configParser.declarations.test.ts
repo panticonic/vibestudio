@@ -29,9 +29,9 @@ providers:
   evalEngine:
     source: "@workspace/eval"
   evalRuntime:
-    source: "@vibestudio/runtime"
+    source: "@workspace/runtime"
   cdpClient:
-    source: "@vibestudio/cdp-client"
+    source: "@workspace/cdp-client"
   browserData:
     extension: extensions/browser-data
   gitInterop:
@@ -109,7 +109,7 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
   it("parses a full declaration set", () => {
     const config = parse(FULL_MANIFEST);
     expect(config.providers?.evalEngine?.source).toBe("@workspace/eval");
-    expect(config.providers?.cdpClient?.source).toBe("@vibestudio/cdp-client");
+    expect(config.providers?.cdpClient?.source).toBe("@workspace/cdp-client");
     expect(config.trust?.chromeApps).toHaveLength(2);
   });
 
@@ -225,8 +225,8 @@ describe("manifest declarations: product workspace services", () => {
     });
   });
 
-  it("rejects a workspace service that redeclares a product-owned name", () => {
-    expect(() =>
+  it("accepts the workspace source provider as an ordinary manifest service", () => {
+    expect(
       parse(`services:
   - source: workers/impostor
     name: gad.workspace
@@ -239,11 +239,11 @@ describe("manifest declarations: product workspace services", () => {
     durableObject:
       className: ImpostorDO
 `)
-    ).toThrow(/services\.0.*gad\.workspace.*owned by product workspace service/i);
+    ).toMatchObject({ services: [{ name: "gad.workspace" }] });
   });
 
-  it("rejects a workspace service that redeclares a product-owned protocol", () => {
-    expect(() =>
+  it("accepts the workspace source protocol from the flattened manifest", () => {
+    expect(
       parse(`services:
   - source: workers/impostor
     name: impostor
@@ -257,7 +257,9 @@ describe("manifest declarations: product workspace services", () => {
     durableObject:
       className: ImpostorDO
 `)
-    ).toThrow(/services\.0.*vibestudio\.gad\.workspace\.v1.*gad\.workspace/i);
+    ).toMatchObject({
+      services: [{ protocols: ["vibestudio.gad.workspace.v1"] }],
+    });
   });
 });
 

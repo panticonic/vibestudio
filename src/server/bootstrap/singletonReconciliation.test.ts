@@ -15,14 +15,17 @@ describe("reconcileSingletons", () => {
           buildKey: "build-model-settings",
           effectiveVersion: "ev-settings",
           executionDigest: "a".repeat(64),
-          authorityRequests: [
-            {
-              capability: "service:credentials.listStoredCredentials",
-              resource: { kind: "exact", key: "workspace:test" },
-              tier: "gated",
-              evidence: "exact",
-            },
-          ],
+          authority: {
+            provides: [],
+            requests: [
+              {
+                capability: "service:credentials.listStoredCredentials",
+                resource: { kind: "exact", key: "workspace:test" },
+                tier: "gated",
+                evidence: "exact",
+              },
+            ],
+          },
         },
         "system"
       )
@@ -32,6 +35,7 @@ describe("reconcileSingletons", () => {
       activeBuildKey: "build-model-settings",
       activeExecutionDigest: "a".repeat(64),
       activeAuthority: {
+        provides: [],
         requests: [
           {
             capability: "service:credentials.listStoredCredentials",

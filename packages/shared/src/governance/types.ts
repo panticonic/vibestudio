@@ -29,6 +29,7 @@ export type ApprovalProvenanceKind =
 export type ApprovalProvenanceDecision =
   | "once"
   | "task"
+  | "mission"
   | "agent"
   | "lock"
   | "session"

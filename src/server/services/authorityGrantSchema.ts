@@ -1,15 +1,17 @@
-import type { CanonicalSqliteMigrationPlan, CanonicalSqliteSchema } from "@vibestudio/sqlite";
+import type { CanonicalSqliteSchema } from "@vibestudio/sqlite";
 
 const AUTHORITY_GRANTS_TABLE_SQL = `CREATE TABLE authority_grants (
   id TEXT PRIMARY KEY,
   effect TEXT NOT NULL CHECK (effect IN ('allow','deny')),
   capability TEXT NOT NULL,
+  capability_definition_digest TEXT,
   resource_key TEXT NOT NULL,
   resource_scope TEXT NOT NULL DEFAULT 'exact' CHECK (resource_scope IN ('exact','prefix','origin','domain','network')),
   subject TEXT NOT NULL,
   session_id TEXT,
   invocation_digest TEXT,
-  mission_subject TEXT,
+  provider_execution_digest TEXT,
+  reviewed_closure_subject TEXT,
   envelope_id TEXT,
   lineage_at_consent TEXT NOT NULL DEFAULT '[]',
   issued_by TEXT NOT NULL,
@@ -31,7 +33,7 @@ const PREAUTH_ENVELOPES_SQL = `CREATE TABLE preauth_envelopes (
   envelope_id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
   task_ref TEXT NOT NULL,
-  mission_subject TEXT,
+  reviewed_closure_subject TEXT,
   state TEXT NOT NULL CHECK (state IN ('active','closed')),
   created_by TEXT NOT NULL,
   created_at INTEGER NOT NULL,
@@ -71,7 +73,7 @@ const AUTHORITY_LOCKS_SQL = `CREATE TABLE authority_locks (
   )
 )`;
 
-export const AUTHORITY_GRANTS_SCHEMA_VERSION = 5;
+export const AUTHORITY_GRANTS_SCHEMA_VERSION = 6;
 
 export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
   version: AUTHORITY_GRANTS_SCHEMA_VERSION,
@@ -87,6 +89,11 @@ export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
       name: "ag_session",
       sql: "CREATE INDEX ag_session ON authority_grants(session_id) WHERE session_id IS NOT NULL",
     },
+    {
+      type: "index",
+      name: "ag_capability_definition",
+      sql: "CREATE INDEX ag_capability_definition ON authority_grants(capability_definition_digest) WHERE capability_definition_digest IS NOT NULL",
+    },
     { type: "table", name: "preauth_envelopes", sql: PREAUTH_ENVELOPES_SQL },
     { type: "table", name: "authority_locks", sql: AUTHORITY_LOCKS_SQL },
     {
@@ -96,9 +103,4 @@ export const AUTHORITY_GRANTS_SCHEMA: CanonicalSqliteSchema = {
     },
     { type: "table", name: "envelope_rules", sql: ENVELOPE_RULES_SQL },
   ],
-};
-
-export const AUTHORITY_GRANTS_MIGRATION_PLAN: CanonicalSqliteMigrationPlan = {
-  current: AUTHORITY_GRANTS_SCHEMA,
-  migrations: [],
 };

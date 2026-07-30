@@ -6,17 +6,13 @@
  */
 
 import type { BrowserSitePermissionCapability, PendingApproval } from "./approvals.js";
-import type {
-  HostTarget,
-  HostTargetLaunchResult,
-  HostTargetLaunchSessionSnapshot,
-} from "./hostTargets.js";
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
+import type { PanelTreeInvalidation } from "./panel/treeIndex.js";
 import type { CallerKind } from "./principalKinds.js";
 import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js";
 import type { WorkspacePresenceEntry } from "./workspacePresence.js";
-import type { PanelPlacementHint, PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
+import type { Panel, PanelPlacementHint, PanelRecoverySnapshot } from "./types.js";
 
 /**
  * Known event names that can be subscribed to.
@@ -28,14 +24,18 @@ export type EventName =
   | "vcs:publication"
   | "workspace:unit-log"
   | "workspace:revision-bumped"
+  | "workspace:protected-refs-changed"
   | "credential:capture-request"
   | "server-log:append"
   | "presence:panel-active"
   | "panel:runtimeLeaseChanged"
+  | "panel:executionActivated"
+  | "panel:stateArgsChanged"
   | "panel-title-updated"
+  | "panel-presentation-changed"
   | "panel:snapshot"
   | "system-theme-changed"
-  | "panel-tree-updated"
+  | "panel-tree-invalidated"
   | "workspace-presence-changed"
   | "open-workspace-switcher"
   | "open-connection-settings"
@@ -65,8 +65,6 @@ export type EventName =
   | "user-notifications-changed"
   | "server-connection-changed"
   | "server-health"
-  | "host-targets:changed"
-  | "host-target-launch:session-changed"
   | "shell-approval:pending-changed"
   | "eval:run-event"
   | "development:run-event"
@@ -82,8 +80,18 @@ export interface NotificationAction {
   variant?: "solid" | "soft" | "ghost";
   command?:
     | { type: "app.applyUpdate"; appId: string }
-    | { type: "app.rollback"; appId: string; buildKey?: string }
-    | { type: "workspace.restartUnit"; name: string }
+    | {
+        type: "runtime.supervision.rollback";
+        release: { kind: "app"; releaseId: string };
+        buildKey?: string;
+      }
+    | {
+        type: "runtime.supervision.restart";
+        identity: {
+          kind: "panel" | "worker" | "do" | "app" | "extension";
+          entityId: string;
+        };
+      }
     | { type: "desktop.installNpmUpdate" }
     | { type: "desktop.copyNpmUpdateCommand" }
     | { type: "browser.downloadOpen"; downloadId: string }
@@ -148,19 +156,6 @@ export interface NotificationPayload {
   iconDataUrl?: string;
 }
 
-export interface HostTargetChangedPayload {
-  target: HostTarget;
-  status: HostTargetLaunchResult["status"] | "unknown";
-  revision: number;
-  reason?: string | null;
-  details?: string[];
-  source?: string | null;
-  appId?: string | null;
-  buildKey?: string | null;
-  approvals?: number;
-  snapshot?: boolean;
-}
-
 /**
  * Event payloads for type safety.
  */
@@ -205,7 +200,7 @@ export interface EventPayloads {
   };
   "build:complete": { source: string; error?: string };
   "system-theme-changed": "light" | "dark";
-  "panel-tree-updated": PanelTreeSnapshot;
+  "panel-tree-invalidated": PanelTreeInvalidation;
   /**
    * WP8 §4 host workspace-presence: the full list of present (+ recently
    * departed) workspace members, re-broadcast whenever a user's presence
@@ -213,7 +208,30 @@ export interface EventPayloads {
    */
   "workspace-presence-changed": WorkspacePresenceEntry[];
   "panel:runtimeLeaseChanged": PanelRuntimeLeaseChangedEvent;
+  /**
+   * The server sealed the immutable execution identity for a panel
+   * incarnation. Addressed to the presenting host so it can converge an
+   * already-created native view without waiting for renderer re-entry.
+   */
+  "panel:executionActivated": {
+    panelId: string;
+    runtimeEntityId: string;
+    effectiveVersion: string;
+    buildKey: string;
+    executionDigest: string;
+    authorityRequests: NonNullable<Panel["authorityRequests"]>;
+  };
+  /**
+   * The server committed a panel's durable state arguments. Addressed to the
+   * presenting host so its bounded runtime projection and live renderer
+   * converge on the authoritative snapshot.
+   */
+  "panel:stateArgsChanged": {
+    panelId: string;
+    stateArgs: Record<string, unknown>;
+  };
   "panel-title-updated": { panelId: string; title: string; explicit?: boolean };
+  "panel-presentation-changed": { revision: number; panelIds: string[] };
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;
   "open-connection-settings": undefined;
@@ -235,7 +253,7 @@ export interface EventPayloads {
   "navigate-about": { page: string };
   /**
    * A newly-created panel that the addressed host should present. The
-   * authoritative tree is broadcast separately through panel-tree-updated;
+   * tree browsers are refreshed separately through panel-tree-invalidated;
    * this event is delivered only to the shell caller that owns the selected
    * runtime host, so presentation remains device-local.
    */
@@ -344,8 +362,6 @@ export interface EventPayloads {
     /** Epoch ms when this sample was captured. */
     sampledAt: number;
   };
-  "host-targets:changed": HostTargetChangedPayload;
-  "host-target-launch:session-changed": HostTargetLaunchSessionSnapshot;
   "shell-approval:pending-changed": { pending: PendingApproval[] };
   "browser-permissions:changed": {
     environmentKey: string;
@@ -358,6 +374,7 @@ export interface EventPayloads {
     }>;
   };
   "workspace:revision-bumped": { workspaceId: string; revision: number };
+  "workspace:protected-refs-changed": { repoPaths: string[] };
   /**
    * The server asks the attached desktop shell to run an interactive session
    * credential capture (browser sign-in). The shell answers with
@@ -415,10 +432,13 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "development:client-launch-request",
   "development:client-stop-request",
   "system-theme-changed",
-  "panel-tree-updated",
+  "panel-tree-invalidated",
   "workspace-presence-changed",
   "panel:runtimeLeaseChanged",
+  "panel:executionActivated",
+  "panel:stateArgsChanged",
   "panel-title-updated",
+  "panel-presentation-changed",
   "panel:snapshot",
   "open-workspace-switcher",
   "open-connection-settings",
@@ -448,11 +468,10 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "user-notifications-changed",
   "server-connection-changed",
   "server-health",
-  "host-targets:changed",
-  "host-target-launch:session-changed",
   "shell-approval:pending-changed",
   "eval:run-event",
   "workspace:revision-bumped",
+  "workspace:protected-refs-changed",
   "credential:capture-request",
   "server-log:append",
   "presence:panel-active",
@@ -469,6 +488,8 @@ export function isValidEventName(name: string): name is EventName {
   if (name === "workspace:revision-bumped") return true;
   if (name === "presence:panel-active") return true;
   if (name === "panel:runtimeLeaseChanged") return true;
+  if (name === "panel:executionActivated") return true;
+  if (name === "panel:stateArgsChanged") return true;
   if (name === "panel-title-updated") return true;
   if (name === "panel:snapshot") return true;
   return VALID_EVENT_NAMES.includes(name as EventName);

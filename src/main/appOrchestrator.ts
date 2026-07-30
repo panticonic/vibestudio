@@ -14,6 +14,7 @@ import {
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 
 const log = createDevLogger("AppOrchestrator");
 
@@ -42,7 +43,7 @@ export interface AppAvailableEvent {
   effectiveVersion?: string | null;
   buildKey?: string | null;
   executionDigest?: string | null;
-  authorityRequests?: readonly CapabilityScope[];
+  authority?: UnitAuthorityManifest;
   adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
   selectedForHost?: boolean;
 }
@@ -65,7 +66,7 @@ interface BakedAppManifest {
     effectiveVersion: string;
     executionDigest: string;
     execution: ExecutionArtifactRefV1;
-    authorityRequests: readonly CapabilityScope[];
+    authority: UnitAuthorityManifest;
   };
   artifacts: Array<{
     path: string;
@@ -80,12 +81,28 @@ interface BakedAppManifest {
 export class AppOrchestrator {
   private readonly adopted = new Map<string, AppAvailableEvent>();
   private readonly pending = new Map<string, AppAvailableEvent>();
+  private readonly adoptionQueues = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: AppOrchestratorDeps) {
     this.loadPendingState();
   }
 
   async applyAppAvailable(event: AppAvailableEvent): Promise<void> {
+    const previous = this.adoptionQueues.get(event.appId) ?? Promise.resolve();
+    const current = previous
+      .catch(() => undefined)
+      .then(() => this.applyAppAvailableSerialized(event));
+    this.adoptionQueues.set(event.appId, current);
+    try {
+      await current;
+    } finally {
+      if (this.adoptionQueues.get(event.appId) === current) {
+        this.adoptionQueues.delete(event.appId);
+      }
+    }
+  }
+
+  private async applyAppAvailableSerialized(event: AppAvailableEvent): Promise<void> {
     if (event.target && event.target !== "electron") {
       log.verbose(`Ignoring non-Electron app ${event.appId} for Electron host: ${event.target}`);
       return;
@@ -254,9 +271,7 @@ function sealedAppCodeIdentity(event: AppAvailableEvent): {
     `Electron app ${event.appId} execution digest`
   );
   const authority = parseUnitAuthorityManifest(
-    {
-      requests: event.authorityRequests,
-    },
+    event.authority,
     `Electron app ${event.appId} sealed authority`
   );
   return {
@@ -336,9 +351,7 @@ export function readBakedElectronApp(distDir: string): AppAvailableEvent | null 
   const htmlPath = path.join(distDir, "artifacts", html.path);
   const executionDigest = verifyBakedExecutionIdentity(manifest);
   const authority = parseUnitAuthorityManifest(
-    {
-      requests: manifest.build.authorityRequests,
-    },
+    manifest.build.authority,
     `Baked Electron app ${manifest.app.name} sealed authority`
   );
   const event: AppAvailableEvent = {
@@ -350,7 +363,7 @@ export function readBakedElectronApp(distDir: string): AppAvailableEvent | null 
     buildKey: manifest.build.key,
     effectiveVersion: manifest.build.effectiveVersion,
     executionDigest,
-    authorityRequests: authority.requests,
+    authority,
   };
   sealedAppCodeIdentity(event);
   return event;

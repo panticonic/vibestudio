@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import type { DevelopmentRun } from "@vibestudio/service-schemas/development";
-import { DevelopmentRecipeRegistry } from "./developmentRecipes.js";
+import { developmentRecipes } from "@panticonic/builtin/development/recipes";
 import {
   IsolatedDevelopmentHostExecutor,
   type IsolatedDevelopmentManager,
@@ -117,11 +117,9 @@ function fixture() {
 }
 
 function runAndPlan(): { run: DevelopmentRun; plan: PreparedDevelopmentBuild } {
-  const recipe = new DevelopmentRecipeRegistry()
-    .list()
-    .find(
-      (candidate) => candidate.target.kind === "isolated-host" && candidate.target.includeClient
-    )!;
+  const recipe = developmentRecipes(process.platform, process.arch).find(
+    (candidate) => candidate.target.kind === "isolated-host" && candidate.target.includeClient
+  )!;
   const snapshot = {
     version: 1 as const,
     sessionId: "session:one",

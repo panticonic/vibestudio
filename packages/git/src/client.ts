@@ -138,7 +138,7 @@ export const SYSTEM_GIT_AUTHOR: { name: string; email: string } = {
 
 /**
  * Minimal fs/promises interface expected by GitClient.
- * Compatible with Node's fs/promises and @vibestudio/runtime's RuntimeFs.
+ * Compatible with Node's fs/promises and @workspace/runtime's RuntimeFs.
  */
 export interface FsPromisesLike {
   readFile(path: string, encoding?: BufferEncoding): Promise<Uint8Array | string>;

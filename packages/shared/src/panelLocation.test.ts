@@ -14,7 +14,6 @@ const LOCATION: PanelLocation = {
   stateArgs: { initialPrompt: "hello # world", nested: { count: 2 } },
   title: "Research",
   slug: "research",
-  name: "Legacy research",
   focus: false,
   disposition: "child",
   placement: { disposition: "side", preferredWidth: 640, minWidth: 440 },

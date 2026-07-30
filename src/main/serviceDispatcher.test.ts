@@ -58,14 +58,7 @@ function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
 
 describe("ServiceDispatcher", () => {
   it("threads invocation cancellation into a parked authority acquisition", async () => {
-    const sd = new ServiceDispatcher({
-      tierLookup: () => ({
-        tier: "gated",
-        session: "family",
-        rationale: "Cancellation propagation test",
-      }),
-      capabilityLookup: () => "test:parked-authority",
-    });
+    const sd = new ServiceDispatcher();
     const caller = createVerifiedCaller(
       "eval:test",
       "agent",
@@ -104,7 +97,18 @@ describe("ServiceDispatcher", () => {
     sd.registerService({
       name: "parked",
       authority: { principals: ["session"] },
-      methods: { run: { args: z.tuple([]), access: { sensitivity: "read" } } },
+      methods: {
+        run: {
+          args: z.tuple([]),
+          access: { sensitivity: "read" },
+          capability: "test:parked-authority",
+          tier: {
+            tier: "gated",
+            session: "family",
+            rationale: "Cancellation propagation test",
+          },
+        },
+      },
       handler: vi.fn(),
     });
     sd.markInitialized();

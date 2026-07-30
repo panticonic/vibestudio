@@ -108,16 +108,20 @@ function fixture(
 
 function approvalSnapshot(overrides: Partial<InvocationSnapshot> = {}): InvocationSnapshot {
   return {
-    v: 1,
+    v: 2,
     service: "fs",
     method: "write",
     capability: "workspace.file.write",
+    capabilityDefinitionDigest: "-",
+    resourceType: "filesystem",
+    provider: "-",
+    providerExecutionDigest: "-",
     resourceKey: "context:one/a.txt",
     argsDigest: digest(["a.txt", "contents"]),
     preparedStateDigest: "c".repeat(64),
     callerPrincipal: "session:eval-one",
     sessionId: "child-authority-session",
-    mission: "-",
+    reviewedClosureSubject: "-",
     snippetDigest: "d".repeat(64),
     codeLineage: { class: "internal", chain: [] },
     contextLineage: null,

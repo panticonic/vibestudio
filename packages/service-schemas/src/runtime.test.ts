@@ -46,7 +46,6 @@ describe("runtime context-boundary authority", () => {
           decision: "once",
         },
       ],
-      userland: [],
       unexpectedPrompts: "fail",
     };
 
@@ -80,7 +79,7 @@ describe("runtime context-boundary authority", () => {
     expect(runtimeMethods.faultAbortAgentVessel).toMatchObject({
       agentFacing: false,
       authority: { principals: ["code"] },
-      tier: { tier: "open", session: "codeOnly" },
+      tier: { tier: "open", session: "family" },
     });
     expect(
       runtimeMethods.faultAbortAgentVessel.args.parse([

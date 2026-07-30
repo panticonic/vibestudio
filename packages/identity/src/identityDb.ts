@@ -21,7 +21,7 @@ import * as path from "node:path";
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import type { User, UserRole } from "./types.js";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
-import { IDENTITY_DATABASE_MIGRATION_PLAN } from "./identitySchema.js";
+import { IDENTITY_DATABASE_SCHEMA } from "./identitySchema.js";
 
 /** A device credential row. Mirrors `DeviceRecord` plus the owning `userId`. */
 export interface DeviceRow {
@@ -152,7 +152,7 @@ export class IdentityDb {
         // is rejected by SQLite itself. The child never issues writes.
         this.db.exec("PRAGMA query_only = ON");
       }
-      openCanonicalSqliteDatabase(this.db, IDENTITY_DATABASE_MIGRATION_PLAN, {
+      openCanonicalSqliteDatabase(this.db, IDENTITY_DATABASE_SCHEMA, {
         description: `identity schema in ${options.path}`,
         readOnly: options.readOnly,
       });

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { hostCapabilityMethods, hostMethodCapability } from "./hostMethodCapabilities.js";
-import { METHOD_TIERS } from "./tierTable.js";
+import {
+  generatedHostCapabilityMethods,
+  generatedHostMethodAuthority,
+} from "./hostAuthorityCatalog.generated.js";
 
 describe("host method capability projection", () => {
   it("keeps proxyFetch as an open transport instead of a generic credential prompt", () => {
-    expect(METHOD_TIERS["credentials.proxyFetch"].tier).toBe("open");
-    expect(hostMethodCapability("credentials.proxyFetch")).toBeNull();
-    expect(hostCapabilityMethods("credential.use")).not.toContain("credentials.proxyFetch");
+    expect(generatedHostMethodAuthority("credentials.proxyFetch")?.tier.tier).toBe("open");
+    expect(generatedHostMethodAuthority("credentials.proxyFetch")?.capability).toBeNull();
+    expect(generatedHostCapabilityMethods("credential.use")).not.toContain(
+      "credentials.proxyFetch"
+    );
   });
 });

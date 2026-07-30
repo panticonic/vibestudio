@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { assertHttpUrl } from "@vibestudio/shared/httpUrl";
 import { browserUrlFromPanelSource } from "@vibestudio/shared/panelChrome";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
@@ -89,12 +88,7 @@ export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
     requesterEntityId: string,
     options?: PanelScreenshotOptions
   ): Promise<PanelScreenshotResult>;
-  drive?(
-    panelId: string,
-    requesterEntityId: string,
-    command: "navigate" | "reload" | "goBack" | "goForward" | "stop",
-    args: unknown[]
-  ): Promise<unknown>;
+  stop?(panelId: string, requesterEntityId: string): Promise<unknown>;
   consoleHistory?(
     panelId: string,
     requesterEntityId: string,
@@ -169,48 +163,66 @@ function cdpBoundaryAuthority(method: string) {
 
 const panelCdpMethods = defineServiceMethods({
   getCdpEndpoint: {
+    capability: "panel.inspect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "cdp.transport",
+      rationale:
+        "Mints one short-lived authenticated endpoint for the exact already-authorized native CDP target",
+    },
+    presentation: {
+      title: "Inspect a panel with developer tools",
+      action: "inspect a panel with developer tools",
+      description: "Allows {requesterKind} to inspect a panel with developer tools.",
+      group: "panels",
+      authorityCategory: {
+        domain: "computer",
+        verb: "see",
+      },
+    },
     description: "Return a single-use CDP WebSocket endpoint for an approved panel target.",
     args: z.tuple([z.string()]),
     authority: cdpBoundaryAuthority("getCdpEndpoint"),
     access: { sensitivity: "admin" },
   },
-  navigate: {
-    description: "Navigate an approved browser panel target through its active CDP host.",
-    args: z.tuple([z.string(), z.string()]),
-    authority: cdpBoundaryAuthority("navigate"),
-    access: { sensitivity: "write" },
-  },
-  reload: {
-    description: "Reload an approved panel target through its active CDP host.",
-    args: z.tuple([z.string()]),
-    authority: cdpBoundaryAuthority("reload"),
-    access: { sensitivity: "write" },
-  },
-  goBack: {
-    description: "Drive browser history back on an approved panel target.",
-    args: z.tuple([z.string()]),
-    authority: cdpBoundaryAuthority("goBack"),
-    access: { sensitivity: "write" },
-  },
-  goForward: {
-    description: "Drive browser history forward on an approved panel target.",
-    args: z.tuple([z.string()]),
-    authority: cdpBoundaryAuthority("goForward"),
-    access: { sensitivity: "write" },
-  },
   stop: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "cdp.native-effect",
+      rationale:
+        "Stops loading in the exact native webContents selected by the receiver-bound target",
+    },
     description: "Stop loading an approved panel target through its active CDP host.",
     args: z.tuple([z.string()]),
     authority: cdpBoundaryAuthority("stop"),
     access: { sensitivity: "write" },
   },
   consoleHistory: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "cdp.transport",
+      rationale: "Returns a bounded observation from the exact authenticated native CDP provider",
+    },
     description: "Read console history from an approved panel target's active CDP host.",
     args: z.tuple([z.string(), consoleHistoryOptionsSchema]),
     authority: cdpBoundaryAuthority("consoleHistory"),
     access: { sensitivity: "read" },
   },
   screenshot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "cdp.native-effect",
+      rationale:
+        "Force-paints and captures the exact native view selected by receiver-bound target authority",
+    },
     description:
       "Capture a screenshot of an approved panel target through its active CDP host " +
       "(force-paints hidden/unslotted panels). Returns base64 image data + mime type; " +
@@ -221,6 +233,24 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   "hostProvider.open": {
+    capability: "panel.inspect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "cdp.transport",
+      rationale: "Opens one authenticated provider stream for an already-minted exact CDP session",
+    },
+    presentation: {
+      title: "Inspect a panel",
+      action: "inspect a panel",
+      description: "Allows {requesterKind} to inspect a panel.",
+      group: "panels",
+      authorityCategory: {
+        domain: "computer",
+        verb: "see",
+      },
+    },
     description: "Internal shell/server transport: open a streamed CDP host-provider channel.",
     args: z.tuple([z.string(), z.string()]),
     returns: z.instanceof(Response),
@@ -228,6 +258,25 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "admin" as const },
   },
   "hostProvider.send": {
+    capability: "panel.inspect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "cdp.transport",
+      rationale:
+        "Relays one frame inside the exact authenticated CDP provider session without product policy",
+    },
+    presentation: {
+      title: "Control an inspected panel",
+      action: "control an inspected panel",
+      description: "Allows {requesterKind} to control an inspected panel.",
+      group: "panels",
+      authorityCategory: {
+        domain: "computer",
+        verb: "see",
+      },
+    },
     description:
       "Internal shell/server transport: deliver a CDP host-provider frame to the bridge.",
     args: z.tuple([z.string(), z.string()]),
@@ -236,6 +285,25 @@ const panelCdpMethods = defineServiceMethods({
     access: { sensitivity: "admin" as const },
   },
   "hostProvider.close": {
+    capability: "panel.inspect",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "cdp.transport",
+      rationale:
+        "Closes the exact authenticated CDP provider stream and only reduces transport authority",
+    },
+    presentation: {
+      title: "Stop inspecting a panel",
+      action: "stop inspecting a panel",
+      description: "Allows {requesterKind} to stop inspecting a panel.",
+      group: "panels",
+      authorityCategory: {
+        domain: "computer",
+        verb: "see",
+      },
+    },
     description: "Internal shell/server transport: close a CDP host-provider channel.",
     args: z.tuple([z.string()]),
     returns: z.void(),
@@ -306,18 +374,6 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     });
   }
 
-  async function drive(
-    ctx: ServiceContext,
-    method: "navigate" | "reload" | "goBack" | "goForward" | "stop",
-    panelId: string,
-    args: unknown[]
-  ): Promise<unknown> {
-    if (method === "navigate") assertHttpUrl(args[0]);
-    await recordCdpAccess(ctx, method, panelId);
-    if (!deps.drive) throw new Error(`Panel CDP driver is not available for ${method}`);
-    return deps.drive(panelId, ctx.caller.runtime.id, method, args);
-  }
-
   return {
     name: "panelCdp",
     description: "Approval-gated server CDP access for panel targets",
@@ -331,16 +387,11 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         ["getCdpEndpoint", "cdp"],
         ["consoleHistory", "cdp"],
         ["screenshot", "cdp"],
-        ["navigate", "navigate"],
-        ["reload", "reload"],
-        ["goBack", "goBack"],
-        ["goForward", "goForward"],
         ["stop", "stop"],
       ].map(([method, operation]) => [
         `panelCdp.${method}.contextBoundary`,
         async (ctx: ServiceContext, args: unknown[]) => {
           const panelId = String(args[0]);
-          if (method === "navigate") assertHttpUrl(args[1]);
           const target = await requireTarget(panelId);
           return {
             selections: await preparePanelAccessAuthority(
@@ -396,11 +447,11 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         await recordCdpIngestion(ctx, target, "screenshot");
         return result;
       },
-      navigate: (ctx, [panelId, url]) => drive(ctx, "navigate", panelId, [url]),
-      reload: (ctx, [panelId]) => drive(ctx, "reload", panelId, []),
-      goBack: (ctx, [panelId]) => drive(ctx, "goBack", panelId, []),
-      goForward: (ctx, [panelId]) => drive(ctx, "goForward", panelId, []),
-      stop: (ctx, [panelId]) => drive(ctx, "stop", panelId, []),
+      stop: async (ctx, [panelId]) => {
+        await recordCdpAccess(ctx, "stop", panelId);
+        if (!deps.stop) throw new Error("Panel CDP stop driver is not available");
+        return deps.stop(panelId, ctx.caller.runtime.id);
+      },
     }),
   };
 }

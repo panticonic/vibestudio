@@ -23,7 +23,8 @@ export interface RuntimeImageRecord {
   unitName: string;
   /** Complete, independently verified executable identity. */
   artifact: ExecutionArtifactRefV1;
-  authorityRequests: UnitAuthorityManifest["requests"];
+  /** Complete sealed authority envelope for this exact executable image. */
+  authority: UnitAuthorityManifest;
   generation: number;
   error?: RuntimeImageRecordError;
   scopeRef?: string;
@@ -45,7 +46,7 @@ const RUNTIME_IMAGE_RECORD_KEYS = [
   "source",
   "unitName",
   "artifact",
-  "authorityRequests",
+  "authority",
   "generation",
   "error",
   "scopeRef",
@@ -55,7 +56,7 @@ const RUNTIME_IMAGE_RECORD_KEYS = [
 function runtimeImageRecord(
   value: unknown,
   index: number,
-  schemaLabel = "runtime-images v6"
+  schemaLabel = "runtime-images v7"
 ): RuntimeImageRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${schemaLabel} record ${index} is not an object`);
@@ -97,36 +98,36 @@ function runtimeImageRecord(
     }
   }
   const authority = parseUnitAuthorityManifest(
-    { requests: record.authorityRequests },
+    record.authority,
     `runtime image ${record.id} authority`
   );
   return {
     ...(record as RuntimeImageRecord),
     artifact,
-    authorityRequests: authority.requests,
+    authority,
   };
 }
 
 function decodeRuntimeImageFile(value: unknown): RuntimeImageFile {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("runtime-images v6 is not an object");
+    throw new Error("runtime-images v7 is not an object");
   }
   const file = value as Record<string, unknown>;
   const unknownKeys = Object.keys(file).filter((key) => key !== "version" && key !== "records");
   if (unknownKeys.length > 0) {
-    throw new Error(`runtime-images v6 has unknown field(s): ${unknownKeys.join(", ")}`);
+    throw new Error(`runtime-images v7 has unknown field(s): ${unknownKeys.join(", ")}`);
   }
-  if (file["version"] !== 6) {
-    throw new Error(`runtime-images v6 has invalid version ${String(file["version"])}`);
+  if (file["version"] !== 7) {
+    throw new Error(`runtime-images v7 has invalid version ${String(file["version"])}`);
   }
   if (!Array.isArray(file["records"])) {
-    throw new Error("runtime-images v6 records must be an array");
+    throw new Error("runtime-images v7 records must be an array");
   }
   const records = file["records"].map((record, index) => runtimeImageRecord(record, index));
   const ids = new Set<string>();
   for (const record of records) {
     if (ids.has(record.id)) {
-      throw new Error(`runtime-images v6 contains duplicate id ${record.id}`);
+      throw new Error(`runtime-images v7 contains duplicate id ${record.id}`);
     }
     ids.add(record.id);
   }
@@ -135,9 +136,8 @@ function decodeRuntimeImageFile(value: unknown): RuntimeImageFile {
 
 const RUNTIME_IMAGE_CODEC: VersionedJsonCodec<RuntimeImageFile> = {
   schemaName: "runtime-images",
-  currentVersion: 6,
+  currentVersion: 7,
   versionKey: "version",
-  migrations: [],
   decodeCurrent: decodeRuntimeImageFile,
   encode: (value) => ({
     records: [...value.records].sort((a, b) => a.id.localeCompare(b.id)),
@@ -171,6 +171,7 @@ export class RuntimeImageStore {
     const record: RuntimeImageRecord = {
       ...input,
       artifact: verifyExecutionArtifactRef(input.artifact),
+      authority: parseUnitAuthorityManifest(input.authority, `runtime image ${input.id} authority`),
       generation: (previous?.generation ?? 0) + 1,
       updatedAt: Date.now(),
     };

@@ -27,7 +27,7 @@ export interface CapabilityScope {
  */
 export interface EvalAuthorityManifest {
   mode: "adaptive" | "strict";
-  effects: "read-only" | "mutable";
+  effects: "read-only" | "read-write";
   approvals: "prompt" | "pregranted-only";
   requests: readonly CapabilityScope[];
   digest: string;
@@ -80,8 +80,8 @@ export interface CodeLineageFact {
   externalKeys: readonly string[];
 }
 
-export interface SessionMissionFact {
-  missionId: string;
+export interface SessionReviewedClosureFact {
+  subject: AuthorityGrantSubject;
   closureDigest: string;
   harness: { unit: string; ev: string };
 }
@@ -105,14 +105,6 @@ export interface AgentExecutionTestAuthorityRule {
   decision: "once" | "deny";
 }
 
-export interface AgentExecutionTestUserlandRule {
-  ruleId: string;
-  /** Exact or deliberately bounded userland subject namespace. */
-  subject: ResourceScope;
-  decision: string;
-  remember: boolean;
-}
-
 export interface AgentExecutionTestAgentPolicy {
   /** The only model that agents created inside this test context may execute. */
   model: string;
@@ -126,7 +118,6 @@ export interface AgentExecutionTestCasePolicy {
   testId: string;
   agent: AgentExecutionTestAgentPolicy;
   authority: readonly AgentExecutionTestAuthorityRule[];
-  userland: readonly AgentExecutionTestUserlandRule[];
   unexpectedPrompts: "fail";
 }
 
@@ -146,7 +137,6 @@ export interface AgentExecutionTestPolicySpec {
   testId: string;
   agent: AgentExecutionTestAgentPolicy;
   authority: readonly AgentExecutionTestAuthorityRule[];
-  userland: readonly AgentExecutionTestUserlandRule[];
   unexpectedPrompts: "fail";
 }
 
@@ -188,7 +178,7 @@ export interface AgentExecutionSessionFact {
     head: string;
     invocationId: string;
   } | null;
-  mission?: SessionMissionFact;
+  reviewedClosure?: SessionReviewedClosureFact;
   testPolicy?: AgentExecutionTestPolicy;
   issuedAt: number;
   expiresAt: number;
@@ -231,7 +221,7 @@ export interface AuthorizationContext {
     audience: string;
     version: string;
     expiresAt: number;
-    mission?: SessionMissionFact;
+    reviewedClosure?: SessionReviewedClosureFact;
     mediatingHarness?: `code:${string}`;
     taskRef?: string;
   };
@@ -241,7 +231,12 @@ export interface AuthorizationContext {
 export interface AuthorityGrantConstraints {
   sessionId?: string;
   invocationDigest?: string;
-  missionSubject?: `mission:${string}`;
+  /**
+   * Receiver build pinned by `version` scope. Ordinary grants deliberately
+   * omit this so definition-stable provider rebuilds do not lapse authority.
+   */
+  providerExecutionDigest?: string;
+  reviewedClosureSubject?: AuthorityGrantSubject;
   envelopeId?: string;
   lineageAtConsent?: readonly string[];
   taskRef?: string;
@@ -264,6 +259,8 @@ export interface AuthorityGrant extends CapabilityScope {
   provenance: string;
   decidedBy?: string;
   decisionSurface?: string;
+  /** Denormalized inventory/invalidation index for userland capabilities. */
+  capabilityDefinitionDigest?: string;
 }
 
 export interface AuthorityLock {
@@ -321,10 +318,18 @@ export interface AuthorizationDecision {
 }
 
 export interface InvocationSnapshot {
-  v: 1;
+  v: 2;
   service: string;
   method: string;
   capability: string;
+  /** `-` for host capabilities. */
+  capabilityDefinitionDigest: string;
+  /** Capability domain for host receivers; declared resource type for userland. */
+  resourceType: string;
+  /** Provider repo path for userland receivers; `-` for host receivers. */
+  provider: string;
+  /** Live provider build digest for userland receivers; `-` for host receivers. */
+  providerExecutionDigest: string;
   /** Additional live target-declaration requirement, composed with the method declaration. */
   targetRequirement?: AuthorityRequirement;
   targetCapability?: string;
@@ -341,7 +346,7 @@ export interface InvocationSnapshot {
   agentScopeEligible?: boolean;
   executionMode?: AgentExecutionMode;
   testPolicyId?: string;
-  mission: `mission:${string}` | "-";
+  reviewedClosureSubject: AuthorityGrantSubject | "-";
   snippetDigest: string;
   codeLineage: { class: CodeLineageFact["class"]; chain: readonly string[] };
   contextLineage: ContextIntegrityFact | null;
@@ -360,7 +365,11 @@ export interface AcquisitionInfo {
   cardType:
     | "permission.gated"
     | "permission.outside"
-    | "confirm.critical";
+    | "confirm.critical"
+    | "template.add"
+    | "template.update"
+    | "template.remove"
+    | "template.suggest";
   renderedAction: string;
   pending: boolean;
   /** The host has minted an exact invocation grant; the receiver may retry
@@ -432,7 +441,11 @@ export interface AuthorityPreflightResult {
     cardType:
       | "permission.gated"
       | "permission.outside"
-      | "confirm.critical";
+      | "confirm.critical"
+      | "template.add"
+      | "template.update"
+      | "template.remove"
+      | "template.suggest";
     renderedAction: string;
   };
 }
@@ -443,11 +456,33 @@ export interface DirectAuthorityAttestation {
   method: string;
   /** Exact sealed receiver effect resolved by the host for this invocation. */
   effect:
-    | { kind: "runtime-intrinsic" }
-    | { kind: "semantic"; capability: string }
-    | { kind: "workspace-service" };
+    | { kind: "open" }
+    | {
+        kind: "userland-capability";
+        capability: string;
+        resource: { kind: "receiver-object" } | { kind: "opaque-handle"; argument: number };
+      }
+    | {
+        kind: "host-capability";
+        capability: string;
+        resource: { kind: "receiver-object" };
+      };
   /** Host-resolved authority identity for this exact receiver invocation. */
   capability: string;
+  capabilityDefinitionDigest: string;
+  resourceType: string;
+  provider: string;
+  providerExecutionDigest: string;
+  /** Host-bound opaque-handle consumption. The provider receives selector, never the handle id. */
+  resourceHandle?: string;
+  resourceSelector?: string;
+  /** Sealed declaration allowing this exact receiver method to mint one handle. */
+  handleProduction?: {
+    capability: string;
+    capabilityDefinitionDigest: string;
+    resourceType: string;
+    provider: string;
+  };
   /** Live target-declaration requirement, composed with the receiver method policy. */
   targetRequirement?: AuthorityRequirement;
   /** Semantic capability naming the live target; distinct from a protected method effect. */
@@ -465,6 +500,38 @@ export interface DirectAuthorityAttestation {
   locks?: readonly AuthorityLock[];
   /** Host-resolved containment, enforced by the receiver before method entry. */
   readOnly?: true;
+}
+
+export interface OpaqueHandlePresentation {
+  title: string;
+  detail?: string;
+}
+
+export interface OpaqueHandlePreparation {
+  __vibestudioOpaqueHandle: 1;
+  selector: string;
+  presentation: OpaqueHandlePresentation;
+}
+
+/** Return from a declared handle-producing RPC method. */
+export function prepareOpaqueHandle(
+  selector: string,
+  presentation: OpaqueHandlePresentation
+): OpaqueHandlePreparation {
+  if (!selector || selector.length > 512) {
+    throw new Error("Opaque resource selector must contain 1-512 characters");
+  }
+  if (!presentation.title || presentation.title.length > 160) {
+    throw new Error("Opaque resource title must contain 1-160 characters");
+  }
+  if (presentation.detail !== undefined && presentation.detail.length > 500) {
+    throw new Error("Opaque resource detail must contain at most 500 characters");
+  }
+  return {
+    __vibestudioOpaqueHandle: 1,
+    selector,
+    presentation: { ...presentation },
+  };
 }
 
 /**

@@ -65,6 +65,13 @@ export type MirrorObjectsResult = z.infer<typeof mirrorObjectsResultSchema>;
 
 export const mirrorMethods = defineServiceMethods({
   targets: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "mirror.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     args: z.tuple([mirrorTargetsArgsSchema]),
     returns: z.array(mirrorTargetSchema),
     description:
@@ -73,6 +80,13 @@ export const mirrorMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   objects: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "mirror.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     args: z.tuple([mirrorObjectsArgsSchema]),
     returns: mirrorObjectsResultSchema,
     description:

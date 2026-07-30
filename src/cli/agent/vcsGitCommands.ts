@@ -153,7 +153,7 @@ function resolveGitRpcClient(): CliRpcClient {
 async function invokeGitInterop<T>(method: string, args: unknown[]): Promise<T> {
   const client = resolveGitRpcClient();
   try {
-    return await client.call<T>(`gitInterop.${method}`, args);
+    return await client.call<T>("extensions.invokeProvider", ["gitInterop", method, args]);
   } finally {
     await client.close().catch(() => undefined);
   }

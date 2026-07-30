@@ -5,8 +5,8 @@
  *
  * Why: panel webContents live in the Electron main process, so their console
  * output and crash events are invisible to the server by default. Workspace
- * agents query unit health through `workspace.units.diagnostics` /
- * `workspace.units.logs`, which read the server-side store — without this
+ * agents query panel health and logs through runtime supervision, which reads
+ * the server-side store — without this
  * bridge, panel failures never show up there.
  *
  * The shell batches records and fires `panelLog.append` best-effort; only

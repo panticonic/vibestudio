@@ -7,17 +7,15 @@ describe("shellApproval service contract", () => {
       shellApprovalMethods.listPending.returns.parse([
         {
           approvalId: "approval-1",
-          callerId: "system:templates",
+          callerId: "extension:shell",
           callerKind: "system",
           repoPath: "meta",
-          effectiveVersion: "template:test",
+          effectiveVersion: "extension:test",
           requestedAt: 0,
-          kind: "userland",
-          subject: { id: "template:test" },
-          title: "Review template",
+          kind: "secret-input",
+          title: "Enter protected input",
           details: [{ label: "Affected parts", value: "projects/example", format: "tree" }],
-          promptOptions: "choices",
-          options: [{ value: "allow", label: "Allow" }],
+          fields: [{ name: "secret", label: "Secret", type: "secret", required: true }],
         },
       ])
     ).toHaveLength(1);

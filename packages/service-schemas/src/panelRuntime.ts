@@ -9,6 +9,7 @@ import type {
   RuntimeLeaseSnapshot,
   RuntimeLeaseVersion,
 } from "@vibestudio/shared/panel/panelLease";
+import { PanelLifecycleResultSchema } from "@vibestudio/shared/panelContracts";
 import { PanelBootObservationSchema } from "@vibestudio/shared/panelContracts";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { SchemaCoversType } from "@vibestudio/shared/schemaTypeGuard";
@@ -106,6 +107,13 @@ export const panelRuntimeLeaseSchema = z
   })
   .strict() satisfies z.ZodType<PanelRuntimeLease, z.ZodTypeDef, unknown>;
 
+export const panelRuntimeSlotObservationSchema = z
+  .object({
+    lease: panelRuntimeLeaseSchema.nullable(),
+    observation: panelHostViewReportSchema.nullable(),
+  })
+  .strict();
+
 export const runtimeLeaseSnapshotSchema = z
   .object({
     version: runtimeLeaseVersionSchema,
@@ -150,6 +158,13 @@ export const panelRuntimeAcquireResultSchema = z.union([
 
 export const panelRuntimeMethods = defineServiceMethods({
   registerClient: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.create",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Register (or refresh) a panel-hosting client session so it can be assigned runtime leases.",
     args: z.tuple([registerClientSchema]),
@@ -157,6 +172,13 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: REGISTER_ACCESS,
   },
   unregisterClient: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Unregister a client session by id, releasing any leases it held and reassigning default CDP hosts as needed.",
     args: z.tuple([z.string().min(1)]),
@@ -164,13 +186,42 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   getSnapshot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description: "Get the current lease snapshot (version + all active panel runtime leases).",
     args: z.tuple([]),
     returns: runtimeLeaseSnapshotSchema,
     authority: USERLAND_READ_POLICY,
     access: READ_ACCESS,
   },
+  observeSlot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale:
+        "Bounded observation of the active presentation lease and its host-reported boot state",
+    },
+    description: "Observe the active runtime lease and latest host report for one panel slot.",
+    args: z.tuple([z.string().min(1)]),
+    returns: panelRuntimeSlotObservationSchema,
+    authority: USERLAND_READ_POLICY,
+    access: READ_ACCESS,
+  },
   acquire: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Acquire the runtime lease for a panel entity. Succeeds for the current holder or an unleased entity; otherwise returns acquired:false with the existing lease.",
     args: z.tuple([z.string(), leaseRequestSchema]),
@@ -178,13 +229,103 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   takeOver: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Forcibly take over a panel entity's runtime lease, revoking and closing any conflicting holder's connection.",
     args: z.tuple([z.string(), leaseRequestSchema]),
     returns: panelRuntimeAcquireResultSchema,
     access: LEASE_ACCESS,
   },
+  handoffSlot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "Idempotently converges a runtime lease onto the entity already committed by the builtin topology owner",
+    },
+    description:
+      "Move an existing slot lease from its previous runtime entity to the exact entity currently committed in workspace topology.",
+    args: z.tuple([z.string(), z.string(), z.string()]),
+    returns: panelRuntimeLeaseSchema.nullable(),
+    authority: { principals: ["host", "user", "code"] },
+    access: LEASE_ACCESS,
+  },
+  ensureSlot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "Assigns a presentation lease only for the exact runtime entity already committed by the builtin topology owner",
+    },
+    description: "Ensure that the current runtime entity for a slot has a presentation host lease.",
+    args: z.tuple([z.string().min(1), z.string().min(1)]),
+    returns: z
+      .object({
+        status: z.enum(["assigned", "already-held", "mobile-held", "unavailable"]),
+        lease: panelRuntimeLeaseSchema.nullable(),
+      })
+      .strict(),
+    authority: { principals: ["host", "user", "code"] },
+    access: LEASE_ACCESS,
+  },
+  unloadSlot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "Releases presentation resources without changing builtin-owned panel topology or product state",
+    },
+    description:
+      "Release the active presentation lease for a panel slot while preserving its runtime entity and topology.",
+    args: z.tuple([panelSlotIdSchema]),
+    returns: PanelLifecycleResultSchema,
+    authority: { principals: ["host", "user", "code"] },
+    access: LEASE_ACCESS,
+  },
+  takeOverSlot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "Transfers presentation to the caller's already-attested host lease without changing panel product state",
+    },
+    description:
+      "Transfer a panel slot's presentation lease to the host currently presenting the calling panel.",
+    args: z.tuple([panelSlotIdSchema]),
+    returns: z
+      .object({
+        panelId: panelSlotIdSchema,
+        status: z.literal("taken_over"),
+        focused: z.literal(true),
+        loaded: z.literal(true),
+        holderLabel: z.string().min(1),
+      })
+      .strict(),
+    authority: { principals: ["code"] },
+    access: LEASE_ACCESS,
+  },
   release: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
     description:
       "Release the lease for a panel entity held by the given connection id. No-op unless the connection matches the current holder.",
     args: z.tuple([z.string(), z.string()]),
@@ -192,6 +333,14 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   reportView: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "P-panels: a lease-owning host reports the current panel boot state; ownership is verified server-side and no authority is widened.",
+    },
     description:
       "Report the current page and boot observation for a leased panel from a host without an inspection transport.",
     args: z.tuple([panelEntityIdSchema, z.string().min(1), panelHostViewReportSchema]),

@@ -1663,8 +1663,8 @@ async function resolveMaterializeRoot(outDir: string): Promise<{ root: string; t
 /**
  * Create (idempotently) and verify a single directory component, refusing to
  * follow through a symlink. Mirrors the ancestor-symlink guard in
- * `gitInteropService.assertWorkspaceCreateTargetSafe`: any pre-existing symlink
- * at a directory component under the materialize root would silently redirect
+ * Git Bridge's checkout-creation guard: any pre-existing symlink at a
+ * directory component under the materialize root would silently redirect
  * writes outside the intended tree, so it is a loud error rather than a
  * follow-through. `lstat` is used deliberately (physical inode at the path, not
  * the symlink's target).

@@ -18,7 +18,7 @@ function setup(input: {
   const session = createTestExecutionSession({ runtimeId: "do:eval:one", agentBinding: null });
   session.eval.authorityManifest = {
     mode: input.mode,
-    effects: "mutable",
+    effects: "read-write",
     approvals: input.approvals,
     requests: input.requests ?? [],
     digest: "a".repeat(64),
@@ -31,10 +31,7 @@ function setup(input: {
     { userId: "one", handle: "one" },
     session
   );
-  const dispatcher = new ServiceDispatcher({
-    tierLookup: () => ({ tier: "gated", session: "family", rationale: "test protected effect" }),
-    capabilityLookup: () => capability,
-  });
+  const dispatcher = new ServiceDispatcher();
   dispatcher.setAuthorityResolver(({ caller: resolvedCaller }) => {
     const resolved = testAuthority(resolvedCaller, capability, resourceKey);
     return { ...resolved, grants: input.granted ? resolved.grants : [] };
@@ -57,6 +54,11 @@ function setup(input: {
       write: {
         args: z.tuple([]),
         capability,
+        tier: {
+          tier: "gated",
+          session: "family",
+          rationale: "Evaluated-run authority test effect",
+        },
         authority: {
           requirement: {
             kind: "capability",

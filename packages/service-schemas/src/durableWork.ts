@@ -47,6 +47,14 @@ export type DurableWorkDriverInspection = z.infer<typeof durableWorkDriverInspec
 
 export const durableWorkMethods = defineServiceMethods({
   inspect: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "durableWork.read",
+      rationale:
+        "Payload-free bounded scheduler health and timing diagnostics; no work content or mutation is exposed",
+    },
     description:
       "Return bounded, payload-free diagnostics for the host durable-work dispatcher, including hint/recovery attribution and recent phase timings.",
     args: z.tuple([]),

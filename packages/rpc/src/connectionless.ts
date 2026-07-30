@@ -2,6 +2,7 @@ export {
   collectExposableMethods,
   createConnectionlessRpcClient,
   rpc,
+  schemaRpc,
   rpcExposedMethodNames,
   rpcMethodAuthority,
   type ConnectionlessRpcClient,

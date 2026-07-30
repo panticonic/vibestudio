@@ -1,7 +1,6 @@
 import ts from "typescript";
 
 const EXTENSION_CONTEXT_FACADES = {
-  approvals: "userlandApproval",
   extensions: "extensions",
   fs: "fs",
   git: "gitInterop",
@@ -22,7 +21,6 @@ const EXTENSION_CONTEXT_DERIVED_METHODS = {
 };
 
 const HOSTED_RUNTIME_FACADES = {
-  approvals: "userlandApproval",
   browserData: "browserData",
   credentials: "credentials",
   extensions: "extensions",
@@ -41,8 +39,6 @@ const HOSTED_RUNTIME_DERIVED_METHODS = {
   "workspace.projects.findForPath": ["workspace.findUnitForPath"],
   "workspace.projects.list": ["workspace.sourceTree"],
   "workspace.switchTo": ["workspace.select"],
-  "workspace.units.status": ["workspace.units.list"],
-  "workspace.units.watch": ["workspace.units.list", "events.subscribe", "events.unsubscribe"],
 };
 
 const CONTEXT_RECEIVER = String.raw`(?:\bctx|\bthis\s*\.\s*ctx)`;
@@ -193,9 +189,7 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
  */
 export function inferTypedWorkspaceEffects(source) {
   const effects = new Set();
-  const methodEffects = new Map([
-    ["removeMember", "channel.members.remove"],
-  ]);
+  const methodEffects = new Map([["removeMember", "channel.members.remove"]]);
   for (const scriptKind of [ts.ScriptKind.TS, ts.ScriptKind.TSX]) {
     const parsed = ts.createSourceFile(
       scriptKind === ts.ScriptKind.TS ? "typed-effects.ts" : "typed-effects.tsx",
@@ -384,9 +378,7 @@ export function inferHostedRuntimeCapabilities(source, hostCapabilities) {
 /**
  * Infer the exact host capabilities reached through the public
  * ExtensionContext facade. The facade deliberately hides transport method
- * names (for example `ctx.approvals.request` calls
- * `userlandApproval.request`), so raw RPC-literal scanning cannot discover
- * these calls.
+ * names, so raw RPC-literal scanning cannot discover these calls.
  *
  * Unknown facade methods are rejected instead of silently producing an
  * incomplete manifest. Adding a new ExtensionContext method therefore makes
@@ -427,11 +419,11 @@ export function inferExtensionContextCapabilities(source, hostCapabilities) {
     },
     {
       pattern: new RegExp(`${CONTEXT_RECEIVER}\\s*\\.\\s*health\\s*\\.`, "g"),
-      serviceMethod: "extensions.health",
+      serviceMethod: "runtime.supervision.reportHealth",
     },
     {
       pattern: new RegExp(`${CONTEXT_RECEIVER}\\s*\\.\\s*log\\s*\\.`, "g"),
-      serviceMethod: "extensions.log",
+      serviceMethod: "runtime.supervision.appendLog",
     },
   ];
   for (const { pattern, serviceMethod } of contextualRuntimeCalls) {

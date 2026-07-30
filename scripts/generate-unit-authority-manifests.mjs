@@ -3,7 +3,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import ts from "typescript";
-import { PRODUCT_WORKSPACE_SERVICES } from "../packages/shared/src/productWorkspaceServices.mjs";
 import {
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
@@ -17,12 +16,6 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = path.join(root, "workspace");
-const methodTiers = loadReviewedMethodTiers(
-  path.join(root, "packages/shared/src/authority/tierTable.ts")
-);
-const methodCapabilities = loadReviewedMethodCapabilities(
-  path.join(root, "packages/shared/src/authority/hostMethodCapabilities.ts")
-);
 const serverMatrix = JSON.parse(
   fs.readFileSync(
     path.join(root, "src/server/services/__serviceAuthorityMatrix.golden.json"),
@@ -39,6 +32,16 @@ for (const [service, entry] of Object.entries(serverMatrix)) {
       service: entry.service,
       methods: { ...entry.methods, ...mainMatrix[service].methods },
     };
+  }
+}
+const methodTiers = new Map();
+const methodCapabilities = new Map();
+for (const [service, entry] of Object.entries(matrix)) {
+  for (const [method, declaration] of Object.entries(entry.methods)) {
+    const qualified = `${service}.${method}`;
+    if (!declaration.tier?.tier) throw new Error(`${qualified} has no schema-owned tier`);
+    methodTiers.set(qualified, declaration.tier.tier);
+    if (declaration.capability) methodCapabilities.set(qualified, declaration.capability);
   }
 }
 const authorityLedger = JSON.parse(
@@ -144,7 +147,9 @@ function normalizeManifestEntry(entry) {
     capability: entry.capability,
     resource: entry.resource,
     tier: reviewedCapabilityTier(entry.capability),
-    evidence: evidenceForResource(entry.resource),
+    evidence: entry.capability.startsWith("userland:")
+      ? "bounded-dynamic"
+      : evidenceForResource(entry.resource),
     ...(Array.isArray(entry.packages) ? { packages: [...new Set(entry.packages)].sort() } : {}),
   };
 }
@@ -152,7 +157,7 @@ const workspaceManifest = YAML.parse(
   fs.readFileSync(path.join(workspaceRoot, "meta/vibestudio.yml"), "utf8")
 );
 const userlandServiceByProtocol = new Map(
-  [...(workspaceManifest.services ?? []), ...PRODUCT_WORKSPACE_SERVICES].flatMap((service) =>
+  [...(workspaceManifest.services ?? [])].flatMap((service) =>
     (service.protocols ?? []).map((protocol) => [protocol, service.name])
   )
 );
@@ -350,6 +355,19 @@ for (const file of packageFiles) {
     packages.set(manifest.name, { file, directory: path.dirname(file), manifest });
   }
 }
+for (const pkg of packages.values()) {
+  const source = path.relative(workspaceRoot, pkg.directory).replaceAll(path.sep, "/");
+  for (const definition of pkg.manifest.vibestudio?.authority?.provides ?? []) {
+    if (typeof definition?.name !== "string" || !["gated", "critical"].includes(definition?.tier)) {
+      continue;
+    }
+    recordCapabilityTier(
+      `userland:${source}/${definition.name}#*`,
+      definition.tier,
+      `${source} authority.provides`
+    );
+  }
+}
 
 const EXECUTABLE_UNIT_ROOTS = new Set(["about", "apps", "extensions", "panels", "workers"]);
 
@@ -521,7 +539,7 @@ function reachablePackageModules(pkg) {
 }
 
 const EFFECT_IMPLEMENTATION_PACKAGES = new Set([
-  "@vibestudio/runtime",
+  "@workspace/runtime",
   "@vibestudio/rpc",
   "@vibestudio/service-schemas",
   "@vibestudio/shared",
@@ -637,13 +655,18 @@ for (const pkg of [...packages.values()].sort((a, b) => a.file.localeCompare(b.f
   if (!isExecutableUnitPackage(pkg)) continue;
   const capabilities = inferCapabilities(pkg);
   const authority = pkg.manifest.vibestudio?.authority;
+  const authorityKeys =
+    authority && typeof authority === "object" && !Array.isArray(authority)
+      ? Object.keys(authority).sort()
+      : [];
   if (
     !authority ||
-    Object.keys(authority).join(",") !== "requests" ||
-    !Array.isArray(authority.requests)
+    authorityKeys.join(",") !== "provides,requests" ||
+    !Array.isArray(authority.requests) ||
+    !Array.isArray(authority.provides)
   ) {
     console.error(
-      `${path.relative(root, pkg.file)} must explicitly contain exactly authority.requests`
+      `${path.relative(root, pkg.file)} must explicitly contain exactly authority.provides and authority.requests`
     );
     invalid = true;
     continue;

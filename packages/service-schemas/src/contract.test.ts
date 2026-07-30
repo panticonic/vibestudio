@@ -10,6 +10,7 @@ import { authMethods } from "./auth.js";
 import { authorityMethods } from "./authority.js";
 import { autofillMethods } from "./autofill.js";
 import { blobstoreMethods } from "./blobstore.js";
+import { browserDataMethods } from "./browserData.js";
 import { browserEnvironmentMethods } from "./browserEnvironment.js";
 import { browserPermissionsMethods } from "./browserPermissions.js";
 import { buildMethods } from "./build.js";
@@ -19,7 +20,9 @@ import { contextIntegrityMethods } from "./contextIntegrity.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { ConnectCredentialSpecSchema, credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
+import { desktopEventsMethods } from "./desktopEvents.js";
 import { developmentMethods } from "./development.js";
+import { developmentNativeMethods } from "./developmentNative.js";
 import { developmentClientExecutorMethods } from "./developmentClientExecutor.js";
 import { attachedHostsMethods } from "./attachedHosts.js";
 import { durableWorkMethods } from "./durableWork.js";
@@ -33,34 +36,35 @@ import { hubControlMethods } from "./hubControl.js";
 import { serverLogMethods } from "./serverLog.js";
 import { menuMethods } from "./menu.js";
 import { mirrorMethods } from "./mirror.js";
-import { missionMethods } from "./mission.js";
+import { missionsMethods } from "./missions.js";
 import { notificationMethods } from "./notification.js";
-import { onboardingStatusMethods } from "./onboardingStatus.js";
-import { paletteMethods } from "./palette.js";
 import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
-import { panelTreeMethods } from "./panelTree.js";
 import { pushMethods, PushRegisterRequestSchema } from "./push.js";
 import { permissionsMethods } from "./permissions.js";
 import { phoneProvisioningMethods } from "./phoneProvisioning.js";
+import { connectedClientTransportMethods } from "./connectedClientTransport.js";
 import { remoteCredMethods } from "./remoteCred.js";
+import { reviewedClosureMethods } from "./reviewedClosure.js";
 import { runtimeMethods } from "./runtime.js";
 import { evalMethods } from "./eval.js";
+import { evalEngineMethods } from "./evalEngine.js";
 import { evalEventIngressMethods } from "./evalEventIngress.js";
 import { evalExecutionRootsMethods } from "./evalExecutionRoots.js";
-import { settingsMethods } from "./settings.js";
 import { shellApprovalMethods } from "./shellApproval.js";
 import { shellPresenceMethods } from "./shellPresence.js";
-import { systemAgentMethods } from "./systemAgent.js";
 import { templatesMethods } from "./templates.js";
 import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
 import { webhookIngressMethods } from "./webhookIngress.js";
+import { webhookEngineMethods } from "./webhookEngine.js";
 import { workerLogMethods } from "./workerLog.js";
 import { workspaceMethods } from "./workspace.js";
 import { workspacePresenceMethods } from "./workspacePresence.js";
+import { gadWireMethods } from "./workspaceSource.js";
 import { workspaceStateMethods } from "./workspaceState.js";
+import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
 
 type ServiceTable = {
   service: string;
@@ -76,6 +80,7 @@ const serviceTables: ServiceTable[] = [
   { service: "authority", file: "authority.ts", methods: authorityMethods },
   { service: "autofill", file: "autofill.ts", methods: autofillMethods },
   { service: "blobstore", file: "blobstore.ts", methods: blobstoreMethods },
+  { service: "browserData", file: "browserData.ts", methods: browserDataMethods },
   {
     service: "browserEnvironment",
     file: "browserEnvironment.ts",
@@ -97,7 +102,13 @@ const serviceTables: ServiceTable[] = [
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
   { service: "docs", file: "docs.ts", methods: docsMethods },
+  { service: "desktopEvents", file: "desktopEvents.ts", methods: desktopEventsMethods },
   { service: "development", file: "development.ts", methods: developmentMethods },
+  {
+    service: "developmentNative",
+    file: "developmentNative.ts",
+    methods: developmentNativeMethods,
+  },
   {
     service: "developmentClientExecutor",
     file: "developmentClientExecutor.ts",
@@ -114,24 +125,32 @@ const serviceTables: ServiceTable[] = [
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
-  { service: "mission", file: "mission.ts", methods: missionMethods },
+  { service: "missions", file: "missions.ts", methods: missionsMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
-  { service: "onboardingStatus", file: "onboardingStatus.ts", methods: onboardingStatusMethods },
-  { service: "palette", file: "palette.ts", methods: paletteMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },
-  { service: "panelTree", file: "panelTree.ts", methods: panelTreeMethods },
   { service: "permissions", file: "permissions.ts", methods: permissionsMethods },
   {
     service: "phoneProvisioning",
     file: "phoneProvisioning.ts",
     methods: phoneProvisioningMethods,
   },
+  {
+    service: "connectedClientTransport",
+    file: "connectedClientTransport.ts",
+    methods: connectedClientTransportMethods,
+  },
   { service: "push", file: "push.ts", methods: pushMethods },
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },
+  {
+    service: "reviewedClosure",
+    file: "reviewedClosure.ts",
+    methods: reviewedClosureMethods,
+  },
   { service: "runtime", file: "runtime.ts", methods: runtimeMethods },
   { service: "eval", file: "eval.ts", methods: evalMethods },
+  { service: "evalEngine", file: "evalEngine.ts", methods: evalEngineMethods },
   {
     service: "evalEventIngress",
     file: "evalEventIngress.ts",
@@ -142,22 +161,27 @@ const serviceTables: ServiceTable[] = [
     file: "evalExecutionRoots.ts",
     methods: evalExecutionRootsMethods,
   },
-  { service: "settings", file: "settings.ts", methods: settingsMethods },
   { service: "shellApproval", file: "shellApproval.ts", methods: shellApprovalMethods },
   { service: "shellPresence", file: "shellPresence.ts", methods: shellPresenceMethods },
-  { service: "systemAgent", file: "systemAgent.ts", methods: systemAgentMethods },
   { service: "templates", file: "templates.ts", methods: templatesMethods },
   { service: "vcs", file: "vcs.ts", methods: vcsMethods },
   { service: "view", file: "view.ts", methods: viewMethods },
+  { service: "webhookEngine", file: "webhookEngine.ts", methods: webhookEngineMethods },
   { service: "webhookIngress", file: "webhookIngress.ts", methods: webhookIngressMethods },
   { service: "workerLog", file: "workerLog.ts", methods: workerLogMethods },
   { service: "workspace", file: "workspace.ts", methods: workspaceMethods },
+  { service: "workspaceSource", file: "workspaceSource.ts", methods: gadWireMethods },
   {
     service: "workspacePresence",
     file: "workspacePresence.ts",
     methods: workspacePresenceMethods,
   },
   { service: "workspace-state", file: "workspaceState.ts", methods: workspaceStateMethods },
+  {
+    service: "workspaceStateEngine",
+    file: "workspaceStateEngine.ts",
+    methods: workspaceStateEngineMethods,
+  },
 ];
 
 const approvedReturnlessMethods = new Set([
@@ -168,6 +192,7 @@ const approvedReturnlessMethods = new Set([
   // A watch is likewise a live Response resource. Its NDJSON records have a
   // structural codec; the Response itself is owned and validated by RPC.
   "events.watch",
+  "desktopEvents.watch",
 ]);
 
 const approvedWeakReturnRoots = new Set<string>();
@@ -347,7 +372,12 @@ describe("service schema contracts", () => {
   it("covers every service schema file in this directory", () => {
     const schemaDir = dirname(fileURLToPath(import.meta.url));
     const schemaFiles = readdirSync(schemaDir)
-      .filter((file) => file.endsWith(".ts") && !file.endsWith(".test.ts"))
+      .filter(
+        (file) =>
+          file.endsWith(".ts") &&
+          !file.endsWith(".test.ts") &&
+          file !== "productBuiltinServices.ts"
+      )
       .sort();
 
     expect(serviceTables.map((table) => table.file).sort()).toEqual(schemaFiles);

@@ -48,27 +48,16 @@ export interface ModelConfig {
   stopSequences?: string[];
 }
 
-/**
- * Model role value - either a simple string "provider:model" or full config object
- */
+/** Model role value used by the model-selection resolver. */
 export type ModelRoleValue = string | ModelConfig;
 
-/**
- * Model role configuration.
- * The four standard roles (smart, coding, fast, cheap) have fallback behavior:
- * - smart <-> coding (bidirectional fallback)
- * - fast <-> cheap (bidirectional fallback)
- *
- * Values can be:
- * - A simple string like "anthropic:claude-sonnet-4-20250514"
- * - A full config object with provider, model, and optional parameters
- */
+/** Named model roles with the standard smart/coding and fast/cheap fallbacks. */
 export interface ModelRoleConfig {
   smart?: ModelRoleValue;
   coding?: ModelRoleValue;
   fast?: ModelRoleValue;
   cheap?: ModelRoleValue;
-  [key: string]: ModelRoleValue | undefined; // Allow custom roles
+  [key: string]: ModelRoleValue | undefined;
 }
 
 /**
@@ -88,8 +77,6 @@ export interface CacheConfig {
  * This is shared across all workspaces.
  */
 export interface CentralConfig {
-  /** Model role mappings (e.g., smart -> anthropic:claude-sonnet-4-20250514) */
-  models?: ModelRoleConfig;
   /** Build cache configuration */
   cache?: CacheConfig;
 }
@@ -415,7 +402,7 @@ export interface WorkspaceProvidersDecl {
   evalEngine?: WorkspaceUnitProviderDecl;
   /**
    * The portable runtime package backing the eval sandbox's
-   * `@vibestudio/runtime` surface. Contract: the unit MUST expose `./hosted`,
+   * `@workspace/runtime` surface. Contract: the unit MUST expose `./hosted`,
    * `./panel-runtime`, and `./portable` package-export subpaths (the hosted
    * runtime factories, panel-runtime factories, and portable helpers).
    */

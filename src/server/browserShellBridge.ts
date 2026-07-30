@@ -1,5 +1,6 @@
 import { createRpcClient, type RpcEnvelope } from "@vibestudio/rpc";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
+import { PanelShellClient } from "@vibestudio/service-schemas/clients/panelShellClient";
 import { createWsTransport } from "../preload/wsTransport.js";
 
 export type PanelInitPayload = {
@@ -23,7 +24,6 @@ export type ShellEnvelopeBridge = {
   addEventListener?: (handler: (event: string, payload: unknown) => void) => number;
   removeEventListener?: (id: number) => void;
   getPanelInit?: () => Promise<PanelInitPayload>;
-  getBootstrapConfig?: () => Promise<PanelInitPayload>;
   getInfo?: () => Promise<unknown>;
   focusPanel?: (panelId: string) => Promise<unknown>;
   openDevtools?: () => Promise<never>;
@@ -81,6 +81,7 @@ export function installFallbackShellBridge(
     reconnect: false,
   });
   const rpc = createRpcClient({ selfId: entityId, callerKind: "panel", transport });
+  const panelShell = new PanelShellClient(rpc);
   const eventListeners = new Map<number, (event: string, payload: unknown) => void>();
   let nextListenerId = 1;
   transport.onMessage((envelope) => {
@@ -115,9 +116,8 @@ export function installFallbackShellBridge(
       eventListeners.delete(id);
     },
     getPanelInit: async () => panelInit,
-    getBootstrapConfig: async () => panelInit,
-    getInfo: () => rpc.call("main", "panelTree.metadata", [slotId]),
-    focusPanel: (panelId) => rpc.call("main", "panelTree.focus", [panelId]),
+    getInfo: () => panelShell.getPanelDetail(slotId),
+    focusPanel: (panelId) => panelShell.focusPanel(panelId),
     openDevtools: () => Promise.reject(new Error("openDevtools is not supported on headless host")),
     openFolderDialog: async () => null,
   };

@@ -36,7 +36,7 @@ describe("buildUnit app builds", () => {
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
-      semanticStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
+      executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });
     clearBuildProvidersForTests();
   });
@@ -57,6 +57,7 @@ describe("buildUnit app builds", () => {
         private: true,
         vibestudio: {
           authority: {
+            provides: [],
             requests: [
               {
                 capability: "app.getInfo",
@@ -134,6 +135,7 @@ describe("buildUnit app builds", () => {
     expect(primary?.content).not.toContain("sourceMappingURL=data:");
     expect(result.buildKey).toBe(result.metadata.buildKey);
     expect(result.metadata.authority).toEqual({
+      provides: [],
       requests: [
         {
           capability: "app.getInfo",
@@ -343,7 +345,7 @@ describe("buildUnit app builds", () => {
     fs.writeFileSync(
       path.join(runtimeDir, "package.json"),
       JSON.stringify({
-        name: "@vibestudio/runtime",
+        name: "@workspace/runtime",
         version: "0.1.0",
         private: true,
         type: "module",
@@ -377,7 +379,7 @@ describe("buildUnit app builds", () => {
           entry: "index.ts",
         },
         dependencies: {
-          "@vibestudio/runtime": "workspace:*",
+          "@workspace/runtime": "workspace:*",
         },
       })
     );

@@ -4,7 +4,7 @@
  * `createRpcClient` core over the envelope-native `httpClientTransport`.
  *
  * There is intentionally ONE builder so the two DurableObjectBase codebases
- * (`@vibestudio/durable` and `@vibestudio/runtime`) cannot drift their RPC wiring
+ * (`@vibestudio/durable` and `@workspace/runtime`) cannot drift their RPC wiring
  * again. The base feeds inbound POSTs to `respond`/`deliver` and dispatches via
  * the core's `handleEnvelope` (method calls flow through `rpc.exposeAll(...)`).
  */
@@ -51,9 +51,18 @@ type RpcExposedCtor = {
 };
 
 export type RpcAuthorityEffect =
-  | { kind: "runtime-intrinsic" }
-  | { kind: "semantic"; capability: string }
-  | { kind: "workspace-service" };
+  | { kind: "open" }
+  | {
+      kind: "userland-capability";
+      /** Unit-local name resolved against sealed `authority.provides`. */
+      capability: string;
+      resource: { kind: "receiver-object" } | { kind: "opaque-handle"; argument: number };
+    }
+  | {
+      kind: "host-capability";
+      capability: string;
+      resource: { kind: "receiver-object" };
+    };
 
 /** Complete, compositional authority admitted to one direct RPC method. */
 export type RpcAuthorityPolicy = (
@@ -68,6 +77,12 @@ export type RpcAuthorityPolicy = (
   sensitivity: "read" | "write" | "admin" | "destructive";
   /** Authorization identity at the receiver boundary; never inferred from the wire method. */
   effect: RpcAuthorityEffect;
+  /**
+   * Declares that a successful return value prepares one host-sealed resource
+   * handle for this provider object. The capability is unit-local and is
+   * resolved and sealed by the workspace build catalog.
+   */
+  produces?: { kind: "opaque-handle"; capability: string };
   /** Existing code declarations admit eval sessions unless explicitly code-only. */
   codeOnly?: boolean;
 };
@@ -87,14 +102,29 @@ type RpcMethodDecorator = <This, Args extends unknown[], Return>(
 ) => void;
 
 function registerRpc(target: object, name: string, authority: RpcAuthorityPolicy): void {
-  if (authority.effect.kind === "runtime-intrinsic" && authority.tier !== "open") {
-    throw new Error(`@rpc ${name}: runtime-intrinsic effects must be open`);
+  if (authority.effect.kind === "open" && authority.tier !== "open") {
+    throw new Error(`@rpc ${name}: open effects must have open tier`);
   }
   if (
-    authority.effect.kind === "semantic" &&
+    authority.effect.kind !== "open" &&
     (!authority.effect.capability || authority.effect.capability.startsWith("rpc:"))
   ) {
-    throw new Error(`@rpc ${name}: semantic effect must name a non-transport capability`);
+    throw new Error(`@rpc ${name}: protected effect must name a non-transport capability`);
+  }
+  if (
+    authority.effect.kind === "userland-capability" &&
+    authority.effect.resource.kind === "opaque-handle" &&
+    (!Number.isSafeInteger(authority.effect.resource.argument) ||
+      authority.effect.resource.argument < 0)
+  ) {
+    throw new Error(`@rpc ${name}: opaque handle argument must be a non-negative integer`);
+  }
+  if (
+    authority.produces &&
+    (!authority.produces.capability ||
+      authority.produces.capability.startsWith("rpc:"))
+  ) {
+    throw new Error(`@rpc ${name}: opaque handle producer must name a local capability`);
   }
   const ctor = (target as { constructor: RpcExposedCtor }).constructor;
   (ctor[RPC_EXPOSED_METHODS] ??= new Set<string>()).add(name);
@@ -107,6 +137,16 @@ function applyRpc(context: ClassMethodDecoratorContext, authority: RpcAuthorityP
   }
   context.addInitializer(function (this: unknown) {
     registerRpc(this as object, String(context.name), authority);
+  });
+}
+
+function applySchemaRpc(context: ClassMethodDecoratorContext): void {
+  if (context.kind !== "method") {
+    throw new Error(`@schemaRpc may only decorate methods (got ${context.kind})`);
+  }
+  context.addInitializer(function (this: unknown) {
+    const ctor = ((this as object) as { constructor: RpcExposedCtor }).constructor;
+    (ctor[RPC_EXPOSED_METHODS] ??= new Set<string>()).add(String(context.name));
   });
 }
 
@@ -124,6 +164,15 @@ function applyRpc(context: ClassMethodDecoratorContext, authority: RpcAuthorityP
 export function rpc(authority: RpcAuthorityPolicy): RpcMethodDecorator;
 export function rpc(authority: RpcAuthorityPolicy): RpcMethodDecorator {
   return (_value, context) => applyRpc(context as ClassMethodDecoratorContext, authority);
+}
+
+/**
+ * Expose a method whose complete receiver policy lives in the class's typed
+ * `rpcMethods` schema. The Durable Object base rejects the method if that
+ * schema is absent or incomplete.
+ */
+export function schemaRpc(): RpcMethodDecorator {
+  return (_value, context) => applySchemaRpc(context as ClassMethodDecoratorContext);
 }
 
 /** The set of `@rpc`-exposed method names for an instance's concrete class (own + inherited). */
@@ -145,6 +194,7 @@ export function rpcMethodAuthority(
   }
   return policy as ResolvedRpcAuthority;
 }
+
 const EMPTY_SET: ReadonlySet<string> = new Set<string>();
 
 /**

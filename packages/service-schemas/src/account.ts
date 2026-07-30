@@ -67,6 +67,14 @@ export type AccountProfileUpdate = z.infer<typeof accountProfileUpdateSchema>;
 
 export const accountMethods = defineServiceMethods({
   getProfile: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "account.read",
+      rationale:
+        "P-discovery: ordinary workspace participant rendering; principal and workspace admission still apply",
+    },
     description:
       "Resolve one account's live profile (defaults to the caller's own subject). Returns null for an unknown userId.",
     args: z.tuple([z.string().optional()]),
@@ -75,6 +83,14 @@ export const accountMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   resolveProfiles: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "account.read",
+      rationale:
+        "P-discovery: ordinary workspace participant rendering; principal and workspace admission still apply",
+    },
     description:
       "Batch-resolve userIds to live profiles for rendering user participants. Unknown ids are absent from the result.",
     args: z.tuple([z.array(z.string())]),
@@ -83,6 +99,14 @@ export const accountMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   isMember: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "account.control",
+      rationale:
+        "P-discovery: ordinary workspace membership rendering; principal and workspace admission still apply",
+    },
     description:
       "Return whether a user belongs to this child server's bound workspace. The workspace is host-bound, never caller-selected.",
     args: z.tuple([z.string().min(1)]),
@@ -91,6 +115,14 @@ export const accountMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   listWorkspaceMembers: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "account.read",
+      rationale:
+        "P-discovery: ordinary workspace participant rendering; principal and workspace admission still apply",
+    },
     description:
       "List live account profiles for this child server's bound workspace, including implicit root membership.",
     args: z.tuple([]),

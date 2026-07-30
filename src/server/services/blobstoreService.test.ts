@@ -16,7 +16,6 @@ import {
   type WorktreeHashFile,
 } from "@vibestudio/content-addressing";
 import { treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
-import { dedupeBlobNamespaceSync } from "../storage/blobCas.js";
 import {
   blobPath,
   collectExactTreeListing,
@@ -269,25 +268,6 @@ describe("blobstoreService", () => {
       if (previousGlobalCas === undefined) delete process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"];
       else process.env["VIBESTUDIO_GLOBAL_BLOB_CAS_DIR"] = previousGlobalCas;
     }
-  });
-
-  it("migrates independent workspace blob namespaces into the global CAS", async () => {
-    const namespaceA = path.join(rootDir, "namespace-a");
-    const namespaceB = path.join(rootDir, "namespace-b");
-    const globalCas = path.join(rootDir, "global-cas");
-    const bytes = Buffer.from("legacy duplicate blob", "utf8");
-    const storedA = await putBytes(namespaceA, bytes);
-    const storedB = await putBytes(namespaceB, bytes);
-    const pathA = blobPath(namespaceA, storedA.digest);
-    const pathB = blobPath(namespaceB, storedB.digest);
-    expect((await fsp.stat(pathA)).ino).not.toBe((await fsp.stat(pathB)).ino);
-
-    const first = dedupeBlobNamespaceSync(namespaceA, globalCas);
-    const second = dedupeBlobNamespaceSync(namespaceB, globalCas);
-
-    expect(first.alreadyShared).toBe(1);
-    expect(second.linked).toBe(1);
-    expect((await fsp.stat(pathA)).ino).toBe((await fsp.stat(pathB)).ino);
   });
 
   it("returns 404 for unknown digests and 400 for malformed digests", async () => {

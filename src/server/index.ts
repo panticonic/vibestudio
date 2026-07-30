@@ -35,7 +35,6 @@ import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { stateLayout } from "./stateLayout.js";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
-import { createGitInteropProviderInvoker } from "./gitInteropProviderInvoker.js";
 import { retireRoutedReach } from "./routedReachRetirement.js";
 import { createWorkspaceChildHubPort } from "./workspaceChildHubPort.js";
 import { declaredWorkspaceServiceActivationInput } from "./runtimeExecutionIdentity.js";
@@ -74,16 +73,6 @@ type HeartbeatControlSelector =
       channelId?: string;
       participantHandle?: string;
     };
-
-function readHostExecutionDigest(repoRoot: string): string {
-  const record = JSON.parse(
-    fs.readFileSync(path.join(repoRoot, "dist", "host-build-fingerprint.json"), "utf8")
-  ) as { version?: unknown; fingerprint?: unknown };
-  if (record.version !== 1 || !/^[0-9a-f]{64}$/u.test(String(record.fingerprint ?? ""))) {
-    throw new Error("The trusted host build fingerprint is missing or invalid");
-  }
-  return String(record.fingerprint);
-}
 
 function resolveHeartbeatRegistryRow(
   rows: HeartbeatRegistryControlRow[],
@@ -491,20 +480,44 @@ async function main() {
   const developmentRunRootProvider = new DelegatingExecutionRootProvider("development-run");
   const { createCapabilityPresentationResolver, summarizeAuthorityRequests } =
     await import("@vibestudio/shared/authorityPresentation");
-  const { PRODUCT_WORKSPACE_SERVICES } =
-    await import("@vibestudio/shared/productWorkspaceServices.mjs");
-  const describeCapability = createCapabilityPresentationResolver(() => [
-    ...(workspaceConfig.services ?? []),
-    ...PRODUCT_WORKSPACE_SERVICES,
-  ]);
+  const { PRODUCT_BUILTIN_CATALOG } =
+    await import("@vibestudio/shared/productBuiltinCatalog.generated");
+  const { discoverPackageGraph: discoverAuthorityPackageGraph } =
+    await import("./buildV2/packageGraph.js");
+  const describeCapability = createCapabilityPresentationResolver(
+    () => [
+      ...PRODUCT_BUILTIN_CATALOG.flatMap((entry) =>
+        entry.kind === "service"
+          ? [
+              {
+                name: entry.name,
+                title: entry.title,
+                action: entry.action,
+                description: entry.description,
+                presentation: entry.presentation,
+                source: "vibestudio/internal",
+              },
+            ]
+          : []
+      ),
+      ...(workspaceConfig.services ?? []),
+    ],
+    () =>
+      discoverAuthorityPackageGraph(workspacePath)
+        .allNodes()
+        .flatMap((node) =>
+          (node.manifest.authority?.provides ?? []).map((definition) => ({
+            provider: node.relativePath,
+            definition,
+          }))
+        )
+  );
 
   // Parse workspace declarations (singletonObjects + services + routes).
   // Validation (every DO-backed service/route has a matching singleton row)
   // runs eagerly here — bad workspaces fail fast at startup with a clear msg.
   const { buildWorkspaceDeclarations } = await import("@vibestudio/workspace/singletonRegistry");
-  const workspaceDecls = buildWorkspaceDeclarations(workspaceConfig);
   const { resolveWorkspaceService } = await import("./workspaceServices.js");
-  const { SEMANTIC_CONTROL_PLANE } = await import("./internalDOs/controlPlane.js");
   const {
     resolveWorkspaceTrustGrants,
     resolveHostTargetDecl,
@@ -704,9 +717,9 @@ async function main() {
       callerId ===
       canonicalEntityId({
         kind: "do",
-        source: SEMANTIC_CONTROL_PLANE.source,
-        className: SEMANTIC_CONTROL_PLANE.className,
-        key: SEMANTIC_CONTROL_PLANE.objectKey,
+        source: semanticWorkspaceService.source,
+        className: semanticWorkspaceService.className,
+        key: semanticWorkspaceService.objectKey,
       })
     );
   };
@@ -764,6 +777,8 @@ async function main() {
   const credentialUseGrantStore = new CredentialUseGrantStore({ statePath });
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
   const capabilityGrantStore = new CapabilityGrantStore({ statePath });
+  const { UserlandResourceHandleStore } = await import("./services/userlandResourceHandleStore.js");
+  const userlandResourceHandles = new UserlandResourceHandleStore({ statePath });
   const { AgentExecutionSessionRegistry } =
     await import("./services/agentExecutionSessionRegistry.js");
   const agentExecutionSessions = new AgentExecutionSessionRegistry();
@@ -780,15 +795,15 @@ async function main() {
   const conduitBlessingStore = new ConduitBlessingStore({ statePath });
   const {
     authorizeVerifiedCaller,
-    callerMatchesMissionHarness,
+    callerMatchesReviewedClosureHarness,
     isAttestedSystemTestHarness,
     isBlessedSystemTestConduit,
   } = await import("./services/authorityRuntime.js");
-  const { MissionRegistry } = await import("./services/missionRegistry.js");
-  const missionRegistry = new MissionRegistry({
+  const { ReviewedClosureRegistry } = await import("./services/reviewedClosureRegistry.js");
+  const reviewedClosureRegistry = new ReviewedClosureRegistry({
     statePath,
     grantStore: capabilityGrantStore,
-    isConduitBlessed: (identity) =>
+    isHarnessBlessed: (identity) =>
       conduitBlessingStore.isBlessed({
         repoPath: identity.unit,
         effectiveVersion: identity.ev,
@@ -803,17 +818,17 @@ async function main() {
     ({ ctx, caller, service, method, capability, resourceKey, tier }) => {
       const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
       const sessionOrigin = caller.executionSession !== undefined;
-      const mission = missionRegistry.factForSession(sessionId);
-      let missionChangeRequired = false;
+      const reviewedClosure = reviewedClosureRegistry.factForSession(sessionId);
+      let reviewedClosureChangeRequired = false;
       try {
-        missionRegistry.assertServiceExposure(sessionId, `${service}.${method}`);
+        reviewedClosureRegistry.assertServiceExposure(sessionId, `${service}.${method}`);
       } catch (error) {
         if (
-          mission &&
+          reviewedClosure &&
           error instanceof Error &&
           (error as NodeJS.ErrnoException).code === "EMISSIONSCOPE"
         ) {
-          missionChangeRequired = true;
+          reviewedClosureChangeRequired = true;
         } else {
           throw error;
         }
@@ -824,7 +839,7 @@ async function main() {
         caller.executionSession &&
         caller.executionSession.harness.principal ===
           `code:${caller.code.repoPath}@${caller.code.executionDigest}` &&
-        (!mission || callerMatchesMissionHarness(caller, mission))
+        (!reviewedClosure || callerMatchesReviewedClosureHarness(caller, reviewedClosure))
       );
       return {
         ...authorizeVerifiedCaller(caller, {
@@ -836,7 +851,7 @@ async function main() {
           capability,
           resourceKey,
           tier,
-          mission,
+          reviewedClosure,
           contextIntegrity:
             sessionOrigin && caller.agentBinding
               ? contextIntegrityStore.effectiveFact({
@@ -848,19 +863,28 @@ async function main() {
           grantCode: caller.codeApproved === true,
           grantStore: capabilityGrantStore,
         }),
-        ...(missionChangeRequired ? { missionChangeRequired: true } : {}),
+        ...(reviewedClosureChangeRequired ? { reviewedClosureChangeRequired: true } : {}),
       };
     }
   );
-  const { DevelopmentSessionStore } = await import("./services/developmentSessionStore.js");
-  const developmentSessionStore = new DevelopmentSessionStore({
-    statePath,
-    publicationPort: executionPublicationJournal,
+  let resolvedDoDispatchForTitles: import("./doDispatch.js").DODispatch | null = null;
+  developmentRunRootProvider.bind({
+    id: "development-run",
+    mandatory: true,
+    async snapshotRoots(epoch) {
+      const doDispatch = resolvedDoDispatchForTitles;
+      if (!doDispatch) throw new Error("Development builtin is not reachable for retention");
+      return (await doDispatch.dispatch(
+        {
+          source: "vibestudio/internal",
+          className: "DevelopmentDO",
+          objectKey: workspaceId,
+        },
+        "snapshotExecutionRoots",
+        { epoch }
+      )) as import("@vibestudio/shared/execution/retention").ExecutionRoot[];
+    },
   });
-  const { SystemTestBuildFaultRegistry } =
-    await import("./services/systemTestBuildFaultRegistry.js");
-  const systemTestBuildFaults = new SystemTestBuildFaultRegistry();
-  developmentRunRootProvider.bind(developmentSessionStore.executionRootProvider());
   // EntityTitleService: source-of-truth for display titles lives in the
   // WorkspaceDO (entities.display_title). The cache here is populated at
   // boot via `hydrate()` and updated on every write. The lazy doDispatch
@@ -870,7 +894,6 @@ async function main() {
   const { createEntityTitleService } = await import("./services/entityTitleService.js");
   const { INTERNAL_DO_SOURCE: ENTITY_TITLE_INTERNAL_DO_SOURCE } =
     await import("./internalDOs/internalDoLoader.js");
-  let resolvedDoDispatchForTitles: import("./doDispatch.js").DODispatch | null = null;
   const entityTitleService = createEntityTitleService({
     getDoDispatch: () => resolvedDoDispatchForTitles,
     workspaceRef: {
@@ -1002,7 +1025,7 @@ async function main() {
     },
     assertMissionNetworkExposure: (caller, targetUrl) => {
       const sessionId = caller.agentBinding?.channelId ?? caller.runtime.id;
-      return missionRegistry.assertNetworkExposure(sessionId, targetUrl.origin);
+      return reviewedClosureRegistry.assertNetworkExposure(sessionId, targetUrl.origin);
     },
   });
   let panelRuntimeCoordinatorForCleanup:
@@ -1020,6 +1043,8 @@ async function main() {
       tokenManager,
       connectionGrants,
       entityTitleService,
+      resourceHandles: userlandResourceHandles,
+      workspaceId,
       getFsService: () => {
         try {
           return container.get<import("@vibestudio/shared/fsService").FsService>("fsService");
@@ -1096,107 +1121,6 @@ async function main() {
       (host): host is TrustedUnitHostInstance => host !== null
     );
   let startupWorkspaceUnitReconcile: Promise<void> | null = null;
-  let startupNonCriticalUnitReconcile: Promise<void> = Promise.resolve();
-  let releaseRuntimeUnitApprovalStaged!: () => void;
-  let runtimeUnitApprovalStagedReleased = false;
-  const runtimeUnitApprovalStaged = new Promise<void>((resolve) => {
-    releaseRuntimeUnitApprovalStaged = resolve;
-  });
-  const finishRuntimeUnitApprovalStaging = (): void => {
-    if (runtimeUnitApprovalStagedReleased) return;
-    runtimeUnitApprovalStagedReleased = true;
-    releaseRuntimeUnitApprovalStaged();
-  };
-  let releaseStartupLaunchWindow!: () => void;
-  let startupLaunchWindowReleased = false;
-  let startupLaunchRequested = false;
-  let startupLaunchFallbackTimer: NodeJS.Timeout | null = null;
-  const startupLaunchWindowComplete = new Promise<void>((resolve) => {
-    releaseStartupLaunchWindow = resolve;
-  });
-  const finishStartupLaunchWindow = (reason: string): void => {
-    if (startupLaunchWindowReleased) return;
-    startupLaunchWindowReleased = true;
-    if (startupLaunchFallbackTimer) clearTimeout(startupLaunchFallbackTimer);
-    console.info(`[StartupCriticalPath] Interactive launch window complete: ${reason}`);
-    releaseStartupLaunchWindow();
-  };
-  const armStartupLaunchFallback = (): void => {
-    if (startupLaunchRequested || startupLaunchWindowReleased || startupLaunchFallbackTimer) return;
-    startupLaunchFallbackTimer = setTimeout(
-      () => finishStartupLaunchWindow("no host target requested within 10000ms"),
-      10000
-    );
-    startupLaunchFallbackTimer.unref();
-  };
-  let releaseStartupBackgroundWork!: () => void;
-  const startupBackgroundWorkComplete = new Promise<void>((resolve) => {
-    releaseStartupBackgroundWork = resolve;
-  });
-  const { HostTargetLaunchCoordinator } = await import("./hostTargetLaunchCoordinator.js");
-  // Launch/session state only needs declared units to be CLASSIFIED (pending
-  // entries upserted, approval batches staged with the coordinator) — waiting
-  // for the whole startup reconcile made the launch gate sit behind every unit
-  // build. Race against the reconcile promise so a pass that fails before
-  // staging still releases the gate (with its error surfaced by resolveLaunch).
-  const startupUnitDeclarationsStaged = (): Promise<void> => {
-    if (!startupWorkspaceUnitReconcile) return Promise.resolve();
-    const staged = Promise.all([
-      ...trustedUnitHosts().map((host) => host.whenDeclarationsStaged()),
-      runtimeUnitApprovalStaged,
-    ]).then(() => {});
-    return Promise.race([staged, startupWorkspaceUnitReconcile]);
-  };
-  const startupHostTargetPreparations = new Map<string, Promise<void>>();
-  const prepareStartupHostTarget = async (
-    target: import("@vibestudio/shared/hostTargets").HostTarget
-  ): Promise<void> => {
-    await startupUnitDeclarationsStaged();
-    const required = resolveHostTargetRequiredExtensions(workspaceConfig, target);
-    if (!extensionHostForGateway || required.length === 0) return;
-    const key = `${target}:${required.map((decl) => `${decl.source}@${decl.ref}`).join(",")}`;
-    let preparation = startupHostTargetPreparations.get(key);
-    if (!preparation) {
-      const startedAt = Date.now();
-      preparation = extensionHostForGateway
-        .reconcileDeclared(required, {
-          trigger: "startup",
-          removeUndeclared: false,
-          // Trusted provider dependencies have no approval publication to
-          // await, so their targeted reconcile is the settlement boundary.
-          // Approval-gated dependencies stage here and settle through the
-          // unit-selective publication below.
-          waitFor: "applied",
-        })
-        .then(() => {
-          console.info(
-            `[StartupCriticalPath] ${target} provider dependencies classified in ${Date.now() - startedAt}ms (${required.map((decl) => decl.source).join(", ")})`
-          );
-        });
-      startupHostTargetPreparations.set(key, preparation);
-      void preparation.catch(() => startupHostTargetPreparations.delete(key));
-    }
-    await preparation;
-  };
-  const hostTargetLaunchCoordinator = new HostTargetLaunchCoordinator({
-    approvalQueue,
-    eventService,
-    startupApprovals: unitApprovalCoordinator,
-    awaitStartupUnitReconcile: startupUnitDeclarationsStaged,
-    prepareHostTarget: prepareStartupHostTarget,
-    getRequiredExtensionSources: (target) =>
-      resolveHostTargetRequiredExtensions(workspaceConfig, target).map((decl) => decl.source),
-    getAppHost: () => appHostForGateway,
-    getTrustedUnitHosts: trustedUnitHosts,
-    onLaunchActivity: (target, phase) => {
-      if (phase === "requested") {
-        startupLaunchRequested = true;
-        if (startupLaunchFallbackTimer) clearTimeout(startupLaunchFallbackTimer);
-        return;
-      }
-      finishStartupLaunchWindow(`${target} launch settled`);
-    },
-  });
   // Protected repository content pointers: the single host publication store.
   // Constructed BEFORE WorkspaceVcs (which routes every protected read/advance
   // through it); the approval gate is late-bound below once the main-advance
@@ -1251,6 +1175,7 @@ async function main() {
   const rootTemplateBootstrap = new WorkspaceRootTemplateBootstrap({
     workspaceId,
     statePath,
+    sourcePath: workspacePath,
     acquire: async (pin) => {
       return acquireRootTemplateSnapshot({
         statePath,
@@ -1262,8 +1187,30 @@ async function main() {
       });
     },
   });
-  // Workspace VCS is a host adapter for the product-sealed semantic control
-  // plane. It has no pre-attachment history or mutable workspace binding.
+  await rootTemplateBootstrap.prepareSource();
+  const { parseWorkspaceConfigContentWithId } = await import("@vibestudio/workspace/configParser");
+  const materializedWorkspaceConfig = parseWorkspaceConfigContentWithId(
+    fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf8"),
+    workspaceId
+  );
+  replaceWorkspaceConfig(workspaceConfig, materializedWorkspaceConfig);
+  const workspaceDecls = buildWorkspaceDeclarations(workspaceConfig);
+  const resolvedWorkspaceSource = resolveWorkspaceService(
+    workspaceDecls,
+    "vibestudio.workspace-source.v1"
+  );
+  if (resolvedWorkspaceSource.kind !== "durable-object") {
+    throw new Error(
+      "Workspace protocol vibestudio.workspace-source.v1 must be Durable Object-backed"
+    );
+  }
+  const semanticWorkspaceService = {
+    source: resolvedWorkspaceSource.source,
+    className: resolvedWorkspaceSource.className,
+    objectKey: resolvedWorkspaceSource.objectKey,
+  };
+  // Workspace VCS is the native effect adapter for the exact manifest-declared
+  // semantic authority worker.
   const { WorkspaceVcs } = await import("./vcsHost/workspaceVcs.js");
   const workspaceVcs = new WorkspaceVcs({
     blobsDir: layout.blobsDir,
@@ -1400,12 +1347,7 @@ async function main() {
                 .then(() => extensionHost.whenReconciled())
             );
           if (trigger === "startup") {
-            console.info(
-              "[StartupCriticalPath] Extension builds deferred until a host target or background reconcile needs them"
-            );
-            armStartupLaunchFallback();
-            startupNonCriticalUnitReconcile = Promise.resolve()
-              .then(() => startupLaunchWindowComplete)
+            void Promise.resolve()
               .then(() => {
                 const backgroundStartedAt = Date.now();
                 return reconcileAll().then(() => {
@@ -1690,25 +1632,22 @@ async function main() {
   const attachedHostController = new AttachedHostController(
     attachedHostParentEndpoint,
     ({ sessionId, developmentRunId, childGenerationId: lostGenerationId }) => {
-      const run = developmentSessionStore.getRun(developmentRunId);
-      if (
-        !run?.attachedHost ||
-        run.attachedHost.sessionId !== sessionId ||
-        run.attachedHost.childGenerationId !== lostGenerationId
-      ) {
-        return;
-      }
-      developmentSessionStore.transitionRun({
-        runId: run.runId,
-        expected: [run.state],
-        state: run.state,
-        attachedHost: {
-          ...run.attachedHost,
-          state: "route-lost",
-          routeLostAt: Date.now(),
+      const doDispatch = resolvedDoDispatchForTitles;
+      if (!doDispatch) return;
+      void doDispatch.dispatch(
+        {
+          source: "vibestudio/internal",
+          className: "DevelopmentDO",
+          objectKey: workspaceId,
         },
-        message: "Attached child approval route was lost; restart the isolated run",
-      });
+        "nativeRunEvent",
+        {
+          kind: "attached-route-lost",
+          runId: developmentRunId,
+          sessionId,
+          childGenerationId: lostGenerationId,
+        }
+      );
     }
   );
 
@@ -1722,42 +1661,25 @@ async function main() {
         capabilityGrantStore.priorInteractiveApprovalCount(input),
       invalidate: (snapshotDigest, ownerRuntimeId, callerPrincipal) =>
         acquisitionCoordinator.invalidate(snapshotDigest, ownerRuntimeId, callerPrincipal),
-      proposeMissionRevision: ({ snapshot, tier, resource }) => {
-        if (snapshot.mission === "-") {
-          throw new Error("Mission revision proposal requires a mission-bound invocation");
+      proposeReviewedClosureRevision: ({ snapshot, tier, resource }) => {
+        if (snapshot.reviewedClosureSubject === "-") {
+          throw new Error("Authority revision proposal requires a reviewed-closure invocation");
         }
-        const mission = missionRegistry.proposePermissionRevision({
-          sessionId: snapshot.sessionId,
-          service: snapshot.service,
-          method: snapshot.method,
-          capability: snapshot.capability,
-          resource,
-          tier,
-        });
-        void import("./services/missionService.js")
-          .then(({ reviewMission }) =>
-            reviewMission(
-              {
-                registry: missionRegistry,
-                approvalQueue,
-                capabilityGrants: capabilityGrantStore,
-                describeCapability,
-                contextIntegrityReady: () => contextIntegrityStore.isCutoverComplete(),
-              },
-              mission,
-              mission.owner.userId,
-              {
-                reviewKind: "out-of-charter",
-                blockedAt: Date.now(),
-                declinedRestriction: {
-                  capability: snapshot.capability,
-                  resourceKey: snapshot.resourceKey,
-                },
-              }
-            )
-          )
+        const source = reviewedClosureRegistry.sourceForSession(snapshot.sessionId);
+        const ref = source ? parseDoTargetId(source.issuer) : null;
+        const dispatcher = resolvedDoDispatchForTitles;
+        if (!source || source.sourceDocument.kind !== "mission" || !ref || !dispatcher) {
+          throw new Error("Reviewed closure has no reachable source-document owner");
+        }
+        void dispatcher
+          .dispatch(ref, "proposeAuthorityRevision", {
+            missionId: source.sourceDocument.id,
+            capability: snapshot.capability,
+            resource,
+            tier,
+          })
           .catch((error) => {
-            console.error("[Mission] Could not publish revision review:", error);
+            console.error("[ReviewedClosure] Could not record revision proposal:", error);
           });
       },
     };
@@ -1827,7 +1749,28 @@ async function main() {
     },
   });
 
-  // Build system
+  const { BootstrapWorkspaceSource } = await import("./buildV2/bootstrapWorkspaceSource.js");
+  const bootstrapWorkspaceSource = new BootstrapWorkspaceSource(workspaceId, workspacePath);
+  container.registerManaged({
+    name: "bootstrapBuildSystem",
+    async start() {
+      return initBuildSystemV2(
+        workspacePath,
+        bootstrapWorkspaceSource,
+        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
+        {
+          appRoot,
+          dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+        }
+      );
+    },
+    async stop(instance: import("./buildV2/index.js").BuildSystemV2 | null) {
+      await instance?.shutdown();
+    },
+  });
+
+  // Steady-state build system, installed only after the workspace source
+  // provider has accepted the exact bootstrap snapshot.
   container.registerManaged({
     name: "buildSystem",
     dependencies: ["semanticWorkspace"],
@@ -1896,29 +1839,6 @@ async function main() {
                       reason: "rollback" as const,
                     })),
                   ]);
-              },
-              resolve: ({ buildKey }) => {
-                const build = buildStoreForPublication.peekLocal(buildKey);
-                return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
-              },
-            }),
-            buildKeyRootProvider({
-              id: "host-target-selection",
-              owner: "host-target-selection",
-              buildKeys() {
-                const appHost = appHostForGateway;
-                if (!appHost) throw new Error("Host-target selections are not available");
-                return appHost.listPersistedHostTargetSelections().flatMap((selection) =>
-                  selection.buildKey
-                    ? [
-                        {
-                          ownerId: selection.target,
-                          buildKey: selection.buildKey,
-                          reason: "pinned" as const,
-                        },
-                      ]
-                    : []
-                );
               },
               resolve: ({ buildKey }) => {
                 const build = buildStoreForPublication.peekLocal(buildKey);
@@ -2082,17 +2002,6 @@ async function main() {
         if (!conduitBlessingStore.isSeededFor(snapshotState)) {
           conduitBlessingStore.seedProductSnapshot(snapshotState, identities);
         }
-        const { loadMissionSeedDefinitions, reconcileSeededMissions } =
-          await import("./services/seededMissions.js");
-        const definitions = loadMissionSeedDefinitions(path.join(appRoot, "seed", "missions"));
-        reconcileSeededMissions({
-          productSnapshotState: snapshotState,
-          definitions,
-          harnessVersions: new Map(
-            identities.map((identity) => [identity.repoPath, identity.effectiveVersion])
-          ),
-          registry: missionRegistry,
-        });
       }
       return buildSystem;
     },
@@ -2159,9 +2068,9 @@ async function main() {
   // ── RPC-only services (replacing serverServiceRegistry.ts) ──
 
   const { createBuildService } = await import("./services/buildService.js");
+  const { listBuildUnitCatalog } = await import("./services/buildUnitCatalog.js");
   const { createPresenceService, createPresenceTracker } =
     await import("./services/presenceService.js");
-  const { createGitInteropService } = await import("./services/gitInteropService.js");
   const { createWorkerService } = await import("./services/workerService.js");
 
   let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
@@ -2175,7 +2084,30 @@ async function main() {
         );
       },
       getServiceDefinition() {
-        return createBuildService({ buildSystem: assertPresent(buildSystemInstance) });
+        const buildSystem = assertPresent(buildSystemInstance);
+        return createBuildService({
+          buildSystem,
+          listUnits: () =>
+            listBuildUnitCatalog({
+              buildSystem,
+              hostedSources: () =>
+                trustedUnitHosts().flatMap((host) =>
+                  host.listWorkspaceUnits().map((row) => ({
+                    name: row.name,
+                    kind: row.kind,
+                    source: row.source,
+                    status: row.status,
+                    activeBundleKey: row.activeBundleKey,
+                    lastError: row.lastError,
+                    pendingApproval: "pendingApproval" in row ? row.pendingApproval : null,
+                  }))
+                ),
+              workerSources: () => workerdManagerForGateway?.listInstances() ?? [],
+              workerError: (source) => workerdManagerForGateway?.getLastWorkerError(source) ?? null,
+              authorityRows: (requests) =>
+                summarizeAuthorityRequests(requests, [], describeCapability).rows,
+            }),
+        });
       },
     });
   }
@@ -2203,9 +2135,8 @@ async function main() {
     );
   }
 
-  // Git interchange semantics live behind the manifest-declared
-  // providers.gitInterop extension. The host keeps only this policy/dispatch
-  // service (approvals, config writes, and provider invocation).
+  // Workspace config publication is a domain-neutral digest-bound protected
+  // write. Git interpretation lives entirely in the manifest-selected bridge.
   const { createWorkspaceConfigMainWriter } = await import("./workspaceConfigWriter.js");
   const workspaceConfigWriter = createWorkspaceConfigMainWriter({
     workspaceId,
@@ -2213,80 +2144,12 @@ async function main() {
   });
   const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void =>
     replaceWorkspaceConfig(workspaceConfig, { ...next, id: workspaceId });
-  const invokeGitInteropProvider = createGitInteropProviderInvoker(() => extensionHostForGateway);
-  const gitInteropDefinition = createGitInteropService({
-    workspaceId,
-    workspacePath,
-    workspaceConfig,
-    resolveCredential: async (input) => {
-      const { resolveCredentialByLabel } = await import("./services/credentialSelection.js");
-      return (
-        (
-          await resolveCredentialByLabel(credentialStore, {
-            label: input.name,
-            url: input.url,
-            use: "git-http",
-          })
-        )?.id ?? null
-      );
-    },
-    invokeGitProvider: invokeGitInteropProvider,
-    requestGitReconciliation: (repoPaths) => {
-      for (const repo of repoPaths) pendingGitUpstreamRepos.add(repo);
-      void flushGitUpstreamRepos();
-    },
-    persistWorkspaceConfigMutation: async (input) => {
-      const result = await workspaceConfigWriter.applyMutation(input);
-      replaceLiveWorkspaceConfig(result.nextConfig);
-      return result;
-    },
-  });
-  container.registerRpc(gitInteropDefinition);
-  const pendingGitUpstreamRepos = new Set<string>();
-  let gitUpstreamFlushRunning = false;
-  const flushGitUpstreamRepos = async (): Promise<void> => {
-    if (gitUpstreamFlushRunning) return;
-    gitUpstreamFlushRunning = true;
-    try {
-      // Ref advances can precede declared-extension reconciliation. Extension
-      // lifecycle notifications below replay this queue when provider state
-      // changes; no timer guesses at readiness.
-      await startupBackgroundWorkComplete;
-      while (pendingGitUpstreamRepos.size > 0) {
-        if (!extensionHostForGateway) {
-          return;
-        }
-        const repos = [...pendingGitUpstreamRepos];
-        pendingGitUpstreamRepos.clear();
-        try {
-          await invokeGitInteropProvider(
-            { caller: createHostCaller("server") },
-            "reconcileUpstreams",
-            [repos.map((repoPath) => ({ repoPath }))]
-          );
-        } catch (err) {
-          const code =
-            typeof err === "object" && err !== null && "code" in err
-              ? (err as { code?: unknown }).code
-              : undefined;
-          if (code === "ENOEXT" || code === "ENOTREADY") {
-            for (const repo of repos) pendingGitUpstreamRepos.add(repo);
-            return;
-          }
-          console.warn("[GitUpstream] forward failed:", err);
-        }
-      }
-    } finally {
-      gitUpstreamFlushRunning = false;
-    }
-  };
   protectedRefStore.onRefsChanged((publication) => {
     const repos = publication.changes
       .filter((change) => change.nextContentRoot !== null)
       .map((change) => change.repoPath);
     if (repos.length === 0) return;
-    for (const repo of repos) pendingGitUpstreamRepos.add(repo);
-    void flushGitUpstreamRepos();
+    eventService.emit("workspace:protected-refs-changed", { repoPaths: [...new Set(repos)] });
   });
   const { createBuildUnitChangeApprovalProvider } =
     await import("./services/buildUnitChangeApprovalProvider.js");
@@ -2321,6 +2184,32 @@ async function main() {
         workspaceVcs.contentProjection.ensureStateMirrored(stateHash),
       workspaceViewWithReposAt: (overrides) =>
         workspaceVcs.repositories.workspaceViewWithReposAt(overrides),
+      validateCandidateWorkspaceState: async (stateHash, changedPaths) => {
+        await loadWorkspaceConfigFromState(stateHash);
+        const buildSystem = assertPresent(buildSystemInstance);
+        const unitNames = await buildSystem.listAffectedBuildUnits(stateHash, changedPaths);
+        const reports = await Promise.all(
+          unitNames.map((unitName) => buildSystem.getBuildReport(unitName, stateHash))
+        );
+        const failures = reports.flatMap((report) =>
+          report.diagnostics
+            .filter((diagnostic) => diagnostic.severity === "error")
+            .map(
+              (diagnostic) =>
+                `${report.repoPath}${diagnostic.line ? `:${diagnostic.line}` : ""}: ${diagnostic.message}`
+            )
+        );
+        if (failures.length > 0) {
+          const { BuildGateFailedError } = await import("./buildV2/diagnostics.js");
+          throw new BuildGateFailedError(
+            reports.flatMap((report) =>
+              report.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
+            ),
+            unitNames,
+            stateHash
+          );
+        }
+      },
       computeDeleteDependents: (repoPath) => workspaceVcs.repositories.deletionDependents(repoPath),
     });
     // Remote context mirrors (plan §6.5): read-side of exact context content
@@ -2483,10 +2372,7 @@ async function main() {
   );
   const { BrowserPermissionGrantProjection, createBrowserPermissionsService } =
     await import("./services/browserPermissionsService.js");
-  const browserPermissionGrantStore = new BrowserPermissionGrantProjection(
-    capabilityGrantStore,
-    statePath
-  );
+  const browserPermissionGrantStore = new BrowserPermissionGrantProjection(capabilityGrantStore);
   container.registerRpc(
     createBrowserPermissionsService({
       approvalQueue,
@@ -2497,24 +2383,6 @@ async function main() {
   );
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
   container.registerRpc(createCorsApprovalService());
-  const { createUserlandApprovalService } = await import("./services/userlandApprovalService.js");
-  container.registerRpc(
-    createUserlandApprovalService({
-      approvalQueue,
-      grantStore: capabilityGrantStore,
-      resolveRuntimeEntity: (id) => getEntityStore().resolveRecord(id),
-      onExternalApprovalExpired: ({ operation }) => {
-        eventService.emit("notification:show", {
-          id: `external-approval-expired-${Date.now()}`,
-          type: "warning",
-          title: "Claude Code request expired",
-          message: `${operation} was denied because no answer was received within 10 minutes.`,
-          ttl: 0,
-        });
-      },
-    })
-  );
-
   // ── Relay backhaul: OAuth callbacks + third-party webhooks ride one
   // authenticated server→relay pipe (the home server has no public endpoint).
   // Inert until start(); returns null when no relay is configured. Created
@@ -2652,16 +2520,8 @@ async function main() {
   }
 
   {
-    const { createMissionService } = await import("./services/missionService.js");
-    container.registerRpc(
-      createMissionService({
-        registry: missionRegistry,
-        approvalQueue,
-        capabilityGrants: capabilityGrantStore,
-        describeCapability,
-        contextIntegrityReady: () => contextIntegrityStore.isCutoverComplete(),
-      })
-    );
+    const { createReviewedClosureService } = await import("./services/reviewedClosureService.js");
+    container.registerRpc(createReviewedClosureService({ registry: reviewedClosureRegistry }));
   }
 
   {
@@ -2808,7 +2668,8 @@ async function main() {
           tokenManager,
           workspaceId,
           executionSessions: agentExecutionSessions,
-          missionFactForSession: (sessionId) => missionRegistry.factForSession(sessionId),
+          reviewedClosureFactForSession: (sessionId) =>
+            reviewedClosureRegistry.factForSession(sessionId),
           isSystemTestHarness: (caller, runId) =>
             runId.startsWith("system-test-runner:") &&
             isBlessedSystemTestConduit(caller, (identity) =>
@@ -2829,7 +2690,7 @@ async function main() {
           eventSinks: evalEventSinks,
           resolveContextSource: async (contextId, sourcePath) => {
             const contentStateHash = await workspaceVcs.resolveContextState(contextId);
-            const sourceState = workspaceVcs.semanticStateForContent(contentStateHash);
+            const sourceState = workspaceVcs.executionStateForContent(contentStateHash);
             if (!sourceState) {
               throw new Error(
                 `eval context ${contextId} has no semantic identity for ${contentStateHash}`
@@ -2886,6 +2747,10 @@ async function main() {
   let heartbeatDeclarationRegistryInstance:
     | import("./services/recurringRegistry.js").HeartbeatDeclarationRegistry
     | null = null;
+  const { UnitSupervisor } = await import("./services/unitSupervisor.js");
+  const unitSupervisor = new UnitSupervisor();
+  let runtimeServiceInternal: import("./services/runtimeService.js").RuntimeServiceInternal | null =
+    null;
 
   {
     const { createWorkspaceStateService } = await import("./services/workspaceStateService.js");
@@ -2909,11 +2774,18 @@ async function main() {
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
+          panelAccess: (
+            await import("./services/createPanelAccessPermissionDeps.js")
+          ).createPanelAccessPermissionDeps({
+            contextBoundary: contextBoundaryDeps,
+            entityCache,
+            getAppHost: () => appHostForGateway,
+          }),
           // The DO already writes display_title in the same transaction as
           // searchable_title (see workspaceDO.panelIndex / panelUpdateTitle),
           // so the callback only needs to mirror into the in-memory cache.
-          onPanelTitleChanged: (entityId, title) => {
-            entityTitleService.mirrorCachedTitle(entityId, title);
+          onPanelTitleChanged: (entityId, title, explicit) => {
+            entityTitleService.mirrorCachedTitle(entityId, title, { explicit });
           },
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
           onHeartbeatRegistryChanged: () => {
@@ -2989,10 +2861,11 @@ async function main() {
             effectiveVersion: build.metadata.ev,
             buildKey: build.buildKey,
             executionDigest,
-            authorityRequests: authority.requests,
+            authority,
           };
         };
         runtimeResult = createRuntimeService({
+          unitSupervisor,
           entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
           onContextCreated: ({ contextId, ownerContextId, inheritedTestPolicy, casePolicy }) => {
@@ -3061,7 +2934,7 @@ async function main() {
                 effectiveVersion: string;
                 buildKey?: string;
                 executionDigest?: string;
-                authorityRequests?: readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[];
+                authority?: import("@vibestudio/shared/authorityManifest").UnitAuthorityManifest;
                 targetId?: string;
               };
               if (spec.kind === "do") {
@@ -3102,7 +2975,7 @@ async function main() {
                     effectiveVersion: build.metadata.ev,
                     buildKey: existingBuildKey,
                     executionDigest: build.metadata.execution?.executionDigest,
-                    authorityRequests: build.metadata.authority?.requests,
+                    authority: build.metadata.authority,
                   };
                 } else {
                   const binding = await buildSystem.bindRuntimeImage(source, ref);
@@ -3110,7 +2983,7 @@ async function main() {
                     effectiveVersion: binding.artifact.sourceState.effectiveVersion,
                     buildKey: binding.artifact.buildKey,
                     executionDigest: binding.artifact.executionDigest,
-                    authorityRequests: binding.authorityRequests,
+                    authority: binding.authority,
                   };
                 }
               } else {
@@ -3131,7 +3004,7 @@ async function main() {
                 buildKey: prepared.buildKey,
                 executionDigest: prepared.executionDigest,
                 authority: parseUnitAuthorityManifest(
-                  { requests: prepared.authorityRequests },
+                  prepared.authority,
                   `${spec.kind} ${targetId} authority`
                 ),
               };
@@ -3233,6 +3106,7 @@ async function main() {
             });
           },
         });
+        runtimeServiceInternal = runtimeResult.internal;
         return runtimeResult;
       },
       getServiceDefinition() {
@@ -3244,239 +3118,7 @@ async function main() {
     });
   }
 
-  // ── development.* exact semantic build lifecycle ──
-  {
-    const { createDevelopmentService } = await import("./services/developmentService.js");
-    const { DevelopmentRecipeRegistry } = await import("./services/developmentRecipes.js");
-    const { DevelopmentExecutor } = await import("./services/developmentExecutor.js");
-    const { IsolatedDevelopmentHostExecutor } =
-      await import("./services/isolatedDevelopmentHostExecutor.js");
-    const { DevelopmentClientExecutorRegistry } =
-      await import("./services/developmentClientExecutorService.js");
-    const { createNativeDevelopmentController } =
-      await import("./services/nativeDevelopmentComposition.js");
-    const { createNativeDevelopmentSemanticAdapter } =
-      await import("./services/nativeDevelopmentSemanticAdapter.js");
-    let developmentDefinition:
-      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
-      | null = null;
-    const isolatedInstanceId = process.env["VIBESTUDIO_INSTANCE"];
-    const isolatedGenerationId = process.env["VIBESTUDIO_DEVELOPMENT_INSTANCE_GENERATION"];
-    const developmentClientExecutors = new DevelopmentClientExecutorRegistry({
-      eventService,
-      ...(process.env["VIBESTUDIO_DEVELOPMENT_PARENT_RUN"] &&
-      isolatedInstanceId &&
-      isolatedGenerationId
-        ? {
-            isolatedHost: {
-              instanceId: isolatedInstanceId,
-              generationId: isolatedGenerationId,
-            },
-          }
-        : {}),
-    });
-    let developmentClientExecutorDefinition:
-      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
-      | null = null;
-    container.registerManaged({
-      name: "developmentClientExecutor",
-      dependencies: [],
-      async start() {
-        developmentClientExecutorDefinition = developmentClientExecutors.definition();
-      },
-      getServiceDefinition() {
-        if (!developmentClientExecutorDefinition) {
-          throw new Error("development client executor service not initialized");
-        }
-        return developmentClientExecutorDefinition;
-      },
-    });
-    container.registerManaged({
-      name: "development",
-      dependencies: ["runtime", "developmentClientExecutor", "attachedHosts"],
-      async start(resolve) {
-        const runtime = assertPresent(
-          resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
-        );
-        const recipes = new DevelopmentRecipeRegistry();
-        const executor = new DevelopmentExecutor({
-          workspaceId,
-          hostExecutionDigest: readHostExecutionDigest(process.cwd()),
-          root: layout.development.runsDir,
-          recipes,
-          planSource: (input) => workspaceVcs.planExactContextRepository(input),
-          materializeSource: (plan, destination) =>
-            workspaceVcs.materializeExactRepositoryPlan(plan, destination),
-          onLog: (runId, stream, line) => {
-            developmentSessionStore.appendRunEvent(runId, "log", { stream, line });
-            serverLogStore.append("info", [`[development:${runId}:${stream}] ${line}`]);
-          },
-        });
-        const isolatedExecutor = new IsolatedDevelopmentHostExecutor({
-          controlRepoRoot: process.cwd(),
-          parentGatewayUrl: getLocalGatewayUrl("attached development host callback"),
-          buildExecutor: executor,
-          onLog: (runId, stream, line) => {
-            developmentSessionStore.appendRunEvent(runId, "log", { stream, line });
-            serverLogStore.append("info", [`[development:${runId}:isolated:${stream}] ${line}`]);
-          },
-          createAttachmentPorts: (input) =>
-            createAttachedHostPublicationPorts({
-              ...input,
-              parentEndpoint: attachedHostParentEndpoint,
-            }),
-        });
-        const nativeExecutorId = `local:${readHostExecutionDigest(process.cwd())}`;
-        const native = await createNativeDevelopmentController({
-          executorId: nativeExecutorId,
-          root: layout.development.nativeSessionsDir,
-          blobsDir: layout.blobsDir,
-          semantic: createNativeDevelopmentSemanticAdapter(workspaceVcs),
-          planSource: ({ developmentContextId, repositoryId }) =>
-            workspaceVcs.planExactContextRepository({
-              contextId: developmentContextId,
-              repositoryId,
-              requiredFiles: [],
-            }),
-          materializeSource: (plan, destination) =>
-            workspaceVcs.materializeExactRepositoryPlan(plan, destination),
-        });
-        developmentDefinition = createDevelopmentService({
-          store: developmentSessionStore,
-          runtime: runtime.internal,
-          eventService,
-          recipes,
-          executor,
-          isolatedExecutor,
-          attachedHostPublisher: attachedHostController,
-          attachedHostParentId: localHostId,
-          attachedHostAuthorityCeiling,
-          clientExecutors: developmentClientExecutors,
-          armSystemTestBuildFailure: (caller, input, phase) => {
-            if (
-              !isAttestedSystemTestHarness(caller, (identity) =>
-                conduitBlessingStore.isBlessed(identity)
-              )
-            ) {
-              throw Object.assign(
-                new Error(
-                  "development.faultFailBuildAfterSnapshotRetained requires an attested system-test harness"
-                ),
-                { code: "EACCES" }
-              );
-            }
-            return systemTestBuildFaults.arm({ ...input, phase });
-          },
-          consumeSystemTestBuildFailure: (run) =>
-            systemTestBuildFaults.consumeAfterSnapshotRetained(run),
-          mintCurrentHostInvite: (input) => workspaceChildHub.mintDeviceInvite(input),
-          resolveClientExecutorRuntime: (ctx) => {
-            for (const caller of [ctx.caller, ctx.authorizingCaller, ctx.transportCaller]) {
-              if (!caller) continue;
-              if (caller.runtime.kind === "shell") return caller.runtime.id;
-              const presentation = panelRuntimeCoordinator.resolvePresentationCallerForRuntime(
-                caller.runtime.id
-              );
-              if (presentation) return presentation;
-            }
-            return null;
-          },
-          native,
-          isStateDescendant: (ancestor, descendant) =>
-            workspaceVcs.isStateDescendant(ancestor, descendant),
-          repositories: {
-            resolveExact: async ({ contextId, repositoryId }) => {
-              const status = await workspaceVcs.semanticDirectCall<
-                import("@vibestudio/service-schemas/vcs").VcsStatusResult
-              >("vcsStatus", { contextId });
-              try {
-                const inspected = await workspaceVcs.semanticDirectCall<
-                  import("@vibestudio/service-schemas/vcs").VcsInspectResult
-                >("vcsInspect", {
-                  node: { kind: "repository", state: status.workingHead, repositoryId },
-                  edgeLimit: 1,
-                });
-                if (
-                  inspected.node.kind !== "repository" ||
-                  inspected.node.value.kind !== "present"
-                ) {
-                  return { status: "not-adopted" as const };
-                }
-                return {
-                  status: "present" as const,
-                  repoPath: inspected.node.value.repoPath,
-                  sourceState: status.workingHead,
-                };
-              } catch (error) {
-                // The semantic API's only expected absence result here is an
-                // unknown repository at this exact working state. Never import
-                // or infer an identity from a native checkout.
-                const semanticCode =
-                  typeof error === "object" &&
-                  error !== null &&
-                  "errorData" in error &&
-                  typeof (error as { errorData?: { code?: unknown } }).errorData?.code === "string"
-                    ? (error as { errorData: { code: string } }).errorData.code
-                    : undefined;
-                if (semanticCode === "InvalidReference") {
-                  return { status: "not-adopted" as const };
-                }
-                throw error;
-              }
-            },
-          },
-        });
-        return developmentDefinition;
-      },
-      getServiceDefinition() {
-        if (!developmentDefinition) throw new Error("development service not initialized");
-        return developmentDefinition;
-      },
-    });
-  }
-
-  // ── Product-owned System Agent conversation lifecycle ──
-  // The service depends on runtime + the live relay, but selects code only from
-  // the immutable shipped snapshot used to seed conduit blessings.
-  {
-    const { createSystemAgentService } = await import("./services/systemAgentService.js");
-    let systemAgentDefinition:
-      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
-      | null = null;
-    container.registerManaged({
-      name: "systemAgent",
-      dependencies: ["runtime", "rpcServer", "buildSystem"],
-      async start(resolve) {
-        const runtime = assertPresent(
-          resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
-        );
-        const rpcServer = assertPresent(
-          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
-        );
-        systemAgentDefinition = createSystemAgentService({
-          workspaceId,
-          productSnapshotState: productSeedStateHash,
-          runtime: runtime.internal,
-          conduitBlessings: conduitBlessingStore,
-          startMissionSession: (input) => missionRegistry.startSession(input),
-          callTarget: (targetId, method, args) =>
-            rpcServer.server.callTarget(targetId, method, args),
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-        });
-        return systemAgentDefinition;
-      },
-      getServiceDefinition() {
-        if (!systemAgentDefinition) {
-          throw new Error("systemAgent service not initialized");
-        }
-        return systemAgentDefinition;
-      },
-    });
-  }
-
-  // browser-data is an extension at workspace/extensions/browser-data. Callers
-  // reach its declared namespace through `extensions.invokeProvider`; direct
+  // Browser data is reached through its declared extension provider; direct
   // package invocation is not a provider route. The extension proxies to the
   // BrowserDataDO via unified RPC, so storage stays in workerd unchanged.
 
@@ -3647,8 +3289,24 @@ async function main() {
   const { PanelRuntimeCoordinator } = await import("./panelRuntimeCoordinator.js");
   const panelRuntimeCoordinator = new PanelRuntimeCoordinator({ eventService });
   panelRuntimeCoordinatorForCleanup = panelRuntimeCoordinator;
+  const { wireDevelopmentNative } = await import("./bootstrap/developmentNative.js");
+  await wireDevelopmentNative({
+    container,
+    workspaceId,
+    workspaceVcs,
+    layout,
+    eventService,
+    serverLogStore,
+    getLocalGatewayUrl,
+    createAttachedHostPublicationPorts,
+    attachedHostParentEndpoint,
+    attachedHostPublisher: attachedHostController,
+    attachedHostParentId: localHostId,
+    attachedHostAuthorityCeiling,
+    workspaceChildHub,
+    panelRuntimeCoordinator,
+  });
 
-  // ── RPC server (always present) ──
   let rpcServerForGateway: import("./rpcServer.js").RpcServer | null = null;
 
   container.registerManaged({
@@ -3664,6 +3322,7 @@ async function main() {
         dispatcher,
         workspaceId: entryWorkspaceId,
         capabilityGrantStore,
+        userlandResourceHandles,
         directAuthorityAcquirer: {
           request: (input) => acquisitionCoordinator.request(input),
           acquire: (input, signal) => acquisitionCoordinator.requestAndWait(input, signal),
@@ -3687,7 +3346,8 @@ async function main() {
         membershipGate: membershipEntryGate,
         workspaceRoleResolver,
         describeCapability,
-        missionFactForSession: (sessionId) => missionRegistry.factForSession(sessionId),
+        reviewedClosureFactForSession: (sessionId) =>
+          reviewedClosureRegistry.factForSession(sessionId),
         contextIntegrityFactForSession: (sessionId, caller) =>
           caller.executionSession !== undefined
             ? contextIntegrityStore.effectiveFact({
@@ -3696,15 +3356,146 @@ async function main() {
                 conduitBlessed: conduitBlessingStore.isBlessed(caller.code),
               })
             : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+        isAttestedSystemTestHarness: (caller) =>
+          isAttestedSystemTestHarness(caller, (identity) =>
+            conduitBlessingStore.isBlessed(identity)
+          ),
+        resolveProductBuiltinPreparedAuthority: async ({
+          caller,
+          source,
+          className,
+          objectKey,
+          args,
+          resolver,
+          contextBoundary,
+        }) => {
+          if (!contextBoundary) {
+            throw new Error(
+              `Product builtin authority resolver '${resolver}' has no supported preparation descriptor`
+            );
+          }
+          const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+          if (source !== INTERNAL_DO_SOURCE || className !== "WorkspaceDO") {
+            throw new Error(`Context-boundary preparation is not valid for ${source}:${className}`);
+          }
+          const selectPath = (root: unknown, path: readonly (string | number)[]): unknown => {
+            let selected = root;
+            for (const segment of path) {
+              if (selected === null || typeof selected !== "object" || !(segment in selected)) {
+                return null;
+              }
+              selected = (selected as Record<string | number, unknown>)[segment];
+            }
+            return selected;
+          };
+          const argument = args[contextBoundary.targetArgument];
+          const selectedTarget = selectPath(argument, contextBoundary.targetPath ?? []);
+          if (selectedTarget == null) return [];
+          const slotId = selectedTarget;
+          if (typeof slotId !== "string" || slotId.length === 0) {
+            throw new Error(
+              `Context-boundary resolver '${resolver}' requires a slot id at argument ${contextBoundary.targetArgument}`
+            );
+          }
+          const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+          if (!doDispatch) throw new Error("Workspace state dispatcher is unavailable");
+          const detail = (await doDispatch.dispatch(
+            { source, className, objectKey },
+            "panelTreeDetail",
+            slotId
+          )) as {
+            slot: { current_entity_title?: string | null };
+            currentHistory: { source: string; context_id: string };
+            entity: { id: string };
+          } | null;
+          if (!detail) throw new Error(`Unknown panel slot: ${slotId}`);
+          let requestedContext = contextBoundary.requestedContextPath
+            ? selectPath(argument, contextBoundary.requestedContextPath)
+            : null;
+          if (requestedContext == null && contextBoundary.requestedContextLookup) {
+            const lookupArgs = contextBoundary.requestedContextLookup.arguments.map((input) =>
+              selectPath(args[input.argument], input.path ?? [])
+            );
+            if (lookupArgs.every((value) => value != null)) {
+              const lookupResult = await doDispatch.dispatch(
+                { source, className, objectKey },
+                contextBoundary.requestedContextLookup.method,
+                lookupArgs
+              );
+              requestedContext = selectPath(
+                lookupResult,
+                contextBoundary.requestedContextLookup.resultPath
+              );
+            }
+          }
+          const { preparePanelAccessAuthority } =
+            await import("./services/panelAccessPermission.js");
+          const { createVerifiedCaller } = await import("@vibestudio/shared/serviceDispatcher");
+          const isEntityControlledBy = (entityId: string, callerId: string): boolean => {
+            const visited = new Set<string>();
+            let current = entityCache.resolve(entityId);
+            while (current && !visited.has(current.id)) {
+              if (current.parentId === callerId) return true;
+              visited.add(current.id);
+              current = current.parentId ? entityCache.resolve(current.parentId) : null;
+            }
+            return false;
+          };
+          return preparePanelAccessAuthority(
+            {
+              contextExists: contextBoundaryDeps.contextExists,
+              resolveContextOwnerLabel: contextBoundaryDeps.resolveContextOwnerLabel,
+              resolveCallerContext: async (callerId) => entityCache.resolveContext(callerId),
+              resolveEntityContext: (entityId) => entityCache.resolveContext(entityId),
+              isEntityControlledBy,
+              resolveSubjectCaller: (entityId) => {
+                const entity = entityCache.resolveActive(entityId);
+                if (
+                  !entity ||
+                  !["panel", "app", "worker", "do"].includes(entity.kind) ||
+                  !entity.activeExecutionDigest ||
+                  !entity.activeAuthority
+                ) {
+                  return null;
+                }
+                return createVerifiedCaller(
+                  entity.id,
+                  entity.kind as "panel" | "app" | "worker" | "do",
+                  {
+                    callerId: entity.id,
+                    callerKind: entity.kind as "panel" | "app" | "worker" | "do",
+                    repoPath: entity.source.repoPath,
+                    effectiveVersion: entity.source.effectiveVersion,
+                    executionDigest: entity.activeExecutionDigest,
+                    requested: entity.activeAuthority.requests,
+                  }
+                );
+              },
+              hasAppCapability: (callerId, capability) =>
+                appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+            },
+            { caller },
+            contextBoundary.operation,
+            {
+              id: slotId,
+              title: detail.slot.current_entity_title ?? slotId,
+              source: detail.currentHistory.source,
+              kind: isOpenPanelBrowserUrl(detail.currentHistory.source) ? "browser" : "workspace",
+              runtimeEntityId: detail.entity.id,
+              contextId: detail.currentHistory.context_id,
+              ...(typeof requestedContext === "string" && requestedContext.length > 0
+                ? { requestedContextId: requestedContext }
+                : {}),
+            }
+          );
+        },
         resolveWorkspaceDirectAuthority: async ({ source, className, objectKey, method }) => {
-          const { PRODUCT_WORKSPACE_SERVICES } =
-            await import("@vibestudio/shared/productWorkspaceServices.mjs");
-          const { isHostIntrinsicDirectMethod, productDirectMethodCapability } =
-            await import("@vibestudio/shared/authority/directMethodEffects");
+          const { isHostIntrinsicDirectMethod } =
+            await import("@vibestudio/shared/authority/hostIntrinsicDirectMethods");
           const authoritiesFrom = async (
             declarations: import("@vibestudio/workspace/singletonRegistry").WorkspaceDeclarations
           ) => {
-            const matches = [...declarations.services, ...PRODUCT_WORKSPACE_SERVICES].filter(
+            const matches = declarations.services.filter(
               (service) =>
                 service.source === source && service.durableObject?.className === className
             );
@@ -3722,33 +3513,61 @@ async function main() {
                     (entry) => entry.className === className && entry.name === method
                   )
                 : undefined;
-            const productCapability = productDirectMethodCapability(className, method);
             const hostIntrinsic = isHostIntrinsicDirectMethod(method);
-            if (
-              !catalogMethod &&
-              !hostIntrinsic &&
-              !PRODUCT_WORKSPACE_SERVICES.some((service) => matches.includes(service))
-            ) {
+            if (!catalogMethod && !hostIntrinsic) {
               throw new Error(
                 `Live workspace service ${source}:${className}.${method} has no exact build-catalog declaration`
               );
             }
+            if (
+              catalogMethod?.effect.kind === "userland-capability" &&
+              (!catalogMethod.userlandCapability || !build?.metadata.execution?.executionDigest)
+            ) {
+              throw new Error(
+                `Live workspace service ${source}:${className}.${method} has unsealed userland authority`
+              );
+            }
             const methodCapability =
-              catalogMethod?.effect.kind === "semantic"
-                ? catalogMethod.effect.capability
-                : (productCapability ?? undefined);
+              catalogMethod?.effect.kind === "userland-capability"
+                ? catalogMethod.userlandCapability!.canonicalCapability
+                : catalogMethod?.effect.kind === "host-capability"
+                  ? catalogMethod.effect.capability
+                  : undefined;
             const methodEffect =
-              (hostIntrinsic ? ({ kind: "runtime-intrinsic" } as const) : catalogMethod?.effect) ??
-              (productCapability
-                ? ({ kind: "semantic", capability: productCapability } as const)
-                : ({ kind: "workspace-service" } as const));
-            const methodTier =
-              catalogMethod?.access?.tier ?? (productCapability ? "critical" : "open");
+              (hostIntrinsic ? ({ kind: "open" } as const) : catalogMethod?.effect) ??
+              ({ kind: "open" } as const);
+            const methodTier = catalogMethod?.access?.tier ?? "open";
             return matches.map((service) => ({
               capability: `workspace-service:${service.name}`,
               methodEffect,
               principals: service.authority.principals,
               ...(methodCapability ? { methodCapability } : {}),
+              ...(catalogMethod?.userlandCapability && build?.metadata.execution?.executionDigest
+                ? {
+                    methodReceiverAuthority: {
+                      capabilityDefinitionDigest: catalogMethod.userlandCapability.definitionDigest,
+                      resourceType: catalogMethod.userlandCapability.resourceType,
+                      provider: source,
+                      providerExecutionDigest: build.metadata.execution.executionDigest,
+                      grantScopes: catalogMethod.userlandCapability.grantScopes,
+                      title: catalogMethod.userlandCapability.title,
+                      action: catalogMethod.userlandCapability.action,
+                      ...(catalogMethod.userlandCapability.description
+                        ? { description: catalogMethod.userlandCapability.description }
+                        : {}),
+                    },
+                  }
+                : {}),
+              ...(catalogMethod?.producesHandle
+                ? {
+                    methodHandleProduction: {
+                      capability: catalogMethod.producesHandle.canonicalCapability,
+                      capabilityDefinitionDigest: catalogMethod.producesHandle.definitionDigest,
+                      resourceType: catalogMethod.producesHandle.resourceType,
+                      provider: source,
+                    },
+                  }
+                : {}),
               methodTier,
               presentation: service.presentation,
               title: service.title ?? service.name,
@@ -3769,21 +3588,28 @@ async function main() {
             const config = await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
             return await authoritiesFrom(buildWorkspaceDeclarations(config));
           } catch {
-            // Main/product DOs use host-owned context ids that are not VCS
-            // contexts. They deliberately stay on the reviewed static path.
+            // Main workspace singletons may use host-owned context ids rather
+            // than VCS operation contexts.
             return [];
           }
         },
         liveCallerGate,
-        // RpcServer starts before workerd by design. Resolve the sealed semantic
-        // control plane lazily at the first provenance-bearing ingress, then
+        // RpcServer starts before workerd by design. Resolve the declared
+        // workspace source provider lazily at the first provenance-bearing ingress, then
         // prove the exact invocation node exists before any service or relay
         // can persist the asserted causal edge.
         verifyExactCausalInvocation: async (parent) => {
           const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-          const { createSemanticControlPlaneCaller, hasExactCausalInvocation } =
-            await import("./internalDOs/controlPlane.js");
-          return hasExactCausalInvocation(createSemanticControlPlaneCaller(doDispatch), parent);
+          const { createWorkspaceSemanticPort, hasExactCausalInvocation } =
+            await import("./workspaceSourceProvider.js");
+          return hasExactCausalInvocation(
+            createWorkspaceSemanticPort(doDispatch, {
+              source: semanticWorkspaceService.source,
+              className: semanticWorkspaceService.className,
+              objectKey: semanticWorkspaceService.objectKey,
+            }),
+            parent
+          );
         },
         runtimeCoordinator: panelRuntimeCoordinator,
         // The child accepts only identities already issued by the hub: returning
@@ -3812,10 +3638,10 @@ async function main() {
     },
   });
   {
-    const { createPhoneProvisioningProxyService } =
-      await import("./services/phoneProvisioningService.js");
+    const { createConnectedClientTransportService } =
+      await import("./services/connectedClientTransportService.js");
     container.registerRpc(
-      createPhoneProvisioningProxyService({
+      createConnectedClientTransportService({
         getUserConnections: (userId) =>
           assertPresent(rpcServerForGateway).getUserConnections(userId),
         getClientBridge: (callerId) => assertPresent(rpcServerForGateway).getClientBridge(callerId),
@@ -3896,19 +3722,41 @@ async function main() {
         );
         const archived = (await dispatcher.dispatch(
           { caller: createHostCaller("server") },
-          "panelTree",
-          "archiveOwnedRoots",
+          "workspace-state",
+          "slot.closeOwnedRoots",
           [userId]
-        )) as { archivedRootIds: string[]; closedIds: string[] };
-
-        const gad = resolveWorkspaceService(workspaceDecls, "vibestudio.gad.workspace.v1");
-        if (gad.kind !== "durable-object") {
-          throw new Error("Workspace GAD service is not a durable object");
+        )) as { rootIds: string[]; closedIds: string[] };
+        for (;;) {
+          const page = (await dispatcher.dispatch(
+            { caller: createHostCaller("server") },
+            "workspace-state",
+            "slot.closeCleanupPage",
+            [{ ownerUserId: userId, limit: 200 }]
+          )) as {
+            items: Array<{ slotId: string; entityId: string | null }>;
+          };
+          if (page.items.length === 0) break;
+          for (const item of page.items) {
+            if (!item.entityId) continue;
+            await dispatcher.dispatch(
+              { caller: createHostCaller("server") },
+              "runtime",
+              "retireEntity",
+              [{ id: item.entityId, removeContext: true }]
+            );
+          }
+          await dispatcher.dispatch(
+            { caller: createHostCaller("server") },
+            "workspace-state",
+            "slot.closeCleanupAck",
+            [page.items.map((item) => item.slotId)]
+          );
         }
+
         const gadRef = {
-          source: gad.source,
-          className: gad.className,
-          objectKey: gad.objectKey,
+          source: semanticWorkspaceService.source,
+          className: semanticWorkspaceService.className,
+          objectKey: semanticWorkspaceService.objectKey,
         };
         const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
         const channelPlan = (await doDispatch.dispatch(gadRef, "listChannelMembershipsForUser", {
@@ -3949,7 +3797,7 @@ async function main() {
             userId,
             closedSessions: connections.length,
             retiredDeputyIds: retired,
-            archivedRootIds: archived.archivedRootIds,
+            archivedRootIds: archived.rootIds,
             archivedPanelIds: archived.closedIds,
             removedChannelIds: channelPlan.channelIds,
             removedPushRegistrations,
@@ -4144,9 +3992,33 @@ async function main() {
     let panelRuntimeDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelRuntime",
-      async start() {
+      dependencies: ["cdpBridge"],
+      async start(resolve) {
+        const cdpBridge = assertPresent(resolve<import("./cdpBridge.js").CdpBridge>("cdpBridge"));
         panelRuntimeDefinition = createPanelRuntimeService({
           coordinator: panelRuntimeCoordinator,
+          observeHostSlot: async (slotId) => {
+            if (!cdpBridge.isTargetRegistered(slotId)) return null;
+            const { panelHostViewReportSchema } =
+              await import("@vibestudio/service-schemas/panelRuntime");
+            return panelHostViewReportSchema
+              .nullable()
+              .parse(await cdpBridge.sendHostCommand(slotId, "panelObservation"));
+          },
+          currentEntityForSlot: async (slotId) => {
+            const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+            const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+            const detail = (await doDispatch.dispatch(
+              {
+                source: INTERNAL_DO_SOURCE,
+                className: "WorkspaceDO",
+                objectKey: entryWorkspaceId,
+              },
+              "panelTreeDetail",
+              slotId
+            )) as { entity?: { id?: string } } | null;
+            return detail?.entity?.id ?? null;
+          },
         });
         return panelRuntimeDefinition;
       },
@@ -4199,14 +4071,11 @@ async function main() {
         resolveProviderExtensionName: (provider) =>
           workspaceProviderExtensionPackageName(workspaceConfig, provider),
         providerSlots: WORKSPACE_EXTENSION_PROVIDER_NAMES,
-        hostProviderContracts: {
+        providerContracts: {
           gitInterop: GIT_INTEROP_PROVIDER_METHOD_NAMES,
         },
-        onWorkspaceUnitsChanged: (reason) => {
-          hostTargetLaunchCoordinator.notifyAllTargetsChanged(reason);
-          if (reason === "extension-status" && pendingGitUpstreamRepos.size > 0) {
-            void flushGitUpstreamRepos();
-          }
+        privateProviderMethods: {
+          gitInterop: ["cloneRepo", "remoteDefaultBranch", "reconcileUpstreams"],
         },
         extensionTransport: {
           call(name, method, args, options) {
@@ -4266,8 +4135,6 @@ async function main() {
         getGatewayUrl: () => getLocalGatewayUrl("app startup"),
         getReactNativeAppArtifactBaseUrl: () => getConnectUrl("React Native app artifact"),
         getTerminalAppArtifactBaseUrl: () => getLocalGatewayUrl("Terminal app artifact"),
-        onHostTargetChanged: (target, reason) =>
-          hostTargetLaunchCoordinator.notifyTargetChanged(target, reason),
         // Manifest-declared preferred app per host target (meta/vibestudio.yml
         // hostTargets.*). Read live from workspaceConfig so meta-change
         // reloads are reflected without an AppHost restart.
@@ -4403,7 +4270,7 @@ async function main() {
           },
           assertUserlandServiceExposure: (ctx, service) => {
             const sessionId = ctx.caller.agentBinding?.channelId ?? ctx.caller.runtime.id;
-            missionRegistry.assertUserlandServiceExposure({ sessionId, ...service });
+            reviewedClosureRegistry.assertUserlandServiceExposure({ sessionId, ...service });
           },
           activateDurableObject: ({ source, className, objectKey, contextId, buildRef }) => {
             return activateDurableObjectEntity(doDispatch, workerdManagerInst, {
@@ -4488,6 +4355,8 @@ async function main() {
     statePath,
     workspaceId,
     workspaceDeclarations: workspaceDecls,
+    userlandResourceHandles,
+    assertBootstrapSourceUnchanged: () => bootstrapWorkspaceSource.assertUnchanged(),
     routeRegistry,
     egressProxy,
     gatewayToken: workerdGatewayToken,
@@ -4523,7 +4392,13 @@ async function main() {
     container,
     workspaceVcs,
     executionPublicationJournal,
-    registerControlPlanePrincipal: ({
+    workspaceSourceProvider: {
+      source: semanticWorkspaceService.source,
+      className: semanticWorkspaceService.className,
+      objectKey: semanticWorkspaceService.objectKey,
+    },
+    bootstrapSourceState: async () => (await bootstrapWorkspaceSource.ensureFresh()).stateHash,
+    registerBootstrapEntity: ({
       targetId,
       source,
       className,
@@ -4531,17 +4406,15 @@ async function main() {
       effectiveVersion,
       buildKey,
       executionDigest,
-      authorityRequests,
+      authority,
     }) => {
-      entityCache.registerControlPlane({
+      entityCache.registerBootstrapEntity({
         id: targetId,
         source: { repoPath: source, effectiveVersion },
         activeBuildKey: buildKey,
         activeExecutionDigest: executionDigest,
-        activeAuthority: {
-          requests: authorityRequests,
-        },
-        contextId: `control-plane:${workspaceId}`,
+        activeAuthority: authority,
+        contextId: `workspace-source:${workspaceId}`,
         className,
         key: objectKey,
       });
@@ -4719,7 +4592,8 @@ async function main() {
   // (extracted to panelRuntimeRegistration.ts)
   // ===========================================================================
 
-  const { registerPanelServices } = await import("./panelRuntimeRegistration.js");
+  const { cdpDefaultHostAssignmentError, registerPanelServices } =
+    await import("./panelRuntimeRegistration.js");
   // Set once the container constructs the manager (registered before
   // startAll below); the commonDeps closure resolves it lazily.
   let headlessHostManager: import("./headlessHostManager.js").HeadlessHostManager | null = null;
@@ -4747,6 +4621,24 @@ async function main() {
       });
       replaceLiveWorkspaceConfig(result.nextConfig);
     },
+    applyPreparedWorkspaceConfig: async (
+      ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext,
+      input: {
+        expectedBaseDigest: string;
+        nextState: typeof workspaceConfig;
+        resultDigest: string;
+        allowedPathScope: string[];
+        summary: string;
+      }
+    ) => {
+      const result = await workspaceConfigWriter.applyPrepared({ ctx, ...input });
+      replaceLiveWorkspaceConfig(result.nextConfig);
+      return {
+        changed: result.changed,
+        resultDigest: result.resultDigest,
+        config: result.nextConfig,
+      };
+    },
     treeScanner,
     adminToken,
     args,
@@ -4773,266 +4665,6 @@ async function main() {
       dir: await contextFolderManager.ensureContextFolder(contextId),
     }),
     resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
-    listWorkspaceUnits: () => {
-      const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-      const graphNodes = buildSystem?.getGraph().allNodes() ?? [];
-      const authorityRowsFor = (node: (typeof graphNodes)[number] | undefined) =>
-        summarizeAuthorityRequests(node?.manifest.authority?.requests ?? [], [], describeCapability)
-          .rows;
-      type WorkspaceUnitStatus = import("./services/workspaceService.js").WorkspaceUnitStatus;
-      const trustedRows: WorkspaceUnitStatus[] = trustedUnitHosts()
-        .flatMap((host) => host.listWorkspaceUnits() as WorkspaceUnitStatus[])
-        .map((row) => {
-          const node = graphNodes.find((candidate) => candidate.relativePath === row.source);
-          return {
-            ...row,
-            isAgent: Boolean(node?.manifest.agent),
-            authorityRows: authorityRowsFor(node),
-          };
-        });
-      const trustedRowsBySource = new Map<string, WorkspaceUnitStatus>(
-        trustedRows.map((row) => [row.source, row])
-      );
-      const workerInstances = new Map(
-        workerdManagerForGateway?.listInstances().map((instance) => [instance.source, instance]) ??
-          []
-      );
-      const rows: import("./services/workspaceService.js").WorkspaceUnitStatus[] = [
-        ...trustedRows.filter((row) => row.kind === "app"),
-      ];
-      for (const node of graphNodes) {
-        if (node.kind !== "panel" && node.kind !== "worker" && node.kind !== "extension") continue;
-        if (node.kind === "extension") {
-          rows.push(
-            trustedRowsBySource.get(node.relativePath) ?? {
-              name: node.name,
-              kind: "extension",
-              isAgent: false,
-              source: node.relativePath,
-              displayName: node.manifest.displayName ?? node.name,
-              status: "stopped",
-              ev: buildSystem?.getEffectiveVersion(node.name) ?? null,
-              lastError: null,
-              health: null,
-              methods: [],
-              hasFetch: false,
-              respawn: null,
-              inspectorUrl: null,
-              authorityRows: authorityRowsFor(node),
-            }
-          );
-          continue;
-        }
-        const workerInstance =
-          node.kind === "worker" ? workerInstances.get(node.relativePath) : null;
-        const workerLastError =
-          node.kind === "worker"
-            ? (workerdManagerForGateway?.getLastWorkerError(node.relativePath) ?? null)
-            : null;
-        rows.push({
-          name: node.name,
-          kind: node.kind,
-          isAgent: Boolean(node.manifest.agent),
-          source: node.relativePath,
-          displayName: node.manifest.displayName ?? node.manifest.title ?? node.name,
-          status: workerInstance
-            ? workerInstance.status === "starting"
-              ? "building"
-              : workerInstance.status
-            : workerLastError
-              ? "error"
-              : "available",
-          lastError: workerLastError?.message ?? null,
-          ev: workerInstance?.buildKey ?? buildSystem?.getEffectiveVersion(node.name) ?? null,
-          inspectorUrl: workerInstance
-            ? (workerdManagerForGateway?.getWorkerInspectorUrl(workerInstance.source) ?? null)
-            : null,
-          bindings:
-            node.kind === "worker" && workerInstance
-              ? ((workerInstance as { bindings?: Record<string, unknown> | null }).bindings ?? null)
-              : null,
-          lastBuiltAt: null,
-          pendingApproval: null,
-          availableUpdate: null,
-          authorityRows: authorityRowsFor(node),
-        });
-      }
-      return rows;
-    },
-    restartWorkspaceUnit: async (
-      ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext,
-      name: string
-    ) => {
-      // Resolve by kind via the build graph so callers can use either the
-      // package name or the workspace-relative source path. Extensions go
-      // through the approval-gated reload; workers re-spawn through workerd's
-      // config-reload path. Panels have no host-driven restart concept — a
-      // panel restarts on the next page navigation.
-      const extensionHost = extensionHostForGateway;
-      if (extensionHost?.registry.get(name)) {
-        await extensionHost.reload(ctx, name);
-        return;
-      }
-      const appHost = appHostForGateway;
-      if (
-        appHost?.registry.get(name) ||
-        appHost?.registry.list().some((entry) => entry.source.repo === name)
-      ) {
-        await appHost.terminal.restart(name);
-        return;
-      }
-      const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-      const node = buildSystem
-        ?.getGraph()
-        .allNodes()
-        .find((candidate) => candidate.name === name || candidate.relativePath === name);
-      if (!node) {
-        throw new Error(`Workspace unit not found: ${name}`);
-      }
-      if (node.kind === "worker") {
-        const workerdManager = workerdManagerForGateway;
-        if (!workerdManager) throw new Error("Worker runtime is not available");
-        const instance = workerdManager
-          .listInstances()
-          .find((entry) => entry.source === node.relativePath);
-        if (!instance) {
-          throw new Error(`Worker has no running instance to restart: ${node.relativePath}`);
-        }
-        await workerdManager.updateInstance(instance.name, {});
-        return;
-      }
-      if (node.kind === "panel") {
-        throw new Error(
-          "Panels restart on next page navigation; no host-driven restart is available"
-        );
-      }
-      throw new Error(`Workspace unit kind not restartable: ${node.kind}`);
-    },
-    listWorkspaceUnitLogs: (
-      name: string,
-      opts?: {
-        since?: number;
-        level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"];
-        limit?: number;
-      }
-    ) => {
-      // Resolve the unit kind from the build graph (the same surface
-      // listWorkspaceUnits uses) and pull from the corresponding store.
-      const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-      const node = buildSystem
-        ?.getGraph()
-        .allNodes()
-        .find((candidate) => candidate.name === name || candidate.relativePath === name);
-      const kind = node?.kind;
-      if (kind === "app") {
-        return appHostForGateway?.listWorkspaceUnitLogs(name) ?? [];
-      }
-      if (kind === "worker") {
-        const source = node?.relativePath ?? name;
-        const persisted = runtimeDiagnostics.history(source, {
-          since: opts?.since,
-          level: opts?.level,
-          limit: opts?.limit,
-        });
-        return persisted.entries.map((entry) => ({
-          workspaceId: entry.workspaceId ?? workspaceId,
-          unitName: source,
-          kind: "worker" as const,
-          timestamp: entry.timestamp,
-          level: entry.level,
-          message: entry.message,
-          fields: entry.fields,
-          source: entry.source === "system" ? "console" : entry.source,
-        }));
-      }
-      if (kind === "panel") {
-        // Panel console errors and lifecycle events are forwarded from the
-        // shell via panelLog.append and keyed by package name.
-        const persisted = runtimeDiagnostics.history(node?.name ?? name, {
-          since: opts?.since,
-          level: opts?.level,
-          limit: opts?.limit,
-        });
-        return persisted.entries.map((entry) => ({
-          workspaceId: entry.workspaceId ?? workspaceId,
-          unitName: node?.name ?? name,
-          kind: "panel" as const,
-          timestamp: entry.timestamp,
-          level: entry.level,
-          message: entry.message,
-          fields: entry.fields,
-          source:
-            entry.source === "system" || entry.source === "lifecycle" ? "console" : entry.source,
-        }));
-      }
-      // Default and extension: the extension host has its own buffer and
-      // also returns [] if the name is unknown.
-      return extensionHostForGateway?.listWorkspaceUnitLogs(name, opts) ?? [];
-    },
-    unitDiagnostics: (
-      name: string,
-      opts?: {
-        since?: number;
-        sinceSeq?: number;
-        level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"];
-        limit?: number;
-        errorLimit?: number;
-      }
-    ) => {
-      const units = commonDeps.listWorkspaceUnits();
-      const unit = units.find((row) => row.name === name || row.source === name) ?? null;
-      const entityId = unit?.kind === "worker" ? unit.source : (unit?.name ?? name);
-      const history = runtimeDiagnostics.history(entityId, {
-        since: opts?.since,
-        sinceSeq: opts?.sinceSeq,
-        level: opts?.level,
-        limit: opts?.limit,
-        errorLimit: opts?.errorLimit,
-      });
-      const kind = unit?.kind ?? "worker";
-      const toLog = (
-        entry: import("./runtimeDiagnosticsStore.js").RuntimeDiagnosticRecord
-      ): import("./services/workspaceService.js").WorkspaceUnitLogRecord => ({
-        workspaceId: entry.workspaceId ?? workspaceId,
-        unitName: entityId,
-        kind,
-        timestamp: entry.timestamp,
-        level: entry.level,
-        message: entry.message,
-        fields: entry.fields,
-        source: entry.source,
-        seq: entry.seq,
-      });
-      const fallbackLogs = commonDeps.listWorkspaceUnitLogs(name, opts);
-      const logs = history.entries.length > 0 ? history.entries.map(toLog) : fallbackLogs;
-      const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-      return {
-        unit,
-        logs,
-        errors: history.errors.map(toLog),
-        builds: buildSystem?.listRecentBuildEvents(unit?.name ?? name) ?? [],
-        dropped: history.dropped,
-        capacity: history.capacity,
-      };
-    },
-    bakeAppDist: (sourceOrName: string, opts?: { outDir?: string }) => {
-      const appHost = appHostForGateway;
-      if (!appHost) throw new Error("App host is not available");
-      return appHost.bakeDist(
-        sourceOrName,
-        opts?.outDir ?? path.join(appRoot, "dist", "baked-app")
-      );
-    },
-    listAppVersions: (sourceOrName: string) => {
-      const appHost = appHostForGateway;
-      if (!appHost) return { current: null, previous: [], retentionLimit: 0 };
-      return appHost.listAppVersions(sourceOrName);
-    },
-    rollbackAppVersion: (sourceOrName: string, buildKey?: string) => {
-      const appHost = appHostForGateway;
-      if (!appHost) throw new Error("App host is not available");
-      return appHost.rollbackAppVersion(sourceOrName, buildKey);
-    },
     listRecurringJobs: () => recurringRegistryInstance?.listJobs() ?? [],
     listHeartbeats: async () => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
@@ -5164,63 +4796,6 @@ async function main() {
         row.name
       ) as Promise<{ ok: true }>;
     },
-    listHostTargetCandidates: (target: import("@vibestudio/shared/hostTargets").HostTarget) => {
-      const appHost = appHostForGateway;
-      return appHost?.listHostTargetCandidates(target) ?? [];
-    },
-    getHostTargetSelection: (target: import("@vibestudio/shared/hostTargets").HostTarget) => {
-      const appHost = appHostForGateway;
-      return (
-        appHost?.getHostTargetSelection(target) ?? {
-          selection: null,
-          valid: false,
-          reason: "App host is not available",
-        }
-      );
-    },
-    setHostTargetSelection: (
-      target: import("@vibestudio/shared/hostTargets").HostTarget,
-      input: import("@vibestudio/shared/hostTargets").HostTargetSelectionInput
-    ) => {
-      const appHost = appHostForGateway;
-      if (!appHost) throw new Error("App host is not available");
-      return appHost.setHostTargetSelection(target, input);
-    },
-    clearHostTargetSelection: (target: import("@vibestudio/shared/hostTargets").HostTarget) => {
-      appHostForGateway?.clearHostTargetSelection(target);
-    },
-    listHostTargetVersions: (
-      target: import("@vibestudio/shared/hostTargets").HostTarget,
-      sourceOrName: string
-    ) => {
-      const appHost = appHostForGateway;
-      if (!appHost) return { current: null, previous: [], retentionLimit: 0 };
-      return appHost.listHostTargetVersions(target, sourceOrName);
-    },
-    prepareHostTargetPinnedRef: (
-      target: import("@vibestudio/shared/hostTargets").HostTarget,
-      sourceOrName: string,
-      ref: string
-    ) => {
-      const appHost = appHostForGateway;
-      if (!appHost) throw new Error("App host is not available");
-      return appHost.prepareHostTargetPinnedRef(target, sourceOrName, ref);
-    },
-    launchHostTarget: async (target: import("@vibestudio/shared/hostTargets").HostTarget) => {
-      return hostTargetLaunchCoordinator.launch(target);
-    },
-    beginHostTargetLaunch: async (target: import("@vibestudio/shared/hostTargets").HostTarget) => {
-      return hostTargetLaunchCoordinator.beginLaunch(target);
-    },
-    getHostTargetLaunchSession: (sessionId: string) => {
-      return hostTargetLaunchCoordinator.getLaunchSession(sessionId);
-    },
-    resolveHostTargetLaunchSessionApproval: (sessionId: string, decision: "once" | "deny") => {
-      return hostTargetLaunchCoordinator.resolveLaunchSessionApproval(sessionId, decision);
-    },
-    cancelHostTargetLaunchSession: (sessionId: string) => {
-      hostTargetLaunchCoordinator.cancelLaunchSession(sessionId);
-    },
     approvalQueue,
     registerEntityTitleListener: (
       listener: (
@@ -5247,6 +4822,64 @@ async function main() {
       return buildSystem?.getEffectiveVersion(source) ?? undefined;
     },
   };
+  (await import("./services/registerEntityUnitDrivers.js")).registerEntityUnitDrivers({
+    supervisor: unitSupervisor,
+    entityCache,
+    diagnostics: runtimeDiagnostics,
+    titleFor: (entityId) => entityTitleService.getTitle(entityId),
+    restartPanel: async (_ctx, entity) => {
+      const slotId = (await dispatcher.dispatch(
+        { caller: createHostCaller("server") },
+        "workspace-state",
+        "slot.resolveByEntity",
+        [entity.id]
+      )) as string | null;
+      if (!slotId) throw new Error(`Panel entity is not current in an open slot: ${entity.id}`);
+      panelRuntimeCoordinator.unloadSlot(slotId);
+      const assigned = panelRuntimeCoordinator.ensureDefaultCdpHostForSlot(slotId, entity.id);
+      if (!assigned.assigned && assigned.reason !== "already_held") {
+        throw (
+          cdpDefaultHostAssignmentError(slotId, assigned.reason) ??
+          new Error(`Unable to restart panel runtime: ${slotId}`)
+        );
+      }
+    },
+    restartWorker: async (_ctx, entity) => {
+      const manager = workerdManagerForGateway;
+      if (!manager) throw new Error("Worker runtime is not available");
+      const instance = manager
+        .listInstances()
+        .find((candidate) => candidate.source === entity.source.repoPath);
+      if (!instance) throw new Error(`Worker runtime is not active: ${entity.id}`);
+      await manager.updateInstance(instance.name, {});
+    },
+    restartDurableObject: async (_ctx, entity) => {
+      if (!entity.className) throw new Error(`Durable Object entity has no class: ${entity.id}`);
+      const manager = workerdManagerForGateway;
+      if (!manager) throw new Error("Durable Object runtime is not available");
+      await manager.restartUserlandDOFacet({
+        source: entity.source.repoPath,
+        className: entity.className,
+        objectKey: entity.key,
+      });
+    },
+    retire: async (_ctx, entity) => {
+      const runtime = runtimeServiceInternal;
+      if (!runtime) throw new Error("Runtime service is not available");
+      await runtime.retireEntity(entity.id);
+    },
+  });
+  unitSupervisor.register(
+    (await import("./services/extensionUnitDriver.js")).createExtensionUnitDriver(
+      () => extensionHostForGateway
+    )
+  );
+  unitSupervisor.register(
+    (await import("./services/appUnitDriver.js")).createAppUnitDriver({
+      getHost: () => appHostForGateway,
+      entityCache,
+    })
+  );
   await registerPanelServices(commonDeps);
 
   {
@@ -5349,12 +4982,6 @@ async function main() {
     );
   }
 
-  {
-    // Settings service for trusted remote hosts and mobile workspace apps.
-    const { createSettingsService } = await import("./services/settingsService.js");
-    container.registerRpc(createSettingsService());
-  }
-
   // ── Panel-asset loopback bridge (remote shells) ──
   // A remote shell has no local gateway, so its panel-asset façade calls this to
   // loopback-fetch panel HTML/bundles from the server's own gateway over the
@@ -5409,8 +5036,13 @@ async function main() {
           auditLog,
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-          ensureMobileAppReady: (source) =>
-            hostTargetLaunchCoordinator.ensureMobileHostReadyForPairing(source),
+          ensureMobileAppReady: async (source) =>
+            appHostForGateway?.reactNative.ensureReady(source, { waitForApproval: false }) ?? {
+              ready: false,
+              source: source ?? null,
+              reason: "App host is not available",
+              details: [],
+            },
           getMobileAppBootstrap: async (source) =>
             appHostForGateway?.reactNative.getBootstrap(source) ?? null,
           registerMobileAppPrincipal: (deviceId, source) =>
@@ -5878,12 +5510,10 @@ async function main() {
             console.warn("[Units] Failed to apply runtime unit approval:", err)
           );
       }
-      finishRuntimeUnitApprovalStaging();
       void unitApprovalCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
     } finally {
-      finishRuntimeUnitApprovalStaging();
       initialWorkspaceUnitReconcileComplete = true;
       if (syncDeclaredRemotesAfterStartupReload) {
         syncDeclaredRemotesForSource().catch((err: unknown) =>
@@ -5896,12 +5526,6 @@ async function main() {
     }
   };
   startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile();
-  void startupWorkspaceUnitReconcile
-    .then(
-      () => startupNonCriticalUnitReconcile,
-      () => startupNonCriticalUnitReconcile
-    )
-    .finally(() => releaseStartupBackgroundWork());
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(
@@ -5913,7 +5537,10 @@ async function main() {
 
   if (requireMobileReady) {
     await startupWorkspaceUnitReconcile;
-    const readiness = await hostTargetLaunchCoordinator.ensureMobileHostReadyForPairing();
+    const appHost = container.get<import("./appHost.js").AppHost>("appHost");
+    const readiness = await appHost.reactNative.ensureReady(null, {
+      waitForApproval: false,
+    });
     if (!readiness?.ready) {
       printReadinessActionBlock("React Native mobile app is not ready", [
         "This server was started with mobile pairing enabled, but the",
@@ -5933,7 +5560,7 @@ async function main() {
     );
   }
   if (requireElectronReady) {
-    await startupUnitDeclarationsStaged();
+    await startupWorkspaceUnitReconcile;
     const appHost = container.get<import("./appHost.js").AppHost>("appHost");
     const readiness = await appHost.ensureElectronReady();
     if (!readiness.ready) {
@@ -6075,6 +5702,16 @@ async function main() {
       .stopAll()
       .then(() => console.log("[Server] All services stopped"))
       .catch((e) => console.error("[Server] Service shutdown error:", e));
+    try {
+      userlandResourceHandles.close();
+    } catch (error) {
+      console.error("[Server] Resource handle store shutdown error:", error);
+    }
+    try {
+      reviewedClosureRegistry.close();
+    } catch (error) {
+      console.error("[Server] Reviewed closure registry shutdown error:", error);
+    }
     try {
       identityDb.close();
     } catch (error) {

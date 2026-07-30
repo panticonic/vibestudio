@@ -182,6 +182,11 @@ export class ExtensionProcessManager {
     return this.running.get(name)?.ready ?? false;
   }
 
+  /** Whether this generation has a live child, including its startup phase. */
+  isActive(name: string): boolean {
+    return this.running.has(name);
+  }
+
   /** Wait for an already-starting or crash-restarting extension. Never starts one. */
   whenRunning(name: string, signal?: AbortSignal): Promise<void> {
     if (this.isRunning(name)) return Promise.resolve();

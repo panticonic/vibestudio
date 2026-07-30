@@ -27,6 +27,7 @@ import {
 } from "@vibestudio/workspace-contracts/sourceDirs";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
+import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import type { PanelReadinessSnapshot, TestApi } from "../../src/main/testApi.js";
 import type { MainProcessErrorRecord } from "../../src/main/mainProcessErrorLedger.js";
 import type { PanelInitializationFailure } from "../../src/main/panelInitializationFailure.js";
@@ -45,6 +46,8 @@ export interface TestApp {
   workspacePath: string;
   /** Captured stdout and stderr from the Electron process. */
   getOutput: () => string;
+  /** Tail of the isolated local hub log, where workspace build diagnostics live. */
+  getHubOutput: () => string;
   /** Clean up the app and test workspace */
   cleanup: () => Promise<void>;
 }
@@ -489,7 +492,18 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     });
   }
 
-  return { app, window, workspacePath, getOutput: () => output.join(""), cleanup };
+  return {
+    app,
+    window,
+    workspacePath,
+    getOutput: () => output.join(""),
+    getHubOutput: () =>
+      readLogTail(
+        path.join(getCentralDataDirFromEnv(workspaceInfo.env), "logs", "hub.log"),
+        40_000
+      ),
+    cleanup,
+  };
 }
 
 /**
@@ -504,56 +518,49 @@ export async function approvePendingStartupUnits(
   timeoutMs = 180_000
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  let launchSessionId: string | null = null;
+  let lastState: unknown = null;
+  const hostLaunch = new HostLaunchClient((service, method, args) =>
+    app.evaluate(
+      async (_electron, request) => {
+        const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
+        if (!testApi) throw new Error("Test API not available");
+        return testApi.rpcCall(request.service, request.method, request.args);
+      },
+      { service, method, args }
+    )
+  );
   while (Date.now() < deadline) {
     try {
-      const state = await app.evaluate(async () => {
+      const launch = await hostLaunch.launch("electron");
+      if ((await hostLaunch.resolvePendingStartupApprovals("once")) > 0) continue;
+      const hostView = await app.evaluate(async () => {
         const testApi = (
           globalThis as {
-            __testApi?: Pick<TestApi, "rpcCall" | "getHostViewDebugInfo">;
+            __testApi?: Pick<TestApi, "getHostViewDebugInfo">;
           }
         ).__testApi;
         if (!testApi) throw new Error("Test API not available");
-        return {
-          launch: null as unknown,
-          hostView: testApi.getHostViewDebugInfo(),
-        };
+        return testApi.getHostViewDebugInfo();
       });
-      state.launch = await app.evaluate(async (_electron, sessionId) => {
-        const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
-        if (!testApi) throw new Error("Test API not available");
-        return sessionId
-          ? testApi.rpcCall("workspace", "hostTargets.getLaunchSession", [sessionId])
-          : testApi.rpcCall("workspace", "hostTargets.beginLaunch", ["electron"]);
-      }, launchSessionId);
-      const launch = state.launch as {
-        sessionId?: unknown;
-        status?: unknown;
-        settled?: unknown;
-        approvals?: unknown;
-      } | null;
-      if (typeof launch?.sessionId === "string") launchSessionId = launch.sessionId;
-      if (launchSessionId && Array.isArray(launch?.approvals) && launch.approvals.length > 0) {
-        await app.evaluate(async (_electron, sessionId) => {
-          const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
-          if (!testApi) throw new Error("Test API not available");
-          await testApi.rpcCall("workspace", "hostTargets.resolveLaunchSessionApproval", [
-            sessionId,
-            "once",
-          ]);
-        }, launchSessionId);
-      }
+      lastState = { launch, hostView };
+      if (launch.status === "approval-required") continue;
       const hostedShellReady =
-        typeof state.hostView.visibleHostChromeAppId === "string" &&
-        typeof state.hostView.hostedShellUrl === "string" &&
-        state.hostView.hostedShellUrl.includes("/_a/");
-      if (launch?.status === "ready" && launch.settled === true && hostedShellReady) return;
+        typeof hostView.visibleHostChromeAppId === "string" &&
+        typeof hostView.hostedShellUrl === "string" &&
+        hostView.hostedShellUrl.includes("/_a/");
+      if (launch.status === "ready" && hostedShellReady) return;
     } catch (error) {
       if (!isAutomationContextReplacement(error)) throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error("Timed out waiting for the cold-start unit review to settle");
+  const initializationFailure = await readPanelInitializationFailure(app).catch(() => null);
+  throw new Error(
+    `Timed out waiting for the cold-start unit review to settle: ${JSON.stringify({
+      lastState,
+      initializationFailure,
+    })}`
+  );
 }
 
 function readLogTail(logFile: string, maxCharacters = 20_000): string {
@@ -934,15 +941,17 @@ export async function isPanelContentReady(
 export async function readPanelInitializationFailure(
   app: ElectronApplication
 ): Promise<PanelInitializationFailure | null> {
-  return app.evaluate(() => {
-    const testApi = (
-      globalThis as {
-        __testApi?: Pick<TestApi, "readPanelInitializationFailure">;
-      }
-    ).__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    return testApi.readPanelInitializationFailure();
-  });
+  return retryTestApiEvaluation(() =>
+    app.evaluate(() => {
+      const testApi = (
+        globalThis as {
+          __testApi?: Pick<TestApi, "readPanelInitializationFailure">;
+        }
+      ).__testApi;
+      if (!testApi) throw new Error("Test API not available");
+      return testApi.readPanelInitializationFailure();
+    })
+  );
 }
 
 export function panelInitializationFailureError(
@@ -959,98 +968,122 @@ export async function ensureHostedShellReady(
   app: ElectronApplication,
   options: { panelSource: string; timeoutMs?: number }
 ): Promise<PanelReadinessSnapshot> {
-  const deadline = Date.now() + (options.timeoutMs ?? 180_000);
-  let launchSessionId: string | null = null;
-  let lastState: unknown = null;
-  while (Date.now() < deadline) {
-    try {
-      const initializationError = panelInitializationFailureError(
-        await readPanelInitializationFailure(app)
-      );
-      if (initializationError) throw initializationError;
-
-      const launch = await app.evaluate(async (_electron, currentSessionId) => {
-        const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
-        if (!testApi) throw new Error("Test API not available");
-        return currentSessionId
-          ? testApi.rpcCall("workspace", "hostTargets.getLaunchSession", [currentSessionId])
-          : testApi.rpcCall("workspace", "hostTargets.beginLaunch", ["electron"]);
-      }, launchSessionId);
-      if (launch && typeof launch === "object") {
-        const sessionId = (launch as { sessionId?: unknown }).sessionId;
-        if (typeof sessionId === "string") launchSessionId = sessionId;
-        const approvals = (launch as { approvals?: unknown }).approvals;
-        if (launchSessionId && Array.isArray(approvals) && approvals.length > 0) {
-          await app.evaluate(async (_electron, id) => {
-            const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
-            if (!testApi) throw new Error("Test API not available");
-            await testApi.rpcCall("workspace", "hostTargets.resolveLaunchSessionApproval", [
-              id,
-              "once",
-            ]);
-          }, launchSessionId);
+  const watch = await app.evaluate(
+    async (_electron, input) => {
+      const testApi = (
+        globalThis as {
+          __testApi?: Pick<
+            TestApi,
+            "getPanelTree" | "getPanelReadiness" | "readPanelInitializationFailure"
+          >;
         }
-      }
+      ).__testApi;
+      if (!testApi) throw new Error("Test API not available");
 
-      const panel = (await getPanelTree(app)).find(
-        (entry) => entry.snapshot?.source === options.panelSource
-      );
-      if (panel) {
-        const readiness = await getPanelReadiness(app, panel.id);
-        lastState = readiness;
-        if (readiness.terminal) return readiness;
-      } else {
-        lastState = { panelSource: options.panelSource, panel: "missing", launch };
-      }
-    } catch (error) {
-      // Bootstrap navigation replaces Electron's automation context. Retry the
-      // authoritative probes for that narrow race only. Product/service errors
-      // are terminal diagnostics and must not be disguised as readiness waits.
-      if (!isAutomationContextReplacement(error)) throw error;
-      lastState = { error: error instanceof Error ? error.message : String(error) };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  const surfaces = await app.evaluate(async ({ webContents }) =>
-    Promise.all(
-      webContents
-        .getAllWebContents()
-        .filter((contents) => !contents.isDestroyed())
-        .map(async (contents) => {
-          let documentState: { readyState: string; bodyText: string } | null = null;
-          try {
-            documentState = (await contents.executeJavaScript(
-              `({ readyState: document.readyState, bodyText: (document.body?.innerText ?? "").slice(0, 2000) })`,
-              true
-            )) as { readyState: string; bodyText: string };
-          } catch {
-            // Non-DOM WebContents are still useful by type and URL.
+      const deadline = Date.now() + input.timeoutMs;
+      let lastState: unknown = null;
+      while (Date.now() < deadline) {
+        const initializationFailure = testApi.readPanelInitializationFailure();
+        if (initializationFailure) {
+          return { readiness: null, initializationFailure, lastState };
+        }
+
+        const panel = testApi
+          .getPanelTree()
+          .find((entry) => entry.snapshot?.source === input.panelSource);
+        if (panel) {
+          const readiness = testApi.getPanelReadiness(panel.id);
+          lastState = readiness;
+          if (readiness.terminal) {
+            return { readiness, initializationFailure: null, lastState };
           }
-          return {
-            id: contents.id,
-            type: contents.getType(),
-            url: contents.getURL(),
-            title: contents.getTitle(),
-            loading: contents.isLoading(),
-            documentState,
-          };
-        })
-    )
+        } else {
+          lastState = { panelSource: input.panelSource, panel: "missing" };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return { readiness: null, initializationFailure: null, lastState };
+    },
+    {
+      panelSource: options.panelSource,
+      timeoutMs: options.timeoutMs ?? 180_000,
+    }
+  );
+  const initializationError = panelInitializationFailureError(watch.initializationFailure);
+  if (initializationError) throw initializationError;
+  if (watch.readiness) return watch.readiness;
+
+  const hostedShellDiagnostics = await app.evaluate(async ({ webContents }) => {
+    const hostedShell = webContents
+      .getAllWebContents()
+      .find(
+        (contents) =>
+          !contents.isDestroyed() &&
+          contents.getURL().includes("/_a/") &&
+          contents.getURL().endsWith("/index.html")
+      );
+    if (!hostedShell) return null;
+    return (await hostedShell.executeJavaScript(
+      `({
+        titles: Array.from(document.querySelectorAll("[title]"))
+          .map((node) => node.getAttribute("title"))
+          .filter(Boolean),
+        text: document.body.innerText,
+        panes: Array.from(document.querySelectorAll("[data-pane-id]"))
+          .map((node) => node.getAttribute("data-pane-id"))
+      })`,
+      true
+    )) as { titles: string[]; text: string; panes: string[] };
+  });
+  const surfaces = await app.evaluate(({ webContents }) =>
+    webContents
+      .getAllWebContents()
+      .filter((contents) => !contents.isDestroyed())
+      .map((contents) => ({
+        id: contents.id,
+        type: contents.getType(),
+        url: contents.getURL(),
+        title: contents.getTitle(),
+        loading: contents.isLoading(),
+      }))
   );
   throw new Error(
-    `Hosted shell did not reach terminal readiness for ${options.panelSource}: ${JSON.stringify({ lastState, surfaces })}`
+    `Hosted shell did not reach terminal readiness for ${options.panelSource}: ${JSON.stringify({ lastState: watch.lastState, hostedShellDiagnostics, surfaces })}`
   );
 }
 
 export async function readMainProcessErrors(
   app: ElectronApplication
 ): Promise<MainProcessErrorRecord[]> {
-  return app.evaluate(() => {
-    const testApi = (globalThis as { __testApi?: Pick<TestApi, "readMainProcessErrors"> })
-      .__testApi;
-    if (!testApi) throw new Error("Test API not available");
-    return testApi.readMainProcessErrors();
-  });
+  return retryTestApiEvaluation(() =>
+    app.evaluate(() => {
+      const testApi = (globalThis as { __testApi?: Pick<TestApi, "readMainProcessErrors"> })
+        .__testApi;
+      if (!testApi) throw new Error("Test API not available");
+      return testApi.readMainProcessErrors();
+    })
+  );
+}
+
+async function retryTestApiEvaluation<T>(evaluate: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      return await evaluate();
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        !/Execution context was destroyed|Test API not available|most likely because of a navigation/i.test(
+          message
+        )
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw lastError;
 }
 
 export async function clearMainProcessErrors(app: ElectronApplication): Promise<void> {

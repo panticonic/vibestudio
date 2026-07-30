@@ -97,7 +97,10 @@ export function createEvalImportLoader(
     if (ref?.startsWith("npm:")) {
       const version = npmRefToVersion(specifier, ref);
       const result = await build.getBuildNpm(specifier, version, externals);
-      return requireBuildBundleResult(result, `Build service returned an invalid npm library build: ${specifier}`);
+      return requireBuildBundleResult(
+        result,
+        `Build service returned an invalid npm library build: ${specifier}`
+      );
     }
 
     const result = await build.getBuild(specifier, workspaceRef(ref), {

@@ -71,7 +71,7 @@ function fakeSource(
         })
       ),
     resolveContextState: async () => CANDIDATE_VIEW,
-    semanticStateForContent: (stateHash) => ({
+    executionStateForContent: (stateHash) => ({
       kind: "event",
       eventId: `event:${stateHash}`,
     }),
@@ -93,8 +93,11 @@ async function loadWithMocks(): Promise<{
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-validate-"));
   const workspaceRoot = path.join(root, "workspace");
   writeUnit(workspaceRoot, "packages/lib", "@workspace/lib");
-  writeUnit(workspaceRoot, "panels/app", "@workspace-panels/app", {
+  writeUnit(workspaceRoot, "packages/mid", "@workspace/mid", {
     "@workspace/lib": "workspace:*",
+  });
+  writeUnit(workspaceRoot, "panels/app", "@workspace-panels/app", {
+    "@workspace/mid": "workspace:*",
   });
   writeUnit(workspaceRoot, "panels/solo", "@workspace-panels/solo");
 
@@ -152,7 +155,7 @@ async function loadWithMocks(): Promise<{
               ev,
               sourceStateHash: stateRef,
               sourcemap: false,
-              authority: { requests: [] },
+              authority: { requests: [], provides: [] },
               details: { kind: "generic" as const },
               builtAt: new Date().toISOString(),
             }
@@ -240,6 +243,24 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(buildCalls).toEqual([
       expect.objectContaining({ name: "@workspace-panels/app", stateRef: CANDIDATE_VIEW }),
     ]);
+  });
+
+  it("scopes publication validation to the complete reverse-dependency closure", async () => {
+    env = await loadWithMocks();
+    const { buildSystem } = env;
+
+    await expect(
+      buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["packages/lib"])
+    ).resolves.toEqual(["@workspace/lib", "@workspace/mid", "@workspace-panels/app"]);
+  });
+
+  it("does not turn content-only repository changes into a whole-workspace build", async () => {
+    env = await loadWithMocks();
+    const { buildSystem } = env;
+
+    await expect(
+      buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, ["projects/notes"])
+    ).resolves.toEqual([]);
   });
 
   it("returns agent-actionable diagnostics for an explicit failed build", async () => {

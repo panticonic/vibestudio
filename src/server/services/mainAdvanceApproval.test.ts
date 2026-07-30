@@ -240,7 +240,7 @@ describe("createMainAdvanceApprovalGate", () => {
     await gate.approve(
       candidate({
         caller: shell,
-        via: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+        via: "do:workers/workspace-source:GadWorkspaceDO:workspace",
         repoPath: "apps/shell",
         changedPaths: ["apps/shell/index.tsx"],
       })
@@ -502,7 +502,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       },
       operation,
       reason: "test",
-      writer: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+      writer: "do:workers/workspace-source:GadWorkspaceDO:workspace",
       onBehalfOf: null,
       ...(context !== undefined ? { gateContext: context } : {}),
     };
@@ -582,6 +582,37 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     expect(candidate.repoPath).toBe("panels/x");
     // No candidate view supplied → the gate composes one itself.
     expect(candidate.stateHash).toBe("state:composed-fallback");
+  });
+
+  it("rejects a candidate workspace invariant before approval", async () => {
+    const blobsDir = path.join(tempStatePath(), "blobs");
+    const next = await stageTree(blobsDir, [{ path: "vibestudio.yml", body: "changed\n" }]);
+    const approve = vi.fn();
+    const validateCandidateWorkspaceState = vi.fn(async () => {
+      throw new Error("workspace-source coordinates changed");
+    });
+    const gate = createMainRefAdvanceGate({
+      blobsDir,
+      approvalGate: {
+        approve,
+        approveSemanticAdvance: vi.fn(),
+        approveRepoDeletion: vi.fn(),
+      },
+      ensureStateMirrored: vi.fn(async () => undefined),
+      workspaceViewWithReposAt: vi.fn(async () => "state:candidate"),
+      validateCandidateWorkspaceState,
+    });
+
+    await expect(
+      gate(
+        batch([{ repoPath: "meta", old: null, next }], {
+          kind: "caller",
+          caller: panelCaller(),
+        })
+      )
+    ).rejects.toThrow("workspace-source coordinates changed");
+    expect(validateCandidateWorkspaceState).toHaveBeenCalledWith("state:candidate", ["meta"]);
+    expect(approve).not.toHaveBeenCalled();
   });
 
   it("a main creation (old null) diffs against the empty tree", async () => {

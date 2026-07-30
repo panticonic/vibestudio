@@ -13,7 +13,6 @@ export const REQUIRED_EXECUTION_ROOT_PROVIDER_IDS = [
   "runtime-entity",
   "panel-history",
   "app-generation",
-  "host-target-selection",
   "terminal-app",
   "runtime-image",
   "extension-generation",
@@ -37,8 +36,8 @@ export function executionArtifactRefFromBuild(
   if (!identity || !build.sourceStateHash || !build.metadata.sourcePath) {
     throw new Error(`Build ${build.buildKey} has no reconstructible execution identity`);
   }
-  if (!build.metadata.sourceSemanticState) {
-    throw new Error(`Build ${build.buildKey} has no exact semantic source identity`);
+  if (!build.metadata.sourceState) {
+    throw new Error(`Build ${build.buildKey} has no exact source identity`);
   }
   if (
     build.buildKey !== build.metadata.buildKey ||
@@ -51,9 +50,9 @@ export function executionArtifactRefFromBuild(
   if (
     verified.sourceState.kind !== "workspace" ||
     verified.sourceState.workspaceId !== workspaceId ||
-    canonicalJson(verified.sourceState.state) !== canonicalJson(build.metadata.sourceSemanticState)
+    canonicalJson(verified.sourceState.state) !== canonicalJson(build.metadata.sourceState)
   ) {
-    throw new Error(`Build ${build.buildKey} has inconsistent semantic execution identity`);
+    throw new Error(`Build ${build.buildKey} has inconsistent execution source identity`);
   }
   return verified;
 }

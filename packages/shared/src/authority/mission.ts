@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ResourceScope, SessionMissionFact } from "@vibestudio/rpc";
+import type { ResourceScope } from "@vibestudio/rpc";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { canonicalJson } from "../canonicalJson.js";
 import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
@@ -52,7 +52,7 @@ export interface MissionRecord {
   charter: MissionCharter;
   owner: { userId: string; deviceId: string };
   state: MissionState;
-  closureDigest: string;
+  revisionDigest: string;
   createdAt: number;
   updatedAt: number;
   seeded?: boolean;
@@ -201,30 +201,6 @@ export function missionClosureDigest(
   part(sha256(canonicalJson(permissions)));
   part(sha256(canonicalJson(standingRestrictions)));
   return hash.digest("hex");
-}
-
-export function missionSubject(
-  record: Pick<MissionRecord, "missionId" | "closureDigest">
-): `mission:${string}` {
-  if (!record.missionId.startsWith("msn_") || !HEX64.test(record.closureDigest)) {
-    throw new Error("Mission subject requires a canonical id and closure digest");
-  }
-  return `mission:${record.missionId}@${record.closureDigest}`;
-}
-
-export function missionFact(record: MissionRecord): SessionMissionFact {
-  if (record.state !== "active") throw new Error(`Mission ${record.missionId} is not active`);
-  if (
-    missionClosureDigest(record.charter, record.permissions, record.standingRestrictions) !==
-    record.closureDigest
-  ) {
-    throw new Error(`Mission ${record.missionId} closure has drifted`);
-  }
-  return {
-    missionId: record.missionId,
-    closureDigest: record.closureDigest,
-    harness: { ...record.charter.harness },
-  };
 }
 
 export function missionAllowsService(charter: MissionCharter, qualifiedMethod: string): boolean {

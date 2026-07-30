@@ -62,7 +62,51 @@ describe("execution artifact retention identity", () => {
     invalidWorkspaceRef.sourceState.kind = "workspace";
     expect(() =>
       verifyExecutionArtifactRef(invalidWorkspaceRef as unknown as ExecutionArtifactRefV1)
-    ).toThrow("Workspace execution semantic source state is required");
+    ).toThrow("Workspace execution source state is required");
+  });
+
+  it("commits bootstrap execution to the exact sealed snapshot", () => {
+    const snapshotHash = `state:${"3".repeat(64)}`;
+    const contentRoots = [{ repoPath: "vibestudio/internal", stateHash: snapshotHash }] as const;
+    const effectiveVersion = domainHash("vibestudio/test-effective/v1", "bootstrap");
+    const recipeDigest = domainHash("vibestudio/test-recipe/v1", "bootstrap");
+    const artifactDigest = domainHash("vibestudio/test-artifact/v1", "bootstrap");
+    const sourceState = {
+      kind: "workspace" as const,
+      workspaceId: "workspace:test",
+      effectiveVersion,
+      state: { kind: "bootstrap-snapshot" as const, snapshotHash },
+      contentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(contentRoots),
+    };
+    const unsigned = {
+      version: 1 as const,
+      sourceState,
+      recipeDigest,
+      buildKey: recipeDigest,
+      artifactDigest,
+    };
+    const ref = {
+      ...unsigned,
+      executionDigest: executionArtifactDigest(unsigned),
+    };
+
+    expect(verifyExecutionArtifactRef(ref).sourceState).toMatchObject({
+      kind: "workspace",
+      state: { kind: "bootstrap-snapshot", snapshotHash },
+    });
+    expect(() =>
+      verifyExecutionArtifactRef({
+        ...ref,
+        sourceState: {
+          ...sourceState,
+          state: {
+            kind: "bootstrap-snapshot",
+            snapshotHash: `state:${"4".repeat(64)}`,
+          },
+        },
+      })
+    ).toThrow("Execution bootstrap snapshot does not match its content roots");
   });
 
   it("rejects product seeds that claim a workspace repository root", () => {

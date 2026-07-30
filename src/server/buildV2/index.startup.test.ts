@@ -28,7 +28,7 @@ function fakeWorkspaceSource(workspaceRoot: string): WorkspaceStateSource & Buil
     async resolveContextState() {
       return TEST_STATE;
     },
-    semanticStateForContent(stateHash) {
+    executionStateForContent(stateHash) {
       return { kind: "event", eventId: `event:${stateHash}` };
     },
     async discoverGraph() {
@@ -144,7 +144,6 @@ describe("BuildSystemV2 startup", () => {
             "runtime-entity",
             "panel-history",
             "app-generation",
-            "host-target-selection",
             "terminal-app",
             "runtime-image",
             "extension-generation",
@@ -214,7 +213,6 @@ describe("BuildSystemV2 startup", () => {
       "runtime-entity",
       "panel-history",
       "app-generation",
-      "host-target-selection",
       "terminal-app",
       "runtime-image",
       "extension-generation",
@@ -274,7 +272,6 @@ describe("BuildSystemV2 startup", () => {
             "runtime-entity",
             "panel-history",
             "app-generation",
-            "host-target-selection",
             "terminal-app",
             "runtime-image",
             "extension-generation",
@@ -339,7 +336,7 @@ describe("BuildSystemV2 startup", () => {
         type: "module",
         vibestudio: {
           title: "Cached",
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
         },
       })
     );
@@ -377,7 +374,7 @@ describe("BuildSystemV2 startup", () => {
         vibestudio: {
           entry: "worker.ts",
           durable: { classes: [{ className: "RetainedWorker" }] },
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
         },
       })
     );
@@ -445,7 +442,7 @@ describe("BuildSystemV2 startup", () => {
         vibestudio: {
           entry: "worker.ts",
           durable: { classes: [{ className: "MissingSourceWorker" }] },
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
         },
       })
     );
@@ -486,7 +483,7 @@ describe("BuildSystemV2 startup", () => {
         vibestudio: {
           entry: "worker.ts",
           durable: { classes: [{ className: "SharedOnlyWorker" }] },
-          authority: { requests: [] },
+          authority: { requests: [], provides: [] },
         },
       })
     );
@@ -512,7 +509,6 @@ describe("BuildSystemV2 startup", () => {
       "runtime-entity",
       "panel-history",
       "app-generation",
-      "host-target-selection",
       "terminal-app",
       "runtime-image",
       "extension-generation",

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
 import { ensureLayout, mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
+import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
 describe("WorkspaceVcs protected publication notification", () => {
@@ -42,7 +43,13 @@ describe("WorkspaceVcs protected publication notification", () => {
       extractMainToSource: true,
       refs,
     });
-    await vcs.attachGad({ call: async () => undefined as never });
+    await vcs.attachGad(
+      createWorkspaceSemanticPort({ dispatch: async () => undefined as never } as never, {
+        source: "test/provider",
+        className: "TestProvider",
+        objectKey: "test",
+      })
+    );
     const listener = vi.fn();
     vcs.onProtectedPublication(listener);
     vi.spyOn(console, "error").mockImplementation(() => undefined);

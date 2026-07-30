@@ -28,6 +28,14 @@ export const BrowserPermissionGrantSchema = z.object({
 
 export const browserPermissionsMethods = defineServiceMethods({
   snapshot: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "browserPermissions.control",
+      rationale:
+        "Verified-user read of that user's exact-origin browser grants; code and anonymous callers remain excluded.",
+    },
     description: "Read the current origin-scoped website permission projection.",
     args: z.tuple([z.object({ sessionEpoch: z.string().min(16).max(200) }).strict()]),
     returns: z.object({
@@ -38,6 +46,14 @@ export const browserPermissionsMethods = defineServiceMethods({
     authority: { principals: ["user"] },
   },
   request: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "browserPermissions.control",
+      rationale:
+        "Verified-user browser permission prompt flow; the decision is stored as a user grant and code callers remain excluded.",
+    },
     description: "Request owner approval for origin-scoped website capabilities.",
     args: z.tuple([
       z.object({
@@ -58,6 +74,14 @@ export const browserPermissionsMethods = defineServiceMethods({
     authority: { principals: ["user"] },
   },
   revoke: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "grant-authority",
+      family: "browserPermissions.retire",
+      rationale:
+        "Verified-user revocation of that user's exact-origin browser grants, driven by explicit shell UI.",
+    },
     description: "Revoke remembered website permission grants for an origin.",
     args: z.tuple([
       z.object({

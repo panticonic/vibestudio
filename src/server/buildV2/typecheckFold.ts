@@ -57,8 +57,10 @@ function toBuildDiagnostic(
 
 /**
  * Type-check a single unit's materialized sources and return BuildDiagnostics.
- * Best-effort: on any internal failure returns [] so a typecheck-engine failure
- * does not hide the esbuild result.
+ * Typecheck failures are build failures. A broken typecheck engine or an
+ * unavailable materialized source is represented as an error diagnostic rather
+ * than being silently treated as a clean build; protected-main publication
+ * relies on this fail-closed behavior.
  *
  * The materialized build source root is a BARE partial checkout — the unit plus
  * its workspace-dependency source subtrees, with NO `node_modules` and NO
@@ -115,10 +117,17 @@ export async function typecheckUnit(
       .filter((d) => d.severity === "error" || d.severity === "warning")
       .map((d) => toBuildDiagnostic(d, sourceRoot, unitRelativePath));
   } catch (err) {
-    console.warn(
-      `[BuildV2] typecheck fold-in failed for ${unitRelativePath}:`,
-      err instanceof Error ? err.message : String(err)
-    );
-    return [];
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[BuildV2] typecheck fold-in failed for ${unitRelativePath}:`, message);
+    return [
+      {
+        source: "tsc",
+        severity: "error",
+        file: unitRelativePath,
+        line: 1,
+        column: 1,
+        message: `Typecheck could not complete: ${message}`,
+      },
+    ];
   }
 }

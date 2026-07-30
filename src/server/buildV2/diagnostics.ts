@@ -61,6 +61,21 @@ export class BuildDiagnosticsError extends Error {
   }
 }
 
+/** Structured refusal raised when publication's exact candidate build gate fails. */
+export class BuildGateFailedError extends RpcBoundaryError {
+  constructor(diagnostics: BuildDiagnostic[], affectedUnits: string[], candidateState: string) {
+    const message = `Protected main push rejected: build/typecheck gate failed for candidate ${candidateState}`;
+    super(message, "application", "BuildGateFailed", undefined, {
+      code: "BuildGateFailed",
+      message,
+      candidateState,
+      affectedUnits,
+      diagnostics,
+    });
+    this.name = "BuildGateFailedError";
+  }
+}
+
 function normalizePathContext(
   contextOrWorkspaceRoot?: string | DiagnosticPathContext
 ): DiagnosticPathContext {

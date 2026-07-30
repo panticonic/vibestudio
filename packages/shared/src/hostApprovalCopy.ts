@@ -6,12 +6,8 @@
  * reading the authority implementation and guarantees that desktop, mobile,
  * terminal, and push surfaces use the same language.
  *
- * Userland approval titles, summaries, warnings, and choices are intentionally
- * NOT defined here: they are supplied by the requesting userland provider and
- * rendered as attributed, untrusted content.
- *
  * Capability-specific names live alongside this file in:
- *   - authority/hostCapabilityPresentations.ts (static host service methods)
+ *   - each host method's service schema (static host service methods)
  *   - HOST_SEMANTIC_CAPABILITY_COPY below (semantic/runtime capabilities)
  */
 
@@ -88,8 +84,6 @@ export const HOST_APPROVAL_COPY = {
     "worker-lifecycle": "Background tasks",
     workspace: "Workspace",
     "service-setup": "Setting up a connection",
-    userland: "App action",
-    "external-agent": "Agent action",
     "device-code": "Device sign-in",
     unknown: "Action",
   },
@@ -101,8 +95,6 @@ export const HOST_APPROVAL_COPY = {
     accessRequest: "Use an account",
     serviceSetup: "Set up a connection",
     privilegedInput: "Enter a secret",
-    privilegedAction: "Sensitive action",
-    agentTool: "Agent action",
     deviceSignIn: "Device sign-in",
     appManagement: "Manage apps",
     extensionManagement: "Manage extensions",
@@ -278,13 +270,6 @@ export const HOST_APPROVAL_COPY = {
       "You enter the secret here in Vibestudio's secure prompt. It's used once and not saved anywhere.",
     storedSecretHelp:
       "You enter the secret here in Vibestudio's secure prompt. It's saved encrypted and only used for matching requests.",
-  },
-
-  externalAgent: {
-    allow: "Allow",
-    allowDescription: "Allow this action once.",
-    deny: "Deny",
-    denyDescription: "Don't allow this.",
   },
 
   deviceSignIn: {
@@ -480,10 +465,6 @@ export const HOST_APPROVAL_COPY = {
       summary: `Saves ${credential} for use with ${audience}. Secrets are stored encrypted and only sent where they're needed.`,
     }),
     secretInputFallback: "Needs a secret for a one-time action. The value isn't saved.",
-    externalAgent: (operation: string) => ({
-      title: `${operation}`,
-      summary: `An AI agent connected to this conversation wants to perform this action.`,
-    }),
     deviceSignIn: (credential: string, code: string, origin: string) => ({
       title: `Sign in to ${credential}`,
       summary: `Go to ${origin} and enter the code below to finish connecting ${credential}.`,
@@ -561,11 +542,14 @@ export const HOST_AUTHORITY_GROUP_COPY = [
 /**
  * Human names for semantic capabilities that can appear in host approval and
  * version-review prompts. Static service-method copy is in
- * authority/hostCapabilityPresentations.ts because its exhaustive type check is
- * coupled to the reviewed host method census.
+ * each method's service schema; generated projections enforce exhaustiveness.
  */
 interface SemanticCapabilityRow {
   prefix: string;
+  authorityCategory: {
+    domain: import("./authority/authorityDomains.js").AuthorityDomainId;
+    verb: import("./authority/authorityDomains.js").AuthorityVerb;
+  };
   title: string;
   action: string;
   description: string;
@@ -574,7 +558,128 @@ interface SemanticCapabilityRow {
 
 const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   {
+    prefix: "missions.",
+    authorityCategory: { domain: "automation", verb: "manage" },
+    title: "Manage reviewed automations",
+    action: "create, change, run, pause, or retire reviewed automations",
+    description: "Manage reviewed automations and their durable runs",
+    group: "runtime",
+  },
+  {
+    prefix: "git.project.import",
+    authorityCategory: { domain: "files", verb: "act" },
+    title: "Import Git projects",
+    action: "import a Git project",
+    description: "Import an external Git repository into this workspace",
+    group: "files",
+  },
+  {
+    prefix: "git.publish",
+    authorityCategory: { domain: "sharing", verb: "act" },
+    title: "Publish workspace changes",
+    action: "publish workspace changes",
+    description: "Push workspace changes to an external Git repository",
+    group: "files",
+  },
+  {
+    prefix: "git.pull",
+    authorityCategory: { domain: "files", verb: "act" },
+    title: "Bring in remote workspace changes",
+    action: "pull changes from the upstream Git repository",
+    description: "Fetch and import changes from an external Git repository",
+    group: "files",
+  },
+  {
+    prefix: "git.remotes.manage",
+    authorityCategory: { domain: "sharing", verb: "manage" },
+    title: "Manage workspace publishing destinations",
+    action: "change workspace Git remotes",
+    description: "Add, change, or remove external Git repository destinations",
+    group: "files",
+  },
+  {
+    prefix: "workspace-host.manage",
+    authorityCategory: { domain: "computer", verb: "manage" },
+    title: "Manage workspace apps",
+    action: "open and manage workspace apps",
+    description: "Open and manage apps provided by this workspace",
+    group: "workspace",
+  },
+  {
+    prefix: "workspace-units.manage",
+    authorityCategory: { domain: "automation", verb: "manage" },
+    title: "Manage workspace components",
+    action: "manage workspace apps, panels, workers, and extensions",
+    description: "Build, start, stop, or update components provided by this workspace",
+    group: "workspace",
+  },
+  {
+    prefix: "workspace-units.publish",
+    authorityCategory: { domain: "sharing", verb: "act" },
+    title: "Publish workspace components",
+    action: "publish workspace apps, panels, workers, and extensions",
+    description: "Publish components provided by this workspace for use outside the workspace",
+    group: "workspace",
+  },
+  {
+    prefix: "extensions.reload",
+    authorityCategory: { domain: "automation", verb: "manage" },
+    title: "Reload workspace extensions",
+    action: "reload workspace extensions",
+    description: "Reload extensions provided by this workspace after their source changes",
+    group: "workspace",
+  },
+  {
+    prefix: "browser-passwords.read",
+    authorityCategory: { domain: "accounts", verb: "see" },
+    title: "View saved browser passwords",
+    action: "view saved browser passwords",
+    description: "Read passwords saved in the browser",
+    group: "credentials",
+  },
+  {
+    prefix: "browser-passwords.delete",
+    authorityCategory: { domain: "accounts", verb: "act" },
+    title: "Delete saved browser passwords",
+    action: "delete saved browser passwords",
+    description: "Permanently delete passwords saved in the browser",
+    group: "credentials",
+  },
+  {
+    prefix: "workspace.dependencies.install",
+    authorityCategory: { domain: "automation", verb: "act" },
+    title: "Install workspace packages",
+    action: "install workspace packages",
+    description: "Install packages used by workspace apps and automations",
+    group: "workspace",
+  },
+  {
+    prefix: "settings.read",
+    authorityCategory: { domain: "automation", verb: "see" },
+    title: "View workspace settings",
+    action: "view workspace settings",
+    description: "Read settings for this workspace",
+    group: "workspace",
+  },
+  {
+    prefix: "automations.register",
+    authorityCategory: { domain: "automation", verb: "manage" },
+    title: "Register automations",
+    action: "register workspace automations",
+    description: "Register automations provided by this workspace",
+    group: "runtime",
+  },
+  {
+    prefix: "workspace-panels.manage",
+    authorityCategory: { domain: "automation", verb: "manage" },
+    title: "Manage workspace panels",
+    action: "add, update, or remove workspace panels",
+    description: "Manage panels provided by this workspace",
+    group: "workspace",
+  },
+  {
     prefix: "browser-data.read",
+    authorityCategory: { domain: "web", verb: "see" },
     title: "Read your browser data",
     action: "read your browsing history, bookmarks, passwords, and site data",
     description:
@@ -583,6 +688,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "browser-data.write",
+    authorityCategory: { domain: "web", verb: "act" },
     title: "Change your browser data",
     action: "change your browsing history, bookmarks, passwords, and site data",
     description:
@@ -591,6 +697,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "browser-data.delete",
+    authorityCategory: { domain: "web", verb: "act" },
     title: "Delete your browser data",
     action: "delete your browsing history, bookmarks, passwords, or site data",
     description: "Delete your browser information through the approved browser-data provider",
@@ -598,6 +705,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "runtime.code-execution.manage",
+    authorityCategory: { domain: "automation", verb: "manage" },
     title: "Run code",
     action: "start, monitor, or stop a code execution",
     description: "Manage one isolated code run",
@@ -605,6 +713,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "workspace.runtime-state.manage",
+    authorityCategory: { domain: "automation", verb: "manage" },
     title: "Manage running workspace services",
     action: "manage apps, panels, background tasks, and scheduled work that's currently running",
     description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
@@ -612,6 +721,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "workspace.graph.delete",
+    authorityCategory: { domain: "files", verb: "act" },
     title: "Permanently delete workspace history",
     action: "permanently delete workspace history or collaboration records (can't be undone)",
     description: "Delete workspace or collaboration records that cannot be restored automatically",
@@ -619,6 +729,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "channel.admin",
+    authorityCategory: { domain: "people", verb: "manage" },
     title: "Manage a conversation",
     action: "change settings for a shared conversation",
     description: "Change the settings of a shared conversation",
@@ -626,6 +737,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "channel.archive",
+    authorityCategory: { domain: "people", verb: "manage" },
     title: "Archive a conversation",
     action: "archive a conversation (it stays in history but is no longer active)",
     description: "Remove a conversation from active use while keeping its history",
@@ -633,6 +745,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "channel.members.remove",
+    authorityCategory: { domain: "people", verb: "manage" },
     title: "Remove someone from a conversation",
     action: "remove a person from a shared conversation",
     description: "End a person's membership in a shared conversation",
@@ -640,6 +753,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "service:workers.resolveService",
+    authorityCategory: { domain: "automation", verb: "act" },
     title: "Use a workspace service",
     action: "use a workspace service",
     description: "Connect to a service declared by this workspace",
@@ -647,13 +761,71 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "context.boundary",
+    authorityCategory: { domain: "files", verb: "act" },
     title: "Access another part of your project",
     action: "use files and services from another part of your project",
     description: "Use content or controls belonging to a different workspace context",
     group: "panels",
   },
   {
+    prefix: "browser-passwords.read",
+    authorityCategory: { domain: "accounts", verb: "see" },
+    title: "View saved password accounts and preferences",
+    action: "view saved password accounts and preferences",
+    description: "View saved account names, websites, and password-saving preferences",
+    group: "credentials",
+  },
+  {
+    prefix: "browser-passwords.delete",
+    authorityCategory: { domain: "accounts", verb: "act" },
+    title: "Delete saved passwords",
+    action: "delete saved passwords",
+    description: "Permanently delete saved browser passwords",
+    group: "credentials",
+  },
+  {
+    prefix: "workspace.dependencies.install",
+    authorityCategory: { domain: "automation", verb: "act" },
+    title: "Install workspace packages",
+    action: "install workspace packages",
+    description: "Install packages needed by workspace apps, panels, workers, or extensions",
+    group: "workspace",
+  },
+  {
+    prefix: "settings.read",
+    authorityCategory: { domain: "automation", verb: "see" },
+    title: "View workspace settings",
+    action: "view workspace settings",
+    description: "Read the settings used by this workspace",
+    group: "workspace",
+  },
+  {
+    prefix: "automations.register",
+    authorityCategory: { domain: "automation", verb: "manage" },
+    title: "Schedule workspace automations",
+    action: "schedule workspace automations",
+    description: "Register recurring or event-driven workspace work",
+    group: "workspace",
+  },
+  {
+    prefix: "workspace-panels.manage",
+    authorityCategory: { domain: "automation", verb: "manage" },
+    title: "Open and arrange workspace panels",
+    action: "open and arrange workspace panels",
+    description: "Create, arrange, or close panels in this workspace",
+    group: "panels",
+  },
+  {
+    prefix: "workspace-host.manage",
+    authorityCategory: { domain: "computer", verb: "manage" },
+    title: "Open and manage workspace apps",
+    action: "open and manage workspace apps",
+    description: "Start, inspect, or stop apps provided by this workspace",
+    group: "workspace",
+  },
+  {
     prefix: "workspace.files.read",
+    authorityCategory: { domain: "files", verb: "see" },
     title: "Read your files",
     action: "read files in your workspace",
     description: "Read the files the requesting app, panel, or extension was approved to see",
@@ -661,6 +833,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "workspace.files.write",
+    authorityCategory: { domain: "files", verb: "act" },
     title: "Change your files",
     action: "create or change files in your workspace",
     description:
@@ -669,6 +842,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "workspace.history.write",
+    authorityCategory: { domain: "files", verb: "act" },
     title: "Save to version history",
     action: "save changes to your project's history",
     description: "Create or advance your project's saved history",
@@ -676,6 +850,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "process.execute",
+    authorityCategory: { domain: "computer", verb: "act" },
     title: "Run programs on your device",
     action: "run programs on your computer",
     description: "Start approved programs on this device",
@@ -683,6 +858,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "network.fetch",
+    authorityCategory: { domain: "web", verb: "act" },
     title: "Use the internet",
     action: "connect to the internet",
     description: "Connect to approved internet destinations",
@@ -690,6 +866,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "credential.use",
+    authorityCategory: { domain: "accounts", verb: "act" },
     title: "Use a connected account",
     action: "use a saved account for its intended service",
     description: "Use an approved account for its declared service",
@@ -697,6 +874,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "panel.navigate",
+    authorityCategory: { domain: "automation", verb: "act" },
     title: "Open or switch panels",
     action: "open panels or switch what they're showing",
     description: "Open or navigate an approved panel",
@@ -704,6 +882,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "workspace-service:",
+    authorityCategory: { domain: "automation", verb: "act" },
     title: "Use a workspace service",
     action: "use a workspace service",
     description: "Connect to a service set up by this workspace",
@@ -711,6 +890,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "notifications",
+    authorityCategory: { domain: "computer", verb: "act" },
     title: "Show notifications",
     action: "show and manage notifications",
     description: "Display and manage notifications for this workspace",
@@ -718,6 +898,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "native-menus",
+    authorityCategory: { domain: "computer", verb: "act" },
     title: "Add menu items",
     action: "add commands to your system's application menus",
     description: "Add commands to the device's native application menus",
@@ -725,6 +906,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "open-external",
+    authorityCategory: { domain: "sharing", verb: "act" },
     title: "Open links in other apps",
     action: "open links in other applications on your device",
     description: "Open links in another application on this device",
@@ -732,6 +914,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "window-management",
+    authorityCategory: { domain: "computer", verb: "manage" },
     title: "Manage windows",
     action: "open, focus, or resize Vibestudio windows",
     description: "Open, focus, or change Vibestudio windows",
@@ -739,6 +922,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "panel-hosting",
+    authorityCategory: { domain: "automation", verb: "manage" },
     title: "Display panels",
     action: "show and coordinate workspace panels",
     description: "Display and coordinate workspace panels",
@@ -746,6 +930,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "incoming-pair-links",
+    authorityCategory: { domain: "people", verb: "act" },
     title: "Pair other devices",
     action: "accept links that pair another device with Vibestudio",
     description: "Handle links that pair another Vibestudio device",
@@ -753,6 +938,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "clipboard",
+    authorityCategory: { domain: "computer", verb: "act" },
     title: "Use your clipboard",
     action: "read from or copy to your clipboard",
     description: "Read or write the device clipboard",
@@ -760,6 +946,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "keychain",
+    authorityCategory: { domain: "accounts", verb: "manage" },
     title: "Use secure storage",
     action: "save account information in your device's secure storage",
     description: "Store account material in the device keychain",
@@ -767,6 +954,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "external-browser-open",
+    authorityCategory: { domain: "sharing", verb: "act" },
     title: "Open your browser",
     action: "open a web page in your browser",
     description: "Open a reviewed address in the system browser",
@@ -774,6 +962,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "internal-model-runtime.use",
+    authorityCategory: { domain: "automation", verb: "act" },
     title: "Use local AI models",
     action: "send prompts to the local AI model running on this device",
     description:
@@ -782,6 +971,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "workspace-main-advance",
+    authorityCategory: { domain: "sharing", verb: "act" },
     title: "Update shared history",
     action: "save reviewed changes to your project's main history",
     description: "Save reviewed changes to a protected part of your project's history",
@@ -789,6 +979,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "workspace-repo-delete",
+    authorityCategory: { domain: "files", verb: "act" },
     title: "Delete a repository",
     action: "permanently remove a repository from your workspace",
     description: "Remove a repository from the workspace",
@@ -796,6 +987,7 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
   },
   {
     prefix: "workerd.inspector",
+    authorityCategory: { domain: "computer", verb: "see" },
     title: "Debug a running service",
     action: "connect developer tools to a running workspace service",
     description: "Connect developer tools to a running workspace service",
@@ -806,7 +998,11 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
 export const HOST_SEMANTIC_CAPABILITY_COPY: ReadonlyArray<{
   prefix: string;
   presentation: EditableCapabilityCopy;
-}> = HOST_SEMANTIC_CAPABILITY_DEFS.map(({ prefix, title, action, description, group }) => ({
-  prefix,
-  presentation: { title, action, description, group },
-}));
+  authorityCategory: SemanticCapabilityRow["authorityCategory"];
+}> = HOST_SEMANTIC_CAPABILITY_DEFS.map(
+  ({ prefix, title, action, description, group, authorityCategory }) => ({
+    prefix,
+    presentation: { title, action, description, group },
+    authorityCategory,
+  })
+);

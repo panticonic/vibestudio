@@ -153,8 +153,6 @@ export type PanelCreateOptions = {
   title?: string;
   /** Opt-in stable id segment; must be unique among the parent's children. */
   slug?: string;
-  /** @deprecated Alias for `title`. Ignored when `title` is set. */
-  name?: string;
   env?: Record<string, string>;
   ref?: string;
   /**

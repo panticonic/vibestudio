@@ -63,6 +63,7 @@ function appCaller() {
   ) as {
     vibestudio: {
       authority: {
+        provides: [];
         requests: Array<{
           capability: string;
           resource: { kind: "exact"; key: string } | { kind: "prefix"; prefix: string };

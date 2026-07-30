@@ -24,7 +24,7 @@ const BAKED_EFFECTIVE_VERSION = "e".repeat(64);
 function sealedAuthority(executionDigest = EXECUTION_DIGEST_1) {
   return {
     executionDigest,
-    authorityRequests: [],
+    authority: { requests: [], provides: [] },
   };
 }
 
@@ -142,6 +142,36 @@ describe("AppOrchestrator", () => {
     await orchestrator.applyAppAvailable(event);
     (panelView.hasView as ReturnType<typeof vi.fn>).mockReturnValue(true);
     await orchestrator.applyAppAvailable({ ...event });
+
+    expect(panelView.createViewForApp).toHaveBeenCalledTimes(1);
+    expect(panelView.setViewVisible).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes concurrent duplicate availability events into one mount", async () => {
+    const panelView = createPanelView();
+    let releaseMount!: () => void;
+    const mountBlocked = new Promise<void>((resolve) => {
+      releaseMount = resolve;
+    });
+    (panelView.createViewForApp as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => mountBlocked
+    );
+    const orchestrator = new AppOrchestrator({ getPanelView: () => panelView });
+    const event = {
+      appId: "@workspace-apps/shell",
+      source: "apps/shell",
+      target: "electron" as const,
+      url: "http://localhost/app",
+      capabilities: ["panel-hosting"] as const,
+      ...sealedAuthority(),
+    };
+
+    const first = orchestrator.applyAppAvailable(event);
+    const second = orchestrator.applyAppAvailable({ ...event });
+    await vi.waitFor(() => expect(panelView.createViewForApp).toHaveBeenCalledTimes(1));
+    (panelView.hasView as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    releaseMount();
+    await Promise.all([first, second]);
 
     expect(panelView.createViewForApp).toHaveBeenCalledTimes(1);
     expect(panelView.setViewVisible).toHaveBeenCalledTimes(1);
@@ -299,7 +329,7 @@ describe("AppOrchestrator", () => {
             effectiveVersion: BAKED_EFFECTIVE_VERSION,
             executionDigest: execution.executionDigest,
             execution,
-            authorityRequests: [],
+            authority: { requests: [], provides: [] },
           },
           artifacts,
         })
@@ -314,7 +344,7 @@ describe("AppOrchestrator", () => {
         capabilities: ["notifications"],
         effectiveVersion: BAKED_EFFECTIVE_VERSION,
         executionDigest: execution.executionDigest,
-        authorityRequests: [],
+        authority: { requests: [], provides: [] },
       });
       await expect(orchestrator.loadBakedApp(root)).resolves.toBe(true);
 
@@ -343,7 +373,7 @@ describe("AppOrchestrator", () => {
       source: "apps/shell",
       target: "electron" as const,
       url: "http://localhost/app",
-      authorityRequests: [],
+      authority: { requests: [], provides: [] },
     };
 
     await expect(orchestrator.applyAppAvailable(event)).rejects.toThrow(
@@ -402,7 +432,7 @@ describe("AppOrchestrator", () => {
             effectiveVersion: BAKED_EFFECTIVE_VERSION,
             executionDigest: execution.executionDigest,
             execution,
-            authorityRequests: [],
+            authority: { requests: [], provides: [] },
           },
           artifacts,
         })

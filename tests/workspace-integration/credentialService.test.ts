@@ -17,7 +17,7 @@ import {
   type EnvelopeId,
   type MessageId,
   type TurnId,
-} from "@vibestudio/agentic-protocol";
+} from "@workspace/agentic-protocol";
 
 import type {
   AuditEntry,
@@ -937,7 +937,6 @@ describe("credentialService", () => {
                   decision: "once",
                 },
               ],
-              userland: [],
               unexpectedPrompts: "fail",
             },
           },

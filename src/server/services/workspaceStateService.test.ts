@@ -1,6 +1,8 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
 
 import { createWorkspaceStateService } from "./workspaceStateService.js";
 
@@ -32,6 +34,7 @@ function makeService(opts: {
    * `panelIndex` / `panelUpdateTitle`).
    */
   dispatchReturns?: Record<string, unknown>;
+  panelAccess?: Partial<PanelAccessPermissionDeps>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const doDispatch = {
@@ -43,6 +46,13 @@ function makeService(opts: {
   const svc = createWorkspaceStateService({
     doDispatch: doDispatch as never,
     workspaceId: "test-workspace",
+    panelAccess: {
+      contextExists: () => false,
+      resolveCallerContext: async () => null,
+      resolveEntityContext: () => null,
+      resolveSubjectCaller: () => null,
+      ...opts.panelAccess,
+    },
     ...(opts.onPanelTitleChanged ? { onPanelTitleChanged: opts.onPanelTitleChanged } : {}),
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
   });
@@ -50,17 +60,58 @@ function makeService(opts: {
 }
 
 describe("workspaceStateService — title mirror hooks", () => {
+  it("prepares exact context-boundary authority at the WorkspaceDO mutation surface", async () => {
+    const { svc } = makeService({
+      dispatchReturns: {
+        panelTreeDetail: {
+          slot: { current_entity_title: "Target" },
+          currentHistory: { source: "panels/target", context_id: "ctx-target" },
+          entity: { id: "panel:target" },
+        },
+      },
+      panelAccess: {
+        contextExists: () => true,
+        resolveCallerContext: async () => "ctx-origin",
+        resolveEntityContext: () => "ctx-target",
+      },
+    });
+    const caller = createVerifiedCaller("panel:caller", "panel", {
+      callerId: "panel:caller",
+      callerKind: "panel",
+      repoPath: "panels/caller",
+      effectiveVersion: "ev-caller",
+      executionDigest: "digest-caller",
+      requested: [],
+    });
+
+    await expect(
+      svc.authorityPreparation?.["workspace-state.slot.close.contextBoundary"]?.({ caller }, [
+        "panel:target",
+      ])
+    ).resolves.toMatchObject({
+      selections: [
+        {
+          capability: "context.boundary",
+          challenge: {
+            operation: { verb: "Close panel in" },
+          },
+        },
+      ],
+      payload: null,
+    });
+  });
+
   it("allows approved shell apps to read and write workspace slot state", () => {
     const { svc } = makeService({});
 
     expect(svc.authority.principals).toContain("code");
-    expect(svc.methods["slot.list"]?.authority).toEqual({
+    expect(svc.methods["panelTree.page"]?.authority).toEqual({
       principals: expect.arrayContaining(["host", "user", "code"]),
     });
-    expect(svc.methods["panelTree.snapshot"]?.authority).toEqual({
+    expect(svc.methods["panelTree.detail"]?.authority).toEqual({
       principals: expect.arrayContaining(["host", "user", "code"]),
     });
-    expect(svc.methods["slot.create"]?.authority).toEqual({
+    expect(svc.methods["slot.create"]?.authority).toMatchObject({
       principals: expect.arrayContaining(["host", "user", "code"]),
     });
   });
@@ -140,10 +191,15 @@ describe("workspaceStateService — title mirror hooks", () => {
       // title — the service should pass THAT (not the slot id) to the hook.
       dispatchReturns: { panelIndex: "entity:abc-current" },
     });
-    await svc.handler(makeCtx() as never, "panel.index", [
+    const result = await svc.handler(makeCtx() as never, "panel.index", [
       { id: "panel:abc", title: "Spectrolite — README" },
     ]);
-    expect(onPanelTitleChanged).toHaveBeenCalledWith("entity:abc-current", "Spectrolite — README");
+    expect(onPanelTitleChanged).toHaveBeenCalledWith(
+      "entity:abc-current",
+      "Spectrolite — README",
+      false
+    );
+    expect(result).toBe("entity:abc-current");
   });
 
   it("skips onPanelTitleChanged on panel.index when the input has no title", async () => {
@@ -162,8 +218,12 @@ describe("workspaceStateService — title mirror hooks", () => {
       onPanelTitleChanged,
       dispatchReturns: { panelUpdateTitle: "entity:abc-current" },
     });
-    await svc.handler(makeCtx() as never, "panel.updateTitle", ["panel:abc", "New title"]);
-    expect(onPanelTitleChanged).toHaveBeenCalledWith("entity:abc-current", "New title");
+    const result = await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:abc",
+      "New title",
+    ]);
+    expect(onPanelTitleChanged).toHaveBeenCalledWith("entity:abc-current", "New title", false);
+    expect(result).toBe("entity:abc-current");
   });
 
   it("does not fire onPanelTitleChanged when the slot has no current entity", async () => {
@@ -172,8 +232,12 @@ describe("workspaceStateService — title mirror hooks", () => {
       onPanelTitleChanged,
       dispatchReturns: { panelUpdateTitle: null },
     });
-    await svc.handler(makeCtx() as never, "panel.updateTitle", ["panel:abc", "Stale"]);
+    const result = await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:abc",
+      "Stale",
+    ]);
     expect(onPanelTitleChanged).not.toHaveBeenCalled();
+    expect(result).toBeNull();
   });
 
   it("never fires onPanelTitleChanged for unrelated methods", async () => {
@@ -194,9 +258,7 @@ describe("workspaceStateService — slot-state change hook", () => {
       },
     };
 
-    await svc.handler(ctx as never, "slot.create", [
-      { slotId: "s1", parentSlotId: null, positionId: "p1" },
-    ]);
+    await svc.handler(ctx as never, "slot.create", [{ slotId: "s1", parentSlotId: null }]);
 
     expect(calls).toContainEqual({
       method: "slotCreate",
@@ -204,7 +266,6 @@ describe("workspaceStateService — slot-state change hook", () => {
         {
           slotId: "s1",
           parentSlotId: null,
-          positionId: "p1",
           ownerUserId: "user-verified",
         },
       ],
@@ -220,16 +281,16 @@ describe("workspaceStateService — slot-state change hook", () => {
       },
     };
 
-    await svc.handler(ctx as never, "slot.move", ["s1", null, "p1"]);
+    await svc.handler(ctx as never, "slot.move", ["s1", null, { afterSlotId: "s0" }]);
 
     expect(calls).toContainEqual({
       method: "slotMove",
-      args: ["s1", null, "p1", "user-verified"],
+      args: ["s1", null, { afterSlotId: "s0" }, "user-verified"],
     });
   });
 
   const mutating: Array<[method: string, args: unknown[]]> = [
-    ["slot.create", [{ slotId: "s1", parentSlotId: null, positionId: "p1" }]],
+    ["slot.create", [{ slotId: "s1", parentSlotId: null }]],
     [
       "slot.commitPreparedNavigation",
       [
@@ -249,9 +310,7 @@ describe("workspaceStateService — slot-state change hook", () => {
       ],
     ],
     ["slot.updateCurrentStateArgs", ["s1", {}]],
-    ["slot.setParent", ["s1", null]],
-    ["slot.setPosition", ["s1", "p1"]],
-    ["slot.move", ["s1", null, "p1"]],
+    ["slot.move", ["s1", null, { afterSlotId: "s0" }]],
     ["slot.close", ["s1"]],
   ];
 
@@ -265,10 +324,13 @@ describe("workspaceStateService — slot-state change hook", () => {
   }
 
   const reads: Array<[method: string, args: unknown[]]> = [
-    ["panelTree.snapshot", []],
-    ["slot.list", []],
+    ["panelTree.rootGroups", [{}]],
+    ["panelTree.page", [{ group: { kind: "roots", ownerUserId: null }, limit: 50 }]],
+    ["panelTree.path", ["s1"]],
+    ["panelTree.detail", ["s1"]],
+    ["panelTree.search", [{ query: "q" }]],
     ["slot.get", ["s1"]],
-    ["slot.history", ["s1"]],
+    ["slot.historyRelative", ["s1", -1]],
     ["entity.resolveActive", ["e1"]],
     ["entity.resolve", ["e1"]],
     ["panel.search", ["q", 10]],

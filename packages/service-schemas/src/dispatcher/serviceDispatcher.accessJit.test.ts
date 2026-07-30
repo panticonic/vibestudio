@@ -142,9 +142,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     const acquire = vi.fn();
     const consume = vi.fn();
     const handler = vi.fn(async () => "effect");
-    const d = new ServiceDispatcher({
-      tierLookup: () => ({ tier: "gated", session: "family", rationale: "test" }),
-      capabilityLookup: (method) => `test:${method}`,
+    const d = createTestServiceDispatcher({
+      methods: {
+        "dry.write": { tier: "gated", capability: "test:dry.write" },
+      },
     });
     d.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
       ...testAuthority(caller, capability, resourceKey),
@@ -198,11 +199,11 @@ describe("dispatcher: access descriptor + JIT errors", () => {
   });
 
   it("keeps nested preflight bound to the immutable eval transport identity", async () => {
-    const d = new ServiceDispatcher({
-      tierLookup: (method) =>
-        method === "sealed.write"
-          ? { tier: "open", session: "codeOnly", rationale: "durable code only" }
-          : { tier: "open", session: "family", rationale: "discovery" },
+    const d = createTestServiceDispatcher({
+      methods: {
+        "authority.preflight": { tier: "open" },
+        "sealed.write": { tier: "open", session: "codeOnly" },
+      },
     });
     d.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
       ...testAuthority(caller, capability, resourceKey),
@@ -286,8 +287,8 @@ describe("dispatcher: access descriptor + JIT errors", () => {
   });
 
   it("keeps discovery open while gating a dynamically selected authority leaf", async () => {
-    const d = new ServiceDispatcher({
-      tierLookup: () => ({ tier: "open", session: "family", rationale: "discovery" }),
+    const d = createTestServiceDispatcher({
+      openMethods: ["discovery.resolve"],
     });
     d.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
       ...testAuthority(caller, capability, resourceKey),
@@ -383,8 +384,8 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     const handler = vi.fn(async (handlerCtx: ServiceContext) =>
       preparedAuthorityPayload<{ selectedTarget: string }>(handlerCtx, "dynamic.resolve.target")
     );
-    const d = new ServiceDispatcher({
-      tierLookup: () => ({ tier: "open", session: "family", rationale: "discovery" }),
+    const d = createTestServiceDispatcher({
+      openMethods: ["dynamic.resolve"],
     });
     d.setAuthorityResolver(({ caller, capability, resourceKey }) => {
       const resolved = testAuthority(caller, capability, resourceKey);
@@ -452,8 +453,8 @@ describe("dispatcher: access descriptor + JIT errors", () => {
 
   it("keeps prepared payloads invocation-local and exposes only the final handler value", async () => {
     const resolverSawPayload: boolean[] = [];
-    const d = new ServiceDispatcher({
-      tierLookup: () => ({ tier: "open", session: "family", rationale: "test" }),
+    const d = createTestServiceDispatcher({
+      openMethods: ["payload.use"],
     });
     d.setAuthorityResolver(({ caller, capability, resourceKey }) =>
       testAuthority(caller, capability, resourceKey)
@@ -518,8 +519,8 @@ describe("dispatcher: access descriptor + JIT errors", () => {
   });
 
   it("clears stale prepared payloads when authority is denied and never invokes the effect", async () => {
-    const d = new ServiceDispatcher({
-      tierLookup: () => ({ tier: "open", session: "family", rationale: "test" }),
+    const d = createTestServiceDispatcher({
+      openMethods: ["deniedPayload.use"],
     });
     d.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
       ...testAuthority(caller, capability, resourceKey),
@@ -606,9 +607,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
       state: "closed" as const,
       info: request(input),
     }));
-    const d = new ServiceDispatcher({
-      tierLookup: () => ({ tier: "gated", session: "family", rationale: "test" }),
-      capabilityLookup: (method) => `test:${method}`,
+    const d = createTestServiceDispatcher({
+      methods: {
+        "acquisition.act": { tier: "gated", capability: "test:acquisition.act" },
+      },
     });
     d.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
       ...testAuthority(caller, capability, resourceKey),
@@ -677,9 +679,10 @@ describe("dispatcher: access descriptor + JIT errors", () => {
         preauthorized: true as const,
       };
     });
-    const d = new ServiceDispatcher({
-      tierLookup: () => ({ tier: "gated", session: "family", rationale: "test" }),
-      capabilityLookup: (method) => `test:${method}`,
+    const d = createTestServiceDispatcher({
+      methods: {
+        "preauthorized.act": { tier: "gated", capability: "test:preauthorized.act" },
+      },
     });
     d.setAuthorityResolver(({ caller, capability, resourceKey }) => {
       const resolved = testAuthority(caller, capability, resourceKey);

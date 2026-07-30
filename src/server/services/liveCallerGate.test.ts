@@ -4,7 +4,7 @@ import { createLiveCallerGate } from "./liveCallerGate.js";
 
 describe("createLiveCallerGate", () => {
   const executionDigest = "a".repeat(64);
-  const authority = { requests: [] } as const;
+  const authority = { requests: [], provides: [] } as const;
   const codeIdentity = (
     callerId: string,
     callerKind: "panel" | "app" | "worker" | "do",
@@ -76,7 +76,12 @@ describe("createLiveCallerGate", () => {
               ? ({
                   id: entityId,
                   kind: "do",
-                  source: { repoPath: "vibestudio/internal", effectiveVersion: "ev-1" },
+                  source: {
+                    repoPath: entityId.includes("GadWorkspaceDO")
+                      ? "vibestudio/internal"
+                      : "vibestudio/internal",
+                    effectiveVersion: "ev-1",
+                  },
                   activeExecutionDigest: currentExecutionDigest,
                   activeAuthority: authority,
                   ownerUserId: "system",
@@ -92,8 +97,7 @@ describe("createLiveCallerGate", () => {
       },
       isLiveExtension: (callerId) => extensionLive && callerId === "@workspace-extensions/host",
       isLiveSystemRuntime: (callerId, callerKind) =>
-        callerId === "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane" &&
-        callerKind === "do",
+        callerId === "do:workers/workspace-source:GadWorkspaceDO:workspace" && callerKind === "do",
       now: () => 10,
     });
     return {
@@ -241,10 +245,10 @@ describe("createLiveCallerGate", () => {
     expect(
       state.gate(
         createVerifiedCaller(
-          "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+          "do:workers/workspace-source:GadWorkspaceDO:workspace",
           "do",
           codeIdentity(
-            "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+            "do:workers/workspace-source:GadWorkspaceDO:workspace",
             "do",
             "vibestudio/internal"
           ),
@@ -256,9 +260,13 @@ describe("createLiveCallerGate", () => {
     expect(
       state.gate(
         createVerifiedCaller(
-          "do:vibestudio/internal:GadWorkspaceDO:other",
+          "do:workers/workspace-source:GadWorkspaceDO:other",
           "do",
-          codeIdentity("do:vibestudio/internal:GadWorkspaceDO:other", "do", "vibestudio/internal"),
+          codeIdentity(
+            "do:workers/workspace-source:GadWorkspaceDO:other",
+            "do",
+            "vibestudio/internal"
+          ),
           null,
           systemSubject
         )

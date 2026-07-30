@@ -115,10 +115,10 @@ function mockWorkerBuild(
       sourcePath: "workers/runtime-fixture",
       ev: execution.sourceState.effectiveVersion,
       sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
-      sourceSemanticState: execution.sourceState.state,
+      sourceState: execution.sourceState.state,
       execution,
       sourcemap: false,
-      authority: { requests: [] },
+      authority: { requests: [], provides: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -161,7 +161,7 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
       source: unitPath,
       unitName: unitPath,
       artifact: runtimeArtifact(unitPath, ref ?? "main"),
-      authorityRequests: [],
+      authority: { provides: [], requests: [] },
     })),
     getBuildByKey: vi.fn(() => build),
     getManifestRoutes: () => [],
@@ -376,7 +376,7 @@ describe("WorkerdManager", () => {
         source: "workers/runtime-fixture",
         unitName: "workers/runtime-fixture",
         artifact: runtimeArtifact("workers/runtime-fixture", "main"),
-        authorityRequests: [],
+        authority: { provides: [], requests: [] },
       });
       await mgr.startWorker(startArgs());
 
@@ -510,7 +510,7 @@ describe("WorkerdManager", () => {
           activeBuildKey: prepared.buildKey,
           activeExecutionDigest: prepared.executionDigest,
           activeAuthority: {
-            requests: prepared.authorityRequests,
+            ...prepared.authority,
           },
           contextId: "ctx-agent",
           className: "NewDO",
@@ -538,7 +538,7 @@ describe("WorkerdManager", () => {
         source: unitPath,
         unitName: unitPath,
         artifact: runtimeArtifact(unitPath, "changed"),
-        authorityRequests: [],
+        authority: { provides: [], requests: [] },
       }));
       vi.mocked(deps.bindRuntimeImage).mockClear();
       const restored = new WorkerdManager(deps);
@@ -553,7 +553,7 @@ describe("WorkerdManager", () => {
         activeBuildKey: prepared.buildKey,
         activeExecutionDigest: prepared.executionDigest,
         activeAuthority: {
-          requests: prepared.authorityRequests,
+          ...prepared.authority,
         },
         contextId: "ctx-agent",
         className: "NewDO",
@@ -681,7 +681,7 @@ describe("WorkerdManager", () => {
   });
 
   describe("authority-first workspace stage", () => {
-    it("fails closed for every non-control-plane runtime before provider binding", async () => {
+    it("fails closed for every workspace runtime before provider binding", async () => {
       const deps = createMockDeps();
       const mgr = new ProductWorkerdManager(deps);
 
@@ -692,7 +692,7 @@ describe("WorkerdManager", () => {
       await expect(mgr.startWorker(startArgs())).rejects.toThrow(/sealed control-plane stage/);
       await expect(
         mgr.ensureDurableObjectEntity({
-          source: "vibestudio/internal",
+          source: "workers/workspace-source",
           className: "GadWorkspaceDO",
           key: "alternate-authority",
           contextId: "control-plane:test",
@@ -700,35 +700,37 @@ describe("WorkerdManager", () => {
       ).rejects.toThrow(/sealed control-plane stage/);
     });
 
-    it("can register only the product-sealed semantic authority before binding", async () => {
+    it("registers the manifest-declared source provider after bootstrap binding", async () => {
       const deps = createMockDeps();
       const mgr = new ProductWorkerdManager(deps);
+      mgr.bindWorkspaceProvider(deps);
 
-      await mgr.ensureDOClass("vibestudio/internal", "GadWorkspaceDO");
+      await mgr.ensureDOClass("workers/workspace-source", "GadWorkspaceDO");
 
-      expect(mgr.getStage()).toBe("control-plane");
-      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      expect(mgr.getStage()).toBe("workspace");
+      expect(deps.bindRuntimeImage).toHaveBeenCalled();
     });
 
-    it("prepares the semantic authority from a host-baked sealed runtime image", async () => {
+    it("prepares the source provider from the bootstrap workspace image", async () => {
       const deps = createMockDeps();
       const mgr = new ProductWorkerdManager(deps);
+      mgr.bindWorkspaceProvider(deps);
 
       const prepared = await mgr.ensureDurableObjectEntity({
-        source: "vibestudio/internal",
+        source: "workers/workspace-source",
         className: "GadWorkspaceDO",
-        key: "workspace-semantic-control-plane",
-        contextId: "control-plane:workspace-semantic-control-plane",
+        key: "workspace",
+        contextId: "control-plane:workspace",
       });
 
       expect(prepared).toMatchObject({
-        targetId: "do:vibestudio/internal:GadWorkspaceDO:workspace-semantic-control-plane",
+        targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
         effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
         buildKey: expect.stringMatching(/^[0-9a-f]{64}$/),
         executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-        authorityRequests: [],
+        authority: { provides: [], requests: [] },
       });
-      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      expect(deps.bindRuntimeImage).toHaveBeenCalled();
     });
 
     it("binds the semantic-main-backed workspace provider exactly once", () => {
@@ -918,7 +920,7 @@ describe("WorkerdManager", () => {
           source: "workers/runtime-fixture",
           unitName: "workers/runtime-fixture",
           artifact: runtimeArtifact("workers/runtime-fixture", "main"),
-          authorityRequests: [],
+          authority: { provides: [], requests: [] },
         })
         .mockRejectedValueOnce(new Error("Unknown vcs ref: ctx:deleted"));
       const deps = createMockDeps({
@@ -1021,6 +1023,31 @@ describe("WorkerdManager", () => {
       expect(revokeSpy).toHaveBeenCalledWith("do-service:workers/agent:LegacyDO");
       // The entry is gone from the map — config regeneration won't emit it.
       expect(revokeSpy).not.toHaveBeenCalledWith("do-service:workers/agent:AgentDO");
+    });
+
+    it("reconciles provider definitions and receiver classes before activating a rebuilt source", async () => {
+      const resourceHandleLifecycle = {
+        reconcileProviderDefinitions: vi.fn(),
+        reconcileReceiverClasses: vi.fn(),
+      };
+      const deps = createMockDeps({ resourceHandleLifecycle });
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.onSourceRebuilt(
+        "workers/agent",
+        [{ className: "AgentDO" }],
+        undefined,
+        "build:workers/agent:main"
+      );
+
+      expect(resourceHandleLifecycle.reconcileProviderDefinitions).toHaveBeenCalledWith(
+        "workers/agent",
+        []
+      );
+      expect(resourceHandleLifecycle.reconcileReceiverClasses).toHaveBeenCalledWith(
+        "workers/agent",
+        ["AgentDO"]
+      );
     });
 
     it("leaves DO services alone for a non-authoritative rebuild", async () => {
@@ -1181,9 +1208,8 @@ describe("WorkerdManager", () => {
       expect(compiledWorkerdPrograms.universalDo).toContain(
         "if (this.loadedFacet?.version === args.version) return this.loadedFacet"
       );
-      expect(compiledWorkerdPrograms.universalDo).toContain(
-        'this.ctx.facets.abort("do", new Error("Runtime entity retired"))'
-      );
+      expect(compiledWorkerdPrograms.universalDo).toContain("Runtime entity retired");
+      expect(compiledWorkerdPrograms.universalDo).toContain('this.ctx.facets.abort("do"');
       expect(compiledWorkerdPrograms.universalDo).toContain(
         'this.ctx.facets.abort("do", new Error("System-test injected vessel crash"))'
       );

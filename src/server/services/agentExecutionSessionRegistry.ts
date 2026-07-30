@@ -21,6 +21,11 @@ interface AdmissionWaiter {
  */
 export class AgentExecutionSessionRegistry {
   private readonly byRuntime = new Map<string, AgentExecutionSessionFact>();
+  /** A notebook history keeps one authority identity across cells, while this
+   * map records the single cell currently executing in that history. */
+  private readonly activeRunByRuntime = new Map<string, string>();
+  /** Previous committed history fact while a new cell is being prepared. */
+  private readonly priorFactByActiveRuntime = new Map<string, AgentExecutionSessionFact | null>();
   private readonly testPoliciesByContext = new Map<
     string,
     NonNullable<AgentExecutionSessionFact["testPolicy"]>
@@ -61,11 +66,6 @@ export class AgentExecutionSessionRegistry {
         authority: Object.freeze(
           spec.authority.map((rule) =>
             Object.freeze({ ...rule, resource: Object.freeze({ ...rule.resource }) })
-          )
-        ),
-        userland: Object.freeze(
-          spec.userland.map((rule) =>
-            Object.freeze({ ...rule, subject: Object.freeze({ ...rule.subject }) })
           )
         ),
         unexpectedPrompts: spec.unexpectedPrompts,
@@ -132,31 +132,41 @@ export class AgentExecutionSessionRegistry {
 
   admit(input: AdmissionInput): AgentExecutionSessionFact {
     const issuedAt = Date.now();
-    const active = this.resolve(input.eval.runtimeId, issuedAt);
-    if (active) {
-      if (active.eval.runId === input.eval.runId) {
-        if (!sameAdmission(active, input)) {
+    const retained = this.resolve(input.eval.runtimeId, issuedAt);
+    const activeRunId = this.activeRunByRuntime.get(input.eval.runtimeId);
+    if (retained && activeRunId) {
+      if (activeRunId === input.eval.runId) {
+        if (!sameAdmission(retained, input)) {
           throw new Error(
             `Evaluated run ${input.eval.runId} was replayed with different admission facts`
           );
         }
-        return active;
+        return retained;
       }
       throw new Error(
-        `Evaluated runtime ${input.eval.runtimeId} is already admitted for run ${active.eval.runId}`
+        `Evaluated runtime ${input.eval.runtimeId} is already admitted for run ${activeRunId}`
+      );
+    }
+    if (retained && !sameTrustUnit(retained, input)) {
+      throw new Error(
+        `Evaluated runtime ${input.eval.runtimeId} was reused by a different notebook trust unit`
       );
     }
     const fact: AgentExecutionSessionFact = Object.freeze({
       v: 1,
-      authoritySessionId: randomUUID(),
-      authoritySessionVersion: 1,
+      authoritySessionId: retained?.authoritySessionId ?? randomUUID(),
+      authoritySessionVersion: (retained?.authoritySessionVersion ?? 0) + 1,
       ...input,
       issuedAt,
-      // This bounds orphaned async runs. Live held runs are removed on completion.
+      // A warm EvalDO is a notebook history, not a sequence of unrelated
+      // programs. Keep its trust identity for the same retention window as its
+      // live heap; individual cell completion only releases the execution slot.
       expiresAt: input.expiresAt ?? issuedAt + 7 * 24 * 60 * 60 * 1_000,
-      nonce: randomUUID(),
+      nonce: retained?.nonce ?? randomUUID(),
     });
     this.byRuntime.set(fact.eval.runtimeId, fact);
+    this.priorFactByActiveRuntime.set(fact.eval.runtimeId, retained);
+    this.activeRunByRuntime.set(fact.eval.runtimeId, fact.eval.runId);
     if (fact.mode === "test" && fact.testPolicy) {
       const rootPolicyId = orchestratorPolicyId(fact.testPolicy);
       const root = this.orchestratorRuns.get(rootPolicyId);
@@ -169,6 +179,11 @@ export class AgentExecutionSessionRegistry {
           runtimeId: fact.eval.runtimeId,
           runId: fact.eval.runId,
         });
+      } else if (
+        fact.testPolicy.kind === "orchestrator" &&
+        root.runtimeId === fact.eval.runtimeId
+      ) {
+        root.runId = fact.eval.runId;
       }
       this.markTestContext(fact.contextId, fact.testPolicy);
     }
@@ -189,11 +204,12 @@ export class AgentExecutionSessionRegistry {
   ): Promise<AgentExecutionSessionFact> {
     const runtimeId = input.eval.runtimeId;
     const queued = this.admissionWaiters.get(runtimeId);
-    const active = this.resolve(runtimeId);
-    if ((!queued || queued.length === 0) && !active) {
+    const retained = this.resolve(runtimeId);
+    const activeRunId = this.activeRunByRuntime.get(runtimeId);
+    if ((!queued || queued.length === 0) && !activeRunId) {
       return Promise.resolve(this.admit(input));
     }
-    if (active?.eval.runId === input.eval.runId) {
+    if (retained && activeRunId === input.eval.runId) {
       return Promise.resolve(this.admit(input));
     }
     if (signal?.aborted) return Promise.reject(admissionAbortError(runtimeId));
@@ -249,14 +265,36 @@ export class AgentExecutionSessionRegistry {
 
   close(runtimeId: string, runId?: string): boolean {
     const fact = this.byRuntime.get(runtimeId);
-    if (!fact || (runId !== undefined && fact.eval.runId !== runId)) return false;
-    this.remove(fact);
+    const activeRunId = this.activeRunByRuntime.get(runtimeId);
+    if (!fact || !activeRunId || (runId !== undefined && activeRunId !== runId)) {
+      return false;
+    }
+    this.activeRunByRuntime.delete(runtimeId);
+    this.priorFactByActiveRuntime.delete(runtimeId);
+    this.drainAdmissionWaiters(runtimeId);
+    return true;
+  }
+
+  /**
+   * Roll back a cell that failed before it was accepted by the notebook
+   * kernel. Unlike close(), this does not commit its per-cell authority facts.
+   */
+  discard(runtimeId: string, runId: string): boolean {
+    const activeRunId = this.activeRunByRuntime.get(runtimeId);
+    if (activeRunId !== runId) return false;
+    const prior = this.priorFactByActiveRuntime.get(runtimeId) ?? null;
+    this.activeRunByRuntime.delete(runtimeId);
+    this.priorFactByActiveRuntime.delete(runtimeId);
+    if (prior) this.byRuntime.set(runtimeId, prior);
+    else this.byRuntime.delete(runtimeId);
     this.drainAdmissionWaiters(runtimeId);
     return true;
   }
 
   clear(): void {
     this.byRuntime.clear();
+    this.activeRunByRuntime.clear();
+    this.priorFactByActiveRuntime.clear();
     this.testPoliciesByContext.clear();
     this.orchestratorRuns.clear();
     for (const [runtimeId, waiters] of this.admissionWaiters) {
@@ -269,6 +307,8 @@ export class AgentExecutionSessionRegistry {
   }
 
   private remove(fact: AgentExecutionSessionFact): void {
+    this.activeRunByRuntime.delete(fact.eval.runtimeId);
+    this.priorFactByActiveRuntime.delete(fact.eval.runtimeId);
     const policy = fact.testPolicy;
     if (fact.mode !== "test" || !policy) {
       this.byRuntime.delete(fact.eval.runtimeId);
@@ -293,6 +333,8 @@ export class AgentExecutionSessionRegistry {
         orchestratorPolicyId(fact.testPolicy) === policyId
       ) {
         this.byRuntime.delete(runtimeId);
+        this.activeRunByRuntime.delete(runtimeId);
+        this.priorFactByActiveRuntime.delete(runtimeId);
         removedRuntimeIds.push(runtimeId);
       }
     }
@@ -308,7 +350,7 @@ export class AgentExecutionSessionRegistry {
   }
 
   private drainAdmissionWaiters(runtimeId: string): void {
-    if (this.byRuntime.has(runtimeId)) return;
+    if (this.activeRunByRuntime.has(runtimeId)) return;
     const waiters = this.admissionWaiters.get(runtimeId);
     if (!waiters) return;
     for (;;) {
@@ -355,7 +397,29 @@ function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): 
     JSON.stringify(factEval) === JSON.stringify(inputEval) &&
     JSON.stringify(fact.attachedHost ?? null) === JSON.stringify(input.attachedHost ?? null) &&
     JSON.stringify(fact.causalParent) === JSON.stringify(input.causalParent) &&
-    JSON.stringify(fact.mission ?? null) === JSON.stringify(input.mission ?? null) &&
+    JSON.stringify(fact.reviewedClosure ?? null) ===
+      JSON.stringify(input.reviewedClosure ?? null) &&
+    JSON.stringify(fact.testPolicy ?? null) === JSON.stringify(input.testPolicy ?? null)
+  );
+}
+
+/**
+ * Identity that owns one warm EvalDO notebook heap. Cell-local provenance
+ * (run id, task ref, causal parent, manifest and event sink) deliberately does
+ * not participate: those facts advance on every cell without changing who
+ * owns the surviving modules and objects.
+ */
+function sameTrustUnit(fact: AgentExecutionSessionFact, input: AdmissionInput): boolean {
+  return (
+    fact.mode === input.mode &&
+    fact.ownerUser === input.ownerUser &&
+    fact.workspaceId === input.workspaceId &&
+    fact.contextId === input.contextId &&
+    JSON.stringify(fact.agentBinding) === JSON.stringify(input.agentBinding) &&
+    JSON.stringify(fact.harness) === JSON.stringify(input.harness) &&
+    JSON.stringify(fact.attachedHost ?? null) === JSON.stringify(input.attachedHost ?? null) &&
+    JSON.stringify(fact.reviewedClosure ?? null) ===
+      JSON.stringify(input.reviewedClosure ?? null) &&
     JSON.stringify(fact.testPolicy ?? null) === JSON.stringify(input.testPolicy ?? null)
   );
 }

@@ -420,7 +420,8 @@ async function collectShellSnapshots(app) {
                 /^(Trust and (start|connect)|Approve and (start|connect)|Deny)$/i.test(label)
               );
             const hasHostedShellChrome = Boolean(
-              document.querySelector(".titlebar-breadcrumb-scroll")
+              document.querySelector('[data-shell-top-chrome="titlebar"]')
+                || document.querySelector(".titlebar-breadcrumb-scroll")
                 || document.querySelector('[aria-label="Menu"]')
                 || document.querySelector('[data-hosted-shell="true"]')
             );
@@ -458,7 +459,8 @@ async function clickDesktopButton(app, label) {
           `(() => {
               const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'));
               const hasHostedShellChrome = Boolean(
-                document.querySelector(".titlebar-breadcrumb-scroll")
+                document.querySelector('[data-shell-top-chrome="titlebar"]')
+                  || document.querySelector(".titlebar-breadcrumb-scroll")
                   || document.querySelector('[aria-label="Menu"]')
               );
               if (hasLaunchGateApproval) return 0;
@@ -501,19 +503,20 @@ async function dismissConnectionDialog(app) {
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
       try {
-        const isConnectionDialog = await contents.executeJavaScript(
+        const dismissed = await contents.executeJavaScript(
           `(() => {
               const dialog = document.querySelector('[role="dialog"]');
               const text = dialog?.textContent ?? "";
-              return /paired devices/i.test(text) && /Pair & relaunch/i.test(text);
+              if (!/paired devices/i.test(text) || !/Pair & relaunch/i.test(text)) return false;
+              const cancel = Array.from(dialog.querySelectorAll("button"))
+                .find((button) => button.textContent?.trim() === "Cancel");
+              if (!(cancel instanceof HTMLButtonElement) || cancel.disabled) return false;
+              cancel.click();
+              return true;
             })()`,
           true
         );
-        if (!isConnectionDialog) continue;
-        contents.focus();
-        contents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
-        contents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
-        return true;
+        if (dismissed) return true;
       } catch {
         // Ignore non-DOM webContents.
       }
@@ -556,7 +559,8 @@ async function waitForRenderedPanel(app, timeoutMs) {
                   text,
                   childCount: body?.querySelectorAll("*").length ?? 0,
                   hasHostChrome: Boolean(
-                    document.querySelector(".titlebar-breadcrumb-scroll")
+                    document.querySelector('[data-shell-top-chrome="titlebar"]')
+                      || document.querySelector(".titlebar-breadcrumb-scroll")
                       || document.querySelector('[aria-label="Menu"]')
                   ),
                   hasLaunchGateApproval: Boolean(
@@ -580,8 +584,7 @@ async function waitForRenderedPanel(app, timeoutMs) {
           if (
             dom.hasHostChrome ||
             dom.hasLaunchGateApproval ||
-            dom.readyState !== "complete" ||
-            dom.childCount < 4
+            dom.readyState !== "complete"
           ) {
             continue;
           }

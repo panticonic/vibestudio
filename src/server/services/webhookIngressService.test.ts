@@ -204,8 +204,7 @@ describe("webhookIngressService — RPC surface", () => {
         className: "WebhookStoreDO",
         objectKey: "global",
       },
-      "list",
-      undefined
+      "list"
     );
   });
 
