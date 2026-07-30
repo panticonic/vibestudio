@@ -1,19 +1,11 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
-import baseConfig from "./vitest.config";
-
-const base = baseConfig as {
-  test?: {
-    exclude?: string[];
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-};
+import { vitestSharedConfig } from "./vitest.sharedConfig";
 
 export default defineConfig({
-  ...base,
+  ...vitestSharedConfig,
   test: {
-    ...base.test,
+    ...vitestSharedConfig.test,
     name: "host",
     reporters: [
       "default",
@@ -32,6 +24,6 @@ export default defineConfig({
       "apps/**/*.test.ts",
       "apps/**/*.test.tsx",
     ],
-    exclude: [...(base.test?.exclude ?? []), "workspace/**", "tests/workspace-integration/**"],
+    exclude: [...vitestSharedConfig.test.exclude, "workspace/**", "tests/workspace-integration/**"],
   },
 });

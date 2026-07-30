@@ -103,6 +103,7 @@
       "@workspace-workers/agent-worker": ["workspace/workers/agent-worker/index.ts"],
       "@workspace-workers/email-sync": ["workspace/workers/email-sync/index.ts"],
       "@workspace-workers/test-agent": ["workspace/workers/test-agent/index.ts"],
+      "@workspace-workers/workspace-source": ["workspace/workers/workspace-source/index.ts"],
       "@workspace/about-shared/types": ["workspace/packages/about-shared/types.ts"],
       "@workspace/about-shared/templates": ["workspace/packages/about-shared/templates.ts"],
       "@workspace/about-shared/template-review": ["workspace/packages/about-shared/templateReview.tsx"],
@@ -121,7 +122,7 @@
       "@workspace/ui/panel": ["workspace/packages/ui/src/panel.ts"],
       "@workspace/ui/tokens.css": ["workspace/packages/ui/src/tokens.css"],
       "@workspace/agentic-do": ["workspace/packages/agentic-do/src/index.ts"],
-      "@vibestudio/agentic-protocol": ["packages/agentic-protocol/src/index.ts"],
+      "@workspace/agentic-protocol": ["workspace/packages/agentic-protocol/src/index.ts"],
       "@workspace/eval": ["workspace/packages/eval/src/index.ts"],
       "@workspace/eval/sandbox": ["workspace/packages/eval/src/sandbox.ts"],
       "@workspace/eval/scope": ["workspace/packages/eval/src/scope.ts"],
@@ -145,32 +146,34 @@
       "@workspace/pubsub": ["workspace/packages/pubsub/src/index.ts"],
       "@workspace/react": ["workspace/packages/react/src/index.ts"],
       "@workspace/react/responsive": ["workspace/packages/react/src/responsive.ts"],
-      "@vibestudio/runtime": ["packages/runtime/src/panel/index.ts"],
-      "@vibestudio/runtime/internal/diagnostics": [
-        "packages/runtime/src/internal/diagnostics.ts"
+      "@workspace/runtime": ["workspace/packages/runtime/src/panel/index.ts"],
+      "@workspace/runtime/panel-runtime": [
+        "workspace/packages/runtime/src/shared/panelRuntime.ts"
+      ],
+      "@workspace/runtime/internal/diagnostics": [
+        "workspace/packages/runtime/src/internal/diagnostics.ts"
       ],
       "@workspace/testkit/suites": ["workspace/packages/testkit/src/suites/index.ts"],
       "@workspace/testkit/profiling": ["workspace/packages/testkit/src/profile-core.ts"],
-      "@vibestudio/runtime/hosted": ["packages/runtime/src/shared/hostedRuntime.ts"],
-      "@vibestudio/runtime/portable": ["packages/runtime/src/shared/portable.ts"],
-      "@vibestudio/runtime/credentials": ["packages/runtime/src/shared/credentials.ts"],
-      "@vibestudio/runtime/worker": ["packages/runtime/src/worker/index.ts"],
-      "@vibestudio/runtime/worker/durable-base": [
-        "packages/runtime/src/worker/durable-base.ts"
+      "@workspace/runtime/hosted": ["workspace/packages/runtime/src/shared/hostedRuntime.ts"],
+      "@workspace/runtime/portable": ["workspace/packages/runtime/src/shared/portable.ts"],
+      "@workspace/runtime/credentials": ["workspace/packages/runtime/src/shared/credentials.ts"],
+      "@workspace/runtime/worker": ["workspace/packages/runtime/src/worker/index.ts"],
+      "@workspace/runtime/worker/durable-base": [
+        "workspace/packages/runtime/src/worker/durable-base.ts"
       ],
-      "@vibestudio/runtime/worker/credentials": [
-        "packages/runtime/src/worker/credentials.ts"
+      "@workspace/runtime/worker/credentials": [
+        "workspace/packages/runtime/src/worker/credentials.ts"
       ],
-      "@vibestudio/runtime/panel/credentials": [
-        "packages/runtime/src/panel/credentials.ts"
+      "@workspace/runtime/panel/credentials": [
+        "workspace/packages/runtime/src/panel/credentials.ts"
       ],
-      "@vibestudio/runtime/worker/test-utils": [
-        "packages/runtime/src/worker/durable-test-utils.ts"
+      "@workspace/runtime/worker/test-utils": [
+        "workspace/packages/runtime/src/worker/durable-test-utils.ts"
       ],
-      "@vibestudio/runtime/workerd-client": ["packages/runtime/src/shared/workerd.ts"],
-      "@vibestudio/runtime/gad-schema": ["packages/runtime/src/shared/gad-schema.ts"],
-      "@vibestudio/vcs-engine": ["packages/vcs-engine/src/index.ts"],
-      "@vibestudio/cdp-client": ["packages/cdp-client/index.d.ts"],
+      "@workspace/runtime/workerd-client": ["workspace/packages/runtime/src/shared/workerd.ts"],
+      "@workspace/vcs-engine": ["workspace/packages/vcs-engine/src/index.ts"],
+      "@workspace/cdp-client": ["workspace/packages/cdp-client/index.d.ts"],
       "@workspace/svelte": ["workspace/packages/svelte/src/index.ts"],
       "@workspace/tool-ui": ["workspace/packages/tool-ui/src/index.ts"],
       "@workspace/tool-ui/*": ["workspace/packages/tool-ui/src/*"],

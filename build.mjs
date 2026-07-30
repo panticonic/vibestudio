@@ -26,6 +26,54 @@ const logOverride = {
 
 const SOURCE_PREREQUISITE_LOCK_PATH = "dist/source-server-prerequisites.lock";
 
+function workspaceImplementationRoots() {
+  const externallyForbidden = (process.env.VIBESTUDIO_FORBIDDEN_USERLAND_ROOTS ?? "")
+    .split(path.delimiter)
+    .filter(Boolean)
+    .map((root) => `${fs.realpathSync(root)}${path.sep}`);
+  const workspaceRoot = path.resolve("workspace");
+  if (!fs.existsSync(workspaceRoot)) return externallyForbidden;
+  const roots = [...externallyForbidden];
+  const visit = (directory) => {
+    if (path.basename(directory) === "node_modules") return;
+    const manifest = path.join(directory, "package.json");
+    if (directory !== workspaceRoot && fs.existsSync(manifest)) {
+      roots.push(`${fs.realpathSync(directory)}${path.sep}`);
+      return;
+    }
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) visit(path.join(directory, entry.name));
+    }
+  };
+  visit(workspaceRoot);
+  return roots;
+}
+
+function assertHostBuildMetafiles(results) {
+  const userlandRoots = workspaceImplementationRoots();
+  for (const result of results) {
+    for (const input of Object.keys(result.metafile?.inputs ?? {})) {
+      if (input.startsWith("<") || !fs.existsSync(input)) continue;
+      const real = fs.realpathSync(input);
+      const userlandRoot = userlandRoots.find(
+        (root) => real === root.slice(0, -1) || real.startsWith(root)
+      );
+      if (userlandRoot) {
+        throw new Error(
+          `Host build input ${input} resolves into userland source ${path.relative(
+            process.cwd(),
+            userlandRoot
+          )}`
+        );
+      }
+    }
+  }
+}
+
+async function buildHostArtifact(config) {
+  return esbuild.build({ ...config, metafile: true });
+}
+
 async function acquireSourcePrerequisiteLock() {
   fs.mkdirSync(path.dirname(SOURCE_PREREQUISITE_LOCK_PATH), { recursive: true });
   const token = randomUUID();
@@ -532,16 +580,19 @@ async function build() {
     // Dependencies: buildVibestudioPackages
     // Required by: None (final outputs)
     const workerdProgramsPromise = buildWorkerdPrograms({ minify: !isDev, logOverride });
-    await Promise.all([
-      esbuild.build(mainConfig),
-      ...preloadConfigs.map((config) => esbuild.build(config)),
-      esbuild.build(browserTransportConfig),
-      esbuild.build(internalDoBundleConfig),
-      esbuild.build(bootstrapConfig),
-      esbuild.build(clientConfig),
+    const initialHostBuilds = await Promise.all([
+      buildHostArtifact(mainConfig),
+      ...preloadConfigs.map((config) => buildHostArtifact(config)),
+      buildHostArtifact(browserTransportConfig),
+      buildHostArtifact(internalDoBundleConfig),
+      buildHostArtifact(bootstrapConfig),
+      buildHostArtifact(clientConfig),
       buildDependencyWorkers(),
       workerdProgramsPromise,
     ]);
+    assertHostBuildMetafiles(
+      initialHostBuilds.filter((result) => result && typeof result === "object")
+    );
     const workerdPrograms = await workerdProgramsPromise;
     // Inline the build-compiled internal DO and workerd host programs into both
     // server artifacts. Source-mode execution reads the same emitted files.
@@ -559,7 +610,11 @@ async function build() {
       define: { ...(serverConfig.define ?? {}), ...internalDoBundleDefine },
     };
     // Both server bundles consume the internal-DO output captured above.
-    await Promise.all([esbuild.build(serverElectronWithBundle), esbuild.build(serverWithBundle)]);
+    const serverBuilds = await Promise.all([
+      buildHostArtifact(serverElectronWithBundle),
+      buildHostArtifact(serverWithBundle),
+    ]);
+    assertHostBuildMetafiles(serverBuilds);
 
     // ========================================================================
     // STEP 3: Copy static assets

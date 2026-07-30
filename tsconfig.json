@@ -26,6 +26,13 @@
       "@vibestudio/browser-data/source-reader-internals": [
         "packages/browser-data/src/sourceReaderInternals.ts"
       ],
+      "@panticonic/builtin/browser-data": ["packages/builtin/src/browser-data/index.ts"],
+      "@panticonic/builtin/workspace-state": ["packages/builtin/src/workspace-state/index.ts"],
+      "@panticonic/builtin/workspace-state/test-fixture": [
+        "packages/builtin/src/workspace-state/testFixture.ts"
+      ],
+      "@panticonic/builtin/eval-engine": ["packages/builtin/src/eval-engine/index.ts"],
+      "@panticonic/builtin/webhook-engine": ["packages/builtin/src/webhook-engine/index.ts"],
       "@vibestudio/content-addressing": ["packages/content-addressing/src/index.ts"],
       "@vibestudio/credential-client": ["packages/credential-client/src/index.ts"],
       "@vibestudio/credential-client/*": ["packages/credential-client/src/*"],
@@ -57,14 +64,14 @@
       "@vibestudio/types": ["packages/types/src/index.ts"],
       "@vibestudio/workspace/*": ["packages/workspace/src/*"],
       "@vibestudio/workspace-contracts/*": ["packages/workspace-contracts/src/*"],
-      "@vibestudio/agentic-protocol": ["packages/agentic-protocol/src/index.ts"],
-      "@vibestudio/semantic-control-plane": [
-        "packages/semantic-control-plane/src/index.ts"
+      "@workspace/agentic-protocol": ["workspace/packages/agentic-protocol/src/index.ts"],
+      "@workspace/vcs-engine": ["workspace/packages/vcs-engine/src/index.ts"],
+      "@workspace/runtime": ["workspace/packages/runtime/src/panel/index.ts"],
+      "@workspace/runtime/panel-runtime": [
+        "workspace/packages/runtime/src/shared/panelRuntime.ts"
       ],
-      "@vibestudio/vcs-engine": ["packages/vcs-engine/src/index.ts"],
-      "@vibestudio/runtime": ["packages/runtime/src/panel/index.ts"],
-      "@vibestudio/runtime/*": ["packages/runtime/src/*"],
-      "@vibestudio/cdp-client": ["packages/cdp-client/index.d.ts"]
+      "@workspace/runtime/*": ["workspace/packages/runtime/src/*"],
+      "@workspace/cdp-client": ["workspace/packages/cdp-client/index.d.ts"]
     }
   },
   "include": ["src/**/*", "packages/**/*"],

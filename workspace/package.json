@@ -1,5 +1,5 @@
 {
-  "name": "@vibestudio/userland-workspace",
+  "name": "@workspace/root",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.12.4",
@@ -14,33 +14,5 @@
     "@types/node": "^24.10.1",
     "typescript": "^5.9.3",
     "vitest": "^3.2.2"
-  },
-  "pnpm": {
-    "allowedBuilds": [
-      "electron",
-      "esbuild",
-      "node-pty",
-      "node-datachannel"
-    ],
-    "onlyBuiltDependencies": [
-      "electron",
-      "esbuild",
-      "node-pty",
-      "node-datachannel"
-    ],
-    "//overrides": "react-native 0.79 peerDeps react ^19.0.0. Pinning here prevents hoisted React 18 (pulled in transitively by workspace deps) from shadowing RN's requirement in the mobile bundle. protobufjs ^7.5.5 patches RCE GHSA-xq3m-2v4x-88gg reachable via @google/genai -> pi-ai. ws pins each transitively required major to its patched fragmentation-memory floor. Revisit when bumping RN.",
-    "overrides": {
-      "react": "19.0.0",
-      "react-dom": "19.0.0",
-      "@earendil-works/pi-ai": "0.82.0",
-      "protobufjs": "^7.5.5",
-      "ws@6": "6.2.4",
-      "ws@7": "7.5.11",
-      "ws@8": "8.21.1"
-    },
-    "patchedDependencies": {
-      "re2@1.24.0": "../patches/re2@1.24.0.patch",
-      "@earendil-works/pi-ai@0.82.0": "packages/harness/patches/@earendil-works__pi-ai@0.82.0.patch"
-    }
   }
 }
