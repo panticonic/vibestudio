@@ -105,13 +105,7 @@ export function App() {
   // Listen for navigate-about menu event via shell event
   const handleNavigateAbout = useCallback(async (payload: { page: string }) => {
     try {
-      const parentId = payload.page === "new" ? await panel.getFocusedPanelId() : null;
-      await (parentId
-        ? panel.createChild(parentId, "about/new", {
-            focus: true,
-            placement: { disposition: "side" },
-          })
-        : panel.createAboutPanel(payload.page));
+      await panel.createAboutPanel(payload.page);
     } catch (error) {
       console.error(`[App] Failed to create shell panel for ${payload.page}:`, error);
       void notification.show({

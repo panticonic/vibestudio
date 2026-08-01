@@ -365,7 +365,11 @@ export const panel = {
   unload: (panelId: string) => productPanelRuntime.panelTree.get(panelId).unload(),
   archive: (panelId: string) => workspaceStateClient.slot.close(panelId),
   createAboutPanel: async (page: string) => {
-    const handle = await productPanelRuntime.openPanel(`about/${page}`, { focus: true });
+    const handle = await productPanelRuntime.openPanel(`about/${page}`, {
+      parentId: null,
+      ...(page === "new" ? { slug: `new-${crypto.randomUUID().slice(0, 8)}` } : {}),
+      focus: true,
+    });
     return { id: handle.id, title: handle.title, kind: handle.kind };
   },
   /** Create a panel from any source path (not prefixed with "about/"). */

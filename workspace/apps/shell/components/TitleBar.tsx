@@ -130,10 +130,6 @@ export function TitleBar({
   };
 
   const handleNewPanel = async () => {
-    if (paneChromeState && onPaneChromeCommand) {
-      onPaneChromeCommand({ type: "new-child" });
-      return;
-    }
     try {
       await panel.createAboutPanel("new");
     } catch (error) {
@@ -228,13 +224,13 @@ export function TitleBar({
             gap="1"
             style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
           >
-            <Tooltip content="New child panel">
+            <Tooltip content="New panel">
               <IconButton
                 variant="ghost"
                 size="2"
                 className="app-touch-target"
                 onClick={handleNewPanel}
-                aria-label="New child panel"
+                aria-label="New panel"
               >
                 <PlusIcon />
               </IconButton>
@@ -321,13 +317,8 @@ export function TitleBar({
             </IconButton>
           </Tooltip>
 
-          <Tooltip content="New child panel beside (⌘/Ctrl+T)">
-            <IconButton
-              variant="ghost"
-              size="1"
-              onClick={handleNewPanel}
-              aria-label="New child panel beside"
-            >
+          <Tooltip content="New panel (⌘/Ctrl+T)">
+            <IconButton variant="ghost" size="1" onClick={handleNewPanel} aria-label="New panel">
               <PlusIcon />
             </IconButton>
           </Tooltip>
