@@ -77,6 +77,15 @@
   --elevation-2: 0 4px 12px var(--black-a4), 0 2px 4px var(--black-a3);
   --elevation-overlay: 0 12px 40px var(--black-a6), 0 4px 12px var(--black-a4);
 
+  /* Scrollbars. The platform default paints a wide grooved track that reads as
+     a seam against our surfaces, so every scroller in the shell and in panels
+     gets the slim treatment below. Override these on a subtree (not the rules)
+     when a surface needs a different weight. */
+  --scrollbar-size: 10px;
+  --scrollbar-inset: 3px;
+  --scrollbar-thumb: color-mix(in srgb, var(--gray-10) 38%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--gray-11) 68%, transparent);
+
   /* Stacking-context policy (one overlay hierarchy) */
   --z-chrome: 10;
   --z-approval-bar: 50;
@@ -145,6 +154,44 @@
   :root:not(.light):not(.light-theme) .vibestudio-logo-img-light {
     display: none;
   }
+}
+
+/* ONE global scrollbar treatment: a slim rounded thumb floating in a
+   transparent gutter, no track and no arrow buttons. An unqualified
+   pseudo-element means `*`, so this reaches every scroller — including the
+   document root — without per-component opt-in. Firefox gets the two standard
+   properties; Chromium (Electron) takes the `::-webkit-` rules, where the
+   transparent border plus `background-clip: padding-box` is what lets a 10px
+   gutter carry a ~4px thumb. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  /* Keep a grabbable target even when the content is very long. */
+  min-width: 28px;
+  min-height: 28px;
+  border: var(--scrollbar-inset) solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
 }
 
 /* Centralized keyframes */

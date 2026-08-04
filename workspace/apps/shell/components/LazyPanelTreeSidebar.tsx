@@ -1416,7 +1416,11 @@ export function LazyPanelTreeSidebar({
           </IconButton>
         ) : null}
       </Flex>
-      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+      <div
+        ref={scrollRef}
+        className="panel-tree-scroll"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+      >
         <Box
           p="1"
           style={{

@@ -458,20 +458,8 @@
   font-size: var(--font-size-1);
 }
 
-/* Subtle scrollbars inside our panes */
-.spectrolite-file-tree ::-webkit-scrollbar,
-.spectrolite-mdx ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.spectrolite-file-tree ::-webkit-scrollbar-thumb,
-.spectrolite-mdx ::-webkit-scrollbar-thumb {
-  background: var(--gray-a5);
-  border-radius: 8px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
+/* (Scrollbars inside our panes need no local rules — the slim treatment in
+   tokens.css already covers every scroller in the panel.) */
 
 /* ----------------------------------------------------------------
  * Mobile adjustments (max-width 767px matches useIsMobile).

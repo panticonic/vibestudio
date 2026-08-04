@@ -129,6 +129,13 @@ body,
   background-color: var(--app-chrome-bg);
 }
 
+/* Panel tree scroller. The slim thumb is global (tokens.css); what's specific
+   here is the reserved gutter: the virtualizer measures this element, so a
+   scrollbar that appears and disappears as rows expand would reflow the tree. */
+.panel-tree-scroll {
+  scrollbar-gutter: stable;
+}
+
 /* Radix Card paints its surface border on `::after`, so the element's
    `box-shadow: none` above isn't enough — clear the pseudo-element ring too. */
 .app-shell-panel-card::after {
@@ -318,42 +325,11 @@ body,
   outline: none;
 }
 
-.approval-card,
-.approval-card * {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--gray-10) 55%, transparent) transparent;
-}
-
-.approval-card::-webkit-scrollbar,
-.approval-card *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-.approval-card::-webkit-scrollbar-track,
-.approval-card *::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.approval-card::-webkit-scrollbar-thumb,
-.approval-card *::-webkit-scrollbar-thumb {
-  min-width: 28px;
-  min-height: 28px;
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--gray-10) 48%, transparent);
-  background-clip: padding-box;
-}
-
-.approval-card::-webkit-scrollbar-thumb:hover,
-.approval-card *::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--gray-11) 68%, transparent);
-  background-clip: padding-box;
-}
-
-.approval-card::-webkit-scrollbar-corner,
-.approval-card *::-webkit-scrollbar-corner {
-  background: transparent;
+/* The card floats free of the window, so its scrollers sit closer to the eye
+   than in-app ones — carry the shared shape at a slightly stronger tone.
+   (The slim scrollbar itself is global, in tokens.css.) */
+.approval-card {
+  --scrollbar-thumb: color-mix(in srgb, var(--gray-10) 55%, transparent);
 }
 
 @keyframes approval-card-in {
