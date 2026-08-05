@@ -70,7 +70,9 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
    infrastructure, not throwaway prototypes. Design for real use from the start:
    proper schema migrations, error surfaces, principled state management, and
    tested edge cases. Do not scaffold a "v1 prototype" with the intent to
-   rewrite later.
+   rewrite later. Do not populate apps with hardcoded demo data or placeholder
+   content — build real empty states, real data entry flows, and real
+   persistence from the start.
 
 For a panel build/debug/polish task, read and follow
 [PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) first. It is the canonical bounded

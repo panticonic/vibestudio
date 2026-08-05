@@ -32,7 +32,8 @@ from panels, workers, and extensions:
 0. **Build production-ready systems** — apps are trusted workspace
    infrastructure, not throwaway prototypes. Design for real use from the
    start: proper state persistence, error handling, principled authority, and
-   tested edge cases.
+   tested edge cases. Do not populate apps with hardcoded demo/fake data —
+   build real empty states and real data entry flows.
 1. `@workspace-apps/foo` maps to `apps/foo`, not `apps/@workspace-apps/foo`.
 2. App identity comes from `package.json` package name plus the approved build
    identity, not from a special filesystem path.

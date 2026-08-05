@@ -63,7 +63,8 @@ Before scaffolding, decide on persistence and agent integration:
   an afterthought.
 - **Production quality**: build durable infrastructure, not prototypes. Proper
   schemas, error surfaces, edge-case coverage, and principled state
-  management from the first scaffold.
+  management from the first scaffold. No hardcoded demo data or placeholder
+  content — build real empty states and real data flows.
 - **Theme and layout**: use `usePanelTheme()` from `@workspace/react` to
   respect the host's dark/light theme. Build mobile-friendly, responsive
   layouts — panels render on desktop, tablet, and mobile hosts.
