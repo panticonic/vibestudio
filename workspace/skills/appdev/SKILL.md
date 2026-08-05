@@ -60,7 +60,11 @@ from panels, workers, and extensions:
    `@rpc({ principals, effect, tier, sensitivity })` policy. For editable
    content that benefits from history and agent collaboration, use
    version-controlled files under `projects/` instead.
-9. **Agentically enabled by default** — expose app DO methods with explicit
+9. **Respect the host theme** — use `usePanelTheme()` from `@workspace/react`
+   for live dark/light awareness. Do not hardcode a color scheme. Build
+   mobile-friendly, responsive layouts — apps render on desktop and mobile
+   hosts.
+10. **Agentically enabled by default** — expose app DO methods with explicit
    `@rpc` contracts so agents can call them alongside human UIs. If the app has
    a conversational or collaborative dimension, integrate it with the workspace
    channel/messaging system using `addAgentToChannel`. Every meaningful app

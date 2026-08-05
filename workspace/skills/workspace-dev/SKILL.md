@@ -150,6 +150,19 @@ worker, or app that manages data or exposes actions:
 The goal is that every meaningful workspace surface is programmable by agents
 as a first-class concern, not bolted on after the human UI ships.
 
+## Theme And Layout
+
+All panels and apps must respect the host theme and work on mobile viewports:
+
+1. **Use the passed-down theme** — call `usePanelTheme()` from `@workspace/react`
+   to get the live `"dark"` | `"light"` appearance and subscribe to changes.
+   For Radix-based panels, `autoMount` wires this automatically through
+   `useAppTheme()`. Do not hardcode a color scheme or ignore the host theme.
+2. **Mobile-friendly layout** — use responsive CSS (flexbox/grid, relative
+   units, `max-width: 100%` on media, vertical stacking at narrow widths).
+   Panels render on desktop, tablet, and mobile hosts. Test that the UI is
+   usable at small viewports, not just wide screens.
+
 ## Quick Start Workflow
 
 Create and open a panel with one durable creation receipt. Store that receipt
