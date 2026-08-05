@@ -46,6 +46,7 @@ Agents read skills by the path shown in the generated skill index, for example
 | Document                                 | Content                                                                                                                                                          |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [WORKFLOW.md](WORKFLOW.md)               | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                                                   |
+| [PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) | Short canonical create/build/screenshot/rebuild/interact/publish recipe for panel debugging and polish tasks                                                     |
 | [PANEL_API.md](PANEL_API.md)             | Runtime panel API reference                                                                                                                                      |
 | [WORKERS.md](WORKERS.md)                 | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
 | [capabilities](../capabilities/SKILL.md) | Explicit requests and provided capabilities, dynamic workspace service discovery, host grants, receiver-owned acquisition, and content provenance                |
@@ -64,6 +65,18 @@ following through `server-log:append` and the `about/server-logs` viewer.
 See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERNS.md) for when to use inline UI vs eval for side-effect actions. In short: if an action involves choices or could fail, prefer rendering an inline UI that lets the user trigger it and reports results back via `chat.publish`.
 
 ## Critical Rules
+
+0. **Build production-ready systems** — workspace units are durable
+   infrastructure, not throwaway prototypes. Design for real use from the start:
+   proper schema migrations, error surfaces, principled state management, and
+   tested edge cases. Do not scaffold a "v1 prototype" with the intent to
+   rewrite later.
+
+For a panel build/debug/polish task, read and follow
+[PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) first. It is the canonical bounded
+recipe. Do not preload the full workflow, browser, panel, and eval manuals; open
+only the specific reference needed when the recipe reaches an unfamiliar typed
+result.
 
 1. **Relative workspace paths only** — use `panels/my-app/index.tsx`, NEVER host absolute paths such as `/home/.../workspace/...`. In runtime `fs.*` calls, `/panels/...` is context-root absolute and accepted, but docs and source-edit examples prefer `panels/...` to avoid ambiguity.
 2. **NEVER use Bash** for vcs, file listing, or file creation — use the structured tools
@@ -96,26 +109,89 @@ Never use `.first()`, `.last()`, or `.nth()`to guess which repeated control
 belongs to an item. Ordinals are acceptable only after`inspect()` proves
     the intended rendered ancestor context.
 
+## Persistence
+
+Choose the right persistence layer for the data shape:
+
+- **Durable Object SQLite** (`this.sql` in a `DurableObjectBase` subclass) —
+  the default for live application state that needs transactions, queries, or
+  shared access across panels/agents/apps. See
+  [WORKERS.md](WORKERS.md#durable-object-backed-app-databases) for the full
+  pattern.
+- **Version-controlled files in `projects/`** — for editable content that
+  benefits from history, diffing, branching, and easy agent access. Freely
+  create new repos under `projects/` (e.g. `projects/my-dataset/`,
+  `projects/config-store/`). Content there is ordinary workspace source:
+  agents can read, edit, and commit it through the VCS surface, and multiple
+  users or agents can collaborate on it through normal branch/merge. Use this
+  for structured documents, configuration, datasets, templates, or any content
+  that humans and agents jointly author.
+
+Do not store meaningful application state only in panel `stateArgs`, eval
+`scope`, or ephemeral in-memory structures. If a user closes a panel and
+reopens it, or an agent restarts, state that matters should survive.
+
+## Agentic Integration
+
+Workspace apps should be agentically enabled by default. When building a panel,
+worker, or app that manages data or exposes actions:
+
+1. **Expose DO methods over RPC** with explicit `@rpc` contracts so agents can
+   call them, not just human UIs. Keep methods app-shaped (`addItem`,
+   `listItems`, `getStatus`) rather than UI-shaped (`getTableRows`).
+2. **Integrate with channels** — if the app has a conversational or
+   collaborative surface, wire it into the workspace messaging system using
+   `addAgentToChannel` from `@workspace-skills/agents`. Agents should be able
+   to participate in the app's workflows.
+3. **Publish structured events** that agents can subscribe to and act on.
+   Prefer the workspace channel/envelope system over ad-hoc notification
+   mechanisms.
+
+The goal is that every meaningful workspace surface is programmable by agents
+as a first-class concern, not bolted on after the human UI ships.
+
 ## Quick Start Workflow
 
-Create a project via eval with the `imports` parameter:
+Create and open a panel with one durable creation receipt. Store that receipt
+before the later open/verification phase so a failure after publication cannot
+cause creation to be repeated:
 
-```
+```ts
 eval({ code: `
   import { createProject } from "@workspace-skills/workspace-dev";
-  return await createProject({ projectType: "panel", name: "my-app", title: "My App" });
+  import { openPanel } from "@workspace/runtime";
+
+  scope.createdProject = await createProject({
+    projectType: "panel",
+    name: "my-app",
+    title: "My App",
+  });
+  // `created` is already the canonical source, e.g. "panels/my-app".
+  // Never prepend "panels/" a second time.
+  scope.createdPanel = await openPanel(scope.createdProject.created);
+  return {
+    created: scope.createdProject,
+    observation: await scope.createdPanel.observe(),
+    snapshot: await scope.createdPanel.snapshot(),
+  };
 `
 })
 ```
 
 Success returns `{ created, files, preflight, publication }`.
+For every project type, `created` is the complete canonical repository path
+(`panels/name`, `workers/name`, and so on), not a basename. Pass it directly to
+APIs that accept a workspace source.
 `name` is a stable repository identifier matching `^[a-z][a-z0-9-]*$`. For an
 isolated suffix use lowercase base 36, for example
 `` `my-app-${Date.now().toString(36)}` ``; a raw ISO timestamp is invalid.
-`preflight.ok === true` proves that the complete planned repository passed the
-same canonical project-type, package identity, executable entry, strict
-authority-manifest, skill-instruction, and module-dependency contract used for
-forks before the first VCS edit. The dependency contract uses the same shared
+`preflight.ok === true`, `scope === "planned-repository"`, and
+`semanticBuildGate === "pending-publication"` prove the mutation-free checks
+that are possible before the repository has an exact semantic state: canonical
+project type, package identity, executable entry, authority-manifest syntax,
+skill instructions, and the module-dependency contract. Compilation and
+semantic authority coverage run later against the exact committed candidate in
+the protected publication gate. The dependency contract uses the same shared
 syntax-aware analyzer as eval import validation and sandbox-renderer linting;
 comments, strings, templates, regular expressions, Node built-ins, and
 self-imports do not become phantom packages. Value imports in production source
@@ -138,10 +214,24 @@ protected publication fails, the helper throws `ScaffoldPublicationError`.
 Eval preserves its structured `errorData`, including
 `code: "scaffold_publication_failed"`, `published: false`, the exact committed
 event and original push request, the nested typed VCS error, and its command-ID
-retry policy. Do not call `createProject` again. Pass the error or its
-`errorData` to `recoverProjectPublication`; it verifies the context is clean at
-that exact commit and either replays the identical uncertain command or
-reobserves main and uses a fresh command after a known refusal.
+retry policy. Do not call `createProject` again. Branch on
+`retry.commandIdPolicy`: use `recoverProjectPublication` for an uncertain
+external effect or a refusal that only needs a freshly observed main. For
+`repair-source-and-recommit`, consume every nested `BuildGateFailed` diagnostic,
+repair the already-created repository, rebuild the exact context, commit a new
+event, and publish from fresh status. Retrying the rejected commit cannot pass.
+`stop-integrity-investigation` is terminal pending investigation.
+
+Eval is not a transaction: if creation publishes and a later statement in the
+same cell fails, that repository still exists. Resume from
+`scope.createdProject` and retry only the failed open/verification phase. Never
+rerun `createProject` because `openPanel`, `snapshot`, or another downstream
+operation failed.
+
+The same rule applies to `forkPanel`, `forkWorker`, and every mutating helper:
+assign its receipt into `scope` before the next awaited operation. A panel
+snapshot is a structured document-capture object, not a string; return or
+inspect its fields and do not call string methods such as `slice()` on it.
 
 `Project already exists: <path>` is not a recoverable publication failure. It
 means the requested repository is outside this creation attempt. Stop or choose
@@ -192,6 +282,13 @@ const snapshot = await local.snapshot();
 return { panelId: local.id, observation, snapshot };
 ```
 
+Use `createPanelSlot(source, options)` when the authoritative result is the
+durable panel-tree receipt rather than a ready renderer. It returns promptly,
+never focuses, and has no readiness option; call `handle.observe()` later when
+live runtime state matters. `openPanel` observes immediately and polls for
+readiness without a fixed deadline. Pass a caller-owned `AbortSignal` when the
+workflow supports cancellation and a stable `operationId` when it may retry.
+
 Boot readiness and rendered verification are deliberately distinct. A
 successful `openPanel(...)` or `observe()` proves that the selected immutable
 attempt reached its application boot handshake; it does **not** prove that the
@@ -212,7 +309,7 @@ key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 | Task                        | How                                                                                                                                                                                                                                                                                                                                                                  |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Create project              | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `return await createProject({ projectType, name, title })`; retain its exact `publication`, or recover the committed event from structured `scaffold_publication_failed` data without rerunning creation                                                                             |
-| Fork panel                  | `eval` — `import { forkPanel } from "@workspace-skills/workspace-dev"`; return the `dryRun: true` plan, apply the same typed helper with `dryRun: false`, then `const handle = await openPanel(created.created); return { plan, created, observation: await handle.observe(), snapshot: await handle.snapshot() }`. Never claim the fork works from readiness alone. |
+| Fork panel                  | `eval` — `import { forkPanel } from "@workspace-skills/workspace-dev"`; store the `dryRun: true` plan, then assign the applied receipt to `scope.forkedProject` **before** opening `scope.forkedProject.created`. Store the handle too, and return the structured observation and snapshot without string-coercing either. If open/snapshot fails, resume from scope; never fork again. |
 | Fork worker                 | `eval` — `import { forkWorker } from "@workspace-skills/workspace-dev"` then `forkWorker({ from: "workers/source", name: "new-worker", title, dryRun: true })`; pass `classMap` for multi-class workers                                                                                                                                                              |
 | Build app database          | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a live service with `authority.principals` and explicit `@rpc` receiver policies, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).                     |
 | Add repo guidance           | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages                                                                                                                                                                                               |

@@ -29,6 +29,10 @@ from panels, workers, and extensions:
 
 ## Critical Rules
 
+0. **Build production-ready systems** — apps are trusted workspace
+   infrastructure, not throwaway prototypes. Design for real use from the
+   start: proper state persistence, error handling, principled authority, and
+   tested edge cases.
 1. `@workspace-apps/foo` maps to `apps/foo`, not `apps/@workspace-apps/foo`.
 2. App identity comes from `package.json` package name plus the approved build
    identity, not from a special filesystem path.
@@ -53,7 +57,14 @@ from panels, workers, and extensions:
    database; use `workers.resolveService(...)` + `rpc.call(...)` against narrow
    DO methods. Admit the relevant authenticated principal families in both the
    service's `authority.principals` and each DO method's
-   `@rpc({ principals, effect, tier, sensitivity })` policy.
+   `@rpc({ principals, effect, tier, sensitivity })` policy. For editable
+   content that benefits from history and agent collaboration, use
+   version-controlled files under `projects/` instead.
+9. **Agentically enabled by default** — expose app DO methods with explicit
+   `@rpc` contracts so agents can call them alongside human UIs. If the app has
+   a conversational or collaborative dimension, integrate it with the workspace
+   channel/messaging system using `addAgentToChannel`. Every meaningful app
+   surface should be programmable by agents as a first-class concern.
 
 ## Quick Start
 

@@ -48,6 +48,23 @@ naming CAS bytes. The semantic workspace verifies those host-observed
 descriptors and derives the snapshot digest. Do not reconstruct an import as a sequence of ordinary
 authored edits or partial repository loops.
 
+## Design principles
+
+Before scaffolding, decide on persistence and agent integration:
+
+- **Persistence**: use Durable Object SQLite for live transactional state
+  (see [WORKERS.md](WORKERS.md#durable-object-backed-app-databases)); use
+  version-controlled files under `projects/` for editable content that agents
+  and humans jointly author. Do not leave meaningful state in ephemeral
+  structures.
+- **Agentic integration**: expose DO methods with `@rpc` contracts so agents
+  can exercise the same operations as the UI. Wire conversational surfaces
+  into the workspace channel system. Build for agents from the start, not as
+  an afterthought.
+- **Production quality**: build durable infrastructure, not prototypes. Proper
+  schemas, error surfaces, edge-case coverage, and principled state
+  management from the first scaffold.
+
 ## Development loop
 
 1. Scaffold with eval:
@@ -60,12 +77,17 @@ const created = await createProject({
   name: "my-app",
   title: "My App",
 });
+// `created.created` is the full canonical source: "panels/my-app".
+scope.createdProject = created;
 return created;
 ```
 
-Require `created.preflight.ok === true`, then retain `created.publication`: the
-former proves the planned repository was validated before mutation and the
-latter proves the committed event reached protected main. If the eval fails with
+Require `created.preflight.ok === true`,
+`created.preflight.scope === "planned-repository"`, and
+`created.preflight.semanticBuildGate === "pending-publication"`, then retain
+`created.publication`. Preflight proves the mutation-free structural and
+dependency checks; protected publication proves the exact-state compiler and
+semantic-authority gate. If the eval fails with
 `errorData.code === "project_preflight_failed"`, use its dependency issues as
 the exact repair packet: each issue identifies its file and line, import
 specifier/kind, required manifest field, accepted package coordinates, and
@@ -75,12 +97,19 @@ remediation. Production value imports belong to `dependencies` or
 validation, and it deliberately ignores embedded examples and Node built-ins.
 Repair the named source/manifest rather than selecting another fork source.
 
+Creation, publication, and opening are distinct durable phases. Eval rejection
+does not roll back an earlier published phase. If opening or verification fails,
+reuse `scope.createdProject.created` and retry only that phase; do not call
+`createProject` again and do not add another `panels/` prefix.
+
 If the eval instead fails with
 `errorData.code === "scaffold_publication_failed"`, the repository is already
-committed but unpublished. Do not scaffold again. Call
-`recoverProjectPublication(error)` from the same skill. It validates a clean
-context at the exact `committedEventId` and applies the recorded command-ID
-policy without rerunning file generation or commit.
+committed but unpublished. Do not scaffold again. Inspect
+`retry.commandIdPolicy`. Call `recoverProjectPublication(error)` only for an
+uncertain effect or a retryable refusal. For `repair-source-and-recommit`, repair
+all nested build diagnostics in the existing repository, run an exact-context
+build, commit a new event, and publish from freshly observed status. For
+`stop-integrity-investigation`, preserve the receipt and stop mutation.
 
 Skip scaffolding for context-local notes. Write inside a repo-shaped path such
 as `projects/tmp-name/note.md`; that work remains private until its semantic
@@ -164,7 +193,7 @@ new command ID. Follow the typed discriminant, not prose.
 ```ts
 import { openPanel } from "@workspace/runtime";
 
-const myApp = await openPanel("panels/my-app", { focus: true });
+const myApp = await openPanel(scope.createdProject.created, { focus: true });
 scope.myAppPanel = myApp;
 scope.myAppPanelId = myApp.id;
 const first = await myApp.snapshot();
@@ -242,8 +271,14 @@ Readiness-bearing lifecycle results are `PanelObservation` values. `phase:
 Failures throw `PanelOperationError` with the same provenance fields.
 Slot creation itself is durable and immediately observable; runtime preparation
 continues asynchronously so one broken panel cannot hold the panel-tree queue.
-`openPanel` bridges those two boundaries by waiting up to 90 seconds for the
-created attempt's terminal observation.
+`createPanelSlot` exposes that durable boundary without focusing or waiting.
+`openPanel` bridges the two boundaries by observing immediately and polling for
+the created attempt's readiness. It returns on the first valid ready
+observation, rejects terminal failures immediately, and otherwise waits until
+caller cancellation. Use a stable `operationId` to make retried creation address
+the same slot. The retry identity also contains the source, context, parent, and
+ref; exact redelivery resumes the first commit and a different logical open
+cannot alias it. Do not combine `operationId` with `slug`.
 
 9. Tune running state without reopening:
 
@@ -349,6 +384,31 @@ under `workers/` or `panels/`; `dryRun: true` itself guarantees that no
 destination is written. Use generic `forkProject({ from, to, projectType })`
 only for an intentional advanced lifecycle operation. Crossing project types
 is rejected unless `projectType` explicitly opts into it.
+
+Apply a panel fork with an explicit durable phase boundary:
+
+```ts
+import { forkPanel } from "@workspace-skills/workspace-dev";
+import { openPanel } from "@workspace/runtime";
+
+scope.forkPlan = await forkPanel({ from, name, title, dryRun: true });
+scope.forkedProject = await forkPanel({ from, name, title, dryRun: false });
+scope.forkedPanel = await openPanel(scope.forkedProject.created, {
+  contextId: ctx.contextId,
+  ref: `ctx:${ctx.contextId}`,
+});
+return {
+  plan: scope.forkPlan,
+  created: scope.forkedProject,
+  observation: await scope.forkedPanel.observe(),
+  snapshot: await scope.forkedPanel.snapshot(),
+};
+```
+
+Eval rejection never rolls back an already applied fork. If open, observe, or
+snapshot fails, resume from the scoped receipt/handle and retry only that later
+phase. `snapshot()` returns a structured capture object rather than a string;
+do not call `slice()` or other string methods on it.
 
 Every canonical panel and worker in the workspace is continuously checked
 against this same fork preflight. A dry-run failure is therefore concrete
