@@ -1,7 +1,8 @@
 import {
+  HubPairingInviteSchema,
   HubReadyPayloadSchema,
   HubWorkspaceRouteSchema,
-  type HubReadyPayload,
+  type HubPairingInvite,
 } from "@vibestudio/service-schemas/hubControl";
 import { selectedWorkspacePath } from "@vibestudio/shared/connect";
 import {
@@ -23,6 +24,22 @@ export type DevCliBootstrapResult =
   | { status: "existing"; workspaceName: string }
   | { status: "paired"; workspaceName: string }
   | { status: "invite-required" };
+
+export interface DevCliPairingSponsor {
+  gatewayUrl: string;
+  serverId: string;
+  workspaceName: string;
+  deviceId: string;
+  refreshToken: string;
+}
+
+interface BootstrapDeps {
+  fetch?: typeof fetch;
+  rpcClient?: (credential: { url: string; deviceId: string; refreshToken: string }) => {
+    call(method: string, args?: unknown[]): Promise<unknown>;
+    close(): Promise<void>;
+  };
+}
 
 function stableReach(value: {
   room: string;
@@ -54,10 +71,12 @@ function pairingResponse(value: unknown): PairingResponse {
   return value as PairingResponse;
 }
 
-async function postPairing(ready: HubReadyPayload): Promise<PairingResponse> {
-  const invite = ready.rootInvite;
-  if (!invite) throw new Error("The development hub has no root invite");
-  const response = await fetch(new URL("/_r/s/auth/complete-pairing", ready.gatewayUrl), {
+async function postPairing(
+  gatewayUrl: string,
+  invite: HubPairingInvite,
+  fetchImpl: typeof fetch = fetch
+): Promise<PairingResponse> {
+  const response = await fetchImpl(new URL("/_r/s/auth/complete-pairing", gatewayUrl), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -82,53 +101,55 @@ async function postPairing(ready: HubReadyPayload): Promise<PairingResponse> {
   return pairingResponse(body);
 }
 
-/**
- * Give a source-server instance its own CLI device without WebRTC/signaling.
- *
- * This is the same one-time root pairing and route contract used by remote
- * clients, transported over the hub's loopback HTTP ingress. The resulting
- * credential remains instance-scoped and all later CLI calls use ordinary
- * authenticated routing.
- */
-export async function bootstrapInstanceCli(
-  rawReady: unknown,
-  options: { credentialFile?: string } = {}
-): Promise<DevCliBootstrapResult> {
-  const ready = HubReadyPayloadSchema.parse(rawReady);
-  const existing = loadCliCredentials(options.credentialFile);
-  if (existing) {
-    if (existing.serverId !== ready.serverId) {
-      throw new Error(
-        `Instance CLI credential targets server ${existing.serverId}, ` +
-          `but the live hub is ${ready.serverId}`
-      );
-    }
-    return { status: "existing", workspaceName: existing.workspaceName };
+function existingCredential(
+  serverId: string,
+  credentialFile: string | undefined
+): DevCliBootstrapResult | null {
+  const existing = loadCliCredentials(credentialFile);
+  if (!existing) return null;
+  if (existing.serverId !== serverId) {
+    throw new Error(
+      `Instance CLI credential targets server ${existing.serverId}, ` +
+        `but the live hub is ${serverId}`
+    );
   }
-  if (!ready.rootInvite) return { status: "invite-required" };
+  return { status: "existing", workspaceName: existing.workspaceName };
+}
 
-  const device = await postPairing(ready);
-  const workspace = ready.workspaces.find((entry) => entry.workspaceId === device.workspaceId);
-  if (!workspace) {
+async function pairWithInvite(
+  input: {
+    gatewayUrl: string;
+    serverId: string;
+    expectedWorkspaceIds?: ReadonlySet<string>;
+    invite: HubPairingInvite;
+  },
+  credentialFile: string | undefined,
+  deps: BootstrapDeps = {}
+): Promise<DevCliBootstrapResult> {
+  if (input.invite.serverId !== input.serverId) {
+    throw new Error("Development CLI invite targets a different hub");
+  }
+  const device = await postPairing(input.gatewayUrl, input.invite, deps.fetch);
+  if (input.expectedWorkspaceIds && !input.expectedWorkspaceIds.has(device.workspaceId)) {
     throw new Error(
       `Development pairing selected unknown workspace ${JSON.stringify(device.workspaceId)}`
     );
   }
-  const rpc = new RpcClient({
-    url: ready.gatewayUrl,
+  const rpc = (deps.rpcClient ?? ((credential) => new RpcClient(credential)))({
+    url: input.gatewayUrl,
     deviceId: device.deviceId,
     refreshToken: device.refreshToken,
   });
   let route;
   try {
     route = HubWorkspaceRouteSchema.parse(
-      await rpc.call("hubControl.routeWorkspace", [{ workspaceId: workspace.workspaceId }])
+      await rpc.call("hubControl.routeWorkspace", [{ workspaceId: device.workspaceId }])
     );
   } finally {
     await rpc.close();
   }
 
-  const controlPairing = stableReach(ready.rootInvite);
+  const controlPairing = stableReach(input.invite);
   const workspacePairing = stableReach(route.workspaceReach);
   const credentials: CliCredentials = {
     schemaVersion: 4,
@@ -143,6 +164,76 @@ export async function bootstrapInstanceCli(
     workspacePairing,
     pairedAt: Date.now(),
   };
-  saveCliCredentials(credentials, options.credentialFile);
+  saveCliCredentials(credentials, credentialFile);
   return { status: "paired", workspaceName: route.workspace };
+}
+
+/**
+ * Give a source-server instance its own CLI device without WebRTC/signaling.
+ *
+ * This is the same one-time root pairing and route contract used by remote
+ * clients, transported over the hub's loopback HTTP ingress. The resulting
+ * credential remains instance-scoped and all later CLI calls use ordinary
+ * authenticated routing.
+ */
+export async function bootstrapInstanceCli(
+  rawReady: unknown,
+  options: { credentialFile?: string } & BootstrapDeps = {}
+): Promise<DevCliBootstrapResult> {
+  const ready = HubReadyPayloadSchema.parse(rawReady);
+  const existing = existingCredential(ready.serverId, options.credentialFile);
+  if (existing) return existing;
+  if (!ready.rootInvite) return { status: "invite-required" };
+  if (ready.workspaces.length === 0) {
+    throw new Error("The development hub has no workspace for its CLI");
+  }
+  return pairWithInvite(
+    {
+      gatewayUrl: ready.gatewayUrl,
+      serverId: ready.serverId,
+      expectedWorkspaceIds: new Set(ready.workspaces.map((workspace) => workspace.workspaceId)),
+      invite: ready.rootInvite,
+    },
+    options.credentialFile,
+    options
+  );
+}
+
+/**
+ * Add the instance CLI as another device of an already-paired development
+ * desktop. The sponsor authenticates through the ordinary device flow and
+ * mints the same account-bound invite exposed by `hubControl.pairDevice`.
+ */
+export async function bootstrapInstanceCliFromDevice(
+  sponsor: DevCliPairingSponsor,
+  options: { credentialFile?: string } & BootstrapDeps = {}
+): Promise<DevCliBootstrapResult> {
+  const existing = existingCredential(sponsor.serverId, options.credentialFile);
+  if (existing) return existing;
+
+  const rpc = (options.rpcClient ?? ((credential) => new RpcClient(credential)))({
+    url: sponsor.gatewayUrl,
+    deviceId: sponsor.deviceId,
+    refreshToken: sponsor.refreshToken,
+  });
+  let rawInvite: unknown;
+  try {
+    rawInvite = await rpc.call("hubControl.pairDevice", [{ workspace: sponsor.workspaceName }]);
+  } finally {
+    await rpc.close();
+  }
+  const result =
+    rawInvite && typeof rawInvite === "object" && !Array.isArray(rawInvite)
+      ? (rawInvite as { pairing?: unknown })
+      : {};
+  const invite = HubPairingInviteSchema.parse(result.pairing);
+  return pairWithInvite(
+    {
+      gatewayUrl: sponsor.gatewayUrl,
+      serverId: sponsor.serverId,
+      invite,
+    },
+    options.credentialFile,
+    options
+  );
 }

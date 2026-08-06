@@ -1241,7 +1241,10 @@ describe("createEvalService — explicit timeout process watchdog", () => {
   it("accepts a cooperative timeout without invoking process recovery", async () => {
     const { service, calls, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
       contextId: "ctx_agent",
-      getRunResponse: { status: "running" },
+      getRunResponse: {
+        status: "done",
+        result: { success: false, console: "", failureCode: "eval_deadline_exceeded" },
+      },
       heldMode: "cooperative-timeout",
     });
 

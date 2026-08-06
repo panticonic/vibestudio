@@ -674,6 +674,106 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).toThrow(/256 KiB/);
   });
 
+  it("renews liveness only when observable progress changes and persists exact RPC state", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "run-liveness");
+    const renew = vi.fn();
+    priv<Map<string, () => void>>(instance, "runLeaseRenewals").set("run-liveness", renew);
+
+    const record = priv<(runId: string, checkpoint: Record<string, unknown>) => void>(
+      instance,
+      "recordRunCheckpoint"
+    );
+    const complete = priv<(runId: string, checkpoint: Record<string, unknown>) => void>(
+      instance,
+      "completeRunCheckpoint"
+    );
+    record.call(instance, "run-liveness", {
+      stage: "outbound-rpc",
+      state: "waiting",
+      targetId: "main",
+      method: "panel.observe",
+    });
+    complete.call(instance, "run-liveness", {
+      stage: "outbound-rpc",
+      state: "completed",
+      targetId: "main",
+      method: "panel.observe",
+    });
+    // Repeating the same polling operation updates current diagnostics but is
+    // not a new observable checkpoint and therefore cannot renew the lease.
+    record.call(instance, "run-liveness", {
+      stage: "outbound-rpc",
+      state: "waiting",
+      targetId: "main",
+      method: "panel.observe",
+    });
+    expect(renew).toHaveBeenCalledTimes(1);
+    expect(instance.getRun("run-liveness")).toMatchObject({
+      checkpoint: {
+        stage: "outbound-rpc",
+        state: "waiting",
+        targetId: "main",
+        method: "panel.observe",
+      },
+    });
+
+    const report = priv<(runId: string, progress: unknown) => void>(instance, "persistRunProgress");
+    report.call(instance, "run-liveness", { phase: "building" });
+    report.call(instance, "run-liveness", { phase: "building" });
+    report.call(instance, "run-liveness", { phase: "connected" });
+    expect(renew).toHaveBeenCalledTimes(3);
+  });
+
+  it("suspends guest inactivity while an outbound service owns the awaited RPC", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "rpc-over-lease");
+    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'rpc-over-lease'`);
+    let release!: () => void;
+    vi.spyOn(
+      priv<{ call: (...args: unknown[]) => Promise<unknown> }>(instance, "rpc"),
+      "call"
+    ).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    const pause = vi.fn();
+    const resume = vi.fn();
+    priv<Map<string, { pause: (reason: string) => void; resume: (reason: string) => void }>>(
+      instance,
+      "runLeaseSuspensionControls"
+    ).set("rpc-over-lease", { pause, resume });
+    const execution = priv<
+      (input: { runId: string; contextId: string }) => {
+        rpc: { call: (...args: unknown[]) => Promise<unknown> };
+      }
+    >(instance, "createExecutionContext").call(instance, {
+      runId: "rpc-over-lease",
+      contextId: "ctx",
+    });
+
+    const pending = execution.rpc.call("main", "panel.observe", []);
+    expect(pause).toHaveBeenCalledWith("outbound-rpc");
+    expect(resume).not.toHaveBeenCalled();
+    expect(instance.getRun("rpc-over-lease")).toMatchObject({
+      checkpoint: {
+        stage: "outbound-rpc",
+        state: "waiting",
+        targetId: "main",
+        method: "panel.observe",
+      },
+    });
+
+    release();
+    await pending;
+    expect(resume).toHaveBeenCalledWith("outbound-rpc");
+    expect(instance.getRun("rpc-over-lease")).toMatchObject({
+      checkpoint: { stage: "outbound-rpc", state: "completed" },
+    });
+  });
+
   it("reports authority waiting as lifecycle state and clears it on decision", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const call = vi.fn(() => Promise.resolve(undefined));
@@ -727,6 +827,90 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(instance.getRun("authority-lifecycle")).toMatchObject({
       status: "running",
       activity: { kind: "executing" },
+    });
+  });
+
+  it("keeps reporting authority pending until every concurrent request is decided", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "authority-concurrent");
+    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'authority-concurrent'`);
+    const pause = vi.fn();
+    const resume = vi.fn();
+    priv<Map<string, { pause: (reason: string) => void; resume: (reason: string) => void }>>(
+      instance,
+      "runLeaseSuspensionControls"
+    ).set("authority-concurrent", { pause, resume });
+
+    instance.appendAuthorityEvent("authority-concurrent", "authority-requested", {
+      snapshotDigest: "snapshot-a",
+      capability: "context.boundary",
+    });
+    instance.appendAuthorityEvent("authority-concurrent", "authority-requested", {
+      snapshotDigest: "snapshot-b",
+      capability: "service:models.generate",
+    });
+    instance.appendAuthorityEvent("authority-concurrent", "authority-requested", {
+      snapshotDigest: "snapshot-b",
+      capability: "service:models.generate",
+    });
+    expect(pause).toHaveBeenCalledTimes(2);
+    instance.appendAuthorityEvent("authority-concurrent", "authority-decided", {
+      snapshotDigest: "already-granted-snapshot",
+      decision: "allow",
+    });
+    expect(resume).not.toHaveBeenCalled();
+    instance.appendAuthorityEvent("authority-concurrent", "authority-decided", {
+      snapshotDigest: "snapshot-b",
+      decision: "allow",
+    });
+    expect(resume).toHaveBeenCalledTimes(1);
+
+    expect(instance.getRun("authority-concurrent")).toMatchObject({
+      status: "running",
+      activity: {
+        kind: "authority-pending",
+        request: { snapshotDigest: "snapshot-a", capability: "context.boundary" },
+      },
+    });
+
+    instance.appendAuthorityEvent("authority-concurrent", "authority-decided", {
+      snapshotDigest: "snapshot-a",
+      decision: "allow",
+    });
+    expect(resume).toHaveBeenCalledTimes(2);
+    expect(instance.getRun("authority-concurrent")).toMatchObject({
+      status: "running",
+      activity: { kind: "executing" },
+    });
+  });
+
+  it("suspends the inactivity lease while external authority owns the wait", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "authority-over-lease", {
+      code: "return 1",
+      contextId: "ctx",
+      livenessLeaseMs: 50,
+    });
+    setPriv(instance, "runLocked", async () => {
+      instance.appendAuthorityEvent("authority-over-lease", "authority-requested", {
+        acquisitionId: "approval-1",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      expect(instance.getRun("authority-over-lease")).toMatchObject({
+        status: "running",
+        activity: { kind: "authority-pending" },
+        liveness: { suspended: "authority" },
+      });
+      instance.appendAuthorityEvent("authority-over-lease", "authority-decided", {
+        acquisitionId: "approval-1",
+        decision: "allow",
+      });
+      return { success: true, console: "", returnValue: 1 };
+    });
+
+    await expect(instance.executeRun("authority-over-lease")).resolves.toMatchObject({
+      success: true,
+      returnValue: 1,
     });
   });
 

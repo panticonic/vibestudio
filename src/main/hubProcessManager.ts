@@ -17,6 +17,7 @@ import { getCentralDataPath } from "@vibestudio/env-paths";
 import { createConnectionlessRpcClient } from "@vibestudio/rpc";
 import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
 import type { CentralDataManager, HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
+import { bootstrapInstanceCliFromDevice } from "../dev/bootstrapInstanceCli.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   isDeviceId,
@@ -521,6 +522,15 @@ export class HubProcessManager {
     const routed = await hubControl.routeWorkspace({ workspaceId: workspace.workspaceId });
     if (routed.workspaceId !== workspace.workspaceId || routed.workspace !== workspace.name) {
       throw new Error("Hub routed a different workspace than the one requested");
+    }
+    if (process.env["VIBESTUDIO_INSTANCE_ROOT"]?.trim()) {
+      await bootstrapInstanceCliFromDevice({
+        gatewayUrl: baseUrl,
+        serverId: target.record.serverId,
+        workspaceName: routed.workspace,
+        deviceId: credential.deviceId,
+        refreshToken: credential.refreshToken,
+      });
     }
     return {
       gatewayPort: target.record.gatewayPort,

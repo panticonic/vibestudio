@@ -68,7 +68,7 @@ const evalCommonSchema = {
     Type.Integer({
       minimum: 1,
       description:
-        "Exceptional whole-cell wall-clock deadline. Omit by default: eval has no implicit deadline. Do not add a generic 120000/300000 safety timeout to ordinary work or lifecycle calls; it cancels the entire cell and obscures the operation that stalled. When one wait needs a bound, pass an AbortSignal/timeout to that operation and keep the eval itself unbounded. Set timeoutMs only for deliberately non-settling code or an explicit end-to-end deadline.",
+        "Optional whole-cell wall-clock deadline. Eval also has a host-owned renewable liveness lease; use timeoutMs only when the task itself has a fixed end-to-end bound.",
     })
   ),
   reset: Type.Optional(

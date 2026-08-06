@@ -196,6 +196,7 @@ export interface EventPayloads {
         | "state"
         | "console"
         | "progress"
+        | "checkpoint"
         | "authority-requested"
         | "authority-decided"
         | "kernel"

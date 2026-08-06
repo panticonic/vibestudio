@@ -6,6 +6,7 @@ import {
   evalMethods,
 } from "@vibestudio/service-schemas/eval";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
 import type {
@@ -82,7 +83,6 @@ const EVAL_RETURN_PAGE_CHARS = Math.floor(
 // reads bypass the EvalDO run-result envelope. A 128 Ki-code-unit page becomes
 // ~342 KiB as UTF-16LE base64, comfortably bounded while reducing round trips.
 const DIRECT_SCOPE_PAGE_CHARS = 128 * 1024;
-const STARTUP_APPROVAL_DEADLINE_MS = 60_000;
 const STARTUP_READINESS_DEADLINE_MS = 60_000;
 const STALE_STATUS_ATTESTATION_RE =
   /host authority attestation nonce was replayed or is outside the receiver's retention bound/u;
@@ -1239,10 +1239,17 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
         typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined,
       ]);
     };
-    const prepared =
-      inv.flags["approve-startup"] === true
-        ? await settleSystemTestStartup(readDoctor, startupApprovalPort())
-        : null;
+    let prepared: Awaited<ReturnType<typeof settleSystemTestStartup>> | null = null;
+    if (inv.flags["approve-startup"] === true) {
+      const approvals = startupApprovalPort();
+      try {
+        prepared = await settleSystemTestStartup(readDoctor, approvals, {
+          onStatus: (status) => console.error(`[system-test] waiting for startup: ${status}`),
+        });
+      } finally {
+        await approvals.close();
+      }
+    }
     const value = prepared?.doctor ?? (await readDoctor());
     const result = prepared ? { ...value, startupApprovals: prepared.startupApprovals } : value;
     printResult(result, {
@@ -1274,20 +1281,24 @@ export async function settleSystemTestStartup(
     listPending(): Promise<PendingApproval[]>;
     getWorkspaceCreationReviewState(): Promise<WorkspaceCreationReviewState>;
     resolveInstallReview(approval: PendingUnitInstallReviewApproval): Promise<void>;
+    startObserving?(): Promise<void>;
+    observationRevision?(): number;
+    waitForChange?(afterRevision: number): Promise<void>;
   },
-  options: { deadlineMs?: number; pollMs?: number } = {}
+  options: { deadlineMs?: number; pollMs?: number; onStatus?: (status: string) => void } = {}
 ): Promise<{
   doctor: SystemTestDoctorResult;
   startupApprovals: { approvedReviewIds: string[]; approvedPartCount: number };
 }> {
-  const deadline =
-    Date.now() +
-    (options.deadlineMs ?? STARTUP_APPROVAL_DEADLINE_MS + STARTUP_READINESS_DEADLINE_MS);
+  const deadline = options.deadlineMs === undefined ? null : Date.now() + options.deadlineMs;
   const pollMs = options.pollMs ?? 250;
   const approved = new Set<string>();
   let approvedPartCount = 0;
 
+  let lastStatus = "";
+  await approvals.startObserving?.();
   while (true) {
+    const observedRevision = approvals.observationRevision?.() ?? 0;
     const reviewState = await approvals.getWorkspaceCreationReviewState();
     if (reviewState.status === "failed") {
       throw new CliError(`workspace creation review preparation failed: ${reviewState.error}`);
@@ -1325,6 +1336,18 @@ export async function settleSystemTestStartup(
     }
     const reviewPreparationComplete =
       reviewState.status === "not-required" || reviewState.status === "resolved";
+    const status = `creation review: ${reviewState.status}; pending approvals: ${pending.length}; ${
+      result.ok
+        ? "doctor ready"
+        : (result.checks ?? [])
+            .filter((check) => !check.ok)
+            .map((check) => `${check.name}=${check.detail}`)
+            .join("; ") || "doctor not ready"
+    }`;
+    if (status !== lastStatus) {
+      lastStatus = status;
+      options.onStatus?.(status);
+    }
     if (result.ok && reviewPreparationComplete && pending.length === 0) {
       return {
         doctor: result,
@@ -1334,12 +1357,13 @@ export async function settleSystemTestStartup(
         },
       };
     }
-    if (Date.now() >= deadline) {
+    if (deadline !== null && Date.now() >= deadline) {
       throw new CliError(
         `timed out waiting for semantic startup preparation (creation review: ${reviewState.status})`
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    if (approvals.waitForChange) await approvals.waitForChange(observedRevision);
+    else await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 }
 
@@ -1388,12 +1412,27 @@ function startupApprovalPort(): {
   listPending(): Promise<PendingApproval[]>;
   getWorkspaceCreationReviewState(): Promise<WorkspaceCreationReviewState>;
   resolveInstallReview(approval: PendingUnitInstallReviewApproval): Promise<void>;
+  startObserving(): Promise<void>;
+  observationRevision(): number;
+  waitForChange(afterRevision: number): Promise<void>;
+  close(): Promise<void>;
 } {
   const credentials = loadCliCredentials();
   if (!credentials?.workspaceName) {
     throw new CliError("system-test startup preparation requires a selected workspace");
   }
   const client = typedClient("shellApproval", shellApprovalMethods, new RpcClient(credentials));
+  const eventsRpc = new RpcClient(credentials);
+  const events = new EventsClient(eventsRpc);
+  let revision = 0;
+  const waiters = new Set<() => void>();
+  const changed = () => {
+    revision += 1;
+    for (const resolve of waiters) resolve();
+    waiters.clear();
+  };
+  const removeApprovalListener = events.on("shell-approval:pending-changed", changed);
+  const removeBuildListener = events.on("build:complete", changed);
   return {
     listPending: () => client.listPending(),
     getWorkspaceCreationReviewState: () => client.getWorkspaceCreationReviewState(),
@@ -1401,6 +1440,34 @@ function startupApprovalPort(): {
       client
         .resolveInstallReview(approval.approvalId, defaultAcceptance(approval.mode, approval.parts))
         .then(() => undefined),
+    startObserving: () => events.subscribeAll(["shell-approval:pending-changed", "build:complete"]),
+    observationRevision: () => revision,
+    waitForChange: (afterRevision) => {
+      if (revision !== afterRevision) return Promise.resolve();
+      // Events own normal continuation. This slow reconciliation tick covers a
+      // server restart or a state transition that predates event publication;
+      // it is not a completion deadline.
+      return new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout>;
+        const finish = () => {
+          clearTimeout(timer);
+          waiters.delete(finish);
+          resolve();
+        };
+        timer = setTimeout(finish, 5_000);
+        timer.unref?.();
+        waiters.add(finish);
+      });
+    },
+    close: async () => {
+      removeApprovalListener();
+      removeBuildListener();
+      for (const resolve of waiters) resolve();
+      waiters.clear();
+      const unsubscribe = events.unsubscribeAll();
+      await eventsRpc.close();
+      await unsubscribe;
+    },
   };
 }
 

@@ -146,15 +146,6 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     const evalClient = typedClient("eval", evalMethods, client);
     const scopeKey = session.scopeKey;
 
-    // --fresh-scope wipes the persistent scope (and user db) before the run, so
-    // the snippet starts from an empty REPL scope.
-    if (inv.flags["fresh-scope"] === true) {
-      await evalClient.reset({
-        target: { kind: "owner-session", sessionId: session.entityId },
-        scopeKey,
-      });
-    }
-
     const runArgs = {
       runId: randomUUID(),
       target: { kind: "owner-session" as const, sessionId: session.entityId },
@@ -167,17 +158,50 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     };
     let streamedConsole = "";
+    let lastShellWaitDiagnostic = "";
+    let activeAuthorityDiagnostic = "";
+    let authorityDiagnosticTimer: ReturnType<typeof setTimeout> | undefined;
     let stopLiveEvents: (() => Promise<void>) | undefined;
-    if (!json) {
+    {
       const events = new EventsClient(client);
+      const removeApprovalListener = events.on("shell-approval:pending-changed", ({ pending }) => {
+        for (const approval of pending) {
+          const diagnostic = `CLI operation is waiting for ${approval.kind} approval ${approval.approvalId}`;
+          if (diagnostic === lastShellWaitDiagnostic) continue;
+          lastShellWaitDiagnostic = diagnostic;
+          process.stderr.write(`${diagnostic}\n`);
+        }
+      });
       const removeListener = events.on("eval:run-event", (payload) => {
-        if (
-          payload.runId !== runArgs.runId ||
-          payload.scopeKey !== scopeKey ||
-          payload.event.kind !== "console"
-        ) {
+        if (payload.runId !== runArgs.runId || payload.scopeKey !== scopeKey) return;
+        if (payload.event.kind === "authority-requested") {
+          const detail =
+            payload.event.payload && typeof payload.event.payload === "object"
+              ? (payload.event.payload as Record<string, unknown>)
+              : {};
+          const capability =
+            typeof detail["capability"] === "string" ? ` ${detail["capability"]}` : "";
+          const acquisition =
+            typeof detail["acquisitionId"] === "string" ? ` (${detail["acquisitionId"]})` : "";
+          const diagnostic = `eval ${runArgs.runId} is waiting for approval${capability}${acquisition}`;
+          if (authorityDiagnosticTimer) clearTimeout(authorityDiagnosticTimer);
+          authorityDiagnosticTimer = setTimeout(() => {
+            activeAuthorityDiagnostic = diagnostic;
+            process.stderr.write(`${diagnostic}\n`);
+          }, 500);
+          authorityDiagnosticTimer.unref?.();
           return;
         }
+        if (payload.event.kind === "authority-decided") {
+          if (authorityDiagnosticTimer) clearTimeout(authorityDiagnosticTimer);
+          authorityDiagnosticTimer = undefined;
+          if (activeAuthorityDiagnostic) {
+            process.stderr.write(`eval ${runArgs.runId} approval decided; resuming\n`);
+            activeAuthorityDiagnostic = "";
+          }
+          return;
+        }
+        if (json || payload.event.kind !== "console") return;
         const eventPayload = payload.event.payload;
         const text =
           eventPayload && typeof eventPayload === "object" && !Array.isArray(eventPayload)
@@ -188,15 +212,20 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
         process.stderr.write(text.endsWith("\n") ? text : `${text}\n`);
       });
       try {
-        await events.subscribe("eval:run-event");
+        await events.subscribeAll(["eval:run-event", "shell-approval:pending-changed"]);
         stopLiveEvents = async () => {
           removeListener();
-          await events.unsubscribeAll();
+          removeApprovalListener();
+          if (authorityDiagnosticTimer) clearTimeout(authorityDiagnosticTimer);
+          const unsubscribe = events.unsubscribeAll();
+          await client.close();
+          await unsubscribe;
         };
       } catch {
         // Live observation is an ergonomic accelerator. The durable executor
         // remains authoritative if a watch cannot be established.
         removeListener();
+        removeApprovalListener();
       }
     }
     const abort = new AbortController();
@@ -206,6 +235,15 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     );
     let result;
     try {
+      // --fresh-scope wipes the persistent scope (and user db) before the run,
+      // so the snippet starts empty. The event watch is already active so an
+      // approval wait cannot look like a dead CLI request.
+      if (inv.flags["fresh-scope"] === true) {
+        await evalClient.reset({
+          target: { kind: "owner-session", sessionId: session.entityId },
+          scopeKey,
+        });
+      }
       const execution = executeEval(runArgs);
       result =
         timeoutMs !== undefined

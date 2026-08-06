@@ -42,6 +42,8 @@ export const evalLifecycleFailureCodes = {
   runtimeGenerationLost: "runtime_generation_lost",
   /** cancelled: the caller's own opt-in deadline elapsed. */
   deadlineExceeded: "eval_deadline_exceeded",
+  /** cancelled: the host-owned liveness lease expired without observable progress. */
+  livenessStalled: "eval_liveness_stalled",
   /** cancelled: explicit owner/user cancellation. */
   cancelled: "eval_cancelled",
 } as const;
@@ -180,7 +182,7 @@ export const evalStartInputSchema = z
       .positive()
       .optional()
       .describe(
-        "Optional wall-clock deadline in milliseconds. Omit for ordinary work, long-running operations, and calls that may wait for human approval: eval has no implicit deadline. Set only when the task explicitly requires a bound or the code may never settle."
+        "Optional whole-run wall-clock deadline in milliseconds. Independent of the host-owned renewable liveness lease."
       ),
     /**
      * Per-run attenuation. This can only narrow the authority already admitted
@@ -276,6 +278,16 @@ export const evalRunStatusSchema = z
     result: evalRunResultSchema.optional(),
     /** Latest durable heartbeat published by the running sandbox. */
     progress: z.unknown().optional(),
+    /** Latest host-owned execution checkpoint (for example the outbound RPC currently awaited). */
+    checkpoint: z.unknown().optional(),
+    /** Renewable inactivity lease currently owned by this run. */
+    liveness: z
+      .object({
+        expiresAt: z.number().int().nonnegative().optional(),
+        suspended: z.enum(["authority", "outbound-rpc"]).optional(),
+      })
+      .strict()
+      .optional(),
     /** Observable lifecycle state, distinct from execution/result status. */
     activity: z
       .discriminatedUnion("kind", [
@@ -330,6 +342,7 @@ export const evalRunEventSchema = z
       "state",
       "console",
       "progress",
+      "checkpoint",
       "authority-requested",
       "authority-decided",
       "kernel",

@@ -92,6 +92,8 @@ const RESULT_ERROR_MAX_CHARS = 20_000;
 const RESULT_STORAGE_MAX_CHARS = 250_000;
 const CANCELLATION_GRACE_MS = 5_000;
 const MAX_KERNEL_IDLE_LEASE_MS = 60 * 60 * 1_000;
+const DEFAULT_EVAL_LIVENESS_LEASE_MS = 2 * 60 * 1_000;
+const MAX_EVAL_LIVENESS_LEASE_MS = 10 * 60 * 1_000;
 /** Bounded EvalDO-side terminal-push redelivery (receivers dedupe). */
 const RESULT_REDELIVERY_MAX_ATTEMPTS = 3;
 const RESULT_REDELIVERY_BASE_DELAY_MS = 5_000;
@@ -99,6 +101,7 @@ const RESULT_REDELIVERY_BASE_DELAY_MS = 5_000;
 const EVAL_SCHEMA_TABLES = [
   "runs",
   "run_progress",
+  "run_checkpoints",
   "run_events",
   "eval_execution_roots",
   "eval_result_redeliveries",
@@ -342,6 +345,8 @@ interface RunArgs {
   runId?: string;
   /** Opt-in deadline; the run is aborted after this many ms. Absent ⇒ unbounded. */
   timeoutMs?: number;
+  /** Host-owned renewable inactivity lease. Semantic checkpoint changes renew it. */
+  livenessLeaseMs?: number;
   /** Read-only containment: outbound service calls from this run are dispatched
    *  with ctx.readOnly, so the server refuses any non-`read` method. */
   readOnly?: boolean;
@@ -365,6 +370,7 @@ function semanticRunArgs(
   | "resultReceiverRef"
   | "scopeInputRevision"
   | "runDigest"
+  | "livenessLeaseMs"
 > {
   const {
     gatewayToken: _gatewayToken,
@@ -373,6 +379,7 @@ function semanticRunArgs(
     resultReceiverRef: _resultReceiverRef,
     scopeInputRevision: _scopeInputRevision,
     runDigest: _runDigest,
+    livenessLeaseMs: _livenessLeaseMs,
     ...semantic
   } = args;
   return semantic;
@@ -394,6 +401,7 @@ type EvalRunEventKind =
   | "state"
   | "console"
   | "progress"
+  | "checkpoint"
   | "authority-requested"
   | "authority-decided"
   | "kernel"
@@ -457,6 +465,25 @@ export class EvalDO extends DurableObjectBase {
    * already-aborted signal; the cancelled program itself is no longer running.
    */
   private readonly runCleanupPhases = new Map<string, RunCleanupPhase>();
+  /** Activation-local lease renewers owned by the currently executing run. */
+  private readonly runLeaseRenewals = new Map<string, () => void>();
+  /** Externally-owned waits suspend guest-execution inactivity. */
+  private readonly runLeaseSuspensionControls = new Map<
+    string,
+    {
+      pause: (reason: "authority" | "outbound-rpc") => void;
+      resume: (reason: "authority" | "outbound-rpc") => void;
+    }
+  >();
+  private readonly runLeaseSuspensions = new Map<
+    string,
+    ReadonlySet<"authority" | "outbound-rpc">
+  >();
+  /** Exact authority asks still awaiting a decision, grouped by invocation identity. */
+  private readonly runPendingAuthorityRequests = new Map<string, Map<string, unknown>>();
+  /** Last observable operation checkpoint digest; repeated polling of the same operation
+   * does not manufacture liveness by toggling transport state. */
+  private readonly runCheckpointDigests = new Map<string, string>();
   /**
    * The execution currently invoking retained runtime objects. Panel handles
    * survive across notebook cells, so their module-loader closure must resolve
@@ -573,6 +600,14 @@ export class EvalDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS run_checkpoints (
+        run_id TEXT PRIMARY KEY,
+        checkpoint TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+      )
+    `);
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS run_events (
         run_id TEXT NOT NULL,
         sequence INTEGER NOT NULL,
@@ -655,12 +690,48 @@ export class EvalDO extends DurableObjectBase {
       }
       return options as T;
     };
-    const call = <T = unknown>(
+    const call = async <T = unknown>(
       targetId: string,
       method: string,
       args: unknown[],
       options?: RpcCallOptions
-    ) => base.call<T>(targetId, method, args, mergeOptions(options));
+    ): Promise<T> => {
+      const controls = input.runId ? this.runLeaseSuspensionControls.get(input.runId) : undefined;
+      if (input.runId) {
+        this.recordRunCheckpoint(input.runId, {
+          stage: "outbound-rpc",
+          state: "waiting",
+          targetId,
+          method,
+        });
+        controls?.pause("outbound-rpc");
+      }
+      try {
+        const result = await base.call<T>(targetId, method, args, mergeOptions(options));
+        if (input.runId) {
+          this.completeRunCheckpoint(input.runId, {
+            stage: "outbound-rpc",
+            state: "completed",
+            targetId,
+            method,
+          });
+        }
+        return result;
+      } catch (error) {
+        if (input.runId) {
+          this.completeRunCheckpoint(input.runId, {
+            stage: "outbound-rpc",
+            state: "failed",
+            targetId,
+            method,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        throw error;
+      } finally {
+        controls?.resume("outbound-rpc");
+      }
+    };
     const emit = (targetId: string, event: string, payload: unknown, options?: RpcCallOptions) =>
       base.emit(targetId, event, payload, mergeOptions(options));
     const peerFor = (targetId: string) => {
@@ -776,8 +847,9 @@ export class EvalDO extends DurableObjectBase {
   /**
    * Keep the inbound `respond()` watchdog disabled explicitly: the synchronous panel/CLI `run`
    * method legitimately runs for the eval's whole duration. Agent `startRun` returns immediately
-   * and executes under `waitUntil`. An opt-in `timeoutMs` bounds either form; restart interruption
-   * is reconciled on boot.
+   * and executes under `waitUntil`. The renewable liveness lease bounds an unchanged execution
+   * stage; an optional `timeoutMs` additionally bounds the complete run. Restart interruption is
+   * reconciled on boot.
    */
   protected override get respondTimeoutMs(): number {
     return 0;
@@ -999,6 +1071,16 @@ export class EvalDO extends DurableObjectBase {
     existing: boolean;
   }> {
     const runId = args.runId;
+    if (
+      args.livenessLeaseMs !== undefined &&
+      (!Number.isSafeInteger(args.livenessLeaseMs) ||
+        args.livenessLeaseMs <= 0 ||
+        args.livenessLeaseMs > MAX_EVAL_LIVENESS_LEASE_MS)
+    ) {
+      throw new Error(
+        `eval liveness lease must be an integer between 1 and ${MAX_EVAL_LIVENESS_LEASE_MS}ms`
+      );
+    }
     const existing = this.sql
       .exec(`SELECT status, args FROM runs WHERE run_id = ?`, runId)
       .toArray()[0];
@@ -1061,7 +1143,11 @@ export class EvalDO extends DurableObjectBase {
       .update(`${args.intentDigest ?? ""}\0${scopeInputRevision}`)
       .digest("hex");
     args = { ...args, scopeInputRevision, runDigest };
-    const deadlineAt = args.timeoutMs ? Date.now() + args.timeoutMs : null;
+    const acceptedAt = Date.now();
+    const leaseDeadlineAt = acceptedAt + evalLivenessLeaseMs(args);
+    const deadlineAt = args.timeoutMs
+      ? Math.min(acceptedAt + args.timeoutMs, leaseDeadlineAt)
+      : leaseDeadlineAt;
     this.sql.exec(
       `INSERT INTO runs (run_id, args, agent_ref, channel_id, status, started_at, deadline_at)
        VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
@@ -1069,7 +1155,7 @@ export class EvalDO extends DurableObjectBase {
       JSON.stringify(args),
       args.agentRef ?? null,
       args.channelId ?? null,
-      Date.now(),
+      acceptedAt,
       deadlineAt
     );
     this.appendRunEvent(runId, "state", { status: "accepted" });
@@ -1254,7 +1340,10 @@ export class EvalDO extends DurableObjectBase {
       )
       .toArray()[0];
     const row = this.sql
-      .exec(`SELECT status, args, deadline_at, result FROM runs WHERE run_id = ?`, runId)
+      .exec(
+        `SELECT status, args, started_at, deadline_at, result FROM runs WHERE run_id = ?`,
+        runId
+      )
       .toArray()[0];
     if (!row) {
       return {
@@ -1289,7 +1378,8 @@ export class EvalDO extends DurableObjectBase {
     this.appendRunEvent(runId, "state", { status: "running" });
 
     const args = JSON.parse(String(row["args"])) as RunArgs;
-    const deadlineAt = row["deadline_at"] != null ? Number(row["deadline_at"]) : null;
+    let deadlineAt = Number(row["deadline_at"]);
+    const totalDeadlineAt = args.timeoutMs ? Number(row["started_at"]) + args.timeoutMs : null;
     const controller = new AbortController();
     const cleanupPhase: RunCleanupPhase = { active: false, revoked: false };
     this.runAborts.set(runId, controller);
@@ -1299,23 +1389,86 @@ export class EvalDO extends DurableObjectBase {
 
     let result: RunResult;
     let kernel: KernelRunStatus | undefined;
-    try {
-      if (deadlineAt != null) {
-        const remaining = deadlineAt - Date.now();
-        if (remaining <= 0) {
-          controller.abort(evalDeadlineAbortReason(args.timeoutMs));
-          cleanupPhase.active = true;
-          await this.executeRunCancelHandlers(runId);
-        } else {
-          timer = setTimeout(() => {
-            controller.abort(evalDeadlineAbortReason(args.timeoutMs));
-          }, remaining);
-          timer.unref?.();
+    const suspensionCounts = new Map<"authority" | "outbound-rpc", number>();
+    const isSuspended = () => suspensionCounts.size > 0;
+    const armLease = () => {
+      if (isSuspended()) return;
+      const now = Date.now();
+      deadlineAt = Math.min(
+        now + evalLivenessLeaseMs(args),
+        totalDeadlineAt ?? Number.POSITIVE_INFINITY
+      );
+      this.sql.exec(
+        `UPDATE runs SET deadline_at = ? WHERE run_id = ? AND status = 'running'`,
+        deadlineAt,
+        runId
+      );
+      if (timer) clearTimeout(timer);
+      const remaining = deadlineAt - now;
+      const kind =
+        totalDeadlineAt !== null && deadlineAt >= totalDeadlineAt ? "deadline" : "stalled";
+      if (remaining <= 0) controller.abort(evalExecutionAbortReason(kind, args));
+      else {
+        timer = setTimeout(() => controller.abort(evalExecutionAbortReason(kind, args)), remaining);
+        timer.unref?.();
+      }
+    };
+    this.runLeaseRenewals.set(runId, armLease);
+    this.runLeaseSuspensionControls.set(runId, {
+      pause: (reason) => {
+        const wasSuspended = isSuspended();
+        suspensionCounts.set(reason, (suspensionCounts.get(reason) ?? 0) + 1);
+        this.runLeaseSuspensions.set(runId, new Set(suspensionCounts.keys()));
+        if (wasSuspended) return;
+        if (timer) clearTimeout(timer);
+        timer = null;
+        if (totalDeadlineAt !== null) deadlineAt = totalDeadlineAt;
+        this.sql.exec(
+          `UPDATE runs SET deadline_at = ? WHERE run_id = ? AND status = 'running'`,
+          totalDeadlineAt,
+          runId
+        );
+        if (totalDeadlineAt !== null) {
+          const remaining = totalDeadlineAt - Date.now();
+          if (remaining <= 0) controller.abort(evalExecutionAbortReason("deadline", args));
+          else {
+            timer = setTimeout(
+              () => controller.abort(evalExecutionAbortReason("deadline", args)),
+              remaining
+            );
+            timer.unref?.();
+          }
         }
+      },
+      resume: (reason) => {
+        const count = suspensionCounts.get(reason) ?? 0;
+        if (count <= 1) suspensionCounts.delete(reason);
+        else suspensionCounts.set(reason, count - 1);
+        if (isSuspended()) {
+          this.runLeaseSuspensions.set(runId, new Set(suspensionCounts.keys()));
+          return;
+        }
+        this.runLeaseSuspensions.delete(runId);
+        if (count === 0) return;
+        armLease();
+      },
+    });
+    try {
+      armLease();
+      if (controller.signal.aborted) {
+        cleanupPhase.active = true;
+        await this.executeRunCancelHandlers(runId);
       }
       const ran = this.runChain.then(async () => {
         try {
-          return await this.runLocked(args, controller.signal, runId, deadlineAt, cleanupPhase);
+          this.recordRunCheckpoint(runId, { stage: "sandbox-execution" });
+          return await this.runLocked(
+            args,
+            controller.signal,
+            runId,
+            totalDeadlineAt,
+            cleanupPhase
+          );
         } finally {
           // Consume the incarnation event inside the serialized run chain. A
           // second queued cell can never race the first and also claim it.
@@ -1324,7 +1477,7 @@ export class EvalDO extends DurableObjectBase {
       });
       this.runChain = ran.catch(() => undefined);
       result = await ran;
-      if (controller.signal.aborted && deadlineAt !== null) {
+      if (controller.signal.aborted) {
         cleanupPhase.active = true;
         try {
           await this.executeRunCancelHandlers(runId);
@@ -1338,13 +1491,15 @@ export class EvalDO extends DurableObjectBase {
           console.error(`[EvalDO] cancellation cleanup failed for timed-out run ${runId}`, error);
         }
       }
-      if (controller.signal.aborted && deadlineAt !== null) {
+      if (controller.signal.aborted) {
+        const reason = executionAbortDetails(controller.signal.reason, args);
         result = {
           success: false,
           console: result.console,
-          error: `eval timed out after ${args.timeoutMs}ms`,
+          error: reason.message,
           failureKind: "cancelled",
-          failureCode: "eval_deadline_exceeded",
+          failureCode: reason.code,
+          errorData: this.runStallDiagnostics(runId, deadlineAt),
         };
       }
       if (cancellationCleanupError !== undefined) {
@@ -1355,7 +1510,7 @@ export class EvalDO extends DurableObjectBase {
         result = {
           ...result,
           success: false,
-          error: `${result.error ?? `eval timed out after ${args.timeoutMs}ms`}; cancellation cleanup failed: ${cleanupMessage}`,
+          error: `${result.error ?? executionAbortDetails(controller.signal.reason, args).message}; cancellation cleanup failed: ${cleanupMessage}`,
         };
       }
       result = { ...result, kernel };
@@ -1364,7 +1519,7 @@ export class EvalDO extends DurableObjectBase {
         this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0]?.["status"] ??
           ""
       );
-      const deadlineFired = deadlineAt !== null && controller.signal.aborted;
+      const deadlineFired = controller.signal.aborted;
       // A fired deadline is not carte blanche: only an error DERIVED from the
       // abort (the reason itself, an AbortError, or an abort-caused transport
       // rejection in the cause chain) is the timeout. Anything else is a real
@@ -1385,17 +1540,19 @@ export class EvalDO extends DurableObjectBase {
           err instanceof Error ? (err.stack ?? err.message) : String(err)
         );
       }
+      const abortDetails = executionAbortDetails(controller.signal.reason, args);
       result = deadlineExceeded
         ? {
             success: false,
             console: "",
-            error: `eval timed out after ${args.timeoutMs}ms${
+            error: `${abortDetails.message}${
               /cancellation cleanup failed/iu.test(err instanceof Error ? err.message : String(err))
                 ? `; ${err instanceof Error ? err.message : String(err)}`
                 : ""
             }`,
             failureKind: "cancelled",
-            failureCode: "eval_deadline_exceeded",
+            failureCode: abortDetails.code,
+            errorData: this.runStallDiagnostics(runId, deadlineAt),
             kernel: kernel ?? this.kernelStatusForRun(),
           }
         : {
@@ -1412,6 +1569,11 @@ export class EvalDO extends DurableObjectBase {
           };
     } finally {
       if (timer) clearTimeout(timer);
+      this.runLeaseRenewals.delete(runId);
+      this.runLeaseSuspensionControls.delete(runId);
+      this.runLeaseSuspensions.delete(runId);
+      this.runPendingAuthorityRequests.delete(runId);
+      this.runCheckpointDigests.delete(runId);
       this.runAborts.delete(runId);
       this.runCleanupPhases.delete(runId);
       if (!controller.signal.aborted) this.runCancelHandlers.delete(runId);
@@ -1496,13 +1658,15 @@ export class EvalDO extends DurableObjectBase {
     status: EvalRunStatusValue | "unknown";
     result?: RunResult;
     progress?: unknown;
+    checkpoint?: unknown;
+    liveness?: { expiresAt?: number; suspended?: "authority" | "outbound-rpc" };
     activity?:
       | { kind: "executing" }
       | { kind: "authority-pending"; request: unknown }
       | { kind: "cancelling" };
   } {
     const row = this.sql
-      .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
+      .exec(`SELECT status, result, deadline_at FROM runs WHERE run_id = ?`, runId)
       .toArray()[0];
     if (!row) return { status: "unknown" };
     const status = String(row["status"]) as EvalRunStatusValue;
@@ -1511,31 +1675,25 @@ export class EvalDO extends DurableObjectBase {
       .toArray()[0];
     const progress =
       progressRow?.["progress"] != null ? JSON.parse(String(progressRow["progress"])) : undefined;
-    // Activity is a LIVE-lifecycle observation; a terminal run has none. Gate
-    // on status before deriving from authority events, so a terminal run whose
-    // last authority event happens to be `authority-requested` can never report
-    // a permanently pending authority ask.
-    const authorityEvent =
+    const checkpointRow = this.sql
+      .exec(`SELECT checkpoint FROM run_checkpoints WHERE run_id = ?`, runId)
+      .toArray()[0];
+    const checkpoint = checkpointRow?.["checkpoint"]
+      ? JSON.parse(String(checkpointRow["checkpoint"]))
+      : undefined;
+    // Activity is a LIVE-lifecycle observation; a terminal run has none.
+    const pendingAuthority =
       status === "running"
-        ? this.sql
-            .exec(
-              `SELECT kind, payload
-                 FROM run_events
-                WHERE run_id = ? AND kind IN ('authority-requested', 'authority-decided')
-                ORDER BY sequence DESC
-                LIMIT 1`,
-              runId
-            )
-            .toArray()[0]
+        ? this.runPendingAuthorityRequests.get(runId)?.values().next().value
         : undefined;
     const activity =
       status === "cancelling"
         ? ({ kind: "cancelling" } as const)
         : status === "running"
-          ? String(authorityEvent?.["kind"] ?? "") === "authority-requested"
+          ? pendingAuthority
             ? ({
                 kind: "authority-pending" as const,
-                request: JSON.parse(String(authorityEvent!["payload"])),
+                request: pendingAuthority,
               } as const)
             : ({ kind: "executing" } as const)
           : undefined;
@@ -1543,6 +1701,22 @@ export class EvalDO extends DurableObjectBase {
       status,
       ...(row["result"] != null ? { result: JSON.parse(String(row["result"])) as RunResult } : {}),
       ...(progress !== undefined ? { progress } : {}),
+      ...(checkpoint !== undefined ? { checkpoint } : {}),
+      ...(status === "running"
+        ? {
+            liveness: {
+              ...(row["deadline_at"] != null ? { expiresAt: Number(row["deadline_at"]) } : {}),
+              ...(() => {
+                const suspensions = this.runLeaseSuspensions.get(runId);
+                return suspensions?.has("authority")
+                  ? { suspended: "authority" as const }
+                  : suspensions?.has("outbound-rpc")
+                    ? { suspended: "outbound-rpc" as const }
+                    : {};
+              })(),
+            },
+          }
+        : {}),
       ...(activity ? { activity } : {}),
     };
   }
@@ -1618,6 +1792,22 @@ export class EvalDO extends DurableObjectBase {
   ): void {
     const row = this.sql.exec(`SELECT args FROM runs WHERE run_id = ?`, runId).toArray()[0];
     if (!row || !this.appendRunEvent(runId, kind, payload)) return;
+    const identity = authorityEventIdentity(payload);
+    let suspensionChange: "pause" | "resume" | null = null;
+    if (identity) {
+      const pending = this.runPendingAuthorityRequests.get(runId) ?? new Map();
+      if (kind === "authority-requested") {
+        if (!pending.has(identity)) suspensionChange = "pause";
+        pending.set(identity, payload);
+        this.runPendingAuthorityRequests.set(runId, pending);
+      } else {
+        if (pending.delete(identity)) suspensionChange = "resume";
+        if (pending.size === 0) this.runPendingAuthorityRequests.delete(runId);
+      }
+    }
+    const controls = this.runLeaseSuspensionControls.get(runId);
+    if (suspensionChange === "pause") controls?.pause("authority");
+    else if (suspensionChange === "resume") controls?.resume("authority");
     const args = JSON.parse(String(row["args"])) as RunArgs;
     const activity = this.deliverEvalProgress(runId, args, {
       activity: { kind, detail: payload },
@@ -1778,6 +1968,9 @@ export class EvalDO extends DurableObjectBase {
     if (encoded.length > 256 * 1024) {
       throw new Error("eval progress exceeds the 256 KiB durable heartbeat limit");
     }
+    const previous = this.sql
+      .exec(`SELECT progress FROM run_progress WHERE run_id = ?`, runId)
+      .toArray()[0]?.["progress"];
     this.sql.exec(
       `INSERT INTO run_progress (run_id, progress, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(run_id) DO UPDATE SET progress = excluded.progress, updated_at = excluded.updated_at`,
@@ -1786,6 +1979,68 @@ export class EvalDO extends DurableObjectBase {
       Date.now()
     );
     this.appendRunEvent(runId, "progress", progress);
+    // A repeated heartbeat with identical content is not progress and cannot
+    // keep a wedged run alive indefinitely.
+    if (String(previous ?? "") !== encoded) this.runLeaseRenewals.get(runId)?.();
+  }
+
+  private recordRunCheckpoint(runId: string, checkpoint: Record<string, unknown>): void {
+    const at = Date.now();
+    this.persistRunCheckpoint(runId, { ...checkpoint, at }, at);
+    // State is intentionally excluded: repeatedly polling the same operation
+    // alternates waiting/completed but is still one unchanged semantic stage.
+    const semantic = { ...checkpoint };
+    Reflect.deleteProperty(semantic, "state");
+    const digest = canonicalJson(semantic);
+    if (this.runCheckpointDigests.get(runId) !== digest) {
+      this.runCheckpointDigests.set(runId, digest);
+      this.appendRunEvent(runId, "checkpoint", { ...checkpoint, at });
+      this.runLeaseRenewals.get(runId)?.();
+    }
+  }
+
+  private completeRunCheckpoint(runId: string, checkpoint: Record<string, unknown>): void {
+    const at = Date.now();
+    this.persistRunCheckpoint(runId, { ...checkpoint, at }, at);
+  }
+
+  private persistRunCheckpoint(
+    runId: string,
+    checkpoint: Record<string, unknown>,
+    at: number
+  ): void {
+    this.sql.exec(
+      `INSERT INTO run_checkpoints (run_id, checkpoint, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(run_id) DO UPDATE
+         SET checkpoint = excluded.checkpoint, updated_at = excluded.updated_at`,
+      runId,
+      JSON.stringify(checkpoint),
+      at
+    );
+  }
+
+  private runStallDiagnostics(runId: string, expiresAt: number): Record<string, unknown> {
+    const checkpointRow = this.sql
+      .exec(`SELECT checkpoint, updated_at FROM run_checkpoints WHERE run_id = ?`, runId)
+      .toArray()[0];
+    const progressRow = this.sql
+      .exec(`SELECT progress, updated_at FROM run_progress WHERE run_id = ?`, runId)
+      .toArray()[0];
+    return {
+      expiresAt,
+      ...(checkpointRow
+        ? {
+            checkpoint: JSON.parse(String(checkpointRow["checkpoint"])),
+            checkpointAt: Number(checkpointRow["updated_at"]),
+          }
+        : {}),
+      ...(progressRow
+        ? {
+            lastProgress: JSON.parse(String(progressRow["progress"])),
+            progressAt: Number(progressRow["updated_at"]),
+          }
+        : {}),
+    };
   }
 
   private appendRunEvent(runId: string, kind: EvalRunEventKind, payload: unknown): boolean {
@@ -2285,6 +2540,7 @@ export class EvalDO extends DurableObjectBase {
              'repl_scopes',
              'runs',
              'run_progress',
+             'run_checkpoints',
              'run_events',
              'eval_execution_roots'
            )`
@@ -3178,11 +3434,59 @@ function isTerminalRunStatus(value: Record<string, unknown> | null): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled";
 }
 
-/** Tagged reason for the deadline abort so downstream errors stay attributable. */
-function evalDeadlineAbortReason(timeoutMs: number | undefined): Error {
-  const reason = new Error(`eval deadline of ${timeoutMs}ms elapsed`);
+/** Tagged reason for an execution-liveness abort so downstream errors stay attributable. */
+function evalLivenessLeaseMs(args: Pick<RunArgs, "livenessLeaseMs">): number {
+  return args.livenessLeaseMs ?? DEFAULT_EVAL_LIVENESS_LEASE_MS;
+}
+
+function evalExecutionAbortReason(
+  kind: "deadline" | "stalled",
+  args: Pick<RunArgs, "timeoutMs" | "livenessLeaseMs">
+): Error {
+  const reason = new Error(
+    kind === "deadline"
+      ? `eval deadline of ${args.timeoutMs}ms elapsed`
+      : `eval made no observable progress for ${evalLivenessLeaseMs(args)}ms`
+  );
   reason.name = "AbortError";
-  return Object.assign(reason, { code: "EEVALDEADLINE" });
+  return Object.assign(reason, {
+    code: kind === "deadline" ? "EEVALDEADLINE" : "EEVALSTALLED",
+  });
+}
+
+function authorityEventIdentity(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const value = payload as Record<string, unknown>;
+  if (typeof value["snapshotDigest"] === "string") {
+    return `snapshot:${value["snapshotDigest"]}`;
+  }
+  if (typeof value["acquisitionId"] === "string") {
+    return `acquisition:${value["acquisitionId"]}`;
+  }
+  if (
+    typeof value["capability"] === "string" &&
+    typeof value["resourceKey"] === "string" &&
+    typeof value["tier"] === "string"
+  ) {
+    return `request:${value["capability"]}:${value["resourceKey"]}:${value["tier"]}`;
+  }
+  return null;
+}
+
+function executionAbortDetails(
+  reason: unknown,
+  args: Pick<RunArgs, "timeoutMs" | "livenessLeaseMs">
+): { code: string; message: string } {
+  const stalled = errorCodeInChain(reason) === "EEVALSTALLED";
+  return stalled
+    ? {
+        code: "eval_liveness_stalled",
+        message: `eval stalled: no observable progress for ${evalLivenessLeaseMs(args)}ms`,
+      }
+    : {
+        code: "eval_deadline_exceeded",
+        message: `eval timed out after ${args.timeoutMs}ms`,
+      };
 }
 
 /**
@@ -3205,7 +3509,12 @@ function isAbortDerivedError(error: unknown, abortReason: unknown): boolean {
       cause?: unknown;
     };
     if (candidate.name === "AbortError") return true;
-    if (candidate.code === "ABORT_ERR" || candidate.code === "EEVALDEADLINE") return true;
+    if (
+      candidate.code === "ABORT_ERR" ||
+      candidate.code === "EEVALDEADLINE" ||
+      candidate.code === "EEVALSTALLED"
+    )
+      return true;
     if (typeof candidate.message === "string" && /\babort/iu.test(candidate.message)) return true;
     current = candidate.cause;
   }
