@@ -158,6 +158,7 @@ describe("createEvalImportLoader", () => {
         kind: "package" as const,
         name: "@workspace/pkg",
         buildKey: "a".repeat(64),
+        sourcePath: null,
         ev: "ev-test",
         sourceStateHash: null,
         sourcemap: false,

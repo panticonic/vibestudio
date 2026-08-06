@@ -19,7 +19,10 @@ import type {
   WorkspaceContext,
   WorkspacePackageInfo,
 } from "@vibestudio/typecheck";
+import type { PackageManifest } from "@vibestudio/shared/types";
 import { workspaceDiagnosticPath, type BuildDiagnostic } from "./diagnostics.js";
+import { authorityDiagnosticsForProgram } from "./authorityFold.js";
+import type { ExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
 
 /** A materialized internal-dep unit — package name + workspace-relative path,
  *  both taken from the build package graph. */
@@ -35,6 +38,43 @@ async function readPackageJson(dir: string): Promise<WorkspacePackageInfo["packa
   } catch {
     return null;
   }
+}
+
+/** Create the exact TypeScript program used by the report fold. */
+export async function typecheckProgramForUnit(
+  unitRelativePath: string,
+  sourceRoot: string,
+  internalDeps: TypecheckUnitDep[],
+  nodeModulesPaths: string[]
+): Promise<import("typescript").Program> {
+  const { TypeCheckService, createDiskFileSource, loadSourceFiles } =
+    await import("@vibestudio/typecheck");
+  const unitDir = path.join(sourceRoot, unitRelativePath);
+  const packages = new Map<string, WorkspacePackageInfo>();
+  for (const dep of internalDeps) {
+    const dir = path.join(sourceRoot, dep.relativePath);
+    const packageJson = await readPackageJson(dir);
+    const name = packageJson?.name ?? dep.name;
+    if (!name) continue;
+    packages.set(name, {
+      name,
+      dir,
+      packageJson: packageJson ?? ({ name } as WorkspacePackageInfo["packageJson"]),
+    });
+  }
+  const service = new TypeCheckService({
+    panelPath: unitDir,
+    workspaceContext: { monorepoRoot: sourceRoot, packages },
+    nodeModulesPaths,
+    tsconfigSearchBoundary: unitDir,
+  });
+  const files = await loadSourceFiles(createDiskFileSource(unitDir), ".");
+  for (const [relPath, content] of files) {
+    service.updateFile(path.resolve(unitDir, relPath), content);
+  }
+  const program = service.getProgram();
+  if (!program) throw new Error("Typecheck could not obtain the exact TypeScript program");
+  return program;
 }
 
 function toBuildDiagnostic(
@@ -80,7 +120,22 @@ export async function typecheckUnit(
   unitRelativePath: string,
   sourceRoot: string,
   internalDeps: TypecheckUnitDep[],
-  nodeModulesPaths: string[]
+  nodeModulesPaths: string[],
+  authority?: {
+    manifest: PackageManifest;
+    environment?: ExactWorkspaceAuthorityEnvironment;
+    workspaceId?: string;
+    executableModules?: readonly {
+      moduleId: string;
+      contentDigest: string;
+      package:
+        | { kind: "first-party" }
+        | { kind: "workspace"; name: string; effectiveVersion: string }
+        | { kind: "external"; name: string; version: string; packageDigest: string };
+      format: "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs";
+      source: string;
+    }[];
+  }
 ): Promise<BuildDiagnostic[]> {
   const unitDir = path.join(sourceRoot, unitRelativePath);
   try {
@@ -113,9 +168,47 @@ export async function typecheckUnit(
       service.updateFile(path.resolve(unitDir, relPath), content);
     }
     const result = service.check();
-    return result.diagnostics
+    const diagnostics = result.diagnostics
       .filter((d) => d.severity === "error" || d.severity === "warning")
       .map((d) => toBuildDiagnostic(d, sourceRoot, unitRelativePath));
+    if (authority) {
+      const program = service.getProgram();
+      if (!program) {
+        diagnostics.push({
+          source: "authority",
+          severity: "error",
+          file: `${unitRelativePath}/package.json`,
+          line: 1,
+          column: 1,
+          message: "Authority analysis could not obtain the exact TypeScript program.",
+        });
+      } else {
+        try {
+          diagnostics.push(
+            ...(await authorityDiagnosticsForProgram({
+              program,
+              sourceRoot,
+              unitRelativePath,
+              units: internalDeps,
+              manifest: authority.manifest,
+              environment: authority.environment,
+              workspaceId: authority.workspaceId,
+              executableModules: authority.executableModules,
+            }))
+          );
+        } catch (error) {
+          diagnostics.push({
+            source: "authority",
+            severity: "error",
+            file: `${unitRelativePath}/package.json`,
+            line: 1,
+            column: 1,
+            message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
+    }
+    return diagnostics;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[BuildV2] typecheck fold-in failed for ${unitRelativePath}:`, message);

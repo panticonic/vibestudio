@@ -9,11 +9,13 @@ import {
   artifactFilePath,
   collectRetention,
   get,
+  getByExecution,
   has,
   primaryArtifact,
   primaryArtifactFilePath,
   primaryTextArtifactContent,
   put,
+  rebindSourceState,
   scanRetention,
   setBuildExecutionIdentityContext,
   type BuildResult,
@@ -344,6 +346,55 @@ describe("build artifact helpers", () => {
       expect(get(workspaceMetadata.buildKey)?.metadata.execution).toEqual(
         changedSource.metadata.execution
       );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rebinds reusable artifact bytes to the exact current source state", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-rebind-"));
+    const buildKey = "e".repeat(64);
+    const firstState = `state:${"1".repeat(64)}`;
+    const secondState = `state:${"2".repeat(64)}`;
+    try {
+      setUserDataPath(root);
+      setBuildExecutionIdentityContext({
+        workspaceId: "workspace:rebind",
+        executionStateForContent: (stateHash) =>
+          stateHash === firstState
+            ? { kind: "event", eventId: "event:first" }
+            : stateHash === secondState
+              ? { kind: "event", eventId: "event:second" }
+              : null,
+      });
+      put(
+        buildKey,
+        { entries: build().artifacts },
+        {
+          ...build().metadata,
+          buildKey,
+          sourcePath: "workers/a",
+          ev: "f".repeat(64),
+          sourceStateHash: firstState,
+        }
+      );
+
+      const first = get(buildKey)!;
+      const firstExecutionDigest = first.metadata.execution!.executionDigest;
+      const rebound = rebindSourceState(first, secondState);
+
+      expect(rebound.sourceStateHash).toBe(secondState);
+      expect(rebound.metadata.sourceState).toEqual({ kind: "event", eventId: "event:second" });
+      expect(get(buildKey)?.metadata.execution?.sourceState.state).toEqual({
+        kind: "event",
+        eventId: "event:second",
+      });
+      expect(getByExecution(buildKey, firstExecutionDigest)?.metadata.execution).toEqual(
+        first.metadata.execution
+      );
+      expect(
+        getByExecution(buildKey, rebound.metadata.execution!.executionDigest)?.metadata.execution
+      ).toEqual(rebound.metadata.execution);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -792,12 +843,27 @@ describe("build artifact helpers", () => {
       expect(original.dir).toBe(path.join(stateA, "builds", buildKey));
 
       setUserDataPath(stateB);
+      setBuildExecutionIdentityContext({
+        workspaceId: "workspace:b",
+        executionStateForContent: (stateHash) =>
+          stateHash === `state:${"1".repeat(64)}`
+            ? { kind: "event", eventId: "event:workspace-b" }
+            : null,
+      });
       expect(has(buildKey)).toBe(true);
       const reused = get(buildKey);
 
       expect(reused).toMatchObject({
         dir: path.join(stateB, "builds", buildKey),
         sourceStateHash: `state:${"1".repeat(64)}`,
+      });
+      expect(reused?.metadata.sourceState).toEqual({
+        kind: "event",
+        eventId: "event:workspace-b",
+      });
+      expect(reused?.metadata.execution?.sourceState.state).toEqual({
+        kind: "event",
+        eventId: "event:workspace-b",
       });
       expect(reused?.artifacts[0]?.content).toBe("export default {};");
       expect(fs.existsSync(path.join(stateB, "builds", "same-build-key"))).toBe(false);

@@ -39,6 +39,7 @@ import {
 import { assertPresent } from "../../lintHelpers";
 import { blobCasPath, centralBlobCasDir, putBlobBytesSync } from "../storage/blobCas.js";
 import { stateLayout } from "../stateLayout.js";
+export { contentTypeForPath } from "@vibestudio/shared/contentType";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,6 +112,17 @@ export type ExtensionMethodAuthority = Record<
     }
 >;
 
+export interface ExecutableModuleInput {
+  moduleId: string;
+  contentDigest: string;
+  package:
+    | { kind: "first-party" }
+    | { kind: "workspace"; name: string; effectiveVersion: string }
+    | { kind: "external"; name: string; version: string; packageDigest: string };
+  format: "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs";
+  source: string;
+}
+
 export type BuildMetadataDetails =
   | {
       kind: "extension";
@@ -174,6 +186,8 @@ export interface BuildMetadata {
   }>;
   /** Authority sealed from the exact materialized source manifest. */
   authority?: UnitAuthorityManifest;
+  /** Exact implementation modules selected by the successful executable build. */
+  executableModules?: ExecutableModuleInput[];
   /** Panel state-argument schema sealed from the exact materialized manifest. */
   stateArgsSchema?: import("@vibestudio/shared/stateArgs").StateArgsSchema;
   /**
@@ -213,6 +227,32 @@ function getBuildsDir(): string {
 
 function getBuildDir(key: string): string {
   return path.join(getBuildsDir(), key);
+}
+
+function executionMetadataPath(dir: string, executionDigest: string): string {
+  if (!/^[0-9a-f]{64}$/u.test(executionDigest)) {
+    throw new Error(`Invalid build execution digest: ${executionDigest}`);
+  }
+  return path.join(dir, "executions", `${executionDigest}.json`);
+}
+
+function writeExecutionMetadata(dir: string, metadata: BuildMetadata): void {
+  const digest = metadata.execution?.executionDigest;
+  if (!digest) return;
+  const target = executionMetadataPath(dir, digest);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp.${crypto.randomBytes(12).toString("hex")}`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(metadata, null, 2)}\n`);
+    fs.renameSync(tmp, target);
+  } catch (error) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch (cleanupError) {
+      warnCleanupFailure(tmp, cleanupError);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -316,36 +356,6 @@ function publishSharedBuild(key: string, sourceDir: string): void {
     console.warn(
       `[buildStore] Failed to publish shared build ${key}: ${error instanceof Error ? error.message : String(error)}`
     );
-  }
-}
-
-export function contentTypeForPath(filePath: string): string {
-  switch (path.extname(filePath).toLowerCase()) {
-    case ".js":
-    case ".mjs":
-      return "text/javascript; charset=utf-8";
-    case ".css":
-      return "text/css; charset=utf-8";
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".json":
-    case ".map":
-      return "application/json; charset=utf-8";
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    case ".gif":
-      return "image/gif";
-    case ".wasm":
-      return "application/wasm";
-    default:
-      return "application/octet-stream";
   }
 }
 
@@ -593,7 +603,11 @@ export function has(key: string): boolean {
   return get(key) !== null;
 }
 
-function readBuildDir(dir: string, expectedBuildKey: string): BuildResult | null {
+function readBuildDir(
+  dir: string,
+  expectedBuildKey: string,
+  options: { verifyExecution?: boolean } = {}
+): BuildResult | null {
   const metadataPath = path.join(dir, "metadata.json");
 
   if (!fs.existsSync(metadataPath)) return null;
@@ -642,7 +656,9 @@ function readBuildDir(dir: string, expectedBuildKey: string): BuildResult | null
       }
       return lazyArtifactContent(dir, entry);
     });
-    verifiedExecutionIdentity(metadata, storedManifest);
+    if (options.verifyExecution !== false) {
+      verifiedExecutionIdentity(metadata, storedManifest);
+    }
     return {
       dir,
       buildKey: expectedBuildKey,
@@ -680,8 +696,26 @@ export function get(key: string): BuildResult | null {
   // cache. Without this check a successful sweep would immediately resurrect
   // the same local record on the next lookup.
   if (isRetiredBuildKey(key)) return null;
-  const shared = readBuildDir(sharedDir, key);
+  // The shared record's execution identity belongs to its source workspace;
+  // it is deliberately verified only after its provenance is rebound below.
+  const shared = readBuildDir(sharedDir, key, { verifyExecution: false });
   if (shared) {
+    // Artifact bytes are globally shareable, but workspace build metadata is
+    // not. In particular, sourceState and execution commit to the workspace
+    // that materialized the build. Rebind that provenance to this workspace
+    // only when the exact source content is present here; otherwise this is a
+    // safe cache miss and the caller must rebuild from its own source.
+    let sharedMetadata = shared.metadata;
+    if (sharedMetadata.sourceStateHash !== null) {
+      const sourceState = activeExecutionIdentityContext?.executionStateForContent(
+        sharedMetadata.sourceStateHash
+      );
+      if (!sourceState) return null;
+      const reboundMetadata: BuildMetadata = { ...sharedMetadata, sourceState };
+      const execution = createBuildExecutionIdentity(reboundMetadata, shared.artifacts);
+      if (!execution) return null;
+      sharedMetadata = { ...reboundMetadata, execution };
+    }
     // A shared result is only a reconstruction cache, never an authoritative
     // workspace record. Materialize a local immutable link tree before it can
     // be returned to an owner/publication path so workspace retention has one
@@ -690,6 +724,16 @@ export function get(key: string): BuildResult | null {
     try {
       fs.mkdirSync(path.dirname(localDir), { recursive: true });
       linkBuildTreeSync(sharedDir, tmpDir);
+      if (sharedMetadata !== shared.metadata) {
+        fs.writeFileSync(
+          path.join(tmpDir, "metadata.json"),
+          `${JSON.stringify(sharedMetadata, null, 2)}\n`
+        );
+      }
+      // Execution metadata is workspace-owned provenance. Shared caches supply
+      // reusable bytes, never another workspace's semantic execution variants.
+      fs.rmSync(path.join(tmpDir, "executions"), { recursive: true, force: true });
+      writeExecutionMetadata(tmpDir, sharedMetadata);
       try {
         fs.renameSync(tmpDir, localDir);
       } catch (error) {
@@ -713,6 +757,122 @@ export function get(key: string): BuildResult | null {
     );
   }
   return materialized;
+}
+
+/** Resolve one retained execution of reusable artifact bytes without rebinding
+ * or silently upgrading it to the build key's latest semantic source state. */
+export function getByExecution(key: string, executionDigest: string): BuildResult | null {
+  const current = get(key);
+  if (!current) return null;
+  if (current.metadata.execution?.executionDigest === executionDigest) return current;
+  try {
+    const raw = JSON.parse(
+      fs.readFileSync(executionMetadataPath(current.dir, executionDigest), "utf8")
+    ) as BuildMetadata;
+    const authority =
+      raw.authority === undefined
+        ? undefined
+        : parseUnitAuthorityManifest(raw.authority, `build ${key} retained execution authority`);
+    const metadata: BuildMetadata = { ...raw, ...(authority ? { authority } : {}) };
+    if (
+      metadata.buildKey !== key ||
+      metadata.sourceStateHash === null ||
+      metadata.execution?.executionDigest !== executionDigest
+    ) {
+      return null;
+    }
+    verifiedExecutionIdentity(metadata, current.artifacts);
+    return {
+      ...current,
+      sourceStateHash: metadata.sourceStateHash,
+      metadata: metadataForEntries(metadata, current.artifacts),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Rebind an immutable artifact set to the exact source state that requested it.
+ * BuildV2 keys locate reusable artifact bytes; execution identity additionally
+ * commits the source state, so reusing bytes across semantic states must update
+ * the workspace-owned metadata before the result can be retained or executed.
+ */
+export function rebindSourceState(build: BuildResult, sourceStateHash: string): BuildResult {
+  if (build.sourceStateHash === sourceStateHash) return build;
+  const sourceState = activeExecutionIdentityContext?.executionStateForContent(sourceStateHash);
+  if (!sourceState) {
+    throw new Error(
+      `Build ${build.buildKey} cannot be rebound to source state ${sourceStateHash}: state is not present in the active workspace`
+    );
+  }
+  const metadataWithoutExecution: BuildMetadata = {
+    ...build.metadata,
+    sourceStateHash,
+    sourceState,
+  };
+  const execution = createBuildExecutionIdentity(metadataWithoutExecution, build.artifacts);
+  if (!execution) {
+    throw new Error(
+      `Build ${build.buildKey} cannot be rebound without a workspace execution identity`
+    );
+  }
+  const metadata: BuildMetadata = { ...metadataWithoutExecution, execution };
+  const localDir = getBuildDir(build.buildKey);
+  if (path.resolve(build.dir) === path.resolve(localDir)) {
+    const metadataPath = path.join(localDir, "metadata.json");
+    const tmpPath = `${metadataPath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
+    try {
+      fs.writeFileSync(tmpPath, `${JSON.stringify(metadata, null, 2)}\n`);
+      writeExecutionMetadata(localDir, metadata);
+      fs.renameSync(tmpPath, metadataPath);
+    } catch (error) {
+      try {
+        fs.rmSync(tmpPath, { force: true });
+      } catch (cleanupError) {
+        warnCleanupFailure(tmpPath, cleanupError);
+      }
+      throw error;
+    }
+  }
+  return {
+    ...build,
+    sourceStateHash,
+    metadata,
+  };
+}
+
+/**
+ * Bootstrap builds are compiled from the filesystem snapshot used only to
+ * bring the semantic source provider online. Once semantic startup has
+ * reconciled its active entities, those snapshot roots are no longer valid
+ * execution sources for the steady-state store and must not enter content GC.
+ * Remove only exact matching, non-active cache records; shared artifact bytes
+ * remain available for normal workspace-local reconstruction.
+ */
+export function discardBootstrapBuilds(
+  sourceStateHash: string,
+  protectedBuildKeys: ReadonlySet<string>
+): number {
+  const buildsDir = getBuildsDir();
+  if (!fs.existsSync(buildsDir)) return 0;
+  const trashDir = stateLayout(getUserDataPath()).executionRetention.buildTrashDir;
+  let discarded = 0;
+  for (const entry of fs.readdirSync(buildsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || protectedBuildKeys.has(entry.name)) continue;
+    const buildDir = path.join(buildsDir, entry.name);
+    const build = readBuildDir(buildDir, entry.name, { verifyExecution: false });
+    if (!build || build.sourceStateHash !== sourceStateHash) continue;
+    const trashPath = path.join(
+      trashDir,
+      `${entry.name}.bootstrap.${crypto.randomBytes(8).toString("hex")}`
+    );
+    fs.mkdirSync(trashDir, { recursive: true, mode: 0o700 });
+    fs.renameSync(buildDir, trashPath);
+    fs.rmSync(trashPath, { recursive: true, force: true });
+    discarded += 1;
+  }
+  return discarded;
 }
 
 export function primaryArtifact(
@@ -840,6 +1000,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
 
   // Write metadata (sentinel) inside tmpDir BEFORE rename so winner is always complete
   fs.writeFileSync(path.join(tmpDir, "metadata.json"), JSON.stringify(storedMetadata, null, 2));
+  writeExecutionMetadata(tmpDir, storedMetadata);
 
   // Race-safe promotion: try rename, handle concurrent winner
   try {

@@ -76,9 +76,7 @@ function concat(parts: readonly Uint8Array[]): Uint8Array {
 export function canonicalSnapshotDigest(
   entries: readonly CanonicalSnapshotEntry[]
 ): CanonicalSnapshotDigest {
-  const sorted = [...entries].sort((left, right) =>
-    compareUtf16CodeUnits(left.path, right.path)
-  );
+  const sorted = [...entries].sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
   const seen = new Set<string>();
   const parts: Uint8Array[] = [MAGIC, u32(sorted.length)];
   for (const entry of sorted) {
@@ -101,8 +99,12 @@ export function isCanonicalSnapshotDigest(value: string): value is CanonicalSnap
   return /^v1-sha256:[0-9a-f]{64}$/.test(value);
 }
 
-export function assertCanonicalSnapshotDigest(value: string): asserts value is CanonicalSnapshotDigest {
+export function assertCanonicalSnapshotDigest(
+  value: string
+): asserts value is CanonicalSnapshotDigest {
   if (!isCanonicalSnapshotDigest(value)) {
-    throw new Error(`Expected canonical snapshot digest v1-sha256:<64 lowercase hex>, got ${value}`);
+    throw new Error(
+      `Expected canonical snapshot digest v1-sha256:<64 lowercase hex>, got ${value}`
+    );
   }
 }

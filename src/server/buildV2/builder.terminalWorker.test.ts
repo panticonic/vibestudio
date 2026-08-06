@@ -113,7 +113,13 @@ describe("buildUnit terminal worker builds", () => {
       SOURCE_STATE_HASH
     );
 
-    // Multi-artifact: primary bundle.js + the extracted yoga.wasm module.
+    // Debug provenance remains in the immutable build, but is not embedded in
+    // the primary module that workerd loads for every activation.
+    const sourceMap = result.artifacts.find((a) => a.role === "map");
+    expect(sourceMap?.path).toBe("bundle.js.map");
+    expect(sourceMap?.content).toContain('"sourcesContent"');
+
+    // Multi-artifact: primary bundle.js + linked map + extracted yoga.wasm.
     const wasm = result.artifacts.find((a) => a.role === "wasm");
     expect(wasm, "yoga.wasm artifact should be emitted").toBeDefined();
     expect(wasm?.path).toBe("yoga.wasm");
@@ -128,6 +134,8 @@ describe("buildUnit terminal worker builds", () => {
     // The bundle imports the external "yoga.wasm" (workerd provides the module).
     const bundle = result.artifacts.find((a) => a.role === "primary")?.content ?? "";
     expect(bundle).toContain("yoga.wasm");
+    expect(bundle).toContain("//# sourceMappingURL=bundle.js.map");
+    expect(bundle).not.toContain("sourceMappingURL=data:");
   }, 60_000);
 
   it("prefers workspace package source over stale build-output exports", async () => {
@@ -205,10 +213,11 @@ describe("buildUnit terminal worker builds", () => {
       workspaceRoot,
       laterState
     );
-    expect(reused.sourceStateHash).toBe(SOURCE_STATE_HASH);
-    expect(reused.metadata.sourceStateHash).toBe(SOURCE_STATE_HASH);
-    expect(reused.metadata.execution?.sourceState.contentRoots[0]?.stateHash).toBe(
-      SOURCE_STATE_HASH
-    );
+    // The executable is reused, but its provenance is rebound to the state
+    // that requested this build. The source tree/effective version is unchanged;
+    // the surrounding workspace state is not.
+    expect(reused.sourceStateHash).toBe(laterState);
+    expect(reused.metadata.sourceStateHash).toBe(laterState);
+    expect(reused.metadata.execution?.sourceState.contentRoots[0]?.stateHash).toBe(laterState);
   });
 });

@@ -8,9 +8,7 @@ describe("resolveExportSubpath", () => {
       "./tests/special": "./special.ts",
     };
 
-    expect(resolveExportSubpath(exports, "./tests/special", ["default"])).toBe(
-      "./special.ts"
-    );
+    expect(resolveExportSubpath(exports, "./tests/special", ["default"])).toBe("./special.ts");
   });
 
   it("substitutes package export wildcard matches into the target", () => {

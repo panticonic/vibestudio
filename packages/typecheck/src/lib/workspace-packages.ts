@@ -43,7 +43,7 @@ export const WORKSPACE_CONDITIONS = ["types", "default"] as const;
 export function resolveExportSubpath(
   exports: Record<string, unknown>,
   subpath: string,
-  conditions: readonly string[],
+  conditions: readonly string[]
 ): string | null {
   const exportValue = exports[subpath];
   if (exportValue !== undefined) return resolveConditionValue(exportValue, conditions);
@@ -76,10 +76,7 @@ export function resolveExportSubpath(
   return null;
 }
 
-function resolveConditionValue(
-  value: unknown,
-  conditions: readonly string[],
-): string | null {
+function resolveConditionValue(value: unknown, conditions: readonly string[]): string | null {
   if (typeof value === "string") return value;
   if (typeof value !== "object" || value === null) return null;
   const obj = value as Record<string, unknown>;

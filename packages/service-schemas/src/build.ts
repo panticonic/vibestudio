@@ -57,6 +57,7 @@ export const UserlandCapabilityDefinitionSchema = z
         verb: z.enum(["see", "act", "manage"]),
       })
       .strict(),
+    notability: z.enum(["headline", "everyday"]),
     grantScopes: z
       .array(z.enum(["once", "task", "agent", "mission", "version", "session"]))
       .readonly(),
@@ -104,28 +105,162 @@ export const buildArtifactSchema = z
   })
   .strict();
 
+const panelBundlePayloadReportSchema = z
+  .object({
+    requests: z.number().int().nonnegative(),
+    bytes: z.number().int().nonnegative(),
+    jsBytes: z.number().int().nonnegative(),
+    cssBytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const panelBundleReportSchema = z
+  .object({
+    version: z.literal(2),
+    mode: z.literal("report-only"),
+    entryOutput: z.string(),
+    initialArtifacts: z.array(z.string()),
+    initial: panelBundlePayloadReportSchema,
+    lazy: panelBundlePayloadReportSchema,
+    total: panelBundlePayloadReportSchema,
+    largestJsChunkBytes: z.number().int().nonnegative(),
+    largestInitialInputs: z.array(
+      z.object({ source: z.string(), bytes: z.number().int().nonnegative() }).strict()
+    ),
+    largestLazyInputs: z.array(
+      z.object({ source: z.string(), bytes: z.number().int().nonnegative() }).strict()
+    ),
+  })
+  .strict();
+
+const workspaceRpcEffectResourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("receiver-object") }).strict(),
+  z.object({ kind: z.literal("opaque-handle"), argument: z.number().int().nonnegative() }).strict(),
+]);
+
+const workspaceRpcMethodDocSchema = z
+  .object({
+    className: z.string(),
+    name: z.string(),
+    signature: z.string(),
+    description: z.string().optional(),
+    effect: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("open") }).strict(),
+      z
+        .object({
+          kind: z.literal("userland-capability"),
+          capability: z.string(),
+          resource: workspaceRpcEffectResourceSchema,
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("host-capability"),
+          capability: z.string(),
+          resource: z.object({ kind: z.literal("receiver-object") }).strict(),
+        })
+        .strict(),
+    ]),
+    access: z
+      .object({
+        principals: z.array(z.string()).optional(),
+        tier: z.enum(["open", "gated", "critical"]).optional(),
+        sensitivity: z.enum(["read", "write", "admin", "destructive"]).optional(),
+        codeOnly: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    inputContractDigest: z.string(),
+    producesHandle: z
+      .object({
+        localName: z.string(),
+        canonicalCapability: z.string(),
+        definitionDigest: z.string(),
+        resourceType: z.string(),
+      })
+      .strict()
+      .optional(),
+    userlandCapability: z
+      .object({
+        localName: z.string(),
+        canonicalCapability: z.string(),
+        definitionDigest: z.string(),
+        resourceType: z.string(),
+        grantScopes: z.array(z.enum(["once", "task", "agent", "mission", "version", "session"])),
+        title: z.string(),
+        action: z.string(),
+        description: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const executableModuleSchema = z
+  .object({
+    moduleId: z.string(),
+    contentDigest: z.string(),
+    package: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("first-party") }).strict(),
+      z
+        .object({
+          kind: z.literal("workspace"),
+          name: z.string(),
+          effectiveVersion: z.string(),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("external"),
+          name: z.string(),
+          version: z.string(),
+          packageDigest: z.string(),
+        })
+        .strict(),
+    ]),
+    format: z.enum(["ts", "tsx", "js", "jsx", "mjs", "cjs"]),
+    source: z.string(),
+  })
+  .strict();
+
 export const buildMetadataSchema = z
   .object({
     kind: z.enum(["panel", "package", "worker", "extension", "app", "template"]),
     name: z.string(),
     buildKey: z.string().min(1),
+    sourcePath: z.string().nullable(),
     ev: z.string(),
     sourceStateHash: z.string().nullable(),
     sourceState: z
       .discriminatedUnion("kind", [
         z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
         z.object({ kind: z.literal("application"), applicationId: z.string().min(1) }).strict(),
+        z.object({ kind: z.literal("bootstrap-snapshot"), snapshotHash: z.string() }).strict(),
       ])
       .nullable()
       .optional(),
     execution: z.lazy(() => executionArtifactRefSchema).optional(),
     sourcemap: z.boolean(),
     framework: z.string().optional(),
+    bundleReport: panelBundleReportSchema.optional(),
+    sharedStyles: z
+      .array(
+        z
+          .object({
+            digest: z.string(),
+            contentType: z.string(),
+            url: z.string(),
+          })
+          .strict()
+      )
+      .optional(),
     authority: UnitAuthorityManifestSchema.optional(),
+    executableModules: z.array(executableModuleSchema).optional(),
     stateArgsSchema: z
       .record(z.unknown())
       .optional()
       .describe("Panel state-argument schema sealed from this exact source artifact."),
+    workspaceRpcCatalog: z.array(workspaceRpcMethodDocSchema).optional(),
     details: z.object({ kind: z.string() }).passthrough(),
     builtAt: z.string(),
   })
@@ -221,12 +356,13 @@ export const buildChangeSetSchema = z
 
 /**
  * Structured, agent-actionable build diagnostic. Reuses the typecheck service's
- * `BaseDiagnostic` shape (position + severity) so esbuild and tsc diagnostics
- * are one uniform type the agent parses. `source` distinguishes the producer.
+ * `BaseDiagnostic` shape (position + severity) so esbuild, TypeScript, and
+ * authority diagnostics are one uniform type the agent parses. `source`
+ * distinguishes the producer.
  */
 export const buildDiagnosticSchema = z
   .object({
-    source: z.enum(["esbuild", "tsc"]),
+    source: z.enum(["esbuild", "tsc", "authority"]),
     severity: z.enum(["error", "warning"]),
     file: z.string(),
     line: z.number().int().nonnegative(),
@@ -802,8 +938,8 @@ export const buildMethods = defineServiceMethods({
       rationale: "Read-only discovery of workspace-local panel metadata",
     },
     description:
-      "Launcher metadata (source path, title, description, launcher visibility) for a panel unit, or null if the name is absent or not a panel.",
-    args: z.tuple([z.string()]),
+      "Launcher metadata for a panel unit resolved from the caller-selected exact workspace ref, or null if absent or not a panel.",
+    args: z.tuple([z.string(), z.string().min(1).optional()]),
     returns: panelMetadataSchema.nullable(),
     access: READ_ACCESS,
   },

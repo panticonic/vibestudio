@@ -307,7 +307,11 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(dynamicDependencies).toEqual(
       expect.arrayContaining(["node:fs", "node:os", "node:path", "node:module"])
     );
-  }, 30_000);
+    // This deliberately builds the complete real agentic runtime graph. It takes
+    // ~20s in isolation and competes with other build tests in the host suite, so
+    // give this integration-sized assertion its own budget instead of weakening
+    // the global unit-test timeout.
+  }, 90_000);
 
   it("uses worker conditions throughout an eval library dependency graph", async () => {
     const actualWorkspaceRoot = path.resolve(__dirname, "../../../workspace");
@@ -405,9 +409,22 @@ describe("BuildSystemV2 library package subpaths", () => {
     installTextCodecs(TextDecoder, TextEncoder);
     const receiver = vm.runInContext(
       `(() => {
+        const asyncHooks = {
+          AsyncLocalStorage: class AsyncLocalStorage {
+            getStore() { return undefined; }
+            run(_store, callback) { return callback(); }
+            exit(callback) { return callback(); }
+            disable() {}
+            enable() {}
+            enterWith() {}
+          },
+        };
         const exports = Object.create(null);
         return [
-          (specifier) => { throw new Error("unexpected external dependency " + specifier); },
+          (specifier) => {
+            if (specifier === "node:async_hooks") return asyncHooks;
+            throw new Error("unexpected external dependency " + specifier);
+          },
           exports,
           { exports },
           async (specifier) => { throw new Error("unexpected dynamic dependency " + specifier); }

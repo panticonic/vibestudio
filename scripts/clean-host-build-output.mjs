@@ -6,6 +6,8 @@ const PRESERVED_DIST_ENTRIES = new Set([
   "baked-app",
   // Full and source-prerequisite builds share this lock.
   "source-server-prerequisites.lock",
+  // ensure-host-build serializes callers while this directory is replaced.
+  "host-build.lock",
 ]);
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
-import { buildMethods, executionArtifactRefSchema } from "./build.js";
+import { buildMetadataSchema, buildMethods, executionArtifactRefSchema } from "./build.js";
 
 const digest = "0".repeat(64);
 const semanticState = { kind: "event" as const, eventId: "event:test" };
@@ -98,5 +98,30 @@ describe("build method effects", () => {
     expect(buildMethods.getBuild.access).toEqual({ sensitivity: "read" });
     expect(buildMethods.getBuildReport.access).toEqual({ sensitivity: "read" });
     expect(buildMethods.getBuildNpm.access).toEqual({ sensitivity: "write" });
+  });
+
+  it("accepts executable module provenance emitted by BuildV2 metadata", () => {
+    expect(
+      buildMetadataSchema.safeParse({
+        kind: "worker",
+        name: "worker:test",
+        buildKey: digest,
+        sourcePath: "workers/test",
+        ev: "ev:test",
+        sourceStateHash: digest,
+        sourcemap: false,
+        executableModules: [
+          {
+            moduleId: "src/index.ts",
+            contentDigest: digest,
+            package: { kind: "first-party" },
+            format: "ts",
+            source: "src/index.ts",
+          },
+        ],
+        details: { kind: "generic" },
+        builtAt: new Date(0).toISOString(),
+      }).success
+    ).toBe(true);
   });
 });

@@ -140,7 +140,7 @@ async function findTypeScriptFiles(source: FileSource, dir: string = "."): Promi
  */
 export async function loadSourceFiles(
   source: FileSource,
-  dir: string = ".",
+  dir: string = "."
 ): Promise<Map<string, string>> {
   const files = await findTypeScriptFiles(source, dir);
   const contents = new Map<string, string>();

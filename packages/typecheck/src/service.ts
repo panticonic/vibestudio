@@ -107,6 +107,8 @@ export class TypeCheckService {
   private tsconfigOptionsLoaded = false;
   /** Cached compilerOptions loaded from tsconfig.json (if any) */
   private tsconfigOptionsCache: ts.CompilerOptions | null = null;
+  /** Exact config files read while resolving the effective compiler options. */
+  private compilerOptionDependencies = new Set<string>();
   /** TypeScript module resolution cache for ts.resolveModuleName */
   private tsResolutionCache: ts.ModuleResolutionCache | null = null;
 
@@ -124,6 +126,23 @@ export class TypeCheckService {
 
     this.addBundledLibFiles();
     this.languageService = this.createLanguageService();
+  }
+
+  /**
+   * Return the exact compiler options used by this service after defaults,
+   * tsconfig discovery, caller overrides, and check-only normalization.
+   *
+   * Snapshot-style callers use this to group consumers by compiler semantics
+   * without constructing a TypeScript Program for every consumer.
+   */
+  getEffectiveCompilerOptions(): Readonly<ts.CompilerOptions> {
+    return { ...this.getCompilerOptions() };
+  }
+
+  /** Config files whose contents contributed to the effective compiler options. */
+  getCompilerOptionDependencies(): readonly string[] {
+    this.getCompilerOptions();
+    return [...this.compilerOptionDependencies].sort();
   }
 
   /**
@@ -809,8 +828,10 @@ export class TypeCheckService {
     }
 
     try {
+      this.compilerOptionDependencies.add(path.resolve(configPath));
       const readResult = ts.readConfigFile(configPath, (p) => {
         try {
+          this.compilerOptionDependencies.add(path.resolve(p));
           return fs.readFileSync(p, "utf-8");
         } catch {
           return undefined;
@@ -820,9 +841,16 @@ export class TypeCheckService {
         this.tsconfigOptionsCache = {};
         return {};
       }
+      const parseHost: ts.ParseConfigHost = {
+        ...ts.sys,
+        readFile: (p) => {
+          this.compilerOptionDependencies.add(path.resolve(p));
+          return ts.sys.readFile(p);
+        },
+      };
       const parsed = ts.parseJsonConfigFileContent(
         readResult.config,
-        ts.sys,
+        parseHost,
         path.dirname(configPath)
       );
       const options: ts.CompilerOptions = { ...parsed.options };

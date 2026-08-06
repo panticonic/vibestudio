@@ -126,6 +126,149 @@ describe("BuildSystemV2 startup", () => {
       storedRootBuildKeys: [],
       unresolvedAuthoritativeRootBuildKeys: [],
     });
+  }, 15_000);
+
+  it("starts authority prewarm after readiness and shares it with publication validation", async () => {
+    let resolveEnvironment!: (value: { services: [] }) => void;
+    const environment = new Promise<{ services: [] }>((resolve) => {
+      resolveEnvironment = resolve;
+    });
+    const workspaceAuthorityEnvironmentAt = vi.fn(() => environment);
+
+    const { initBuildSystemV2 } = await import("./index.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+      workspaceAuthorityEnvironmentAt,
+    });
+
+    // The host starts prewarm only after it has published readiness.
+    buildSystem.prewarmAuthorityIndex();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledTimes(1);
+    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledWith(TEST_STATE);
+
+    const publicationValidation = buildSystem.listAffectedBuildUnits(TEST_STATE, []);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledTimes(1);
+
+    resolveEnvironment({ services: [] });
+    await expect(publicationValidation).resolves.toEqual([]);
+  });
+
+  it("logs a failed authority prewarm and lets publication retry", async () => {
+    const workspaceAuthorityEnvironmentAt = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("authority store unavailable"))
+      .mockResolvedValueOnce({ services: [] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { initBuildSystemV2 } = await import("./index.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+      workspaceAuthorityEnvironmentAt,
+    });
+    buildSystem.prewarmAuthorityIndex();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "[BuildV2] Authority baseline prewarm failed; publication will retry:",
+      "authority store unavailable"
+    );
+    await expect(buildSystem.listAffectedBuildUnits(TEST_STATE, [])).resolves.toEqual([]);
+    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledTimes(2);
+
+    warn.mockRestore();
+  });
+
+  it("restores the exact authority baseline without reanalyzing units after restart", async () => {
+    const panelDir = path.join(workspaceRoot, "panels", "authority-cached");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/authority-cached",
+        version: "0.1.0",
+        type: "module",
+      })
+    );
+    fs.writeFileSync(path.join(panelDir, "index.ts"), "export const value = 1;\n");
+
+    vi.doMock("./typecheckFold.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./typecheckFold.js")>("./typecheckFold.js");
+      return { ...actual, typecheckProgramForUnit: vi.fn(async () => ({ mocked: true })) };
+    });
+    vi.doMock("./userlandAuthorityAnalyzer.js", async () => {
+      const actual = await vi.importActual<typeof import("./userlandAuthorityAnalyzer.js")>(
+        "./userlandAuthorityAnalyzer.js"
+      );
+      return { ...actual, analyzeWorkspaceServiceCalls: vi.fn(() => []) };
+    });
+
+    const source = fakeWorkspaceSource(workspaceRoot);
+    const options = { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) };
+    const { initBuildSystemV2 } = await import("./index.js");
+    const { analyzeWorkspaceServiceCalls } = await import("./userlandAuthorityAnalyzer.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], options);
+    await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
+    expect(analyzeWorkspaceServiceCalls).toHaveBeenCalledTimes(1);
+    await buildSystem.shutdown();
+    buildSystem = null;
+
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], options);
+    await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
+    expect(analyzeWorkspaceServiceCalls).toHaveBeenCalledTimes(1);
+
+    vi.doUnmock("./typecheckFold.js");
+    vi.doUnmock("./userlandAuthorityAnalyzer.js");
+  });
+
+  it("materializes the union of cold authority consumer closures once", async () => {
+    for (const name of ["alpha", "beta"]) {
+      const unitDir = path.join(workspaceRoot, "packages", name);
+      fs.mkdirSync(unitDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(unitDir, "package.json"),
+        JSON.stringify({ name: `@workspace/${name}`, version: "0.1.0", type: "module" })
+      );
+      fs.writeFileSync(path.join(unitDir, "index.ts"), `export const ${name} = true;\n`);
+    }
+
+    vi.doMock("./typecheckFold.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./typecheckFold.js")>("./typecheckFold.js");
+      return { ...actual, typecheckProgramForUnit: vi.fn(async () => ({ mocked: true })) };
+    });
+    vi.doMock("./userlandAuthorityAnalyzer.js", async () => {
+      const actual = await vi.importActual<typeof import("./userlandAuthorityAnalyzer.js")>(
+        "./userlandAuthorityAnalyzer.js"
+      );
+      return { ...actual, analyzeWorkspaceServiceCalls: vi.fn(() => []) };
+    });
+
+    const base = fakeWorkspaceSource(workspaceRoot);
+    const materializeForBuild = vi.fn(
+      async (_units: Parameters<BuildSourceProvider["materializeForBuild"]>[0]) => ({
+        sourceRoot: workspaceRoot,
+      })
+    );
+    const source = { ...base, materializeForBuild };
+    const { initBuildSystemV2 } = await import("./index.js");
+    const { analyzeWorkspaceServiceCalls } = await import("./userlandAuthorityAnalyzer.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], {
+      workspaceAuthorityEnvironmentAt: async () => ({ services: [] }),
+    });
+
+    await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
+
+    expect(materializeForBuild).toHaveBeenCalledTimes(1);
+    expect(materializeForBuild.mock.calls[0]?.[0].map((unit) => unit.name)).toEqual([
+      "@workspace/alpha",
+      "@workspace/beta",
+    ]);
+    expect(analyzeWorkspaceServiceCalls).toHaveBeenCalledTimes(1);
+
+    vi.doUnmock("./typecheckFold.js");
+    vi.doUnmock("./userlandAuthorityAnalyzer.js");
   });
 
   it("diagnoses host-owned retention roots without deleting stored builds", async () => {
@@ -359,6 +502,46 @@ describe("BuildSystemV2 startup", () => {
 
     expect(second).toEqual(first);
     expect(ensureFresh).toHaveBeenCalledTimes(callsAfterFirstBinding);
+  });
+
+  it("invalidates a cached binding when shared build metadata was rebound", async () => {
+    const panelDir = path.join(workspaceRoot, "panels", "rebound-cache");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/rebound-cache",
+        version: "0.1.0",
+        type: "module",
+        vibestudio: {
+          title: "Rebound cache",
+          authority: { requests: [], provides: [] },
+        },
+      })
+    );
+    fs.writeFileSync(
+      path.join(panelDir, "index.html"),
+      '<!doctype html><html><body><script type="module" src="./index.ts"></script></body></html>'
+    );
+    fs.writeFileSync(path.join(panelDir, "index.ts"), 'document.body.textContent = "ready";\n');
+
+    const { initBuildSystemV2 } = await import("./index.js");
+    const { rebindSourceState } = await import("./buildStore.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [
+      path.join(process.cwd(), "node_modules"),
+    ]);
+
+    const first = await buildSystem.bindRuntimeImage("panels/rebound-cache");
+    const build = buildSystem.getBuildByKey(first.artifact.buildKey);
+    expect(build).not.toBeNull();
+    rebindSourceState(build!, `state:${"b".repeat(64)}`);
+
+    const rebound = await buildSystem.bindRuntimeImage("panels/rebound-cache");
+
+    expect(rebound).toEqual(first);
+    expect(buildSystem.getBuildByKey(first.artifact.buildKey)?.metadata.execution).toEqual(
+      first.artifact
+    );
   });
 
   it("reconstructs and loads an exact retained runtime after process state and build cache are cold", async () => {

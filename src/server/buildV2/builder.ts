@@ -191,10 +191,22 @@ const PANEL_ASSET_LOADERS: Record<string, esbuild.Loader> = {
   ".otf": "file",
   ".eot": "file",
   ".mp3": "file",
+  ".aac": "file",
+  ".m4a": "file",
+  ".flac": "file",
+  ".oga": "file",
   ".wav": "file",
   ".ogg": "file",
+  ".opus": "file",
+  ".aif": "file",
+  ".aiff": "file",
   ".mp4": "file",
+  ".m4v": "file",
   ".webm": "file",
+  ".ogv": "file",
+  ".mov": "file",
+  ".avi": "file",
+  ".mkv": "file",
   ".wasm": "file",
   ".pdf": "file",
 };
@@ -1617,7 +1629,10 @@ export async function buildUnit(
   const buildKey = computeBuildUnitKey(node, ev, options);
 
   // Check store first
-  const cached = buildStore.get(buildKey);
+  let cached = buildStore.get(buildKey);
+  if (cached && cached.sourceStateHash !== stateRef && cached.sourceStateHash !== null) {
+    cached = buildStore.rebindSourceState(cached, stateRef);
+  }
   if (cached) {
     if (node.kind === "extension") {
       await refreshCachedExtensionRuntimeDeps(cached);
@@ -1857,9 +1872,9 @@ function storeSimpleBuild(
   sourcemap: boolean,
   sourceStateHash: string | null,
   authority: UnitAuthorityManifest,
-  extraMetadata: Partial<BuildMetadata> = {}
+  extraMetadata: Partial<BuildMetadata> = {},
+  artifacts: BuildArtifacts = bundleArtifacts(bundle)
 ): BuildResult {
-  const artifacts = bundleArtifacts(bundle);
   const metadata: BuildMetadata = {
     kind: node.kind as BuildMetadata["kind"],
     name: node.name,
@@ -1890,9 +1905,138 @@ function bundleArtifacts(bundle: string): BuildArtifacts {
   };
 }
 
+function workerBundleArtifacts(bundle: string, sourceMap: string | null): BuildArtifacts {
+  return {
+    entries: [
+      ...bundleArtifacts(bundle).entries,
+      ...(sourceMap === null
+        ? []
+        : [
+            {
+              path: "bundle.js.map",
+              role: "map" as const,
+              contentType: "application/json; charset=utf-8",
+              encoding: "utf8" as const,
+              content: sourceMap,
+            },
+          ]),
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Panel / About Build
 // ---------------------------------------------------------------------------
+
+function executableModulesFromMetafile(
+  metafile: esbuild.Metafile | undefined,
+  outdir: string,
+  sourceRoot: string,
+  workspaceRoot: string,
+  node: GraphNode,
+  graph: PackageGraph
+): import("./buildStore.js").ExecutableModuleInput[] {
+  if (!metafile) return [];
+  const modules: import("./buildStore.js").ExecutableModuleInput[] = [];
+  const unitRoots = graph.allNodes().map((candidate) => ({
+    candidate,
+    root: `${path.resolve(sourceRoot, candidate.relativePath)}${path.sep}`,
+  }));
+  const firstPartyRoot = `${path.resolve(sourceRoot, node.relativePath)}${path.sep}`;
+  const packageRootFor = (fileName: string): { name: string; root: string } | null => {
+    const marker = `${path.sep}node_modules${path.sep}`;
+    const markerIndex = fileName.lastIndexOf(marker);
+    if (markerIndex < 0) return null;
+    const rest = fileName.slice(markerIndex + marker.length);
+    const parts = rest.split(path.sep);
+    const name = parts[0]?.startsWith("@") ? `${parts[0]}/${parts[1] ?? ""}` : (parts[0] ?? "");
+    if (!name) return null;
+    return {
+      name,
+      root: path.join(fileName.slice(0, markerIndex + marker.length), ...name.split("/")),
+    };
+  };
+  const formatFor = (
+    fileName: string
+  ): import("./buildStore.js").ExecutableModuleInput["format"] | null => {
+    switch (path.extname(fileName).toLowerCase()) {
+      case ".ts":
+        return "ts";
+      case ".tsx":
+        return "tsx";
+      case ".js":
+        return "js";
+      case ".jsx":
+        return "jsx";
+      case ".mjs":
+        return "mjs";
+      case ".cjs":
+        return "cjs";
+      default:
+        return null;
+    }
+  };
+  for (const inputPath of Object.keys(metafile.inputs).sort()) {
+    const fileName = path.resolve(outdir, inputPath);
+    if (fileName.startsWith(`${path.resolve(outdir)}${path.sep}`)) continue;
+    const format = formatFor(fileName);
+    if (!format || !fs.existsSync(fileName)) continue;
+    const source = fs.readFileSync(fileName, "utf8");
+    const contentDigest = createHash("sha256").update(source, "utf8").digest("hex");
+    const unit = unitRoots
+      .filter(({ root }) => fileName.startsWith(root))
+      .sort((left, right) => right.root.length - left.root.length)[0]?.candidate;
+    if (fileName.startsWith(firstPartyRoot)) {
+      modules.push({
+        moduleId: path.relative(sourceRoot, fileName).replace(/\\/gu, "/"),
+        contentDigest,
+        package: { kind: "first-party" },
+        format,
+        source,
+      });
+      continue;
+    }
+    if (unit) {
+      const packageName = unit.name;
+      modules.push({
+        moduleId: path.relative(sourceRoot, fileName).replace(/\\/gu, "/"),
+        contentDigest,
+        package: {
+          kind: "workspace",
+          name: packageName,
+          effectiveVersion: "unknown",
+        },
+        format,
+        source,
+      });
+      continue;
+    }
+    const externalPackage = packageRootFor(fileName);
+    if (!externalPackage) continue;
+    const packageJsonPath = path.join(externalPackage.root, "package.json");
+    let version = "unknown";
+    let packageDigest = "unknown";
+    try {
+      const packageJson = fs.readFileSync(packageJsonPath, "utf8");
+      const parsed = JSON.parse(packageJson) as { version?: unknown };
+      if (typeof parsed.version === "string") version = parsed.version;
+      packageDigest = createHash("sha256").update(packageJson, "utf8").digest("hex");
+    } catch {
+      // A source input without its package manifest is not enough provenance
+      // for dependency endowment routing; omit it and let the fold remain
+      // conservative about the missing executable closure.
+      continue;
+    }
+    modules.push({
+      moduleId: `external:${externalPackage.name}/${path.relative(externalPackage.root, fileName).replace(/\\/gu, "/")}`,
+      contentDigest,
+      package: { kind: "external", name: externalPackage.name, version, packageDigest },
+      format,
+      source,
+    });
+  }
+  return modules;
+}
 
 async function buildPanel(
   node: GraphNode,
@@ -2202,6 +2346,14 @@ async function buildPanel(
       sourceStateHash,
       sourcemap,
       authority,
+      executableModules: executableModulesFromMetafile(
+        metafile,
+        outdir,
+        sourceRoot,
+        workspaceRoot,
+        node,
+        graph
+      ),
       ...(node.kind === "panel" && extractedManifest.stateArgs
         ? { stateArgsSchema: extractedManifest.stateArgs }
         : {}),
@@ -2691,7 +2843,7 @@ async function buildWorker(
   }
 
   try {
-    await esbuild.build({
+    const buildResult = await esbuild.build({
       entryPoints: [relativeModuleSpecifier(outdir, wrapperPath)],
       absWorkingDir: outdir,
       bundle: true,
@@ -2700,7 +2852,11 @@ async function buildWorker(
       format: "esm",
       splitting: false,
       outfile: path.join(outdir, "bundle.js"),
-      sourcemap: sourcemap ? "inline" : false,
+      // Keep debugger provenance in the immutable build without making
+      // workerd parse and retain it as part of every runtime module. The
+      // runtime loader mounts only the primary artifact; the linked map stays
+      // available to diagnostics from the same content-addressed build.
+      sourcemap: sourcemap ? "linked" : false,
       metafile: true,
       logLevel: "warning",
       conditions: [...WORKER_CONDITIONS],
@@ -2722,9 +2878,22 @@ async function buildWorker(
       nodePaths,
       tsconfigRaw: { compilerOptions: {} },
     });
+    const executableModules = executableModulesFromMetafile(
+      buildResult.metafile,
+      outdir,
+      sourceRoot,
+      workspaceRoot,
+      node,
+      graph
+    );
 
     const bundlePath = path.join(outdir, "bundle.js");
     const bundle = fs.readFileSync(bundlePath, "utf-8");
+    const sourceMapPath = path.join(outdir, "bundle.js.map");
+    const workerArtifacts = workerBundleArtifacts(
+      bundle,
+      sourcemap && fs.existsSync(sourceMapPath) ? fs.readFileSync(sourceMapPath, "utf-8") : null
+    );
 
     if (terminalWorker) {
       // Emit the JS bundle plus the extracted yoga.wasm so workerdManager can
@@ -2733,13 +2902,7 @@ async function buildWorker(
       const yogaWasm = await extractYogaWasm(resolveDir);
       const artifacts: BuildArtifacts = {
         entries: [
-          {
-            path: "bundle.js",
-            role: "primary",
-            contentType: "text/javascript; charset=utf-8",
-            encoding: "utf8",
-            content: bundle,
-          },
+          ...workerArtifacts.entries,
           {
             path: "yoga.wasm",
             role: "wasm",
@@ -2759,15 +2922,27 @@ async function buildWorker(
         sourcemap,
         authority,
         workspaceRpcCatalog,
+        executableModules,
         details: { kind: "generic" },
         builtAt: new Date().toISOString(),
       };
       return buildStore.put(buildKey, artifacts, metadata);
     }
 
-    return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap, sourceStateHash, authority, {
-      workspaceRpcCatalog,
-    });
+    return storeSimpleBuild(
+      buildKey,
+      bundle,
+      node,
+      ev,
+      sourcemap,
+      sourceStateHash,
+      authority,
+      {
+        workspaceRpcCatalog,
+        executableModules,
+      },
+      workerArtifacts
+    );
   } finally {
     env.cleanup();
   }

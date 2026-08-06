@@ -60,7 +60,7 @@ export function getBrowserTypeDefinitions(): BrowserTypeDefinitions {
     TS_LIB_FILES: { ...TS_LIB_FILES },
     typeDefinitionFiles: getBrowserTypeDefinitionFiles(),
     tsLibFilePaths: Object.fromEntries(
-      Object.keys(TS_LIB_FILES).map((libName) => [libName, getMonacoTsLibFilePath(libName)]),
+      Object.keys(TS_LIB_FILES).map((libName) => [libName, getMonacoTsLibFilePath(libName)])
     ),
   };
 }

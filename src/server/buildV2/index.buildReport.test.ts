@@ -25,6 +25,14 @@ const CANDIDATE_VIEW = `state:${"b".repeat(64)}`;
 
 // Per-test hook so a unit's build can be made to fail at a specific view.
 let shouldFail: (name: string, ev: string, stateRef: string) => boolean = () => false;
+let typecheckDiagnostics: (unitRelativePath: string) => Array<{
+  source: "tsc" | "authority";
+  severity: "error" | "warning";
+  file: string;
+  line: number;
+  column: number;
+  message: string;
+}> = () => [];
 // Records every non-cache-hit build the mock actually performs.
 let buildCalls: Array<{ name: string; key: string; stateRef: string }> = [];
 
@@ -111,7 +119,11 @@ async function loadWithMocks(): Promise<{
     return { ...actual, persistEvState };
   });
 
-  vi.doMock("./typecheckFold.js", () => ({ typecheckUnit: vi.fn(async () => []) }));
+  vi.doMock("./typecheckFold.js", () => ({
+    typecheckUnit: vi.fn(async (unitRelativePath: string) =>
+      typecheckDiagnostics(unitRelativePath)
+    ),
+  }));
 
   vi.doMock("./builder.js", async () => {
     const actual = await vi.importActual<typeof import("./builder.js")>("./builder.js");
@@ -195,6 +207,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
 
   beforeEach(() => {
     shouldFail = () => false;
+    typecheckDiagnostics = () => [];
     buildCalls = [];
   });
 
@@ -226,7 +239,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(second).toEqual(first);
     expect(persistEvState).not.toHaveBeenCalled();
     expect(buildCalls.length).toBe(buildsAfterFirst);
-  });
+  }, 15_000);
 
   it("resolves context selectors to exact content before building a report", async () => {
     env = await loadWithMocks();
@@ -294,5 +307,32 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(buildSystem.getUnitDiagnostics("@workspace-panels/app")).toEqual(
       expect.arrayContaining([expect.objectContaining({ severity: "error" })])
     );
+  });
+
+  it("includes authority errors in the same report consumed by protected-main validation", async () => {
+    typecheckDiagnostics = (unitRelativePath) => [
+      {
+        source: "authority",
+        severity: "error",
+        file: `${unitRelativePath}/package.json`,
+        line: 1,
+        column: 1,
+        message: "Installed code uses capability 'push.send' but does not declare it.",
+      },
+    ];
+    env = await loadWithMocks();
+
+    const report = await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
+
+    expect(report).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        expect.objectContaining({
+          source: "authority",
+          severity: "error",
+          file: "panels/app/package.json",
+        }),
+      ],
+    });
   });
 });

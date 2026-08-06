@@ -2,10 +2,10 @@
  * Build-local RPC documentation for workspace workers.
  *
  * This is deliberately derived from the exact materialized source state being
- * built. It is not a product census and is never authority input: the receiver's
- * live `@rpc` declaration remains the enforcement boundary. The sealed catalog
- * only lets caller-relative service discovery describe the provider bytes that
- * resolution will activate.
+ * built. It is not a product census and never grants or attests authority: the
+ * receiver's live `@rpc` declaration remains the enforcement boundary. Its
+ * sealed authority projection is additionally consumed by static build
+ * diagnostics so unchanged consumers are rechecked when this contract changes.
  */
 import * as fs from "fs";
 import * as path from "path";

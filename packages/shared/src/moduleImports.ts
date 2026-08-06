@@ -28,6 +28,9 @@ type StringNode = AstNode & { value: string };
 const PARSER_PLUGINS: ParserPlugin[] = [
   "typescript",
   "jsx",
+  // The workspace uses TypeScript's legacy decorator grammar, including
+  // parameter decorators. Babel's current decorators proposal deliberately
+  // rejects those even though workerd/esbuild accepts the source contract.
   "decorators-legacy",
   "importAttributes",
   "explicitResourceManagement",

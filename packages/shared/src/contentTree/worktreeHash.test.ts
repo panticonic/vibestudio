@@ -156,11 +156,9 @@ describe("content addressing golden vectors", () => {
   });
 
   it("exports locale-independent canonical text order for BMP and astral Unicode", () => {
-    const localeCompare = vi
-      .spyOn(String.prototype, "localeCompare")
-      .mockImplementation(() => {
-        throw new Error("protocol ordering must not consult locale collation");
-      });
+    const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+      throw new Error("protocol ordering must not consult locale collation");
+    });
     try {
       expect(["ä", "a", "B"].sort(compareUtf16CodeUnits)).toEqual(["B", "a", "ä"]);
       // U+1F600 begins with the UTF-16 high surrogate D83D, which sorts before

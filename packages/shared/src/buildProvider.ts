@@ -40,8 +40,5 @@ export interface BuildProvider {
   activeEv: string | null;
   activeBuildKey: string | null;
   build(input: BuildProviderInput): Promise<BuildProviderOutput>;
-  streamArtifact?(
-    artifact: BuildProviderArtifact,
-    input: BuildProviderInput,
-  ): Promise<Response>;
+  streamArtifact?(artifact: BuildProviderArtifact, input: BuildProviderInput): Promise<Response>;
 }

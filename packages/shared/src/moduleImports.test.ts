@@ -146,6 +146,43 @@ describe("analyzeModuleImports", () => {
     ]);
   });
 
+  it("parses workspace TypeScript decorators", () => {
+    const source = [
+      'import { rpc } from "@workspace/runtime/worker";',
+      "export class Service {",
+      '  @rpc({ principals: ["code"], effect: { kind: "open" } })',
+      "  async inspect(): Promise<void> {}",
+      "}",
+    ].join("\n");
+
+    expect(analyzeModuleImports(source)).toMatchObject([
+      {
+        specifier: "@workspace/runtime/worker",
+        syntax: "import",
+        kind: "value",
+        named: ["rpc"],
+      },
+    ]);
+  });
+
+  it("parses TypeScript parameter decorators used by existing workspace units", () => {
+    const source = [
+      'import { inject } from "@workspace/runtime/worker";',
+      "export class Service {",
+      "  constructor(@inject(\"store\") readonly store: unknown) {}",
+      "}",
+    ].join("\n");
+
+    expect(analyzeModuleImports(source)).toMatchObject([
+      {
+        specifier: "@workspace/runtime/worker",
+        syntax: "import",
+        kind: "value",
+        named: ["inject"],
+      },
+    ]);
+  });
+
   it("normalizes package coordinates and excludes platform built-ins", () => {
     expect(moduleCoordinate("@scope/name/subpath")).toBe("@scope/name");
     expect(moduleCoordinate("plain/subpath")).toBe("plain");

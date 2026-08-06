@@ -29,7 +29,7 @@ export class BuildRequestError extends RpcBoundaryError {
 }
 
 export interface BuildDiagnostic {
-  source: "esbuild" | "tsc";
+  source: "esbuild" | "tsc" | "authority";
   severity: "error" | "warning";
   file: string;
   line: number;

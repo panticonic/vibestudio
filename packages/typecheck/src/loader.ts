@@ -209,7 +209,10 @@ export class TypeDefinitionLoader {
    * Extract types paths from package.json exports field.
    * Returns main entry point and a map of subpath exports.
    */
-  private extractAllExports(exports: unknown): { main: string | undefined; subpaths: Map<string, string> } {
+  private extractAllExports(exports: unknown): {
+    main: string | undefined;
+    subpaths: Map<string, string>;
+  } {
     const subpaths = new Map<string, string>();
 
     if (!exports || typeof exports !== "object") {
@@ -426,9 +429,10 @@ export class TypeDefinitionLoader {
 
     for (const ext of extensions) {
       // Skip adding extension if path already ends with .ts (but not .d.ts which we'd double)
-      const tryPath = resolvedPath.endsWith(".ts") && !resolvedPath.endsWith(".d.ts")
-        ? resolvedPath
-        : resolvedPath + ext;
+      const tryPath =
+        resolvedPath.endsWith(".ts") && !resolvedPath.endsWith(".d.ts")
+          ? resolvedPath
+          : resolvedPath + ext;
       try {
         await fs.access(tryPath);
         await this.loadTypeFile(tryPath, packageDir, result, visitedFiles);

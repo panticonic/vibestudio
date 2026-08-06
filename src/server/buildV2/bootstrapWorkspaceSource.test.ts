@@ -23,7 +23,8 @@ describe("BootstrapWorkspaceSource execution identity", () => {
       `${JSON.stringify({ name: "@workspace/root", private: true }, null, 2)}\n`
     );
     const source = new BootstrapWorkspaceSource("workspace:test", root);
-    const { stateHash } = await source.ensureFresh();
+    const snapshot = await source.seal();
+    const { stateHash } = snapshot;
 
     expect(source.executionStateForContent(stateHash)).toEqual({
       kind: "bootstrap-snapshot",
@@ -32,12 +33,29 @@ describe("BootstrapWorkspaceSource execution identity", () => {
     expect(source.executionStateForContent(`state:${"0".repeat(64)}`)).toBeNull();
   });
 
+  it("keeps the sealed state addressable after the live source is published", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
+    temporaryRoots.push(root);
+    await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/root"}\n');
+    const source = new BootstrapWorkspaceSource("workspace:test", root);
+    const snapshot = await source.seal();
+
+    await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/published"}\n');
+
+    await expect(snapshot.assertUnchanged()).rejects.toThrow(
+      "Bootstrap workspace source changed while its provider was being built"
+    );
+    await expect(source.ensureFresh()).rejects.toThrow(
+      "Bootstrap workspace source changed after it was sealed"
+    );
+  });
+
   it("fails closed when the sealed checkout changes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
     temporaryRoots.push(root);
     await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/root"}\n');
     const source = new BootstrapWorkspaceSource("workspace:test", root);
-    await source.ensureFresh();
+    await source.seal();
     await fs.writeFile(path.join(root, "package.json"), '{"name":"@workspace/changed"}\n');
 
     await expect(source.ensureFresh()).rejects.toThrow(
@@ -62,7 +80,7 @@ describe("BootstrapWorkspaceSource execution identity", () => {
       "export default 2;\n"
     );
 
-    await expect(source.assertUnchanged()).rejects.toThrow(
+    await expect((await source.seal()).assertUnchanged()).rejects.toThrow(
       "Bootstrap workspace source changed while its provider was being built"
     );
   });

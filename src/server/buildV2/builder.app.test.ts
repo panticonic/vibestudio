@@ -147,6 +147,75 @@ describe("buildUnit app builds", () => {
     });
   });
 
+  it("builds browser-viewable document and media assets with inline content types", async () => {
+    const appDir = path.join(workspaceRoot, "apps", "asset-viewer");
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(appDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-apps/asset-viewer",
+        version: "0.1.0",
+        private: true,
+        vibestudio: { app: { target: "electron", renderer: "index.ts" } },
+      })
+    );
+    const assets = [
+      ["guide.pdf", "%PDF-1.7\n"],
+      ["track.m4a", "m4a-bytes"],
+      ["movie.webm", "webm-bytes"],
+      ["photo.avif", "avif-bytes"],
+    ] as const;
+    for (const [fileName, content] of assets) {
+      fs.writeFileSync(path.join(appDir, fileName), Buffer.from(content));
+    }
+    fs.writeFileSync(
+      path.join(appDir, "index.ts"),
+      `${assets.map(([fileName], index) => `import asset${index} from "./${fileName}";`).join("\n")}\ndocument.body.dataset.assets = [${assets.map((_, index) => `asset${index}`).join(", ")}].join(",");\n`
+    );
+    fs.writeFileSync(
+      path.join(appDir, "index.html"),
+      '<!doctype html><html><body><script type="module" src="./bundle.js"></script></body></html>'
+    );
+    git(appDir, ["init", "-b", "main"]);
+    git(appDir, ["add", "."]);
+    git(appDir, [
+      "-c",
+      "user.name=Vibestudio Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-m",
+      "initial asset viewer app",
+    ]);
+
+    const graph = discoverPackageGraph(workspaceRoot);
+    const result = await buildUnit(
+      graph.get("@workspace-apps/asset-viewer"),
+      "b".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH
+    );
+
+    expect(
+      Object.fromEntries(
+        assets.map(([fileName]) => {
+          const extension = path.extname(fileName);
+          const stem = path.basename(fileName, extension);
+          const artifact = result.artifacts.find(
+            (entry) => entry.path.includes(`/${stem}-`) && entry.path.endsWith(extension)
+          );
+          return [fileName, artifact?.contentType];
+        })
+      )
+    ).toEqual({
+      "guide.pdf": "application/pdf",
+      "track.m4a": "audio/mp4",
+      "movie.webm": "video/webm",
+      "photo.avif": "image/avif",
+    });
+  });
+
   it("bundles terminal app targets as node entry artifacts", async () => {
     const rpcDir = path.join(workspaceRoot, "packages", "rpc");
     fs.mkdirSync(path.join(rpcDir, "src"), { recursive: true });

@@ -81,7 +81,9 @@ export interface WorkspaceStateSource {
    */
   discoverGraph(stateHash: string): Promise<PackageGraph>;
   /** Subscribe to atomic protected workspace publications. Returns unsubscribe. */
-  onProtectedPublication(cb: (event: ProtectedPublicationEvent) => void): () => void;
+  onProtectedPublication(
+    cb: (event: ProtectedPublicationEvent) => void | Promise<void>
+  ): () => void;
   /** Append `build.completed` provenance to the builds log (best effort). */
   recordBuild(record: BuildRecord): Promise<void>;
 }
@@ -239,7 +241,7 @@ export class StateTransitionTrigger extends EventEmitter {
     return this.queuedRevision === this.settledRevision;
   }
 
-  private handlePublication(event: ProtectedPublicationEvent): void {
+  private handlePublication(event: ProtectedPublicationEvent): Promise<void> {
     const revision = ++this.queuedRevision;
     this.queue = this.queue
       .then(() => this.process(event))
@@ -247,6 +249,7 @@ export class StateTransitionTrigger extends EventEmitter {
       .finally(() => {
         this.settledRevision = revision;
       });
+    return this.queue;
   }
 
   private async process(event: ProtectedPublicationEvent): Promise<void> {

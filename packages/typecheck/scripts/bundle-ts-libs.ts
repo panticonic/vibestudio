@@ -96,9 +96,7 @@ function findTsLibPath(): string {
     }
   }
 
-  throw new Error(
-    "Could not find TypeScript lib directory. Make sure typescript is installed."
-  );
+  throw new Error("Could not find TypeScript lib directory. Make sure typescript is installed.");
 }
 
 function sanitizeName(libName: string): string {

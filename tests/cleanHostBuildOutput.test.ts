@@ -23,6 +23,7 @@ describe("host build output cleanup", () => {
       "dist/removed-worker.js",
       "dist/baked-app/index.html",
       "dist/source-server-prerequisites.lock",
+      "dist/host-build.lock",
     ]) {
       const target = path.join(cwd, relative);
       fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -33,6 +34,7 @@ describe("host build output cleanup", () => {
 
     expect(fs.readdirSync(path.join(cwd, "dist")).sort()).toEqual([
       "baked-app",
+      "host-build.lock",
       "source-server-prerequisites.lock",
     ]);
     expect(fs.readFileSync(path.join(cwd, "dist", "baked-app", "index.html"), "utf8")).toBe(

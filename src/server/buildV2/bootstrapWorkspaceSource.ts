@@ -10,6 +10,20 @@ import { discoverPackageGraph } from "./packageGraph.js";
 import type { BuildRecord, WorkspaceStateSource } from "./stateTrigger.js";
 
 /**
+ * The immutable identity captured before semantic workspace initialization.
+ *
+ * The source directory may subsequently be used as the live semantic
+ * workspace projection (notably by source-coupled development instances), so
+ * callers must retain this value instead of asking the source to rediscover
+ * its current state.
+ */
+export interface BootstrapWorkspaceSnapshot {
+  readonly stateHash: string;
+  /** Re-check the snapshot only while the bootstrap phase is still active. */
+  assertUnchanged(): Promise<void>;
+}
+
+/**
  * Read-only source view used only to break the workspace-source-provider
  * bootstrap fixed point. The directory must already be the atomically
  * materialized exact root snapshot; this class neither fetches nor interprets
@@ -22,21 +36,50 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
         subtreeHash(path: string): string | null;
       }
     | undefined;
+  private publicSnapshot: BootstrapWorkspaceSnapshot | undefined;
+  private sealFlight: Promise<BootstrapWorkspaceSnapshot> | undefined;
 
   constructor(
     readonly workspaceId: string,
     private readonly sourceRoot: string
   ) {}
 
+  /** Capture the exact source identity once for the bootstrap lifecycle. */
+  async seal(): Promise<BootstrapWorkspaceSnapshot> {
+    if (this.publicSnapshot) return this.publicSnapshot;
+    if (this.sealFlight) return this.sealFlight;
+
+    this.sealFlight = (async () => {
+      const snapshot = await this.readSnapshot();
+      this.snapshot = snapshot;
+      const publicSnapshot: BootstrapWorkspaceSnapshot = Object.freeze({
+        stateHash: snapshot.stateHash,
+        assertUnchanged: async () => {
+          const observed = await this.readSnapshot();
+          if (observed.stateHash !== snapshot.stateHash) {
+            throw new Error(
+              "Bootstrap workspace source changed while its provider was being built"
+            );
+          }
+        },
+      });
+      this.publicSnapshot = publicSnapshot;
+      return publicSnapshot;
+    })().finally(() => {
+      this.sealFlight = undefined;
+    });
+    return this.sealFlight;
+  }
+
   async ensureFresh(): Promise<{ stateHash: string }> {
-    const next = await this.readSnapshot();
-    if (this.snapshot && this.snapshot.stateHash !== next.stateHash) {
+    const snapshot = await this.seal();
+    const observed = await this.readSnapshot();
+    if (observed.stateHash !== snapshot.stateHash) {
       throw new Error(
         "Bootstrap workspace source changed after it was sealed; restart from the exact root snapshot"
       );
     }
-    this.snapshot = next;
-    return { stateHash: next.stateHash };
+    return { stateHash: snapshot.stateHash };
   }
 
   async unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>> {
@@ -83,17 +126,8 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
     return { sourceRoot: this.sourceRoot };
   }
 
-  async assertUnchanged(): Promise<void> {
-    const expected = this.snapshot;
-    if (!expected) throw new Error("Bootstrap workspace source was not sealed");
-    const observed = await this.readSnapshot();
-    if (observed.stateHash !== expected.stateHash) {
-      throw new Error("Bootstrap workspace source changed while its provider was being built");
-    }
-  }
-
   private async requireSnapshot(stateHash: string) {
-    if (!this.snapshot) await this.ensureFresh();
+    if (!this.snapshot) await this.seal();
     if (!this.snapshot || this.snapshot.stateHash !== stateHash) {
       throw new Error(`Unknown bootstrap workspace state ${stateHash}`);
     }

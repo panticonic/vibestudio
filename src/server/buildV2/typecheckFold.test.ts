@@ -3,6 +3,7 @@ import * as fsp from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { typecheckUnit } from "./typecheckFold.js";
+import { createExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
 
 /**
  * The push build-gate type-checks a unit against a BARE materialized source root
@@ -102,6 +103,81 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
       );
     } finally {
       await fsp.rm(brokenPath, { force: true });
+    }
+  });
+
+  it("folds missing capability requests into the exact-context build diagnostics", async () => {
+    const authorityPath = path.join(sourceRoot, "panels/hello/authority-use.ts");
+    await fsp.writeFile(
+      authorityPath,
+      [
+        `declare function createTypedServiceClient(...args: unknown[]): any;`,
+        `declare const workers: { resolveService(protocol: string): unknown };`,
+        `const push = createTypedServiceClient("push", {}, () => undefined);`,
+        `void push.send({ title: "hello" });`,
+        `void workers.resolveService("example.notifications.v1");`,
+      ].join("\n")
+    );
+    try {
+      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules], {
+        manifest: {
+          authority: {
+            provides: [],
+            requests: [
+              {
+                capability: "context.boundary",
+                resource: { kind: "prefix", prefix: "" },
+                tier: "critical",
+                evidence: "intentional-broad",
+              },
+            ],
+          },
+        },
+        environment: createExactWorkspaceAuthorityEnvironment({
+          stateHash: "state:test",
+          services: [
+            {
+              name: "local-notifications",
+              protocols: ["example.notifications.v1"],
+              source: "workers/notifications",
+              action: "read notifications",
+              presentation: { domain: "computer", verb: "see" },
+              principals: ["code"],
+              target: { kind: "worker", routePath: "/notifications" },
+            },
+          ],
+          resolveCatalog: async (binding) => ({
+            provider: {
+              unitName: binding.source,
+              source: binding.source,
+              effectiveVersion: "ev-notifications",
+              className: "worker",
+            },
+            methods: new Map(),
+            digest: "catalog-notifications",
+          }),
+        }),
+      });
+      expect(diags).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: "authority",
+            severity: "error",
+            file: "panels/hello/package.json",
+            message: expect.stringContaining("push.send"),
+          }),
+        ])
+      );
+      expect(diags).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: "authority",
+            message: expect.stringContaining("workspace-service:local-notifications"),
+          }),
+        ])
+      );
+    } finally {
+      await fsp.rm(authorityPath, { force: true });
     }
   });
 });
