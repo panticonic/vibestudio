@@ -13,6 +13,19 @@ const baseInline = Array.isArray(baseDeps.inline) ? baseDeps.inline : [];
 
 export default defineConfig({
   ...base,
+  resolve: {
+    ...((base.resolve as Record<string, unknown> | undefined) ?? {}),
+    // The terminal app renders through Ink, whose reconciler and scheduler are
+    // React consumers the root `dedupe` list never named. Userland carries its
+    // own physical copies of both, so Ink's hooks ran against a second React
+    // instance and every terminal surface rendered as an empty frame under
+    // test — while working correctly outside it.
+    dedupe: [
+      ...(((base.resolve as { dedupe?: string[] } | undefined)?.dedupe ?? []) as string[]),
+      "react-reconciler",
+      "scheduler",
+    ],
+  },
   test: {
     ...baseTest,
     name: "userland",
