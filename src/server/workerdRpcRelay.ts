@@ -255,9 +255,10 @@ async function fetchEnvelopeFromDO(
 async function postEnvelopeToDO(
   ref: DORef,
   envelope: RpcEnvelope,
-  deps: DurableObjectRelayDeps
+  deps: DurableObjectRelayDeps,
+  signal?: AbortSignal
 ): Promise<unknown> {
-  const res = await fetchEnvelopeFromDO(ref, envelope, deps);
+  const res = await fetchEnvelopeFromDO(ref, envelope, deps, signal);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`DO RPC relay failed (${res.status}): ${text}`);
@@ -290,7 +291,8 @@ export async function postToDurableObject(
   ref: DORef,
   method: string,
   args: unknown[],
-  deps: DurableObjectRelayDeps
+  deps: DurableObjectRelayDeps,
+  signal?: AbortSignal
 ): Promise<unknown> {
   const targetId = doTargetString(ref);
   const finishRelay = beginEntityRelay(targetId);
@@ -312,7 +314,7 @@ export async function postToDurableObject(
         ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
       },
     });
-    return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, deps));
+    return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, deps, signal));
   } finally {
     finishRelay();
   }
@@ -352,7 +354,8 @@ export async function postEventToDurableObject(
   ref: DORef,
   event: string,
   payload: unknown,
-  deps: DurableObjectRelayDeps
+  deps: DurableObjectRelayDeps,
+  signal?: AbortSignal
 ): Promise<void> {
   const caller = callerFromDeps(deps);
   const envelope = envelopeFromMessage({
@@ -362,5 +365,5 @@ export async function postEventToDurableObject(
     caller,
     message: { type: "event", fromId: caller.callerId, event, payload },
   });
-  await postEnvelopeToDO(ref, envelope, deps);
+  await postEnvelopeToDO(ref, envelope, deps, signal);
 }

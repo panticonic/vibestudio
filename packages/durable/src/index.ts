@@ -30,16 +30,8 @@ import {
   type HostControlDenial,
 } from "@vibestudio/shared/directRpcEnforcement";
 import type { DurableWorkQueue } from "@vibestudio/shared/durableWork";
-import {
-  bindMethodCapability,
-  allOf,
-  anyOf,
-  capability,
-} from "@vibestudio/shared/authorization";
-import type {
-  MethodSchema,
-  ServiceMethodSchemas,
-} from "@vibestudio/shared/typedServiceClient";
+import { bindMethodCapability, allOf, anyOf, capability } from "@vibestudio/shared/authorization";
+import type { MethodSchema, ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import { installExactDurableObjectSchema } from "./schema.js";
 import { InvocationContext } from "./invocation-context.js";
 
@@ -204,14 +196,11 @@ export abstract class DurableObjectBase {
     return {
       requires: anyOf(
         ...unconstrained.map((principal) => capability(principal, methodCapability)),
-        allOf(
-          capability("code", methodCapability),
-          {
-            kind: "relationship",
-            name: "code-source",
-            value: codeSource,
-          }
-        )
+        allOf(capability("code", methodCapability), {
+          kind: "relationship",
+          name: "code-source",
+          value: codeSource,
+        })
       ),
       effect,
       tier: tier.tier,
@@ -244,6 +233,7 @@ export abstract class DurableObjectBase {
       className: this.constructor.name,
       version: (this.constructor as typeof DurableObjectBase).schemaVersion,
       storage: this.ctx.storage,
+      schemaTables: this.requiredTables(),
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });
@@ -832,9 +822,7 @@ export abstract class DurableObjectBase {
       message.args = parsedArgs.data as unknown[];
     }
     const audience = this.rpcSelfId;
-    const declaration = method
-      ? this.rpcAuthorityDeclaration(method, wireMethod)
-      : null;
+    const declaration = method ? this.rpcAuthorityDeclaration(method, wireMethod) : null;
     const attestation = caller?.authorization ?? null;
     const resourceKey =
       declaration?.effect.kind === "userland-capability" &&

@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LifecycleDriver } from "./lifecycleDriver.js";
 import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
 import type { DODispatch } from "../doDispatch.js";
@@ -9,6 +9,7 @@ import type { DORef } from "@vibestudio/shared/doDispatcher";
 function makeHarness(
   opts: {
     hangPrepare?: boolean;
+    hangRecordOp?: boolean;
     leases?: Array<{ source: string; className: string; objectKey: string }>;
     concurrency?: number;
   } = {}
@@ -45,6 +46,9 @@ function makeHarness(
   const doDispatch = {
     dispatch: async (_ref: DORef, method: string, ...args: unknown[]) => {
       calls.push({ kind: "workspace", method, arg: args[0] });
+      if (opts.hangRecordOp && method === "lifecycleRecordOp") {
+        await new Promise(() => undefined);
+      }
       if (method === "lifecycleOpenEpoch") {
         epoch = "epoch-1";
         return epoch;
@@ -193,5 +197,40 @@ describe("LifecycleDriver", () => {
     expect(prepareCalls).toHaveLength(1);
     expect(elapsedMs).toBeLessThan(90);
     expect(timedOutOps).toHaveLength(2);
+  });
+
+  it("does not let bookkeeping against a wedged WorkspaceDO hold restart preparation", async () => {
+    const harness = makeHarness({ hangPrepare: true, hangRecordOp: true });
+    const startedAt = Date.now();
+
+    await expect(
+      harness.fireBegin({ correlationId: "r-bookkeeping", generation: 8, reason: "planned" })
+    ).rejects.toThrow(/Lifecycle release failed/u);
+
+    expect(Date.now() - startedAt).toBeLessThan(140);
+    expect(harness.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "workspace", method: "lifecycleRecordOp" }),
+      ])
+    );
+  });
+
+  it("aborts prepare and its bookkeeping immediately when crash recovery preempts it", async () => {
+    const harness = makeHarness({ hangPrepare: true, hangRecordOp: true });
+    const controller = new AbortController();
+    const preparation = harness.fireBegin({
+      correlationId: "r-preempt",
+      generation: 8,
+      reason: "planned",
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        harness.calls.some((call) => call.kind === "lifecycle" && call.method === "prepare")
+      ).toBe(true)
+    );
+    controller.abort();
+    await expect(preparation).rejects.toThrow(/Lifecycle release failed/u);
   });
 });

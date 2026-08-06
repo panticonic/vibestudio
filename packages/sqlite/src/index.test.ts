@@ -1,9 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import {
-  openCanonicalSqliteDatabase,
-  type CanonicalSqliteSchema,
-} from "./index.js";
+import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "./index.js";
 
 const SCHEMA: CanonicalSqliteSchema = {
   version: 9,
@@ -81,9 +78,9 @@ describe("openCanonicalSqliteDatabase", () => {
     db.exec(SCHEMA.objects[1]!.sql);
     db.exec(`PRAGMA user_version = ${version}`);
 
-    expect(() =>
-      openCanonicalSqliteDatabase(db, SCHEMA, { description: "test database" })
-    ).toThrow(`schema version is ${version}, expected 9`);
+    expect(() => openCanonicalSqliteDatabase(db, SCHEMA, { description: "test database" })).toThrow(
+      `schema version is ${version}, expected 9`
+    );
     expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
     db.close();
   });
@@ -93,9 +90,9 @@ describe("openCanonicalSqliteDatabase", () => {
     db.exec(SCHEMA.objects[0]!.sql);
     db.exec("PRAGMA user_version = 9");
 
-    expect(() =>
-      openCanonicalSqliteDatabase(db, SCHEMA, { description: "test database" })
-    ).toThrow("schema object set is not canonical");
+    expect(() => openCanonicalSqliteDatabase(db, SCHEMA, { description: "test database" })).toThrow(
+      "schema object set is not canonical"
+    );
     db.close();
   });
 
@@ -105,20 +102,16 @@ describe("openCanonicalSqliteDatabase", () => {
     db.exec("INSERT INTO discarded(value) VALUES ('history')");
     db.exec("DROP TABLE discarded");
 
-    expect(() =>
-      openCanonicalSqliteDatabase(db, SCHEMA, { description: "test database" })
-    ).toThrow("schema version is 0, expected 9");
+    expect(() => openCanonicalSqliteDatabase(db, SCHEMA, { description: "test database" })).toThrow(
+      "schema version is 0, expected 9"
+    );
     db.close();
   });
 
   it("rejects invalid current schema declarations", () => {
     const db = memoryDatabase();
     expect(() =>
-      openCanonicalSqliteDatabase(
-        db,
-        { version: 0, objects: [] },
-        { description: "test database" }
-      )
+      openCanonicalSqliteDatabase(db, { version: 0, objects: [] }, { description: "test database" })
     ).toThrow("schema version must be a positive safe integer");
     db.close();
   });

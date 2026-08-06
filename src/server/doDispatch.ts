@@ -43,6 +43,29 @@ export function doRefKey(ref: DORef): string {
 }
 
 /**
+ * Typed error code for dispatches attempted while a workerd generation
+ * transition is in flight. Distinguishes "the runtime is being replaced —
+ * retry after the ready event" from "workerd is broken/not running". Carried
+ * as `RemoteRpcError.code` (errorKind "service") so it survives RPC
+ * boundaries; gateway callers should match on this code.
+ */
+export const RUNTIME_RESTARTING_ERROR_CODE = "runtime_restarting";
+
+export function runtimeRestartingError(): RemoteRpcError {
+  return new RemoteRpcError(
+    "workerd runtime generation transition in flight; retry after the runtime is ready",
+    "service",
+    RUNTIME_RESTARTING_ERROR_CODE
+  );
+}
+
+export function isRuntimeRestartingError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { code, errorCode } = error as { code?: unknown; errorCode?: unknown };
+  return code === RUNTIME_RESTARTING_ERROR_CODE || errorCode === RUNTIME_RESTARTING_ERROR_CODE;
+}
+
+/**
  * Pack a userland DO ref into a single object key for the UniversalDO facet
  * host: `source|className|userKey`, each segment `encodeURIComponent`-escaped
  * (which escapes `|`), so the split back is unambiguous. Mirrored by the
@@ -332,6 +355,12 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       ) => unknown | Promise<unknown>)
     | null = null;
   private workReadyObserver: ((hint: DurableWorkReadyHint) => void) | null = null;
+  private runtimeRestartingProbe: (() => boolean) | null = null;
+  constructor(private readonly ensureUserlandTargetReady: (ref: DORef) => Promise<void>) {
+    if (typeof ensureUserlandTargetReady !== "function") {
+      throw new Error("DODispatch requires a userland Durable Object readiness barrier");
+    }
+  }
 
   /**
    * Set the TokenManager for per-instance identity tokens.
@@ -404,10 +433,39 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     this.workReadyObserver = observer;
   }
 
+  /**
+   * Set a probe reporting whether a workerd generation transition is in
+   * flight (`WorkerdManager.isGenerationTransitionInFlight`). While it is,
+   * dispatches fail with the typed `runtime_restarting` error instead of a
+   * generic "workerd not running" — so gateway callers can distinguish a
+   * restarting runtime (retry after ready) from a broken one.
+   */
+  setRuntimeRestartingProbe(fn: () => boolean): void {
+    this.runtimeRestartingProbe = fn;
+  }
+
+  private requireWorkerdUrl(): string {
+    try {
+      return assertPresent(this.getWorkerdUrl)();
+    } catch (err) {
+      if (this.runtimeRestartingProbe?.()) throw runtimeRestartingError();
+      throw err;
+    }
+  }
+
+  private async prepareTarget(ref: DORef): Promise<void> {
+    if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
+      throw new Error("DODispatch requires token-backed workerd configuration");
+    }
+    if (this.runtimeRestartingProbe?.()) throw runtimeRestartingError();
+    if (isInternalDOSource(ref.source)) return;
+    await this.ensureUserlandTargetReady(ref);
+  }
+
   private buildPostDeps(ref: DORef): PostToDOWithTokenDeps {
     return {
       tokenManager: assertPresent(this.tokenManager),
-      workerdUrl: assertPresent(this.getWorkerdUrl)(),
+      workerdUrl: this.requireWorkerdUrl(),
       workerdGatewayToken: assertPresent(this.getWorkerdGatewayToken)(),
       dispatchSecret: this.getDispatchSecret ? this.getDispatchSecret() : undefined,
       onWorkReady: (queues) => this.workReadyObserver?.({ owner: ref, queues }),
@@ -440,9 +498,10 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
    * Dispatch a method call to a DO via HTTP POST.
    * Returns the parsed JSON response (type depends on the DO method).
    *
-   * A dispatch is attempted exactly once. Lifecycle owners prepare the DO
-   * before invoking it; this transport must not replay a semantic call or
-   * recreate infrastructure after its entity has retired.
+   * A dispatch is attempted exactly once. The readiness barrier may restore
+   * disposable workerd state from the exact active durable row before
+   * authority resolution, but this transport never rebuilds from a mutable
+   * selector and never replays a semantic call.
    */
   async dispatch(ref: DORef, method: string, ...args: unknown[]): Promise<unknown> {
     return this.withProgressReport(`${doRefKey(ref)}.${method}`, () =>
@@ -523,9 +582,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     args: unknown[],
     signal?: AbortSignal
   ): Promise<unknown> {
-    if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
-      throw new Error("DODispatch requires token-backed workerd configuration");
-    }
+    await this.prepareTarget(ref);
 
     // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval.start,
     // workspace methods, …), so the caller is always the server — stamp it so the
@@ -587,9 +644,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     arg: unknown
   ): Promise<unknown> {
     const lifecycleMethod = `__lifecycle/${method}`;
-    if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
-      throw new Error("DODispatch requires token-backed workerd configuration");
-    }
+    await this.prepareTarget(ref);
     const serverCaller = await this.serverCaller(ref, lifecycleMethod, [arg]);
     if (!serverCaller.authorization || !this.authorityParentRunner) {
       throw new Error("DODispatch requires an authority parent runner");
@@ -634,9 +689,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     signal?: AbortSignal,
     testPolicy?: AgentExecutionTestPolicy
   ): Promise<DoAlarmDispatchResult> {
-    if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {
-      throw new Error("DODispatch requires token-backed workerd configuration");
-    }
+    await this.prepareTarget(ref);
     const serverCaller = await this.serverCaller(ref, "__alarm", [], testPolicy);
     const invoke = () =>
       postToDOWithToken(

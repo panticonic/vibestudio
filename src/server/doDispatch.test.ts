@@ -121,7 +121,7 @@ describe("DODispatch", () => {
 
   beforeEach(() => {
     vi.unstubAllGlobals();
-    dispatch = new DODispatch();
+    dispatch = new DODispatch(async () => undefined);
     dispatch.setAuthorityAttester(() => testAttestation());
     dispatch.setAuthorityParentRunner(async (_receiverRuntimeId, _authorization, invoke) =>
       invoke()
@@ -154,6 +154,85 @@ describe("DODispatch", () => {
   });
 
   describe("dispatch with token-backed workerd URL", () => {
+    it("fails closed before authority or transport when no userland readiness barrier exists", async () => {
+      expect(() => new DODispatch(undefined as never)).toThrow(
+        /requires a userland Durable Object readiness barrier/
+      );
+    });
+
+    it("establishes exact readiness before authority resolution and invokes only after success", async () => {
+      const events: string[] = [];
+      let readinessAttempts = 0;
+      dispatch = new DODispatch(async () => {
+        events.push("ready");
+        readinessAttempts += 1;
+        if (readinessAttempts === 1) throw new Error("sealed image unavailable");
+      });
+      dispatch.setAuthorityParentRunner(async (_receiverRuntimeId, _authorization, invoke) =>
+        invoke()
+      );
+      dispatch.setAuthorityAttester(() => {
+        events.push("attest");
+        return testAttestation();
+      });
+      const fetchMock = vi.fn(async () => {
+        events.push("invoke");
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      dispatch.setTokenManager(new TokenManager());
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+
+      await expect(dispatch.dispatch(makeRef(), "ping")).rejects.toThrow(
+        "sealed image unavailable"
+      );
+      expect(events).toEqual(["ready"]);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      await expect(dispatch.dispatch(makeRef(), "ping")).resolves.toEqual({ ok: true });
+      expect(events).toEqual(["ready", "ready", "attest", "invoke"]);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+
+    it("guards ordinary, held, lifecycle, and alarm dispatch through the same barrier", async () => {
+      const ensureReady = vi.fn(async (_ref: DORef) => undefined);
+      const guarded = new DODispatch(ensureReady);
+      guarded.setAuthorityAttester(() => testAttestation());
+      guarded.setAuthorityParentRunner(async (_id, _authorization, invoke) => invoke());
+      guarded.setTokenManager(new TokenManager());
+      guarded.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      guarded.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({}), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            })
+        )
+      );
+      const ref = makeRef();
+
+      await guarded.dispatch(ref, "ordinary");
+      await guarded.dispatchHeld(ref, "held");
+      await guarded.dispatchHeldWithSignal(ref, new AbortController().signal, "heldSignal");
+      await guarded.dispatchLifecycle(ref, "prepare", {
+        epoch: "test",
+        mode: "suspend",
+        reason: "test",
+        deadlineMs: 1,
+      });
+      await guarded.dispatchAlarm(ref);
+
+      expect(ensureReady).toHaveBeenCalledTimes(5);
+      expect(ensureReady.mock.calls.every(([candidate]) => candidate === ref)).toBe(true);
+    });
+
     it("strips a work-ready receipt from the result and notifies its owner", async () => {
       const ref = makeRef();
       const observer = vi.fn();

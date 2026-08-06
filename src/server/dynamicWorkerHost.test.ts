@@ -179,6 +179,10 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
       authority: { requests: [], provides: [] },
     }),
     getBuildByKey: () => currentBuild.value,
+    getBuildByExecution: (_key, executionDigest) =>
+      currentBuild.value.metadata.execution?.executionDigest === executionDigest
+        ? currentBuild.value
+        : null,
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),

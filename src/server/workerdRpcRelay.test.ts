@@ -75,6 +75,7 @@ describe("workerdRpcRelay", () => {
   it("POSTs an envelope to __rpc, stamps the dispatch secret, and unwraps the result", async () => {
     const fetchMock = vi.fn().mockResolvedValue(responseEnvelope({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
 
     await expect(
       postToDurableObject(
@@ -87,7 +88,8 @@ describe("workerdRpcRelay", () => {
           workerdDispatchSecret: "dispatch-secret",
           idempotencyKey: "idem-1",
           readOnly: true,
-        }
+        },
+        controller.signal
       )
     ).resolves.toEqual({ ok: true });
 
@@ -95,6 +97,7 @@ describe("workerdRpcRelay", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `http://127.0.0.1:8787/_u/${encodeURIComponent(encodeUniversalKey(ref))}/__rpc`,
       expect.objectContaining({
+        signal: controller.signal,
         headers: expect.objectContaining({
           Authorization: "Bearer gateway-token",
           "X-Vibestudio-Dispatch-Secret": "dispatch-secret",

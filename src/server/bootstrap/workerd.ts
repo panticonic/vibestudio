@@ -49,14 +49,25 @@ export interface WorkerdBootstrapDeps {
     | "reconcileProviderDefinitions"
     | "reconcileReceiverClasses"
   >;
-  assertBootstrapSourceUnchanged(): Promise<void>;
+  /** Validate the sealed checkout before semantic initialization can begin. */
+  assertBootstrapSnapshotUnchanged(): Promise<void>;
   /**
    * Join a registered image identity to its current host-owned execution
    * session and context policy. Egress is long-lived, so these facts must be
    * resolved when a request arrives rather than captured at image startup.
    */
   resolveEgressCaller(caller: VerifiedCaller): VerifiedCaller | null;
+  /** Restore the exact active entity incarnation before any userland DO call. */
+  ensureUserlandDoReady(ref: DORef): Promise<void>;
   onManagerStarted(manager: WorkerdManager): void;
+  /** Sole owner of source-build publication into durable and derived runtime state. */
+  publishSourceBuild(
+    manager: WorkerdManager,
+    source: string,
+    doClasses: Array<{ className: string }> | null,
+    trigger: import("../buildV2/index.js").ProtectedPublicationEvent | undefined,
+    buildKey: string | undefined
+  ): Promise<void>;
 }
 
 export function parseGatewayAliases(value: string): string[] {
@@ -284,8 +295,8 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         recordLifecycleEvent: (event) => {
           deps.runtimeDiagnostics.record({
             workspaceId: deps.workspaceId,
-            entityId: event.source,
-            kind: "worker",
+            entityId: event.entityId ?? event.source,
+            kind: event.kind ?? "worker",
             level: event.level,
             message: event.message,
             source: "lifecycle",
@@ -294,7 +305,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           deps.eventService.emit("workspace:unit-log", {
             workspaceId: deps.workspaceId,
             unitName: event.source,
-            kind: "worker",
+            kind: event.kind === "do" ? "worker" : (event.kind ?? "worker"),
             timestamp: Date.now(),
             level: event.level,
             message: event.message,
@@ -311,6 +322,8 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       manager.bindWorkspaceProvider({
         bindRuntimeImage: (unitPath, ref) => bootstrapBuildSystem.bindRuntimeImage(unitPath, ref),
         getBuildByKey: (key) => bootstrapBuildSystem.getBuildByKey(key),
+        getBuildByExecution: (key, executionDigest) =>
+          bootstrapBuildSystem.getBuildByExecution(key, executionDigest),
         getManifestRoutes: (source) =>
           deps.workspaceDeclarations.routes.filter((route) => route.source === source),
         getManifestDoClasses: (source) => {
@@ -331,7 +344,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           (entry) => ({ source: INTERNAL_DO_SOURCE, className: entry.className })
         )
       );
-      await deps.assertBootstrapSourceUnchanged();
+      await deps.assertBootstrapSnapshotUnchanged();
 
       return manager;
     },
@@ -347,7 +360,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       const { DODispatch } = await import("../doDispatch.js");
       const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
       const rpcServer = assertPresent(resolve<{ server: RpcServer }>("rpcServer")).server;
-      const dispatch = new DODispatch();
+      const dispatch = new DODispatch(deps.ensureUserlandDoReady);
       dispatch.setTokenManager(deps.tokenManager);
       dispatch.setGetWorkerdGatewayToken(() => deps.gatewayToken);
       dispatch.setGetWorkerdUrl(() => {
@@ -356,6 +369,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         return `http://127.0.0.1:${port}`;
       });
       dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
+      // Typed runtime_restarting failures while a generation transition is in
+      // flight, instead of the generic "workerd not running" throw above.
+      dispatch.setRuntimeRestartingProbe(() => manager.isGenerationTransitionInFlight());
       dispatch.setAuthorityAttester(
         createHostDoAuthorityAttester({
           manager,
@@ -397,6 +413,8 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       const provider: WorkerdWorkspaceProvider = {
         bindRuntimeImage: (unitPath, ref) => buildSystem.bindRuntimeImage(unitPath, ref),
         getBuildByKey: (key) => buildSystem.getBuildByKey(key),
+        getBuildByExecution: (key, executionDigest) =>
+          buildSystem.getBuildByExecution(key, executionDigest),
         getManifestRoutes: (source) =>
           deps.workspaceDeclarations.routes.filter((route) => route.source === source),
         getManifestDoClasses: (source) => {
@@ -433,18 +451,32 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         INTERNAL_DO_CLASSES.map((className) => ({ source: INTERNAL_DO_SOURCE, className }))
       );
 
+      const sourceBuildChains = new Map<string, Promise<void>>();
       buildSystem.onPushBuild((source, trigger, buildKey) => {
         const node = buildSystem
           .getGraph()
           .allNodes()
           .find((entry) => entry.relativePath === source);
         const classes = node?.kind === "worker" ? (node.manifest.durable?.classes ?? []) : null;
-        void manager.onSourceRebuilt(source, classes, trigger, buildKey).catch((error: unknown) => {
-          console.error(
-            `[WorkerdManager] Failed to reconcile rebuilt source ${source} from ${trigger?.publicationId ?? "an unscoped build"}:`,
-            error
-          );
-        });
+        const previous = sourceBuildChains.get(source) ?? Promise.resolve();
+        // One failed publication must not permanently poison reconciliation
+        // for every later build of the same source.
+        const next = previous
+          .catch(() => undefined)
+          .then(async () => {
+            await deps.publishSourceBuild(manager, source, classes, trigger, buildKey);
+          });
+        sourceBuildChains.set(source, next);
+        void next
+          .catch((error: unknown) => {
+            console.error(
+              `[WorkerdManager] Failed to reconcile rebuilt source ${source} from ${trigger?.publicationId ?? "an unscoped build"}:`,
+              error
+            );
+          })
+          .finally(() => {
+            if (sourceBuildChains.get(source) === next) sourceBuildChains.delete(source);
+          });
       });
 
       for (const node of graphNodes) {

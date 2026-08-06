@@ -128,15 +128,14 @@ export function createBuildService(deps: {
         deps.buildSystem.inspectExecution(executionDigest),
       getAboutPages: () => deps.buildSystem.getAboutPages(),
       hasUnit: (_ctx, [unit]) => deps.buildSystem.hasUnit(unit),
-      getPanelMetadata: (_ctx, [unit]) => {
-        const graph = deps.buildSystem.getGraph();
-        const node =
-          graph.tryGet(unit) ??
-          graph.allNodes().find((candidate) => candidate.relativePath === unit);
-        if (!node || node.kind !== "panel") return null;
+      getPanelMetadata: async (_ctx, [unit, ref]) => {
+        const node = (await deps.buildSystem.listBuildUnits(ref, ["panel"])).find(
+          (candidate) => candidate.unitName === unit || candidate.unitPath === unit
+        );
+        if (!node) return null;
         return {
-          source: node.relativePath,
-          title: node.manifest.title ?? node.name,
+          source: node.unitPath,
+          title: node.manifest.title ?? node.unitName,
           description: node.manifest.description,
           hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
           stateArgs: node.manifest.stateArgs,

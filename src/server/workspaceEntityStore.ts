@@ -12,9 +12,10 @@
  *
  * This store makes the invariant STRUCTURAL: it is the only thing that
  * dispatches `entityActivate`/`entityRetire` to the WorkspaceDO, and each
- * mutation pairs the durable write with the cache update atomically. The
- * write-owners (`runtimeService`, `evalService`) receive the store and never
- * touch raw entity dispatch or the cache mutators, so they CAN'T drift.
+ * mutation pairs the durable write with the cache update and post-commit
+ * execution materialization. The write-owners (`runtimeService`, `evalService`)
+ * receive the store and never touch raw entity dispatch or the cache mutators,
+ * so they CAN'T publish an executable identity that its runtime cannot load.
  *
  * NOT in scope: cache-only synthetic entities (apps / device principals in
  * `appHost`, which have no WorkspaceDO row) and the boot hydrate path
@@ -53,6 +54,8 @@ export interface WorkspaceEntityStoreDeps {
   workspaceId: string;
   entityCache: EntityCache;
   executionPublicationPort?: ExecutionPublicationPort;
+  /** Materialize derived runtime state only after the durable row and cache mirror exist. */
+  materializeExecution: (record: EntityRecord) => Promise<void>;
 }
 
 export class WorkspaceEntityStore {
@@ -83,6 +86,7 @@ export class WorkspaceEntityStore {
       () => this.dispatch<EntityRecord>("entityActivate", input)
     );
     this.deps.entityCache._onActivate(record);
+    await this.deps.materializeExecution(record);
     return record;
   }
 
@@ -105,7 +109,29 @@ export class WorkspaceEntityStore {
       () => this.dispatch<EntityRecord>("entityAdvanceExecution", input)
     );
     this.deps.entityCache._onActivate(record);
+    await this.deps.materializeExecution(record);
     return record;
+  }
+
+  /** Atomically publish one execution incarnation to a set of durable identities. */
+  async advanceExecutions(inputs: EntityActivateInput[]): Promise<EntityRecord[]> {
+    if (inputs.length === 0) return [];
+    const publications = inputs.map((input) => this.publication(input));
+    const records = await publishExecutionOwnerAsync(
+      this.deps.executionPublicationPort,
+      {
+        owner: "runtime-entity",
+        ownerId: `batch:${publications
+          .map(({ ownerId }) => ownerId)
+          .sort()
+          .join(",")}`,
+        artifacts: publications.flatMap(({ artifacts }) => artifacts),
+      },
+      () => this.dispatch<EntityRecord[]>("entityAdvanceExecutions", inputs)
+    );
+    for (const record of records) this.deps.entityCache._onActivate(record);
+    await Promise.all(records.map((record) => this.deps.materializeExecution(record)));
+    return records;
   }
 
   /** Retire a WorkspaceDO entity and mirror the retirement. Null if already gone. */
@@ -133,6 +159,15 @@ export class WorkspaceEntityStore {
     return this.dispatch<EntityRecord | null>("entityResolve", canonicalId);
   }
 
+  /** Resolve the active durable identity, repairing a lost hot-cache mirror. */
+  async resolveActiveRecord(canonicalId: string): Promise<EntityRecord | null> {
+    const cached = this.deps.entityCache.resolveActive(canonicalId);
+    if (cached) return cached;
+    const record = await this.dispatch<EntityRecord | null>("entityResolveActive", canonicalId);
+    if (record) this.deps.entityCache._onActivate(record);
+    return record;
+  }
+
   /**
    * Durable nav→slot mapping: the OPEN slot id whose current runtime entity is
    * `entityId`, or null. Authoritative + lease-independent (backed by the slot
@@ -147,6 +182,13 @@ export class WorkspaceEntityStore {
     return kind
       ? this.dispatch<EntityRecord[]>("entityListActiveByKind", kind)
       : this.dispatch<EntityRecord[]>("entityListActive");
+  }
+
+  /** Durable reservations whose executable incarnation has not committed yet. */
+  listPreparing(kind?: EntityKind | string): Promise<EntityRecord[]> {
+    return kind
+      ? this.dispatch<EntityRecord[]>("entityListPreparingByKind", kind)
+      : this.dispatch<EntityRecord[]>("entityListPreparing");
   }
 
   /** Active executions plus retired panel-history entries that remain selectable. */

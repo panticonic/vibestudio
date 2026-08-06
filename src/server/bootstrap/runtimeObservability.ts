@@ -11,6 +11,7 @@ export interface RuntimeObservabilityBootstrapDeps {
   statePath: string;
   workspaceId: string;
   eventService: Pick<EventService, "emit">;
+  diagnostics?: RuntimeDiagnosticsStore;
 }
 
 /**
@@ -23,7 +24,8 @@ export interface RuntimeObservabilityBootstrapDeps {
 export function wireRuntimeObservability(
   deps: RuntimeObservabilityBootstrapDeps
 ): RuntimeDiagnosticsStore {
-  const diagnostics = new RuntimeDiagnosticsStore({ statePath: deps.statePath });
+  const diagnostics =
+    deps.diagnostics ?? new RuntimeDiagnosticsStore({ statePath: deps.statePath });
 
   deps.container.registerManaged({
     name: "buildDiagnosticsBridge",

@@ -58,26 +58,19 @@ describe("PhoneProvisioningDO", () => {
     });
 
     await expect(
-      callAs(
-        { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
-        "providers"
-      )
+      callAs({ callerId: "panel:alice", callerKind: "panel", userId: "alice" }, "providers")
     ).resolves.toEqual([
       expect.objectContaining({
         providerId: "shell:desktop",
         label: "My desktop",
       }),
     ]);
-    expect(rpcCall).toHaveBeenLastCalledWith(
-      "main",
-      "connectedClientTransport.invoke",
-      [
-        {
-          clientId: "shell:desktop",
-          method: "desktopPhoneProvider.providers",
-          args: [],
-        },
-      ]
-    );
+    expect(rpcCall).toHaveBeenLastCalledWith("main", "connectedClientTransport.invoke", [
+      {
+        clientId: "shell:desktop",
+        method: "desktopPhoneProvider.providers",
+        args: [],
+      },
+    ]);
   });
 });

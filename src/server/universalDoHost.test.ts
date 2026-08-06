@@ -188,6 +188,10 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
       };
     },
     getBuildByKey: (key: string) => boundBuilds.get(key) ?? null,
+    getBuildByExecution: (key: string, executionDigest: string) => {
+      const build = boundBuilds.get(key) ?? null;
+      return build?.metadata.execution?.executionDigest === executionDigest ? build : null;
+    },
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),

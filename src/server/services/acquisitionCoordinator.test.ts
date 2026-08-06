@@ -138,7 +138,10 @@ describe("AcquisitionCoordinator", () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-unit-review-")),
     });
-    const request = vi.fn(async () => "once" as const);
+    // The review surface reports semantic acceptance. The coordinator maps it
+    // to the caller's authority vocabulary instead of expecting the UI to know
+    // whether this requester is a session or installed code.
+    const request = vi.fn(async () => "accepted" as const);
     const coordinator = new AcquisitionCoordinator({
       approvalQueue: { request } as never,
       grantStore,
@@ -154,8 +157,8 @@ describe("AcquisitionCoordinator", () => {
       resource: { kind: "exact", key: snap.resourceKey },
       presentation: {
         ...reviewedPresentation(),
-        unitBatch: {
-          trigger: "source-change",
+        installReview: {
+          mode: "part-changed",
           units: [
             {
               unitKind: "panel",
@@ -172,11 +175,59 @@ describe("AcquisitionCoordinator", () => {
 
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "source-change",
+        kind: "unit-install-review",
+        mode: "part-changed",
         units: [expect.objectContaining({ unitKind: "panel", displayName: "Example" })],
       })
     );
+    expect(grantStore.grantsForSubjects([snap.callerPrincipal], snap.capability)).toEqual([
+      expect.objectContaining({
+        subject: snap.callerPrincipal,
+        constraints: expect.objectContaining({ invocationDigest: invocationSnapshotDigest(snap) }),
+      }),
+    ]);
+    grantStore.close();
+  });
+
+  it("maps an accepted install review to exact-version authority for installed code", async () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-code-review-")),
+    });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request: vi.fn(async () => "accepted" as const) } as never,
+      grantStore,
+    });
+    const snap = {
+      ...snapshot(),
+      callerPrincipal: "code:panels/example@ev-example" as const,
+    };
+    const caller = createVerifiedCaller("panel:example", "panel", {
+      callerId: "panel:example",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "ev-example",
+    });
+
+    await coordinator.requestAndWait({
+      snapshot: snap,
+      snapshotDigest: invocationSnapshotDigest(snap),
+      tier: "gated",
+      caller,
+      renderedAction: "publish panel source",
+      resource: { kind: "exact", key: snap.resourceKey },
+      presentation: {
+        ...reviewedPresentation(),
+        installReview: {
+          mode: "part-changed",
+          units: [],
+          configWrite: null,
+        },
+      },
+    });
+
+    expect(grantStore.grantsForSubjects([snap.callerPrincipal], snap.capability)).toEqual([
+      expect.objectContaining({ subject: snap.callerPrincipal }),
+    ]);
     grantStore.close();
   });
 
@@ -193,7 +244,11 @@ describe("AcquisitionCoordinator", () => {
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-")),
     });
     const coordinator = new AcquisitionCoordinator({ approvalQueue, grantStore });
-    const snap = { ...snapshot(), taskRef: "task:chat-1" };
+    const snap = {
+      ...snapshot(),
+      taskRef: "task:chat-1",
+      taskAuthority: "task:closure-chat-1" as const,
+    };
     const input = {
       snapshot: snap,
       snapshotDigest: invocationSnapshotDigest(snap),
@@ -229,7 +284,49 @@ describe("AcquisitionCoordinator", () => {
     });
     resolve("task");
     await expect(waiting).resolves.toEqual({ state: "decided", decision: "task" });
-    expect(grantStore.grantsForSubjects(["session:chat-1"], snap.capability)).toHaveLength(1);
+    expect(grantStore.grantsForSubjects([snap.taskAuthority], snap.capability)).toEqual([
+      expect.objectContaining({
+        subject: snap.taskAuthority,
+        scope: "task",
+        constraints: expect.not.objectContaining({ sessionId: expect.anything() }),
+      }),
+    ]);
+    grantStore.close();
+  });
+
+  it("offers task scope to descendant code only with host-attested task membership", async () => {
+    const request = vi.fn(async () => "task" as const);
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-code-task-")),
+    });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request } as never,
+      grantStore,
+    });
+    const snap = {
+      ...snapshot(),
+      callerPrincipal: "code:panels/taskflow@ev-one" as const,
+      taskAuthority: "task:closure-taskflow" as const,
+    };
+    await coordinator.requestAndWait({
+      snapshot: snap,
+      snapshotDigest: invocationSnapshotDigest(snap),
+      tier: "gated",
+      caller: {
+        ...createVerifiedCaller("panel:taskflow", "panel"),
+        taskAuthority: snap.taskAuthority,
+      },
+      renderedAction: "use the taskflow store",
+      resource: { kind: "exact", key: snap.resourceKey },
+      presentation: reviewedPresentation(),
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: expect.arrayContaining(["version", "task", "deny"]),
+      })
+    );
+    expect(grantStore.grantsForSubjects([snap.taskAuthority], snap.capability)).toHaveLength(1);
     grantStore.close();
   });
 
@@ -759,7 +856,54 @@ describe("AcquisitionCoordinator", () => {
     vi.useRealTimers();
   });
 
-  it("wakes the durable owner after settlement without making the hint part of correctness", async () => {
+  it("interrupts once per principal context and quietly queues a concurrent burst", async () => {
+    const request = vi.fn(async () => "deny" as const);
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-attention-")),
+    });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request } as never,
+      grantStore,
+    });
+    const firstSnapshot = snapshot();
+    const secondSnapshot = {
+      ...snapshot(),
+      capability: "service:example.other",
+      resourceKey: "origin:https://other.example",
+    };
+    const common = {
+      tier: "gated" as const,
+      caller: createVerifiedCaller("agent:1", "agent", null, {
+        agentId: "a",
+        entityId: "e",
+        contextId: "c",
+        channelId: "chat-1",
+      }),
+      renderedAction: "use a service",
+      presentation: reviewedPresentation(),
+    };
+
+    await Promise.all([
+      coordinator.requestAndWait({
+        ...common,
+        snapshot: firstSnapshot,
+        snapshotDigest: invocationSnapshotDigest(firstSnapshot),
+        resource: { kind: "exact", key: firstSnapshot.resourceKey },
+      }),
+      coordinator.requestAndWait({
+        ...common,
+        snapshot: secondSnapshot,
+        snapshotDigest: invocationSnapshotDigest(secondSnapshot),
+        resource: { kind: "exact", key: secondSnapshot.resourceKey },
+      }),
+    ]);
+
+    expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({ attention: "interrupt" }));
+    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({ attention: "queue" }));
+    grantStore.close();
+  });
+
+  it("wakes an out-of-band durable owner after settlement without making the hint part of correctness", async () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-wake-")),
     });
@@ -780,17 +924,16 @@ describe("AcquisitionCoordinator", () => {
       notifyOwner,
     });
 
-    await expect(
-      coordinator.requestAndWait({
-        snapshot: snap,
-        snapshotDigest: invocationSnapshotDigest(snap),
-        tier: "gated",
-        caller,
-        renderedAction: "access example.com",
-        resource: { kind: "origin", origin: "https://example.com" },
-        presentation: reviewedPresentation(),
-      })
-    ).resolves.toMatchObject({ state: "decided", decision: "deny" });
+    coordinator.request({
+      snapshot: snap,
+      snapshotDigest: invocationSnapshotDigest(snap),
+      tier: "gated",
+      caller,
+      renderedAction: "access example.com",
+      resource: { kind: "origin", origin: "https://example.com" },
+      presentation: reviewedPresentation(),
+    });
+    await Promise.resolve();
     await Promise.resolve();
 
     expect(notifyOwner).toHaveBeenCalledOnce();
@@ -800,6 +943,73 @@ describe("AcquisitionCoordinator", () => {
       "owner is restarting"
     );
     warn.mockRestore();
+    grantStore.close();
+  });
+
+  it("does not send a wake hint when the acquiring call is already waiting in-band", async () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-in-band-")),
+    });
+    const notifyOwner = vi.fn();
+    const snap = snapshot();
+    const caller = createVerifiedCaller("do:vibestudio/internal:EvalDO:test", "do");
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request: vi.fn(async () => "deny" as const) } as never,
+      grantStore,
+      notifyOwner,
+    });
+
+    await coordinator.requestAndWait({
+      snapshot: snap,
+      snapshotDigest: invocationSnapshotDigest(snap),
+      tier: "gated",
+      caller,
+      renderedAction: "access example.com",
+      resource: { kind: "origin", origin: "https://example.com" },
+      presentation: reviewedPresentation(),
+    });
+
+    expect(notifyOwner).not.toHaveBeenCalled();
+    grantStore.close();
+  });
+
+  it("suppresses the wake hint once an in-band waiter joins a redrive-created ask", async () => {
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-join-")),
+    });
+    const notifyOwner = vi.fn();
+    let settle!: (decision: "deny") => void;
+    const presented = new Promise<"deny">((resolve) => {
+      settle = resolve;
+    });
+    const snap = snapshot();
+    const caller = createVerifiedCaller("do:vibestudio/internal:EvalDO:test", "do");
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request: vi.fn(async () => presented) } as never,
+      grantStore,
+      notifyOwner,
+    });
+    const input = {
+      snapshot: snap,
+      snapshotDigest: invocationSnapshotDigest(snap),
+      tier: "gated" as const,
+      caller,
+      renderedAction: "access example.com",
+      resource: { kind: "origin", origin: "https://example.com" } as const,
+      presentation: reviewedPresentation(),
+    };
+
+    // Created by the fire-and-forget path (owner-redrive continuation)…
+    const info = coordinator.request(input);
+    expect(info.pending).toBe(true);
+    // …then a deduped in-band waiter joins the SAME ask. The gate must follow
+    // the live waiter: settlement is delivered inside its held call, so an
+    // owner wake would drive the same effect a second time.
+    const waited = coordinator.requestAndWait(input);
+    settle("deny");
+    await expect(waited).resolves.toMatchObject({ state: "decided", decision: "deny" });
+
+    expect(notifyOwner).not.toHaveBeenCalled();
     grantStore.close();
   });
 });

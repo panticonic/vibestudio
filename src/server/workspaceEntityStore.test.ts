@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { DODispatch } from "./doDispatch.js";
@@ -15,7 +15,11 @@ const RECORD: EntityRecord = {
   cleanupComplete: true,
 };
 
-function makeStore(handlers: Record<string, (...args: unknown[]) => unknown>) {
+function makeStore(
+  handlers: Record<string, (...args: unknown[]) => unknown>,
+  materializeExecution: (record: EntityRecord) => Promise<void> = async () => undefined,
+  entityCache = new EntityCache()
+) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const doDispatch = {
     async dispatch(_ref: unknown, method: string, ...args: unknown[]) {
@@ -25,8 +29,12 @@ function makeStore(handlers: Record<string, (...args: unknown[]) => unknown>) {
       return handler(...args);
     },
   } as unknown as DODispatch;
-  const entityCache = new EntityCache();
-  const store = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
+  const store = new WorkspaceEntityStore({
+    doDispatch,
+    workspaceId: "ws_1",
+    entityCache,
+    materializeExecution,
+  });
   return { store, entityCache, calls };
 }
 
@@ -39,6 +47,7 @@ describe("WorkspaceEntityStore", () => {
       doDispatch: { dispatch } as unknown as DODispatch,
       workspaceId: "ws_1",
       entityCache: new EntityCache(),
+      materializeExecution: async () => undefined,
       executionPublicationPort: {
         reserve() {
           throw new Error("execution identity mismatch");
@@ -101,6 +110,43 @@ describe("WorkspaceEntityStore", () => {
     expect(calls.map((call) => call.method)).toEqual(["entityReserve", "entityAdvanceExecution"]);
   });
 
+  it("mirrors an atomic execution batch only after the durable write returns", async () => {
+    const first = { ...RECORD, id: "do:workers/a:A:one", className: "A", key: "one" };
+    const second = { ...RECORD, id: "do:workers/a:A:two", className: "A", key: "two" };
+    const entityCache = new EntityCache();
+    const materialized: string[] = [];
+    const made = makeStore(
+      { entityAdvanceExecutions: () => [first, second] },
+      async (record) => {
+        // The whole durable batch is mirrored before any derived attachment is
+        // exposed, so cross-object resolution cannot observe a partial batch.
+        expect(entityCache.resolveActive(first.id)).toEqual(first);
+        expect(entityCache.resolveActive(second.id)).toEqual(second);
+        materialized.push(record.id);
+      },
+      entityCache
+    );
+    const { store, calls } = made;
+
+    const records = await store.advanceExecutions(
+      [first, second].map((record) => ({
+        kind: record.kind,
+        source: record.source,
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "e".repeat(64),
+        contextId: record.contextId,
+        className: record.className,
+        key: record.key,
+      }))
+    );
+
+    expect(records).toEqual([first, second]);
+    expect(entityCache.resolveActive(first.id)).toEqual(first);
+    expect(entityCache.resolveActive(second.id)).toEqual(second);
+    expect(materialized).toEqual([first.id, second.id]);
+    expect(calls[0]?.method).toBe("entityAdvanceExecutions");
+  });
+
   it("activate pairs the durable write with the cache mirror atomically", async () => {
     const { store, entityCache, calls } = makeStore({ entityActivate: () => RECORD });
 
@@ -134,6 +180,33 @@ describe("WorkspaceEntityStore", () => {
         ],
       },
     ]);
+  });
+
+  it("materializes derived execution only after the durable row is cached", async () => {
+    const entityCache = new EntityCache();
+    const materializeExecution = vi.fn(async (record: EntityRecord) => {
+      expect(entityCache.resolveActive(record.id)).toEqual(record);
+    });
+    const made = makeStore({ entityActivate: () => RECORD }, materializeExecution, entityCache);
+
+    await made.store.activate({
+      kind: "do",
+      source: RECORD.source,
+      contextId: RECORD.contextId,
+      className: "EvalDO",
+      key: RECORD.key,
+    });
+
+    expect(materializeExecution).toHaveBeenCalledWith(RECORD);
+  });
+
+  it("repairs a lost active cache mirror from the durable row", async () => {
+    const { store, entityCache, calls } = makeStore({ entityResolveActive: () => RECORD });
+
+    await expect(store.resolveActiveRecord(RECORD.id)).resolves.toEqual(RECORD);
+    expect(entityCache.resolveActive(RECORD.id)).toEqual(RECORD);
+    await expect(store.resolveActiveRecord(RECORD.id)).resolves.toEqual(RECORD);
+    expect(calls.map((call) => call.method)).toEqual(["entityResolveActive"]);
   });
 
   it("retire mirrors the retirement; a null durable result leaves the cache untouched", async () => {

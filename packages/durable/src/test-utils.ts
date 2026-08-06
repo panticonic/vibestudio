@@ -297,9 +297,7 @@ export async function createTestDO<T>(
     ).rpcMethods?.[method];
     const capability =
       schemaMethod?.capability ??
-      (localDeclaration?.effect.kind !== "open"
-        ? localDeclaration?.effect.capability
-        : undefined);
+      (localDeclaration?.effect.kind !== "open" ? localDeclaration?.effect.capability : undefined);
     const effect =
       schemaMethod?.directEffect ??
       (schemaMethod?.capability

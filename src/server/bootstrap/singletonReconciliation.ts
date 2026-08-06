@@ -3,6 +3,16 @@ import {
   requireActiveExecutionIdentity,
   type PreparedExecutionIdentity,
 } from "../runtimeExecutionIdentity.js";
+import { createHash } from "node:crypto";
+
+export function canonicalSingletonContextId(
+  workspaceId: string,
+  identity: { source: string; className: string; key: string }
+): string {
+  return createHash("sha256")
+    .update(`${workspaceId}\x00${identity.source}\x00${identity.className}\x00${identity.key}`)
+    .digest("hex");
+}
 
 export interface SingletonActivationPlan {
   source: string;

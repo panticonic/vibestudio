@@ -184,7 +184,11 @@ function assertCanonicalSqliteSchema(
   }
 }
 
-function unsupportedVersionError(description: string, actualVersion: number, version: number): Error {
+function unsupportedVersionError(
+  description: string,
+  actualVersion: number,
+  version: number
+): Error {
   return new Error(
     `Unsupported ${description}: schema version is ${actualVersion}, expected ${version}; ` +
       "the database was left unchanged"

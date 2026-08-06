@@ -68,9 +68,7 @@ export class PhoneProvisioningDO extends DurableObjectBase {
         devices.push(
           ...local.devices.map((device) => ({ ...device, providerId: target.clientId }))
         );
-        issues.push(
-          ...local.issues.map((issue) => ({ ...issue, providerId: target.clientId }))
-        );
+        issues.push(...local.issues.map((issue) => ({ ...issue, providerId: target.clientId })));
       } catch (error) {
         issues.push({
           providerId: target.clientId,
@@ -123,9 +121,7 @@ export class PhoneProvisioningDO extends DurableObjectBase {
   }
 
   private invoke(clientId: string, method: string, args: unknown[]): Promise<unknown> {
-    return this.rpc.call("main", "connectedClientTransport.invoke", [
-      { clientId, method, args },
-    ]);
+    return this.rpc.call("main", "connectedClientTransport.invoke", [{ clientId, method, args }]);
   }
 
   private requireUser(): string {

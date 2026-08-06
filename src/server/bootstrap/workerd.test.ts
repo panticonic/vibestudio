@@ -54,7 +54,7 @@ describe("workerd bootstrap policy", () => {
       workspaceId: "workspace-1",
       workspaceDeclarations: inert as WorkerdBootstrapDeps["workspaceDeclarations"],
       userlandResourceHandles: inert as WorkerdBootstrapDeps["userlandResourceHandles"],
-      assertBootstrapSourceUnchanged: vi.fn(async () => undefined),
+      assertBootstrapSnapshotUnchanged: vi.fn(async () => undefined),
       routeRegistry: inert as WorkerdBootstrapDeps["routeRegistry"],
       egressProxy: inert as WorkerdBootstrapDeps["egressProxy"],
       gatewayToken: "gateway-token",
@@ -68,7 +68,9 @@ describe("workerd bootstrap policy", () => {
       runtimeDiagnostics: inert as WorkerdBootstrapDeps["runtimeDiagnostics"],
       eventService: inert as WorkerdBootstrapDeps["eventService"],
       resolveEgressCaller: (caller) => caller,
+      ensureUserlandDoReady: vi.fn(async () => undefined),
       onManagerStarted: vi.fn(),
+      publishSourceBuild: vi.fn(async () => undefined),
     });
 
     expect(services.map(({ name, dependencies }) => ({ name, dependencies }))).toEqual([
@@ -83,13 +85,13 @@ describe("workerd bootstrap policy", () => {
 
   it("reconciles worker classes from one protected publication without scalar-head branching", async () => {
     const services: ManagedService[] = [];
-    const onSourceRebuilt = vi.fn(async () => undefined);
+    const reconcileMutableSourceBuild = vi.fn(async () => undefined);
     const manager = {
       bindWorkspaceProvider: vi.fn(),
       replaceWorkspaceProvider: vi.fn(),
       registerAllDOClasses: vi.fn(async () => undefined),
       reconcileManifestRoutes: vi.fn(),
-      onSourceRebuilt,
+      reconcileMutableSourceBuild,
     };
     let onPushBuild:
       | ((source: string, trigger?: ProtectedPublicationEvent, buildKey?: string) => void)
@@ -116,6 +118,11 @@ describe("workerd bootstrap policy", () => {
       reconcileReceiverClasses: vi.fn(),
     };
     const inert = {};
+    const publishSourceBuild: WorkerdBootstrapDeps["publishSourceBuild"] = vi.fn(
+      async (workerdManager, source, classes, trigger, buildKey) => {
+        await workerdManager.reconcileMutableSourceBuild(source, classes, trigger, buildKey);
+      }
+    );
     wireWorkerdCore({
       container: { registerManaged: (service) => services.push(service) },
       tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
@@ -128,7 +135,7 @@ describe("workerd bootstrap policy", () => {
       } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"],
       userlandResourceHandles:
         userlandResourceHandles as unknown as WorkerdBootstrapDeps["userlandResourceHandles"],
-      assertBootstrapSourceUnchanged: vi.fn(async () => undefined),
+      assertBootstrapSnapshotUnchanged: vi.fn(async () => undefined),
       routeRegistry: routeRegistry as unknown as WorkerdBootstrapDeps["routeRegistry"],
       egressProxy: inert as WorkerdBootstrapDeps["egressProxy"],
       gatewayToken: "gateway-token",
@@ -142,7 +149,9 @@ describe("workerd bootstrap policy", () => {
       runtimeDiagnostics: inert as WorkerdBootstrapDeps["runtimeDiagnostics"],
       eventService: inert as WorkerdBootstrapDeps["eventService"],
       resolveEgressCaller: (caller) => caller,
+      ensureUserlandDoReady: vi.fn(async () => undefined),
       onManagerStarted: vi.fn(),
+      publishSourceBuild,
     });
     const workspaceService = services.find(({ name }) => name === "workerdWorkspace");
     expect(workspaceService).toBeDefined();
@@ -175,7 +184,7 @@ describe("workerd bootstrap policy", () => {
     onPushBuild?.("workers/example", publication, "build:test");
 
     await vi.waitFor(() =>
-      expect(onSourceRebuilt).toHaveBeenCalledWith(
+      expect(reconcileMutableSourceBuild).toHaveBeenCalledWith(
         "workers/example",
         [{ className: "ExampleDO" }],
         publication,

@@ -39,9 +39,7 @@ class AlarmProbeDO extends DurableObjectBase {
     const released = new Promise<void>((resolve) => {
       this.releaseDeferred = resolve;
     });
-    this.deferredOutbound = released.then(() =>
-      this.rpc.call("main", "probe.deferred", [])
-    );
+    this.deferredOutbound = released.then(() => this.rpc.call("main", "probe.deferred", []));
     this.ctx.waitUntil?.(this.deferredOutbound);
     return "deferred";
   }

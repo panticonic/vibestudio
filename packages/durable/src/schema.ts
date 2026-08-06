@@ -16,17 +16,21 @@ export interface ExactDurableObjectSchemaDefinition {
   readonly className: string;
   readonly version: number;
   readonly storage: DurableObjectSchemaStorage;
+  /** Tables and indexes owned by the durable-object implementation. */
+  readonly schemaTables?: readonly string[];
   createSchema(): void;
   validateSchema(): void;
 }
 
 const SCHEMA_TABLE = "_vibestudio_schema";
 
-function schemaShape(sql: SchemaSqlStorage): string {
+function schemaShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]): string {
+  const ownedTables =
+    schemaTables === undefined ? null : new Set(["state", ...schemaTables]);
   return JSON.stringify(
     sql
       .exec(
-        `SELECT type, name, sql FROM sqlite_master
+        `SELECT type, name, tbl_name, sql FROM sqlite_master
          WHERE type IN ('table', 'view', 'trigger')
            AND name NOT LIKE 'sqlite_%'
            AND name <> ?
@@ -35,10 +39,18 @@ function schemaShape(sql: SchemaSqlStorage): string {
         SCHEMA_TABLE
       )
       .toArray()
+      .filter((row) => {
+        if (!ownedTables) return true;
+        const name = String(row["name"]);
+        const table = String(row["tbl_name"] ?? "");
+        return ownedTables.has(name) || ownedTables.has(table);
+      })
       .map((row) => ({
         type: String(row["type"]),
         name: String(row["name"]),
-        sql: String(row["sql"] ?? "").replace(/\s+/g, " ").trim(),
+        sql: String(row["sql"] ?? "")
+          .replace(/\s+/g, " ")
+          .trim(),
       }))
   );
 }
@@ -53,7 +65,7 @@ function schemaShape(sql: SchemaSqlStorage): string {
 export function installExactDurableObjectSchema(
   definition: ExactDurableObjectSchemaDefinition
 ): void {
-  const { className, version, storage } = definition;
+  const { className, version, storage, schemaTables } = definition;
   if (!Number.isSafeInteger(version) || version < 1) {
     throw new Error(`${className} has invalid schema version ${version}`);
   }
@@ -73,7 +85,7 @@ export function installExactDurableObjectSchema(
       storage.sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
       definition.createSchema();
       definition.validateSchema();
-      const shape = schemaShape(storage.sql);
+      const shape = schemaShape(storage.sql, schemaTables);
       storage.sql.exec(`
         CREATE TABLE ${SCHEMA_TABLE} (
           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -115,7 +127,7 @@ export function installExactDurableObjectSchema(
       rows.length !== 1 ||
       Number(rows[0]!["singleton"]) !== 1 ||
       Number(rows[0]!["version"]) !== version ||
-      rows[0]!["shape_json"] !== schemaShape(storage.sql)
+      rows[0]!["shape_json"] !== schemaShape(storage.sql, schemaTables)
     ) {
       throw new Error(
         `${className} persisted schema does not match current version ${version}; recreate it explicitly`

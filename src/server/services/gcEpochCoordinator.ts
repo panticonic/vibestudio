@@ -8,7 +8,13 @@ import type { ExecutionPublicationJournal } from "../executionPublicationJournal
 
 export const DEFAULT_VCS_GC_MIN_AGE_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_VCS_GC_INTERVAL_MS = 60 * 60 * 1_000;
-export const DEFAULT_VCS_GC_INITIAL_DELAY_MS = 60_000;
+// Startup builds are on-demand and can still be materializing the shell,
+// extensions, and the first panel for several minutes. Running a full artifact
+// and content-store scan during that window competes with the interactive
+// startup path and can even delay small RPCs such as approval-list reads. GC is
+// maintenance, so give the workspace a quiet five-minute settling window
+// before its first sweep; subsequent sweeps remain hourly.
+export const DEFAULT_VCS_GC_INITIAL_DELAY_MS = 5 * 60_000;
 
 /**
  * Owns one GC epoch across the build-retention root snapshot and semantic
@@ -57,7 +63,7 @@ export class GcEpochCoordinator {
       const retention = buildPreparation.report;
       if (!retention.complete) {
         throw new Error(
-          `build retention root snapshot is incomplete (${retention.providerFailures.length} provider failure${retention.providerFailures.length === 1 ? "" : "s"})`
+          `build retention root snapshot is incomplete (${retention.providerFailures.length} provider failure${retention.providerFailures.length === 1 ? "" : "s"}, ${retention.unresolvedAuthoritativeRootBuildKeys.length} unresolved authoritative root${retention.unresolvedAuthoritativeRootBuildKeys.length === 1 ? "" : "s"})`
         );
       }
       if (retention.unresolvedAuthoritativeRootBuildKeys.length > 0) {

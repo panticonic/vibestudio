@@ -63,6 +63,16 @@ function makeBuildSystem(): BuildSystemV2 {
     gc: vi.fn(),
     getAboutPages: vi.fn(),
     hasUnit: vi.fn(),
+    listBuildUnits: vi.fn(async () => [
+      {
+        unitName: "@workspace-panels/hello-svelte",
+        unitPath: "panels/hello-svelte",
+        kind: "panel",
+        stateHash: "state:panel",
+        effectiveVersion: "ev-panel",
+        manifest: { title: "Hello Svelte" },
+      },
+    ]),
     getGraph: vi.fn(() => ({
       allNodes: () => [
         {
@@ -141,16 +151,19 @@ describe("build service extension diagnostics", () => {
   });
 
   it("resolves panel metadata by its public workspace source path", async () => {
-    const service = createBuildService({ buildSystem: makeBuildSystem(), listUnits: () => [] });
+    const buildSystem = makeBuildSystem();
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getPanelMetadata", [
         "panels/hello-svelte",
+        "ctx:feature",
       ])
     ).resolves.toMatchObject({
       source: "panels/hello-svelte",
       title: "Hello Svelte",
     });
+    expect(buildSystem.listBuildUnits).toHaveBeenCalledWith("ctx:feature", ["panel"]);
   });
 
   it("runs retention diagnostics without accepting caller-maintained roots", async () => {

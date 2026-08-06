@@ -8,9 +8,7 @@ import type {
   MissionStandingRestriction,
   MissionState,
 } from "@vibestudio/shared/authority/mission";
-import {
-  missionClosureDigest,
-} from "@vibestudio/shared/authority/mission";
+import { missionClosureDigest } from "@vibestudio/shared/authority/mission";
 import {
   compileMissionExposure,
   reviewedExecutionClosureDigest,
@@ -183,8 +181,7 @@ export class MissionsDO extends DurableObjectBase {
         name: input.name ?? `${current.name} (custom)`,
         charter: input.charter ?? current.charter,
         permissions: input.permissions ?? [...current.permissions],
-        standingRestrictions:
-          input.standingRestrictions ?? [...current.standingRestrictions],
+        standingRestrictions: input.standingRestrictions ?? [...current.standingRestrictions],
       });
     }
     if (current.owner.userId !== caller.userId) throw denied("Mission belongs to another user");
@@ -354,9 +351,7 @@ export class MissionsDO extends DurableObjectBase {
   @schemaRpc()
   async finishSession(input: { sessionId: string; runId: string; outcome: string }): Promise<void> {
     this.requireHost();
-    await this.rpc.call("main", "reviewedClosure.finishSession", [
-      { sessionId: input.sessionId },
-    ]);
+    await this.rpc.call("main", "reviewedClosure.finishSession", [{ sessionId: input.sessionId }]);
     this.sql.exec(
       `UPDATE mission_runs SET finished_at=?,outcome=?
        WHERE run_id=? AND session_id=? AND finished_at IS NULL`,
@@ -492,7 +487,8 @@ export class MissionsDO extends DurableObjectBase {
   }
 
   private requireHost(): void {
-    if (this.caller?.callerKind !== "server") throw denied("Mission session lifecycle is host-only");
+    if (this.caller?.callerKind !== "server")
+      throw denied("Mission session lifecycle is host-only");
   }
 
   private rowToMission(row: MissionRow): MissionRecord {
@@ -534,10 +530,7 @@ export class MissionsDO extends DurableObjectBase {
 }
 
 function isStandingPermission(permission: MissionPermission): boolean {
-  return (
-    permission.tier === "gated" &&
-    receiverAuthorityPolicy(permission.capability).missionGrant
-  );
+  return permission.tier === "gated" && receiverAuthorityPolicy(permission.capability).missionGrant;
 }
 
 function denied(message: string): Error {

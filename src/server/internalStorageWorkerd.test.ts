@@ -59,7 +59,7 @@ function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
     version: 1 as const,
     sourceState: {
       kind: "workspace" as const,
-      workspaceId: "workspace:test",
+      workspaceId: "workspace:internal-workerd-test",
       effectiveVersion: sha256(`ev:${source}:${ref}`),
       state: { kind: "event" as const, eventId: `event:${source}:${ref}` },
       contentRoots,
@@ -158,16 +158,23 @@ async function createWorkerdHarness(
     bindRuntimeImage: async (source: string, ref?: string) => {
       if (!getBuild) throw new Error("workspace builds are not used by internal DO tests");
       const build = await getBuild(source, ref);
-      const artifact = runtimeArtifact(source, ref ?? "main");
-      builds.set(artifact.buildKey, build);
+      if (!build.metadata.execution || !build.metadata.authority) {
+        throw new Error(`fixture build ${build.buildKey} has no sealed execution identity`);
+      }
+      const artifact = build.metadata.execution;
+      builds.set(build.buildKey, build);
       return {
         source,
         unitName: source,
         artifact,
-        authority: { requests: [], provides: [] },
+        authority: build.metadata.authority,
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
+    getBuildByExecution: (key: string, executionDigest: string) => {
+      const build = builds.get(key) ?? null;
+      return build?.metadata.execution?.executionDigest === executionDigest ? build : null;
+    },
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
@@ -268,12 +275,48 @@ async function createWorkerdHarness(
   );
   activeLoaderServers.push(loaderServer);
 
+  const sealedEntities = new Map<
+    string,
+    Parameters<WorkerdManager["restoreDurableObjectEntity"]>[0]
+  >();
+  const attachDurableObject = async (ref: DORef): Promise<void> => {
+    const targetId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+    let record = sealedEntities.get(targetId);
+    if (!record) {
+      const prepared = await manager.ensureDurableObjectEntity({
+        source: ref.source,
+        className: ref.className,
+        key: ref.objectKey,
+        contextId: `ctx:test:${sha256(targetId)}`,
+      });
+      record = {
+        id: prepared.targetId,
+        kind: "do",
+        source: {
+          repoPath: ref.source,
+          effectiveVersion: prepared.effectiveVersion,
+        },
+        activeBuildKey: prepared.buildKey,
+        activeExecutionDigest: prepared.executionDigest,
+        activeAuthority: prepared.authority,
+        contextId: `ctx:test:${sha256(targetId)}`,
+        className: ref.className,
+        key: ref.objectKey,
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+      };
+      sealedEntities.set(targetId, record);
+    }
+    await manager.restoreDurableObjectEntity(record);
+  };
+
   const callDurableObject = async (
     ref: DORef,
     method: string,
     ...args: unknown[]
   ): Promise<unknown> => {
-    await manager.ensureDO(ref.source, ref.className, ref.objectKey);
+    await attachDurableObject(ref);
     const port = manager.getPort();
     if (!port) throw new Error("workerd port is not available");
     return postToDurableObject(ref, method, args, {
@@ -287,11 +330,15 @@ async function createWorkerdHarness(
     });
   };
 
-  return { manager, tokenManager, callDurableObject };
+  return { manager, tokenManager, callDurableObject, attachDurableObject };
 }
 
-function createDODispatch(manager: WorkerdManager, tokenManager: TokenManager): DODispatch {
-  const dispatch = new DODispatch();
+function createDODispatch(
+  manager: WorkerdManager,
+  tokenManager: TokenManager,
+  ensureUserlandDoReady: (ref: DORef) => Promise<void>
+): DODispatch {
+  const dispatch = new DODispatch(ensureUserlandDoReady);
   dispatch.setTokenManager(tokenManager);
   dispatch.setGetWorkerdGatewayToken(() => manager.getWorkerdGatewayToken());
   dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
@@ -356,7 +403,10 @@ async function bundleWorker(
     format: "esm",
     write: false,
     conditions: ["worker", "browser"],
-    external: ["node:*", "electron"],
+    // Keep this direct fixture bundle aligned with the workerd worker builder:
+    // bare fs/path are resolved by the sandbox runtime, while node:* remains
+    // external for nodejs_compat.
+    external: ["node:*", "fs", "path", "electron"],
     logLevel: "silent",
   });
   return buildResult(
@@ -377,22 +427,24 @@ function buildResult(
   bundle: string,
   workspaceRpcCatalog: WorkspaceRpcMethodDoc[] = []
 ): BuildResult {
-  const buildKey = `build:${source}:${ev}`;
+  const execution = runtimeArtifact(source, ev);
+  const buildKey = execution.buildKey;
   return {
     dir: `/tmp/vibestudio-${ev}-build`,
     buildKey,
-    sourceStateHash: "state:test",
+    sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
     metadata: {
       kind: "worker",
       name: source,
       buildKey,
       sourcePath: source,
       ev,
-      sourceStateHash: "state:test",
+      sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
+      sourceState: execution.sourceState.state,
       sourcemap: false,
       authority: { requests: [], provides: [] },
       workspaceRpcCatalog,
-      execution: runtimeArtifact(source, ev),
+      execution,
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -428,7 +480,7 @@ describe("internal storage DOs under workerd", () => {
     await manager.registerAllDOClasses([
       { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
     ]);
-    const doDispatch = createDODispatch(manager, harness.tokenManager);
+    const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     const ref = {
       source: INTERNAL_DO_SOURCE,
       className: "BrowserDataDO",
@@ -537,7 +589,7 @@ describe("internal storage DOs under workerd", () => {
       },
     });
     manager = harness.manager;
-    const doDispatch = createDODispatch(manager, harness.tokenManager);
+    const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     await manager.registerAllDOClasses([
       { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
     ]);
@@ -755,7 +807,7 @@ describe("internal storage DOs under workerd", () => {
       },
     });
     manager = harness.manager;
-    const doDispatch = createDODispatch(manager, harness.tokenManager);
+    const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     const lifecycleDriver = new LifecycleDriver({
       workerdManager: manager,
       doDispatch,
@@ -851,7 +903,7 @@ describe("internal storage DOs under workerd", () => {
       },
     });
     manager = harness.manager;
-    const doDispatch = createDODispatch(manager, harness.tokenManager);
+    const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     const alarmDriver = new AlarmDriver({ doDispatch, workspaceId: "workspace-alarm" });
     const workspaceRef = {
       source: INTERNAL_DO_SOURCE,
@@ -944,7 +996,7 @@ describe("internal storage DOs under workerd", () => {
       },
     });
     manager = harness.manager;
-    doDispatch = createDODispatch(manager, harness.tokenManager);
+    doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     const channelRef = {
       source: "workers/pubsub-channel",
       className: "PubSubChannel",
@@ -955,8 +1007,8 @@ describe("internal storage DOs under workerd", () => {
       { source: WORKSPACE_SOURCE_PROVIDER.source, className: "GadWorkspaceDO" },
       { source: channelRef.source, className: channelRef.className },
     ]);
-    await manager.ensureDO(gadRef.source, gadRef.className, gadRef.objectKey);
-    await manager.ensureDO(channelRef.source, channelRef.className, channelRef.objectKey);
+    await harness.attachDurableObject(gadRef);
+    await harness.attachDurableObject(channelRef);
 
     await expect(doDispatch.dispatchAlarm(channelRef)).resolves.toEqual({ nextAlarm: null });
   }, 30_000);
@@ -1006,7 +1058,7 @@ describe("internal storage DOs under workerd", () => {
       },
     });
     manager = harness.manager;
-    doDispatch = createDODispatch(manager, harness.tokenManager);
+    doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     const channelRef = {
       source: "workers/pubsub-channel",
       className: "PubSubChannel",
@@ -1017,8 +1069,8 @@ describe("internal storage DOs under workerd", () => {
       { source: WORKSPACE_SOURCE_PROVIDER.source, className: "GadWorkspaceDO" },
       { source: channelRef.source, className: channelRef.className },
     ]);
-    await manager.ensureDO(gadRef.source, gadRef.className, gadRef.objectKey);
-    await manager.ensureDO(channelRef.source, channelRef.className, channelRef.objectKey);
+    await harness.attachDurableObject(gadRef);
+    await harness.attachDurableObject(channelRef);
 
     const controller = new AbortController();
     let response: Response | null = null;
@@ -1153,6 +1205,7 @@ describe("internal storage DOs under workerd", () => {
     await harness.callDurableObject(ref, "panelIndex", {
       id: "slot-alpha",
       title: "Alpha chat panel",
+      path: "about/browser-import-inspector",
       manifestDescription: "primary chat workspace",
       keywords: ["chat", "alpha"],
     });
@@ -1170,6 +1223,12 @@ describe("internal storage DOs under workerd", () => {
     expect(matches.map((m) => m.id)).toContain("slot-alpha");
     expect(matches.find((m) => m.id === "slot-alpha")?.title).toBe("Alpha chat panel");
     expect(matches.find((m) => m.id === "slot-beta")).toBeUndefined();
+
+    const treeMatches = (await harness.callDurableObject(ref, "panelTreeSearch", {
+      query: "browser-import-inspector",
+      limit: 10,
+    })) as { hits: Array<{ node: { slotId: string } }> };
+    expect(treeMatches.hits.map((hit) => hit.node.slotId)).toEqual(["slot-alpha"]);
   }, 30_000);
 
   it("supports BrowserDataDO history FTS5 search in real workerd storage", async () => {

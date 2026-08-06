@@ -44,8 +44,13 @@ import {
 import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
 import { destroyWorkerdConnections, getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
+import {
+  RUNTIME_IMAGE_UNAVAILABLE_ERROR_CODE,
+  RUNTIME_IMAGE_WARMING_ERROR_CODE,
+} from "./runtimeReadinessError.js";
 
 const log = createDevLogger("WorkerdManager");
 /** uniqueKey of the single static namespace that hosts all userland DO facets.
@@ -57,11 +62,11 @@ declare const __filename: string | undefined;
 declare const __dirname: string | undefined;
 
 export class RuntimeImageWarmingError extends Error {
-  readonly code = "RUNTIME_IMAGE_WARMING" as const;
+  readonly code = RUNTIME_IMAGE_WARMING_ERROR_CODE;
 }
 
 export class RuntimeImageUnavailableError extends Error {
-  readonly code = "RUNTIME_IMAGE_UNAVAILABLE" as const;
+  readonly code = RUNTIME_IMAGE_UNAVAILABLE_ERROR_CODE;
 }
 
 /** Diagnostic env vars forwarded from the host process into every worker's
@@ -176,6 +181,22 @@ function stableHash(value: unknown): string {
   return crypto.createHash("sha256").update(stableJson(value)).digest("hex").slice(0, 16);
 }
 
+function runtimeIncarnationVersion(
+  image: RuntimeImageRecord,
+  stateArgs?: Record<string, unknown>
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      canonicalJson({
+        executionDigest: image.artifact.executionDigest,
+        authority: image.authority,
+        stateArgs: stateArgs ?? null,
+      })
+    )
+    .digest("hex");
+}
+
 function doServiceKey(source: string, className: string): string {
   return `${source}:${className}`;
 }
@@ -188,10 +209,31 @@ export interface RestartBeginEvent {
   correlationId: string;
   generation: number;
   reason: string;
+  /**
+   * Aborted when crash recovery preempts this graceful preparation. Prep is
+   * advisory — the process is being replaced either way — so hooks should
+   * stop dispatching into the old generation as soon as this fires.
+   */
+  signal?: AbortSignal;
 }
 
-export interface RestartReadyEvent extends RestartBeginEvent {
+export interface RestartReadyEvent {
+  correlationId: string;
+  generation: number;
+  reason: string;
   previousGeneration: number | null;
+}
+
+/**
+ * In-process notification that the current workerd generation is closing.
+ * Runs for BOTH planned and crash transitions (and idle stops). Hooks must be
+ * purely in-process (drop relay URLs, close inspector bridges, …) and must
+ * NEVER dispatch into workerd — the process may already be gone.
+ */
+export interface GenerationClosingEvent {
+  correlationId: string;
+  generation: number;
+  reason: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +344,8 @@ export interface WorkerdManagerDeps {
   getWorkerdGatewayToken: () => string;
   /** Override for tests; production uses the default router readiness window. */
   workerdStartupReadyTimeoutMs?: number;
+  /** Overrides for tests; production uses the default SIGTERM/SIGKILL windows. */
+  workerdStopTimeoutsMs?: { sigtermMs?: number; sigkillMs?: number };
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
   resourceHandleLifecycle?: {
     reconcileProviderDefinitions(
@@ -319,6 +363,8 @@ export interface WorkerdManagerDeps {
   recordLifecycleEvent?: (event: {
     source: string;
     callerId: string;
+    entityId?: string;
+    kind?: "worker" | "do";
     level: "info" | "error";
     message: string;
     fields?: Record<string, unknown>;
@@ -334,6 +380,8 @@ export interface WorkerdManagerDeps {
 export interface WorkerdWorkspaceProvider {
   bindRuntimeImage(unitPath: string, ref?: string): Promise<RuntimeImageBinding>;
   getBuildByKey(key: string): BuildResult | null;
+  /** Resolve the exact retained execution named by a sealed durable entity. */
+  getBuildByExecution(key: string, executionDigest: string): BuildResult | null;
   getManifestRoutes(source: string): ReadonlyArray<ManifestRouteDecl>;
   getManifestDoClasses(source: string): ReadonlyArray<{ className: string }>;
   readonly singletonRegistry: SingletonRegistry;
@@ -343,6 +391,35 @@ export interface WorkerdWorkspaceProvider {
 export type WorkerdStage = "control-plane" | "workspace";
 
 type ResolvedWorkerdManagerDeps = WorkerdManagerDeps;
+
+type WorkerdRestartRequest =
+  | { kind: "planned" }
+  | { kind: "crash"; reason: string; alreadyExited: boolean }
+  | { kind: "stop-if-idle" };
+
+type GenerationTransitionState = "preparing" | "stopping" | "reaping" | "starting";
+
+/**
+ * One run of the generation-transition owner. Exactly one exists at a time
+ * (`activeTransition`); every process stop or start happens inside it. The
+ * run's lifecycle is: idle → preparing → stopping → reaping → starting →
+ * ready | failed, with the preemption rule that a crash request aborts a
+ * planned run's "preparing" phase and escalates the run to crash kind.
+ */
+interface GenerationTransition {
+  correlationId: string;
+  kind: "planned" | "crash" | "stop-if-idle";
+  state: GenerationTransitionState;
+  reason: string;
+  alreadyExited: boolean;
+  /** Fired when a crash request preempts this run's graceful preparation. */
+  prepAbort: AbortController;
+  /** Highest requested epoch this run has consumed (it may grow at re-drain). */
+  covered: number;
+  failed: boolean;
+  error: unknown;
+  promise: Promise<void>;
+}
 
 /** The canonical regular-worker instance name for a source. Matches the
  *  sanitization that startWorker applies to the entity key. */
@@ -382,7 +459,9 @@ export class WorkerdManager {
   // storm (N failed relays ⇒ N racing restarts) that fed the server OOM.
   private requestedEpoch = 0;
   private appliedEpoch = 0;
-  private restartRunning: Promise<void> | null = null;
+  /** The single generation-transition owner run currently in flight, if any. */
+  private activeTransition: GenerationTransition | null = null;
+  private readonly restartRequests = new Map<number, WorkerdRestartRequest>();
   /** Permanently closes process-start admission once shutdown begins. */
   private shuttingDown = false;
   /** Coalesces host watchdogs that observe the same unresponsive workerd. */
@@ -391,13 +470,22 @@ export class WorkerdManager {
   private port: number | null = null;
   private inspectorPort: number | null = null;
   private deps: ResolvedWorkerdManagerDeps;
+  /** Derived exact DO attachments. WorkspaceDO entity rows are their durable owner. */
+  private readonly sealedDoImages = new Map<string, RuntimeImageRecord>();
   private readonly runtimeImages: RuntimeImageStore;
   private readonly runtimeImageRebinds = new Map<string, Promise<void>>();
+  /** Derived lookup index keyed by immutable build objects; entries disappear with the build. */
+  private readonly workspaceRpcCatalogIndexes = new WeakMap<
+    BuildResult,
+    ReadonlyMap<string, WorkspaceRpcMethodDoc>
+  >();
   private workerdBinary: string | null = null;
   private lastWorkerdStartupOutput: string[] = [];
   private workerdStartedAtMs: number | null = null;
   private workerdMemorySampleTimer: ReturnType<typeof setInterval> | null = null;
+  private workerdMemorySamplePid: number | null = null;
   private lastWorkerdRssBytes: number | null = null;
+  private workerdRssSamples: Array<{ at: number; rssBytes: number }> = [];
 
   // DO support: shared services (one per source)
   /** Shared DO services — keyed by `${source}:${className}`. Source-scoped: two workers CAN have same className if different source. */
@@ -411,6 +499,9 @@ export class WorkerdManager {
   private readonly bootGenerationFile: string;
   private restartBeginHooks = new Set<(event: RestartBeginEvent) => Promise<void> | void>();
   private restartReadyHooks = new Set<(event: RestartReadyEvent) => Promise<void> | void>();
+  private generationClosingHooks = new Set<
+    (event: GenerationClosingEvent) => Promise<void> | void
+  >();
   /** Per-manager secret required by the generated router for direct DO dispatch. */
   private readonly dispatchSecret = crypto.randomBytes(32).toString("hex");
   /** Per-process secret gating the loopback `/_workercode` + `/_workerversion`
@@ -439,7 +530,7 @@ export class WorkerdManager {
     return this.workspaceProvider ? "workspace" : "control-plane";
   }
 
-  /** Durable runtime images whose immutable artifacts must remain resolvable. */
+  /** Persisted mutable selectors whose immutable artifacts must remain resolvable. */
   listRuntimeImages(): RuntimeImageRecord[] {
     return this.runtimeImages.list();
   }
@@ -525,7 +616,8 @@ export class WorkerdManager {
     instance.codeVersion = Math.max(instance.codeVersion + 1, generation ?? 0);
   }
 
-  private getRuntimeImageBuild(
+  /** Resolve a mutable selector. Missing CAS content schedules a rebuild from its tracked scope. */
+  private getMutableRuntimeImageBuild(
     imageId: string,
     onRebound?: (record: RuntimeImageRecord) => void
   ): { image: RuntimeImageRecord; build: BuildResult } {
@@ -547,6 +639,28 @@ export class WorkerdManager {
     throw new RuntimeImageWarmingError(
       `Runtime image ${imageId} points at missing artifact ${image.artifact.buildKey}; warming`
     );
+  }
+
+  /** Resolve an exact durable incarnation. It can never be rebuilt from a mutable selector. */
+  private getSealedRuntimeImageBuild(imageId: string): {
+    image: RuntimeImageRecord;
+    build: BuildResult;
+  } {
+    const image = this.sealedDoImages.get(imageId);
+    if (!image) {
+      throw new RuntimeImageUnavailableError(`Sealed runtime image is not attached: ${imageId}`);
+    }
+    const provider = this.requireWorkspaceProvider("sealed runtime image loading");
+    const build = provider.getBuildByExecution(
+      image.artifact.buildKey,
+      image.artifact.executionDigest
+    );
+    if (!build) {
+      throw new RuntimeImageUnavailableError(
+        `Sealed runtime image ${imageId} is missing artifact ${image.artifact.buildKey}`
+      );
+    }
+    return { image, build };
   }
 
   private scheduleRuntimeImageRebind(
@@ -800,46 +914,129 @@ export class WorkerdManager {
     if (!record.activeBuildKey || !record.activeExecutionDigest || !record.activeAuthority) {
       throw new Error(`Durable Object ${record.id} has no sealed active execution identity`);
     }
-    const internalImageId = `do-service:${doServiceKey(record.source.repoPath, record.className)}`;
-    const persistedImage =
-      this.runtimeImages.get(record.id) ??
-      (isInternalDOSource(record.source.repoPath) ? this.runtimeImages.get(internalImageId) : null);
-    if (!persistedImage) {
-      throw new Error(`Durable Object ${record.id} has no persisted runtime image`);
-    }
-    if (
-      persistedImage.artifact.buildKey !== record.activeBuildKey ||
-      persistedImage.artifact.executionDigest !== record.activeExecutionDigest ||
-      persistedImage.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
-      JSON.stringify(persistedImage.authority) !== JSON.stringify(record.activeAuthority)
-    ) {
-      throw new Error(
-        `Durable Object ${record.id} has a persisted runtime image that does not match its sealed active execution identity`
-      );
-    }
-
     if (isInternalDOSource(record.source.repoPath)) {
+      // Internal classes execute in their host-bundle service. The entity
+      // ledger seals that service identity directly; it does not need a second
+      // object-shaped runtime-image record that can drift from the service.
+      const identity = internalDOExecutionIdentity(this.internalDOBundle(), record.className);
+      if (
+        identity.artifact.buildKey !== record.activeBuildKey ||
+        identity.artifact.executionDigest !== record.activeExecutionDigest ||
+        identity.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
+        canonicalJson(identity.authority) !== canonicalJson(record.activeAuthority)
+      ) {
+        throw new RuntimeImageUnavailableError(
+          `Internal Durable Object ${record.id} does not match its sealed host service identity`
+        );
+      }
       await this.ensureDOClass(record.source.repoPath, record.className, {
         objectKey: record.key,
-        imageId: record.id,
         stateArgs: record.stateArgs,
       });
-    } else {
-      this.restoreSealedUserlandDOClass(record, persistedImage);
-      await this.ensureWorkerdRunning();
+      return;
     }
 
-    const restored = this.runtimeImages.get(record.id) ?? persistedImage;
+    const provider = this.requireWorkspaceProvider("sealed runtime image restoration");
+    const build = provider.getBuildByExecution(record.activeBuildKey, record.activeExecutionDigest);
+    if (
+      !build ||
+      build.metadata.kind !== "worker" ||
+      build.metadata.sourcePath !== record.source.repoPath
+    ) {
+      this.recordDurableObjectImageEvent(
+        record,
+        "error",
+        "runtime-image-unavailable",
+        "Sealed Durable Object image is unavailable",
+        "missing"
+      );
+      throw new RuntimeImageUnavailableError(
+        `Durable Object ${record.id} is missing its sealed build artifact ${record.activeBuildKey}`
+      );
+    }
+    const artifact = executionArtifactRefFromBuild(this.deps.workspaceId, build);
+    if (
+      artifact.executionDigest !== record.activeExecutionDigest ||
+      artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
+      canonicalJson(build.metadata.authority) !== canonicalJson(record.activeAuthority)
+    ) {
+      this.recordDurableObjectImageEvent(
+        record,
+        "error",
+        "runtime-image-unavailable",
+        "Sealed Durable Object image failed identity verification",
+        "identity-mismatch"
+      );
+      throw new RuntimeImageUnavailableError(
+        `Durable Object ${record.id} build ${record.activeBuildKey} does not reproduce its sealed execution identity`
+      );
+    }
+    const previous = this.sealedDoImages.get(record.id) ?? this.runtimeImages.get(record.id);
+    const sameIncarnation =
+      previous?.artifact.executionDigest === artifact.executionDigest &&
+      canonicalJson(previous.authority) === canonicalJson(record.activeAuthority);
+    const sealedImage: RuntimeImageRecord = {
+      id: record.id,
+      source: record.source.repoPath,
+      unitName: build.metadata.name,
+      artifact,
+      authority: record.activeAuthority,
+      generation: sameIncarnation ? previous!.generation : (previous?.generation ?? 0) + 1,
+      updatedAt: Date.now(),
+      ...(previous?.scopeRef ? { scopeRef: previous.scopeRef } : {}),
+    };
+    this.sealedDoImages.set(record.id, sealedImage);
+    // Preparation may have persisted a selector for this id. Once the entity
+    // commit succeeds it is derived state and must not remain a second owner.
+    this.runtimeImages.delete(record.id);
+    this.restoreSealedUserlandDOClass(record, sealedImage);
+    await this.ensureWorkerdRunning();
+
+    const restored = this.sealedDoImages.get(record.id);
+    if (!restored) throw new Error(`Durable Object ${record.id} did not attach a runtime image`);
     if (
       restored.artifact.buildKey !== record.activeBuildKey ||
       restored.artifact.executionDigest !== record.activeExecutionDigest ||
       restored.artifact.sourceState.effectiveVersion !== record.source.effectiveVersion ||
-      JSON.stringify(restored.authority) !== JSON.stringify(record.activeAuthority)
+      canonicalJson(restored.authority) !== canonicalJson(record.activeAuthority)
     ) {
       throw new Error(
         `Durable Object ${record.id} could not restore its sealed active execution identity`
       );
     }
+    this.recordDurableObjectImageEvent(
+      record,
+      "info",
+      "runtime-image-attached",
+      "Sealed Durable Object image attached",
+      "retained",
+      { generation: restored.generation }
+    );
+  }
+
+  private recordDurableObjectImageEvent(
+    record: EntityRecord,
+    level: "info" | "error",
+    event: string,
+    message: string,
+    retentionState: string,
+    fields: Record<string, unknown> = {}
+  ): void {
+    this.deps.recordLifecycleEvent?.({
+      source: record.source.repoPath,
+      callerId: record.id,
+      entityId: record.id,
+      kind: "do",
+      level,
+      message,
+      fields: {
+        event,
+        retentionState,
+        buildKey: record.activeBuildKey,
+        executionDigest: record.activeExecutionDigest,
+        ...fields,
+      },
+    });
   }
 
   /**
@@ -859,11 +1056,8 @@ export class WorkerdManager {
     if (sourceSegments.length !== 2) {
       throw new Error(`DO source path must be exactly 2 segments, got: "${source}"`);
     }
-    if (
-      !this.requireWorkspaceProvider("sealed runtime image restoration").getBuildByKey(
-        image.artifact.buildKey
-      )
-    ) {
+    const provider = this.requireWorkspaceProvider("sealed runtime image restoration");
+    if (!provider.getBuildByExecution(image.artifact.buildKey, image.artifact.executionDigest)) {
       throw new RuntimeImageUnavailableError(
         `Durable Object ${record.id} is missing its sealed build artifact ${image.artifact.buildKey}`
       );
@@ -876,10 +1070,8 @@ export class WorkerdManager {
       service = {
         buildKey: image.artifact.buildKey,
         className,
-        imageId: image.id,
         serviceName: `do_${sourceSanitized}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`,
         source,
-        ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
       };
       this.doServices.set(serviceKey, service);
       this.registerRoutesForDoClass(source, className);
@@ -1023,6 +1215,7 @@ export class WorkerdManager {
         fields: {
           event: "worker-started",
           buildKey: image.artifact.buildKey,
+          executionDigest: image.artifact.executionDigest,
           generation: image.generation,
           effectiveVersion: image.artifact.sourceState.effectiveVersion,
         },
@@ -1202,9 +1395,27 @@ export class WorkerdManager {
     this.revokeWorkerBearer(targetId);
     this.deps.fsService.closeHandlesForCaller(targetId);
     await this.deps.cleanupWebhookSubscriptions?.(targetId);
+    const removedImage = this.sealedDoImages.get(targetId) ?? this.runtimeImages.get(targetId);
     this.runtimeImages.delete(targetId);
+    this.sealedDoImages.delete(targetId);
     for (const [key, objectBuild] of Array.from(this.doObjectBuilds.entries())) {
       if (objectBuild.imageId === targetId) this.doObjectBuilds.delete(key);
+    }
+    if (removedImage) {
+      this.deps.recordLifecycleEvent?.({
+        source: ref.source,
+        callerId: targetId,
+        entityId: targetId,
+        kind: "do",
+        level: "info",
+        message: "Durable Object runtime image evicted",
+        fields: {
+          event: "runtime-image-evicted",
+          retentionState: "released",
+          buildKey: removedImage.artifact.buildKey,
+          executionDigest: removedImage.artifact.executionDigest,
+        },
+      });
     }
     if (abortError) throw abortError;
   }
@@ -1238,15 +1449,35 @@ export class WorkerdManager {
    * router are static, so worker lifecycle never needs a restart.
    */
   private async ensureWorkerdRunning(): Promise<void> {
-    if (this.process && this.process.exitCode === null) return;
-    await this.restartWorkerd();
+    for (;;) {
+      if (this.process && this.process.exitCode === null) return;
+      // A generation transition is already in flight (or queued): joining it is
+      // mandatory. Minting a fresh restart epoch here would race the stop→spawn
+      // window and force a needless second full restart cycle.
+      const running = this.activeTransition;
+      if (running) {
+        await running.promise.catch(() => {});
+        if (running.failed) throw running.error;
+        continue;
+      }
+      if (this.appliedEpoch < this.requestedEpoch) {
+        await this.ensureRestartAtLeast(this.requestedEpoch);
+        continue;
+      }
+      await this.restartWorkerd();
+      return;
+    }
   }
 
-  /** Stop workerd only when no workers and no DO services remain to serve. */
+  /**
+   * Stop workerd only when no workers and no DO services remain to serve.
+   * Routed through the generation-transition owner — NO process stop happens
+   * outside it — so an idle stop serializes with (and is subsumed by) any
+   * concurrent planned or crash transition.
+   */
   private async stopWorkerdIfIdle(): Promise<void> {
-    if (this.instances.size === 0 && this.doServices.size === 0) {
-      await this.stopWorkerd("idle");
-    }
+    if (this.instances.size > 0 || this.doServices.size > 0) return;
+    await this.restartWorkerd({ kind: "stop-if-idle" });
   }
 
   async updateInstance(
@@ -1352,6 +1583,29 @@ export class WorkerdManager {
   }
 
   /**
+   * In-process generation-closing hooks: run for planned AND crash transitions
+   * (and idle stops), right before the old process is stopped. Hooks must not
+   * dispatch into workerd. Failures are logged, never propagated — closing the
+   * old generation cannot be vetoed.
+   */
+  onGenerationClosing(fn: (event: GenerationClosingEvent) => Promise<void> | void): () => void {
+    this.generationClosingHooks.add(fn);
+    return () => this.generationClosingHooks.delete(fn);
+  }
+
+  /**
+   * True while the generation-transition owner is replacing workerd AND the
+   * old generation is no longer dispatchable (stopping/reaping/starting).
+   * Deliberately false during graceful "preparing": prep hooks must still be
+   * able to dispatch into the live old generation.
+   */
+  isGenerationTransitionInFlight(): boolean {
+    return (
+      this.activeTransition !== null && !(this.process !== null && this.process.exitCode === null)
+    );
+  }
+
+  /**
    * Recover an unresponsive sandbox without first asking workerd-hosted
    * lifecycle targets to prepare. A synchronous unsafe-eval loop prevents
    * those RPCs from running, so graceful restart would deadlock before it
@@ -1375,23 +1629,8 @@ export class WorkerdManager {
 
   private async recoverSandbox(reason: string, alreadyExited: boolean): Promise<void> {
     if (this.unresponsiveRecovery) return this.unresponsiveRecovery;
-    const recovery = (async () => {
-      const correlationId = crypto.randomUUID();
-      const previousGeneration = this.bootGeneration === 0 ? null : this.bootGeneration;
-      log.error(`recovering unresponsive workerd sandbox: ${reason}`);
-      if (alreadyExited) {
-        await destroyWorkerdConnections(`workerd process generation crashed: ${reason}`);
-      } else {
-        await this.stopWorkerd(`unresponsive-sandbox:${reason}`);
-      }
-      await this.restartWorkerd();
-      await this.emitRestartReady({
-        correlationId,
-        generation: this.bootGeneration,
-        previousGeneration,
-        reason: "crash",
-      });
-    })();
+    log.error(`recovering unresponsive workerd sandbox: ${reason}`);
+    const recovery = this.restartWorkerd({ kind: "crash", reason, alreadyExited });
     this.unresponsiveRecovery = recovery;
     try {
       await recovery;
@@ -1440,7 +1679,7 @@ export class WorkerdManager {
     const instance = this.instances.get(name);
     if (!instance) return null;
 
-    const { image, build: buildResult } = this.getRuntimeImageBuild(
+    const { image, build: buildResult } = this.getMutableRuntimeImageBuild(
       instance.runtimeImageId,
       (record) => {
         instance.buildKey = record.artifact.buildKey;
@@ -1527,20 +1766,33 @@ export class WorkerdManager {
     if (objectKey) {
       const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
       if (objectBuild) {
-        const image = this.runtimeImages.get(objectBuild.imageId);
-        const version = image ? String(image.generation) : objectBuild.buildKey;
-        return objectBuild.stateArgs
-          ? `${version}:state:${stableHash(objectBuild.stateArgs)}`
-          : version;
+        const image = this.sealedDoImages.get(objectBuild.imageId);
+        return image
+          ? runtimeIncarnationVersion(image, objectBuild.stateArgs)
+          : objectBuild.stateArgs
+            ? `${objectBuild.buildKey}:state:${stableHash(objectBuild.stateArgs)}`
+            : objectBuild.buildKey;
       }
     }
     const svc = this.doServices.get(doServiceKey(source, className));
     if (!svc || isInternalDOSource(source)) return null;
     const image = svc.imageId ? this.runtimeImages.get(svc.imageId) : null;
-    return image ? String(image.generation) : svc.buildKey;
+    return image ? runtimeIncarnationVersion(image) : svc.buildKey;
   }
 
   /** Resolve a userland DO method from the exact build bound to this object. */
+  private workspaceRpcCatalogIndex(build: BuildResult): ReadonlyMap<string, WorkspaceRpcMethodDoc> {
+    const cached = this.workspaceRpcCatalogIndexes.get(build);
+    if (cached) return cached;
+    const index = new Map<string, WorkspaceRpcMethodDoc>();
+    for (const declaration of build.metadata.workspaceRpcCatalog ?? []) {
+      const key = `${declaration.className}\0${declaration.name}`;
+      if (!index.has(key)) index.set(key, declaration);
+    }
+    this.workspaceRpcCatalogIndexes.set(build, index);
+    return index;
+  }
+
   resolveDoRpcMethodAuthority(
     source: string,
     className: string,
@@ -1559,10 +1811,7 @@ export class WorkerdManager {
     if (!buildKey) return null;
     const build = this.requireWorkspaceProvider("direct DO authority").getBuildByKey(buildKey);
     if (!build || build.metadata.kind !== "worker") return null;
-    const declaration =
-      build.metadata.workspaceRpcCatalog?.find(
-        (entry) => entry.className === className && entry.name === method
-      ) ?? null;
+    const declaration = this.workspaceRpcCatalogIndex(build).get(`${className}\0${method}`) ?? null;
     return declaration && build.metadata.execution?.executionDigest
       ? {
           ...declaration,
@@ -1597,19 +1846,13 @@ export class WorkerdManager {
 
     const objectBuildKey = objectKey ? doObjectBuildKey(source, className, objectKey) : null;
     const objectBuild = objectBuildKey ? this.doObjectBuilds.get(objectBuildKey) : undefined;
-    const imageId = objectBuild?.imageId ?? svc.imageId;
-    if (!imageId) return null;
-    const { image, build: buildResult } = this.getRuntimeImageBuild(imageId, (record) => {
-      if (objectBuildKey && objectBuild) {
-        this.doObjectBuilds.set(objectBuildKey, {
-          ...objectBuild,
-          buildKey: record.artifact.buildKey,
-        });
-      } else {
-        svc.buildKey = record.artifact.buildKey;
-      }
-      this.registerDoEgressCaller(source, className, record, objectKey);
-    });
+    const resolved = objectBuild
+      ? this.getSealedRuntimeImageBuild(objectBuild.imageId)
+      : svc.imageId
+        ? this.getMutableRuntimeImageBuild(svc.imageId)
+        : null;
+    if (!resolved) return null;
+    const { image, build: buildResult } = resolved;
     if (objectBuildKey && objectBuild) {
       this.doObjectBuilds.set(objectBuildKey, {
         ...objectBuild,
@@ -2064,57 +2307,199 @@ export class WorkerdManager {
   // =========================================================================
 
   /**
-   * Coalesced restart. Concurrent callers share one in-flight restart; a config
-   * change made during a restart triggers at most one follow-up. Errors
-   * propagate to all current waiters (no infinite retry loop).
+   * Coalesced generation transition. Concurrent callers share one in-flight
+   * run; a config change made during a run triggers at most one follow-up.
+   * A run's failure propagates only to callers whose epoch that run actually
+   * covered — waiters whose request was never attempted survive it and get
+   * their own attempt (so a queued crash recovery is never lost to another
+   * caller's failed restart).
    */
-  private restartWorkerd(): Promise<void> {
+  private restartWorkerd(request: WorkerdRestartRequest = { kind: "planned" }): Promise<void> {
     if (this.shuttingDown) {
       return Promise.reject(new Error("WorkerdManager is shutting down"));
     }
     const myEpoch = ++this.requestedEpoch;
+    this.restartRequests.set(myEpoch, request);
+    // Preemption rule: crash recovery must never queue behind a hung graceful
+    // prepare. Prep is advisory — the process is being replaced either way.
+    if (request.kind === "crash") this.preemptPreparingTransition(request.reason);
     return this.ensureRestartAtLeast(myEpoch);
+  }
+
+  private preemptPreparingTransition(reason: string): void {
+    const transition = this.activeTransition;
+    if (transition && transition.kind === "planned" && transition.state === "preparing") {
+      transition.prepAbort.abort(
+        new Error(`crash recovery preempted graceful workerd prepare: ${reason}`)
+      );
+    }
   }
 
   private async ensureRestartAtLeast(epoch: number): Promise<void> {
     while (this.appliedEpoch < epoch) {
       if (this.shuttingDown) return;
-      if (this.restartRunning) {
-        await this.restartRunning;
+      const running = this.activeTransition;
+      if (running) {
+        // Never inherit another run's rejection unguarded: only a run that
+        // actually covered this epoch owes this caller its failure.
+        await running.promise.catch(() => {});
+        if (running.failed && running.covered >= epoch) throw running.error;
         continue;
       }
-      // Snapshot the highest requested epoch; the config generated below reads
-      // the latest doServices/instances, so it covers at least this epoch.
-      const applying = this.requestedEpoch;
-      this.restartRunning = this._restartWorkerdInner();
-      try {
-        await this.restartRunning;
-      } finally {
-        this.restartRunning = null;
-      }
-      this.appliedEpoch = Math.max(this.appliedEpoch, applying);
+      const transition = this.startGenerationTransition();
+      await transition.promise.catch(() => {});
+      if (transition.failed && transition.covered >= epoch) throw transition.error;
     }
   }
 
-  private async _restartWorkerdInner(): Promise<void> {
+  /**
+   * Become the generation-transition owner. Consumes queued restart requests
+   * (they are deleted regardless of outcome — a failed run must not leak them
+   * into misclassifying the next planned restart as a crash), classifies the
+   * run (crash > planned > stop-if-idle), and starts the owner run.
+   */
+  private startGenerationTransition(): GenerationTransition {
+    const requests = this.consumeQueuedRequests();
+    const crash = [...requests].reverse().find((request) => request.kind === "crash");
+    const onlyStopIfIdle =
+      requests.length > 0 && requests.every((request) => request.kind === "stop-if-idle");
+    const transition: GenerationTransition = {
+      correlationId: crypto.randomUUID(),
+      kind: crash ? "crash" : onlyStopIfIdle ? "stop-if-idle" : "planned",
+      state: "preparing",
+      reason: crash ? crash.reason : onlyStopIfIdle ? "idle" : "planned-restart",
+      alreadyExited: crash?.alreadyExited ?? false,
+      prepAbort: new AbortController(),
+      covered: this.requestedEpoch,
+      failed: false,
+      error: undefined,
+      promise: Promise.resolve(),
+    };
+    this.activeTransition = transition;
+    transition.promise = (async () => {
+      try {
+        await this._runGenerationTransition(transition);
+        // Success applies every epoch the run consumed, including any absorbed
+        // at the stopping-step re-drain after a crash preemption.
+        this.appliedEpoch = Math.max(this.appliedEpoch, transition.covered);
+      } catch (err) {
+        transition.failed = true;
+        transition.error = err;
+        throw err;
+      } finally {
+        if (this.activeTransition === transition) this.activeTransition = null;
+      }
+    })();
+    // The owner loop and every waiter attach their own catch; keep the raw
+    // promise from surfacing as an unhandled rejection in the interim.
+    transition.promise.catch(() => {});
+    return transition;
+  }
+
+  /** Drain queued requests up to the current requested epoch (per-attempt). */
+  private consumeQueuedRequests(): WorkerdRestartRequest[] {
+    const applying = this.requestedEpoch;
+    const consumed: WorkerdRestartRequest[] = [];
+    for (const [requestEpoch, request] of [...this.restartRequests.entries()].sort(
+      ([a], [b]) => a - b
+    )) {
+      if (requestEpoch > applying) continue;
+      consumed.push(request);
+      this.restartRequests.delete(requestEpoch);
+    }
+    return consumed;
+  }
+
+  /**
+   * The one owner run: preparing → stopping → reaping → starting. No process
+   * stop or start happens outside this method (and terminal `shutdown()`,
+   * which first closes admission and quiesces the owner).
+   */
+  private async _runGenerationTransition(transition: GenerationTransition): Promise<void> {
     if (this.shuttingDown) return;
-    const correlationId = crypto.randomUUID();
     const previousGeneration = this.bootGeneration === 0 ? null : this.bootGeneration;
     const nextGeneration = this.bootGeneration + 1;
     const hadRunningProcess = this.process !== null;
-    if (hadRunningProcess) {
-      await this.emitRestartBegin({
-        correlationId,
+
+    // ── stop-if-idle: a pure stop transition; re-check idleness under the
+    // owner (an instance/DO registered while queued wins — no stop).
+    if (transition.kind === "stop-if-idle") {
+      if (this.instances.size > 0 || this.doServices.size > 0) return;
+      transition.state = "stopping";
+      if (hadRunningProcess) {
+        await this.emitGenerationClosing({
+          correlationId: transition.correlationId,
+          generation: nextGeneration,
+          reason: "idle",
+        });
+      }
+      await this.stopWorkerd("idle");
+      return;
+    }
+
+    // ── preparing (planned only; prep hooks may dispatch into workerd) ──
+    let prepDegraded = false;
+    if (transition.kind === "planned" && hadRunningProcess) {
+      transition.state = "preparing";
+      const outcome = await this.emitRestartBegin(
+        {
+          correlationId: transition.correlationId,
+          generation: nextGeneration,
+          reason: "planned",
+          signal: transition.prepAbort.signal,
+        },
+        transition.prepAbort.signal
+      );
+      if (outcome === "failed") {
+        // A failed/timed-out graceful prepare must not abort the restart: the
+        // process replacement proceeds crash-style and listeners reconcile
+        // runtime leases from durable state on the crash-ready event.
+        prepDegraded = true;
+        log.warn(
+          "workerd graceful prepare failed or timed out; proceeding crash-style so the " +
+            "generation transition still reaches the process boundary"
+        );
+      }
+      // "aborted" needs no handling here: the crash request that fired the
+      // abort is absorbed at the re-drain below and escalates the run.
+    }
+
+    // Absorb requests queued during prep. A crash request escalates the run
+    // in place — this is how preemption completes inside the state machine.
+    const lateCrash = [...this.consumeQueuedRequests()]
+      .reverse()
+      .find((request) => request.kind === "crash");
+    if (lateCrash) {
+      transition.kind = "crash";
+      transition.reason = lateCrash.reason;
+      transition.alreadyExited ||= lateCrash.alreadyExited;
+    }
+    transition.covered = Math.max(transition.covered, this.requestedEpoch);
+    const crashStyle = transition.kind === "crash" || prepDegraded;
+
+    // ── stopping: close the old generation in-process, then stop it ──
+    transition.state = "stopping";
+    if (hadRunningProcess || transition.kind === "crash") {
+      await this.emitGenerationClosing({
+        correlationId: transition.correlationId,
         generation: nextGeneration,
-        reason: "planned",
+        reason: crashStyle ? "crash" : "planned",
       });
     }
-    await this.stopWorkerd("planned-restart");
+    if (transition.kind === "crash" && transition.alreadyExited) {
+      await destroyWorkerdConnections(`workerd process generation crashed: ${transition.reason}`);
+    }
+    transition.state = "reaping";
+    await this.stopWorkerd(
+      transition.kind === "crash" ? `unresponsive-sandbox:${transition.reason}` : "planned-restart"
+    );
 
     if (this.shuttingDown) return;
 
     if (this.instances.size === 0 && this.doServices.size === 0) return;
 
+    // ── starting ──
+    transition.state = "starting";
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
       if (this.shuttingDown) return;
@@ -2129,12 +2514,12 @@ export class WorkerdManager {
         this.bootGeneration = nextGeneration;
         this.pendingBootGeneration = null;
         this.writeBootGeneration(this.bootGeneration);
-        if (hadRunningProcess) {
+        if (crashStyle || hadRunningProcess) {
           await this.emitRestartReady({
-            correlationId,
+            correlationId: transition.correlationId,
             generation: this.bootGeneration,
             previousGeneration,
-            reason: "planned",
+            reason: crashStyle ? "crash" : "planned",
           });
         }
         return;
@@ -2182,18 +2567,46 @@ export class WorkerdManager {
     fs.writeFileSync(this.bootGenerationFile, `${generation}\n`);
   }
 
-  private async emitRestartBegin(event: RestartBeginEvent): Promise<void> {
-    const failures: unknown[] = [];
+  /**
+   * Run graceful-prepare hooks for a planned transition. Returns "aborted"
+   * the moment `signal` fires (crash preemption — remaining hooks are skipped
+   * and in-flight ones are abandoned with their rejections swallowed),
+   * "failed" when any hook failed, "ok" otherwise. Never throws: prepare is
+   * advisory and must not be able to abort the transition.
+   */
+  private async emitRestartBegin(
+    event: RestartBeginEvent,
+    signal: AbortSignal
+  ): Promise<"ok" | "failed" | "aborted"> {
+    let failed = false;
+    const aborted = new Promise<"aborted">((resolve) => {
+      if (signal.aborted) resolve("aborted");
+      else signal.addEventListener("abort", () => resolve("aborted"), { once: true });
+    });
     for (const hook of this.restartBeginHooks) {
+      if (signal.aborted) return "aborted";
+      const hookRun = (async () => {
+        await hook(event);
+        return "hook-done" as const;
+      })().catch((err: unknown) => {
+        log.warn("restart begin hook failed:", err);
+        failed = true;
+        return "hook-done" as const;
+      });
+      const winner = await Promise.race([hookRun, aborted]);
+      if (winner === "aborted") return "aborted";
+    }
+    return failed ? "failed" : "ok";
+  }
+
+  /** In-process only; hook failures are logged, never propagated. */
+  private async emitGenerationClosing(event: GenerationClosingEvent): Promise<void> {
+    for (const hook of this.generationClosingHooks) {
       try {
         await hook(event);
       } catch (err) {
-        log.warn("restart begin hook failed:", err);
-        failures.push(err);
+        log.warn("generation closing hook failed:", err);
       }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "workerd restart preparation failed");
     }
   }
 
@@ -2338,19 +2751,29 @@ export class WorkerdManager {
       clearInterval(this.workerdMemorySampleTimer);
       this.workerdMemorySampleTimer = null;
     }
+    this.workerdRssSamples = [];
+    this.workerdMemorySamplePid = pid ?? null;
     if (!pid || process.platform !== "linux") return;
-    this.lastWorkerdRssBytes = this.readProcessRssBytes(pid);
-    this.workerdMemorySampleTimer = setInterval(() => {
+    const recordSample = (): void => {
       const rss = this.readProcessRssBytes(pid);
-      if (rss !== null) this.lastWorkerdRssBytes = rss;
+      if (rss === null) return;
+      this.lastWorkerdRssBytes = rss;
+      this.workerdRssSamples.push({ at: Date.now(), rssBytes: rss });
+      if (this.workerdRssSamples.length > 120) this.workerdRssSamples.shift();
+    };
+    recordSample();
+    this.workerdMemorySampleTimer = setInterval(() => {
+      recordSample();
     }, 5_000);
     this.workerdMemorySampleTimer.unref?.();
   }
 
   private stopWorkerdMemorySampling(): void {
-    if (!this.workerdMemorySampleTimer) return;
-    clearInterval(this.workerdMemorySampleTimer);
-    this.workerdMemorySampleTimer = null;
+    if (this.workerdMemorySampleTimer) {
+      clearInterval(this.workerdMemorySampleTimer);
+      this.workerdMemorySampleTimer = null;
+    }
+    this.workerdMemorySamplePid = null;
   }
 
   private readProcessRssBytes(pid: number): number | null {
@@ -2374,22 +2797,40 @@ export class WorkerdManager {
         this.workerdDiagnostics(pid)
       )}`
     );
-    this.stopWorkerdMemorySampling();
+    if (pid === this.workerdMemorySamplePid) this.stopWorkerdMemorySampling();
   }
 
   private workerdDiagnostics(pid: number | undefined): Record<string, unknown> {
     const currentRssBytes = pid ? this.readProcessRssBytes(pid) : null;
-    if (currentRssBytes !== null) this.lastWorkerdRssBytes = currentRssBytes;
+    const ownsSamples = pid !== undefined && pid === this.workerdMemorySamplePid;
+    if (currentRssBytes !== null && ownsSamples) {
+      this.lastWorkerdRssBytes = currentRssBytes;
+      const latest = this.workerdRssSamples.at(-1);
+      if (!latest || latest.rssBytes !== currentRssBytes) {
+        this.workerdRssSamples.push({ at: Date.now(), rssBytes: currentRssBytes });
+        if (this.workerdRssSamples.length > 120) this.workerdRssSamples.shift();
+      }
+    }
+    const samples = ownsSamples ? this.workerdRssSamples : [];
+    const firstRss = samples[0];
+    const lastRss = samples.at(-1);
     return {
       pid: pid ?? null,
       port: this.port,
-      uptimeMs: this.workerdStartedAtMs ? Date.now() - this.workerdStartedAtMs : null,
+      uptimeMs:
+        ownsSamples && this.workerdStartedAtMs ? Date.now() - this.workerdStartedAtMs : null,
       rssBytes: currentRssBytes,
-      lastRssBytes: this.lastWorkerdRssBytes,
+      lastRssBytes: ownsSamples ? this.lastWorkerdRssBytes : currentRssBytes,
+      rssSampleCount: samples.length,
+      rssPeakBytes:
+        samples.length > 0 ? Math.max(...samples.map((sample) => sample.rssBytes)) : null,
+      rssGrowthBytes: firstRss && lastRss ? lastRss.rssBytes - firstRss.rssBytes : null,
+      rssWindowMs: firstRss && lastRss ? lastRss.at - firstRss.at : null,
       regularWorkers: this.instances.size,
       doServices: this.doServices.size,
       doObjectBuilds: this.doObjectBuilds.size,
       runtimeImages: this.runtimeImages.list().length,
+      sealedDoImages: this.sealedDoImages.size,
       runtimeImageRebinds: this.runtimeImageRebinds.size,
       bootGeneration: this.bootGeneration,
       pendingBootGeneration: this.pendingBootGeneration,
@@ -2416,66 +2857,141 @@ export class WorkerdManager {
   }
 
   private async stopWorkerd(reason = "unspecified"): Promise<void> {
-    if (this.process) {
-      const proc = this.process;
-      this.process = null;
-      log.info(
-        `stopping workerd (${reason}); diagnostics=${JSON.stringify(
-          this.workerdDiagnostics(proc.pid)
-        )}`
-      );
-      await destroyWorkerdConnections(`workerd process generation ended: ${reason}`);
-      proc.kill("SIGTERM");
-      // Wait for the process to exit so the port is released before respawn.
-      // `proc.killed` only reports that a signal was *sent*, not that the
-      // process actually died — so track exit observation explicitly.
-      let exited = false;
-      await new Promise<void>((resolve) => {
-        const onExit = () => {
-          exited = true;
-          resolve();
-        };
-        proc.once("exit", onExit);
-        setTimeout(() => {
-          proc.removeListener("exit", onExit);
-          resolve();
-        }, 3000);
-      });
-      if (!exited) {
-        // SIGTERM timed out — force reap so the socket can be reclaimed.
-        try {
-          log.warn(
-            `workerd did not exit after SIGTERM (${reason}); sending SIGKILL; diagnostics=${JSON.stringify(
-              this.workerdDiagnostics(proc.pid)
-            )}`
+    const proc = this.process;
+    this.process = null;
+    try {
+      if (proc) {
+        log.info(
+          `stopping workerd (${reason}); diagnostics=${JSON.stringify(
+            this.workerdDiagnostics(proc.pid)
+          )}`
+        );
+        await destroyWorkerdConnections(`workerd process generation ended: ${reason}`);
+        proc.kill("SIGTERM");
+        // Wait for the process to exit so the port is released before respawn.
+        // `proc.killed` only reports that a signal was *sent*, not that the
+        // process actually died — so track exit observation explicitly.
+        let exited = await this.waitForProcessExitEvent(
+          proc,
+          this.deps.workerdStopTimeoutsMs?.sigtermMs ?? 3000
+        );
+        if (!exited) {
+          // SIGTERM timed out — force reap so the socket can be reclaimed.
+          try {
+            log.warn(
+              `workerd did not exit after SIGTERM (${reason}); sending SIGKILL; diagnostics=${JSON.stringify(
+                this.workerdDiagnostics(proc.pid)
+              )}`
+            );
+            proc.kill("SIGKILL");
+          } catch {
+            /* already gone */
+          }
+          // Confirm the reap from kernel state (kill(pid, 0)) rather than a
+          // single libuv event window: a delayed 'exit' event must not fail a
+          // reap that actually succeeded.
+          exited = await this.waitForProcessReaped(
+            proc,
+            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? 5000
           );
-          proc.kill("SIGKILL");
-        } catch {
-          /* already gone */
         }
-        await new Promise<void>((resolve) => {
-          const onExit = () => resolve();
-          proc.once("exit", onExit);
-          setTimeout(() => {
-            proc.removeListener("exit", onExit);
-            resolve();
-          }, 1000);
-        });
+        if (!exited) {
+          // Refusal path: never overlap runtime generations. Watch this exact
+          // pid in the background — when the kernel finally reaps it, re-enter
+          // the transition owner so the runtime does not stay down forever.
+          this.installUnkillableProcessWatch(proc, reason);
+          throw new Error(
+            `workerd process ${proc.pid ?? "unknown"} did not exit after SIGKILL (${reason}); refusing to overlap runtime generations`
+          );
+        }
       }
+    } finally {
+      // Always release the pinned ports — including on the SIGKILL-refusal
+      // throw above — so the next transition re-probes via findServicePort.
+      // findServicePort skips EADDRINUSE ports, which sidesteps both the
+      // kernel-release race and the still-bound unkillable process.
+      if (this.port) {
+        const { releaseServicePort } = await import("./hostCore/portUtils.js");
+        releaseServicePort("workerd", this.port);
+      }
+      this.port = null;
+      if (this.inspectorPort) {
+        const { releaseServicePort } = await import("./hostCore/portUtils.js");
+        releaseServicePort("workerdInspector", this.inspectorPort);
+      }
+      this.inspectorPort = null;
     }
-    // Release the pinned port so restartWorkerd re-probes via findServicePort.
-    // findServicePort skips EADDRINUSE ports, which sidesteps the race where
-    // the kernel has not finished releasing our previous bind yet.
-    if (this.port) {
-      const { releaseServicePort } = await import("./hostCore/portUtils.js");
-      releaseServicePort("workerd", this.port);
+  }
+
+  private waitForProcessExitEvent(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const onExit = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        proc.removeListener("exit", onExit);
+        resolve(false);
+      }, timeoutMs);
+      proc.once("exit", onExit);
+    });
+  }
+
+  /**
+   * True once the process is gone, judged by kernel state: either the 'exit'
+   * event fires or kill(pid, 0) reports ESRCH. Polled, because a single
+   * event-loop window can miss a reap that has already happened.
+   */
+  private async waitForProcessReaped(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
+    const pid = proc.pid;
+    let exitObserved = proc.exitCode !== null || proc.signalCode !== null;
+    const onExit = () => {
+      exitObserved = true;
+    };
+    proc.once("exit", onExit);
+    try {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        if (exitObserved) return true;
+        if (pid !== undefined && !this.isPidAlive(pid)) return true;
+        if (Date.now() >= deadline) return false;
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+    } finally {
+      proc.removeListener("exit", onExit);
     }
-    this.port = null;
-    if (this.inspectorPort) {
-      const { releaseServicePort } = await import("./hostCore/portUtils.js");
-      releaseServicePort("workerdInspector", this.inspectorPort);
+  }
+
+  private isPidAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      // ESRCH: no such process (reaped). Anything else (e.g. EPERM) means the
+      // pid still exists as far as the kernel is concerned.
+      return (err as NodeJS.ErrnoException).code !== "ESRCH";
     }
-    this.inspectorPort = null;
+  }
+
+  /**
+   * Background watcher for a process that survived SIGKILL confirmation. The
+   * moment its exit is finally observed, re-enter the generation-transition
+   * owner with a crash request so recovery is driven by the lifecycle event,
+   * not a clock — the runtime must not stay down because one reap was late.
+   */
+  private installUnkillableProcessWatch(proc: ChildProcess, reason: string): void {
+    const pid = proc.pid ?? "unknown";
+    proc.once("exit", () => {
+      if (this.shuttingDown) return;
+      log.warn(`previously unkillable workerd pid ${pid} finally exited; re-entering recovery`);
+      void this.restartWorkerd({
+        kind: "crash",
+        reason: `late exit of unkillable workerd pid ${pid} (${reason})`,
+        alreadyExited: true,
+      }).catch((err) => {
+        log.error("failed to recover after late exit of unkillable workerd:", err);
+      });
+    });
   }
 
   /**
@@ -2683,6 +3199,11 @@ export class WorkerdManager {
     objectKey: string,
     opts: { contextId?: string; ref?: string } = {}
   ): Promise<void> {
+    if (!isInternalDOSource(source)) {
+      throw new Error(
+        `Userland Durable Object ${source}:${className}/${objectKey} requires a sealed entity record`
+      );
+    }
     const scopeRef = opts.contextId
       ? entityScopeRef(opts.ref, opts.contextId)
       : explicitScopeRef(opts.ref);
@@ -2808,7 +3329,7 @@ export class WorkerdManager {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
-    await this.restartRunning?.catch((error) => {
+    await this.activeTransition?.promise.catch((error) => {
       log.warn("in-flight workerd restart failed while shutdown was taking ownership:", error);
     });
     await this.stopWorkerd("shutdown");
@@ -2854,7 +3375,7 @@ export class WorkerdManager {
    * the stale workerd service on the next rebuild, rather than leaving an
    * orphaned class bound forever.
    */
-  async onSourceRebuilt(
+  async reconcileMutableSourceBuild(
     source: string,
     doClasses: Array<{ className: string }> | null,
     trigger?: ProtectedPublicationEvent,
@@ -2920,9 +3441,6 @@ export class WorkerdManager {
     const trackedServices = Array.from(this.doServices.values()).filter(
       (s) => s.source === source && scopeTracksProtectedMain(s.scopeRef)
     );
-    const trackedObjects = Array.from(this.doObjectBuilds.entries()).filter(
-      ([key, build]) => key.startsWith(`${source}:`) && scopeTracksProtectedMain(build.scopeRef)
-    );
     for (const svc of trackedServices) {
       if (!svc.imageId) continue;
       const image = updateImageFromCompleted(svc.imageId, svc.scopeRef);
@@ -2931,12 +3449,10 @@ export class WorkerdManager {
         this.registerDoEgressCaller(svc.source, svc.className, image);
       }
     }
-    for (const [key, objectBuild] of trackedObjects) {
-      const image = updateImageFromCompleted(objectBuild.imageId, objectBuild.scopeRef);
-      if (image) {
-        this.doObjectBuilds.set(key, { ...objectBuild, buildKey: image.artifact.buildKey });
-      }
-    }
+    // Object-specific DO images are sealed by their durable entity records.
+    // Publication advances those records through WorkspaceEntityStore and then
+    // calls restoreDurableObjectEntity(); this source-level callback must never
+    // move a live object ahead of its durable identity.
 
     // Reconcile DO classes for this source against the new manifest — add new,
     // drop removed. All loader-cache changes; no restart.
@@ -2951,7 +3467,10 @@ export class WorkerdManager {
         for (const key of Array.from(this.doObjectBuilds.keys())) {
           if (key.startsWith(`${source}:${svc.className}/`)) {
             const objectBuild = this.doObjectBuilds.get(key);
-            if (objectBuild) this.runtimeImages.delete(objectBuild.imageId);
+            if (objectBuild) {
+              this.runtimeImages.delete(objectBuild.imageId);
+              this.sealedDoImages.delete(objectBuild.imageId);
+            }
             this.doObjectBuilds.delete(key);
           }
         }

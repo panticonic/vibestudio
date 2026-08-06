@@ -63,6 +63,7 @@ vi.mock("child_process", () => ({
       }),
       pid: 12345,
       exitCode: null,
+      signalCode: null,
     };
     return proc;
   }),
@@ -134,6 +135,25 @@ function mockWorkerBuild(
   };
 }
 
+function mockWorkerBuildFor(source: string, execution: ExecutionArtifactRefV1): BuildResult {
+  const base = mockWorkerBuild();
+  return {
+    ...base,
+    buildKey: execution.buildKey,
+    sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
+    metadata: {
+      ...base.metadata,
+      name: source,
+      buildKey: execution.buildKey,
+      sourcePath: source,
+      ev: execution.sourceState.effectiveVersion,
+      sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
+      sourceState: execution.sourceState.state,
+      execution,
+    },
+  };
+}
+
 type TestWorkerdDeps = WorkerdManagerDeps & WorkerdWorkspaceProvider;
 const testStatePaths = new Set<string>();
 
@@ -164,6 +184,9 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
       authority: { provides: [], requests: [] },
     })),
     getBuildByKey: vi.fn(() => build),
+    getBuildByExecution: vi.fn((_key, executionDigest) =>
+      build.metadata.execution?.executionDigest === executionDigest ? build : null
+    ),
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
@@ -487,6 +510,43 @@ describe("WorkerdManager", () => {
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
     });
 
+    it("restores an internal entity directly from its sealed service identity", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+      const prepared = await mgr.ensureDurableObjectEntity({
+        source: "vibestudio/internal",
+        className: "BrowserDataDO",
+        key: "browser-environment",
+        contextId: "ctx-internal",
+      });
+
+      await expect(
+        mgr.restoreDurableObjectEntity({
+          id: "do:vibestudio/internal:BrowserDataDO:browser-environment",
+          kind: "do",
+          source: {
+            repoPath: "vibestudio/internal",
+            effectiveVersion: prepared.effectiveVersion,
+          },
+          activeBuildKey: prepared.buildKey,
+          activeExecutionDigest: prepared.executionDigest,
+          activeAuthority: prepared.authority,
+          contextId: "ctx-internal",
+          className: "BrowserDataDO",
+          key: "browser-environment",
+          createdAt: 1,
+          status: "active",
+          cleanupComplete: false,
+        })
+      ).resolves.toBeUndefined();
+      expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      expect(
+        mgr
+          .listRuntimeImages()
+          .some(({ id }) => id === "do:vibestudio/internal:BrowserDataDO:browser-environment")
+      ).toBe(false);
+    });
+
     ledgerTest("execution.workerd-start-worker", async () => {
       const deps = createMockDeps();
       const first = new WorkerdManager(deps);
@@ -496,37 +556,45 @@ describe("WorkerdManager", () => {
         key: "k1",
         contextId: "ctx-agent",
       });
+      const sealedArtifact = runtimeArtifact("workers/new-do", "ctx:ctx-agent");
+      vi.mocked(deps.getBuildByExecution).mockImplementation((buildKey, executionDigest) =>
+        buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
+          ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
+          : null
+      );
       vi.mocked(deps.bindRuntimeImage).mockClear();
       const restored = new WorkerdManager(deps);
+      const record = {
+        id: "do:workers/new-do:NewDO:k1",
+        kind: "do" as const,
+        source: {
+          repoPath: "workers/new-do",
+          effectiveVersion: prepared.effectiveVersion,
+        },
+        activeBuildKey: prepared.buildKey,
+        activeExecutionDigest: prepared.executionDigest,
+        activeAuthority: { ...prepared.authority },
+        contextId: "ctx-agent",
+        className: "NewDO",
+        key: "k1",
+        createdAt: 1,
+        status: "active" as const,
+        cleanupComplete: false,
+      };
 
-      await expect(
-        restored.restoreDurableObjectEntity({
-          id: "do:workers/new-do:NewDO:k1",
-          kind: "do",
-          source: {
-            repoPath: "workers/new-do",
-            effectiveVersion: prepared.effectiveVersion,
-          },
-          activeBuildKey: prepared.buildKey,
-          activeExecutionDigest: prepared.executionDigest,
-          activeAuthority: {
-            ...prepared.authority,
-          },
-          contextId: "ctx-agent",
-          className: "NewDO",
-          key: "k1",
-          createdAt: 1,
-          status: "active",
-          cleanupComplete: false,
-        })
-      ).resolves.toBeUndefined();
+      await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
+      const version = restored.getDoVersion("workers/new-do", "NewDO", "k1");
+      await expect(restored.restoreDurableObjectEntity(record)).resolves.toBeUndefined();
+      expect(restored.getDoVersion("workers/new-do", "NewDO", "k1")).toBe(version);
+      expect(restored.listRuntimeImages().some(({ id }) => id === record.id)).toBe(false);
       expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
       const code = await restored.getDoCode("workers/new-do", "NewDO", "k1");
       expect(code).not.toBeNull();
     });
 
     it("restores and retires a sealed DO after its workspace source ref changes", async () => {
-      const deps = createMockDeps();
+      const recordLifecycleEvent = vi.fn();
+      const deps = createMockDeps({ recordLifecycleEvent });
       const first = new WorkerdManager(deps);
       const prepared = await first.ensureDurableObjectEntity({
         source: "workers/new-do",
@@ -534,6 +602,28 @@ describe("WorkerdManager", () => {
         key: "k1",
         contextId: "ctx-agent",
       });
+      const sealedArtifact = runtimeArtifact("workers/new-do", "ctx:ctx-agent");
+      const changedSource = runtimeArtifact("workers/new-do", "changed");
+      const changedUnsigned = {
+        ...changedSource,
+        recipeDigest: sealedArtifact.recipeDigest,
+        buildKey: sealedArtifact.buildKey,
+        artifactDigest: sealedArtifact.artifactDigest,
+      };
+      const changedArtifact = verifyExecutionArtifactRef({
+        ...changedUnsigned,
+        executionDigest: executionArtifactDigest(changedUnsigned),
+      });
+      vi.mocked(deps.getBuildByKey).mockImplementation((buildKey) =>
+        buildKey === sealedArtifact.buildKey
+          ? mockWorkerBuildFor("workers/new-do", changedArtifact)
+          : null
+      );
+      deps.getBuildByExecution = vi.fn((buildKey, executionDigest) =>
+        buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
+          ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
+          : null
+      );
       vi.mocked(deps.bindRuntimeImage).mockImplementation(async (unitPath: string) => ({
         source: unitPath,
         unitName: unitPath,
@@ -564,6 +654,21 @@ describe("WorkerdManager", () => {
       });
 
       expect(deps.bindRuntimeImage).not.toHaveBeenCalled();
+      expect(deps.getBuildByExecution).toHaveBeenCalledWith(
+        sealedArtifact.buildKey,
+        sealedArtifact.executionDigest
+      );
+      expect(recordLifecycleEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityId: "do:workers/new-do:NewDO:k1",
+          kind: "do",
+          fields: expect.objectContaining({
+            event: "runtime-image-attached",
+            buildKey: sealedArtifact.buildKey,
+            executionDigest: sealedArtifact.executionDigest,
+          }),
+        })
+      );
       await expect(
         restored.retireDOEntity({
           source: "workers/new-do",
@@ -571,6 +676,12 @@ describe("WorkerdManager", () => {
           objectKey: "k1",
         })
       ).resolves.toBeUndefined();
+      expect(recordLifecycleEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityId: "do:workers/new-do:NewDO:k1",
+          fields: expect.objectContaining({ event: "runtime-image-evicted" }),
+        })
+      );
     });
 
     it("fails a requested fault abort when workerd is not running", async () => {
@@ -610,7 +721,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.ensureDurableObjectEntity({
+      const prepared = await mgr.ensureDurableObjectEntity({
         source: "workers/new-do",
         className: "NewDO",
         key: "subagent-object",
@@ -623,6 +734,36 @@ describe("WorkerdManager", () => {
           },
         },
       });
+      const sealedArtifact = runtimeArtifact("workers/new-do", "ctx:ctx-agent");
+      vi.mocked(deps.getBuildByExecution).mockImplementation((buildKey, executionDigest) =>
+        buildKey === sealedArtifact.buildKey && executionDigest === sealedArtifact.executionDigest
+          ? mockWorkerBuildFor("workers/new-do", sealedArtifact)
+          : null
+      );
+      await mgr.restoreDurableObjectEntity({
+        id: prepared.targetId,
+        kind: "do",
+        source: {
+          repoPath: "workers/new-do",
+          effectiveVersion: prepared.effectiveVersion,
+        },
+        activeBuildKey: prepared.buildKey,
+        activeExecutionDigest: prepared.executionDigest,
+        activeAuthority: prepared.authority,
+        contextId: "ctx-agent",
+        className: "NewDO",
+        key: "subagent-object",
+        stateArgs: {
+          subagent: {
+            runId: "run-1",
+            parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+            parentChannelId: "ch-parent",
+          },
+        },
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+      });
 
       const code = await mgr.getDoCode("workers/new-do", "NewDO", "subagent-object");
       expect(code?.env["STATE_ARGS"]).toEqual({
@@ -632,7 +773,9 @@ describe("WorkerdManager", () => {
           parentChannelId: "ch-parent",
         },
       });
-      expect(mgr.getDoVersion("workers/new-do", "NewDO", "subagent-object")).toContain(":state:");
+      expect(mgr.getDoVersion("workers/new-do", "NewDO", "subagent-object")).toMatch(
+        /^[a-f0-9]{64}$/
+      );
     });
 
     it("honors explicit context refs for runtime-managed DO object images", async () => {
@@ -845,16 +988,16 @@ describe("WorkerdManager", () => {
   });
 
   // -------------------------------------------------------------------------
-  // onSourceRebuilt
+  // reconcileMutableSourceBuild
   // -------------------------------------------------------------------------
-  describe("onSourceRebuilt", () => {
+  describe("reconcileMutableSourceBuild", () => {
     ledgerTest("execution.worker-push-rebuild", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "main" }));
       const before = mgr.getWorkerVersion("hello");
-      await mgr.onSourceRebuilt(
+      await mgr.reconcileMutableSourceBuild(
         "workers/runtime-fixture",
         null,
         {
@@ -889,7 +1032,7 @@ describe("WorkerdManager", () => {
       await mgr.updateInstance("hello", { env: { FEATURE: "enabled" } });
       const beforeRebuild = mgr.getWorkerVersion("hello");
 
-      await mgr.onSourceRebuilt(
+      await mgr.reconcileMutableSourceBuild(
         "workers/runtime-fixture",
         null,
         {
@@ -950,7 +1093,7 @@ describe("WorkerdManager", () => {
       const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
 
       // Ref-targeted instance should not restart on HEAD push
-      await mgr.onSourceRebuilt(
+      await mgr.reconcileMutableSourceBuild(
         "workers/runtime-fixture",
         null,
         {
@@ -984,7 +1127,7 @@ describe("WorkerdManager", () => {
       await mgr.startWorker(startArgs());
       const spawnsBefore = vi.mocked(spawn).mock.calls.length;
 
-      await mgr.onSourceRebuilt("workers/runtime-fixture", null);
+      await mgr.reconcileMutableSourceBuild("workers/runtime-fixture", null);
 
       // Dynamic loading: a rebuild is a loader-cache eviction, never a restart.
       expect(vi.mocked(spawn).mock.calls.length).toBe(spawnsBefore);
@@ -998,7 +1141,7 @@ describe("WorkerdManager", () => {
       await mgr.startWorker(startArgs());
       const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
 
-      await mgr.onSourceRebuilt("workers/other", null);
+      await mgr.reconcileMutableSourceBuild("workers/other", null);
 
       // No additional bind calls (no restart triggered)
       expect(vi.mocked(deps.bindRuntimeImage).mock.calls.length).toBe(callsBefore);
@@ -1017,7 +1160,7 @@ describe("WorkerdManager", () => {
       const revokeSpy = vi.spyOn(deps.tokenManager, "revokeToken");
 
       // Manifest is re-read after a rebuild and now only declares AgentDO.
-      await mgr.onSourceRebuilt("workers/agent", [{ className: "AgentDO" }]);
+      await mgr.reconcileMutableSourceBuild("workers/agent", [{ className: "AgentDO" }]);
 
       // LegacyDO's service-level token was revoked.
       expect(revokeSpy).toHaveBeenCalledWith("do-service:workers/agent:LegacyDO");
@@ -1033,7 +1176,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps({ resourceHandleLifecycle });
       const mgr = new WorkerdManager(deps);
 
-      await mgr.onSourceRebuilt(
+      await mgr.reconcileMutableSourceBuild(
         "workers/agent",
         [{ className: "AgentDO" }],
         undefined,
@@ -1057,7 +1200,7 @@ describe("WorkerdManager", () => {
       await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
 
       const revokeSpy = vi.spyOn(deps.tokenManager, "revokeToken");
-      await mgr.onSourceRebuilt("workers/agent", null);
+      await mgr.reconcileMutableSourceBuild("workers/agent", null);
 
       // No revokes — null explicitly means this rebuild does not own the main manifest.
       expect(revokeSpy).not.toHaveBeenCalledWith(
@@ -1076,7 +1219,7 @@ describe("WorkerdManager", () => {
 
       const revokeSpy = vi.spyOn(deps.tokenManager, "revokeToken");
       // Empty array = "manifest declares no DO classes now" → remove all.
-      await mgr.onSourceRebuilt("workers/agent", []);
+      await mgr.reconcileMutableSourceBuild("workers/agent", []);
 
       expect(revokeSpy).toHaveBeenCalledWith("do-service:workers/agent:A");
       expect(revokeSpy).toHaveBeenCalledWith("do-service:workers/agent:B");
@@ -1104,7 +1247,7 @@ describe("WorkerdManager", () => {
       });
       const mgr = new WorkerdManager(deps);
 
-      await mgr.onSourceRebuilt("workers/agent", [{ className: "AgentDO" }]);
+      await mgr.reconcileMutableSourceBuild("workers/agent", [{ className: "AgentDO" }]);
 
       expect(vi.mocked(deps.bindRuntimeImage)).not.toHaveBeenCalled();
       expect(routeRegistry.lookup("/_r/w/workers/agent/agent", "POST", false)).toMatchObject({
@@ -1169,7 +1312,7 @@ describe("WorkerdManager", () => {
       expect(routeRegistry.lookup("/_r/w/workers/agent/poems", "POST", false)).toBeNull();
     });
 
-    it("does NOT probe-and-restart a live workerd on ensureDO (A1: no false-positive restarts)", async () => {
+    it("rejects mutable userland ensureDO attachment", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
@@ -1181,15 +1324,15 @@ describe("WorkerdManager", () => {
       const restartBegin = vi.fn();
       mgr.onRestartBegin(restartBegin);
 
-      // If ensureDO probed HTTP readiness, a rejecting fetch would (old behavior)
-      // trigger a restart. The new contract: a live, registered process is left
-      // alone — no readiness fetch, no restart. (Userland DO classes load into
-      // the static universal-do host, so they never restart regardless.)
+      // Route and lifecycle callers must attach through the sealed entity
+      // record; this legacy API remains only for host-owned internal DOs.
       const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
       vi.stubGlobal("fetch", fetchMock);
 
       try {
-        await expect(mgr.ensureDO("workers/agent", "AgentDO", "object-1")).resolves.toBeUndefined();
+        await expect(mgr.ensureDO("workers/agent", "AgentDO", "object-1")).rejects.toThrow(
+          /requires a sealed entity record/
+        );
       } finally {
         vi.unstubAllGlobals();
       }
@@ -1275,6 +1418,79 @@ describe("WorkerdManager", () => {
         })
       );
       expect(mgr.getBootGeneration()).toBe(initialGeneration + 1);
+    });
+
+    it("lets crash recovery preempt a hung graceful prepare", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const ready = vi.fn();
+      mgr.onRestartReady(ready);
+      await mgr.startWorker(startArgs());
+
+      let entered!: () => void;
+      const beginEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      mgr.onRestartBegin(() => {
+        entered();
+        return new Promise<void>(() => {});
+      });
+
+      const planned = (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+      await beginEntered;
+      const crash = mgr.recoverUnresponsiveSandbox("liveness probe failed during prepare");
+
+      await expect(Promise.all([planned, crash])).resolves.toBeDefined();
+      expect(ready).toHaveBeenCalledOnce();
+      expect(ready).toHaveBeenCalledWith(expect.objectContaining({ reason: "crash" }));
+    });
+
+    it("retries a queued crash recovery in its own transition after the owner transition fails", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const ready = vi.fn();
+      mgr.onRestartReady(ready);
+      await mgr.startWorker(startArgs());
+      const internal = mgr as unknown as {
+        restartWorkerd(): Promise<void>;
+        startWorkerdOnce(): Promise<void>;
+        restartRequests: Map<number, unknown>;
+      };
+      const originalStart = internal.startWorkerdOnce.bind(mgr);
+      let starts = 0;
+      vi.spyOn(internal, "startWorkerdOnce").mockImplementation(async () => {
+        starts += 1;
+        if (starts <= 3) throw new Error(`first transition start failure ${starts}`);
+        await originalStart();
+      });
+      let queued: Promise<void> | null = null;
+      mgr.onGenerationClosing(() => {
+        queued ??= mgr.recoverUnresponsiveSandbox("crash queued during stopping");
+      });
+
+      await expect(internal.restartWorkerd()).rejects.toThrow(/first transition start failure 3/);
+      expect(queued).not.toBeNull();
+      await expect(queued!).resolves.toBeUndefined();
+      expect(starts).toBe(4);
+      expect(internal.restartRequests.size).toBe(0);
+      expect(mgr.getPort()).not.toBeNull();
+      expect(ready).toHaveBeenCalledWith(expect.objectContaining({ reason: "crash" }));
+    });
+
+    it("refuses to overlap generations when SIGKILL cannot be confirmed", async () => {
+      const mgr = new WorkerdManager(
+        createMockDeps({ workerdStopTimeoutsMs: { sigtermMs: 1, sigkillMs: 1 } })
+      );
+      await mgr.startWorker(startArgs());
+      const spawnCount = vi.mocked(spawn).mock.calls.length;
+      const internal = mgr as unknown as {
+        process: { kill: ReturnType<typeof vi.fn> } | null;
+        restartWorkerd(): Promise<void>;
+        isPidAlive(pid: number): boolean;
+      };
+      internal.process!.kill = vi.fn(() => true);
+      vi.spyOn(internal, "isPidAlive").mockReturnValue(true);
+
+      await expect(internal.restartWorkerd()).rejects.toThrow(/refusing to overlap/u);
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount);
     });
 
     it("recovers an unexpectedly exited runtime and reports a crash generation", async () => {

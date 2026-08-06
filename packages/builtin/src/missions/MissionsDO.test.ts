@@ -24,14 +24,11 @@ const charter = (): MissionCharter => ({
 });
 
 async function missions() {
-  return createTestDO(
-    MissionsDO,
-    {
-      WORKER_SOURCE: "vibestudio/internal",
-      WORKER_CLASS_NAME: "MissionsDO",
-      __objectKey: "workspace",
-    }
-  );
+  return createTestDO(MissionsDO, {
+    WORKER_SOURCE: "vibestudio/internal",
+    WORKER_CLASS_NAME: "MissionsDO",
+    __objectKey: "workspace",
+  });
 }
 
 describe("MissionsDO", () => {
