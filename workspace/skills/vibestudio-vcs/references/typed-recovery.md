@@ -181,7 +181,7 @@ command, and `final.workingHead` equals `retry.workingHead`.
 
 ## Recover a committed scaffold whose publication failed
 
-`createProject` and `forkProject` create one repository, commit the complete
+`createProjects` and `forkProject` create repositories, commit the complete
 local chain, and then call the separate protected `vcs.push` boundary. If push
 fails after commit, they throw `ScaffoldPublicationError` with
 `errorData.code === "scaffold_publication_failed"`. Its data includes the

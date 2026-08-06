@@ -50,11 +50,16 @@ describe("WorkspaceVcs protected publication notification", () => {
         objectKey: "test",
       })
     );
-    const listener = vi.fn();
+    let releaseListener!: () => void;
+    const listenerGate = new Promise<void>((resolve) => {
+      releaseListener = resolve;
+    });
+    const listener = vi.fn(async () => listenerGate);
     vcs.onProtectedPublication(listener);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    await refs.updateMains({
+    let publicationSettled = false;
+    const publication = refs.updateMains({
       entries: [{ repoPath: "packages/app", expectedOld: null, next: stateHash }],
       evidence: {
         publicationId: "publication:test",
@@ -63,8 +68,15 @@ describe("WorkspaceVcs protected publication notification", () => {
         hostRefsBasisDigest: hostRefBasisDigest([]),
       },
     });
+    void publication.then(() => {
+      publicationSettled = true;
+    });
 
-    expect(listener).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce());
+    expect(publicationSettled).toBe(false);
+    releaseListener();
+    await publication;
+
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({
         publicationId: "publication:test",

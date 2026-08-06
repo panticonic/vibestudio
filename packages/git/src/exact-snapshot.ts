@@ -57,24 +57,27 @@ interface ReadExactGitSnapshotOptions {
   reservedPaths?: ReservedPathPolicy;
 }
 
-export interface AcquireExactGitSnapshotOptions
-  extends Omit<ReadExactGitSnapshotOptions, "commit"> {
+export interface AcquireExactGitSnapshotOptions extends Omit<
+  ReadExactGitSnapshotOptions,
+  "commit"
+> {
   url: string;
   ref: string;
   expectedCommit: string;
 }
 
-export interface DiscoverExactGitSnapshotOptions
-  extends Omit<ReadExactGitSnapshotOptions, "commit" | "expectedSnapshot"> {
+export interface DiscoverExactGitSnapshotOptions extends Omit<
+  ReadExactGitSnapshotOptions,
+  "commit" | "expectedSnapshot"
+> {
   url: string;
   ref: string;
 }
-export type DiscoverDefaultGitSnapshotOptions = Omit<
+export type DiscoverDefaultGitSnapshotOptions = Omit<DiscoverExactGitSnapshotOptions, "ref">;
+export interface DiscoverTrackedGitSnapshotOptions extends Omit<
   DiscoverExactGitSnapshotOptions,
   "ref"
->;
-export interface DiscoverTrackedGitSnapshotOptions
-  extends Omit<DiscoverExactGitSnapshotOptions, "ref"> {
+> {
   /** Canonical branch/tag ref, or a refs/tags/* pattern. */
   track: string;
 }
@@ -337,9 +340,7 @@ export async function acquireExactGitSnapshot(
     sink: options.sink,
     ...(options.expectedSnapshot ? { expectedSnapshot: options.expectedSnapshot } : {}),
     ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.maxDescriptorBytes
-      ? { maxDescriptorBytes: options.maxDescriptorBytes }
-      : {}),
+    ...(options.maxDescriptorBytes ? { maxDescriptorBytes: options.maxDescriptorBytes } : {}),
     ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
 }
@@ -372,9 +373,7 @@ export async function discoverExactGitSnapshot(
     label: options.label,
     sink: options.sink,
     ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.maxDescriptorBytes
-      ? { maxDescriptorBytes: options.maxDescriptorBytes }
-      : {}),
+    ...(options.maxDescriptorBytes ? { maxDescriptorBytes: options.maxDescriptorBytes } : {}),
     ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
 }
@@ -404,9 +403,7 @@ export async function discoverDefaultGitSnapshot(
     label: options.label,
     sink: options.sink,
     ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.maxDescriptorBytes
-      ? { maxDescriptorBytes: options.maxDescriptorBytes }
-      : {}),
+    ...(options.maxDescriptorBytes ? { maxDescriptorBytes: options.maxDescriptorBytes } : {}),
     ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
   return { ...snapshot, ref };
@@ -427,10 +424,7 @@ export async function discoverTrackedGitSnapshot(
     });
     return { ...snapshot, ref: options.track };
   }
-  if (
-    !options.track.startsWith("refs/tags/") ||
-    /[\s~^:[\]\\]/u.test(options.track)
-  ) {
+  if (!options.track.startsWith("refs/tags/") || /[\s~^:[\]\\]/u.test(options.track)) {
     throw new Error("Template track glob must be a canonical refs/tags/* pattern");
   }
   options.git.resolveUrl(options.url);
@@ -461,9 +455,7 @@ export async function discoverTrackedGitSnapshot(
     label: options.label,
     sink: options.sink,
     ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.maxDescriptorBytes
-      ? { maxDescriptorBytes: options.maxDescriptorBytes }
-      : {}),
+    ...(options.maxDescriptorBytes ? { maxDescriptorBytes: options.maxDescriptorBytes } : {}),
     ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
   return { ...snapshot, ref };

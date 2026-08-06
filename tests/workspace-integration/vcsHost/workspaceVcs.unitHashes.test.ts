@@ -35,7 +35,7 @@ describe("WorkspaceVcs build-unit hashes from canonical content", () => {
     blobsDir = path.join(root, "blobs");
     const refs = createProtectedRefStore({
       statePath: path.join(root, "refs"),
-      gate: async () => {},
+      gate: async () => undefined,
     });
     vcs = new WorkspaceVcs({
       workspaceId: "test-workspace",

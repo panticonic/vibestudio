@@ -29,6 +29,7 @@
             "domain": "files",
             "verb": "manage"
           },
+          "notability": "headline",
           "grantScopes": [
             "once"
           ]

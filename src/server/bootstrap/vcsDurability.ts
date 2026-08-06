@@ -11,23 +11,30 @@ import type { WorkerdManager } from "../workerdManager.js";
 import type { GcEpochCoordinator } from "../services/gcEpochCoordinator.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
+import { canonicalSingletonContextId } from "./singletonReconciliation.js";
 
 export interface VcsDurabilityBootstrapDeps {
   container: Pick<ServiceContainer, "registerManaged">;
   workspaceVcs: WorkspaceVcs;
   executionPublicationJournal: ExecutionPublicationJournal;
   workspaceSourceProvider: WorkspaceSourceProviderRef;
-  bootstrapSourceState(): Promise<string>;
-  registerBootstrapEntity(input: {
-    targetId: string;
-    source: string;
-    className: string;
-    objectKey: string;
-    effectiveVersion: string;
-    buildKey: string;
-    executionDigest: string;
-    authority: import("@vibestudio/shared/authorityManifest").UnitAuthorityManifest;
-  }): void;
+  workspaceId: string;
+  /** The state captured before semantic initialization may mutate the source root. */
+  bootstrapStateHash: string;
+  publishBootstrapEntity(
+    workerdManager: WorkerdManager,
+    input: {
+      targetId: string;
+      source: string;
+      className: string;
+      objectKey: string;
+      effectiveVersion: string;
+      buildKey: string;
+      executionDigest: string;
+      authority: import("@vibestudio/shared/authorityManifest").UnitAuthorityManifest;
+      contextId: string;
+    }
+  ): Promise<void>;
   activateSemanticWorkspace(workspaceVcs: WorkspaceVcs): Promise<void>;
 }
 
@@ -40,15 +47,19 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
       const doDispatch = assertPresent(resolve<DODispatch>("doDispatch"));
       const workerdManager = assertPresent(resolve<WorkerdManager>("workerdManager"));
       const gadRef = deps.workspaceSourceProvider;
-      const bootstrapSourceState = await deps.bootstrapSourceState();
-      const prepared = await workerdManager.ensureDurableObjectEntity({
+      const contextId = canonicalSingletonContextId(deps.workspaceId, {
         source: gadRef.source,
-        ref: bootstrapSourceState,
         className: gadRef.className,
         key: gadRef.objectKey,
-        contextId: `workspace-source:${gadRef.objectKey}`,
       });
-      deps.registerBootstrapEntity({ ...gadRef, ...prepared });
+      const prepared = await workerdManager.ensureDurableObjectEntity({
+        source: gadRef.source,
+        ref: deps.bootstrapStateHash,
+        className: gadRef.className,
+        key: gadRef.objectKey,
+        contextId,
+      });
+      await deps.publishBootstrapEntity(workerdManager, { ...gadRef, contextId, ...prepared });
       await deps.workspaceVcs.attachGad(createWorkspaceSemanticPort(doDispatch, gadRef));
       deps.workspaceVcs.attachWorkspaceSourceProvider(
         createWorkspaceSourceProviderV1(doDispatch, gadRef)

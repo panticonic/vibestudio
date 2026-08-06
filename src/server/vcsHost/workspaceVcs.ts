@@ -13,7 +13,6 @@
  * stores, staging areas, ancestry helpers, or provenance reconstructions.
  */
 
-import { EventEmitter } from "node:events";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as crypto from "node:crypto";
 import * as fsp from "node:fs/promises";
@@ -223,6 +222,8 @@ export type CallerPublicationGateContext = {
   caller: VerifiedCaller;
   signal?: AbortSignal;
   via?: string;
+  /** Host-composed exact candidate view, added by publishMain before gating. */
+  candidateWorkspaceState?: string;
 };
 
 type PublicationGateContext = CallerPublicationGateContext | { kind: "workspace-initialization" };
@@ -248,7 +249,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private gadCaller: WorkspaceSemanticPort | null = null;
   private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
-  private readonly emitter = new EventEmitter();
+  private readonly protectedPublicationListeners = new Set<
+    (event: ProtectedPublicationEvent) => void | Promise<void>
+  >();
   private readonly projector: DiskProjector;
   private readonly materializer: ContextMaterializer;
   private readonly locks = new Map<string, Promise<unknown>>();
@@ -292,18 +295,66 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     epoch: number;
     executionSourceRoots: readonly ExecutionSourceContentRoot[];
   }): Promise<PreparedWorkspaceGc> {
+    const reachable = await this.collectGcReachableDigests(options.executionSourceRoots);
+    let committed = false;
+    return {
+      epoch: options.epoch,
+      commit: async () => {
+        if (committed) throw new Error(`Content GC epoch ${options.epoch} was already committed`);
+        committed = true;
+        // A materialization may finish after the initial read-only preflight
+        // and before the shared epoch commits. Re-read all durable and cached
+        // roots at the destructive boundary so a newly published state cannot
+        // be mistaken for garbage. Keeping the first snapshot as well is
+        // intentional: roots retired during the epoch remain protected until
+        // the normal age grace period expires.
+        const finalReachable = await this.collectGcReachableDigests(options.executionSourceRoots);
+        for (const digest of reachable) finalReachable.add(digest);
+        return sweepUnreachableBlobs(this.deps.blobsDir, finalReachable, options.minAgeMs);
+      },
+    };
+  }
+
+  private async collectGcReachableDigests(
+    executionSourceRoots: readonly ExecutionSourceContentRoot[]
+  ): Promise<Set<string>> {
     const semantic = await this.gad().contentGcRoots();
     const roots = new Set(semantic.contentRoots);
-    for (const main of this.deps.refs.listMains()) roots.add(main.contentRoot);
-    for (const executionRoot of options.executionSourceRoots) {
-      roots.add(assertExecutionSourceContentRoot(executionRoot).stateHash);
+    const mainRoots = new Set<string>();
+    for (const main of this.deps.refs.listMains()) {
+      mainRoots.add(main.contentRoot);
+      roots.add(main.contentRoot);
+    }
+    const executionRoots = new Set<string>();
+    const executionRootPaths = new Map<string, Set<string>>();
+    for (const executionRoot of executionSourceRoots) {
+      const validated = assertExecutionSourceContentRoot(executionRoot);
+      const stateHash = validated.stateHash;
+      executionRoots.add(stateHash);
+      roots.add(stateHash);
+      const paths = executionRootPaths.get(stateHash) ?? new Set<string>();
+      paths.add(validated.repoPath ?? "<workspace>");
+      executionRootPaths.set(stateHash, paths);
     }
     const reachable = new Set(semantic.contentHashes);
     for (const root of roots) {
       const tree = await collectTreeReachableDigests(this.deps.blobsDir, root, {
         verifyContent: true,
       });
-      if (!tree) throw new Error(`GC root ${root} is missing from the content store`);
+      if (!tree) {
+        const provenance = semantic.contentRoots.includes(root)
+          ? "semantic materialization/pending effect"
+          : mainRoots.has(root)
+            ? "protected main"
+            : executionRoots.has(root)
+              ? `retained execution source (${[...(executionRootPaths.get(root) ?? [])].join(
+                  ", "
+                )})`
+              : "unknown";
+        throw new Error(
+          `GC root ${root} is missing from the content store (provenance: ${provenance})`
+        );
+      }
       for (const digest of tree.treeDigests) reachable.add(digest);
       for (const digest of tree.contentDigests) reachable.add(digest);
     }
@@ -316,15 +367,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const cachedViews = await this.repositories.collectCachedReachableDigests();
     for (const digest of cachedViews.treeDigests) reachable.add(digest);
     for (const digest of cachedViews.contentDigests) reachable.add(digest);
-    let committed = false;
-    return {
-      epoch: options.epoch,
-      commit: async () => {
-        if (committed) throw new Error(`Content GC epoch ${options.epoch} was already committed`);
-        committed = true;
-        return sweepUnreachableBlobs(this.deps.blobsDir, reachable, options.minAgeMs);
-      },
-    };
+    return reachable;
   }
 
   async runGc(options: {
@@ -802,6 +845,22 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const changedPaths = [...new Set([...currentByPath.keys(), ...targetByPath.keys()])]
       .filter((repoPath) => currentByPath.get(repoPath) !== targetByPath.get(repoPath))
       .sort(compareUtf16CodeUnits);
+    const candidateWorkspaceState = await this.repositories.workspaceViewWithReposAt(
+      changedPaths.map((repoPath) => ({
+        repoPath,
+        stateHash: targetByPath.get(repoPath) ?? null,
+      }))
+    );
+    const publishedEventId = String(effect.payload["publishedEventId"] ?? "");
+    if (!publishedEventId) throw new Error("publication effect lacks its published event identity");
+    // BuildV2 seals execution identity while the ref gate validates this
+    // candidate. Register the already-committed semantic event before the gate
+    // asks for a build, rather than teaching the build store to accept an
+    // anonymous content hash.
+    this.semanticStateByContent.set(candidateWorkspaceState, {
+      kind: "event",
+      eventId: publishedEventId,
+    });
     const hostRefsBasisDigest = hostRefBasisDigest(
       current.map(({ repoPath, contentRoot }) => ({ repoPath, contentRoot }))
     );
@@ -817,7 +876,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         publishedEventId: String(effect.payload["publishedEventId"] ?? ""),
         hostRefsBasisDigest,
       },
-      gateContext,
+      gateContext:
+        gateContext.kind === "caller" ? { ...gateContext, candidateWorkspaceState } : gateContext,
     });
     const publication = this.deps.refs.readAppliedPublication(effect.effectId);
     if (!publication) throw new Error(`protected publication ${effect.effectId} was not recorded`);
@@ -1640,9 +1700,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   // Protected-main effects and build notifications
   // -----------------------------------------------------------------------
 
-  onProtectedPublication(callback: (event: ProtectedPublicationEvent) => void): () => void {
-    this.emitter.on("protected-publication", callback);
-    return () => this.emitter.off("protected-publication", callback);
+  onProtectedPublication(
+    callback: (event: ProtectedPublicationEvent) => void | Promise<void>
+  ): () => void {
+    this.protectedPublicationListeners.add(callback);
+    return () => this.protectedPublicationListeners.delete(callback);
   }
 
   private async onProtectedRefsPublished(publication: ProtectedRefPublication): Promise<void> {
@@ -1666,14 +1728,23 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const changedPaths = [
       ...new Set(repositories.flatMap(({ fileChanges }) => fileChanges.map(({ path }) => path))),
     ].sort(compareUtf16CodeUnits);
-    this.emitter.emit("protected-publication", {
+    const event = {
       publicationId: publication.publicationId,
       resultHostRefsBasisDigest: publication.resultHostRefsBasisDigest,
       appliedAt: publication.appliedAt,
       workspaceStateHash,
       changedPaths,
       repositories,
-    } satisfies ProtectedPublicationEvent);
+    } satisfies ProtectedPublicationEvent;
+
+    // Protected-ref publication is not settled until exact-state consumers have
+    // observed it. In particular, BuildV2 must install the new graph/EV state
+    // before vcs.push returns so an immediate open/build cannot see stale HEAD.
+    // The protected-ref store durably replays this observer phase if a listener
+    // is interrupted after the CAS has committed.
+    for (const listener of this.protectedPublicationListeners) {
+      await listener(event);
+    }
 
     // Source checkout mirroring is an observer, never part of publication
     // authority. Its failure must not suppress the CAS-derived notification.

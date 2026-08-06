@@ -24,7 +24,7 @@
     },
     {
       "path": "references/checks-and-publication.md",
-      "sha256": "564c27374bebd397dc2b021e3fdf371caa3d8d9cbb9898b93c33233316269f61"
+      "sha256": "4acf7653c225c96a6b148ca3a0337c8cd19a103afc51a897ef65d47de771ced8"
     },
     {
       "path": "references/compare-and-integrate.md",
@@ -48,7 +48,7 @@
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "8f6870ad041d4bfd2fd1354afec3e96ae6e954cc6579a1348d4f98d6f3c94723"
+      "sha256": "5e5bfdd8a67ff6c212e05879be865adfb929f72772ec735f3d58e5e11385eae3"
     },
     {
       "path": "references/public-contract.md",
@@ -68,8 +68,8 @@
     },
     {
       "path": "references/typed-recovery.md",
-      "sha256": "c076bd5ab208f75f1744a1d054906932674c7f9df607d7fed48d738f5a3736f4"
+      "sha256": "2dfdb379d41be3072e6c24b65821febe3ecbb7d0ee07fc11d29a07285c7a439d"
     }
   ],
-  "packageDigest": "8ceb9e5ab536859776398147c5cd821eb7cccd4fbd5e6d4f01b9b8144066670a"
+  "packageDigest": "77faf9d7dc5878f462a7548ac4903e01380c071748ec004dea3572cabdb3420e"
 }

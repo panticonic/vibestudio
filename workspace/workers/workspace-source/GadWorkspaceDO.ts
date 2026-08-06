@@ -8,7 +8,7 @@
 import { schemaRpc } from "@vibestudio/rpc";
 import {
   gadWireMethods,
-  RegistryMutationInputSchema,
+  StoredRegistryMutationInputSchema,
 } from "@vibestudio/service-schemas/workspaceSource";
 import { channelIdFromTrajectoryLog, logIdForChannel } from "@vibestudio/trajectory-identity";
 import { DurableObjectBase } from "@vibestudio/durable";
@@ -30,7 +30,7 @@ import {
 import type {
   AgentHealthInspection,
   ChannelEnvelopeInspection,
-  ChannelMessageTypeDefinition,
+  StoredChannelMessageTypeDefinition,
   ChannelPublication,
   ChannelRosterInspection,
   EnvelopeLineage,
@@ -46,14 +46,14 @@ import type {
   PrivateLineageForPublishedEnvelope,
   PublicationIntegrityInspection,
   PublishedArtifact,
-  RegistryMutationInput,
+  StoredRegistryMutationInput,
   TurnStateInspection,
   GadJsonRecord,
 } from "@vibestudio/service-schemas/workspaceSource";
 export type {
   AgentHealthInspection,
   ChannelEnvelopeInspection,
-  ChannelMessageTypeDefinition,
+  StoredChannelMessageTypeDefinition,
   ChannelPublication,
   ChannelRosterInspection,
   EnvelopeLineage,
@@ -69,7 +69,7 @@ export type {
   PrivateLineageForPublishedEnvelope,
   PublicationIntegrityInspection,
   PublishedArtifact,
-  RegistryMutationInput,
+  StoredRegistryMutationInput,
   TurnStateInspection,
 } from "@vibestudio/service-schemas/workspaceSource";
 import {
@@ -89,6 +89,7 @@ import {
   assertAgenticEventStoredValuesEncoded,
   brandId,
   collectStoredValueRefs,
+  isStoredValueRef,
   publicActorRef,
   publicParticipantMetadata,
   publicParticipantRef,
@@ -539,10 +540,12 @@ function isActorRefLike(value: unknown): value is ActorRef {
   );
 }
 
-function sanitizeRegistryMutation(mutation: RegistryMutationInput): RegistryMutationInput {
+function sanitizeRegistryMutation(
+  mutation: StoredRegistryMutationInput
+): StoredRegistryMutationInput {
   if (mutation.kind !== "upsertMessageType") return mutation;
   const registeredBy = mutation.row.registeredBy;
-  return RegistryMutationInputSchema.parse({
+  return StoredRegistryMutationInputSchema.parse({
     ...mutation,
     row: {
       ...mutation.row,
@@ -4158,7 +4161,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  listMessageTypes(input: { channelId: string }): ChannelMessageTypeDefinition[] {
+  listMessageTypes(input: { channelId: string }): StoredChannelMessageTypeDefinition[] {
     this.ensureReady();
     const rows = this.sql
       .exec(
@@ -4176,7 +4179,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   getMessageType(input: {
     channelId: string;
     typeId: string;
-  }): ChannelMessageTypeDefinition | null {
+  }): StoredChannelMessageTypeDefinition | null {
     this.ensureReady();
     const row = this.sql
       .exec(
@@ -4224,10 +4227,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
       );
     }
     const source = payload["source"];
-    if (!source || typeof source !== "object" || Array.isArray(source)) {
-      throw new Error(`messageType.registered payload invalid: source is required`);
+    if (!isStoredValueRef(source)) {
+      throw new Error(`messageType.registered payload invalid: source must be stored by reference`);
     }
-    for (const field of ["imports", "stateSchema", "updateSchema"] as const) {
+    if (payload["imports"] !== undefined && !isStoredValueRef(payload["imports"])) {
+      throw new Error(
+        `messageType.registered payload invalid: imports must be stored by reference`
+      );
+    }
+    for (const field of ["stateSchema", "updateSchema"] as const) {
       const value = payload[field];
       if (value !== undefined && (typeof value !== "object" || Array.isArray(value))) {
         throw new Error(`messageType.registered payload invalid: ${field} must be an object`);
@@ -4237,29 +4245,31 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.applyRegistryMutation(
       envelope.logId,
       envelope.seq,
-      sanitizeRegistryMutation(RegistryMutationInputSchema.parse({
-        kind: "upsertMessageType",
-        typeId,
-        row: {
-          displayMode: displayMode as "inline" | "row",
-          source: source as ChannelMessageTypeDefinition["source"],
-          ...(payload["imports"] ? { imports: payload["imports"] as Record<string, string> } : {}),
-          ...(payload["stateSchema"]
-            ? { stateSchema: payload["stateSchema"] as Record<string, unknown> }
-            : {}),
-          ...(payload["updateSchema"]
-            ? { updateSchema: payload["updateSchema"] as Record<string, unknown> }
-            : {}),
-          ...(registeredBy ? { registeredBy } : {}),
-        },
-      }))
+      sanitizeRegistryMutation(
+        StoredRegistryMutationInputSchema.parse({
+          kind: "upsertMessageType",
+          typeId,
+          row: {
+            displayMode: displayMode as "inline" | "row",
+            source,
+            ...(payload["imports"] ? { imports: payload["imports"] } : {}),
+            ...(payload["stateSchema"]
+              ? { stateSchema: payload["stateSchema"] as Record<string, unknown> }
+              : {}),
+            ...(payload["updateSchema"]
+              ? { updateSchema: payload["updateSchema"] as Record<string, unknown> }
+              : {}),
+            ...(registeredBy ? { registeredBy } : {}),
+          },
+        })
+      )
     );
   }
 
   private applyRegistryMutation(
     channelId: string,
     seq: number,
-    mutation: RegistryMutationInput
+    mutation: StoredRegistryMutationInput
   ): void {
     if (mutation.kind === "upsertMessageType") {
       this.sql.exec(
@@ -4312,15 +4322,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
     );
   }
 
-  private mapMessageType(row: JsonRecord): ChannelMessageTypeDefinition {
-    const result: ChannelMessageTypeDefinition = {
+  private mapMessageType(row: JsonRecord): StoredChannelMessageTypeDefinition {
+    const result: StoredChannelMessageTypeDefinition = {
       typeId: String(row["type_id"]),
       displayMode: String(row["display_mode"]) === "inline" ? "inline" : "row",
-      source: parseRecord(asString(row["source_json"])) as ChannelMessageTypeDefinition["source"],
+      source: parseRecord(
+        asString(row["source_json"])
+      ) as StoredChannelMessageTypeDefinition["source"],
       updatedAtSeq: asNumber(row["updated_at_seq"]),
     };
     if (row["imports_json"])
-      result.imports = parseRecord(asString(row["imports_json"])) as Record<string, string>;
+      result.imports = parseRecord(
+        asString(row["imports_json"])
+      ) as StoredChannelMessageTypeDefinition["imports"];
     if (row["schema_json"]) {
       const schemas = parseJson(asString(row["schema_json"])) as {
         stateSchema?: Record<string, unknown>;

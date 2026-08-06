@@ -91,7 +91,17 @@ export interface ProtectedRefPublication {
 }
 
 export type OnRefsChanged = (publication: ProtectedRefPublication) => void | Promise<void>;
-export type RefGate = (batch: RefGateBatch) => Promise<void>;
+export interface RefGateCompletion {
+  /**
+   * Prepare all durable side effects that must exist before the refs advance.
+   * A failed preparation aborts the publication and invokes `failed`.
+   */
+  prepare(): void | Promise<void>;
+  committed(): void | Promise<void>;
+  failed(error: unknown): void | Promise<void>;
+}
+
+export type RefGate = (batch: RefGateBatch) => Promise<RefGateCompletion | undefined>;
 
 export interface ProtectedRefStoreDeps {
   statePath: string;
@@ -579,7 +589,7 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
         // The semantic main event is protected state even when its repository
         // snapshot is content-identical to the current one. Gate every new
         // publication; only an exact durable replay above skips approval.
-        await deps.gate({
+        const gateCompletion = await deps.gate({
           entries: entries.map((entry) => ({
             repoPath: entry.repoPath,
             old: entry.expectedOld,
@@ -593,44 +603,63 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
           ...(input.gateContext !== undefined ? { gateContext: input.gateContext } : {}),
         });
 
-        const appliedAt = now();
-        const nextMains = new Map(mains);
-        for (const entry of entries) {
-          if (entry.next === null) nextMains.delete(entry.repoPath);
-          else {
-            nextMains.set(entry.repoPath, {
-              repoPath: entry.repoPath,
-              contentRoot: entry.next,
-              updatedAt: appliedAt,
-            });
+        let evidence!: AppliedPublication;
+        try {
+          // Gate side effects are prepared before the protected refs are
+          // published. This is deliberately a separate phase: a completion
+          // callback that runs only after `persist` can leave the refs ahead of
+          // admission/clearance when that callback fails.
+          await gateCompletion?.prepare();
+          const appliedAt = now();
+          const nextMains = new Map(mains);
+          for (const entry of entries) {
+            if (entry.next === null) nextMains.delete(entry.repoPath);
+            else {
+              nextMains.set(entry.repoPath, {
+                repoPath: entry.repoPath,
+                contentRoot: entry.next,
+                updatedAt: appliedAt,
+              });
+            }
           }
-        }
-        const evidence: AppliedPublication = {
-          publicationId: input.evidence.publicationId,
-          previousEventId: input.evidence.previousEventId,
-          publishedEventId: input.evidence.publishedEventId,
-          hostRefsBasisDigest: input.evidence.hostRefsBasisDigest,
-          resultHostRefsBasisDigest: hostRefBasisDigest(
-            [...nextMains.values()].map(({ repoPath, contentRoot }) => ({ repoPath, contentRoot }))
-          ),
-          entries,
-          appliedAt,
-          observersAppliedAt: null,
-          semanticAcknowledgedAt: null,
-        };
-        const nextPublications = new Map(publications).set(evidence.publicationId, evidence);
-        for (const [id, priorEvidence] of nextPublications) {
-          if (id !== evidence.publicationId && priorEvidence.semanticAcknowledgedAt !== null) {
-            nextPublications.delete(id);
+          evidence = {
+            publicationId: input.evidence.publicationId,
+            previousEventId: input.evidence.previousEventId,
+            publishedEventId: input.evidence.publishedEventId,
+            hostRefsBasisDigest: input.evidence.hostRefsBasisDigest,
+            resultHostRefsBasisDigest: hostRefBasisDigest(
+              [...nextMains.values()].map(({ repoPath, contentRoot }) => ({
+                repoPath,
+                contentRoot,
+              }))
+            ),
+            entries,
+            appliedAt,
+            observersAppliedAt: null,
+            semanticAcknowledgedAt: null,
+          };
+          const nextPublications = new Map(publications).set(evidence.publicationId, evidence);
+          for (const [id, priorEvidence] of nextPublications) {
+            if (id !== evidence.publicationId && priorEvidence.semanticAcknowledgedAt !== null) {
+              nextPublications.delete(id);
+            }
           }
+          persist(nextMains, nextPublications, evidence.publicationId, evidence.publishedEventId);
+          mains.clear();
+          for (const [repoPath, record] of nextMains) mains.set(repoPath, record);
+          publications.clear();
+          for (const [id, retained] of nextPublications) publications.set(id, retained);
+          headPublicationId = evidence.publicationId;
+          mainEventId = evidence.publishedEventId;
+        } catch (error) {
+          await gateCompletion?.failed(error);
+          throw error;
         }
-        persist(nextMains, nextPublications, evidence.publicationId, evidence.publishedEventId);
-        mains.clear();
-        for (const [repoPath, record] of nextMains) mains.set(repoPath, record);
-        publications.clear();
-        for (const [id, retained] of nextPublications) publications.set(id, retained);
-        headPublicationId = evidence.publicationId;
-        mainEventId = evidence.publishedEventId;
+        // The durable ref state is now committed. Completion reporting is
+        // intentionally outside the rollback path: if an observer/reporting
+        // callback fails, the workspace did change and must not be reported as
+        // unchanged or have its admission rolled back.
+        await gateCompletion?.committed();
         return {
           result: {
             updated: entries.map((entry) => ({

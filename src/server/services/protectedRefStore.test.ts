@@ -31,6 +31,71 @@ afterEach(async () => {
 });
 
 describe("ProtectedRefStore", () => {
+  it("completes an approved operation only after its refs are durably committed", async () => {
+    const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "protected-main-completion-"));
+    roots.push(statePath);
+    const committed = vi.fn();
+    const prepare = vi.fn();
+    const failed = vi.fn();
+    const store = createProtectedRefStore({
+      statePath,
+      gate: async () => ({ prepare, committed, failed }),
+      now: () => 42,
+    });
+
+    await store.updateMains({
+      entries: [{ repoPath: "packages/a", expectedOld: null, next: A }],
+      evidence: {
+        publicationId: "publication:completion",
+        previousEventId: "event:before:completion",
+        publishedEventId: "event:after:completion",
+        hostRefsBasisDigest: EMPTY_BASIS,
+      },
+      gateContext: { approved: true },
+    });
+
+    expect(committed).toHaveBeenCalledOnce();
+    expect(failed).not.toHaveBeenCalled();
+    expect(store.readMain("packages/a")?.contentRoot).toBe(A);
+    const persisted = JSON.parse(
+      await fsp.readFile(path.join(statePath, "protected-publication-state.json"), "utf8")
+    ) as { mainEventId?: string };
+    expect(persisted.mainEventId).toBe("event:after:completion");
+  });
+
+  it("prepares gate side effects before publishing refs and rolls them back on failure", async () => {
+    const { statePath } = await makeStore();
+    const prepared = vi.fn();
+    const failed = vi.fn();
+    const store = createProtectedRefStore({
+      statePath,
+      gate: async () => ({
+        prepare: () => {
+          prepared();
+          expect(store.readMain("packages/a")).toBeNull();
+          throw new Error("admission write failed");
+        },
+        committed: vi.fn(),
+        failed,
+      }),
+    });
+
+    await expect(
+      store.updateMains({
+        entries: [{ repoPath: "packages/a", expectedOld: null, next: A }],
+        evidence: {
+          publicationId: "publication:prepare-failure",
+          previousEventId: "event:before:prepare-failure",
+          publishedEventId: "event:after:prepare-failure",
+          hostRefsBasisDigest: EMPTY_BASIS,
+        },
+      })
+    ).rejects.toThrow("admission write failed");
+    expect(prepared).toHaveBeenCalledOnce();
+    expect(failed).toHaveBeenCalledOnce();
+    expect(store.readMain("packages/a")).toBeNull();
+  });
+
   it("atomically applies one exact batch with durable evidence", async () => {
     const { statePath, store, gate } = await makeStore();
     const listener = vi.fn();

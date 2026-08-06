@@ -22,10 +22,7 @@ function fakeGit(entries: GitCommitTreeEntry[], matrix?: Array<[string, number, 
     getCurrentCommit: vi.fn(async () => COMMIT),
     statusMatrix: vi.fn(
       async () =>
-        matrix ??
-        entries.map(
-          (entry) => [entry.path, 1, 1, 1] as [string, number, number, number]
-        )
+        matrix ?? entries.map((entry) => [entry.path, 1, 1, 1] as [string, number, number, number])
     ),
     readCommitTree: vi.fn(async () => entries),
   } as unknown as GitClient;
@@ -257,9 +254,7 @@ describe("discoverTrackedGitSnapshot", () => {
     // Every acquisition path validates the remote URL before cloning; the
     // non-glob track branch used to be the one that skipped it.
     expect(git.resolveUrl).toHaveBeenCalledWith("https://example.test/template.git");
-    expect(git.clone).toHaveBeenCalledWith(
-      expect.objectContaining({ ref: "refs/heads/stable" })
-    );
+    expect(git.clone).toHaveBeenCalledWith(expect.objectContaining({ ref: "refs/heads/stable" }));
     expect(git.listTags).not.toHaveBeenCalled();
   });
 });

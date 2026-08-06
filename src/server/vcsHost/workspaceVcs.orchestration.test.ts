@@ -108,6 +108,32 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
   });
 
+  it("rechecks semantic roots before committing a GC epoch", async () => {
+    const { blobsDir, vcs } = await harness();
+    const retained = await putBytes(blobsDir, Buffer.from("materialized during preflight"));
+    const source = await putTree(
+      blobsDir,
+      [{ name: "index.ts", kind: "file", contentHash: retained.digest, mode: 0o100644 }],
+      { root: true }
+    );
+    const unreachable = await putBytes(blobsDir, Buffer.from("unreachable"));
+    let roots: string[] = [];
+    await vcs.attachGad({
+      contentGcRoots: vi.fn(async () => ({ contentRoots: roots, contentHashes: [] })),
+    } as never);
+
+    const prepared = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
+    // This simulates a context materialization completing after the read-only
+    // preflight but before the destructive commit.
+    roots = [source.stateHash!];
+    await prepared.commit();
+
+    await expect(getBytes(blobsDir, retained.digest)).resolves.toEqual(
+      Buffer.from("materialized during preflight")
+    );
+    await expect(getBytes(blobsDir, unreachable.digest)).resolves.toBeNull();
+  });
+
   it("keeps a retained execution source composition rooted during content GC", async () => {
     const { blobsDir, vcs } = await harness();
     const retained = await putBytes(blobsDir, Buffer.from("retained build source"));
@@ -1379,6 +1405,20 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     expect(refs.readAppliedPublication("effect:publish")).toMatchObject({
       previousEventId: "event:genesis",
       publishedEventId: "event:one",
+    });
+    const firstGateContext = updateMains.mock.calls[0]?.[0].gateContext as
+      | { kind?: string; candidateWorkspaceState?: string }
+      | undefined;
+    expect(firstGateContext).toMatchObject({
+      kind: "caller",
+      candidateWorkspaceState: expect.stringMatching(/^state:[0-9a-f]{64}$/),
+    });
+    if (firstGateContext?.kind !== "caller" || !firstGateContext.candidateWorkspaceState) {
+      throw new Error("publication did not carry its exact candidate workspace state");
+    }
+    expect(vcs.executionStateForContent(firstGateContext.candidateWorkspaceState)).toEqual({
+      kind: "event",
+      eventId: "event:one",
     });
 
     await vcs.semanticCall(

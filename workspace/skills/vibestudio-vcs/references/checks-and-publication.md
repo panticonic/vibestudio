@@ -4,7 +4,8 @@
 
 Build is a projection of source state, not a second history. Use the ordinary
 build service with the context ref (`ctx:<contextId>`) and the smallest relevant
-unit or package. Inspect its structured diagnostics and repair the cited files
+unit or package. Inspect its structured esbuild, TypeScript, and authority
+diagnostics and repair the cited files
 through ordinary local edits. In eval, the direct shape is
 `await services.build.getBuildReport(unit, "ctx:" + contextId)`; other clients
 should discover the same live `build.getBuildReport` service schema.
@@ -20,7 +21,7 @@ will enforce.
 `vcs.push` is the only protected publication operation. It accepts an exact
 clean committed event and the exact main event observed by `status`. Push
 validates semantic ancestry and integration completeness, runs the
-candidate-state build/typecheck gate for changed units and their transitive
+candidate-state build/typecheck/authority gate for changed units and their transitive
 reverse dependents, obtains the required approval, and atomically advances the
 protected refs through a durable effect.
 

@@ -34,7 +34,7 @@ describe("protected main ref approval and compare-and-swap", () => {
 
   beforeEach(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "protected-main-"));
-    gate = async () => {};
+    gate = async () => undefined;
     observed = [];
   });
 
@@ -47,7 +47,7 @@ describe("protected main ref approval and compare-and-swap", () => {
       statePath: path.join(root, "refs"),
       gate: async (batch) => {
         observed.push(batch);
-        await gate(batch);
+        return gate(batch);
       },
     });
   }
@@ -76,6 +76,7 @@ describe("protected main ref approval and compare-and-swap", () => {
     gate = async () => {
       approvalStarted();
       await approval;
+      return undefined;
     };
 
     const advancing = refs.updateMains({

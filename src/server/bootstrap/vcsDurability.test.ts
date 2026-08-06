@@ -5,6 +5,7 @@ import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { WorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import type { WorkerdManager } from "../workerdManager.js";
 import { wireVcsDurability, type VcsDurabilityBootstrapDeps } from "./vcsDurability.js";
+import { canonicalSingletonContextId } from "./singletonReconciliation.js";
 
 function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
   services: ManagedService[];
@@ -25,8 +26,9 @@ function captureServices(overrides: Partial<VcsDurabilityBootstrapDeps> = {}): {
       className: "GadWorkspaceDO",
       objectKey: "workspace",
     },
-    bootstrapSourceState: vi.fn(async () => `state:${"d".repeat(64)}`),
-    registerBootstrapEntity: vi.fn(),
+    workspaceId: "workspace-1",
+    bootstrapStateHash: `state:${"d".repeat(64)}`,
+    publishBootstrapEntity: vi.fn(async () => undefined),
     activateSemanticWorkspace: vi.fn(async () => undefined),
     ...overrides,
   };
@@ -51,7 +53,7 @@ describe("wireVcsDurability", () => {
     ]);
   });
 
-  it("attaches the manifest source provider and registers its bootstrap entity", async () => {
+  it("durably publishes the manifest source-provider entity before attaching it", async () => {
     const dispatch = {
       dispatch: vi.fn(async () => "direct-result"),
     } as unknown as DODispatch;
@@ -71,10 +73,10 @@ describe("wireVcsDurability", () => {
       }),
       attachWorkspaceSourceProvider: vi.fn(),
     } as unknown as WorkspaceVcs;
-    const registerBootstrapEntity = vi.fn();
+    const publishBootstrapEntity = vi.fn(async () => undefined);
     const { services } = captureServices({
       workspaceVcs,
-      registerBootstrapEntity,
+      publishBootstrapEntity,
     });
     const attach = services.find((service) => service.name === "vcsAttach");
     const resolve = <D>(name: string): D | undefined =>
@@ -89,20 +91,26 @@ describe("wireVcsDurability", () => {
       className: "GadWorkspaceDO",
       objectKey: "workspace",
     };
+    const contextId = canonicalSingletonContextId("workspace-1", {
+      source: gadRef.source,
+      className: gadRef.className,
+      key: gadRef.objectKey,
+    });
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledWith({
       source: gadRef.source,
       ref: `state:${"d".repeat(64)}`,
       className: gadRef.className,
       key: gadRef.objectKey,
-      contextId: "workspace-source:workspace",
+      contextId,
     });
-    expect(registerBootstrapEntity).toHaveBeenCalledWith({
+    expect(publishBootstrapEntity).toHaveBeenCalledWith(manager, {
       ...gadRef,
       targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
       effectiveVersion: "a".repeat(64),
       buildKey: "c".repeat(64),
       executionDigest: "b".repeat(64),
       authority: { provides: [], requests: [] },
+      contextId,
     });
     expect(workspaceVcs.attachGad).toHaveBeenCalledOnce();
     expect(workspaceVcs.attachWorkspaceSourceProvider).toHaveBeenCalledOnce();
