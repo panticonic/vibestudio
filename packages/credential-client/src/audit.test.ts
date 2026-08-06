@@ -77,7 +77,7 @@ describe("AuditLog", () => {
       auditLog.query({
         filter: { workerId: "worker-2", method: "POST" },
         after: firstEntry.ts,
-      }),
+      })
     ).resolves.toEqual([secondEntry]);
 
     await expect(auditLog.query({ limit: 1 })).resolves.toEqual([firstEntry]);
@@ -97,7 +97,10 @@ describe("AuditLog", () => {
     await auditLog.append(yesterdayEntry);
     await auditLog.append(todayEntry);
 
-    const yesterdayPath = path.join(logDir, `credentials-audit-${formatDateKey(yesterdayEntry.ts)}.jsonl`);
+    const yesterdayPath = path.join(
+      logDir,
+      `credentials-audit-${formatDateKey(yesterdayEntry.ts)}.jsonl`
+    );
     const todayPath = path.join(logDir, `credentials-audit-${formatDateKey(todayEntry.ts)}.jsonl`);
 
     expect(readFileSync(yesterdayPath, "utf8").trim()).toBe(JSON.stringify(yesterdayEntry));
@@ -138,8 +141,10 @@ describe("AuditLog", () => {
 
     await auditLog.append(setupEntry);
 
-    await expect(auditLog.query({
-      filter: { providerId: "url-bound" },
-    })).resolves.toEqual([setupEntry]);
+    await expect(
+      auditLog.query({
+        filter: { providerId: "url-bound" },
+      })
+    ).resolves.toEqual([setupEntry]);
   });
 });

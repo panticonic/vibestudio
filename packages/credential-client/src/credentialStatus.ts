@@ -48,8 +48,7 @@ export function credentialLifecycle(
     return { state: "revoked", canRefresh: false };
   }
   return {
-    state:
-      credential.expiresAt !== undefined && credential.expiresAt <= now ? "expired" : "active",
+    state: credential.expiresAt !== undefined && credential.expiresAt <= now ? "expired" : "active",
     canRefresh:
       Boolean(credential.refreshToken) && isOAuthRefreshRecipeComplete(credential.oauthRefresh),
   };

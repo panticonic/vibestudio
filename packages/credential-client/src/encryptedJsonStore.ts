@@ -9,7 +9,7 @@ const IDENTIFIER_RE = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
 export function assertValidStoreIdentifier(kind: string, value: string): void {
   if (typeof value !== "string" || !IDENTIFIER_RE.test(value)) {
     throw new Error(
-      `Invalid ${kind}: must be a safe path component matching /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/ (got: ${JSON.stringify(value)})`,
+      `Invalid ${kind}: must be a safe path component matching /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/ (got: ${JSON.stringify(value)})`
     );
   }
 }
@@ -21,7 +21,9 @@ interface DirectoryEntry {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+  return (
+    error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 interface EncryptedEnvelope {
@@ -136,7 +138,7 @@ function decryptJson(envelope: EncryptedEnvelope): string {
     const ss = tryGetSafeStorage();
     if (!ss) {
       throw new Error(
-        "Record was encrypted with Electron safeStorage but safeStorage is unavailable in this process.",
+        "Record was encrypted with Electron safeStorage but safeStorage is unavailable in this process."
       );
     }
     return ss.decryptString(Buffer.from(envelope.ct, "base64"));
@@ -166,7 +168,11 @@ export abstract class EncryptedJsonStore<TRecord> {
     this.basePath = options.basePath ?? options.defaultBasePath;
   }
 
-  protected async saveRecord(namespaceId: string, recordId: string, record: TRecord): Promise<void> {
+  protected async saveRecord(
+    namespaceId: string,
+    recordId: string,
+    record: TRecord
+  ): Promise<void> {
     assertValidStoreIdentifier("namespaceId", namespaceId);
     assertValidStoreIdentifier("recordId", recordId);
 
@@ -174,7 +180,7 @@ export abstract class EncryptedJsonStore<TRecord> {
     const targetPath = this.getRecordPath(namespaceId, recordId);
     const tempPath = path.join(
       namespaceDir,
-      `.${recordId}.${process.pid}.${Date.now()}.${crypto.randomBytes(16).toString("hex")}.tmp`,
+      `.${recordId}.${process.pid}.${Date.now()}.${crypto.randomBytes(16).toString("hex")}.tmp`
     );
     const fileContents = serializeRecord(record);
 
@@ -213,7 +219,9 @@ export abstract class EncryptedJsonStore<TRecord> {
     const namespaceIds = namespaceId ? [namespaceId] : await this.listNamespaceIds();
     const records: TRecord[] = [];
 
-    for (const currentNamespaceId of namespaceIds.sort((left, right) => left.localeCompare(right))) {
+    for (const currentNamespaceId of namespaceIds.sort((left, right) =>
+      left.localeCompare(right)
+    )) {
       if (!IDENTIFIER_RE.test(currentNamespaceId)) continue;
       const namespaceDir = this.getNamespacePath(currentNamespaceId);
       let entries: DirectoryEntry[];
@@ -311,7 +319,7 @@ export abstract class EncryptedJsonStore<TRecord> {
     } catch (error) {
       console.warn(
         `[EncryptedJsonStore] Ignoring unreadable record file ${filePath}: ` +
-        `${error instanceof Error ? error.message : String(error)}`,
+          `${error instanceof Error ? error.message : String(error)}`
       );
       return null;
     }

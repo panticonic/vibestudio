@@ -23,7 +23,7 @@ import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
-import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 
 function makePanelRecord(id: string): EntityRecord {
   return {
@@ -340,31 +340,49 @@ describe("auth service connection grants", () => {
     const approvals = [
       {
         approvalId: "approval-mobile",
-        kind: "unit-batch",
+        kind: "unit-install-review",
         callerId: "system:apps",
         callerKind: "system",
         repoPath: "apps/mobile",
         effectiveVersion: "ev-mobile",
-        trigger: "startup",
-        title: "Approve workspace apps",
+        mode: "adopt-root",
+        title: "Start this workspace?",
         description: "Approve the mobile app",
-        units: [
+        parts: [
           {
-            unitKind: "app",
-            unitName: "@workspace-apps/mobile",
-            displayName: "Mobile",
+            identityKey: "apps/mobile@ev-mobile",
+            kind: "app",
+            label: "Client App",
+            surfaces: [],
+            name: "@workspace-apps/mobile",
+            title: "Mobile",
+            purpose: "The mobile app itself.",
+            repoPath: "apps/mobile",
+            effectiveVersion: "ev-mobile",
+            version: null,
+            requiredUnitKeys: [],
+            runsInBackground: false,
             target: "react-native",
-            source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-            ev: "ev-mobile",
-            capabilities: ["notifications"],
-            dependencyEvs: {},
-            externalDeps: {},
+            origin: {
+              url: null,
+              originKey: "vibestudio",
+              registrableDomain: null,
+              version: null,
+              isHostBuild: true,
+              firstEncounter: false,
+            },
+            notableRows: [],
+            everydayRows: [],
+            change: "added",
+            section: "template",
           },
         ],
+        summary: { panels: 0, agents: 0, services: 0, clientApps: 1, extensions: 0 },
+        unchangedPartCount: 0,
         configWrite: null,
         requestedAt: 1,
       },
-    ] satisfies PendingUnitBatchApproval[];
+    ] satisfies PendingUnitInstallReviewApproval[];
     const authService = createAuthService({
       tokenManager,
       deviceAuthStore: authStore,
@@ -402,7 +420,7 @@ describe("auth service connection grants", () => {
       });
       const response = await postLocal<{
         code: string;
-        approvals: PendingUnitBatchApproval[];
+        approvals: PendingUnitInstallReviewApproval[];
       }>(port, "/_r/s/auth/mobile-app-bootstrap", {
         deviceId: issued.deviceId,
         refreshToken: issued.refreshToken,
@@ -413,7 +431,7 @@ describe("auth service connection grants", () => {
       expect(response.body.approvals).toEqual([
         expect.objectContaining({
           approvalId: "approval-mobile",
-          units: [expect.objectContaining({ target: "react-native" })],
+          parts: [expect.objectContaining({ target: "react-native" })],
         }),
       ]);
     } finally {

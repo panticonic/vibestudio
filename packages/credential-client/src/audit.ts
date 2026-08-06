@@ -16,21 +16,30 @@ function formatDateKey(ts: number): string {
 
 function matchesFilter(
   entry: CredentialAuditEvent,
-  filter?: Partial<Pick<AuditEntry, "workerId" | "providerId" | "connectionId" | "method">>,
+  filter?: Partial<Pick<AuditEntry, "workerId" | "providerId" | "connectionId" | "method">>
 ): boolean {
   if (!filter) {
     return true;
   }
 
-  if (filter.workerId !== undefined && (!("workerId" in entry) || entry.workerId !== filter.workerId)) {
+  if (
+    filter.workerId !== undefined &&
+    (!("workerId" in entry) || entry.workerId !== filter.workerId)
+  ) {
     return false;
   }
 
-  if (filter.providerId !== undefined && (!("providerId" in entry) || entry.providerId !== filter.providerId)) {
+  if (
+    filter.providerId !== undefined &&
+    (!("providerId" in entry) || entry.providerId !== filter.providerId)
+  ) {
     return false;
   }
 
-  if (filter.connectionId !== undefined && (!("connectionId" in entry) || entry.connectionId !== filter.connectionId)) {
+  if (
+    filter.connectionId !== undefined &&
+    (!("connectionId" in entry) || entry.connectionId !== filter.connectionId)
+  ) {
     return false;
   }
 

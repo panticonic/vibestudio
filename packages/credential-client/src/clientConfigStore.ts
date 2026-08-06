@@ -1,9 +1,6 @@
 import * as path from "node:path";
 import { getProfileDataPath } from "@vibestudio/env-paths";
-import {
-  assertValidStoreIdentifier,
-  EncryptedJsonStore,
-} from "./encryptedJsonStore.js";
+import { assertValidStoreIdentifier, EncryptedJsonStore } from "./encryptedJsonStore.js";
 import type {
   CredentialFlowType,
   ClientConfigFieldStatus,
@@ -25,11 +22,14 @@ export interface ClientConfigRecord {
   status?: "active" | "disabled" | "deleted";
   flowTypes?: CredentialFlowType[];
   allowRefreshWhenDisabled?: boolean;
-  fields: Record<string, {
-    value: string;
-    type: ClientConfigFieldType;
-    updatedAt: number;
-  }>;
+  fields: Record<
+    string,
+    {
+      value: string;
+      type: ClientConfigFieldType;
+      updatedAt: number;
+    }
+  >;
   versions?: Record<string, ClientConfigVersionRecord>;
   createdAt: number;
   updatedAt: number;
@@ -87,7 +87,7 @@ export class ClientConfigStore extends EncryptedJsonStore<ClientConfigRecord> {
   summarize(
     configId: string,
     record: ClientConfigRecord | null,
-    requestedFields?: readonly { name: string; type: ClientConfigFieldType }[],
+    requestedFields?: readonly { name: string; type: ClientConfigFieldType }[]
   ): ClientConfigStatus {
     const fields: Record<string, ClientConfigFieldStatus> = {};
     const names = requestedFields?.length

@@ -1404,23 +1404,13 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ credentialId: "cred-123" }] }],
   },
   resolveCredential: {
-    capability: "credential.use",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.read",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
-    },
-    presentation: {
-      title: "Use a matching connected account",
-      action: "use a matching connected account",
-      description: "Allows {requesterKind} to use a matching connected account.",
-      group: "credentials",
-      authorityCategory: {
-        domain: "accounts",
-        verb: "act",
-      },
+      rationale:
+        "Credential mediation exposes no credential before the handler authorizes the exact matched credential and use context",
     },
     description:
       "Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches.",
@@ -1447,23 +1437,13 @@ export const credentialsMethods = defineServiceMethods({
     examples: [{ args: [{ url: "https://api.example.com/v1/me", method: "GET" }] }],
   },
   proxyGitHttp: {
-    capability: "credential.use",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.control",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
-    },
-    presentation: {
-      title: "Use a connected account with a Git remote",
-      action: "use a connected account with a Git remote",
-      description: "Allows {requesterKind} to use a connected account with a Git remote.",
-      group: "credentials",
-      authorityCategory: {
-        domain: "accounts",
-        verb: "act",
-      },
+      rationale:
+        "The transport exposes no Git response before the egress proxy authorizes anonymous network access or one concrete credential and remote",
     },
     description:
       "Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded.",

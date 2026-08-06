@@ -25,7 +25,7 @@ import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { User } from "@vibestudio/identity/types";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { AuditLog } from "@vibestudio/credential-client/audit";
-import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isPanelSlotId } from "@vibestudio/shared/panel/ids";
 import {
@@ -322,7 +322,7 @@ export function createAuthService(deps: {
     reason?: string;
     details?: string[];
     approvalRequired?: boolean;
-    approvals?: PendingUnitBatchApproval[];
+    approvals?: PendingUnitInstallReviewApproval[];
   }>;
   getMobileAppBootstrap?: (source?: string | null) => unknown | null | Promise<unknown | null>;
   registerMobileAppPrincipal?: (

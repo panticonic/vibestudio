@@ -41,7 +41,7 @@ export function ensureCentralConfigDir(): string {
     } catch (err) {
       console.warn(
         `[centralAuth] Could not enforce 0o700 on ${dir}: ${(err as Error).message}. ` +
-        `Secrets may be readable by other users on this machine.`,
+          `Secrets may be readable by other users on this machine.`
       );
     }
   }

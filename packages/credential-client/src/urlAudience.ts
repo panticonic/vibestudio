@@ -68,11 +68,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
 ]);
 
-const BLOCKED_INJECTION_HEADERS = new Set([
-  "host",
-  "content-length",
-  "cookie",
-]);
+const BLOCKED_INJECTION_HEADERS = new Set(["host", "content-length", "cookie"]);
 
 const HTTP_TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
@@ -140,7 +136,10 @@ export function urlMatchesAudience(targetUrl: string | URL, audience: UrlAudienc
   return targetPath === basePath || targetPath.startsWith(`${basePath}/`);
 }
 
-export function findMatchingUrlAudience(targetUrl: string | URL, audiences: readonly UrlAudience[]): UrlAudience | null {
+export function findMatchingUrlAudience(
+  targetUrl: string | URL,
+  audiences: readonly UrlAudience[]
+): UrlAudience | null {
   for (const audience of audiences) {
     if (urlMatchesAudience(targetUrl, audience)) {
       return normalizeUrlAudience(audience);
@@ -150,7 +149,11 @@ export function findMatchingUrlAudience(targetUrl: string | URL, audiences: read
 }
 
 export function normalizeCredentialInjection(injection: CredentialInjection): CredentialInjection {
-  if (injection.type === "oauth1-signature" || injection.type === "cookie" || injection.type === "ssh-key") {
+  if (
+    injection.type === "oauth1-signature" ||
+    injection.type === "cookie" ||
+    injection.type === "ssh-key"
+  ) {
     return { type: injection.type };
   }
 
@@ -195,7 +198,10 @@ export function renderCredentialHeaderValue(template: string, token: string): st
   return rendered;
 }
 
-export function renderCredentialBasicAuthValue(injection: CredentialBasicAuthInjection, token: string): string {
+export function renderCredentialBasicAuthValue(
+  injection: CredentialBasicAuthInjection,
+  token: string
+): string {
   const username = renderCredentialHeaderValue(injection.usernameTemplate, token);
   const password = renderCredentialHeaderValue(injection.passwordTemplate, token);
   return `Basic ${base64EncodeUtf8(`${username}:${password}`)}`;
@@ -236,8 +242,13 @@ function parseCredentialUrl(raw: string): URL {
   if (parsed.hostname.endsWith(".")) {
     throw new Error("Credential audience URL must not use a trailing-dot hostname");
   }
-  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocalHttpHost(parsed.hostname))) {
-    throw new Error("Credential audience URL must use HTTPS unless it targets localhost or loopback HTTP");
+  if (
+    parsed.protocol !== "https:" &&
+    !(parsed.protocol === "http:" && isLocalHttpHost(parsed.hostname))
+  ) {
+    throw new Error(
+      "Credential audience URL must use HTTPS unless it targets localhost or loopback HTTP"
+    );
   }
   return parsed;
 }
@@ -280,7 +291,11 @@ function validateHeaderName(name: string): void {
   if (CONTROL_CHAR_RE.test(name)) {
     throw new Error("Credential header name contains control characters");
   }
-  if (HOP_BY_HOP_HEADERS.has(name) || BLOCKED_INJECTION_HEADERS.has(name) || name.startsWith("proxy-")) {
+  if (
+    HOP_BY_HOP_HEADERS.has(name) ||
+    BLOCKED_INJECTION_HEADERS.has(name) ||
+    name.startsWith("proxy-")
+  ) {
     throw new Error(`Credential header cannot be injected into ${name}`);
   }
 }
@@ -314,7 +329,13 @@ function base64EncodeUtf8(value: string): string {
   if (typeof btoa === "function") {
     return btoa(binary);
   }
-  const maybeBuffer = (globalThis as { Buffer?: { from(input: string, encoding: "binary"): { toString(encoding: "base64"): string } } }).Buffer;
+  const maybeBuffer = (
+    globalThis as {
+      Buffer?: {
+        from(input: string, encoding: "binary"): { toString(encoding: "base64"): string };
+      };
+    }
+  ).Buffer;
   if (maybeBuffer) {
     return maybeBuffer.from(binary, "binary").toString("base64");
   }

@@ -1,9 +1,7 @@
 /** Wire contract for identity revocation cleanup across workspace children. */
 import { z } from "zod";
 
-export const RevokedUserCleanupRequestSchema = z
-  .object({ userId: z.string().min(1) })
-  .strict();
+export const RevokedUserCleanupRequestSchema = z.object({ userId: z.string().min(1) }).strict();
 
 export const RevokedUserCleanupResultSchema = z
   .object({

@@ -1,12 +1,12 @@
-import type { EndpointDeclaration } from './types.js';
+import type { EndpointDeclaration } from "./types.js";
 
-export type CapabilityResult = 'allow' | 'deny' | 'warn';
+export type CapabilityResult = "allow" | "deny" | "warn";
 
 export function checkCapability(
   url: string,
   method: string,
   declarations: EndpointDeclaration[],
-  mode: 'enforce' | 'warn' = 'enforce',
+  mode: "enforce" | "warn" = "enforce"
 ): CapabilityResult {
   const normalizedUrl = normalizeUrl(url);
   const normalizedMethod = method.toUpperCase();
@@ -17,25 +17,22 @@ export function checkCapability(
     }
 
     if (matchesMethod(declaration.methods, normalizedMethod)) {
-      return 'allow';
+      return "allow";
     }
   }
 
-  return mode === 'warn' ? 'warn' : 'deny';
+  return mode === "warn" ? "warn" : "deny";
 }
 
 function normalizeUrl(url: string): string {
-  const hashIndex = url.indexOf('#');
+  const hashIndex = url.indexOf("#");
   const withoutHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
-  const queryIndex = withoutHash.indexOf('?');
+  const queryIndex = withoutHash.indexOf("?");
   return queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
 }
 
-function matchesMethod(
-  methods: EndpointDeclaration['methods'],
-  method: string,
-): boolean {
-  if (methods === '*') {
+function matchesMethod(methods: EndpointDeclaration["methods"], method: string): boolean {
+  if (methods === "*") {
     return true;
   }
 
@@ -43,8 +40,8 @@ function matchesMethod(
 }
 
 function matchesUrlPattern(pattern: string, url: string): boolean {
-  const patternSegments = normalizeUrl(pattern).split('/');
-  const urlSegments = url.split('/');
+  const patternSegments = normalizeUrl(pattern).split("/");
+  const urlSegments = url.split("/");
 
   return matchSegments(patternSegments, urlSegments, 0, 0);
 }
@@ -53,12 +50,12 @@ function matchSegments(
   patternSegments: string[],
   urlSegments: string[],
   patternIndex: number,
-  urlIndex: number,
+  urlIndex: number
 ): boolean {
   while (patternIndex < patternSegments.length && urlIndex < urlSegments.length) {
     const patternSegment = patternSegments[patternIndex];
 
-    if (patternSegment === '**') {
+    if (patternSegment === "**") {
       if (patternIndex === patternSegments.length - 1) {
         return true;
       }
@@ -72,7 +69,7 @@ function matchSegments(
       return false;
     }
 
-    if (patternSegment !== '*' && patternSegment !== urlSegments[urlIndex]) {
+    if (patternSegment !== "*" && patternSegment !== urlSegments[urlIndex]) {
       return false;
     }
 
@@ -80,7 +77,7 @@ function matchSegments(
     urlIndex += 1;
   }
 
-  while (patternIndex < patternSegments.length && patternSegments[patternIndex] === '**') {
+  while (patternIndex < patternSegments.length && patternSegments[patternIndex] === "**") {
     patternIndex += 1;
   }
 

@@ -28,9 +28,10 @@ describe("credential lifecycle", () => {
       state: "expired",
       canRefresh: false,
     });
-    expect(
-      credentialLifecycle({ revokedAt: NOW - 1, refreshToken: "secret" }, NOW)
-    ).toEqual({ state: "revoked", canRefresh: false });
+    expect(credentialLifecycle({ revokedAt: NOW - 1, refreshToken: "secret" }, NOW)).toEqual({
+      state: "revoked",
+      canRefresh: false,
+    });
   });
 
   it("requires an exact refresh recipe instead of trusting token presence", () => {

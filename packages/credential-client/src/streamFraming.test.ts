@@ -60,7 +60,9 @@ describe("streamFraming", () => {
     const data1 = encodeDataFrame(new Uint8Array([1, 2, 3, 4, 5]));
     const data2 = encodeDataFrame(new Uint8Array([6, 7, 8]));
     const end = encodeEndFrame({ bytesIn: 8 });
-    const combined = new Uint8Array(head.byteLength + data1.byteLength + data2.byteLength + end.byteLength);
+    const combined = new Uint8Array(
+      head.byteLength + data1.byteLength + data2.byteLength + end.byteLength
+    );
     combined.set(head, 0);
     combined.set(data1, head.byteLength);
     combined.set(data2, head.byteLength + data1.byteLength);

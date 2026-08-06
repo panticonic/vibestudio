@@ -1,6 +1,6 @@
-import type { RetryConfig } from './types.js';
+import type { RetryConfig } from "./types.js";
 
-export type BreakerState = 'closed' | 'open' | 'half-open';
+export type BreakerState = "closed" | "open" | "half-open";
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_INITIAL_DELAY_MS = 1000;
@@ -21,7 +21,7 @@ export class CircuitBreaker {
   private readonly tripWindowMs: number;
   private readonly cooldownMs: number;
 
-  private currentState: BreakerState = 'closed';
+  private currentState: BreakerState = "closed";
   private failureTimestamps: number[] = [];
   private openedAtMs = 0;
   private readonly listeners = new Set<(state: BreakerState) => void>();
@@ -33,23 +33,20 @@ export class CircuitBreaker {
   }
 
   get state(): BreakerState {
-    if (
-      this.currentState === 'open' &&
-      Date.now() >= this.openedAtMs + this.cooldownMs
-    ) {
-      this.transitionTo('half-open');
+    if (this.currentState === "open" && Date.now() >= this.openedAtMs + this.cooldownMs) {
+      this.transitionTo("half-open");
     }
 
     return this.currentState;
   }
 
   recordSuccess(): void {
-    if (this.currentState === 'half-open') {
+    if (this.currentState === "half-open") {
       this.reset();
       return;
     }
 
-    if (this.currentState === 'closed') {
+    if (this.currentState === "closed") {
       this.pruneFailures(Date.now());
     }
   }
@@ -57,12 +54,12 @@ export class CircuitBreaker {
   recordFailure(): void {
     const now = Date.now();
 
-    if (this.state === 'half-open') {
+    if (this.state === "half-open") {
       this.open(now);
       return;
     }
 
-    if (this.currentState === 'open') {
+    if (this.currentState === "open") {
       this.open(now);
       return;
     }
@@ -76,13 +73,13 @@ export class CircuitBreaker {
   }
 
   isAllowed(): boolean {
-    return this.state !== 'open';
+    return this.state !== "open";
   }
 
   reset(): void {
     this.failureTimestamps = [];
     this.openedAtMs = 0;
-    this.transitionTo('closed');
+    this.transitionTo("closed");
   }
 
   onStateChange(cb: (state: BreakerState) => void): () => void {
@@ -95,7 +92,7 @@ export class CircuitBreaker {
   private open(now: number): void {
     this.failureTimestamps = [];
     this.openedAtMs = now;
-    this.transitionTo('open');
+    this.transitionTo("open");
   }
 
   private pruneFailures(now: number): void {
@@ -117,10 +114,7 @@ export class CircuitBreaker {
 
 export function calculateBackoff(attempt: number, config: RetryConfig = {}): number {
   const normalizedAttempt = Math.max(1, Math.floor(attempt));
-  const initialDelayMs = normalizePositiveInteger(
-    config.initialDelayMs,
-    DEFAULT_INITIAL_DELAY_MS,
-  );
+  const initialDelayMs = normalizePositiveInteger(config.initialDelayMs, DEFAULT_INITIAL_DELAY_MS);
   const maxDelayMs = normalizePositiveInteger(config.maxDelayMs, DEFAULT_MAX_DELAY_MS);
 
   const delay = initialDelayMs * 2 ** (normalizedAttempt - 1);
@@ -128,7 +122,7 @@ export function calculateBackoff(attempt: number, config: RetryConfig = {}): num
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return fallback;
   }
 
