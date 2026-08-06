@@ -72,7 +72,10 @@ describe("inputRouter", () => {
   });
 });
 
-function fakeRpc(): { rpc: RpcLike; calls: Array<{ target: string; method: string; args: unknown[] }> } {
+function fakeRpc(): {
+  rpc: RpcLike;
+  calls: Array<{ target: string; method: string; args: unknown[] }>;
+} {
   const calls: Array<{ target: string; method: string; args: unknown[] }> = [];
   const rpc: RpcLike = {
     async call<T>(target: string, method: string, args: unknown[]): Promise<T> {
@@ -90,7 +93,11 @@ describe("SessionManager", () => {
   it("spawns a session via createEntity + startSession and focuses it", async () => {
     const { rpc, calls } = fakeRpc();
     const sm = new SessionManager({ rpc, hostPrincipalId: "app:host", viewport });
-    const record = await sm.open({ source: "workers/terminal-chat", className: "TerminalChatWorker", title: "Chat" });
+    const record = await sm.open({
+      source: "workers/terminal-chat",
+      className: "TerminalChatWorker",
+      title: "Chat",
+    });
     expect(record.status).toBe("running");
     expect(calls[0]?.method).toBe("runtime.createEntity");
     expect(calls[0]?.args[0]).toMatchObject({
@@ -141,7 +148,11 @@ describe("HostService caller ownership", () => {
       expose: (m: string, h: (req: RpcRequestContext) => unknown) => handlers.set(m, h),
     } as unknown as RpcClient;
     const { rpc: workerRpc } = fakeRpc(); // createEntity -> targetId "do:term:1"
-    const sessions = new SessionManager({ rpc: workerRpc, hostPrincipalId: "app:host", viewport: { columns: 40, rows: 6 } });
+    const sessions = new SessionManager({
+      rpc: workerRpc,
+      hostPrincipalId: "app:host",
+      viewport: { columns: 40, rows: 6 },
+    });
     const rejected: Array<{ method: string; caller: string; session: string }> = [];
     registerHostService(hostRpc, {
       sessions,
@@ -196,15 +207,18 @@ describe("HostService caller ownership", () => {
     ]);
 
     // Apply a fresh-seq frame directly (await the async VT write) for the grid assertion.
-    await sessions.onFrame(encodeFrame(rec.sessionId, "stdout", new TextEncoder().encode("hi\n"), 10));
+    await sessions.onFrame(
+      encodeFrame(rec.sessionId, "stdout", new TextEncoder().encode("hi\n"), 10)
+    );
     expect(rec.vt.grid()[0]).toBe("hi");
   });
 
   it("rejects setRawMode from an unrelated principal", () => {
     const { handlers, rejected, hostRpc } = setup();
-    const setRaw = handlers.get(HOST_METHODS.setRawMode)! as (
-      req: RpcRequestContext,
-    ) => { ok: boolean; reason?: string };
+    const setRaw = handlers.get(HOST_METHODS.setRawMode)! as (req: RpcRequestContext) => {
+      ok: boolean;
+      reason?: string;
+    };
     const result = setRaw({
       caller: { callerId: "panel:evil", callerKind: "panel" },
       origin: { callerId: "panel:evil", callerKind: "panel" },

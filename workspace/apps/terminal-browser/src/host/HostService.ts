@@ -27,11 +27,7 @@ export interface HostServiceDeps {
 export function registerHostService(rpc: RpcClient, deps: HostServiceDeps): void {
   const maxFrameBytes = deps.maxFrameBytes ?? 256 * 1024;
 
-  const authorized = (
-    caller: AuthenticatedCaller,
-    sessionId: string,
-    method: string,
-  ): boolean => {
+  const authorized = (caller: AuthenticatedCaller, sessionId: string, method: string): boolean => {
     if (deps.sessions.ownerOf(sessionId) === caller.callerId) return true;
     deps.onRejected?.(method, caller.callerId, sessionId);
     return false;

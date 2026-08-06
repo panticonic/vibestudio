@@ -38,8 +38,22 @@ describe("terminal exact state", () => {
     expect(loadTerminalState(current)).toEqual({ ...current, scratchOpen: false });
   });
 
+  it("starts empty panels and migrates known legacy state", () => {
+    expect(loadTerminalState({})).toEqual(defaultTerminalState());
+    expect(
+      loadTerminalState({
+        schemaVersion: 2,
+        panelTitle: " Legacy terminal ",
+        fontSize: 15,
+      })
+    ).toMatchObject({
+      panelTitle: "Legacy terminal",
+      fontSize: 15,
+      schemaVersion: TERMINAL_STATE_SCHEMA_VERSION,
+    });
+  });
+
   it.each([
-    { ...defaultTerminalState(), schemaVersion: TERMINAL_STATE_SCHEMA_VERSION - 1 },
     { ...defaultTerminalState(), schemaVersion: TERMINAL_STATE_SCHEMA_VERSION + 1 },
     { ...defaultTerminalState(), fontSize: Number.NaN },
     { ...defaultTerminalState(), panelTitle: "  rewritten  " },

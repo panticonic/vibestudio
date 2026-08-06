@@ -11,6 +11,7 @@ import {
   callMain,
 } from "@workspace/runtime";
 import type { RuntimeSupervisionDescription } from "@vibestudio/service-schemas/runtime";
+import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 
 // Top-level `expose` was removed from @workspace/runtime; this is the same
 // arg-spreading wrapper over the portable `rpc.expose`, kept local to the panel.
@@ -124,6 +125,8 @@ export function TerminalApp() {
   const initialOpenInFlightRef = useRef(false);
   const initialOpenHintTimerRef = useRef<number | null>(null);
   const interactiveOpenInFlightRef = useRef(false);
+  const pendingStatePersistenceRef = useRef<Record<string, unknown> | null>(null);
+  const statePersistenceInFlightRef = useRef<Promise<void> | null>(null);
   const approvedOpenUrlIdsRef = useRef(new Set<string>());
   const latestStateRef = useRef(state);
   const prevScratchOpenRef = useRef(state.scratchOpen);
@@ -309,9 +312,45 @@ export function TerminalApp() {
     [sessionIdsKey, sessionStore, shell]
   );
 
+  const persistLatestState = useCallback(
+    (nextState: Record<string, unknown>) => {
+      pendingStatePersistenceRef.current = nextState;
+      if (statePersistenceInFlightRef.current) return;
+
+      const persist = async (): Promise<void> => {
+        while (pendingStatePersistenceRef.current) {
+          const snapshot = pendingStatePersistenceRef.current;
+          pendingStatePersistenceRef.current = null;
+          try {
+            await panel.stateArgs.set(snapshot);
+          } catch (error) {
+            // A launch/install review can temporarily gate the workspace-state
+            // service. That is expected while the user is deciding; the latest
+            // snapshot remains queued for the next state change and ordinary
+            // failures are surfaced without creating an unhandled rejection.
+            if (!isReviewPending(error)) {
+              console.warn(
+                "[TerminalApp] Failed to persist terminal state:",
+                error instanceof Error ? error.message : String(error)
+              );
+            }
+          }
+        }
+      };
+
+      const inFlight = persist().finally(() => {
+        if (statePersistenceInFlightRef.current === inFlight) {
+          statePersistenceInFlightRef.current = null;
+        }
+      });
+      statePersistenceInFlightRef.current = inFlight;
+    },
+    [panel]
+  );
+
   useEffect(() => {
-    void panel.stateArgs.set(state as unknown as Record<string, unknown>);
-  }, [state]);
+    persistLatestState(state as unknown as Record<string, unknown>);
+  }, [persistLatestState, state]);
 
   useEffect(() => {
     const prev = prevScratchOpenRef.current;
@@ -340,11 +379,21 @@ export function TerminalApp() {
         setInitialOpenStartedAt(null);
         return sessionId;
       } catch (err) {
-        setInitialOpenError(
-          err instanceof Error ? err.message : "Terminal session failed to start"
-        );
-        initialOpenPendingRef.current = false;
-        setInitialOpenStatus("failed");
+        if (isReviewPending(err)) {
+          // A review-pending result is a recoverable workspace state, not a
+          // failed terminal. Keep the initial request eligible for the quiet
+          // approval-change retry below so resolving the review brings this
+          // same panel to life without requiring a second click.
+          initialOpenPendingRef.current = true;
+          setInitialOpenError(null);
+          setInitialOpenStatus("waitingApproval");
+        } else {
+          setInitialOpenError(
+            err instanceof Error ? err.message : "Terminal session failed to start"
+          );
+          initialOpenPendingRef.current = false;
+          setInitialOpenStatus("failed");
+        }
         setInitialOpenStartedAt(null);
         return undefined;
       } finally {
@@ -551,7 +600,6 @@ export function TerminalApp() {
       initialOpenPendingRef.current = true;
       await openInitialSession();
     };
-    void retryOpen();
     const timer = setInterval(() => void retryOpen(), 2000);
     return () => {
       cancelled = true;

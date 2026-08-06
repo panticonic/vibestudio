@@ -94,9 +94,22 @@ export interface StyledRun {
 
 // xterm system palette 0–15 → Ink/chalk color keywords.
 const ANSI_16 = [
-  "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-  "gray", "redBright", "greenBright", "yellowBright",
-  "blueBright", "magentaBright", "cyanBright", "whiteBright",
+  "black",
+  "red",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "cyan",
+  "white",
+  "gray",
+  "redBright",
+  "greenBright",
+  "yellowBright",
+  "blueBright",
+  "magentaBright",
+  "cyanBright",
+  "whiteBright",
 ];
 
 function hex6(n: number): string {

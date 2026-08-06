@@ -42,6 +42,14 @@ type PendingApproval = {
   approvalId: string;
   kind: string;
   title?: string;
+  allowedDecisions?: Array<"once" | "session" | "task" | "mission" | "agent" | "version" | "lock" | "deny">;
+  mode?: "install" | "update" | "adopt-root" | "part-changed";
+  parts?: Array<{
+    identityKey: string;
+    change?: string;
+    notableRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
+    everydayRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
+  }>;
   options?: Array<{
     value: string;
     tone?: string;
@@ -174,6 +182,14 @@ async function listPendingApprovals(app: ElectronApplication): Promise<PendingAp
       approvalId: string;
       kind: string;
       title?: string;
+      allowedDecisions?: string[];
+      mode?: string;
+      parts?: Array<{
+        identityKey: unknown;
+        change?: unknown;
+        notableRows?: Array<{ key: unknown; selectable: unknown; selectedByDefault: unknown }>;
+        everydayRows?: Array<{ key: unknown; selectable: unknown; selectedByDefault: unknown }>;
+      }>;
       options?: Array<{
         value: unknown;
         tone?: unknown;
@@ -184,6 +200,46 @@ async function listPendingApprovals(app: ElectronApplication): Promise<PendingAp
       approvalId: approval.approvalId,
       kind: approval.kind,
       title: approval.title,
+      allowedDecisions: Array.isArray(approval.allowedDecisions)
+        ? approval.allowedDecisions.filter(
+            (decision): decision is NonNullable<PendingApproval["allowedDecisions"]>[number] =>
+              decision === "once" ||
+              decision === "session" ||
+              decision === "task" ||
+              decision === "mission" ||
+              decision === "agent" ||
+              decision === "version" ||
+              decision === "lock" ||
+              decision === "deny"
+          )
+        : undefined,
+      mode:
+        approval.mode === "install" ||
+        approval.mode === "update" ||
+        approval.mode === "adopt-root" ||
+        approval.mode === "part-changed"
+          ? approval.mode
+          : undefined,
+      parts: Array.isArray(approval.parts)
+        ? approval.parts.map((part) => ({
+            identityKey: String(part.identityKey),
+            change: typeof part.change === "string" ? part.change : undefined,
+            notableRows: Array.isArray(part.notableRows)
+              ? part.notableRows.map((row) => ({
+                  key: String(row.key),
+                  selectable: row.selectable === true,
+                  selectedByDefault: row.selectedByDefault === true,
+                }))
+              : [],
+            everydayRows: Array.isArray(part.everydayRows)
+              ? part.everydayRows.map((row) => ({
+                  key: String(row.key),
+                  selectable: row.selectable === true,
+                  selectedByDefault: row.selectedByDefault === true,
+                }))
+              : [],
+          }))
+        : undefined,
       options: Array.isArray(approval.options)
         ? approval.options.map((option) => ({
             value: String(option.value),
@@ -216,7 +272,29 @@ async function resolveApproval(app: ElectronApplication, approval: PendingApprov
       await testApi.rpcCall("shellApproval", "resolveUserland", [pending.approvalId, choice]);
       return;
     }
-    await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, "session"]);
+    if (pending.kind === "unit-install-review") {
+      const decision =
+        pending.mode === "update"
+          ? "update"
+          : pending.mode === "adopt-root"
+            ? "adopt-root"
+            : "install";
+      const allowNow = (pending.parts ?? [])
+        .filter((part) => part.change !== "removed")
+        .map((part) => ({
+          identityKey: part.identityKey,
+          permissions: [...(part.notableRows ?? []), ...(part.everydayRows ?? [])]
+            .filter((row) => row.selectable && row.selectedByDefault)
+            .map((row) => row.key),
+        }));
+      await testApi.rpcCall("shellApproval", "resolveInstallReview", [
+        pending.approvalId,
+        { decision, allowNow },
+      ]);
+      return;
+    }
+    const decision = pending.allowedDecisions?.find((candidate) => candidate !== "deny") ?? "once";
+    await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, decision]);
   }, approval);
 }
 
@@ -228,7 +306,7 @@ async function approvePendingTerminalWork(app: ElectronApplication, window?: Pag
   if (window) {
     await window
       .getByRole("button", {
-        name: /Trust and start|Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i,
+        name: /Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i,
       })
       .click({ timeout: 250 })
       .catch(() => {});
@@ -362,9 +440,13 @@ async function waitForUsableTerminalSession(
 ): Promise<TerminalSession> {
   const startedAt = Date.now();
   let lastOpenRequestAt = 0;
-  await expect
-    .poll(
-      async () => {
+  let lastOpenErrorMessage = "";
+  let lastPanelText = "";
+  let lastPanelHtml = "";
+  try {
+    await expect
+      .poll(
+        async () => {
         await approvePendingTerminalWork(app, window);
         // The panel may mount before the approved shell extension's first build
         // finishes. Once approvals are resolved, drive its explicit recovery
@@ -387,6 +469,16 @@ async function waitForUsableTerminalSession(
           if (opened) return opened;
           const openErrorMessage = openError instanceof Error ? openError.message : "";
           const panelHtml = await getPanelHtml(app, panelId).catch(() => "");
+          lastOpenErrorMessage = openErrorMessage;
+          lastPanelHtml = panelHtml;
+          lastPanelText = await app
+            .evaluate(async (_electron, id) => {
+              const testApi = (
+                globalThis as { __testApi?: { getPanelText: (panelId: string) => Promise<string> } }
+              ).__testApi;
+              return testApi ? await testApi.getPanelText(id) : "";
+            }, panelId)
+            .catch(() => "");
           if (
             openErrorMessage.includes("did not request") ||
             panelHtml.includes("did not request")
@@ -400,11 +492,19 @@ async function waitForUsableTerminalSession(
           }
           sessions = await listTerminalSessions(app, panelId).catch(() => []);
         }
-        return sessions.find((session) => session.alive !== false)?.sessionId ?? "";
-      },
-      { timeout: 120_000, intervals: [500, 1000, 2000] }
-    )
-    .not.toBe("");
+          return sessions.find((session) => session.alive !== false)?.sessionId ?? "";
+        },
+        { timeout: 120_000, intervals: [500, 1000, 2000] }
+      )
+      .not.toBe("");
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\n` +
+        `Terminal startup snapshot: openError=${JSON.stringify(lastOpenErrorMessage)}\n` +
+        `panelText=${JSON.stringify(lastPanelText.slice(0, 2000))}\n` +
+        `panelHtml=${JSON.stringify(lastPanelHtml.slice(0, 4000))}`
+    );
+  }
 
   const sessions = await listTerminalSessions(app, panelId);
   const session = sessions.find((item) => item.alive !== false);
@@ -1051,6 +1151,43 @@ test.describe("Terminal Startup", () => {
       )
       .not.toBe(`${beforeResize?.cols ?? 0}x${beforeResize?.rows ?? 0}`);
 
+    await expect
+      .poll(
+        async () => {
+          await approvePendingTerminalWork(app, testApp.window);
+          const stateArgs = await app.evaluate(async (_electron, panelId) => {
+            const testApi = (
+              globalThis as {
+                __testApi?: {
+                  rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+                };
+              }
+            ).__testApi;
+            if (!testApi) throw new Error("Test API not available");
+            const detail = (await testApi.rpcCall("workspace-state", "panelTree.detail", [
+              panelId,
+            ])) as { currentHistory?: { state_args?: string | null } } | null;
+            return detail?.currentHistory?.state_args ?? null;
+          }, terminalPanelId);
+          if (!stateArgs) return { leaves: 0, focusedSessionId: null };
+          const state = JSON.parse(stateArgs) as {
+            tree?: { kind: string; sessionId?: string; a?: unknown; b?: unknown };
+            focusedSessionId?: string;
+          };
+          const countLeaves = (node: typeof state.tree): number => {
+            if (!node) return 0;
+            if (node.kind === "leaf") return 1;
+            return countLeaves(node.a as typeof state.tree) + countLeaves(node.b as typeof state.tree);
+          };
+          return {
+            leaves: countLeaves(state.tree),
+            focusedSessionId: state.focusedSessionId ?? null,
+          };
+        },
+        { timeout: 30_000, intervals: [250, 500, 1000] }
+      )
+      .toEqual({ leaves: 3, focusedSessionId: sessionRef.sessionId });
+
     const preReloadPanelId = terminalPanelId;
     await reloadPanel(app, preReloadPanelId);
     terminalPanelId = await waitForTerminalPanel(app, testApp.window);
@@ -1067,21 +1204,28 @@ test.describe("Terminal Startup", () => {
       )
       .toContain("xterm");
 
-    const reloadedSession = await waitForUsableTerminalSession(
+    const reloadedSessionId = await ensureUsableTerminalSessionId(
       app,
       terminalPanelId,
+      sessionRef,
       testApp.window
     );
     await callTerminalPanel(app, terminalPanelId, "focusSession", {
-      sessionId: reloadedSession.sessionId,
+      sessionId: reloadedSessionId,
     }).catch(() => undefined);
     await expect
       .poll(
         async () =>
-          (await clickPanelSelector(app, terminalPanelId, ".xterm").catch(() => false)) ||
-          (await clickPanelSelector(app, terminalPanelId, ".xterm-helper-textarea").catch(
-            () => false
-          )),
+          (await clickPanelSelector(
+            app,
+            terminalPanelId,
+            '[data-focused="true"] .xterm'
+          ).catch(() => false)) ||
+          (await clickPanelSelector(
+            app,
+            terminalPanelId,
+            '[data-focused="true"] .xterm-helper-textarea'
+          ).catch(() => false)),
         { timeout: 30_000, intervals: [250, 500, 1000] }
       )
       .toBe(true);
@@ -1099,13 +1243,13 @@ test.describe("Terminal Startup", () => {
     await expectScrollbackToContain(
       app,
       terminalPanelId,
-      reloadedSession.sessionId,
+      reloadedSessionId,
       "vibestudio-reloaded-keyboard-input"
     );
     await expectRenderedToContain(
       app,
       terminalPanelId,
-      reloadedSession.sessionId,
+      reloadedSessionId,
       "vibestudio-reloaded-keyboard-input"
     );
 

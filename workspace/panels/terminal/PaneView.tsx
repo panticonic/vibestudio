@@ -559,6 +559,8 @@ export function PaneView(props: {
   const pane = (
     <Flex
       ref={paneRef}
+      data-session-id={props.session.sessionId}
+      data-focused={props.focused ? "true" : "false"}
       direction="column"
       style={{
         flex: 1,

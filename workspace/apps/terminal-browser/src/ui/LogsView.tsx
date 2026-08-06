@@ -21,7 +21,11 @@ export function LogsView({ lines, maxLines = 16 }: LogsViewProps): React.ReactEl
         <Text dimColor>No logs yet. Esc to dismiss.</Text>
       ) : (
         shown.map((l, i) => (
-          <Text key={i} color={l.level === "error" ? "red" : undefined} dimColor={l.level !== "error"}>
+          <Text
+            key={i}
+            color={l.level === "error" ? "red" : undefined}
+            dimColor={l.level !== "error"}
+          >
             {`[${l.source}] ${l.message}`}
           </Text>
         ))

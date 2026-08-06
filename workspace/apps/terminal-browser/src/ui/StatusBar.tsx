@@ -29,7 +29,9 @@ export function StatusBar({
       </Text>
       <Text>{`  ws: ${workspace}   session: ${sessionTitle}   `}</Text>
       <Text color={STATUS_COLOR[status] ?? "white"}>{`● ${status}`}</Text>
-      {pendingApprovals > 0 ? <Text color="yellow">{`   approvals(${pendingApprovals})`}</Text> : null}
+      {pendingApprovals > 0 ? (
+        <Text color="yellow">{`   approvals(${pendingApprovals})`}</Text>
+      ) : null}
     </Box>
   );
 }

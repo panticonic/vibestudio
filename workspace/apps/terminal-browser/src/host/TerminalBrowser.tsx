@@ -4,6 +4,14 @@ import type { ApprovalDecisionId } from "@vibestudio/shared/approvalContract";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { SessionManager, type SessionSourceSpec } from "./SessionManager.js";
 import { classifyChord, parseNavKey } from "./inputRouter.js";
+import {
+  applyInstallReviewNav,
+  focusedRowKeyOf,
+  INITIAL_INSTALL_REVIEW_NAV,
+  routeApprovalDigit,
+  shouldHandleInstallReviewNav,
+  type InstallReviewNavState,
+} from "./installReviewNav.js";
 import type { ApprovalsClient } from "../approvals/approvalsClient.js";
 import { StatusBar } from "../ui/StatusBar.js";
 import { Viewport } from "../ui/Viewport.js";
@@ -47,14 +55,28 @@ export function TerminalBrowser(props: TerminalBrowserProps): React.ReactElement
   const [overlay, setOverlay] = React.useState<Overlay>("none");
   const [selected, setSelected] = React.useState(0);
   const [pending, setPending] = React.useState<PendingApproval[]>([]);
+  // Part/permission focus and selection for the approval currently on
+  // screen, if it's a `unit-install-review` (docs §7.2/§8, U5). Reset
+  // whenever the focused approval changes so a stale selection can never
+  // leak onto a different review.
+  const [installNav, setInstallNav] = React.useState<InstallReviewNavState>(
+    INITIAL_INSTALL_REVIEW_NAV
+  );
 
   // Refs so the raw stdin handler reads current state without re-subscribing.
   const overlayRef = React.useRef(overlay);
   const selectedRef = React.useRef(selected);
   const pendingRef = React.useRef(pending);
+  const installNavRef = React.useRef(installNav);
   overlayRef.current = overlay;
   selectedRef.current = selected;
   pendingRef.current = pending;
+  installNavRef.current = installNav;
+
+  const focusedApprovalId = pending[selected]?.approvalId;
+  React.useEffect(() => {
+    setInstallNav(INITIAL_INSTALL_REVIEW_NAV);
+  }, [focusedApprovalId]);
 
   // Re-render whenever session state changes (a frame arrived, focus moved, …).
   React.useEffect(() => sessions.subscribe(rerender), [sessions, rerender]);
@@ -136,18 +158,37 @@ export function TerminalBrowser(props: TerminalBrowserProps): React.ReactElement
       }
       if (mode === "approvals") {
         const list = pendingRef.current;
+        const target = list[selectedRef.current];
         if (nav === "up") setSelected((i) => Math.max(0, i - 1));
         else if (nav === "down") setSelected((i) => Math.min(list.length - 1, i + 1));
-        else if (typeof nav === "object" && nav && "digit" in nav) {
-          const decision = DECISION_BY_DIGIT[nav.digit];
-          const target = list[selectedRef.current];
-          if (decision && target) {
+        else if (shouldHandleInstallReviewNav(target, nav)) {
+          // Part focus, permission-row expansion, and their toggles (§7.2, §8,
+          // U5) — everything ↑/↓/1/4 don't already own. Inert for every other
+          // approval kind, so it can never shadow the generic digit decisions.
+          const parts = target.parts;
+          setInstallNav((prevState) => applyInstallReviewNav(prevState, nav, parts));
+        } else if (typeof nav === "object" && nav && "digit" in nav) {
+          // The only valid resolution for a `unit-install-review` (§8) is
+          // `resolveInstallReview` with the selection built so far — never
+          // the generic once/session/version/deny path used everywhere else.
+          const route = routeApprovalDigit(
+            target,
+            nav.digit,
+            installNavRef.current.selection,
+            DECISION_BY_DIGIT
+          );
+          if (route.via === "resolveInstallReview") {
             void approvals
-              .resolve(target.approvalId, decision)
+              .resolveInstallReview(route.approvalId, route.resolution)
               .then(refreshPending)
               .catch((error) =>
-                console.warn("[terminal-browser] Approval decision failed:", error)
+                console.warn("[terminal-browser] Install review decision failed:", error)
               );
+          } else if (route.via === "resolve") {
+            void approvals
+              .resolve(route.approvalId, route.decision)
+              .then(refreshPending)
+              .catch((error) => console.warn("[terminal-browser] Approval decision failed:", error));
           }
         }
         return;
@@ -168,7 +209,19 @@ export function TerminalBrowser(props: TerminalBrowserProps): React.ReactElement
   if (overlay === "switcher") {
     body = <SessionSwitcher sessions={sessions.list()} selectedIndex={selected} />;
   } else if (overlay === "approvals") {
-    body = <ApprovalsOverlay pending={pending} selectedIndex={selected} />;
+    const focusedApproval = pending[selected];
+    const isInstallReview = focusedApproval?.kind === "unit-install-review";
+    body = (
+      <ApprovalsOverlay
+        pending={pending}
+        selectedIndex={selected}
+        partIndex={isInstallReview ? installNav.partIndex : undefined}
+        installSelection={isInstallReview ? installNav.selection : undefined}
+        focusedRowKey={
+          isInstallReview ? focusedRowKeyOf(installNav, focusedApproval.parts) : undefined
+        }
+      />
+    );
   } else if (overlay === "logs") {
     body = <LogsView lines={props.logs} />;
   } else {

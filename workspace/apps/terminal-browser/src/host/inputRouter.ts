@@ -27,22 +27,40 @@ export function classifyChord(chunk: Uint8Array): HostChord | null {
   return CHORD_BYTES[chunk[0]!] ?? null;
 }
 
-/** Overlay navigation actions parsed from a chunk while an overlay is open. */
-export type NavKey = "up" | "down" | "enter" | "escape" | { digit: number } | { char: string } | null;
+/**
+ * Overlay navigation actions parsed from a chunk while an overlay is open.
+ * `left`/`right`/`tab` exist only for the `unit-install-review` detail (part
+ * and permission-row focus, §7.2/§8) — every other overlay ignores them, the
+ * same way they already ignore `{ char }` today.
+ */
+export type NavKey =
+  | "up"
+  | "down"
+  | "left"
+  | "right"
+  | "tab"
+  | "enter"
+  | "escape"
+  | { digit: number }
+  | { char: string }
+  | null;
 
 export function parseNavKey(chunk: Uint8Array): NavKey {
   if (chunk.length === 1) {
     const b = chunk[0]!;
     if (b === 0x1b) return "escape";
+    if (b === 0x09) return "tab";
     if (b === 0x0d || b === 0x0a) return "enter";
     if (b >= 0x31 && b <= 0x39) return { digit: b - 0x30 }; // '1'..'9'
     if (b >= 0x20 && b < 0x7f) return { char: String.fromCharCode(b) };
     return null;
   }
-  // Arrow keys: ESC [ A/B
+  // Arrow keys: ESC [ A/B/C/D
   if (chunk.length === 3 && chunk[0] === 0x1b && chunk[1] === 0x5b) {
     if (chunk[2] === 0x41) return "up";
     if (chunk[2] === 0x42) return "down";
+    if (chunk[2] === 0x43) return "right";
+    if (chunk[2] === 0x44) return "left";
   }
   return null;
 }

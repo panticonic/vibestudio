@@ -41,13 +41,36 @@ export function defaultTerminalState(): TerminalState {
 }
 
 export function loadTerminalState(raw: unknown): TerminalState {
-  const defaults = defaultTerminalState();
-  if (!raw || typeof raw !== "object") return defaults;
-  if (!isRecord(raw) || raw["schemaVersion"] !== TERMINAL_STATE_SCHEMA_VERSION) {
+  if (!raw || typeof raw !== "object") return defaultTerminalState();
+  if (!isRecord(raw)) {
     throw new Error(
       `Terminal state must use schema version ${TERMINAL_STATE_SCHEMA_VERSION}; recreate the panel`
     );
   }
+  const schemaVersion = raw["schemaVersion"];
+  // A new panel starts with an empty state-args object. Older terminal panels
+  // may also carry the v1/v2 shape from before the exact-state validator was
+  // introduced. Normalize those known legacy shapes once and persist v3 from
+  // the normal state effect; unknown/future versions still fail loudly.
+  if (schemaVersion !== TERMINAL_STATE_SCHEMA_VERSION) {
+    if (schemaVersion === 1 || schemaVersion === 2 || Object.keys(raw).length === 0) {
+      return normalizeTerminalState(raw);
+    }
+    throw new Error(
+      `Terminal state must use schema version ${TERMINAL_STATE_SCHEMA_VERSION}; recreate the panel`
+    );
+  }
+  const normalized = normalizeTerminalState(raw);
+  const state = raw as Partial<TerminalState> & { scratchOpen?: unknown };
+  const persistedShape = { ...normalized, scratchOpen: state.scratchOpen };
+  if (canonicalJson(raw) !== canonicalJson(persistedShape)) {
+    throw new Error("Terminal state is not valid for the current exact schema; recreate the panel");
+  }
+  return normalized;
+}
+
+function normalizeTerminalState(raw: Record<string, unknown>): TerminalState {
+  const defaults = defaultTerminalState();
   const state = raw as Partial<TerminalState> & {
     notifications?: Array<Partial<TerminalNotification> & { message?: string }>;
     scratchBuffers?: unknown;
@@ -126,10 +149,6 @@ export function loadTerminalState(raw: unknown): TerminalState {
     scratchOpen: false,
     schemaVersion: TERMINAL_STATE_SCHEMA_VERSION,
   };
-  const persistedShape = { ...normalized, scratchOpen: state.scratchOpen };
-  if (canonicalJson(raw) !== canonicalJson(persistedShape)) {
-    throw new Error("Terminal state is not valid for the current exact schema; recreate the panel");
-  }
   return normalized;
 }
 
