@@ -10,7 +10,7 @@
 import { panelTree } from "@workspace/runtime";
 import { suite } from "../run.js";
 import { expect } from "../expect.js";
-import { openPanel, panelText, waitFor } from "../panels.js";
+import { evalInPanel, openPanel, panelText, waitFor } from "../panels.js";
 
 // Chat is part of the bootable base contract. Feature panels own their own
 // lifecycle suites instead of becoming an implicit testkit dependency.
@@ -48,6 +48,38 @@ export const panelLifecycle = suite("panel-lifecycle", {
       label: "panel renders visible text",
     });
     expect(text.length, "snapshot text length").toBeGreaterThan(0);
+  })
+  .test("rebuild replaces the runtime and the same handle automates the ready replacement", async (t) => {
+    const handle = await openPanel(TARGET_PANEL_SOURCE);
+    t.defer(() => handle.close().then(() => undefined));
+
+    const before = await handle.observe();
+    expect(before.phase, "initial panel phase").toBe("ready");
+    expect(typeof before.runtimeEntityId, "initial runtime entity id").toBe("string");
+
+    const rebuilt = await handle.rebuild();
+    expect(rebuilt.panelId, "stable panel slot id").toBe(handle.id);
+    expect(rebuilt.phase, "rebuilt panel phase").toBe("ready");
+    expect(typeof rebuilt.runtimeEntityId, "replacement runtime entity id").toBe("string");
+    expect(rebuilt.runtimeEntityId, "replacement runtime entity").not.toBe(
+      before.runtimeEntityId
+    );
+    expect(rebuilt.attemptId, "replacement attempt").not.toBe(before.attemptId);
+
+    const marker = await evalInPanel<string>(
+      handle,
+      `(() => {
+        document.documentElement.dataset.testkitRebuild = "automated";
+        return document.documentElement.dataset.testkitRebuild;
+      })()`
+    );
+    expect(marker, "CDP automation result from replacement runtime").toBe("automated");
+
+    const afterAutomation = await handle.observe();
+    expect(afterAutomation.runtimeEntityId, "automated runtime entity").toBe(
+      rebuilt.runtimeEntityId
+    );
+    expect(afterAutomation.phase, "automated panel phase").toBe("ready");
   })
   .test("closing a panel removes it from the tree", async () => {
     const handle = await openPanel(TARGET_PANEL_SOURCE);

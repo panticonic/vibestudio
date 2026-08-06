@@ -99,8 +99,6 @@ interface EnsurePanelSlotResult {
   } | null;
 }
 
-const BROWSER_READY_STABILITY_DELAY_MS = 50;
-
 /**
  * Does the loaded browser document belong to the requested navigation?
  *
@@ -129,25 +127,6 @@ function browserDocumentMatchesSource(viewUrl: string, source: string): boolean 
     return view.hostname === requested.hostname;
   }
   return view.href === requested.href;
-}
-
-/** Lifecycle-poll delay that rejects promptly when the caller aborts. */
-function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason instanceof Error ? signal.reason : new Error("Aborted"));
-      return;
-    }
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(signal?.reason instanceof Error ? signal.reason : new Error("Aborted"));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 export interface CreatePanelSlotOptions {
@@ -264,6 +243,7 @@ export interface CreatePanelRuntimeOptions {
 
 export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRuntimeApi {
   const metadataCache = new Map<string, PanelHandleMetadata>();
+  const observationVersions = new WeakMap<PanelObservation, { epoch: string; counter: number }>();
   const callState = <T>(method: string, args: unknown[]): Promise<T> =>
     callWorkspaceState<T>(options.rpc, method, args);
   const workspaceState = createRuntimeWorkspaceStateClient(options.rpc);
@@ -422,7 +402,9 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     const detail = await callPanelState<WorkspacePanelDetail | null>("detail", [id]);
     if (!detail) throw new Error(`Unknown panel slot: ${id}`);
     const runtime = await options.rpc.call<{
+      version: { epoch: string; counter: number };
       lease: {
+        runtimeEntityId: string;
         holderLabel: string;
         platform: "desktop" | "headless" | "mobile";
         supportsCdp: boolean;
@@ -445,7 +427,9 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       ? (JSON.parse(detail.currentHistory.options) as { ref?: string })
       : {};
     const source = detail.currentHistory.source;
-    const boot = runtime.observation?.boot;
+    const exactRuntimeObservation =
+      runtime.lease?.runtimeEntityId === detail.entity.id ? runtime.observation : null;
+    const boot = exactRuntimeObservation?.boot;
     // External browser panels do not execute Vibestudio's managed bootstrap,
     // so their boot handshake is intentionally unavailable.  The browser
     // document itself is the readiness contract for those panels; requiring a
@@ -453,9 +437,9 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     // loading state even though its CDP target and document are usable.
     const browserDocumentReady =
       isBrowserPanelSource(source) &&
-      runtime.observation !== null &&
-      runtime.observation.view.loading === false &&
-      browserDocumentMatchesSource(runtime.observation.view.url, source);
+      exactRuntimeObservation !== null &&
+      exactRuntimeObservation.view.loading === false &&
+      browserDocumentMatchesSource(exactRuntimeObservation.view.url, source);
     const phase = !runtime.lease
       ? ("assigning-host" as const)
       : browserDocumentReady
@@ -489,7 +473,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
             },
           }
         : undefined;
-    return {
+    const observation: PanelObservation = {
       panelId: id,
       title: detail.slot.current_entity_title ?? id,
       source,
@@ -510,11 +494,11 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
               platform: runtime.lease.platform,
               supportsInspection: runtime.lease.supportsCdp,
               view: {
-                exists: runtime.observation !== null,
-                ...(runtime.observation
+                exists: exactRuntimeObservation !== null,
+                ...(exactRuntimeObservation
                   ? {
-                      url: runtime.observation.view.url,
-                      loading: runtime.observation.view.loading,
+                      url: exactRuntimeObservation.view.url,
+                      loading: exactRuntimeObservation.view.loading,
                     }
                   : {}),
               },
@@ -533,6 +517,8 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         : {}),
       updatedAt,
     };
+    observationVersions.set(observation, runtime.version);
+    return observation;
   };
 
   for (const metadata of options.initialMetadata ?? []) {
@@ -544,8 +530,6 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     signal?: AbortSignal
   ): Promise<PanelObservation> => {
     let observation = initial;
-    let stableBrowserIdentity: string | null = null;
-    let pollDelayMs = 50;
     for (;;) {
       signal?.throwIfAborted();
       if (observation.phase === "failed" && observation.failure) {
@@ -555,25 +539,18 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         throw new Error(`Panel ${observation.panelId} stopped before it became ready`);
       }
       if (observation.phase === "ready") {
-        if (!isBrowserPanelSource(observation.source)) return observation;
-        const browserIdentity = [
-          observation.runtimeEntityId ?? "",
-          observation.attemptId ?? "",
-          observation.source,
-        ].join("\0");
-        if (stableBrowserIdentity === browserIdentity) return observation;
-        // External-document readiness is a native navigation boundary. Require
-        // the same incarnation to remain ready across one host refresh so the
-        // caller cannot obtain a CDP page in the gap between a false loading
-        // sample and the subsequent navigation event.
-        stableBrowserIdentity = browserIdentity;
-        await abortableDelay(BROWSER_READY_STABILITY_DELAY_MS, signal);
-        observation = await observePanel(observation.panelId);
-        continue;
+        return observation;
       }
-      stableBrowserIdentity = null;
-      await abortableDelay(pollDelayMs, signal);
-      pollDelayMs = Math.min(pollDelayMs * 2, 500);
+      const version = observationVersions.get(observation);
+      if (!version) throw new Error(`Panel ${observation.panelId} has no observation version`);
+      await options.rpc.call(
+        "main",
+        "panelRuntime.awaitSlotChange",
+        [observation.panelId, version],
+        {
+          signal,
+        }
+      );
       observation = await observePanel(observation.panelId);
     }
   };

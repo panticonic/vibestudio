@@ -210,7 +210,8 @@ describe("panelRuntimeService", () => {
 
     await expect(
       service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
+      version: { epoch: expect.any(String), counter: expect.any(Number) },
       lease: expect.objectContaining({ runtimeEntityId: "panel:nav-a" }),
       observation: {
         view: { url: hostObservation.url, loading: false },
@@ -261,6 +262,105 @@ describe("panelRuntimeService", () => {
     ).resolves.toMatchObject({ observation: { boot: { phase: "ready" } } });
     await service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"]);
     expect(observeHost).toHaveBeenCalledOnce();
+  });
+
+  it("waits for the next coordinator transition without polling the host", async () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    const observeHost = vi.fn(async () => null);
+    const service = createPanelRuntimeService({
+      coordinator,
+      currentEntityForSlot,
+      observeHostSlot: observeHost,
+    });
+    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
+    await service.handler(desktopCtx, "registerClient", [
+      {
+        clientSessionId: "desktop-session",
+        hostConnectionId: "desktop-host",
+        label: "Desktop",
+        platform: "desktop",
+      },
+    ]);
+    await service.handler(desktopCtx, "acquire", [
+      "panel:nav-a",
+      {
+        slotId: "panel:tree/slot-a",
+        clientSessionId: "desktop-session",
+        connectionId: "desktop-runtime",
+      },
+    ]);
+    const snapshot = (await service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])) as {
+      version: { epoch: string; counter: number };
+    };
+    const waiting = service.handler(desktopCtx, "awaitSlotChange", [
+      "panel:tree/slot-a",
+      snapshot.version,
+    ]);
+
+    coordinator.reportView("panel:nav-a", "desktop-runtime", {
+      url: "http://127.0.0.1/panels/chat/",
+      loading: false,
+      boot: { phase: "ready" },
+    });
+
+    await expect(waiting).resolves.toMatchObject({
+      observation: { boot: { phase: "ready" } },
+    });
+    expect(observeHost).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not wake a slot waiter for another slot's transition", async () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    const service = createPanelRuntimeService({
+      coordinator,
+      currentEntityForSlot,
+      observeHostSlot: async () => null,
+    });
+    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
+    await service.handler(desktopCtx, "registerClient", [
+      {
+        clientSessionId: "desktop-session",
+        hostConnectionId: "desktop-host",
+        label: "Desktop",
+        platform: "desktop",
+      },
+    ]);
+    for (const suffix of ["a", "b"]) {
+      await service.handler(desktopCtx, "acquire", [
+        `panel:nav-${suffix}`,
+        {
+          slotId: `panel:tree/slot-${suffix}`,
+          clientSessionId: "desktop-session",
+          connectionId: `desktop-runtime-${suffix}`,
+        },
+      ]);
+    }
+    const snapshot = (await service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])) as {
+      version: { epoch: string; counter: number };
+    };
+    let settled = false;
+    const waiting = service
+      .handler(desktopCtx, "awaitSlotChange", ["panel:tree/slot-a", snapshot.version])
+      .finally(() => {
+        settled = true;
+      });
+
+    coordinator.reportView("panel:nav-b", "desktop-runtime-b", {
+      url: "http://127.0.0.1/panels/other/",
+      loading: false,
+      boot: { phase: "ready" },
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    coordinator.reportView("panel:nav-a", "desktop-runtime-a", {
+      url: "http://127.0.0.1/panels/chat/",
+      loading: false,
+      boot: { phase: "ready" },
+    });
+    await expect(waiting).resolves.toMatchObject({
+      observation: { boot: { phase: "ready" } },
+    });
   });
 
   it("refreshes an external document while its managed boot phase is unavailable", async () => {

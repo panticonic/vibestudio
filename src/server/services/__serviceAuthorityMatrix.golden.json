@@ -5304,6 +5304,27 @@
         "capability": null,
         "presentation": null
       },
+      "awaitSlotChange": {
+        "authority": {
+          "principals": [
+            "user",
+            "code",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "supervision",
+          "family": "panelRuntime.read",
+          "rationale": "Waits on the canonical panel observation stream without acquiring authority"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "ensureSlot": {
         "authority": {
           "principals": [
@@ -5397,6 +5418,25 @@
           "residency": "supervision",
           "family": "panelRuntime.control",
           "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "reportOwnView": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "supervision",
+          "family": "panelRuntime.control",
+          "rationale": "A panel principal publishes its own bootstrap transition; the active lease identity is derived server-side."
         },
         "capability": null,
         "presentation": null

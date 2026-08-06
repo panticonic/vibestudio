@@ -29784,6 +29784,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:panelRuntime.awaitSlotChange",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "awaitSlotChange",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "panelRuntime.read",
+      "reviewRationale": "Waits on the canonical panel observation stream without acquiring authority",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.awaitSlotChange"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.awaitSlotChange),allOf(capability(user,service:panelRuntime.awaitSlotChange),workspace-member),allOf(capability(code,service:panelRuntime.awaitSlotChange),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:panelRuntime.awaitSlotChange",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:panelRuntime.ensureSlot",
       "rpcPlane": "host-service",
       "owner": "panelRuntime",
@@ -30009,6 +30055,50 @@
         "change": null
       },
       "capability": "service:panelRuntime.release",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelRuntime.reportOwnView",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "reportOwnView",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "panelRuntime.control",
+      "reviewRationale": "A panel principal publishes its own bootstrap transition; the active lease identity is derived server-side.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.reportOwnView"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:panelRuntime.reportOwnView),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:panelRuntime.reportOwnView",
       "parityAssertion": "generated-census:host-authority"
     },
     {

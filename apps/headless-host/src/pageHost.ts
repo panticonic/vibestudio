@@ -166,6 +166,7 @@ export class PageHost {
   private readonly relayEventListeners = new Set<
     (slotId: string, method: string, params: unknown, sessionId?: string) => void
   >();
+  private readonly viewChangedListeners = new Set<(slotId: string) => void>();
   private readonly documentReadyWaiters = new Map<string, DocumentReadyWaiter>();
 
   constructor(
@@ -193,6 +194,16 @@ export class PageHost {
   ): () => void {
     this.relayEventListeners.add(listener);
     return () => this.relayEventListeners.delete(listener);
+  }
+
+  /** Native Chromium lifecycle edge for publishing the canonical page observation. */
+  onViewChanged(listener: (slotId: string) => void): () => void {
+    this.viewChangedListeners.add(listener);
+    return () => this.viewChangedListeners.delete(listener);
+  }
+
+  private emitViewChanged(slotId: string): void {
+    for (const listener of this.viewChangedListeners) listener(slotId);
   }
 
   private async ensureBrowserContext(contextId: string): Promise<string> {
@@ -547,6 +558,10 @@ export class PageHost {
     switch (event.method) {
       case "Page.domContentEventFired":
         this.documentReadyWaiters.get(slotId)?.resolve();
+        this.emitViewChanged(slotId);
+        return;
+      case "Page.loadEventFired":
+        this.emitViewChanged(slotId);
         return;
       case "Runtime.consoleAPICalled": {
         const params = event.params as {

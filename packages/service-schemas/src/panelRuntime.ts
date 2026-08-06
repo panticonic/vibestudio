@@ -112,6 +112,7 @@ export const panelRuntimeLeaseSchema = z
 
 export const panelRuntimeSlotObservationSchema = z
   .object({
+    version: runtimeLeaseVersionSchema,
     lease: panelRuntimeLeaseSchema.nullable(),
     observation: PanelPageObservationSchema.nullable(),
   })
@@ -213,6 +214,21 @@ export const panelRuntimeMethods = defineServiceMethods({
     },
     description: "Observe the active runtime lease and latest host report for one panel slot.",
     args: z.tuple([z.string().min(1)]),
+    returns: panelRuntimeSlotObservationSchema,
+    authority: USERLAND_READ_POLICY,
+    access: READ_ACCESS,
+  },
+  awaitSlotChange: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Waits on the canonical panel observation stream without acquiring authority",
+    },
+    description:
+      "Wait until a panel slot's lease or host observation advances beyond a known version.",
+    args: z.tuple([z.string().min(1), runtimeLeaseVersionSchema]),
     returns: panelRuntimeSlotObservationSchema,
     authority: USERLAND_READ_POLICY,
     access: READ_ACCESS,
@@ -332,6 +348,21 @@ export const panelRuntimeMethods = defineServiceMethods({
       "Report the current page and boot observation for a leased panel from a host without an inspection transport.",
     args: z.tuple([panelEntityIdSchema, z.string().min(1), panelHostViewReportSchema]),
     returns: z.void(),
+    access: LEASE_ACCESS,
+  },
+  reportOwnView: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "A panel principal publishes its own bootstrap transition; the active lease identity is derived server-side.",
+    },
+    description: "Publish the calling panel runtime's current page and bootstrap observation.",
+    args: z.tuple([panelHostViewReportSchema]),
+    returns: z.void(),
+    authority: { principals: ["code"] },
     access: LEASE_ACCESS,
   },
 });

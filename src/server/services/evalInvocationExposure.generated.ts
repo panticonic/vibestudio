@@ -9219,6 +9219,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:panelRuntime.awaitSlotChange",
+    rpcPlane: "host-service",
+    capability: "service:panelRuntime.awaitSlotChange",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "panelRuntime",
+    method: "awaitSlotChange",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:panelRuntime.awaitSlotChange",
+    },
+  },
+  {
     id: "host:panelRuntime.ensureSlot",
     rpcPlane: "host-service",
     capability: "service:panelRuntime.ensureSlot",
@@ -9281,6 +9294,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:panelRuntime.release",
+    },
+  },
+  {
+    id: "host:panelRuntime.reportOwnView",
+    rpcPlane: "host-service",
+    capability: "service:panelRuntime.reportOwnView",
+    authorityPrincipals: ["code"],
+    owner: "panelRuntime",
+    method: "reportOwnView",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:panelRuntime.reportOwnView",
     },
   },
   {
@@ -13016,6 +13042,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "panelRuntime",
+    method: "awaitSlotChange",
+  },
+  {
+    service: "panelRuntime",
     method: "ensureSlot",
   },
   {
@@ -13033,6 +13063,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   {
     service: "panelRuntime",
     method: "release",
+  },
+  {
+    service: "panelRuntime",
+    method: "reportOwnView",
   },
   {
     service: "panelRuntime",
@@ -14351,9 +14385,11 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:panelCdp.getCdpEndpoint",
   "service:panelCdp.screenshot",
   "service:panelCdp.stop",
+  "service:panelRuntime.awaitSlotChange",
   "service:panelRuntime.ensureSlot",
   "service:panelRuntime.getSnapshot",
   "service:panelRuntime.observeSlot",
+  "service:panelRuntime.reportOwnView",
   "service:panelRuntime.takeOverSlot",
   "service:panelRuntime.unloadSlot",
   "service:permissions.list",

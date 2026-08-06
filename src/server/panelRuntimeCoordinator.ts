@@ -24,6 +24,26 @@ import type {
 
 const LEASE_RECONNECT_GRACE_MS = 3000;
 
+function samePageObservation(
+  previous: PanelPageObservation | undefined,
+  next: { url: string; loading: boolean; boot: PanelBootObservation }
+): boolean {
+  if (!previous) return false;
+  return (
+    previous.view.url === next.url &&
+    previous.view.loading === next.loading &&
+    previous.boot.phase === next.boot.phase &&
+    previous.boot.runtimeEntityId === next.boot.runtimeEntityId &&
+    previous.boot.source === next.boot.source &&
+    previous.boot.contextId === next.boot.contextId &&
+    previous.boot.effectiveVersion === next.boot.effectiveVersion &&
+    previous.boot.buildKey === next.boot.buildKey &&
+    previous.boot.message === next.boot.message &&
+    previous.boot.errorName === next.boot.errorName &&
+    previous.boot.stack === next.boot.stack
+  );
+}
+
 type DefaultCdpHostOptions = {
   isHostAvailable?: (hostConnectionId: string) => boolean;
   replaceUnavailableLease?: boolean;
@@ -42,6 +62,7 @@ export type RuntimeLeaseClose = (
 export class PanelRuntimeCoordinator {
   private readonly epoch = randomUUID();
   private counter = 0;
+  private slotObservationCounters = new Map<PanelSlotId, number>();
   private leases = new Map<PanelEntityId, PanelRuntimeLease>();
   private clients = new Map<string, ClientSession>();
   private expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -58,6 +79,7 @@ export class PanelRuntimeCoordinator {
   private keptLoadedSlots = new Set<PanelSlotId>();
   private closeConnection: RuntimeLeaseClose | null = null;
   private leaseChangeListeners = new Set<(event: PanelRuntimeLeaseChangedEvent) => void>();
+  private slotObservationListeners = new Set<(slotId: PanelSlotId) => void>();
 
   constructor(
     private readonly deps: {
@@ -74,6 +96,24 @@ export class PanelRuntimeCoordinator {
     this.leaseChangeListeners.add(listener);
     return () => {
       this.leaseChangeListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to the canonical observation stream. The coordinator owns both
+   * lease and page-observation transitions, so consumers never need to sample
+   * a presentation host on a timer.
+   */
+  onSlotObservationChanged(listener: (slotId: PanelSlotId) => void): () => void {
+    this.slotObservationListeners.add(listener);
+    return () => this.slotObservationListeners.delete(listener);
+  }
+
+  observationVersion(slotId: string): RuntimeLeaseVersion {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    return {
+      epoch: this.epoch,
+      counter: this.slotObservationCounters.get(normalizedSlotId) ?? 0,
     };
   }
 
@@ -207,6 +247,13 @@ export class PanelRuntimeCoordinator {
     if (!lease || lease.connectionId !== connectionId) {
       throw new Error(`Panel runtime view report does not match the active lease: ${entityId}`);
     }
+    const previous = this.reportedViews.get(entityId);
+    if (
+      previous?.connectionId === connectionId &&
+      samePageObservation(previous.observation, input)
+    ) {
+      return;
+    }
     this.reportedViews.set(entityId, {
       connectionId,
       observation: {
@@ -214,6 +261,9 @@ export class PanelRuntimeCoordinator {
         boot: { ...input.boot, updatedAt: Date.now() },
       },
     });
+    this.nextVersion();
+    this.nextSlotObservationVersion(lease.slotId);
+    this.emitSlotObservationChanged(lease.slotId);
   }
 
   reportedViewForSlot(
@@ -924,6 +974,12 @@ export class PanelRuntimeCoordinator {
     return this.currentVersion();
   }
 
+  private nextSlotObservationVersion(slotId: PanelSlotId): RuntimeLeaseVersion {
+    const counter = (this.slotObservationCounters.get(slotId) ?? 0) + 1;
+    this.slotObservationCounters.set(slotId, counter);
+    return { epoch: this.epoch, counter };
+  }
+
   private emitChange(
     runtimeEntityId: PanelEntityId,
     slotId: PanelSlotId,
@@ -940,6 +996,7 @@ export class PanelRuntimeCoordinator {
       next,
       reason,
     };
+    this.nextSlotObservationVersion(slotId);
     try {
       this.deps.eventService?.emit("panel:runtimeLeaseChanged", event);
     } catch (error) {
@@ -950,6 +1007,17 @@ export class PanelRuntimeCoordinator {
         listener(event);
       } catch (error) {
         this.deps.onError?.(error, `notify lease listener for ${slotId}`);
+      }
+    }
+    this.emitSlotObservationChanged(slotId);
+  }
+
+  private emitSlotObservationChanged(slotId: PanelSlotId): void {
+    for (const listener of this.slotObservationListeners) {
+      try {
+        listener(slotId);
+      } catch (error) {
+        this.deps.onError?.(error, `notify observation listener for ${slotId}`);
       }
     }
   }

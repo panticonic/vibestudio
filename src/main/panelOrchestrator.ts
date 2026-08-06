@@ -1157,6 +1157,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.runtime.viewRevision;
   }
 
+  reportPanelViewTransition(panelId: string): Promise<void> {
+    return this.runtime.reportPanelViewTransition(panelId);
+  }
+
   async refreshPanelProjection(panelId: string): Promise<Panel | null> {
     const slotId = asPanelSlotId(panelId);
     if (!this.registry.getPanel(panelId)) {

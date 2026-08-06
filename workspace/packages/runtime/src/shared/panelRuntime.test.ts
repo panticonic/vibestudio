@@ -4,7 +4,9 @@ import { createPanelRuntime } from "./panelRuntime.js";
 
 function readyHostReport() {
   return {
+    version: { epoch: "test", counter: 1 },
     lease: {
+      runtimeEntityId: "panel:nav-new",
       holderLabel: "Headless",
       platform: "headless" as const,
       supportsCdp: true,
@@ -56,177 +58,198 @@ function runtimeHarness(
     ? (options.browserSource ?? "browser:data:text/html,<p>ready</p>")
     : "panels/new";
   let agentCalls = 0;
-  const call = vi.fn(async <T>(_target: string, method: string, args: unknown[]): Promise<T> => {
-    if (method.startsWith("_agent.")) {
-      agentCalls += 1;
-      if (agentCalls === 1 && options.replaceEntityOnAgentFailure) {
-        currentEntityId = "panel:nav-replacement";
-        throw Object.assign(new Error(`Target not reachable: ${_target}`), {
-          code: "TARGET_NOT_REACHABLE",
-        });
-      }
-      if (options.disconnectAgentTarget) {
-        throw Object.assign(new Error(`Target not reachable: ${_target}`), {
-          code: "TARGET_NOT_REACHABLE",
-        });
-      }
-    }
-    switch (method) {
-      case "_agent.snapshot": {
-        return {
-          kind: "synth",
-          text: `snapshot:${_target}`,
-          structure: {},
-        } as T;
-      }
-      case "_agent.tree":
-        return { target: _target } as T;
-      case "build.getPanelMetadata":
-        return { title: "New" } as T;
-      case "runtime.reserveEntity":
-        return {
-          id: currentEntityId,
-          contextId: "ctx:test",
-          source: { effectiveVersion: "" },
-        } as T;
-      case "runtime.activateReservedEntity":
-        if (options.activateError) throw options.activateError;
-        return {
-          id: currentEntityId,
-          contextId: "ctx:test",
-          source: { effectiveVersion: "ev-new" },
-          buildKey: "build-new",
-        } as T;
-      case "runtime.createEntity": {
-        const spec = args[0] as { key: string; contextId?: string };
-        currentEntityId = method === "runtime.createEntity" ? `panel:${spec.key}` : currentEntityId;
-        return {
-          id: currentEntityId,
-          contextId: spec.contextId ?? "ctx:test",
-          source: { effectiveVersion: "ev-new" },
-          buildKey: "build-new",
-        } as T;
-      }
-      case "workspace-state.slot.create": {
-        if (options.slotCreateError) throw options.slotCreateError;
-        currentSlotId = (args[0] as { slotId: string }).slotId;
-        return undefined as T;
-      }
-      case "workspace-state.slot.commitPreparedNavigation": {
-        const input = args[0] as {
-          mutation: { entry: { entityId: string } };
-          expectedCurrentEntityId: string;
-        };
-        const previousEntityId = input.expectedCurrentEntityId;
-        currentEntityId = input.mutation.entry.entityId;
-        return {
-          previousEntityId,
-          currentEntityId,
-          currentEntryKey: "nav-current",
-          cursor: 1,
-          lease: null,
-        } as T;
-      }
-      case "workspace-state.panelTree.detail":
-        return detail(String(args[0]), currentEntityId, currentSource) as T;
-      case "panelRuntime.ensureSlot":
-        return {
-          status: options.hostAvailable === false ? "unavailable" : "assigned",
-          lease: null,
-        } as T;
-      case "panelRuntime.observeSlot":
-        if (options.observeError) throw options.observeError;
-        if (options.hostAvailable === false) {
-          return { lease: null, observation: null } as T;
+  const call = vi.fn(
+    async <T>(
+      _target: string,
+      method: string,
+      args: unknown[],
+      callOptions?: { signal?: AbortSignal }
+    ): Promise<T> => {
+      if (method.startsWith("_agent.")) {
+        agentCalls += 1;
+        if (agentCalls === 1 && options.replaceEntityOnAgentFailure) {
+          currentEntityId = "panel:nav-replacement";
+          throw Object.assign(new Error(`Target not reachable: ${_target}`), {
+            code: "TARGET_NOT_REACHABLE",
+          });
         }
-        if (options.alwaysLoading) {
+        if (options.disconnectAgentTarget) {
+          throw Object.assign(new Error(`Target not reachable: ${_target}`), {
+            code: "TARGET_NOT_REACHABLE",
+          });
+        }
+      }
+      switch (method) {
+        case "_agent.snapshot": {
           return {
-            lease: {
-              holderLabel: "Headless",
-              platform: "headless" as const,
-              supportsCdp: true,
-            },
-            observation: {
-              view: { url: "http://panel.test/", loading: true },
-              boot: { phase: "loading" as const, updatedAt: 1 },
-            },
+            kind: "synth",
+            text: `snapshot:${_target}`,
+            structure: {},
           } as T;
         }
-        return (
-          options.browserReady
-            ? {
-                lease: {
-                  holderLabel: "Headless",
-                  platform: "headless" as const,
-                  supportsCdp: true,
-                },
-                observation: {
-                  view: {
-                    url: options.browserUrl ?? "data:text/html,<p>ready</p>",
-                    loading: false,
+        case "_agent.tree":
+          return { target: _target } as T;
+        case "build.getPanelMetadata":
+          return { title: "New" } as T;
+        case "runtime.reserveEntity":
+          return {
+            id: currentEntityId,
+            contextId: "ctx:test",
+            source: { effectiveVersion: "" },
+          } as T;
+        case "runtime.activateReservedEntity":
+          if (options.activateError) throw options.activateError;
+          return {
+            id: currentEntityId,
+            contextId: "ctx:test",
+            source: { effectiveVersion: "ev-new" },
+            buildKey: "build-new",
+          } as T;
+        case "runtime.createEntity": {
+          const spec = args[0] as { key: string; contextId?: string };
+          currentEntityId =
+            method === "runtime.createEntity" ? `panel:${spec.key}` : currentEntityId;
+          return {
+            id: currentEntityId,
+            contextId: spec.contextId ?? "ctx:test",
+            source: { effectiveVersion: "ev-new" },
+            buildKey: "build-new",
+          } as T;
+        }
+        case "workspace-state.slot.create": {
+          if (options.slotCreateError) throw options.slotCreateError;
+          currentSlotId = (args[0] as { slotId: string }).slotId;
+          return undefined as T;
+        }
+        case "workspace-state.slot.commitPreparedNavigation": {
+          const input = args[0] as {
+            mutation: { entry: { entityId: string } };
+            expectedCurrentEntityId: string;
+          };
+          const previousEntityId = input.expectedCurrentEntityId;
+          currentEntityId = input.mutation.entry.entityId;
+          return {
+            previousEntityId,
+            currentEntityId,
+            currentEntryKey: "nav-current",
+            cursor: 1,
+            lease: null,
+          } as T;
+        }
+        case "workspace-state.panelTree.detail":
+          return detail(String(args[0]), currentEntityId, currentSource) as T;
+        case "panelRuntime.ensureSlot":
+          return {
+            status: options.hostAvailable === false ? "unavailable" : "assigned",
+            lease: null,
+          } as T;
+        case "panelRuntime.observeSlot":
+          if (options.observeError) throw options.observeError;
+          if (options.hostAvailable === false) {
+            return { version: { epoch: "test", counter: 1 }, lease: null, observation: null } as T;
+          }
+          if (options.alwaysLoading) {
+            return {
+              version: { epoch: "test", counter: 1 },
+              lease: {
+                runtimeEntityId: currentEntityId,
+                holderLabel: "Headless",
+                platform: "headless" as const,
+                supportsCdp: true,
+              },
+              observation: {
+                view: { url: "http://panel.test/", loading: true },
+                boot: { phase: "loading" as const, updatedAt: 1 },
+              },
+            } as T;
+          }
+          return (
+            options.browserReady
+              ? {
+                  version: { epoch: "test", counter: 1 },
+                  lease: {
+                    runtimeEntityId: currentEntityId,
+                    holderLabel: "Headless",
+                    platform: "headless" as const,
+                    supportsCdp: true,
                   },
-                  boot: { phase: "unavailable" as const },
-                },
-              }
-            : readyHostReport()
-        ) as T;
-      case "workspace-state.panel.updateTitle":
-      case "runtime.retireEntity":
-      case "view.focusPanel":
-        return undefined as T;
-      case "panelRuntime.unloadSlot":
-        return {
-          panelId: String(args[0]),
-          operation: "unload",
-          status: "unloaded",
-          loaded: false,
-          rebuilt: false,
-          reloaded: false,
-        } as T;
-      case "runtime.supervision.restart":
-        return undefined as T;
-      case "workspace-state.panelTree.page": {
-        const input = args[0] as { group: { parentSlotId: string } };
-        return {
-          revision: 17,
-          group: input.group,
-          nodes: [
-            {
-              slotId: "browser",
-              title: "Example",
-              source: "browser:https://example.com/",
-              kind: "browser",
-              parentSlotId: input.group.parentSlotId,
-              ownerUserId: null,
-              contextId: "ctx:browser",
-              createdAt: 1,
-              childCount: 0,
-            },
-          ],
-          nextCursor: null,
-        } as T;
+                  observation: {
+                    view: {
+                      url: options.browserUrl ?? "data:text/html,<p>ready</p>",
+                      loading: false,
+                    },
+                    boot: { phase: "unavailable" as const },
+                  },
+                }
+              : {
+                  ...readyHostReport(),
+                  lease: { ...readyHostReport().lease, runtimeEntityId: currentEntityId },
+                }
+          ) as T;
+        case "panelRuntime.awaitSlotChange":
+          return (await new Promise((_, reject) => {
+            const signal = callOptions?.signal;
+            if (signal?.aborted) reject(signal.reason);
+            else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          })) as T;
+        case "workspace-state.panel.updateTitle":
+        case "runtime.retireEntity":
+        case "view.focusPanel":
+          return undefined as T;
+        case "panelRuntime.unloadSlot":
+          return {
+            panelId: String(args[0]),
+            operation: "unload",
+            status: "unloaded",
+            loaded: false,
+            rebuilt: false,
+            reloaded: false,
+          } as T;
+        case "runtime.supervision.restart":
+          return undefined as T;
+        case "workspace-state.panelTree.page": {
+          const input = args[0] as { group: { parentSlotId: string } };
+          return {
+            revision: 17,
+            group: input.group,
+            nodes: [
+              {
+                slotId: "browser",
+                title: "Example",
+                source: "browser:https://example.com/",
+                kind: "browser",
+                parentSlotId: input.group.parentSlotId,
+                ownerUserId: null,
+                contextId: "ctx:browser",
+                createdAt: 1,
+                childCount: 0,
+              },
+            ],
+            nextCursor: null,
+          } as T;
+        }
+        case "workspace-state.panelTree.path":
+          return {
+            revision: 17,
+            nodes: [
+              {
+                slotId: "root",
+                title: "Research",
+                source: "about/collection",
+                kind: "workspace",
+                parentSlotId: null,
+                ownerUserId: null,
+                contextId: "ctx:root",
+                createdAt: 1,
+                childCount: 1,
+              },
+            ],
+          } as T;
+        default:
+          throw new Error(`Unexpected RPC method: ${method} for ${currentSlotId}`);
       }
-      case "workspace-state.panelTree.path":
-        return {
-          revision: 17,
-          nodes: [
-            {
-              slotId: "root",
-              title: "Research",
-              source: "about/collection",
-              kind: "workspace",
-              parentSlotId: null,
-              ownerUserId: null,
-              contextId: "ctx:root",
-              createdAt: 1,
-              childCount: 1,
-            },
-          ],
-        } as T;
-      default:
-        throw new Error(`Unexpected RPC method: ${method} for ${currentSlotId}`);
     }
-  });
+  );
   return {
     call,
     runtime: createPanelRuntime({
@@ -427,29 +450,28 @@ describe("panel runtime topology composition", () => {
     await expect(opening).rejects.toThrow(/caller stopped observing/);
   });
 
-  it("backs off lifecycle observation while a host remains loading", async () => {
-    vi.useFakeTimers();
-    try {
-      const { runtime, call } = runtimeHarness({ alwaysLoading: true });
-      const controller = new AbortController();
-      const opening = runtime.openPanel("panels/new", {
-        slug: "new",
-        focus: false,
-        signal: controller.signal,
-      });
+  it("subscribes once while a host remains loading", async () => {
+    const { runtime, call } = runtimeHarness({ alwaysLoading: true });
+    const controller = new AbortController();
+    const opening = runtime.openPanel("panels/new", {
+      slug: "new",
+      focus: false,
+      signal: controller.signal,
+    });
 
-      await vi.advanceTimersByTimeAsync(1_500);
-      controller.abort(new Error("observation complete"));
-      await expect(opening).rejects.toThrow(/observation complete/);
-
-      const observations = call.mock.calls.filter(
-        (entry) => entry[1] === "panelRuntime.observeSlot"
+    await vi.waitFor(() => {
+      expect(call.mock.calls.some((entry) => entry[1] === "panelRuntime.awaitSlotChange")).toBe(
+        true
       );
-      expect(observations.length).toBeGreaterThan(1);
-      expect(observations.length).toBeLessThanOrEqual(7);
-    } finally {
-      vi.useRealTimers();
-    }
+    });
+    controller.abort(new Error("observation complete"));
+    await expect(opening).rejects.toThrow(/observation complete/);
+    expect(call.mock.calls.filter((entry) => entry[1] === "panelRuntime.observeSlot")).toHaveLength(
+      1
+    );
+    expect(
+      call.mock.calls.filter((entry) => entry[1] === "panelRuntime.awaitSlotChange")
+    ).toHaveLength(1);
   });
 
   it("threads explicit cancellation through every readiness-waiting handle operation", async () => {

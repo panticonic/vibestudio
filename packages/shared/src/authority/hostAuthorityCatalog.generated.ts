@@ -3515,6 +3515,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "panelRuntime.awaitSlotChange": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Waits on the canonical panel observation stream without acquiring authority",
+    },
+    capability: null,
+    presentation: null,
+  },
   "panelRuntime.ensureSlot": {
     tier: {
       tier: "open",
@@ -3568,6 +3579,18 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "supervision",
       family: "panelRuntime.control",
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "panelRuntime.reportOwnView": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "A panel principal publishes its own bootstrap transition; the active lease identity is derived server-side.",
     },
     capability: null,
     presentation: null,

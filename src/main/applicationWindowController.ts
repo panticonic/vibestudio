@@ -273,6 +273,14 @@ export class ApplicationWindowController {
       onPanelResponsivenessChanged: (panelId, responsive) => {
         this.deps.eventService.emit("panel-responsiveness-changed", { panelId, responsive });
       },
+      onPanelViewTransition: (panelId) => {
+        void services.panelOrchestrator.reportPanelViewTransition(panelId).catch((error) => {
+          log.warn("Failed to publish panel view transition", {
+            panelId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      },
       ...(services.formFillManager ? { formFillManager: services.formFillManager } : {}),
       ...(services.browserFaviconObserver
         ? { browserFaviconObserver: services.browserFaviconObserver }

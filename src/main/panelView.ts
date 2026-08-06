@@ -125,6 +125,7 @@ export class PanelView implements PanelViewLike {
     capability: "popups"
   ) => Promise<boolean>;
   private onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
+  private onPanelViewTransition?: (panelId: string) => void;
   private formFillManager?: FormFillManagerLike;
   private browserFaviconObserver?: BrowserFaviconObserverLike;
   private browserFaviconCleanup = new Map<string, () => void>();
@@ -164,6 +165,7 @@ export class PanelView implements PanelViewLike {
     openExternal?: (url: string) => Promise<void>;
     requestSiteCapability(contents: Electron.WebContents, capability: "popups"): Promise<boolean>;
     onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
+    onPanelViewTransition?: (panelId: string) => void;
     formFillManager?: FormFillManagerLike;
     browserFaviconObserver?: BrowserFaviconObserverLike;
     autofillPreloadPath?: string;
@@ -187,6 +189,7 @@ export class PanelView implements PanelViewLike {
     this.openExternal = deps.openExternal;
     this.requestSiteCapability = deps.requestSiteCapability;
     this.onPanelResponsivenessChanged = deps.onPanelResponsivenessChanged;
+    this.onPanelViewTransition = deps.onPanelViewTransition;
     this.formFillManager = deps.formFillManager;
     this.browserFaviconObserver = deps.browserFaviconObserver;
     this.autofillPreloadPath = deps.autofillPreloadPath;
@@ -637,6 +640,7 @@ export class PanelView implements PanelViewLike {
       },
       didStartLoading: () => {
         queueStateUpdate({ isLoading: true });
+        this.onPanelViewTransition?.(panelId);
       },
       didStopLoading: () => {
         if (contents.isDestroyed()) return;
@@ -645,6 +649,7 @@ export class PanelView implements PanelViewLike {
           canGoBack: contents.navigationHistory.canGoBack(),
           canGoForward: contents.navigationHistory.canGoForward(),
         });
+        this.onPanelViewTransition?.(panelId);
       },
       didFinishLoad: () => {
         transientMainFrameLoadRetries = 0;

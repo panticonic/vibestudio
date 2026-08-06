@@ -95,6 +95,8 @@ function lifecycleHarness(navigateResult: { errorText?: string } = {}) {
     send,
     fireDocumentReady: () =>
       eventHandler?.({ method: "Page.domContentEventFired", params: {}, sessionId: "mgmt-1" }),
+    fireLoad: () =>
+      eventHandler?.({ method: "Page.loadEventFired", params: {}, sessionId: "mgmt-1" }),
   };
 }
 
@@ -144,6 +146,23 @@ describe("PageHost navigation readiness", () => {
 
     fireDocumentReady();
     await expect(loading).resolves.toBeUndefined();
+  });
+
+  it("publishes native document and load transitions to readiness observers", async () => {
+    const { host, input, send, fireDocumentReady, fireLoad } = lifecycleHarness();
+    const changed = vi.fn();
+    host.onViewChanged(changed);
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1")
+    );
+
+    fireDocumentReady();
+    await loading;
+    fireLoad();
+
+    expect(changed).toHaveBeenNthCalledWith(1, input.slotId);
+    expect(changed).toHaveBeenNthCalledWith(2, input.slotId);
   });
 
   it("rejects immediately on a concrete navigation error and cleans up the target", async () => {

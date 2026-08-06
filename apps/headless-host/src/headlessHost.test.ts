@@ -20,6 +20,53 @@ function config(): HeadlessHostConfig {
 }
 
 describe("HeadlessHost lifecycle guards", () => {
+  it("publishes a native headless-page transition for the exact current lease", async () => {
+    const host = new HeadlessHost(config());
+    const lease: PanelRuntimeLease = {
+      slotId: asPanelSlotId("panel:tree/a"),
+      runtimeEntityId: asPanelEntityId("panel:nav-a"),
+      clientSessionId: host.registration.clientSessionId,
+      hostConnectionId: host.registration.hostConnectionId ?? host.registration.clientSessionId,
+      connectionId: "headless-connection-a",
+      holderLabel: host.registration.label,
+      platform: "headless",
+      supportsCdp: true,
+      loadOnLeaseAssignment: true,
+      acquiredAt: 1,
+    };
+    const tracker = new LeaseTracker(host.registration.clientSessionId);
+    tracker.reconcile({ version: { epoch: "test", counter: 1 }, leases: [lease] });
+    const rpc = { call: vi.fn(async () => undefined) };
+    const pages = {
+      panelPageObservation: vi.fn(async () => ({
+        view: { url: "http://127.0.0.1/panels/chat/", loading: false },
+        boot: { phase: "ready" as const, runtimeEntityId: lease.runtimeEntityId },
+      })),
+    };
+    Object.assign(
+      host as unknown as {
+        tracker: LeaseTracker;
+        connection: { rpc: typeof rpc };
+        pages: typeof pages;
+      },
+      { tracker, connection: { rpc }, pages }
+    );
+
+    await (
+      host as unknown as { reportPageObservation(slotId: string): Promise<void> }
+    ).reportPageObservation(lease.slotId);
+
+    expect(rpc.call).toHaveBeenCalledWith("main", "panelRuntime.reportView", [
+      lease.runtimeEntityId,
+      lease.connectionId,
+      {
+        url: "http://127.0.0.1/panels/chat/",
+        loading: false,
+        boot: { phase: "ready", runtimeEntityId: lease.runtimeEntityId },
+      },
+    ]);
+  });
+
   it("re-registers and reopens the lease watch after injected connection recovery", async () => {
     let recover: (() => void | Promise<void>) | null = null;
     const rpc = {

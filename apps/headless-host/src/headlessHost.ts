@@ -182,11 +182,50 @@ export class HeadlessHost implements PanelHost {
     });
     this.cdp = await CdpConnection.connect(this.browser.wsEndpoint);
     this.pages = new PageHost(this.cdp, this.consoleHistory);
+    this.pages.onViewChanged((slotId) => {
+      void this.reportPageObservation(slotId);
+    });
     this.pages.onRelayEvent((slotId, method, params, sessionId) => {
       this.bridge?.sendEvent(slotId, method, params, sessionId);
     });
     this.cdp.onClose(() => void this.handleBrowserGone(generation));
     this.browser.process.once("exit", () => void this.handleBrowserGone(generation));
+  }
+
+  /**
+   * Publish a native page transition through the same durable coordinator used
+   * by desktop hosts. The renderer also reports bootstrap transitions itself;
+   * this host-owned edge covers initial/late connection and failed renderer
+   * bootstrap without reintroducing an observation poller.
+   */
+  private async reportPageObservation(slotId: string): Promise<void> {
+    const panelSlotId = asPanelSlotId(slotId);
+    const lease = this.tracker.heldLease(panelSlotId);
+    if (!lease || !this.pages || !this.connection) return;
+    try {
+      const observation = await this.pages.panelPageObservation(slotId);
+      const current = this.tracker.heldLease(panelSlotId);
+      if (
+        current?.runtimeEntityId !== lease.runtimeEntityId ||
+        current.connectionId !== lease.connectionId
+      ) {
+        return;
+      }
+      await this.connection.rpc.call("main", "panelRuntime.reportView", [
+        lease.runtimeEntityId,
+        lease.connectionId,
+        {
+          url: observation.view.url,
+          loading: observation.view.loading,
+          boot: observation.boot,
+        },
+      ]);
+    } catch (error) {
+      // Navigation replaces the execution context and lease churn replaces the
+      // runtime identity. A later native/renderer transition publishes the
+      // winning incarnation; failures remain available through host probing.
+      log.verbose(`view transition for ${slotId} was superseded: ${String(error)}`);
+    }
   }
 
   private async handleBrowserGone(generation: number): Promise<void> {

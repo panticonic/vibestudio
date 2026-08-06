@@ -27,10 +27,11 @@ import {
   PANEL_UI_MAX_LOADED_HEADLESS,
 } from "@vibestudio/shared/constants";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
-import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { assertPresent } from "../lintHelpers";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
 import { PanelResourcePolicy } from "./panelResourcePolicy.js";
+import type { PanelBootObservation } from "@vibestudio/shared/panel/observation";
 
 const log = createDevLogger("PanelRuntimeLeaseController");
 
@@ -44,6 +45,7 @@ export interface PanelRuntimeLeaseControllerDeps {
     registerTarget?(panelId: string, contentsId: number): void;
     cleanupPanelAccess(panelId: string): void;
     unregisterTarget?(panelId: string): void;
+    getBootObservation?(panelId: string): Promise<PanelBootObservation>;
   };
   panelHttpServer: PanelHttpServerLike;
   sendPanelEvent: (panelId: string, event: string, payload: unknown) => void;
@@ -177,6 +179,31 @@ export class PanelRuntimeLeaseController {
 
   getBuildRevision(source: string, ref?: string): number | undefined {
     return this.deps.panelHttpServer.getBuildRevision?.(source, ref);
+  }
+
+  /** Publish a native view transition to the canonical server observation. */
+  async reportPanelViewTransition(panelId: string): Promise<void> {
+    const connection = this.connectionBySlot.get(panelId);
+    const contents = this.deps.getPanelView()?.getWebContents(panelId) as
+      | { isDestroyed(): boolean; getURL(): string; isLoading(): boolean }
+      | null
+      | undefined;
+    if (!connection || !contents || contents.isDestroyed()) return;
+    const boot = this.deps.cdpHost.getBootObservation
+      ? await this.deps.cdpHost
+          .getBootObservation(panelId)
+          .catch(() => ({ phase: "unavailable" as const }))
+      : ({ phase: "unavailable" } as const);
+    if (this.connectionBySlot.get(panelId) !== connection) return;
+    await this.panelRuntime.reportView(
+      asPanelEntityId(connection.runtimeEntityId),
+      connection.connectionId,
+      {
+        url: contents.getURL(),
+        loading: contents.isLoading(),
+        boot,
+      }
+    );
   }
 
   async registerClient(): Promise<void> {
@@ -439,6 +466,7 @@ export class PanelRuntimeLeaseController {
           viewFailure: undefined,
         });
         this.deps.registry.notifyPanelTreeUpdate();
+        await this.reportPanelViewTransition(panelId);
         this.resources.track(panelId);
         await this.resources.enforceCap(panelId);
         return;
@@ -685,6 +713,7 @@ export class PanelRuntimeLeaseController {
         viewFailure: undefined,
       });
       this.deps.registry.notifyPanelTreeUpdate();
+      await this.reportPanelViewTransition(panelId);
       return;
     }
     const panel = this.deps.registry.getPanel(panelId);

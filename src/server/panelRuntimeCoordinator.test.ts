@@ -289,6 +289,27 @@ describe("PanelRuntimeCoordinator", () => {
     expect(coordinator.observeSlot("panel:tree/reconnecting").observation).toBeNull();
   });
 
+  it("does not publish a transition for an unchanged host observation", () => {
+    const { coordinator } = createCoordinator();
+    coordinator.acquire("panel:nav-stable", {
+      slotId: "panel:tree/stable",
+      clientSessionId: "desktop-a",
+      connectionId: "desktop-runtime",
+    });
+    const transitions: string[] = [];
+    coordinator.onSlotObservationChanged((slotId) => transitions.push(slotId));
+    const observation = {
+      url: "http://127.0.0.1/panels/chat/",
+      loading: true,
+      boot: { phase: "booting" as const },
+    };
+
+    coordinator.reportView("panel:nav-stable", "desktop-runtime", observation);
+    coordinator.reportView("panel:nav-stable", "desktop-runtime", observation);
+
+    expect(transitions).toEqual(["panel:tree/stable"]);
+  });
+
   it("reissues a failed headless materialization on the next ensure", () => {
     const coordinator = new PanelRuntimeCoordinator();
     coordinator.registerClient({
