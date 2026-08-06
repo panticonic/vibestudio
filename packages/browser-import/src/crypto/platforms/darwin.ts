@@ -37,25 +37,22 @@ export async function getDarwinDecryptionKey(browser: BrowserName): Promise<Buff
   if (!service) {
     throw new BrowserDataError(
       "UNSUPPORTED_PLATFORM",
-      `Unknown browser for macOS Keychain: ${browser}`,
+      `Unknown browser for macOS Keychain: ${browser}`
     );
   }
 
   let password: string;
   try {
-    password = execSync(
-      `security find-generic-password -s "${service}" -w`,
-      {
-        encoding: "utf-8",
-        timeout: 5000,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    ).trim();
+    password = execSync(`security find-generic-password -s "${service}" -w`, {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
   } catch (err) {
     throw new BrowserDataError(
       "DECRYPTION_FAILED",
       `Could not retrieve "${service}" password from Keychain`,
-      err instanceof Error ? err.message : String(err),
+      err instanceof Error ? err.message : String(err)
     );
   }
 

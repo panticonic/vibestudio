@@ -45,32 +45,32 @@ function renderFolder(node: FolderNode, indent: number): string {
   for (const bm of node.bookmarks) {
     const addDate = toUnixSeconds(bm.dateAdded);
     lines.push(
-      `${pad}<DT><A HREF="${escapeHtml(bm.url)}" ADD_DATE="${addDate}">${escapeHtml(bm.title)}</A>`,
+      `${pad}<DT><A HREF="${escapeHtml(bm.url)}" ADD_DATE="${addDate}">${escapeHtml(bm.title)}</A>`
     );
   }
 
   // Render subfolders
   for (const child of node.children.values()) {
-    const addDate = child.bookmarks.length > 0 || child.children.size > 0
-      ? toUnixSeconds(
-          Math.min(
-            ...child.bookmarks.map((b) => b.dateAdded),
-            ...Array.from(child.children.values()).flatMap((c) =>
-              c.bookmarks.map((b) => b.dateAdded),
-            ),
-            Date.now(),
-          ),
-        )
-      : toUnixSeconds(Date.now());
+    const addDate =
+      child.bookmarks.length > 0 || child.children.size > 0
+        ? toUnixSeconds(
+            Math.min(
+              ...child.bookmarks.map((b) => b.dateAdded),
+              ...Array.from(child.children.values()).flatMap((c) =>
+                c.bookmarks.map((b) => b.dateAdded)
+              ),
+              Date.now()
+            )
+          )
+        : toUnixSeconds(Date.now());
 
-    const lastModified = child.bookmarks.length > 0
-      ? toUnixSeconds(
-          Math.max(...child.bookmarks.map((b) => b.dateModified ?? b.dateAdded)),
-        )
-      : addDate;
+    const lastModified =
+      child.bookmarks.length > 0
+        ? toUnixSeconds(Math.max(...child.bookmarks.map((b) => b.dateModified ?? b.dateAdded)))
+        : addDate;
 
     lines.push(
-      `${pad}<DT><H3 ADD_DATE="${addDate}" LAST_MODIFIED="${lastModified}">${escapeHtml(child.name)}</H3>`,
+      `${pad}<DT><H3 ADD_DATE="${addDate}" LAST_MODIFIED="${lastModified}">${escapeHtml(child.name)}</H3>`
     );
     lines.push(`${pad}<DL><p>`);
     lines.push(renderFolder(child, indent + 1));

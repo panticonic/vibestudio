@@ -14,10 +14,7 @@ import { BrowserDataError } from "../errors.js";
  */
 export async function copyDatabaseToTemp(dbPath: string): Promise<string> {
   if (!fs.existsSync(dbPath)) {
-    throw new BrowserDataError(
-      "PROFILE_NOT_FOUND",
-      `Database not found: ${dbPath}`,
-    );
+    throw new BrowserDataError("PROFILE_NOT_FOUND", `Database not found: ${dbPath}`);
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-browser-import-"));
@@ -52,13 +49,13 @@ export async function copyDatabaseToTemp(dbPath: string): Promise<string> {
       throw new BrowserDataError(
         "DB_LOCKED",
         `Database is locked (browser may be running): ${dbPath}`,
-        error.code,
+        error.code
       );
     }
     throw new BrowserDataError(
       "PERMISSION_DENIED",
       `Failed to copy database: ${dbPath}`,
-      error.message,
+      error.message
     );
   }
 
@@ -70,10 +67,7 @@ export async function copyDatabaseToTemp(dbPath: string): Promise<string> {
  */
 export async function copyFileToTemp(filePath: string): Promise<string> {
   if (!fs.existsSync(filePath)) {
-    throw new BrowserDataError(
-      "PROFILE_NOT_FOUND",
-      `File not found: ${filePath}`,
-    );
+    throw new BrowserDataError("PROFILE_NOT_FOUND", `File not found: ${filePath}`);
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-browser-import-"));
@@ -89,11 +83,7 @@ export async function copyFileToTemp(filePath: string): Promise<string> {
       // Ignore cleanup errors
     }
     if (error.code === "EPERM" || error.code === "EACCES") {
-      throw new BrowserDataError(
-        "TCC_ACCESS_DENIED",
-        `Permission denied: ${filePath}`,
-        error.code,
-      );
+      throw new BrowserDataError("TCC_ACCESS_DENIED", `Permission denied: ${filePath}`, error.code);
     }
     throw error;
   }

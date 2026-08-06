@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BrowserPermissionController,
   browserSecurityOrigin,
   capabilitiesForCheck,
   capabilitiesForRequest,
@@ -7,7 +8,120 @@ import {
   viewMayRequestPeripheral,
 } from "./browserPermissionController.js";
 
+function controllerHarness() {
+  const url = "https://workspace.test/panel";
+  const viewInfo = {
+    type: "panel",
+    capabilities: [],
+    codeIdentity: {
+      source: "panels/terminal",
+      effectiveVersion: "ev-terminal",
+      executionDigest: "a".repeat(64),
+      requested: [
+        {
+          capability: "clipboard",
+          resource: { kind: "prefix" as const, prefix: "" },
+        },
+      ],
+    },
+  };
+  let eventListener: ((payload: never) => void) | null = null;
+  let released = false;
+  const serverClient = {
+    call: async (_service: string, method: string) => {
+      if (method !== "snapshot") throw new Error(`Unexpected method ${method}`);
+      return {
+        environmentKey: "browser_test",
+        grants: [
+          {
+            origin: "https://workspace.test",
+            capability: "notifications",
+            decision: "allow",
+            scope: "session",
+            updatedAt: 1,
+          },
+        ],
+      };
+    },
+    onDirectEvent: (_event: string, listener: (payload: never) => void) => {
+      eventListener = listener;
+      return () => {
+        released = true;
+        eventListener = null;
+      };
+    },
+  };
+  const manager = {
+    findViewIdByWebContentsId: (id: number) => (id === 42 ? "panel:terminal" : null),
+    getViewInfo: (id: string) => (id === "panel:terminal" ? viewInfo : null),
+    getViewPartition: (id: string) => (id === "panel:terminal" ? undefined : null),
+  };
+  const contents = {
+    id: 42,
+    getURL: () => url,
+    isDestroyed: () => false,
+    on: () => undefined,
+    once: () => undefined,
+    off: () => undefined,
+  } as unknown as Electron.WebContents;
+  const controller = new BrowserPermissionController({
+    serverClient: serverClient as never,
+    eventService: { emit: () => undefined } as never,
+    getViewManager: () => manager as never,
+    isTargetUnderAutomation: () => false,
+  });
+  return {
+    controller,
+    contents,
+    url,
+    released: () => released,
+    listener: () => eventListener,
+  };
+}
+
 describe("browser permission capability mapping", () => {
+  it("allows local panel clipboard access before browser-data attaches", () => {
+    const { controller, contents, url, listener } = controllerHarness();
+    const decisions: boolean[] = [];
+
+    controller.requestPermission(
+      contents,
+      "clipboard-sanitized-write",
+      (allowed) => decisions.push(allowed),
+      { requestingUrl: url } as Electron.PermissionRequest
+    );
+    controller.requestPermission(contents, "clipboard-read", (allowed) => decisions.push(allowed), {
+      requestingUrl: url,
+    } as Electron.PermissionRequest);
+
+    expect(decisions).toEqual([true, true]);
+    expect(listener()).toBeNull();
+  });
+
+  it("attaches and detaches browser-site grants without stopping local enforcement", async () => {
+    const { controller, contents, url, released } = controllerHarness();
+
+    expect(controller.isGranted(url, "notifications")).toBe(false);
+    await expect(controller.attachBrowserEnvironment()).resolves.toBe(
+      "persist:browser-environment:browser_test"
+    );
+    expect(controller.isGranted(url, "notifications")).toBe(true);
+
+    controller.detachBrowserEnvironment();
+    expect(released()).toBe(true);
+    expect(controller.isGranted(url, "notifications")).toBe(false);
+    let allowed = false;
+    controller.requestPermission(
+      contents,
+      "clipboard-sanitized-write",
+      (decision) => {
+        allowed = decision;
+      },
+      { requestingUrl: url } as Electron.PermissionRequest
+    );
+    expect(allowed).toBe(true);
+  });
+
   it("represents tuple and opaque security origins without aliasing opaque documents", () => {
     expect(browserSecurityOrigin("https://example.com/path", "opaque-a")).toEqual({
       kind: "tuple",

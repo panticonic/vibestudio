@@ -3,9 +3,7 @@ import type { ImportedSettings } from "../types.js";
 /**
  * Extract settings from Chromium Preferences JSON.
  */
-export function extractChromiumSettings(
-  prefs: Record<string, unknown>,
-): ImportedSettings {
+export function extractChromiumSettings(prefs: Record<string, unknown>): ImportedSettings {
   const settings: ImportedSettings = {};
 
   // Homepage
@@ -18,7 +16,9 @@ export function extractChromiumSettings(
     | undefined;
   if (searchProvider?.["template_url_data"]) {
     const templateData = searchProvider["template_url_data"] as Record<string, unknown>;
-    settings.defaultSearchEngine = String(templateData["keyword"] || templateData["short_name"] || "");
+    settings.defaultSearchEngine = String(
+      templateData["keyword"] || templateData["short_name"] || ""
+    );
   }
 
   // Bookmarks bar visibility
@@ -34,9 +34,7 @@ export function extractChromiumSettings(
  * Extract settings from Firefox prefs.js content.
  * prefs.js contains lines like: user_pref("key", value);
  */
-export function extractFirefoxSettings(
-  prefsMap: Map<string, unknown>,
-): ImportedSettings {
+export function extractFirefoxSettings(prefsMap: Map<string, unknown>): ImportedSettings {
   const settings: ImportedSettings = {};
 
   const homepage = prefsMap.get("browser.startup.homepage");

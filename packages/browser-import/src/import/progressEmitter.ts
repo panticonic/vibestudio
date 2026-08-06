@@ -20,7 +20,7 @@ export class ProgressEmitter {
     phase: ImportPhase,
     itemsProcessed: number,
     totalItems?: number,
-    error?: string,
+    error?: string
   ): void {
     this.callback({
       requestId: this.requestId,

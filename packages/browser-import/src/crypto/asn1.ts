@@ -52,7 +52,9 @@ function parseOne(data: Buffer, offset: number): { node: Asn1Node; consumed: num
   }
 
   if (pos + length > data.length) {
-    throw new Error(`ASN.1: value exceeds buffer (need ${length} bytes at offset ${pos}, have ${data.length - pos})`);
+    throw new Error(
+      `ASN.1: value exceeds buffer (need ${length} bytes at offset ${pos}, have ${data.length - pos})`
+    );
   }
 
   const value = data.subarray(pos, pos + length);

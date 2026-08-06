@@ -114,16 +114,60 @@ const passwordRowSchema = z
   })
   .strict();
 const formFillTypes = [
-  "name", "given-name", "additional-name", "family-name", "honorific-prefix",
-  "honorific-suffix", "nickname", "username", "new-password", "current-password",
-  "one-time-code", "organization-title", "email", "tel", "tel-country-code",
-  "tel-national", "tel-area-code", "tel-local", "tel-local-prefix", "tel-local-suffix",
-  "tel-extension", "impp", "organization", "street-address", "address-line1",
-  "address-line2", "address-line3", "address-level1", "address-level2", "address-level3",
-  "address-level4", "postal-code", "country", "country-name", "cc-name", "cc-given-name",
-  "cc-additional-name", "cc-family-name", "cc-number", "cc-exp", "cc-exp-month",
-  "cc-exp-year", "cc-csc", "cc-type", "transaction-currency", "transaction-amount",
-  "language", "bday", "bday-day", "bday-month", "bday-year", "sex", "url", "photo",
+  "name",
+  "given-name",
+  "additional-name",
+  "family-name",
+  "honorific-prefix",
+  "honorific-suffix",
+  "nickname",
+  "username",
+  "new-password",
+  "current-password",
+  "one-time-code",
+  "organization-title",
+  "email",
+  "tel",
+  "tel-country-code",
+  "tel-national",
+  "tel-area-code",
+  "tel-local",
+  "tel-local-prefix",
+  "tel-local-suffix",
+  "tel-extension",
+  "impp",
+  "organization",
+  "street-address",
+  "address-line1",
+  "address-line2",
+  "address-line3",
+  "address-level1",
+  "address-level2",
+  "address-level3",
+  "address-level4",
+  "postal-code",
+  "country",
+  "country-name",
+  "cc-name",
+  "cc-given-name",
+  "cc-additional-name",
+  "cc-family-name",
+  "cc-number",
+  "cc-exp",
+  "cc-exp-month",
+  "cc-exp-year",
+  "cc-csc",
+  "cc-type",
+  "transaction-currency",
+  "transaction-amount",
+  "language",
+  "bday",
+  "bday-day",
+  "bday-month",
+  "bday-year",
+  "sex",
+  "url",
+  "photo",
 ] as const;
 const formFillTypeSchema = z.enum(formFillTypes);
 const formFillInputSchema = z
@@ -381,18 +425,42 @@ const destroy = (args: z.ZodType<unknown[]>, returns: z.ZodType, description: st
  * not appear here; those remain native brokerage concerns.
  */
 export const browserDataMethods = defineServiceMethods({
-  upsertDownloadRecord: write(z.tuple([browserDownloadRecordSchema]), voidResult, "Store canonical download state."),
-  listDownloadRecords: read(z.tuple([text]), z.array(browserDownloadRecordSchema), "List canonical download state for one host."),
-  getSitePreferences: read(z.tuple([text]), sitePreferencesSchema, "Read site preferences for one origin."),
+  upsertDownloadRecord: write(
+    z.tuple([browserDownloadRecordSchema]),
+    voidResult,
+    "Store canonical download state."
+  ),
+  listDownloadRecords: read(
+    z.tuple([text]),
+    z.array(browserDownloadRecordSchema),
+    "List canonical download state for one host."
+  ),
+  getSitePreferences: read(
+    z.tuple([text]),
+    sitePreferencesSchema,
+    "Read site preferences for one origin."
+  ),
   setSiteZoom: write(z.tuple([text, z.number().positive()]), voidResult, "Set site zoom."),
-  getBookmarks: read(z.tuple([text.optional()]), z.array(bookmarkRowSchema), "List bookmarks in one folder."),
+  getBookmarks: read(
+    z.tuple([text.optional()]),
+    z.array(bookmarkRowSchema),
+    "List bookmarks in one folder."
+  ),
   getAllBookmarks: read(z.tuple([]), z.array(bookmarkRowSchema), "List all bookmarks for export."),
   addBookmark: write(z.tuple([bookmarkInputSchema]), id, "Add a bookmark."),
-  updateBookmark: write(z.tuple([id, bookmarkInputSchema.partial().strict()]), voidResult, "Update a bookmark."),
+  updateBookmark: write(
+    z.tuple([id, bookmarkInputSchema.partial().strict()]),
+    voidResult,
+    "Update a bookmark."
+  ),
   deleteBookmark: destroy(z.tuple([id]), voidResult, "Delete a bookmark."),
   moveBookmark: write(z.tuple([id, text, z.number().int()]), voidResult, "Move a bookmark."),
   searchBookmarks: read(z.tuple([text]), z.array(bookmarkRowSchema), "Search bookmarks."),
-  getHistory: read(z.tuple([historyQuerySchema]), z.array(historyRowSchema), "List bounded browsing history."),
+  getHistory: read(
+    z.tuple([historyQuerySchema]),
+    z.array(historyRowSchema),
+    "List bounded browsing history."
+  ),
   searchHistory: read(
     z.tuple([text, z.number().int().positive().optional()]),
     z.array(historyRowSchema),
@@ -403,8 +471,16 @@ export const browserDataMethods = defineServiceMethods({
     z.array(historyRowSchema),
     "Search browsing history for address completion."
   ),
-  recordHistoryVisit: write(z.tuple([historyVisitInputSchema]), id, "Record one browsing-history visit."),
-  updateHistoryTitle: write(z.tuple([historyTitleInputSchema]), voidResult, "Update a history title."),
+  recordHistoryVisit: write(
+    z.tuple([historyVisitInputSchema]),
+    id,
+    "Record one browsing-history visit."
+  ),
+  updateHistoryTitle: write(
+    z.tuple([historyTitleInputSchema]),
+    voidResult,
+    "Update a history title."
+  ),
   deleteHistoryEntry: destroy(z.tuple([id]), voidResult, "Delete a history entry."),
   deleteHistoryRange: destroy(
     z.tuple([z.number(), z.number()]),
@@ -413,18 +489,46 @@ export const browserDataMethods = defineServiceMethods({
   ),
   clearAllHistory: destroy(z.tuple([]), voidResult, "Delete all browsing history."),
   getPasswords: read(z.tuple([]), z.array(passwordRowSchema), "Read saved passwords.", true),
-  getPasswordForSite: read(z.tuple([text]), z.array(passwordRowSchema), "Read passwords matching one site.", true),
+  getPasswordForSite: read(
+    z.tuple([text]),
+    z.array(passwordRowSchema),
+    "Read passwords matching one site.",
+    true
+  ),
   addPassword: write(z.tuple([passwordInputSchema]), id, "Add a saved password."),
-  updatePassword: write(z.tuple([id, passwordInputSchema.partial().strict()]), voidResult, "Update a saved password."),
+  updatePassword: write(
+    z.tuple([id, passwordInputSchema.partial().strict()]),
+    voidResult,
+    "Update a saved password."
+  ),
   deletePassword: destroy(z.tuple([id]), voidResult, "Delete a saved password."),
   addNeverSave: write(z.tuple([text]), voidResult, "Add a password never-save origin."),
   isNeverSave: read(z.tuple([text]), z.boolean(), "Check a password never-save origin."),
   getNeverSaveOrigins: read(z.tuple([]), z.array(text), "List password never-save origins."),
   removeNeverSave: destroy(z.tuple([text]), voidResult, "Remove a password never-save origin."),
   updateLastUsed: write(z.tuple([id]), voidResult, "Update password last-used metadata."),
-  getFormFillSuggestions: read(z.tuple([formFillQuerySchema]), z.array(formFillRowSchema), "Read form-fill suggestions.", true),
-  addFormFillValue: write(z.tuple([formFillInputSchema, text.optional()]), id, "Add a form-fill value."),
-  updateFormFillValue: write(z.tuple([id, formFillInputSchema.pick({ value: true, displayLabel: true, aliases: true }).partial().strict()]), voidResult, "Update a form-fill value."),
+  getFormFillSuggestions: read(
+    z.tuple([formFillQuerySchema]),
+    z.array(formFillRowSchema),
+    "Read form-fill suggestions.",
+    true
+  ),
+  addFormFillValue: write(
+    z.tuple([formFillInputSchema, text.optional()]),
+    id,
+    "Add a form-fill value."
+  ),
+  updateFormFillValue: write(
+    z.tuple([
+      id,
+      formFillInputSchema
+        .pick({ value: true, displayLabel: true, aliases: true })
+        .partial()
+        .strict(),
+    ]),
+    voidResult,
+    "Update a form-fill value."
+  ),
   markFormFillValueUsed: write(z.tuple([id]), voidResult, "Mark a form-fill value used."),
   deleteFormFillValue: destroy(z.tuple([id]), voidResult, "Delete a form-fill value."),
   clearFormFillValues: destroy(
@@ -437,8 +541,18 @@ export const browserDataMethods = defineServiceMethods({
     z.object({ revision: z.number().int().nonnegative() }).strict(),
     "Apply an exact cookie mutation batch."
   ),
-  getCookieSnapshot: read(z.tuple([z.object({ sinceRevision: z.number().int().nonnegative().optional() }).strict().optional()]), cookieSnapshotSchema, "Read a cookie snapshot."),
-  getCookiesForOrigin: read(z.tuple([text]), z.array(storedCookieSchema), "Read cookies for one origin."),
+  getCookieSnapshot: read(
+    z.tuple([
+      z.object({ sinceRevision: z.number().int().nonnegative().optional() }).strict().optional(),
+    ]),
+    cookieSnapshotSchema,
+    "Read a cookie snapshot."
+  ),
+  getCookiesForOrigin: read(
+    z.tuple([text]),
+    z.array(storedCookieSchema),
+    "Read cookies for one origin."
+  ),
   clearCookiesForOrigin: destroy(
     z.tuple([text]),
     z.number().int().nonnegative(),
@@ -454,15 +568,55 @@ export const browserDataMethods = defineServiceMethods({
     z.number().int().nonnegative(),
     "Delete session-scoped browser cookies."
   ),
-  getCookieSiteSummary: read(z.tuple([text]), z.object({ origin: text, cookieCount: z.number().int().nonnegative(), revision: z.number().int().nonnegative() }).strict(), "Read cookie counts for one origin."),
-  getSearchEngines: read(z.tuple([]), z.array(searchEngineRowSchema), "List imported search engines."),
+  getCookieSiteSummary: read(
+    z.tuple([text]),
+    z
+      .object({
+        origin: text,
+        cookieCount: z.number().int().nonnegative(),
+        revision: z.number().int().nonnegative(),
+      })
+      .strict(),
+    "Read cookie counts for one origin."
+  ),
+  getSearchEngines: read(
+    z.tuple([]),
+    z.array(searchEngineRowSchema),
+    "List imported search engines."
+  ),
   setDefaultEngine: write(z.tuple([id]), voidResult, "Select the default search engine."),
   putPageFavicon: write(z.tuple([faviconInputSchema]), voidResult, "Store a page favicon."),
-  getPageFavicon: read(z.tuple([text]), faviconRowSchema.nullable(), "Read the favicon for one page."),
-  upsertImportJob: write(z.tuple([importJobInputSchema]), voidResult, "Store browser-import job state."),
-  getImportJob: read(z.tuple([text]), importJobRowSchema.nullable(), "Read one browser-import job."),
+  getPageFavicon: read(
+    z.tuple([text]),
+    faviconRowSchema.nullable(),
+    "Read the favicon for one page."
+  ),
+  upsertImportJob: write(
+    z.tuple([importJobInputSchema]),
+    voidResult,
+    "Store browser-import job state."
+  ),
+  getImportJob: read(
+    z.tuple([text]),
+    importJobRowSchema.nullable(),
+    "Read one browser-import job."
+  ),
   listImportJobs: read(z.tuple([]), z.array(importJobRowSchema), "List browser-import jobs."),
-  recordImportBatch: write(z.tuple([z.object({ jobId: text, dataType: text, batchIndex: z.number().int().nonnegative(), idempotencyKey: text, itemCount: z.number().int().nonnegative() }).strict()]), z.object({ stored: z.boolean() }).strict(), "Record imported batch progress."),
+  recordImportBatch: write(
+    z.tuple([
+      z
+        .object({
+          jobId: text,
+          dataType: text,
+          batchIndex: z.number().int().nonnegative(),
+          idempotencyKey: text,
+          itemCount: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ]),
+    z.object({ stored: z.boolean() }).strict(),
+    "Record imported batch progress."
+  ),
   addBookmarksBatch: write(
     z.tuple([z.array(importedBookmarkSchema), importSourceMetaSchema]),
     z.number().int().nonnegative(),
@@ -474,7 +628,15 @@ export const browserDataMethods = defineServiceMethods({
     "Import a history batch."
   ),
   addCookiesBatch: write(
-    z.tuple([z.object({ jobId: text, batchIndex: z.number().int().nonnegative(), cookies: z.array(cookieInputSchema) }).strict()]),
+    z.tuple([
+      z
+        .object({
+          jobId: text,
+          batchIndex: z.number().int().nonnegative(),
+          cookies: z.array(cookieInputSchema),
+        })
+        .strict(),
+    ]),
     z.object({ revision: z.number().int().nonnegative() }).strict(),
     "Import a cookie batch."
   ),

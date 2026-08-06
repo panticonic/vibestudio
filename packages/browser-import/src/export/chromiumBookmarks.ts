@@ -61,20 +61,16 @@ function accumToNodes(accum: FolderAccum): ChromeNode[] {
   for (const [name, child] of accum.children) {
     const earliest = Math.min(
       ...child.bookmarks.map((b) => b.dateAdded),
-      ...Array.from(child.children.values()).flatMap((c) =>
-        c.bookmarks.map((b) => b.dateAdded),
-      ),
-      Date.now(),
+      ...Array.from(child.children.values()).flatMap((c) => c.bookmarks.map((b) => b.dateAdded)),
+      Date.now()
     );
     nodes.push({
       children: accumToNodes(child),
       date_added: unixMsToChrome(earliest),
       date_modified: unixMsToChrome(
         child.bookmarks.length > 0
-          ? Math.max(
-              ...child.bookmarks.map((b) => b.dateModified ?? b.dateAdded),
-            )
-          : earliest,
+          ? Math.max(...child.bookmarks.map((b) => b.dateModified ?? b.dateAdded))
+          : earliest
       ),
       id: String(++idCounter),
       name,
@@ -101,10 +97,10 @@ export function exportChromiumBookmarks(bookmarks: ImportedBookmark[]): string {
   idCounter = 0;
 
   const barBookmarks = bookmarks.filter(
-    (b) => b.folder.length > 0 && b.folder[0] === "Bookmarks Bar",
+    (b) => b.folder.length > 0 && b.folder[0] === "Bookmarks Bar"
   );
   const otherBookmarks = bookmarks.filter(
-    (b) => b.folder.length === 0 || b.folder[0] !== "Bookmarks Bar",
+    (b) => b.folder.length === 0 || b.folder[0] !== "Bookmarks Bar"
   );
 
   const barAccum = buildFolder(barBookmarks);

@@ -77,7 +77,9 @@ function readFirefoxOpenTabs(browser: BrowserName, profilePath: string): Importe
     const selectedTabIndex = typeof window.selected === "number" ? window.selected - 1 : -1;
     window.tabs?.forEach((tab, tabIndex) => {
       const entryIndex =
-        typeof tab.index === "number" && tab.index > 0 ? tab.index - 1 : (tab.entries?.length ?? 1) - 1;
+        typeof tab.index === "number" && tab.index > 0
+          ? tab.index - 1
+          : (tab.entries?.length ?? 1) - 1;
       const entry = tab.entries?.[Math.max(0, entryIndex)] ?? tab.entries?.at(-1);
       const url = normalizeSessionUrl(entry?.url);
       if (!url) return;
@@ -117,24 +119,27 @@ function newestExistingFirefoxSessionFile(profilePath: string): FirefoxSessionFi
     // No backup directory or not readable.
   }
 
-  return candidates
-    .flatMap((candidate) => {
-      try {
-        const stat = fs.statSync(candidate);
-        return stat.isFile() ? [{ path: candidate, mtimeMs: stat.mtimeMs }] : [];
-      } catch {
-        return [];
-      }
-    })
-    .sort((a, b) => b.mtimeMs - a.mtimeMs)[0] ?? null;
+  return (
+    candidates
+      .flatMap((candidate) => {
+        try {
+          const stat = fs.statSync(candidate);
+          return stat.isFile() ? [{ path: candidate, mtimeMs: stat.mtimeMs }] : [];
+        } catch {
+          return [];
+        }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)[0] ?? null
+  );
 }
 
 function readFirefoxSessionJson(filePath: string): FirefoxSession | null {
   try {
     const raw = fs.readFileSync(filePath);
-    const json = filePath.endsWith(".jsonlz4") || filePath.endsWith(".baklz4")
-      ? decompressMozLz4(raw).toString("utf-8")
-      : raw.toString("utf-8");
+    const json =
+      filePath.endsWith(".jsonlz4") || filePath.endsWith(".baklz4")
+        ? decompressMozLz4(raw).toString("utf-8")
+        : raw.toString("utf-8");
     return JSON.parse(json) as FirefoxSession;
   } catch {
     return null;
@@ -180,7 +185,7 @@ function chromiumSessionCandidates(profilePath: string): string[] {
 function readChromiumSessionFile(
   browser: BrowserName,
   profilePath: string,
-  filePath: string,
+  filePath: string
 ): ImportedOpenTab[] {
   let data: Buffer;
   try {
@@ -275,7 +280,7 @@ function readChromiumSessionFile(
   }
 
   const windowIndexById = new Map(
-    windowOrder.filter((id) => !closedWindows.has(id)).map((id, index) => [id, index]),
+    windowOrder.filter((id) => !closedWindows.has(id)).map((id, index) => [id, index])
   );
   const grouped = new Map<number, ChromiumTabState[]>();
   for (const tab of tabs.values()) {
@@ -293,7 +298,8 @@ function readChromiumSessionFile(
   const result: ImportedOpenTab[] = [];
   for (const [windowId, windowTabs] of grouped) {
     const sortedTabs = windowTabs.sort(
-      (a, b) => (a.visualIndex ?? Number.MAX_SAFE_INTEGER) - (b.visualIndex ?? Number.MAX_SAFE_INTEGER),
+      (a, b) =>
+        (a.visualIndex ?? Number.MAX_SAFE_INTEGER) - (b.visualIndex ?? Number.MAX_SAFE_INTEGER)
     );
     const selectedVisualIndex = selectedTabVisualIndexByWindow.get(windowId);
     sortedTabs.forEach((tab, tabIndex) => {
@@ -320,7 +326,7 @@ function readChromiumSessionFile(
 }
 
 function readChromiumNavigationCommand(
-  contents: Buffer,
+  contents: Buffer
 ): { tabId: number; navigation: ChromiumNavigation } | null {
   const reader = PickleReader.from(contents);
   if (!reader) return null;
@@ -345,7 +351,8 @@ function currentChromiumNavigation(tab: ChromiumTabState): ChromiumNavigation | 
   if (tab.currentNavigationIndex != null) {
     const exact = navigations.find((navigation) => navigation.index === tab.currentNavigationIndex);
     if (exact) return exact;
-    const bounded = navigations[Math.max(0, Math.min(tab.currentNavigationIndex, navigations.length - 1))];
+    const bounded =
+      navigations[Math.max(0, Math.min(tab.currentNavigationIndex, navigations.length - 1))];
     if (bounded) return bounded;
   }
   return navigations[navigations.length - 1] ?? null;
@@ -366,7 +373,7 @@ class PickleReader {
   private constructor(
     private readonly data: Buffer,
     private offset: number,
-    private readonly end: number,
+    private readonly end: number
   ) {}
 
   static from(data: Buffer): PickleReader | null {

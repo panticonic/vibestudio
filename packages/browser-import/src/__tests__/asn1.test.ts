@@ -23,9 +23,14 @@ describe("ASN.1 DER parser", () => {
     it("parses a SEQUENCE with children", () => {
       // SEQUENCE containing two INTEGERs: 1 and 2
       const buf = Buffer.from([
-        0x30, 0x06, // SEQUENCE, length 6
-        0x02, 0x01, 0x01, // INTEGER 1
-        0x02, 0x01, 0x02, // INTEGER 2
+        0x30,
+        0x06, // SEQUENCE, length 6
+        0x02,
+        0x01,
+        0x01, // INTEGER 1
+        0x02,
+        0x01,
+        0x02, // INTEGER 2
       ]);
       const node = parseAsn1(buf);
       expect(node.tag).toBe(0x30);
@@ -61,13 +66,13 @@ describe("ASN.1 DER parser", () => {
     it("parses nested SEQUENCE structures", () => {
       // SEQUENCE { SEQUENCE { INTEGER 5 } }
       const inner = Buffer.from([
-        0x30, 0x03, // inner SEQUENCE
-        0x02, 0x01, 0x05, // INTEGER 5
+        0x30,
+        0x03, // inner SEQUENCE
+        0x02,
+        0x01,
+        0x05, // INTEGER 5
       ]);
-      const outer = Buffer.concat([
-        Buffer.from([0x30, inner.length]),
-        inner,
-      ]);
+      const outer = Buffer.concat([Buffer.from([0x30, inner.length]), inner]);
       const node = parseAsn1(outer);
       expect(node.children).toHaveLength(1);
       expect(node.children![0]!.children).toHaveLength(1);
@@ -77,8 +82,11 @@ describe("ASN.1 DER parser", () => {
     it("parses context-specific tags as constructed", () => {
       // Context-specific [0] CONSTRUCTED containing an INTEGER
       const buf = Buffer.from([
-        0xa0, 0x03, // context [0] constructed
-        0x02, 0x01, 0x07, // INTEGER 7
+        0xa0,
+        0x03, // context [0] constructed
+        0x02,
+        0x01,
+        0x07, // INTEGER 7
       ]);
       const node = parseAsn1(buf);
       expect(node.tag).toBe(0xa0);
@@ -103,9 +111,16 @@ describe("ASN.1 DER parser", () => {
   describe("parseAsn1Sequence", () => {
     it("parses multiple consecutive nodes", () => {
       const buf = Buffer.from([
-        0x02, 0x01, 0x0a, // INTEGER 10
-        0x02, 0x01, 0x14, // INTEGER 20
-        0x04, 0x02, 0x41, 0x42, // OCTET STRING "AB"
+        0x02,
+        0x01,
+        0x0a, // INTEGER 10
+        0x02,
+        0x01,
+        0x14, // INTEGER 20
+        0x04,
+        0x02,
+        0x41,
+        0x42, // OCTET STRING "AB"
       ]);
       const nodes = parseAsn1Sequence(buf);
       expect(nodes).toHaveLength(3);
@@ -190,10 +205,16 @@ describe("ASN.1 DER parser", () => {
       // }
 
       // Build it from inside out
-      const pbes2Oid = Buffer.from([0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0d]);
-      const pbkdf2Oid = Buffer.from([0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0c]);
+      const pbes2Oid = Buffer.from([
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0d,
+      ]);
+      const pbkdf2Oid = Buffer.from([
+        0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0c,
+      ]);
       const hmacOid = Buffer.from([0x06, 0x08, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x09]);
-      const aesOid = Buffer.from([0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x2a]);
+      const aesOid = Buffer.from([
+        0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x2a,
+      ]);
 
       const salt = Buffer.alloc(32, 0xab);
       const saltTlv = Buffer.concat([Buffer.from([0x04, 0x20]), salt]);

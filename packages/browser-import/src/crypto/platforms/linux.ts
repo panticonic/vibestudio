@@ -48,14 +48,11 @@ export async function getKeyFromKeyring(browser: BrowserName): Promise<string | 
 
   // Try KWallet via kwallet-query
   try {
-    const result = execSync(
-      `kwallet-query kdewallet -f "Chrome Keys" -r "${app}"`,
-      {
-        encoding: "utf-8",
-        timeout: 5000,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    ).trim();
+    const result = execSync(`kwallet-query kdewallet -f "Chrome Keys" -r "${app}"`, {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
     if (result) return result;
   } catch {
     // Not available or no entry
@@ -72,7 +69,7 @@ export async function getKeyFromKeyring(browser: BrowserName): Promise<string | 
  */
 export async function getLinuxDecryptionKey(
   browser: BrowserName,
-  version: "v10" | "v11",
+  version: "v10" | "v11"
 ): Promise<Buffer> {
   if (version === "v11") {
     try {
@@ -85,7 +82,7 @@ export async function getLinuxDecryptionKey(
     }
     throw new BrowserDataError(
       "KEYRING_UNAVAILABLE",
-      "Could not retrieve encryption key from keyring; falling back to default key",
+      "Could not retrieve encryption key from keyring; falling back to default key"
     );
   }
 
@@ -101,9 +98,7 @@ export async function getLinuxDecryptionKey(
 export function decryptLinuxValue(encrypted: Buffer, key: Buffer): string {
   // Strip version prefix (3 bytes: "v10" or "v11") if present
   const prefix = encrypted.subarray(0, 3).toString("ascii");
-  const data = prefix === "v10" || prefix === "v11"
-    ? encrypted.subarray(3)
-    : encrypted;
+  const data = prefix === "v10" || prefix === "v11" ? encrypted.subarray(3) : encrypted;
 
   // AES-128-CBC with IV = 16 bytes of space (0x20)
   const iv = Buffer.alloc(16, 0x20);

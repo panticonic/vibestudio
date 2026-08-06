@@ -15,7 +15,7 @@ export async function createCryptoProvider(): Promise<CryptoProvider> {
     async decryptChromiumValue(
       encrypted: Buffer,
       browser: BrowserName,
-      localStatePath: string,
+      localStatePath: string
     ): Promise<string> {
       return chromiumCrypto.decrypt(encrypted, browser, localStatePath);
     },
@@ -23,7 +23,7 @@ export async function createCryptoProvider(): Promise<CryptoProvider> {
     async decryptFirefoxLogin(
       encryptedBase64: string,
       key4DbPath: string,
-      masterPassword?: string,
+      masterPassword?: string
     ): Promise<string> {
       return firefoxCrypto.decryptLogin(encryptedBase64, key4DbPath, masterPassword);
     },

@@ -23,9 +23,7 @@ type ProviderFrame =
 
 /** Adapts the authenticated desktop endpoint to the common import provider. */
 export class RemoteBrowserImportProvider implements BrowserImportProvider {
-  constructor(
-    private readonly call: <T>(method: string, ...args: unknown[]) => Promise<T>
-  ) {}
+  constructor(private readonly call: <T>(method: string, ...args: unknown[]) => Promise<T>) {}
 
   listSources(_signal: AbortSignal): Promise<BrowserImportSource[]> {
     return this.call("listImportSources");

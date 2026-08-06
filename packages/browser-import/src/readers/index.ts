@@ -9,7 +9,10 @@ export interface ReaderOptions {
  * Get the appropriate reader for a browser family.
  * Readers are loaded lazily to avoid loading all parsers upfront.
  */
-export async function getReader(family: BrowserFamily, options?: ReaderOptions): Promise<BrowserDataReader> {
+export async function getReader(
+  family: BrowserFamily,
+  options?: ReaderOptions
+): Promise<BrowserDataReader> {
   switch (family) {
     case "firefox": {
       const { FirefoxReader } = await import("./firefoxReader.js");

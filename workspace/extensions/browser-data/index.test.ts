@@ -163,7 +163,7 @@ function makeContext(callerKind: string | null = "shell", callerId = "shell") {
         createdPanels += 1;
         const spec = args[0] as { key: string; contextId?: string };
         const entity = {
-          id: `panel-entity-${createdPanels}`,
+          id: `panel:nav-fixture-${createdPanels}`,
           contextId: spec.contextId ?? `ctx-panel-${createdPanels}`,
           source: { effectiveVersion: "test-version" },
           buildKey: `build-${createdPanels}`,
@@ -175,7 +175,7 @@ function makeContext(callerKind: string | null = "shell", callerId = "shell") {
         const spec = args[0] as { key: string };
         return entities.get(spec.key);
       }
-      if (method === "slotCreate") {
+      if (method === "workspace-state.slot.create") {
         const input = args[0] as {
           slotId: string;
           parentSlotId: string | null;
@@ -194,12 +194,12 @@ function makeContext(callerKind: string | null = "shell", callerId = "shell") {
         });
         return undefined;
       }
-      if (method === "panelUpdateTitle") {
+      if (method === "workspace-state.panel.updateTitle") {
         const slot = slots.get(String(args[0]));
         if (slot) slot.title = String(args[1]);
         return undefined;
       }
-      if (method === "panelTreeDetail") {
+      if (method === "workspace-state.panelTree.detail") {
         const id = String(args[0]);
         const slot = slots.get(id) ?? {
           parentId: null,
@@ -231,14 +231,15 @@ function makeContext(callerKind: string | null = "shell", callerId = "shell") {
         return {
           lease: { holderLabel: "Test", platform: "headless", supportsCdp: true },
           observation: {
-            url: "http://panel.test/",
-            loading: false,
+            view: { url: "http://panel.test/", loading: false },
             boot: { phase: "ready", updatedAt: 1 },
           },
         };
       }
-      if (method === "slotClose") return { closeId: `close:${String(args[0])}`, closedCount: 1 };
-      if (method === "slotCloseCleanupPage") return { items: [], nextCursor: null };
+      if (method === "workspace-state.slot.close")
+        return { closeId: `close:${String(args[0])}`, closedCount: 1 };
+      if (method === "workspace-state.slot.closeCleanupPage")
+        return { items: [], nextCursor: null };
       if (method === "runtime.retireEntity") return undefined;
       return [];
     }
@@ -440,7 +441,7 @@ describe("@workspace-extensions/browser-data", () => {
   });
 
   it("can keep selected HTTP tabs directly under the calling panel", async () => {
-    const { ctx, rpcCall } = makeContext("panel", "panel-parent");
+    const { ctx, rpcCall } = makeContext("panel", "panel:tree/panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
     await expect(
@@ -452,6 +453,13 @@ describe("@workspace-extensions/browser-data", () => {
         groupBy: "none",
       })
     ).resolves.toMatchObject({ tabsFound: 2, panelsOpened: 1 });
+    // Imported browser tabs are deferred slots. The only readiness observation
+    // here is for the caller anchor; the tab itself must not wait for the
+    // external document to load.
+    expect(
+      rpcCall.mock.calls.filter((call) => call[1] === "panelRuntime.observeSlot")
+    ).toHaveLength(1);
+    expect(rpcCall.mock.calls.some((call) => call[1] === "panelRuntime.ensureSlot")).toBe(false);
     expect(rpcCall).toHaveBeenCalledWith("main", "runtime.createEntity", {
       kind: "panel",
       execution: { surface: "external", url: "https://example.com/" },
@@ -460,15 +468,15 @@ describe("@workspace-extensions/browser-data", () => {
       stateArgs: {},
     });
     expect(rpcCall).toHaveBeenCalledWith(
-      expect.stringContaining("WorkspaceDO"),
-      "slotCreate",
-      expect.objectContaining({ parentSlotId: "panel-parent" })
+      "main",
+      "workspace-state.slot.create",
+      expect.objectContaining({ parentSlotId: "panel:tree/panel-parent" })
     );
     expect(orchestrationMocks.launchCollectionTask).not.toHaveBeenCalled();
   });
 
   it("defaults to a new root with nested window collections and deferred tabs", async () => {
-    const { ctx, rpcCall } = makeContext("panel", "panel-parent");
+    const { ctx, rpcCall } = makeContext("panel", "panel:tree/panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
     const result = await api.openTabsAsPanels({
@@ -484,7 +492,7 @@ describe("@workspace-extensions/browser-data", () => {
 
     const collectionCalls = rpcCall.mock.calls.filter(
       (call) =>
-        call[1] === "slotCreate" &&
+        call[1] === "workspace-state.slot.create" &&
         (call[2] as { initialEntry?: { source?: string } })?.initialEntry?.source ===
           "about/collection"
     );
@@ -523,7 +531,7 @@ describe("@workspace-extensions/browser-data", () => {
     const tabParents = rpcCall.mock.calls
       .filter(
         (call) =>
-          call[1] === "slotCreate" &&
+          call[1] === "workspace-state.slot.create" &&
           (call[2] as { initialEntry?: { source?: string } })?.initialEntry?.source?.startsWith(
             "browser:"
           )
@@ -531,18 +539,17 @@ describe("@workspace-extensions/browser-data", () => {
       .map((call) => (call[2] as { parentSlotId?: string }).parentSlotId);
     expect(new Set(tabParents).size).toBe(2);
     expect(tabParents).not.toContain(result.root!.id);
-    expect(tabParents).not.toContain("panel-parent");
+    expect(tabParents).not.toContain("panel:tree/panel-parent");
     const tabContexts = rpcCall.mock.calls
       .filter(
         (call) =>
-          call[1] === "slotCreate" &&
+          call[1] === "workspace-state.slot.create" &&
           (call[2] as { initialEntry?: { source?: string } })?.initialEntry?.source?.startsWith(
             "browser:"
           )
       )
       .map(
-        (call) =>
-          (call[2] as { initialEntry?: { contextId?: string } }).initialEntry?.contextId
+        (call) => (call[2] as { initialEntry?: { contextId?: string } }).initialEntry?.contextId
       );
     expect(new Set(tabContexts)).toEqual(new Set(["ctx-panel-1"]));
     const rootState = (
@@ -567,7 +574,7 @@ describe("@workspace-extensions/browser-data", () => {
     );
     const lastPanelCreateOrder = Math.max(
       ...rpcCall.mock.invocationCallOrder.filter(
-        (_, index) => rpcCall.mock.calls[index]?.[1] === "slotCreate"
+        (_, index) => rpcCall.mock.calls[index]?.[1] === "workspace-state.slot.create"
       )
     );
     expect(orchestrationMocks.launchCollectionTask.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -576,14 +583,14 @@ describe("@workspace-extensions/browser-data", () => {
   });
 
   it("does not silently flatten tabs when a requested window collection cannot be created", async () => {
-    const { ctx, rpcCall } = makeContext("panel", "panel-parent");
+    const { ctx, rpcCall } = makeContext("panel", "panel:tree/panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
 
     const passthrough = rpcCall.getMockImplementation()!;
     let collectionCreates = 0;
     rpcCall.mockImplementation(async (targetId: string, method: string, ...args: unknown[]) => {
-      if (method !== "slotCreate") return passthrough(targetId, method, ...args);
+      if (method !== "workspace-state.slot.create") return passthrough(targetId, method, ...args);
       const [input] = args as [{ initialEntry: { source: string } }];
       if (input.initialEntry.source === "about/collection") {
         collectionCreates += 1;
@@ -608,8 +615,8 @@ describe("@workspace-extensions/browser-data", () => {
       expect.stringContaining("Could not create Window 1"),
     ]);
     expect(rpcCall).toHaveBeenCalledWith(
-      expect.stringContaining("WorkspaceDO"),
-      "slotClose",
+      "main",
+      "workspace-state.slot.close",
       expect.any(String)
     );
     expect(orchestrationMocks.launchCollectionTask).not.toHaveBeenCalled();
@@ -619,7 +626,7 @@ describe("@workspace-extensions/browser-data", () => {
     orchestrationMocks.launchCollectionTask.mockRejectedValueOnce(
       new Error("model provider unavailable")
     );
-    const { ctx } = makeContext("panel", "panel-parent");
+    const { ctx } = makeContext("panel", "panel:tree/panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
 
@@ -638,7 +645,7 @@ describe("@workspace-extensions/browser-data", () => {
   });
 
   it("uses one new root collection without scattering ungrouped tabs as roots", async () => {
-    const { ctx, rpcCall } = makeContext("panel", "panel-parent");
+    const { ctx, rpcCall } = makeContext("panel", "panel:tree/panel-parent");
     const api = (await activate(ctx as never)).providerContracts.browserData;
     const [host] = await api.listImportHosts();
     const result = await api.openTabsAsPanels({
@@ -649,15 +656,13 @@ describe("@workspace-extensions/browser-data", () => {
     });
     expect(result.root).toMatchObject({ panelsOpened: 2 });
     expect(result.collections).toEqual([]);
-    const createCalls = rpcCall.mock.calls.filter((call) => call[1] === "slotCreate");
+    const createCalls = rpcCall.mock.calls.filter(
+      (call) => call[1] === "workspace-state.slot.create"
+    );
     expect(createCalls).toHaveLength(3);
     expect(createCalls[0]?.[2]).toMatchObject({ parentSlotId: null });
     expect(
-      createCalls
-        .slice(1)
-        .map((call) => (call[2] as { parentSlotId?: string }).parentSlotId)
-    ).toEqual(
-      [result.root!.id, result.root!.id]
-    );
+      createCalls.slice(1).map((call) => (call[2] as { parentSlotId?: string }).parentSlotId)
+    ).toEqual([result.root!.id, result.root!.id]);
   });
 });

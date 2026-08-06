@@ -1,12 +1,7 @@
 import type { ImportedPassword } from "../types.js";
 
 function escapeCsvField(field: string): string {
-  if (
-    field.includes(",") ||
-    field.includes('"') ||
-    field.includes("\n") ||
-    field.includes("\r")
-  ) {
+  if (field.includes(",") || field.includes('"') || field.includes("\n") || field.includes("\r")) {
     return '"' + field.replace(/"/g, '""') + '"';
   }
   return field;
@@ -23,7 +18,7 @@ function extractOrigin(url: string): string {
 
 export function exportCsvPasswords(
   passwords: ImportedPassword[],
-  format: "chrome" | "firefox",
+  format: "chrome" | "firefox"
 ): string {
   const lines: string[] = [];
 
@@ -36,7 +31,7 @@ export function exportCsvPasswords(
           escapeCsvField(pw.username),
           escapeCsvField(pw.password),
           escapeCsvField(extractOrigin(pw.url)),
-        ].join(","),
+        ].join(",")
       );
     }
   } else {
@@ -48,7 +43,7 @@ export function exportCsvPasswords(
           escapeCsvField(pw.username),
           escapeCsvField(pw.password),
           escapeCsvField(pw.realm ?? ""),
-        ].join(","),
+        ].join(",")
       );
     }
   }

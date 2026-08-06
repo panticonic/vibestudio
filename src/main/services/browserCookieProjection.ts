@@ -30,7 +30,9 @@ const EXTENSION_WAIT_INTERVAL_MS = 3_000;
 
 function isExtensionUnavailableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /Extension is not installed|Extension failed to start|ENOEXT|ENOTREADY/i.test(message);
+  return /Extension is not installed|Extension failed to start|Unknown service|ENOEXT|ENOTREADY/i.test(
+    message
+  );
 }
 
 function abortError(signal: AbortSignal): unknown {
@@ -80,6 +82,28 @@ async function retryWhileExtensionUnavailable<T>(
 const REVISION_DEBOUNCE_MS = 150;
 const FULL_RECONCILE_INTERVAL_MS = 60_000;
 
+/** Mirrors RUNTIME_RESTARTING_ERROR_CODE in src/server/doDispatch.ts. */
+const RUNTIME_RESTARTING_ERROR_CODE = "runtime_restarting";
+
+/**
+ * True for the typed dispatch failure raised while the server's workerd
+ * runtime is mid generation transition. Checked structurally (code/errorCode
+ * survive the RPC boundary) with a message fallback for transports that only
+ * preserve prose.
+ */
+function isRuntimeRestartingError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const { code, errorCode, message } = error as {
+    code?: unknown;
+    errorCode?: unknown;
+    message?: unknown;
+  };
+  if (code === RUNTIME_RESTARTING_ERROR_CODE || errorCode === RUNTIME_RESTARTING_ERROR_CODE) {
+    return true;
+  }
+  return typeof message === "string" && message.includes(RUNTIME_RESTARTING_ERROR_CODE);
+}
+
 interface OutboxRecord {
   sequence: number;
   mutation: BrowserCookieMutation;
@@ -108,7 +132,6 @@ export function createBrowserCookieProjectionService(deps: {
   serverClient: ServerClient;
   hostId: string;
   outboxRoot: string;
-  setActivePartition(partition: string | null): void;
   createCookieJar?(partition: string): BrowserCookieJar;
   onInitializing?(): void;
   onUnavailable?(error: unknown): void | Promise<void>;
@@ -131,7 +154,6 @@ export function createBrowserCookieProjectionService(deps: {
   const stopHostIntegration = async (): Promise<void> => {
     if (!hostIntegrationActive) return;
     hostIntegrationActive = false;
-    deps.setActivePartition(null);
     await deps.onStopped?.();
   };
 
@@ -161,7 +183,45 @@ export function createBrowserCookieProjectionService(deps: {
           "cookie-outbox.json"
         ),
       });
+      // The browser-data extension can report its environment before its DO
+      // service has been admitted by the workspace workerd. Probe the same
+      // operation used by reconciliation and keep the projection in its
+      // existing background-attach retry path instead of attaching a broken
+      // projection and emitting a reconciliation warning on every startup.
+      await retryWhileExtensionUnavailable(
+        () => deps.browserDataClient.getCookieSnapshot(),
+        signal
+      );
       await candidate.start();
+      if (signal.aborted) throw abortError(signal);
+
+      // Lifecycle awareness: cookie state lives in a workerd-hosted DO, so
+      // reconciliation is pointless while the runtime is offline/restarting.
+      // Pause the reconcile loop on the restart signal and resume on the
+      // readiness signal — event-driven, no polling clock of its own.
+      const stopHealthListening = events.on("server-health" as EventName, (payload) => {
+        const workerd =
+          payload && typeof payload === "object"
+            ? (payload as { workerd?: unknown }).workerd
+            : undefined;
+        if (workerd === "restarting") {
+          candidate?.pauseForRuntimeRestart();
+          projection?.pauseForRuntimeRestart();
+        } else if (workerd === "running") {
+          candidate?.resumeAfterRuntimeRestart();
+          projection?.resumeAfterRuntimeRestart();
+        }
+      });
+      // Observability must not become an attachment prerequisite. A recovering
+      // event stream may be unavailable during the same restart this listener
+      // exists to observe; EventsClient owns its durable resubscription loop.
+      void events.subscribe("server-health" as EventName).catch((error) => {
+        log.warn(
+          `server-health watch will recover in background: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
       if (signal.aborted) throw abortError(signal);
 
       const config = (await deps.serverClient.call(
@@ -171,9 +231,10 @@ export function createBrowserCookieProjectionService(deps: {
       )) as WorkspaceConfig | null;
       if (signal.aborted) throw abortError(signal);
       const broker = config ? workspaceProviderExtensionPackageName(config, "browserData") : null;
+      candidateStopListening = stopHealthListening;
       if (broker) {
         const eventName = `extensions:${broker}::data-changed` as EventName;
-        candidateStopListening = events.on(eventName, (payload) => {
+        const stopDataListening = events.on(eventName, (payload) => {
           if (
             payload &&
             typeof payload === "object" &&
@@ -183,12 +244,21 @@ export function createBrowserCookieProjectionService(deps: {
             projection?.notifyCanonicalRevision();
           }
         });
-        await events.subscribe(eventName);
+        candidateStopListening = () => {
+          stopHealthListening();
+          stopDataListening();
+        };
+        void events.subscribe(eventName).catch((error) => {
+          log.warn(
+            `browser-data watch will recover in background: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        });
         if (signal.aborted) throw abortError(signal);
       }
 
       const api = candidate.api();
-      deps.setActivePartition(partition);
       hostIntegrationActive = true;
       await deps.onReady?.(api);
       if (signal.aborted) throw abortError(signal);
@@ -256,8 +326,11 @@ class BrowserCookieProjection {
   private appliedRevision = 0;
   private mismatchCount = 0;
   private lastError: string | undefined;
+  private lastLoggedWarning: string | undefined;
   private converged = false;
   private stopped = false;
+  /** True while the server's workerd runtime is offline/restarting. */
+  private runtimePaused = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private revisionTimer: ReturnType<typeof setTimeout> | null = null;
   private browserChangeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -298,10 +371,43 @@ class BrowserCookieProjection {
       await this.flushOutbox();
       await this.reconcileNow();
     });
+    this.startPeriodicReconcile();
+  }
+
+  private startPeriodicReconcile(): void {
+    if (this.periodicTimer || this.stopped) return;
     this.periodicTimer = setInterval(() => {
       void this.queueOperation(() => this.reconcileNow());
     }, FULL_RECONCILE_INTERVAL_MS);
     this.periodicTimer.unref?.();
+  }
+
+  /**
+   * The runtime hosting canonical cookie state is offline/restarting: stop
+   * the periodic reconcile clock instead of burning every tick on a doomed
+   * dispatch. Resumption is lifecycle-driven (readiness event or canonical
+   * revision notification), never a retry clock of its own.
+   */
+  pauseForRuntimeRestart(): void {
+    if (this.stopped || this.runtimePaused) return;
+    this.runtimePaused = true;
+    if (this.periodicTimer) {
+      clearInterval(this.periodicTimer);
+      this.periodicTimer = null;
+    }
+    log.info("cookie projection paused while the workerd runtime restarts");
+  }
+
+  resumeAfterRuntimeRestart(): void {
+    if (this.stopped || !this.runtimePaused) return;
+    this.runtimePaused = false;
+    this.startPeriodicReconcile();
+    // Converge immediately on readiness rather than waiting a full interval.
+    void this.queueOperation(async () => {
+      await this.flushOutbox();
+      await this.reconcileNow();
+    });
+    log.info("cookie projection resumed after workerd runtime restart");
   }
 
   async stop(): Promise<void> {
@@ -338,6 +444,9 @@ class BrowserCookieProjection {
   }
 
   notifyCanonicalRevision(): void {
+    // A canonical-data change proves the runtime is serving again; recover the
+    // reconcile loop even if the readiness event was missed.
+    this.resumeAfterRuntimeRestart();
     if (this.revisionTimer) clearTimeout(this.revisionTimer);
     this.revisionTimer = setTimeout(() => {
       this.revisionTimer = null;
@@ -396,6 +505,7 @@ class BrowserCookieProjection {
           mutations: batch.map((entry) => entry.mutation),
         });
       } catch (error) {
+        if (isRuntimeRestartingError(error)) this.pauseForRuntimeRestart();
         this.lastError = `Cookie outbox flush failed: ${messageOf(error)}`;
         this.converged = false;
         await this.persistOutbox();
@@ -482,13 +592,15 @@ class BrowserCookieProjection {
               ? `, ${writeFailures} write failures; first: ${firstWriteFailure ?? "unknown"}`
               : ""
           })`;
-      if (!this.converged) {
-        log.warn(this.lastError ?? "Cookie projection did not converge");
-      }
+      if (this.converged) this.lastLoggedWarning = undefined;
+      else this.warnOnce(this.lastError ?? "Cookie projection did not converge");
     } catch (error) {
+      // A runtime generation transition is a lifecycle state, not a fault:
+      // pause the loop and let the readiness signal resume it.
+      if (isRuntimeRestartingError(error)) this.pauseForRuntimeRestart();
       this.converged = false;
       this.lastError = `Cookie reconciliation failed: ${messageOf(error)}`;
-      log.warn(this.lastError);
+      this.warnOnce(this.lastError);
     }
   }
 
@@ -498,11 +610,17 @@ class BrowserCookieProjection {
       () => undefined,
       (error) => {
         this.lastError = `Cookie projection operation failed: ${messageOf(error)}`;
-        log.warn(this.lastError);
+        this.warnOnce(this.lastError);
         return undefined;
       }
     );
     return next;
+  }
+
+  private warnOnce(message: string): void {
+    if (message === this.lastLoggedWarning) return;
+    this.lastLoggedWarning = message;
+    log.warn(message);
   }
 
   private async loadOutbox(): Promise<void> {

@@ -36,8 +36,9 @@ import type {
 } from "../storage/types.js";
 import type { HistoryQuery } from "../types.js";
 
-interface RpcLike {
-  call(service: string, method: string, args: unknown[]): Promise<unknown>;
+interface BrowserDataRpc {
+  callService(service: string, method: string, args: unknown[]): Promise<unknown>;
+  callTarget(targetId: string, method: string, args: unknown[]): Promise<unknown>;
 }
 
 export interface ImportPreview {
@@ -167,18 +168,18 @@ export interface BrowserDataClient {
 }
 
 /** Canonical client for the manifest-declared browser environment provider. */
-export function createBrowserDataClient(rpc: RpcLike): BrowserDataClient {
+export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient {
   const extensions = createTypedServiceClient(
     "extensions",
     extensionsMethods,
-    (service, method, args) => rpc.call(service, method, args)
+    (service, method, args) => rpc.callService(service, method, args)
   );
   const callNative = <T>(method: string, ...args: unknown[]): Promise<T> =>
     extensions.invokeProvider("browserData", method, args) as Promise<T>;
   let resolvedTarget: Promise<string> | null = null;
   const target = (): Promise<string> => {
     resolvedTarget ??= rpc
-      .call("workers", "resolveService", ["vibestudio.browser-data.v1", null])
+      .callService("workers", "resolveService", ["vibestudio.browser-data.v1", null])
       .then((resolved) => {
         if (
           !resolved ||
@@ -203,7 +204,8 @@ export function createBrowserDataClient(rpc: RpcLike): BrowserDataClient {
     callTypedServiceMethod(
       "browser.data",
       browserDataMethods,
-      async (_service, wireMethod, wireArgs) => rpc.call(await target(), wireMethod, wireArgs),
+      async (_service, wireMethod, wireArgs) =>
+        rpc.callTarget(await target(), wireMethod, wireArgs),
       method,
       args
     ) as Promise<T>;

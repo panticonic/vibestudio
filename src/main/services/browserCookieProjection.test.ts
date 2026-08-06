@@ -136,7 +136,6 @@ describe("canonical browser cookie projection", () => {
       serverClient: { stream: vi.fn(), call: vi.fn() } as never,
       hostId: "desktop:test",
       outboxRoot: "/tmp/unused-browser-projection-test",
-      setActivePartition: vi.fn(),
       createCookieJar,
       onInitializing,
       onUnavailable,
@@ -168,7 +167,6 @@ describe("canonical browser cookie projection", () => {
       serverClient: { stream: vi.fn(), call: vi.fn() } as never,
       hostId: "desktop:test",
       outboxRoot: "/tmp/unused-browser-projection-test",
-      setActivePartition: vi.fn(),
       createCookieJar: vi.fn(() => fakeCookieJar().jar),
       onUnavailable,
     });
@@ -195,7 +193,6 @@ describe("canonical browser cookie projection", () => {
       applyCookieMutations: vi.fn().mockResolvedValue(undefined),
       getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 1, cookies: [] }),
     };
-    const setActivePartition = vi.fn();
     const onReady = vi.fn();
     const onStopped = vi.fn();
     const service = createBrowserCookieProjectionService({
@@ -206,7 +203,6 @@ describe("canonical browser cookie projection", () => {
       } as never,
       hostId: "desktop:test",
       outboxRoot: tempRoot,
-      setActivePartition,
       createCookieJar,
       onReady,
       onStopped,
@@ -218,14 +214,10 @@ describe("canonical browser cookie projection", () => {
 
       await vi.advanceTimersByTimeAsync(3_000);
       await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
-      expect(setActivePartition).toHaveBeenCalledWith(
-        "persist:browser-environment:environment-test"
-      );
       expect(createCookieJar).toHaveBeenCalledWith("persist:browser-environment:environment-test");
 
       await service.stop?.(undefined);
       expect(onStopped).toHaveBeenCalledTimes(1);
-      expect(setActivePartition).toHaveBeenLastCalledWith(null);
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
@@ -259,7 +251,6 @@ describe("canonical browser cookie projection", () => {
       } as never,
       hostId: "desktop:test",
       outboxRoot: tempRoot,
-      setActivePartition: vi.fn(),
       createCookieJar: () => jar,
       onReady,
     });
@@ -323,7 +314,6 @@ describe("canonical browser cookie projection", () => {
       } as never,
       hostId: "desktop:test",
       outboxRoot: tempRoot,
-      setActivePartition: vi.fn(),
       createCookieJar: () => state.jar,
       onReady,
     });
@@ -373,7 +363,6 @@ describe("canonical browser cookie projection", () => {
       } as never,
       hostId: "desktop:test",
       outboxRoot: tempRoot,
-      setActivePartition: vi.fn(),
       createCookieJar: () => state.jar,
       onReady,
     });
@@ -423,7 +412,6 @@ describe("canonical browser cookie projection", () => {
       } as never,
       hostId: "desktop:test",
       outboxRoot: tempRoot,
-      setActivePartition: vi.fn(),
       createCookieJar: () => state.jar,
       onReady,
     });
@@ -448,6 +436,85 @@ describe("canonical browser cookie projection", () => {
           }),
         ],
       });
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("pauses periodic reconciliation during a runtime generation transition and resumes on ready", async () => {
+    vi.useFakeTimers();
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
+    const { jar } = fakeCookieJar();
+    const getCookieSnapshot = vi.fn().mockResolvedValue({ revision: 1, cookies: [] });
+    const encoder = new TextEncoder();
+    let watchController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const stream = vi.fn(
+      async (
+        _service: string,
+        _method: string,
+        _args: unknown[],
+        options: { signal?: AbortSignal }
+      ) => ({
+        status: 200,
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            watchController = controller;
+            controller.enqueue(
+              encoder.encode(
+                `${JSON.stringify({ kind: "watching", events: ["server-health"], epoch: "e1" })}\n`
+              )
+            );
+            options.signal?.addEventListener("abort", () => controller.close(), { once: true });
+          },
+        }),
+      })
+    );
+    const onReady = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      browserDataClient: {
+        getBrowserEnvironment: vi.fn().mockResolvedValue({
+          workspaceId: "workspace-test",
+          ownerUserId: "user-test",
+          environmentKey: "environment-test",
+        }),
+        applyCookieMutations: vi.fn().mockResolvedValue(undefined),
+        getCookieSnapshot,
+      } as never,
+      serverClient: { stream, call: vi.fn().mockResolvedValue(null) } as never,
+      hostId: "desktop:test",
+      outboxRoot: tempRoot,
+      createCookieJar: () => jar,
+      onReady,
+    });
+    const pushHealth = (workerd: "restarting" | "running", sequence: number) => {
+      watchController?.enqueue(
+        encoder.encode(
+          `${JSON.stringify({
+            kind: "event",
+            event: "server-health",
+            payload: { workerd, sampledAt: Date.now() },
+            sequence,
+          })}\n`
+        )
+      );
+    };
+
+    try {
+      await service.start?.(() => undefined);
+      await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+      const initialReads = getCookieSnapshot.mock.calls.length;
+
+      pushHealth("restarting", 1);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getCookieSnapshot).toHaveBeenCalledTimes(initialReads);
+
+      pushHealth("running", 2);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() =>
+        expect(getCookieSnapshot.mock.calls.length).toBeGreaterThan(initialReads)
+      );
     } finally {
       await service.stop?.(undefined);
       await rm(tempRoot, { recursive: true, force: true });

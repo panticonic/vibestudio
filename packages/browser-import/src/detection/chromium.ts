@@ -29,8 +29,11 @@ export function detectChromiumProfiles(dataDir: string): DetectedProfile[] {
 }
 
 function parseInfoCache(
-  infoCache: Record<string, { name?: string; gaia_name?: string; is_using_default_name?: boolean; shortcut_name?: string }>,
-  dataDir: string,
+  infoCache: Record<
+    string,
+    { name?: string; gaia_name?: string; is_using_default_name?: boolean; shortcut_name?: string }
+  >,
+  dataDir: string
 ): DetectedProfile[] {
   const profiles: DetectedProfile[] = [];
 
@@ -38,8 +41,7 @@ function parseInfoCache(
     const profilePath = path.join(dataDir, dirName);
     if (!fs.existsSync(profilePath)) continue;
 
-    const displayName =
-      info.gaia_name || info.name || info.shortcut_name || dirName;
+    const displayName = info.gaia_name || info.name || info.shortcut_name || dirName;
 
     profiles.push({
       id: dirName,
@@ -62,10 +64,7 @@ function scanProfileDirectories(dataDir: string): DetectedProfile[] {
 
   // Check Default profile
   const defaultPath = path.join(dataDir, "Default");
-  if (
-    fs.existsSync(defaultPath) &&
-    fs.existsSync(path.join(defaultPath, "Preferences"))
-  ) {
+  if (fs.existsSync(defaultPath) && fs.existsSync(path.join(defaultPath, "Preferences"))) {
     profiles.push({
       id: "Default",
       displayName: "Default",

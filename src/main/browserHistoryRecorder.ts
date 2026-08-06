@@ -17,7 +17,10 @@ export class BrowserHistoryRecorder {
   private readonly browserData: BrowserDataClient;
 
   constructor(serverClient: ServerClient) {
-    this.browserData = createBrowserDataClient(serverClient);
+    this.browserData = createBrowserDataClient({
+      callService: (service, method, args) => serverClient.call(service, method, args),
+      callTarget: (targetId, method, args) => serverClient.callTarget(targetId, method, args),
+    });
   }
 
   markNext(panelId: string, intent: BrowserNavigationIntent): void {

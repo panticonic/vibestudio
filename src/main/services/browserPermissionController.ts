@@ -14,6 +14,7 @@ import { scopeCovers } from "@vibestudio/shared/authorization";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import { browserEnvironmentPartition } from "@vibestudio/shared/panelInterfaces";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";
 
@@ -45,23 +46,26 @@ const SENSITIVE_PERMISSIONS = new Set([
 ]);
 
 /**
- * Connects one canonical browser environment to Electron's permission hooks.
+ * Connects workspace views to Electron's permission hooks.
  *
- * The server remains the policy authority. This controller retains only the
- * projection required by Electron's synchronous permission-check callback.
+ * Exact workspace-unit authority is available as soon as ViewManager exists.
+ * A canonical browser environment may attach later; only website grant
+ * projection depends on it. Keeping those lifecycles separate means a delayed
+ * browser-data extension cannot disable local panel features such as a
+ * user-activated clipboard write.
  */
 export class BrowserPermissionController {
   private readonly grants = new Map<string, PermissionGrant>();
   private readonly client;
   private readonly sessionEpoch = randomUUID();
   private readonly automationTaint = new Set<number>();
+  private browserPartition: string | null = null;
   private environmentKey: string | null = null;
   private stopped = false;
   private releaseGrantEvents: (() => void) | null = null;
 
   constructor(
     private readonly deps: {
-      partition: string;
       serverClient: ServerClient;
       eventService: EventService;
       getViewManager(): ViewManager | null;
@@ -75,33 +79,53 @@ export class BrowserPermissionController {
     );
   }
 
-  async start(): Promise<void> {
-    this.stopped = false;
-    this.releaseGrantEvents = this.deps.serverClient.onDirectEvent(
-      "browser-permissions:changed",
-      ({ environmentKey, grants }) => {
-        if (environmentKey === this.environmentKey) this.replaceProjection(grants);
-      }
-    );
+  /**
+   * Resolve and attach the canonical browser environment owned by the signed-in
+   * workspace user. This server primitive is deliberately independent of the
+   * optional browser-data extension: ordinary browser views must be usable
+   * while cookie projection is still attaching (or unavailable).
+   */
+  async attachBrowserEnvironment(): Promise<string> {
+    if (this.stopped) throw new Error("Browser permission controller is stopped");
+    this.detachBrowserEnvironment();
     try {
-      await this.refresh();
+      const snapshot = await this.client.snapshot({ sessionEpoch: this.sessionEpoch });
+      const partition = browserEnvironmentPartition(snapshot.environmentKey);
+      this.browserPartition = partition;
+      this.environmentKey = snapshot.environmentKey;
+      this.replaceProjection(snapshot.grants);
+      this.releaseGrantEvents = this.deps.serverClient.onDirectEvent(
+        "browser-permissions:changed",
+        ({ environmentKey, grants }) => {
+          if (environmentKey === this.environmentKey) this.replaceProjection(grants);
+        }
+      );
+      return partition;
     } catch (error) {
-      this.releaseGrantEvents();
-      this.releaseGrantEvents = null;
+      this.detachBrowserEnvironment();
       throw error;
     }
   }
 
-  stop(): void {
-    this.stopped = true;
+  /** Detach browser-only state while retaining local workspace-unit enforcement. */
+  detachBrowserEnvironment(): void {
     this.releaseGrantEvents?.();
     this.releaseGrantEvents = null;
     this.grants.clear();
-    this.automationTaint.clear();
+    this.browserPartition = null;
     this.environmentKey = null;
   }
 
+  stop(): void {
+    this.stopped = true;
+    this.detachBrowserEnvironment();
+    this.automationTaint.clear();
+  }
+
   async refresh(): Promise<void> {
+    if (this.stopped || !this.browserPartition) {
+      throw new Error("Browser permission environment is not attached");
+    }
     const snapshot = await this.client.snapshot({ sessionEpoch: this.sessionEpoch });
     this.environmentKey = snapshot.environmentKey;
     this.replaceProjection(snapshot.grants);
@@ -359,7 +383,11 @@ export class BrowserPermissionController {
     if (!contents || contents.isDestroyed()) return false;
     const manager = this.deps.getViewManager();
     const panelId = manager?.findViewIdByWebContentsId(contents.id);
-    return Boolean(panelId && manager?.getViewPartition(panelId) === this.deps.partition);
+    return Boolean(
+      panelId &&
+      this.browserPartition &&
+      manager?.getViewPartition(panelId) === this.browserPartition
+    );
   }
 
   private mayRequest(

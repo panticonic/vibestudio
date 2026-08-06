@@ -3,9 +3,7 @@ import type { ImportedPermission } from "../types.js";
 /**
  * Map Chromium content setting values to our setting enum.
  */
-export function chromiumSettingToPermission(
-  value: number | string,
-): "allow" | "block" | "ask" {
+export function chromiumSettingToPermission(value: number | string): "allow" | "block" | "ask" {
   // Chromium uses: 1=allow, 2=block, 3=ask (or "session_only" etc.)
   if (value === 1 || value === "allow") return "allow";
   if (value === 2 || value === "block") return "block";
@@ -16,9 +14,7 @@ export function chromiumSettingToPermission(
  * Map Firefox permission type integers to our setting enum.
  * Firefox uses: 1=allow, 2=deny
  */
-export function firefoxPermissionToSetting(
-  permission: number,
-): "allow" | "block" | "ask" {
+export function firefoxPermissionToSetting(permission: number): "allow" | "block" | "ask" {
   if (permission === 1) return "allow";
   if (permission === 2) return "block";
   return "ask";
@@ -28,14 +24,14 @@ export function firefoxPermissionToSetting(
  * Map Chromium content_settings exception key names to our permission names.
  */
 const CHROMIUM_PERMISSION_MAP: Record<string, string> = {
-  "notifications": "notifications",
-  "geolocation": "geolocation",
-  "media_stream_camera": "camera",
-  "media_stream_mic": "microphone",
-  "midi_sysex": "midi",
-  "clipboard": "clipboard-read",
-  "automatic_downloads": "automatic-downloads",
-  "popups": "popups",
+  notifications: "notifications",
+  geolocation: "geolocation",
+  media_stream_camera: "camera",
+  media_stream_mic: "microphone",
+  midi_sysex: "midi",
+  clipboard: "clipboard-read",
+  automatic_downloads: "automatic-downloads",
+  popups: "popups",
 };
 
 export function mapChromiumPermissionName(key: string): string {
@@ -47,11 +43,11 @@ export function mapChromiumPermissionName(key: string): string {
  */
 const FIREFOX_PERMISSION_MAP: Record<string, string> = {
   "desktop-notification": "notifications",
-  "geo": "geolocation",
-  "camera": "camera",
-  "microphone": "microphone",
-  "midi": "midi",
-  "popup": "popups",
+  geo: "geolocation",
+  camera: "camera",
+  microphone: "microphone",
+  midi: "midi",
+  popup: "popups",
   "autoplay-media": "autoplay",
 };
 

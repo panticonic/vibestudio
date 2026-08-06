@@ -46,4 +46,3 @@ export async function openReadonlySqlite(bytes: Uint8Array): Promise<ReaderDatab
 }
 
 export type { ReaderDatabase as Database };
-

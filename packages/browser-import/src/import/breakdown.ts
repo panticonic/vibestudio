@@ -1,7 +1,4 @@
-import type {
-  BrowserImportDataType,
-  ImportCategoryBreakdown,
-} from "@vibestudio/browser-data";
+import type { BrowserImportDataType, ImportCategoryBreakdown } from "@vibestudio/browser-data";
 
 /** Buckets listed individually in a preview breakdown; the rest is summarized. */
 export const BREAKDOWN_GROUP_LIMIT = 12;
@@ -74,6 +71,10 @@ function hostFromUrl(url: string): string {
 
 /** Normalize a cookie domain or hostname to a displayable site label. */
 function hostLabel(host: string): string {
-  const trimmed = host.trim().replace(/^\./, "").replace(/^www\./, "").toLowerCase();
+  const trimmed = host
+    .trim()
+    .replace(/^\./, "")
+    .replace(/^www\./, "")
+    .toLowerCase();
   return trimmed || "unknown";
 }

@@ -166,10 +166,7 @@ describe("Chromium profile detection", () => {
         },
       },
     };
-    fs.writeFileSync(
-      path.join(tmpDir, "Local State"),
-      JSON.stringify(localState),
-    );
+    fs.writeFileSync(path.join(tmpDir, "Local State"), JSON.stringify(localState));
 
     // Create profile dirs
     fs.mkdirSync(path.join(tmpDir, "Default"), { recursive: true });
@@ -233,18 +230,26 @@ describe("packaged browser roots", () => {
   });
 
   it("names the packaging, preferring an explicit label over the path shape", () => {
-    expect(packagingLabel({ path: "/home/u/.var/app/com.google.Chrome/config/google-chrome" })).toBe(
-      "Flatpak"
-    );
+    expect(
+      packagingLabel({ path: "/home/u/.var/app/com.google.Chrome/config/google-chrome" })
+    ).toBe("Flatpak");
     expect(packagingLabel({ path: "/home/u/snap/chromium/common/chromium" })).toBe("Snap");
     expect(packagingLabel({ path: "/home/u/.config/google-chrome" })).toBeUndefined();
     expect(
-      packagingLabel({ path: "/home/u/.var/app/io.github.x/config/chromium", label: "ungoogled, Flatpak" })
+      packagingLabel({
+        path: "/home/u/.var/app/io.github.x/config/chromium",
+        label: "ungoogled, Flatpak",
+      })
     ).toBe("ungoogled, Flatpak");
   });
 
   it("returns a single root for browsers with one location", () => {
-    const entry = { name: "chrome" as const, family: "chromium" as const, displayName: "x", linux: "/one" };
+    const entry = {
+      name: "chrome" as const,
+      family: "chromium" as const,
+      displayName: "x",
+      linux: "/one",
+    };
     expect(getBrowserDataDirs(entry)).toEqual([{ path: "/one" }]);
   });
 });

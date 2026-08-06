@@ -25,7 +25,7 @@ export function deduplicateBookmarks(bookmarks: ImportedBookmark[]): ImportedBoo
 export function buildFolderPath(
   parentId: number,
   parentMap: Map<number, { title: string; parentId: number }>,
-  rootIds: Set<number>,
+  rootIds: Set<number>
 ): string[] {
   const path: string[] = [];
   let currentId = parentId;

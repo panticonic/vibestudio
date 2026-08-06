@@ -42,7 +42,10 @@ function pbeDecrypt(params: PbeParams, ciphertext: Buffer): Buffer {
     // Verify padding bytes
     let validPad = true;
     for (let i = decrypted.length - padLen; i < decrypted.length; i++) {
-      if (decrypted[i]! !== padLen) { validPad = false; break; }
+      if (decrypted[i]! !== padLen) {
+        validPad = false;
+        break;
+      }
     }
     if (validPad) {
       return decrypted.subarray(0, decrypted.length - padLen);
@@ -64,11 +67,7 @@ function pbeDecrypt(params: PbeParams, ciphertext: Buffer): Buffer {
  *   k2  = HMAC-SHA1(chp, tk + entrySalt)
  *   k   = k1 + k2 -> first 24 bytes = 3DES key, next 8 = IV
  */
-function deriveKeyNss(
-  globalSalt: Buffer,
-  entrySalt: Buffer,
-  password: string,
-): PbeParams {
+function deriveKeyNss(globalSalt: Buffer, entrySalt: Buffer, password: string): PbeParams {
   const passwordBuf = Buffer.from(password, "utf-8");
   const hp = crypto.createHash("sha1").update(globalSalt).update(passwordBuf).digest();
 
@@ -77,9 +76,15 @@ function deriveKeyNss(
 
   const chp = crypto.createHash("sha1").update(hp).update(entrySalt).digest();
 
-  const k1 = crypto.createHmac("sha1", chp).update(Buffer.concat([pes, entrySalt])).digest();
+  const k1 = crypto
+    .createHmac("sha1", chp)
+    .update(Buffer.concat([pes, entrySalt]))
+    .digest();
   const tk = crypto.createHmac("sha1", chp).update(pes).digest();
-  const k2 = crypto.createHmac("sha1", chp).update(Buffer.concat([tk, entrySalt])).digest();
+  const k2 = crypto
+    .createHmac("sha1", chp)
+    .update(Buffer.concat([tk, entrySalt]))
+    .digest();
 
   const k = Buffer.concat([k1, k2]);
   return {
@@ -92,11 +97,7 @@ function deriveKeyNss(
 /**
  * PBES2 key derivation (PBKDF2 + cipher).
  */
-function derivePbes2(
-  node: Asn1Node,
-  password: string,
-  globalSalt: Buffer,
-): PbeParams {
+function derivePbes2(node: Asn1Node, password: string, globalSalt: Buffer): PbeParams {
   // node is the SEQUENCE under the PBES2 OID:
   // SEQUENCE { SEQUENCE(PBKDF2 params), SEQUENCE(cipher params) }
   const children = node.children;
@@ -163,7 +164,7 @@ function derivePbes2(
   } else {
     throw new BrowserDataError(
       "UNSUPPORTED_ENCRYPTION_VERSION",
-      `Unsupported cipher OID: ${cipherOid}`,
+      `Unsupported cipher OID: ${cipherOid}`
     );
   }
 
@@ -176,9 +177,10 @@ function derivePbes2(
     iv = Buffer.from(ivValue);
   } else if (ivValue.length < expectedIvLen) {
     // Reconstruct IV from DER encoding: tag + length + value
-    const header = ivValue.length < 128
-      ? Buffer.from([ivNode.tag, ivValue.length])
-      : Buffer.from([ivNode.tag, 0x81, ivValue.length]);
+    const header =
+      ivValue.length < 128
+        ? Buffer.from([ivNode.tag, ivValue.length])
+        : Buffer.from([ivNode.tag, 0x81, ivValue.length]);
     iv = Buffer.concat([header, ivValue]);
   } else {
     iv = ivValue.subarray(0, expectedIvLen);
@@ -186,7 +188,11 @@ function derivePbes2(
 
   // Derive key using PBKDF2
   // Per NSS / firepwd: PBKDF2 password = SHA1(globalSalt + masterPassword), salt = entrySalt
-  const hp = crypto.createHash("sha1").update(globalSalt).update(Buffer.from(password, "utf-8")).digest();
+  const hp = crypto
+    .createHash("sha1")
+    .update(globalSalt)
+    .update(Buffer.from(password, "utf-8"))
+    .digest();
   const key = crypto.pbkdf2Sync(hp, entrySalt, iterations, keyLength, hmacAlgo);
 
   return { algorithm, key, iv };
@@ -214,7 +220,7 @@ function readAsn1Integer(node: Asn1Node): number {
 function parsePbeBlob(
   asn1Data: Buffer,
   password: string,
-  globalSalt: Buffer,
+  globalSalt: Buffer
 ): { params: PbeParams; ciphertext: Buffer } {
   const root = parseAsn1(asn1Data);
   if (!root.children || root.children.length < 2) {
@@ -243,10 +249,7 @@ function parsePbeBlob(
     const params = deriveKeyNss(globalSalt, Buffer.from(entrySalt), password);
     return { params, ciphertext: Buffer.from(encryptedData) };
   } else {
-    throw new BrowserDataError(
-      "UNSUPPORTED_ENCRYPTION_VERSION",
-      `Unsupported PBE OID: ${oid}`,
-    );
+    throw new BrowserDataError("UNSUPPORTED_ENCRYPTION_VERSION", `Unsupported PBE OID: ${oid}`);
   }
 }
 
@@ -264,7 +267,7 @@ export class FirefoxCrypto {
   async decryptLogin(
     encryptedBase64: string,
     key4DbPath: string,
-    masterPassword?: string,
+    masterPassword?: string
   ): Promise<string> {
     const password = masterPassword ?? "";
     const cacheKey = `${key4DbPath}:${password}`;
@@ -307,25 +310,23 @@ export class FirefoxCrypto {
       const { params: checkParams, ciphertext: checkCipher } = parsePbeBlob(
         item2,
         password,
-        globalSalt,
+        globalSalt
       );
       const checkDecrypted = pbeDecrypt(checkParams, checkCipher);
       const checkStr = checkDecrypted.toString("utf-8");
 
       if (!checkStr.startsWith("password-check")) {
-        throw new BrowserDataError(
-          "WRONG_MASTER_PASSWORD",
-          "Master password verification failed",
-        );
+        throw new BrowserDataError("WRONG_MASTER_PASSWORD", "Master password verification failed");
       }
 
       // Step 2: Extract the actual decryption key from nssPrivate.
       // Profiles upgraded from 3DES to AES may have multiple rows:
       // one with the old 24-byte 3DES key, one with the new 32-byte AES key.
       // Try all rows and pick the longest valid key (AES-256 > 3DES).
-      const nssRows = db
-        .prepare("SELECT a11, a102 FROM nssPrivate")
-        .all() as Array<{ a11: Buffer; a102: Buffer }>;
+      const nssRows = db.prepare("SELECT a11, a102 FROM nssPrivate").all() as Array<{
+        a11: Buffer;
+        a102: Buffer;
+      }>;
 
       if (nssRows.length === 0) {
         throw new BrowserDataError("DECRYPTION_FAILED", "No entry in key4.db nssPrivate table");
@@ -336,7 +337,9 @@ export class FirefoxCrypto {
         try {
           const a11 = Buffer.from(nssRow.a11);
           const { params: keyParams, ciphertext: keyCipher } = parsePbeBlob(
-            a11, password, globalSalt,
+            a11,
+            password,
+            globalSalt
           );
           keys.push(pbeDecrypt(keyParams, keyCipher));
         } catch {
@@ -394,7 +397,7 @@ export class FirefoxCrypto {
     if (!root.children || root.children.length < 3) {
       throw new BrowserDataError(
         "DECRYPTION_FAILED",
-        `Invalid login blob: expected 3 elements in root SEQUENCE, got ${root.children?.length ?? 0}`,
+        `Invalid login blob: expected 3 elements in root SEQUENCE, got ${root.children?.length ?? 0}`
       );
     }
 
@@ -413,25 +416,35 @@ export class FirefoxCrypto {
 
     if (oid === OID_DES_EDE3_CBC) {
       if (key.length < 24) {
-        throw new BrowserDataError("DECRYPTION_FAILED", `3DES requires 24-byte key, got ${key.length}`);
+        throw new BrowserDataError(
+          "DECRYPTION_FAILED",
+          `3DES requires 24-byte key, got ${key.length}`
+        );
       }
       return this.decryptCbc("des-ede3-cbc", key.subarray(0, 24), iv, ciphertext, 8);
     } else if (oid === OID_AES_256_CBC) {
       if (key.length < 32) {
-        throw new BrowserDataError("DECRYPTION_FAILED", `AES-256-CBC requires 32-byte key, got ${key.length}`);
+        throw new BrowserDataError(
+          "DECRYPTION_FAILED",
+          `AES-256-CBC requires 32-byte key, got ${key.length}`
+        );
       }
       return this.decryptCbc("aes-256-cbc", key.subarray(0, 32), iv, ciphertext, 16);
     } else {
       throw new BrowserDataError(
         "UNSUPPORTED_ENCRYPTION_VERSION",
-        `Unsupported login cipher OID: ${oid}`,
+        `Unsupported login cipher OID: ${oid}`
       );
     }
   }
 
   /** Decrypt CBC-mode ciphertext, validate and strip PKCS#7 padding. */
   private decryptCbc(
-    algorithm: string, key: Buffer, iv: Buffer, ciphertext: Buffer, blockSize: number,
+    algorithm: string,
+    key: Buffer,
+    iv: Buffer,
+    ciphertext: Buffer,
+    blockSize: number
   ): string {
     const decipher = crypto.createDecipheriv(algorithm, key, iv);
     decipher.setAutoPadding(false);
@@ -449,5 +462,4 @@ export class FirefoxCrypto {
     }
     return decrypted.subarray(0, decrypted.length - padLen).toString("utf-8");
   }
-
 }

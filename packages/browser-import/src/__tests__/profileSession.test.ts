@@ -2,7 +2,11 @@ import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isProfileRunning, profileSessionState, restoresSessionOnLaunch } from "../readers/profileSession.js";
+import {
+  isProfileRunning,
+  profileSessionState,
+  restoresSessionOnLaunch,
+} from "../readers/profileSession.js";
 
 function profileDir(): string {
   return mkdtempSync(path.join(tmpdir(), "vibestudio-profile-"));
@@ -67,10 +71,16 @@ describe("restoresSessionOnLaunch", () => {
 
   it("reads the Chromium continue-where-you-left-off preference", () => {
     const dir = profileDir();
-    writeFileSync(path.join(dir, "Preferences"), JSON.stringify({ session: { restore_on_startup: 1 } }));
+    writeFileSync(
+      path.join(dir, "Preferences"),
+      JSON.stringify({ session: { restore_on_startup: 1 } })
+    );
     expect(restoresSessionOnLaunch("chromium", dir)).toBe(true);
     const other = profileDir();
-    writeFileSync(path.join(other, "Preferences"), JSON.stringify({ session: { restore_on_startup: 5 } }));
+    writeFileSync(
+      path.join(other, "Preferences"),
+      JSON.stringify({ session: { restore_on_startup: 5 } })
+    );
     expect(restoresSessionOnLaunch("chromium", other)).toBe(false);
   });
 

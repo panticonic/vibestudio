@@ -97,9 +97,7 @@ function parseProfilesIni(content: string, baseDir: string): DetectedProfile[] {
     // once marked two profiles default, which made an abandoned profile claim it
     // would reopen on launch.
     const isDefault =
-      installDefaults.size > 0
-        ? installDefaults.has(profilePath)
-        : section["Default"] === "1";
+      installDefaults.size > 0 ? installDefaults.has(profilePath) : section["Default"] === "1";
 
     profiles.push({
       id: profilePath,

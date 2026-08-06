@@ -790,6 +790,7 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
     return groupByWindow(matching);
   }, [rows, needle]);
   const visibleCount = windows.reduce((sum, window) => sum + window.tabs.length, 0);
+  const visibleTabIds = windows.flatMap((window) => window.tabs.map((tab) => tab.tabId));
 
   // When the browser is closed we still list its stored sessions, so say which
   // of them a launch would actually reopen.
@@ -958,23 +959,13 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
                 <MagnifyingGlassIcon />
               </TextField.Slot>
             </TextField.Root>
-            <Button
-              size="1"
-              variant="ghost"
-              disabled={visibleCount === 0}
-              onClick={() =>
-                setMany(
-                  windows.flatMap((window) => window.tabs.map((tab) => tab.tabId)),
-                  !windows.every((window) => window.tabs.every((tab) => selected.has(tab.tabId)))
-                )
-              }
-            >
-              {visibleCount > 0 &&
-              windows.every((window) => window.tabs.every((tab) => selected.has(tab.tabId)))
-                ? "Clear"
-                : `Select ${visibleCount}`}
-            </Button>
           </Flex>
+
+          <TabSelectionActions
+            disabled={visibleCount === 0}
+            onSelect={() => setMany(visibleTabIds, true)}
+            onDeselect={() => setMany(visibleTabIds, false)}
+          />
 
           <Flex
             direction="column"
@@ -1019,6 +1010,12 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
               />
             ))}
           </Flex>
+
+          <TabSelectionActions
+            disabled={visibleCount === 0}
+            onSelect={() => setMany(visibleTabIds, true)}
+            onDeselect={() => setMany(visibleTabIds, false)}
+          />
         </>
       )}
 
@@ -1040,6 +1037,23 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
         </Button>
       </Flex>
     </Card>
+  );
+}
+
+function TabSelectionActions(props: {
+  disabled: boolean;
+  onSelect: () => void;
+  onDeselect: () => void;
+}) {
+  return (
+    <Flex gap="2" align="center" mt="2">
+      <Button size="1" variant="soft" disabled={props.disabled} onClick={props.onSelect}>
+        Select all
+      </Button>
+      <Button size="1" variant="ghost" disabled={props.disabled} onClick={props.onDeselect}>
+        Deselect all
+      </Button>
+    </Flex>
   );
 }
 

@@ -477,6 +477,8 @@ async function openTabsAsPanels(
     sourceName: string;
   }
 ): Promise<OpenTabsAsPanelsResult> {
+  const importStartedAt = Date.now();
+  const slotTimings: Array<{ stage: string; durationMs: number; outcome: string }> = [];
   const panelRuntime = createPanelRuntime({
     rpc: {
       call: async <T>(target: string, method: string, args: unknown[]): Promise<T> =>
@@ -485,6 +487,14 @@ async function openTabsAsPanels(
         throw new Error("Browser-data panel composition does not emit target events");
       },
       on: () => () => {},
+    },
+    onCreateSlotTiming: (event) => {
+      slotTimings.push(event);
+      if (event.durationMs >= 5_000) {
+        ctx.log.warn?.(
+          `Slow browser panel creation stage ${event.stage}: ${event.durationMs}ms (${event.outcome})`
+        );
+      }
     },
   });
   const callerId = parentPanelIdFromInvocation(ctx.invocation.current());
@@ -648,14 +658,17 @@ async function openTabsAsPanels(
     for (const tab of group.tabs) {
       const title = (tab.title?.trim() || hostnameFromUrl(tab.url) || "Imported Tab").slice(0, 80);
       try {
-        const created = await panelRuntime.openPanel(tab.url, {
-            parentId: panelParentId,
-            // A label, not an id: page titles repeat constantly ("New Tab"), and
-            // as an id segment they collided.
-            title,
-            focus: false,
-            ...(orchestrationContextId ? { contextId: orchestrationContextId } : {}),
-          });
+        // Browser panels are intentionally deferred: importing a tab records
+        // its durable slot and URL, but must not wait for the external page to
+        // finish loading. `openPanel` waits up to 90 seconds for browser
+        // readiness, which serializes a tab import behind every slow site.
+        const created = await panelRuntime.createPanelSlot(tab.url, {
+          parentId: panelParentId,
+          // A label, not an id: page titles repeat constantly ("New Tab"), and
+          // as an id segment they collided.
+          title,
+          ...(orchestrationContextId ? { contextId: orchestrationContextId } : {}),
+        });
         panels.push({ id: created.id, title: created.title ?? title, url: tab.url });
         if (collection) collection.panelsOpened += 1;
         if (root) root.panelsOpened += 1;
@@ -679,6 +692,7 @@ async function openTabsAsPanels(
     rootOrchestration = undefined;
   }
   if (root && rootOrchestration) {
+    const launchStartedAt = Date.now();
     try {
       await launchCollectionTask(collectionOrchestrationRpc(ctx), {
         rootPanelId: rootOrchestration.id,
@@ -700,8 +714,28 @@ async function openTabsAsPanels(
           error instanceof Error ? error.message : String(error)
         }`
       );
+    } finally {
+      const durationMs = Date.now() - launchStartedAt;
+      if (durationMs >= 5_000) {
+        ctx.log.warn?.(`Slow post-import collection launch: ${durationMs}ms`);
+      }
     }
   }
+  const stageTotals = slotTimings.reduce<Record<string, { calls: number; durationMs: number }>>(
+    (totals, timing) => {
+      const current = totals[timing.stage] ?? { calls: 0, durationMs: 0 };
+      current.calls += 1;
+      current.durationMs += timing.durationMs;
+      totals[timing.stage] = current;
+      return totals;
+    },
+    {}
+  );
+  ctx.log.info(
+    `Browser panel import completed: ${panels.length}/${openable.length} panels in ${
+      Date.now() - importStartedAt
+    }ms; stages=${JSON.stringify(stageTotals)}`
+  );
   return {
     destination: policy.destination,
     groupBy: policy.groupBy,
