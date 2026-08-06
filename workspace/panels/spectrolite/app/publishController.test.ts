@@ -122,14 +122,22 @@ describe("PublishController", () => {
           status: "conflicts",
           sourceEventId: "event:main",
           conflicts: [
-            { changeId: "change:conflict", kind: "text-edit", summary: "Change the title" },
+            {
+              coordinate: { kind: "file", id: "file:conflict" },
+              coordinates: [{ kind: "file", id: "file:conflict" }],
+              summary: "Change the title",
+            },
           ],
         }),
       })
     );
     await expect(controller.sync()).resolves.toBe("conflicts");
     expect(controller.getSnapshot().conflicts).toEqual([
-      { changeId: "change:conflict", kind: "text-edit", summary: "Change the title" },
+      {
+        coordinate: { kind: "file", id: "file:conflict" },
+        coordinates: [{ kind: "file", id: "file:conflict" }],
+        summary: "Change the title",
+      },
     ]);
   });
 
@@ -137,8 +145,9 @@ describe("PublishController", () => {
     const keepLocalForMain = vi.fn(async () => "integrated" as const);
     const controller = new PublishController(session({ keepLocalForMain }));
 
-    await expect(controller.keepLocal(["change:conflict"])).resolves.toBe("integrated");
-    expect(keepLocalForMain).toHaveBeenCalledWith(["change:conflict"]);
+    const coordinate = { kind: "file" as const, id: "file:conflict" };
+    await expect(controller.keepLocal([coordinate])).resolves.toBe("integrated");
+    expect(keepLocalForMain).toHaveBeenCalledWith([coordinate]);
     expect(controller.getSnapshot().conflicts).toEqual([]);
   });
 });

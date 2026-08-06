@@ -266,7 +266,7 @@ console.log(
 
 The clone produces a committed semantic candidate and does not advance
 protected `main`. Bring `imported.candidate.eventId` into the intended working
-context with ordinary `vcs.compare` and small `vcs.integrate` steps, check it,
+context with ordinary `vcs.compare` and bounded coordinate `vcs.merge` pages, check it,
 commit the complete local chain, and call `vcs.push` explicitly when
 publication is intended.
 

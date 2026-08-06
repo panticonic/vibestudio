@@ -76,7 +76,7 @@ event and an exact event/application working head. The disk tree is a
 disposable projection; semantic history lives only in the context graph.
 
 Managed edits author changes and append local applications. Comparison and
-integration account for incoming changes in small local decisions; commit
+merge accounts for incoming work in bounded stable-coordinate pages; commit
 consumes the complete local chain. Run explicit checks against the context for
 advisory confidence. Protected publication validates semantic ancestry and
 integration, obtains approval, and atomically advances `main`; builds react as
@@ -135,7 +135,7 @@ Plain projects are still external Git-backed projects when imported that way:
   event without advancing protected `main`, plus required semantic evidence
   from that same atomic import transaction. Later pulls use the same exact
   snapshot import for that stable repository identity; each import authors
-  ordinary changes and follows the same incremental integration path.
+  ordinary changes and follows the same coordinate merge path.
 - An explicit userland `git.importProject()` creates one unpublished candidate
   per external source and never advances protected main by importing alone.
 - Build V2 reads the published or candidate semantic state through the CAS. It

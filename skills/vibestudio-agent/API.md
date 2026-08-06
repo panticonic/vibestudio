@@ -379,6 +379,7 @@ Authority principals: `host`, `user`
 | `panelRuntime.unregisterClient` | Unregister a client session by id, releasing any leases it held and reassigning default CDP hosts as needed. |
 | `panelRuntime.getSnapshot` | Get the current lease snapshot (version + all active panel runtime leases). |
 | `panelRuntime.observeSlot` | Observe the active runtime lease and latest host report for one panel slot. |
+| `panelRuntime.awaitSlotChange` | Wait until a panel slot's lease or host observation advances beyond a known version. |
 | `panelRuntime.acquire` | Acquire the runtime lease for a panel entity. Succeeds for the current holder or an unleased entity; otherwise returns acquired:false with the existing lease. |
 | `panelRuntime.takeOver` | Forcibly take over a panel entity's runtime lease, revoking and closing any conflicting holder's connection. |
 | `panelRuntime.ensureSlot` | Ensure that the current runtime entity for a slot has a presentation host lease. |
@@ -510,13 +511,13 @@ Authority principals: `code`, `host`, `user`
 | `vcs.edit` | Atomically create repositories with their initial files or author exact text, binary, file-create, delete, and mode changes on the working head. |
 | `vcs.move` | Move stable file or repository identities without reconstructing intent from bytes. |
 | `vcs.copy` | Copy exact source files into new identities with immediate coordinate provenance. |
-| `vcs.integrate` | Take one local adopt, reconcile, or decline step against an exact source event or coordinator-owned external delta. |
+| `vcs.merge` | Merge one bounded page of stable coordinates from an exact event or external delta by net effect. |
 | `vcs.revert` | Author explicit counteractions of exact semantic changes. |
-| `vcs.commit` | Commit the complete local application chain; derive all integration parents from recorded decisions, or accept explicit zero-change sources. |
+| `vcs.commit` | Commit the complete local application chain; derive every integration parent from recorded merge decisions. |
 | `vcs.discard` | Discard the complete uncommitted chain and return to the committed event. |
 | `vcs.importSnapshot` | Import one exact complete external snapshot as ordinary changes on an import work unit and atomically return the committed event, application, work unit, admitted repository IDs, and canonical external snapshot. |
 | `vcs.registerExternalDelta` | Register one exact unapplied old-to-new external repository delta. |
-| `vcs.supersedeExternalDelta` | Retire one active external delta so it can no longer be integrated. |
+| `vcs.supersedeExternalDelta` | Retire one active external delta so it can no longer be merged. |
 | `vcs.finalizeExternalDelta` | Finalize one fully decided external delta and release its dedicated GC roots. |
 | `vcs.push` | Publish one exact already-committed event to protected main. |
 | `vcs.status` | Return context pointers, clean state, main relation, and compact working counts. |

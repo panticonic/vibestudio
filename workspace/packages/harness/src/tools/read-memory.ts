@@ -40,7 +40,7 @@ function episodeLine(episode: VcsReadMemoryEpisode): string[] {
   const lines = [fields.join(" · ")];
   for (const decision of episode.decisions) {
     lines.push(
-      `  decision ${decision.kind} ${root(decision.decision)}` +
+      `  decision ${decision.resolution} for ${root(decision.coordinate)} ${root(decision.decision)}` +
         (decision.rationale ? ` · ${quoted(decision.rationale)}` : "")
     );
   }

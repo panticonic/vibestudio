@@ -105,7 +105,7 @@ source URI, revision, digest, and target repository identities.
 
 The returned candidate is committed in its dedicated import context, but it is
 not protected `main`. From the working context where the project should land,
-compare against `imported.candidate.eventId`, integrate ordinary changes in
+compare against `imported.candidate.eventId`, merge ordinary coordinates in
 small local steps, run checks, commit the complete chain with that event as the
 integrated source, and call `vcs.push` explicitly only when publication is
 intended. `autoPush: false` is an outgoing Git setting; changing it never
@@ -123,7 +123,7 @@ For a later fetched/pulled tree, the adapter calls the same
 complete snapshot, and exact source revision. Surviving file identities remain
 stable. Use the import operation rather than pretending an external snapshot is
 native `vcs.edit` intent. The operation itself still authors ordinary changes,
-so compare, integrate, and revert need no import-specific path. The pull returns
+so compare, merge, and revert need no import-specific path. The pull returns
 the candidate context and event IDs and leaves protected `main` untouched;
 `upstreamStatus` reports `integration-required` until ordinary semantic
 integration accounts for the candidate.
@@ -165,7 +165,7 @@ observable boundaries:
    committed candidate and does not advance protected main. The preview uses a
    isolated temporary checkout and changes no managed checkout, bridge, semantic, or
    remote state.
-4. Compare and integrate that exact candidate in small steps, check, commit the
+4. Compare and merge that exact candidate by stable coordinate, review composed intents, check, commit the
    complete chain, and explicitly publish it through semantic VCS.
 5. Fetch status again. Only call `git.pushUpstream(repo)` after the
    `integration-required` candidate has cleared.
@@ -187,7 +187,7 @@ divergence playbook.
 
 External repositories are acquired after bootstrap through explicit userland
 `git.importProject()` calls. Each exact source produces a semantic candidate;
-ordinary compare, integrate, check, commit, and explicit publication are still
+ordinary compare, merge, review, check, commit, and explicit publication are still
 required before that project becomes shared workspace source. Upstream
 declarations describe ongoing synchronization and never trigger host startup
 imports.

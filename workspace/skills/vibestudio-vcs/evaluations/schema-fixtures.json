@@ -73,20 +73,20 @@
       ]
     },
     {
-      "name": "integrate-declined-change",
-      "method": "integrate",
+      "name": "merge-declined-coordinate",
+      "method": "merge",
       "valid": true,
       "args": [
         {
-          "commandId": "command:integrate",
+          "commandId": "command:merge",
           "contextId": "context:task",
           "expectedWorkingHead": { "kind": "application", "applicationId": "application:copy" },
-          "sourceEventId": "event:source",
-          "decision": {
-            "kind": "declined",
-            "sourceChangeIds": ["change:obsolete"],
+          "source": { "kind": "event", "eventId": "event:source" },
+          "resolutions": [{
+            "coordinate": { "kind": "file", "id": "file:obsolete" },
+            "resolution": "ours",
             "rationale": "The target already uses the replacement design"
-          }
+          }]
         }
       ]
     },
@@ -113,10 +113,9 @@
           "contextId": "context:task",
           "expectedWorkingHead": {
             "kind": "application",
-            "applicationId": "application:integrate"
+            "applicationId": "application:merge"
           },
-          "message": "Adopt the compatible source changes",
-          "integratesEventIds": ["event:source"]
+          "message": "Adopt the compatible source changes"
         }
       ]
     },
@@ -209,9 +208,7 @@
       "args": [
         {
           "target": { "kind": "application", "applicationId": "application:target" },
-          "sourceEventId": "event:source",
-          "view": "changes",
-          "disposition": "actionable",
+          "source": { "kind": "event", "eventId": "event:source" },
           "limit": 50
         }
       ]
@@ -385,7 +382,7 @@
         {
           "commandId": "command:finalize-delta",
           "contextId": "context:task",
-          "expectedWorkingHead": { "kind": "event", "eventId": "event:integrated" },
+          "expectedWorkingHead": { "kind": "event", "eventId": "event:merged" },
           "intentSummary": "Finalize the fully reviewed upstream update",
           "deltaId": "delta:reviewed"
         }

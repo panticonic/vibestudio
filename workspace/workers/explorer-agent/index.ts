@@ -8,7 +8,7 @@ import { rpc } from "@workspace/runtime/worker";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
 import type {
   VcsCompareResult,
-  VcsIntegrateResult,
+  VcsMergeResult,
   VcsStateNodeRef,
   VcsStatusResult,
 } from "@vibestudio/service-schemas/vcs";
@@ -474,73 +474,38 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
     const sourceEventId = status.mainEventId;
     let workingHead: VcsStateNodeRef = status.workingHead;
     for (;;) {
-      const changes: VcsCompareResult["changes"] = [];
-      let cursor: string | undefined;
-      do {
-        const page = await toolRpc.call<VcsCompareResult>("main", "vcs.compare", [
-          {
-            target: workingHead,
-            sourceEventId,
-            view: "changes",
-            limit: 500,
-            ...(cursor ? { cursor } : {}),
-          },
-        ]);
-        changes.push(...page.changes);
-        cursor = page.nextCursor ?? undefined;
-      } while (cursor);
-      const applicable = changes.find(
-        (change) =>
-          change.disposition.status === "actionable" &&
-          change.disposition.applicability === "applicable"
-      );
-      if (applicable) {
-        const integrated = await toolRpc.call<VcsIntegrateResult>("main", "vcs.integrate", [
-          {
-            commandId: command("integrate", `${sourceEventId}:${applicable.changeId}`),
-            contextId,
-            expectedWorkingHead: workingHead,
-            sourceEventId,
-            decision: { kind: "adopted", sourceChangeIds: [applicable.changeId] },
-          },
-        ]);
-        workingHead = integrated.workingHead;
-        continue;
-      }
-      const satisfied = changes.find(
-        (change) => change.disposition.status === "already-satisfied"
-      );
-      if (satisfied && satisfied.disposition.status === "already-satisfied") {
-        const integrated = await toolRpc.call<VcsIntegrateResult>("main", "vcs.integrate", [
-          {
-            commandId: command("reconcile", `${sourceEventId}:${satisfied.changeId}`),
-            contextId,
-            expectedWorkingHead: workingHead,
-            sourceEventId,
-            decision: {
-              kind: "reconciled",
-              sourceChangeIds: [satisfied.changeId],
-              evidence: satisfied.disposition.evidence,
-              rationale: "The finding context already satisfies this published change.",
-            },
-          },
-        ]);
-        workingHead = integrated.workingHead;
-        continue;
-      }
-      const unresolved = changes.filter(
-        (change) =>
-          change.disposition.status === "actionable" ||
-          change.disposition.status === "already-satisfied"
-      );
-      if (unresolved.length > 0) {
-        throw new Error(
-          `finding publication cannot safely integrate protected main changes: ${unresolved
-            .map((change) => change.changeId)
-            .join(", ")}`
+      const comparison = await toolRpc.call<VcsCompareResult>("main", "vcs.compare", [{
+        target: workingHead,
+        source: { kind: "event", eventId: sourceEventId },
+        limit: 500,
+      }]);
+      if (comparison.counts.conflict > 0) {
+        const conflicts = comparison.coordinates.filter(
+          (coordinate) => coordinate.status === "conflict"
         );
+        let cursor = comparison.nextCursor;
+        while (cursor) {
+          const page = await toolRpc.call<VcsCompareResult>("main", "vcs.compare", [{
+            target: workingHead,
+            source: { kind: "event", eventId: sourceEventId },
+            limit: 500,
+            cursor,
+          }]);
+          conflicts.push(
+            ...page.coordinates.filter((coordinate) => coordinate.status === "conflict")
+          );
+          cursor = page.nextCursor;
+        }
+        throw new Error(`finding publication cannot safely merge protected main coordinates: ${conflicts.map((coordinate) => coordinate.coordinate.id).join(", ")}`);
       }
-      break;
+      if (comparison.resolution.complete && comparison.resolution.concluded) break;
+      const merged = await toolRpc.call<VcsMergeResult>("main", "vcs.merge", [{
+        commandId: command("merge", `${sourceEventId}:${comparison.resolution.remainingCoordinateCount}`),
+        contextId,
+        expectedWorkingHead: workingHead,
+        source: { kind: "event", eventId: sourceEventId },
+      }]);
+      workingHead = merged.workingHead;
     }
 
     const committed = await toolRpc.call<{ event: { kind: "event"; eventId: string } }>(
@@ -551,7 +516,6 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
           commandId: command("commit-integration", sourceEventId),
           contextId,
           expectedWorkingHead: workingHead,
-          integratesEventIds: [sourceEventId],
           message: `${op.summary}; integrate protected main`,
         },
       ]

@@ -213,21 +213,23 @@ describe("ExplorerAgentWorker", () => {
         if (method === "vcs.compare") {
           compareCalls += 1;
           return {
-            changes:
+            coordinates:
               compareCalls === 1
                 ? [
                     {
-                      changeId: "change-main-1",
-                      disposition: { status: "actionable", applicability: "applicable" },
+                      coordinate: { kind: "file", id: "file:main-1", paths: {} },
+                      status: "adopt",
                     },
                   ]
                 : [],
+            counts: { adopt: compareCalls === 1 ? 1 : 0, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+            resolution: { complete: compareCalls > 1, remainingCoordinateCount: compareCalls === 1 ? 1 : 0, concluded: compareCalls > 1 },
             nextCursor: null,
           } as T;
         }
-        if (method === "vcs.integrate") {
+        if (method === "vcs.merge") {
           return {
-            workingHead: { kind: "application", applicationId: "app-integrated" },
+            workingHead: { kind: "application", applicationId: "app-merged" },
           } as T;
         }
         return undefined as T;

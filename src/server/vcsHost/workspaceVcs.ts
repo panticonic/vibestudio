@@ -494,8 +494,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         return gad.vcsMove(request);
       case "vcsCopy":
         return gad.vcsCopy(request);
-      case "vcsIntegrate":
-        return gad.vcsIntegrate(request);
+      case "vcsMerge":
+        return gad.vcsMerge(request);
       case "vcsRevert":
         return gad.vcsRevert(request);
       case "vcsCommit":
@@ -623,7 +623,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     let result = initial;
     for (let step = 0; step < 1_000; step += 1) {
       if (result.kind === "complete") return result.result as T;
-      if (result.kind === "host-read") return (await this.executeHostRead(result.request)) as T;
+      if (result.kind === "host-read") {
+        if (result.request["kind"] === "read-merge-content") {
+          result = await this.executeMergeContentHostRead(result.request);
+          continue;
+        }
+        return (await this.executeHostRead(result.request)) as T;
+      }
       const effect = result.effects[0];
       if (!effect) throw new Error("semantic command reported effects-pending without an effect");
       const effectStartedAt = performance.now();
@@ -812,6 +818,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       };
     }
     throw new Error(`unknown semantic host read ${JSON.stringify(kind)}`);
+  }
+
+  private async executeMergeContentHostRead(
+    request: Record<string, unknown>
+  ): Promise<SemanticDispatchResult> {
+    const requested = request["contentHashes"];
+    if (!Array.isArray(requested) || requested.length === 0) {
+      throw new Error("semantic merge-content read has no content hashes");
+    }
+    const files = await Promise.all(
+      requested.map(async (value) => {
+        const contentHash = String(value);
+        const bytes = await getBytes(this.deps.blobsDir, contentHash);
+        if (!bytes) throw new Error(`semantic content blob ${contentHash} is missing`);
+        return { contentHash, text: UTF8_DECODER.decode(bytes) };
+      })
+    );
+    return this.gad().semanticHostReadAck({ acknowledgement: { request, files } });
   }
 
   private fileContent(

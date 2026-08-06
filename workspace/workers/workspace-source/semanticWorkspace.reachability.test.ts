@@ -8,6 +8,84 @@ import { SemanticWorkspace } from "./semanticWorkspace.js";
 const timestamp = "2026-07-16T00:00:00.000Z";
 
 describe("SemanticWorkspace causal provenance reachability", () => {
+  it("finds a maximal merge base across deep shared history without recursive JS or pairwise ancestry scans", async () => {
+    const sql = await createInMemorySql();
+    createSemanticVcsSchema(sql);
+    const store = new SemanticVcsStore(sql, () => timestamp);
+    const initial = store.initializeWorkspace("context:deep", "command:deep-genesis");
+    const genesisEventId = initial.committed.ref.eventId;
+    const root = store.stateRoot(initial.committed.ref);
+    const depth = 6_000;
+    sql.exec(
+      `WITH RECURSIVE sequence(n) AS (
+         SELECT 1 UNION ALL SELECT n + 1 FROM sequence WHERE n < ?
+       )
+       INSERT INTO gad_workspace_events
+       (event_id, command_id, kind, result_workspace_fact_root_id, message, created_at)
+       SELECT 'event:deep:' || printf('%05d', n),
+              'command:deep:' || printf('%05d', n),
+              'commit', ?, NULL, ?
+         FROM sequence`,
+      depth,
+      root,
+      timestamp
+    );
+    sql.exec(
+      `WITH RECURSIVE sequence(n) AS (
+         SELECT 1 UNION ALL SELECT n + 1 FROM sequence WHERE n < ?
+       )
+       INSERT INTO gad_workspace_event_parents (event_id, ordinal, parent_event_id)
+       SELECT 'event:deep:' || printf('%05d', n), 0,
+              CASE WHEN n = 1 THEN ? ELSE 'event:deep:' || printf('%05d', n - 1) END
+         FROM sequence`,
+      depth,
+      genesisEventId
+    );
+    const sharedTip = `event:deep:${String(depth).padStart(5, "0")}`;
+    for (const eventId of ["event:deep:target", "event:deep:source"]) {
+      sql.exec(
+        `INSERT INTO gad_workspace_events
+         (event_id, command_id, kind, result_workspace_fact_root_id, message, created_at)
+         VALUES (?, ?, 'commit', ?, NULL, ?)`,
+        eventId,
+        `command:${eventId}`,
+        root,
+        timestamp
+      );
+      sql.exec(
+        `INSERT INTO gad_workspace_event_parents (event_id, ordinal, parent_event_id)
+         VALUES (?, 0, ?)`,
+        eventId,
+        sharedTip
+      );
+    }
+    const semantic = new SemanticWorkspace({
+      workspaceId: "workspace:deep",
+      sql,
+      store,
+      now: () => timestamp,
+      transaction: <T>(fn: () => T): T => fn(),
+    });
+    const comparison = await semantic.dispatch("compare", {
+      ingress: {
+        causalParent: null,
+        contextIntegrity: { class: "internal", externalKeys: [] },
+      },
+      input: {
+        target: { kind: "event", eventId: "event:deep:target" },
+        source: { kind: "event", eventId: "event:deep:source" },
+        limit: 1,
+      },
+    });
+    expect(comparison).toMatchObject({
+      kind: "complete",
+      result: {
+        base: { kind: "event", eventId: sharedTip },
+        coordinates: [],
+      },
+    });
+  });
+
   it("shares protected-main history without exposing unpublished sibling branches", async () => {
     const sql = await createInMemorySql();
     createSemanticVcsSchema(sql);
@@ -119,10 +197,10 @@ describe("SemanticWorkspace causal provenance reachability", () => {
     );
     sql.exec(
       `INSERT INTO gad_integration_decisions
-       (decision_id, kind, target_state_kind, target_state_id, source_event_id,
-        work_unit_id, rationale, evidence_predicates_json, created_at)
-       VALUES ('decision:integration', 'adopted', 'event', ?, 'event:foreign-private',
-               'work-unit:integration', NULL, NULL, ?)`,
+       (decision_id, target_state_kind, target_state_id, source_event_id,
+        work_unit_id, created_at, source_delta_id)
+       VALUES ('decision:integration', 'event', ?, 'event:foreign-private',
+               'work-unit:integration', ?, NULL)`,
       "event:own-private",
       timestamp
     );
@@ -241,10 +319,11 @@ describe("SemanticWorkspace causal provenance reachability", () => {
     );
     sql.exec(
       `INSERT INTO gad_work_units
-       (work_unit_id, command_id, kind, intent_summary, external_snapshot_json,
-        content_class, external_lineage_json, normalization_protocol, created_at)
-       VALUES ('work-unit:causal', 'command:causal', 'edit', 'Apply the causal intent', NULL,
-               'internal', '[]', 'normalization:test', ?)`,
+       (work_unit_id, command_id, kind, intent_summary, author_context_id,
+        trigger_excerpt, trigger_sender_json, external_snapshot_json, content_class,
+        external_lineage_json, normalization_protocol, created_at)
+       VALUES ('work-unit:causal', 'command:causal', 'edit', 'Apply the causal intent',
+               'context:own', NULL, NULL, NULL, 'internal', '[]', 'normalization:test', ?)`,
       timestamp
     );
     sql.exec(

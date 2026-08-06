@@ -11,7 +11,7 @@ projected filesystem and derived build are not parallel sources of truth.
    edits with that basis and stable command IDs.
 2. Run the ordinary typecheck, tests, and exact-context build report; inspect
    every structured `file:line:col` diagnostic and repair before committing.
-3. If current `main` has relevant changes, compare its exact event and integrate
+3. If current `main` has relevant changes, compare its exact event and merge
    them in small deliberate local steps.
 4. Commit the complete local application chain.
 5. Publish the clean committed event through `vcs.push`, which validates

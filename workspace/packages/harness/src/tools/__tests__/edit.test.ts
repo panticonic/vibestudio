@@ -14,6 +14,7 @@ describe("canonical edit tool", () => {
       path: "meta/a.ts",
       oldText: "1",
       newText: "42",
+      intent: "Align the fixture with the revised protocol version",
     });
 
     expect(vcs.read("meta/a.ts")).toBe("const x = 42;\n");
@@ -21,6 +22,7 @@ describe("canonical edit tool", () => {
       contextId: "context:test",
       expectedWorkingHead: { kind: "event", eventId: "event:committed" },
       commandId: "command:edit",
+      intentSummary: "Align the fixture with the revised protocol version",
       changes: [
         {
           kind: "text-edit",

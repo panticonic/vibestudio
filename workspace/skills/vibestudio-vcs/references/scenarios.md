@@ -1,65 +1,25 @@
-# Worked scenarios
+# Scenarios
 
-## Reorganize a managed file
+## Child work with an undo chain
 
-Call `status`, resolve the source file and destination repository at the
-working head, then use `move_file` or `vcs.move`. Continue from the returned
-working head. Inspect the file root to verify the same file ID at its new path.
+The child edits one file through several intermediate values and changes an independent file. Compare reports at most one row per stable coordinate, while attribution names every touch, including undone intermediates. One default merge call adopts the clean page. Review `intents` and `composed`, compare again for `complete && concluded`, then commit. Never replay the intermediate values.
 
-## Copy and edit independently
+## Same-file conflict with stated intent
 
-Use `copy_file` or `vcs.copy` from an exact source state. Resolve the new file
-ID, edit the copy, and call `blame` on both files. New copy edits stop at their
-own change; preserved regions walk through the copy edge into the original.
+Both parent and child author the same file with meaningful `intent`. Compare reports a content conflict with both attribution chains and both `stated` intent values. The parent uses `edit` with intent to author the truthful combination, then calls merge with a `current` resolution and rationale. The resolution creates a decision link without an unchanged file transition.
 
-## Bring in another context gradually
+## Net-zero child
 
-Read the source context's committed event. Compare it with the target working
-head, adopt one applicable group, run focused tests, reconcile a group already
-satisfied by target behavior, and ask the user about a genuine conflict.
-Continue from each returned working head. When no effective source change is
-unaccounted, commit the complete chain with the source event as integration
-parent.
+The child changes a coordinate and returns it to the base value before commit. Compare has no material coordinate to adopt but is not concluded. Call merge once with no coordinates. The decision-only application concludes the source; the next commit includes it as a parent and its entire story remains ancestry-reachable.
 
-## Undo one intention
+## External delta
 
-Find the exact change in history, call `revert`, and inspect the new
-counteraction. Verify unrelated later behavior still exists, run tests, and
-commit the complete local chain.
+Register the exact old-to-new delta and compare using the returned delta identity. The declared description is the external work unit's `stated` intent. Merge and resolve through the same coordinate surface as an event. Finalize only after resolution is complete and concluded.
 
-## Recover stale work
+## Non-overlapping text edits
 
-If a mutation returns `RevisionChanged`, discard the failed request, call
-`status`, re-read the affected file, and reformulate from the actual working
-head with a new command ID. If the response was merely lost, retry the exact
-same request with its original command ID.
+Parent changes the header and child changes the footer. Compare requests exact content, runs deterministic three-way composition, and reports `composed`. Merge authors the composed bytes with mapped `incorporates` edges to both parent applied changes. Review the two intents before committing.
 
-## Import one exact external snapshot
+## Structural group
 
-From a real agent tool invocation, import the exact source URI, snapshot
-revision, and complete repository/file source facts naming CAS bytes. Do not
-assert content kind or lengths; the host observes those intrinsic facts and the
-semantic workspace derives the normalized snapshot digest. Call
-blame, then pass its terminal typed change, work-unit, and command roots
-unchanged to provenance inspection. Report the work unit's external snapshot tuple and the
-actual causal intent, while stating that pre-import coordinate authorship is
-unknown. Do not invent a full Git history or per-path author evidence.
-
-## Recover a stale managed edit
-
-When an edit loses a working-head race, inspect status again and re-derive the
-edit against the new exact state. A changed request receives a new command ID;
-reuse the original only for an identical uncertain retry. Do not weaken the CAS
-or rebuild a path from stale bytes.
-
-## Publish verified work
-
-Confirm the context is clean and its committed event includes the intended
-local chain. Run the relevant exact-context checks for fast feedback, then call
-`push` with the exact committed and observed main events. Push repeats the
-affected-unit build/typecheck gate, so handle `BuildGateFailed` by consuming
-all structured diagnostics, repairing the cited source, recommitting, and
-retrying from freshly observed state. Handle ancestry, integration,
-authorization, approval, and atomic-refusal refusals by typed code. Inspect
-post-publication build and activation projections separately; a failed
-activation must leave the previous runnable artifact in place.
+The source creates a repository and places a file in it. Compare gives the repository and file one group. Select both or let the default page choose them. Selecting only the file returns `CoupledGroupIncomplete`; it is never repaired by ordering two partial calls.

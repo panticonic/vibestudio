@@ -17,7 +17,7 @@ const commandId = z.string().trim().min(1);
 const digest = z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u);
 
 /** A standard VCS review source. The UI resolves it through the normal
- * compare/integrate flow; templates never invent a second review channel. */
+ * compare/merge flow; templates never invent a second review channel. */
 export const templateReviewHandleSchema = z
   .object({
     repoPath: z.string(),

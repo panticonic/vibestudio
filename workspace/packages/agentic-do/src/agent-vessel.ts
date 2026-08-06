@@ -95,7 +95,8 @@ import {
 
 import type {
   VcsCompareResult,
-  VcsIntegrateResult,
+  VcsMergeInput,
+  VcsMergeResult,
   VcsInspectResult,
   VcsListFilesResult,
   VcsNeighborsResult,
@@ -208,7 +209,7 @@ const DEFAULT_COMPACTION_TRIGGER_BYTES = 256 * 1024;
 const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
 const DEFAULT_MAX_SUBAGENTS = 3;
 const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
-const SUBAGENT_INTEGRATION_PROTOCOL = "vibestudio.subagent-integration.v2";
+const SUBAGENT_MERGE_PROTOCOL = "vibestudio.subagent-merge.v1";
 const CHANNEL_ENVELOPE_RETRY_MS = 250;
 const CHANNEL_ENVELOPE_MAX_RETRY_MS = 30_000;
 const SUBAGENT_RUN_HANDLE_LENGTH = 24;
@@ -223,12 +224,12 @@ function subagentRunHandle(runId: string): string {
 }
 
 function subagentVcsCommandId(
-  phase: "integrate",
+  phase: "merge",
   run: Pick<SubagentRunRow, "runId" | "parentContextId" | "childContextId">,
   basis: Record<string, string>
 ): string {
   return `subagent-${phase}:${stableSha256Hex({
-    protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+    protocol: SUBAGENT_MERGE_PROTOCOL,
     runId: run.runId,
     parentContextId: run.parentContextId,
     childContextId: run.childContextId,
@@ -5957,8 +5958,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         if (recovered && subagent) {
           const integration = subagent["integration"];
           if (
-            integration === "integrated" ||
-            integration === "conflicted" ||
+            integration === "merged" ||
+            integration === "needs-decision" ||
             integration === "discarded"
           ) {
             recovered = { ...recovered, integration };
@@ -6242,16 +6243,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  /**
-   * Adopt a child context's committed changes into the parent's local working
-   * chain. Each call is an ordinary `vcs.integrate` application. It does not
-   * create a parallel merge session or commit unrelated parent work. The
-   * parent can inspect or reconcile remaining changes and
-   * later commit the whole local chain with the normal VCS tool.
-   */
-  protected async integrateSubagent(
+  /** Merge a child event through the same coordinate engine used everywhere else. */
+  protected async mergeSubagent(
     runId: string,
     parentChannelId?: string,
+    resolutions: VcsMergeInput["resolutions"] = [],
     toolRpc: RpcClient = this.rpc
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
@@ -6264,7 +6260,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           "is retained in the supervisor ledger.",
         {
           ...this.subagentRunDetails(run),
-          protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+          protocol: SUBAGENT_MERGE_PROTOCOL,
           available: false,
           reason: "closed",
         }
@@ -6281,12 +6277,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       callVcs<VcsStatusResult>("status", { contextId: run.childContextId }),
     ]);
     if (!sourceStatus.clean) {
-      this.subagentRuns.setIntegration(run.runId, "conflicted");
+      this.subagentRuns.setIntegration(run.runId, "needs-decision");
       this.subagentRuns.touch(run.runId, Date.now());
       return this.toolText(
-        `subagent ${run.runId} has uncommitted semantic work; commit the child context before integration`,
+        `subagent ${run.runId} has uncommitted semantic work; commit the child context before merging`,
         {
-          protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+          protocol: SUBAGENT_MERGE_PROTOCOL,
           runId: subagentRunHandle(run.runId),
           status: "source-uncommitted",
           source: sourceStatus,
@@ -6300,104 +6296,102 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const sourceEventId = sourceStatus.committed.eventId;
     const initialWorkingHead = targetStatus.workingHead;
     let workingHead = initialWorkingHead;
-    const integrations: VcsIntegrateResult[] = [];
-    let remaining: VcsCompareResult["changes"] = [];
-    let counts: VcsCompareResult["counts"] | null = null;
-
+    const merges: VcsMergeResult[] = [];
+    const composed = new Map<string, VcsMergeResult["composed"][number]>();
+    let comparison = await callVcs<VcsCompareResult>("compare", {
+      target: workingHead,
+      source: { kind: "event", eventId: sourceEventId },
+      limit: 500,
+    });
+    const sourceHeadline = comparison.intents.find(
+      (entry) => entry.side === "theirs" && entry.intent.tier === "trigger"
+    )?.intent.text;
+    let attempt = 0;
     for (;;) {
-      const changes: VcsCompareResult["changes"] = [];
-      let cursor: string | undefined;
-      do {
-        const page = await callVcs<VcsCompareResult>("compare", {
-          target: workingHead,
-          sourceEventId,
-          view: "changes",
-          disposition: "actionable",
-          limit: 500,
-          ...(cursor ? { cursor } : {}),
-        });
-        counts = page.counts;
-        changes.push(...page.changes);
-        cursor = page.nextCursor ?? undefined;
-      } while (cursor);
-
-      const applicable = changes.filter(
-        (change) =>
-          change.disposition.status === "actionable" &&
-          change.disposition.applicability === "applicable"
-      );
-      if (applicable.length === 0) {
-        remaining = changes;
-        break;
-      }
-
-      const sourceChangeIds = applicable.slice(0, 200).map((change) => change.changeId);
+      if (comparison.resolution.complete && comparison.resolution.concluded) break;
+      const mergeableCount =
+        comparison.counts.adopt + comparison.counts.composed + comparison.counts.convergent;
+      if (mergeableCount === 0 && comparison.resolution.concluded) break;
       const previousHead = workingHead;
-      const integration = await callVcs<VcsIntegrateResult>("integrate", {
-        commandId: subagentVcsCommandId("integrate", run, {
+      const merge = await callVcs<VcsMergeResult>("merge", {
+        commandId: subagentVcsCommandId("merge", run, {
           expectedWorkingHead:
             previousHead.kind === "event" ? previousHead.eventId : previousHead.applicationId,
           sourceEventId,
-          sourceChangeIds: sourceChangeIds.join(","),
+          resolutions: JSON.stringify(attempt === 0 ? resolutions : []),
         }),
         contextId: run.parentContextId,
         expectedWorkingHead: previousHead,
-        intentSummary: `Adopt changes from subagent ${run.label || run.runId}`,
-        sourceEventId,
-        decision: { kind: "adopted", sourceChangeIds },
+        source: { kind: "event", eventId: sourceEventId },
+        ...(attempt === 0 && resolutions?.length ? { resolutions } : {}),
       });
-      if (sameState(integration.workingHead, previousHead)) {
-        throw new Error("vcs.integrate returned success without advancing the working head");
+      merges.push(merge);
+      for (const entry of merge.composed) {
+        composed.set(`${entry.coordinate.kind}:${entry.coordinate.id}`, entry);
       }
-      integrations.push(integration);
-      workingHead = integration.workingHead;
+      workingHead = merge.workingHead;
+      comparison = await callVcs<VcsCompareResult>("compare", {
+        target: workingHead,
+        source: { kind: "event", eventId: sourceEventId },
+        limit: 500,
+      });
+      attempt += 1;
     }
 
-    const unresolved = remaining.filter(
-      (change) =>
-        change.disposition.status === "actionable" &&
-        change.disposition.applicability !== "applicable"
-    );
-    const needsDecision =
-      unresolved.length > 0 || (counts?.conflicting ?? 0) > 0 || (counts?.blocked ?? 0) > 0;
-    this.subagentRuns.setIntegration(run.runId, needsDecision ? "conflicted" : "integrated");
+    const conflicts = comparison.coordinates.filter((coordinate) => coordinate.status === "conflict");
+    let conflictCursor = comparison.nextCursor;
+    while (conflictCursor) {
+      const page = await callVcs<VcsCompareResult>("compare", {
+        target: workingHead,
+        source: { kind: "event", eventId: sourceEventId },
+        limit: 500,
+        cursor: conflictCursor,
+      });
+      conflicts.push(...page.coordinates.filter((coordinate) => coordinate.status === "conflict"));
+      conflictCursor = page.nextCursor;
+    }
+    const needsDecision = !comparison.resolution.complete;
+    this.subagentRuns.setIntegration(run.runId, needsDecision ? "needs-decision" : "merged");
     this.subagentRuns.touch(run.runId, Date.now());
 
     if (needsDecision) {
       return this.toolText(
-        `adopted ${integrations.reduce((total, step) => total + step.incorporatedChangeIds.length, 0)} ` +
-          `subagent changes locally; remaining changes require explicit decisions`,
+        `merged the clean subagent coordinates; ${comparison.resolution.remainingCoordinateCount} coordinates require decisions`,
         {
-          protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+          protocol: SUBAGENT_MERGE_PROTOCOL,
           runId: subagentRunHandle(run.runId),
           status: "needs-decision",
           sourceEventId,
           initialWorkingHead,
           workingHead,
-          integrations,
-          counts,
-          unresolved,
+          merges,
+          ...(sourceHeadline ? { sourceHeadline } : {}),
+          intents: comparison.intents,
+          composed: [...composed.values()],
+          conflicts,
+          resolution: comparison.resolution,
         }
       );
     }
 
-    const adopted = integrations.reduce(
-      (total, step) => total + step.incorporatedChangeIds.length,
-      0
-    );
+    const changed = !sameState(workingHead, initialWorkingHead);
     return this.toolText(
-      adopted > 0
-        ? `integrated ${adopted} subagent changes into the local working chain`
-        : `subagent ${run.runId} has no unaccounted changes`,
+      changed
+        ? `merged subagent work into the local working chain; review ${composed.size} mechanically composed coordinates`
+        : `subagent ${run.runId} was already merged`,
       {
-        protocol: SUBAGENT_INTEGRATION_PROTOCOL,
+        protocol: SUBAGENT_MERGE_PROTOCOL,
         runId: subagentRunHandle(run.runId),
-        status: adopted > 0 ? "working" : "unchanged",
+        status: changed ? "working" : "unchanged",
         sourceEventId,
         initialWorkingHead,
         workingHead,
-        integrations,
-        counts,
+        merges,
+        ...(sourceHeadline ? { sourceHeadline } : {}),
+        intents: comparison.intents,
+        composed: [...composed.values()],
+        conflicts,
+        resolution: comparison.resolution,
       }
     );
   }
@@ -6486,16 +6480,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         discarded: run.integration === "discarded",
       });
     }
-    if (!discard && run.integration === "conflicted") {
-      throw this.subagentClosePrecondition(
-        "IntegrationIncomplete",
-        `subagent ${run.runId} still has unresolved integration decisions; resolve every ` +
-          "remaining change, then call integrate_subagent again, or close with discard:true " +
-          "to intentionally drop it",
-        { runId: run.runId }
-      );
-    }
-    if (!discard && run.integration === null) {
+    const shouldDiscard = discard || run.integration === "discarded";
+    if (!shouldDiscard) {
       if (!run.parentContextId) {
         throw this.subagentClosePrecondition(
           "InvalidReference",
@@ -6512,33 +6498,33 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (!sourceStatus.clean || sourceStatus.committed.kind !== "event") {
         throw this.subagentClosePrecondition(
           "WorkingChangesPresent",
-          `subagent ${run.runId} has uncommitted work; commit and integrate it, or close with ` +
+          `subagent ${run.runId} has uncommitted work; commit and merge it, or close with ` +
             "discard:true to intentionally drop it",
           { runId: run.runId, childContextId: run.childContextId }
         );
       }
       const comparison = await callVcs<VcsCompareResult>("compare", {
         target: targetStatus.workingHead,
-        sourceEventId: sourceStatus.committed.eventId,
-        view: "overview",
+        source: { kind: "event", eventId: sourceStatus.committed.eventId },
         limit: 1,
       });
-      if (!comparison.resolution.complete) {
+      if (!comparison.resolution.complete || !comparison.resolution.concluded) {
         throw this.subagentClosePrecondition(
           "IntegrationIncomplete",
-          `subagent ${run.runId} has ${comparison.resolution.remainingChangeCount} unintegrated ` +
-            "effective change(s); call integrate_subagent first, or close with discard:true to " +
+          `subagent ${run.runId} has ${comparison.resolution.remainingCoordinateCount} unmerged ` +
+            "coordinate(s), or the merge has not been concluded; call merge_subagent first, or close with discard:true to " +
             "intentionally drop them",
           {
             runId: run.runId,
             sourceEventId: sourceStatus.committed.eventId,
-            remainingChangeCount: comparison.resolution.remainingChangeCount,
+            remainingCoordinateCount: comparison.resolution.remainingCoordinateCount,
+            concluded: comparison.resolution.concluded,
           }
         );
       }
-      this.subagentRuns.setIntegration(run.runId, "integrated");
+      this.subagentRuns.setIntegration(run.runId, "merged");
     }
-    if (discard && run.integration !== "integrated") {
+    if (shouldDiscard && run.integration !== "merged") {
       this.subagentRuns.setIntegration(run.runId, "discarded");
     }
     const refreshed = this.subagentRuns.get(run.runId)!;

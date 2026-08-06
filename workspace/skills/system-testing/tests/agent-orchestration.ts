@@ -123,7 +123,7 @@ function validateCheapFixtureFanout(result: TestExecutionResult) {
 
   const orchestration = requireCompletedTools(result, {
     inspect_subagent: 3,
-    integrate_subagent: 1,
+    merge_subagent: 1,
     close_subagent: 3,
     provenance: 1,
     eval: 1,
@@ -135,7 +135,7 @@ function validateCheapFixtureFanout(result: TestExecutionResult) {
   const latestSubagentIntegrationByRun = new Map<string, Record<string, unknown>>();
   for (const call of calls) {
     if (!isSuccessful(call)) continue;
-    if (call.name === "integrate_subagent") {
+    if (call.name === "merge_subagent") {
       const runId = call.arguments?.["runId"];
       const details = (call.execution?.result as { details?: unknown } | undefined)?.details;
       if (typeof runId === "string" && details && typeof details === "object") {
@@ -149,8 +149,12 @@ function validateCheapFixtureFanout(result: TestExecutionResult) {
       if (typeof sourceEventId === "string") integratedSourceEventIds.add(sourceEventId);
       continue;
     }
-    if (call.name === "vcs" && call.arguments?.["operation"] === "integrate") {
-      const sourceEventId = call.arguments?.["sourceEventId"];
+    if (call.name === "vcs" && call.arguments?.["operation"] === "merge") {
+      const source = call.arguments?.["source"];
+      const sourceEventId =
+        source && typeof source === "object"
+          ? (source as Record<string, unknown>)["eventId"]
+          : undefined;
       if (typeof sourceEventId === "string") integratedSourceEventIds.add(sourceEventId);
     }
   }

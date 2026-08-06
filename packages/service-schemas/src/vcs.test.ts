@@ -25,7 +25,7 @@ import {
   vcsInspectInputSchema,
   vcsInspectResultSchema,
   vcsInspectedNodeSchema,
-  vcsIntegrateInputSchema,
+  vcsMergeInputSchema,
   vcsListDirectoryInputSchema,
   vcsListDirectoryResultSchema,
   vcsListFilesInputSchema,
@@ -90,7 +90,7 @@ const expectedMethods = [
   "history",
   "importSnapshot",
   "inspect",
-  "integrate",
+  "merge",
   "listDirectory",
   "listFiles",
   "move",
@@ -193,6 +193,8 @@ describe("one authored-change model", () => {
       decisionCount: 0,
       decisionIds: [],
       intentSummary: "Rename the greeting",
+      authorContextId: "context:1",
+      triggerEvidence: null,
       externalSnapshot: null,
       contentClass: "internal" as const,
       externalKeys: [],
@@ -378,26 +380,44 @@ describe("simple local mutations", () => {
     ).toBe(false);
   });
 
-  it("integrates one bounded decision as an ordinary local application", () => {
-    const adopted = {
+  it("merges one bounded coordinate page as an ordinary local application", () => {
+    const merge = {
       ...commonMutation,
-      sourceEventId: "event:source",
-      decision: { kind: "adopted", sourceChangeIds: ["change:source"] },
-    };
-    expect(vcsIntegrateInputSchema.parse(adopted)).toEqual(adopted);
-    expect(
-      vcsIntegrateInputSchema.safeParse({
-        ...adopted,
-        decision: {
-          kind: "reconciled",
-          sourceChangeIds: ["change:source"],
-          evidence: [{ kind: "file-content", fileId: "file:1", contentHash: "blob:1" }],
-          rationale: "The target already contains the intended result.",
+      source: { kind: "event" as const, eventId: "event:source" },
+      coordinates: [{ kind: "file" as const, id: "file:source" }],
+      resolutions: [
+        {
+          coordinate: { kind: "file" as const, id: "file:conflict" },
+          resolution: "current" as const,
+          rationale: "The authored result preserves both intents.",
         },
-      }).success
-    ).toBe(true);
+      ],
+    };
+    expect(vcsMergeInputSchema.parse(merge)).toEqual(merge);
     expect(
-      vcsIntegrateInputSchema.safeParse({ ...adopted, mergeSessionId: "session:1" }).success
+      vcsMergeInputSchema.safeParse({
+        ...merge,
+        resolutions: [{ coordinate: { kind: "file", id: "file:1" }, resolution: "manual" }],
+      }).success
+    ).toBe(false);
+    expect(vcsMergeInputSchema.safeParse({ ...merge, mergeSessionId: "session:1" }).success).toBe(false);
+    expect(
+      vcsMergeInputSchema.safeParse({
+        ...merge,
+        coordinates: [
+          { kind: "file", id: "file:source" },
+          { kind: "file", id: "file:source" },
+        ],
+      }).success
+    ).toBe(false);
+    expect(
+      vcsMergeInputSchema.safeParse({
+        ...merge,
+        resolutions: [
+          { coordinate: { kind: "file", id: "file:source" }, resolution: "ours" },
+          { coordinate: { kind: "file", id: "file:source" }, resolution: "current" },
+        ],
+      }).success
     ).toBe(false);
   });
 
@@ -409,9 +429,15 @@ describe("simple local mutations", () => {
       vcsCommitInputSchema.parse({
         ...commonMutation,
         message: "Complete local work",
-        integratesEventIds: ["event:source"],
       })
     ).toBeTruthy();
+    expect(
+      vcsCommitInputSchema.safeParse({
+        ...commonMutation,
+        message: "Complete local work",
+        integratesEventIds: ["event:source"],
+      }).success
+    ).toBe(false);
     expect(vcsDiscardInputSchema.parse(commonMutation)).toEqual(commonMutation);
 
     for (const selection of [
@@ -674,6 +700,8 @@ describe("honest external snapshot imports", () => {
       decisionCount: 0,
       decisionIds: [],
       intentSummary: "Import the requested external snapshot",
+      authorContextId: "context:import",
+      triggerEvidence: null,
       externalSnapshot: {
         sourceKind: "git",
         sourceUri: snapshot.source.url,
@@ -805,12 +833,10 @@ describe("walkable bounded reads", () => {
     ).toBe(false);
   });
 
-  it("compares changes between exact state nodes", () => {
+  it("compares coordinate net effects between exact state nodes", () => {
     const input = {
       target: application,
-      sourceEventId: "event:source",
-      view: "changes",
-      disposition: "actionable",
+      source: { kind: "event" as const, eventId: "event:source" },
       limit: 50,
     };
     expect(vcsCompareInputSchema.parse(input)).toEqual(input);
@@ -819,28 +845,24 @@ describe("walkable bounded reads", () => {
     ).toBe(false);
   });
 
-  it("exposes one unambiguous integration-resolution gate", () => {
+  it("exposes consistent completion and conclusion bits", () => {
     const result = {
       target: application,
-      sourceEventId: "event:source",
-      resolution: { complete: true, remainingChangeCount: 0 },
-      counts: {
-        shared: 1,
-        alreadySatisfied: 0,
-        actionable: 0,
-        conflicting: 0,
-        blocked: 0,
-        accounted: 0,
-        historical: 0,
-      },
-      changes: [],
+      source: { kind: "event" as const, eventId: "event:source" },
+      base: event,
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: false },
+      counts: { adopt: 0, convergent: 1, composed: 0, conflict: 0, resolved: 0 },
+      intentCounts: { merged: 1, settled: 0, split: 0, contested: 0, pending: 0 },
+      coordinates: [],
+      intents: [],
+      intentsTruncated: false,
       nextCursor: null,
     };
     expect(vcsCompareResultSchema.parse(result)).toEqual(result);
     expect(
       vcsCompareResultSchema.safeParse({
         ...result,
-        resolution: { complete: true, remainingChangeCount: 1 },
+        resolution: { complete: true, remainingCoordinateCount: 1, concluded: false },
       }).success
     ).toBe(false);
   });
@@ -1222,7 +1244,10 @@ describe("explicit reference metadata", () => {
     expect(extractVcsSemanticReferences("status", [{ contextId: "context:1" }])).toHaveLength(1);
     expect(vcsOperationContextId("copy", parsed.input)).toBe("context:1");
     expect(
-      vcsOperationContextId("compare", { target: event, sourceEventId: "event:2" })
+      vcsOperationContextId("compare", {
+        target: event,
+        source: { kind: "event", eventId: "event:2" },
+      })
     ).toBeNull();
   });
 
@@ -1247,11 +1272,27 @@ describe("small typed error vocabulary", () => {
     expect(
       vcsErrorSchema.safeParse({
         code: "IntegrationIncomplete",
-        message: "One source change remains",
-        sourceEventId: "event:source",
-        unaccountedChangeIds: ["change:1"],
+        message: "One source coordinate remains",
+        source: { kind: "event", eventId: "event:source" },
+        unaccountedCoordinates: [{ kind: "file", id: "file:1" }],
       }).success
     ).toBe(true);
+    expect(
+      vcsErrorSchema.safeParse({
+        code: "IntegrationIncomplete",
+        message: "One external coordinate remains",
+        source: { kind: "external-delta", deltaId: "delta:source" },
+        unaccountedCoordinates: [{ kind: "repository", id: "repository:1" }],
+      }).success
+    ).toBe(true);
+    expect(
+      vcsErrorSchema.safeParse({
+        code: "IntegrationIncomplete",
+        message: "Legacy mismatched source shape",
+        deltaId: "delta:source",
+        unaccountedCoordinates: [{ kind: "repository", id: "repository:1" }],
+      }).success
+    ).toBe(false);
     expect(() => createVcsMethodError("status", changed)).toThrow(
       "VCS status does not declare error RevisionChanged"
     );

@@ -50,7 +50,7 @@ export type SemanticVcsErrorCode =
   | "NoEffect"
   | "DestinationOccupied"
   | "ConflictPresent"
-  | "DependencyBlocked"
+  | "CoupledGroupIncomplete"
   | "IntegrationIncomplete"
   | "CommandIdReuse"
   | "DestinationOccupied"
@@ -125,12 +125,17 @@ export interface WorkUnitRecord {
     | "edit"
     | "file-transfer"
     | "lifecycle"
-    | "integrate"
+    | "merge"
     | "revert"
     | "import"
     | "external-unapplied";
   authoredChangeIds: readonly string[];
   intentSummary: string | null;
+  authorContextId: string;
+  triggerEvidence: {
+    text: string;
+    sender: { kind: string; id: string; participantId: string | null };
+  } | null;
   externalSnapshot: ExternalSnapshotRecord | null;
   contentClass: "internal" | "external";
   externalKeys: readonly string[];
@@ -211,14 +216,17 @@ export interface ContentEdgeRecord {
 
 export type IntegrationDecisionRecord = {
   decisionId: string;
-  kind: "adopted" | "reconciled" | "declined";
   targetState: StateNodeRef;
   sourceEventId: string | null;
   sourceDeltaId: string | null;
-  sourceChangeIds: readonly string[];
+  entries: readonly {
+    coordinate: { kind: "file" | "repository"; id: string };
+    resolution: "adopt" | "convergent" | "composed" | "ours" | "current";
+    accountedSourceChangeIds: readonly string[];
+    resultChangeId: string | null;
+    rationale: string | null;
+  }[];
   workUnitId: string;
-  evidencePredicates: readonly StatePredicateRecord[];
-  rationale: string | null;
   createdAt: string;
 };
 
@@ -284,6 +292,8 @@ export const workUnitIdentity = (input: {
   commandId: string;
   kind: WorkUnitRecord["kind"];
   intentSummary: string | null;
+  authorContextId: string;
+  triggerEvidence: WorkUnitRecord["triggerEvidence"];
   externalSnapshot: WorkUnitRecord["externalSnapshot"];
   contentClass: WorkUnitRecord["contentClass"];
   externalKeys: WorkUnitRecord["externalKeys"];
@@ -631,8 +641,7 @@ export class SemanticVcsStore {
 
   registerExternalDelta(
     delta: ExternalDeltaRecord,
-    workUnit: WorkUnitRecord,
-    changes: readonly ChangeRecord[]
+    candidate: ApplicationPersistencePlan
   ): ExternalDeltaRecord {
     const existing = this.externalDelta(delta.deltaId);
     if (existing) {
@@ -644,8 +653,7 @@ export class SemanticVcsStore {
       }
       return existing;
     }
-    this.persistWorkUnit(workUnit);
-    this.persistChanges(changes);
+    this.persistApplicationGraph(candidate);
     const [targetKind, targetId] = stateKindAndId(delta.targetState);
     this.sql.exec(
       `INSERT INTO gad_external_deltas
@@ -753,6 +761,26 @@ export class SemanticVcsStore {
     if (stateNodeKey(plan.application.basis) !== stateNodeKey(plan.expectedWorkingHead)) {
       throw new SemanticVcsError("IntegrityFailure", "Application basis differs from context CAS");
     }
+    this.persistApplicationGraph(plan);
+    this.sql.exec(
+      `UPDATE vcs_contexts SET working_head_application_id = ?, updated_at = ?
+        WHERE context_id = ? AND
+          ((? IS NULL AND working_head_application_id IS NULL AND committed_event_id = ?)
+           OR working_head_application_id = ?)`,
+      plan.application.applicationId,
+      this.now(),
+      plan.contextId,
+      plan.expectedWorkingHead.kind === "event" ? null : plan.expectedWorkingHead.applicationId,
+      plan.expectedWorkingHead.kind === "event" ? plan.expectedWorkingHead.eventId : null,
+      plan.expectedWorkingHead.kind === "event" ? null : plan.expectedWorkingHead.applicationId
+    );
+    if (Number((this.sql.exec(`SELECT changes() AS n`).toArray()[0] as Row)["n"]) !== 1) {
+      throw new SemanticVcsError("RevisionChanged", `Context ${plan.contextId} changed`);
+    }
+    return this.contextRequired(plan.contextId);
+  }
+
+  private persistApplicationGraph(plan: ApplicationPersistencePlan): void {
     this.validateApplicationPlan(plan);
     execBatchedInsert(
       this.sql,
@@ -795,22 +823,6 @@ export class SemanticVcsStore {
     this.persistAppliedChanges(plan.appliedChanges);
     for (const edge of plan.contentEdges) this.persistContentEdge(edge);
     for (const decision of plan.decisions) this.persistDecision(decision);
-    this.sql.exec(
-      `UPDATE vcs_contexts SET working_head_application_id = ?, updated_at = ?
-        WHERE context_id = ? AND
-          ((? IS NULL AND working_head_application_id IS NULL AND committed_event_id = ?)
-           OR working_head_application_id = ?)`,
-      plan.application.applicationId,
-      this.now(),
-      plan.contextId,
-      plan.expectedWorkingHead.kind === "event" ? null : plan.expectedWorkingHead.applicationId,
-      plan.expectedWorkingHead.kind === "event" ? plan.expectedWorkingHead.eventId : null,
-      plan.expectedWorkingHead.kind === "event" ? null : plan.expectedWorkingHead.applicationId
-    );
-    if (Number((this.sql.exec(`SELECT changes() AS n`).toArray()[0] as Row)["n"]) !== 1) {
-      throw new SemanticVcsError("RevisionChanged", `Context ${plan.contextId} changed`);
-    }
-    return this.contextRequired(plan.contextId);
   }
 
   commit(input: {
@@ -1424,7 +1436,7 @@ export class SemanticVcsStore {
   private validateApplicationPlan(plan: ApplicationPersistencePlan): void {
     const authored = plan.changes.map((change) => change.changeId);
     const decision = plan.decisions[0];
-    const incorporated = decision?.sourceChangeIds ?? [];
+    const incorporated = decision?.entries.flatMap((entry) => entry.accountedSourceChangeIds) ?? [];
     const appliedChangeIds = new Set(plan.appliedChanges.map((value) => value.appliedChangeId));
     const targets = plan.workUnit.externalSnapshot?.targetRepositoryIds ?? [];
     const normalizedTargets = [...new Set(targets)].sort(compareUtf16CodeUnits);
@@ -1435,7 +1447,7 @@ export class SemanticVcsStore {
       canonicalJson(authored) !== canonicalJson(plan.workUnit.authoredChangeIds) ||
       plan.changes.some((change) => change.workUnitId !== plan.workUnit.workUnitId) ||
       plan.application.workUnitId !== plan.workUnit.workUnitId ||
-      (plan.workUnit.kind === "integrate"
+      (plan.workUnit.kind === "merge"
         ? plan.decisions.length !== 1
         : plan.decisions.length !== 0) ||
       plan.decisions.some(
@@ -1451,10 +1463,6 @@ export class SemanticVcsStore {
           ![...authored, ...incorporated].includes(value.changeId)
       ) ||
       plan.changes.some((change) => (change.kind === "file-copy") !== (change.source !== null)) ||
-      (decision?.kind === "adopted" &&
-        canonicalJson(plan.appliedChanges.map((value) => value.changeId)) !==
-          canonicalJson(decision.sourceChangeIds)) ||
-      (decision != null && decision.kind !== "adopted" && plan.appliedChanges.length !== 0) ||
       plan.contentEdges.some((edge) => !appliedChangeIds.has(edge.childAppliedChangeId))
     ) {
       throw new SemanticVcsError("IntegrityFailure", "Application plan ownership is inconsistent");
@@ -1531,15 +1539,35 @@ export class SemanticVcsStore {
   }
 
   private persistWorkUnit(value: WorkUnitRecord): void {
+    for (const [field, candidate] of Object.entries({
+      workUnitId: value.workUnitId,
+      commandId: value.commandId,
+      kind: value.kind,
+      authorContextId: value.authorContextId,
+      contentClass: value.contentClass,
+      normalizationProtocol: value.normalizationProtocol,
+      createdAt: value.createdAt,
+    })) {
+      if (typeof candidate !== "string" || candidate.length === 0) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Work unit ${value.workUnitId ?? "<unknown>"} has invalid ${field}`
+        );
+      }
+    }
     this.sql.exec(
       `INSERT INTO gad_work_units
-       (work_unit_id, command_id, kind, intent_summary, external_snapshot_json,
-        content_class, external_lineage_json, normalization_protocol, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (work_unit_id, command_id, kind, intent_summary, author_context_id,
+        trigger_excerpt, trigger_sender_json, external_snapshot_json, content_class,
+        external_lineage_json, normalization_protocol, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       value.workUnitId,
       value.commandId,
       value.kind,
       value.intentSummary,
+      value.authorContextId,
+      value.triggerEvidence?.text ?? null,
+      value.triggerEvidence == null ? null : canonicalJson(value.triggerEvidence.sender),
       value.externalSnapshot == null ? null : canonicalJson(value.externalSnapshot),
       value.contentClass,
       canonicalJson(value.externalKeys),
@@ -1677,28 +1705,40 @@ export class SemanticVcsStore {
     const [targetKind, targetId] = stateKindAndId(value.targetState);
     this.sql.exec(
       `INSERT INTO gad_integration_decisions
-       (decision_id, kind, target_state_kind, target_state_id,
-        source_event_id, work_unit_id, rationale, evidence_predicates_json, created_at,
-        source_delta_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (decision_id, target_state_kind, target_state_id,
+        source_event_id, work_unit_id, created_at, source_delta_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       value.decisionId,
-      value.kind,
       targetKind,
       targetId,
       value.sourceEventId,
       value.workUnitId,
-      value.rationale,
-      value.evidencePredicates.length ? canonicalJson(value.evidencePredicates) : null,
       value.createdAt,
       value.sourceDeltaId
     );
-    value.sourceChangeIds.forEach((changeId) =>
+    for (const entry of value.entries) {
       this.sql.exec(
-        `INSERT INTO gad_decision_source_changes (decision_id, change_id) VALUES (?, ?)`,
+        `INSERT INTO gad_merge_decision_entries
+         (decision_id, coordinate_kind, coordinate_id, resolution, result_change_id, rationale)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         value.decisionId,
-        changeId
-      )
-    );
+        entry.coordinate.kind,
+        entry.coordinate.id,
+        entry.resolution,
+        entry.resultChangeId,
+        entry.rationale
+      );
+      for (const changeId of entry.accountedSourceChangeIds) {
+        this.sql.exec(
+          `INSERT INTO gad_decision_source_changes
+           (decision_id, coordinate_kind, coordinate_id, change_id) VALUES (?, ?, ?, ?)`,
+          value.decisionId,
+          entry.coordinate.kind,
+          entry.coordinate.id,
+          changeId
+        );
+      }
+    }
   }
 
   private persistMappings(contentEdgeId: string, mappings: readonly ContentMapping[]): void {

@@ -1092,7 +1092,7 @@ const semanticEffectSchema = z
     createdAt: z.string(),
   })
   .strict();
-const semanticHostReadSchema = z
+const semanticFileHostReadSchema = z
   .object({
     kind: z.literal("read-semantic-blob"),
     state: vcsStateNodeRefSchema,
@@ -1106,6 +1106,27 @@ const semanticHostReadSchema = z
     contentClass: z.enum(["internal", "external"]),
     externalKeys: z.array(z.string().min(1)).max(256),
     mode: z.number().int().nonnegative(),
+  })
+  .strict();
+const semanticMergeContentHostReadSchema = z
+  .object({
+    kind: z.literal("read-merge-content"),
+    operation: z.enum(["compare", "merge"]),
+    input: GadJsonRecordSchema,
+    ingress: semanticIngressSchema,
+    contentHashes: z.array(z.string().min(1)).min(1).max(1_500),
+  })
+  .strict();
+const semanticHostReadSchema = z.discriminatedUnion("kind", [
+  semanticFileHostReadSchema,
+  semanticMergeContentHostReadSchema,
+]);
+const semanticHostReadAcknowledgementSchema = z
+  .object({
+    request: semanticMergeContentHostReadSchema,
+    files: z.array(
+      z.object({ contentHash: z.string().min(1), text: z.string() }).strict()
+    ).max(1_500),
   })
   .strict();
 
@@ -1147,7 +1168,7 @@ const semanticWireMethods = {
   vcsEdit: semanticWireMethod(vcsMethods.edit, "edit"),
   vcsMove: semanticWireMethod(vcsMethods.move, "move"),
   vcsCopy: semanticWireMethod(vcsMethods.copy, "copy"),
-  vcsIntegrate: semanticWireMethod(vcsMethods.integrate, "integrate"),
+  vcsMerge: semanticWireMethod(vcsMethods.merge, "merge"),
   vcsRevert: semanticWireMethod(vcsMethods.revert, "revert"),
   vcsCommit: semanticWireMethod(vcsMethods.commit, "commit"),
   vcsDiscard: semanticWireMethod(vcsMethods.discard, "discard"),
@@ -1483,6 +1504,12 @@ const gadInternalWireMethods = defineServiceMethods({
   vcsSemanticEffectAck: {
     description: "Acknowledge one exact semantic host effect.",
     args: z.tuple([z.object({ acknowledgement: semanticAcknowledgementSchema }).strict()]),
+    returns: genericSemanticResultSchema,
+    agentFacing: false,
+  },
+  vcsSemanticHostReadAck: {
+    description: "Resume one exact semantic merge-content host read.",
+    args: z.tuple([z.object({ acknowledgement: semanticHostReadAcknowledgementSchema }).strict()]),
     returns: genericSemanticResultSchema,
     agentFacing: false,
   },
@@ -1961,6 +1988,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
     methods: [
       "workspaceSourceInitializeExactSnapshot",
       "vcsSemanticEffectAck",
+      "vcsSemanticHostReadAck",
       "vcsEnsureContext",
       "vcsContextMaterializationCommand",
       "vcsForkContext",

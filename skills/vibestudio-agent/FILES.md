@@ -65,7 +65,7 @@ vibestudio eval run -e 'return await help("vcs")'
 ```
 
 The context exposes one committed event and one working head. Each managed
-edit, move, copy, integrate, or revert advances that local head. Commit or
+edit, move, copy, merge, or revert advances that local head. Commit or
 discard consumes the complete local chain.
 
 Every mutation includes a command ID. Reuse it only for an identical request

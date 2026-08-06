@@ -269,6 +269,46 @@ describe("SemanticWorkspace repository counteractions", () => {
     }>(importedDispatch);
     acknowledgeMaterialization(importedDispatch);
     const repositoryId = imported.importedRepositoryIds[0]!;
+    const capturedEvidence = sql
+      .exec(
+        `SELECT author_context_id, trigger_excerpt, trigger_sender_json
+           FROM gad_work_units WHERE work_unit_id = ?`,
+        imported.workUnitId
+      )
+      .toArray()[0];
+    expect(capturedEvidence).toMatchObject({
+      author_context_id: "context:test",
+      trigger_excerpt: "Move the parser without changing its behavior",
+    });
+    expect(JSON.parse(String(capturedEvidence?.["trigger_sender_json"]))).toEqual({
+      kind: "user",
+      id: "user:alice",
+      participantId: "user:alice",
+    });
+    sql.exec(`SAVEPOINT captured_intent_survives_command_cleanup`);
+    sql.exec(`DELETE FROM vcs_command_journal WHERE command_id = 'command:import'`);
+    const capturedIntent = await semantic.dispatch("compare", {
+      ingress,
+      input: {
+        target: initial.working.ref,
+        source: { kind: "event", eventId: imported.eventId },
+        limit: 100,
+      },
+    });
+    expect(capturedIntent).toMatchObject({
+      kind: "complete",
+      result: {
+        intents: [{
+          side: "theirs",
+          intent: {
+            tier: "trigger",
+            text: "asked by user:alice: Move the parser without changing its behavior",
+          },
+        }],
+      },
+    });
+    sql.exec(`ROLLBACK TO captured_intent_survives_command_cleanup`);
+    sql.exec(`RELEASE captured_intent_survives_command_cleanup`);
     const importedChangeIds = (
       sql
         .exec(
@@ -503,8 +543,8 @@ describe("SemanticWorkspace repository counteractions", () => {
         },
       })
     ).rejects.toMatchObject({
-      code: "DependencyBlocked",
-      detail: { blockingChangeIds: [importedChangeIds[1]!] },
+      code: "InvalidReference",
+      detail: { referenceKind: "change", reference: importedChangeIds[0] },
     });
 
     store.forkContext("context:test", "context:later-file");
@@ -554,8 +594,8 @@ describe("SemanticWorkspace repository counteractions", () => {
         },
       })
     ).rejects.toMatchObject({
-      code: "DependencyBlocked",
-      detail: { blockingChangeIds: laterFile.changeIds },
+      code: "InvalidReference",
+      detail: { referenceKind: "change", reference: importedChangeIds[0] },
     });
     const laterRoot = store.stateRoot(laterCommit.event);
     expect(store.facts.fileAtPath(laterRoot, repositoryId, "src/later.ts")?.state.presence).toBe(
@@ -621,8 +661,7 @@ describe("SemanticWorkspace repository counteractions", () => {
       ingress,
       input: {
         target: emptyTarget.working.ref,
-        sourceEventId: deletedCommit.event.eventId,
-        view: "changes",
+        source: { kind: "event", eventId: deletedCommit.event.eventId },
         limit: 100,
       },
     });
@@ -630,15 +669,8 @@ describe("SemanticWorkspace repository counteractions", () => {
       throw new Error("deleted comparison did not complete");
     }
     expect(deletedComparisonDispatch.result).toMatchObject({
-      counts: { actionable: 0 },
-      changes: expect.arrayContaining(
-        [...importedChangeIds, ...reverted.changeIds].map((changeId) =>
-          expect.objectContaining({
-            changeId,
-            disposition: { status: "historical" },
-          })
-        )
-      ),
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: false },
+      coordinates: [],
     });
 
     await expect(
@@ -652,8 +684,8 @@ describe("SemanticWorkspace repository counteractions", () => {
         },
       })
     ).rejects.toMatchObject({
-      code: "DependencyBlocked",
-      detail: { blockingChangeIds: [reverted.changeIds[0]!] },
+      code: "InvalidReference",
+      detail: { referenceKind: "change", reference: reverted.changeIds[1] },
     });
 
     const restoredDispatch = await semantic.dispatch("revert", {
@@ -700,25 +732,15 @@ describe("SemanticWorkspace repository counteractions", () => {
       ingress,
       input: {
         target: emptyTarget.working.ref,
-        sourceEventId: restoredCommit.event.eventId,
-        view: "changes",
+        source: { kind: "event", eventId: restoredCommit.event.eventId },
         limit: 100,
       },
     });
     if (comparisonDispatch.kind !== "complete") throw new Error("compare did not complete");
-    const compared = comparisonDispatch.result as {
-      changes: Array<{ changeId: string; disposition: { status: string } }>;
-    };
-    const dispositions = new Map(
-      compared.changes.map((change) => [change.changeId, change.disposition.status])
-    );
-    for (const changeId of importedChangeIds) {
-      expect(dispositions.get(changeId)).not.toBe("historical");
-    }
-    for (const changeId of reverted.changeIds)
-      expect(dispositions.get(changeId)).toBe("historical");
-    for (const changeId of restored.changeIds)
-      expect(dispositions.get(changeId)).toBe("historical");
+    expect(comparisonDispatch.result).toMatchObject({
+      resolution: { complete: false, remainingCoordinateCount: 2, concluded: false },
+      counts: { adopt: 2, conflict: 0 },
+    });
 
     store.forkContext("context:test", "context:copy-integration");
     const copyDispatch = await semantic.dispatch("copy", {
@@ -841,14 +863,13 @@ describe("SemanticWorkspace repository counteractions", () => {
       copyCommitDispatch
     );
     acknowledgeMaterialization(copyCommitDispatch);
-    const adoptedCopyDispatch = await semantic.dispatch("integrate", {
+    const adoptedCopyDispatch = await semantic.dispatch("merge", {
       ingress,
       input: {
         contextId: "context:copy-integration",
         commandId: "command:adopt-copy",
         expectedWorkingHead: restoredCommit.event,
-        sourceEventId: copyCommit.event.eventId,
-        decision: { kind: "adopted", sourceChangeIds: copied.changeIds },
+        source: { kind: "event", eventId: copyCommit.event.eventId },
       },
     });
     const adoptedCopy = completedResult<{

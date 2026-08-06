@@ -17,14 +17,14 @@ never strip, split, hash, or reconstruct its prefix.
 
 ## Advance one local step at a time
 
-Every successful `edit`, `move`, `copy`, `integrate`, or `revert` appends one
+Every successful `edit`, `move`, `copy`, `merge`, or `revert` appends one
 work application and returns the new `workingHead`. Pass that returned state as
 the next mutation's `expectedWorkingHead`.
 
 This is a linear local chain inside one context:
 
 ```text
-committed event -> edit application -> integration application -> revert application
+committed event -> edit application -> merge application -> revert application
 ```
 
 Concurrent work that needs an independent chain belongs in another context.
@@ -98,7 +98,7 @@ drops the complete chain and restores the committed event as the working head.
 Neither operation accepts a subset.
 
 Use `compare` with a target state and an exact committed source event. Keep the
-same source event through a sequence of local integration decisions. Commit
+same source event through bounded coordinate decisions. Commit
 only after all effective source changes are truthfully accounted for. Commit
 derives the source parent from those decisions and rejects mixed sources or a
 mismatched caller-supplied parent.

@@ -61,6 +61,8 @@ describe("provenance formatting", () => {
           decisionCount: 0,
           decisionIds: [],
           intentSummary: null,
+          authorContextId: "context:import",
+          triggerEvidence: null,
           externalSnapshot: {
             sourceKind: "git",
             sourceUri: "https://example.test/owner/project.git",

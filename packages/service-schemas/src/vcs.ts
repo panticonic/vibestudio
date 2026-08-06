@@ -377,6 +377,7 @@ export const vcsChangeKindSchema = z.enum([
   "repository-delete",
   "repository-restore",
   "repository-move",
+  "merge",
 ]);
 export type VcsChangeKind = z.infer<typeof vcsChangeKindSchema>;
 
@@ -457,7 +458,7 @@ export const vcsWorkUnitSchema = z
       "edit",
       "file-transfer",
       "lifecycle",
-      "integrate",
+      "merge",
       "revert",
       "import",
       "external-unapplied",
@@ -471,6 +472,20 @@ export const vcsWorkUnitSchema = z
     decisionCount: z.number().int().nonnegative(),
     decisionIds: z.array(id("Bounded preview of integration decisions made here.")).max(200),
     intentSummary: nonEmptyText.nullable(),
+    authorContextId: contextId,
+    triggerEvidence: z
+      .object({
+        text: nonEmptyText.max(1_200),
+        sender: z
+          .object({
+            kind: nonEmptyText,
+            id: id("Canonical sender identity."),
+            participantId: id("Channel participant identity, when applicable.").nullable(),
+          })
+          .strict(),
+      })
+      .strict()
+      .nullable(),
     externalSnapshot: vcsExternalSnapshotSchema.nullable(),
     contentClass: z.enum(["internal", "external"]),
     externalKeys: z.array(z.string().min(1)).max(256),
@@ -492,6 +507,13 @@ export const vcsWorkUnitSchema = z
         message: "Only import work units may carry an external snapshot",
       });
     }
+    if (value.intentSummary != null && value.triggerEvidence != null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["triggerEvidence"],
+        message: "Stated intent and captured trigger evidence are mutually exclusive",
+      });
+    }
   });
 export type VcsWorkUnit = z.infer<typeof vcsWorkUnitSchema>;
 
@@ -508,37 +530,38 @@ export const vcsWorkApplicationSchema = z
   .strict();
 export type VcsWorkApplication = z.infer<typeof vcsWorkApplicationSchema>;
 
-const decisionBase = {
-  decisionId: id("Integration decision."),
-  sourceState: z.union([vcsEventNodeRefSchema, vcsExternalDeltaNodeRefSchema]),
-  targetBasis: vcsStateNodeRefSchema,
-  sourceChangeIds: boundedIds("Source change accounted for by this decision."),
-};
-
-export const vcsIntegrationDecisionSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("adopted"),
-      ...decisionBase,
-      resultAppliedChangeIds: boundedIds("Applied target result."),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("reconciled"),
-      ...decisionBase,
-      evidence: z.array(vcsStatePredicateSchema).min(1).max(200),
-      rationale: nonEmptyText,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("declined"),
-      ...decisionBase,
-      rationale: nonEmptyText,
-    })
-    .strict(),
+export const vcsMergeCoordinateRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("file"), id: id("Stable file identity.") }).strict(),
+  z.object({ kind: z.literal("repository"), id: id("Stable repository identity.") }).strict(),
 ]);
+export type VcsMergeCoordinateRef = z.infer<typeof vcsMergeCoordinateRefSchema>;
+
+export const vcsMergeResolutionKindSchema = z.enum([
+  "composed",
+  "theirs",
+  "ours",
+  "current",
+]);
+export type VcsMergeResolutionKind = z.infer<typeof vcsMergeResolutionKindSchema>;
+
+export const vcsMergeDecisionEntrySchema = z
+  .object({
+    coordinate: vcsMergeCoordinateRefSchema,
+    resolution: z.enum(["adopt", "convergent", "composed", "ours", "current"]),
+    accountedSourceChangeIds: z.array(id("Accounted source change.")).max(10_000),
+    resultChangeId: id("Change realizing the merged result.").optional(),
+    rationale: nonEmptyText.max(2_000).optional(),
+  })
+  .strict();
+
+export const vcsIntegrationDecisionSchema = z
+  .object({
+    decisionId: id("Merge decision."),
+    sourceState: z.union([vcsEventNodeRefSchema, vcsExternalDeltaNodeRefSchema]),
+    targetBasis: vcsStateNodeRefSchema,
+    entries: z.array(vcsMergeDecisionEntrySchema).max(500),
+  })
+  .strict();
 export type VcsIntegrationDecision = z.infer<typeof vcsIntegrationDecisionSchema>;
 
 export const vcsWorkspaceEventSchema = z
@@ -725,35 +748,71 @@ export const vcsCopyInputSchema = z
   .strict();
 export type VcsCopyInput = z.infer<typeof vcsCopyInputSchema>;
 
-export const vcsIntegrationChoiceSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("adopted"), sourceChangeIds: boundedIds("Source change.") }).strict(),
-  z
-    .object({
-      kind: z.literal("reconciled"),
-      sourceChangeIds: boundedIds("Source change."),
-      evidence: z.array(vcsStatePredicateSchema).min(1).max(200),
-      rationale: nonEmptyText,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("declined"),
-      sourceChangeIds: boundedIds("Source change."),
-      rationale: nonEmptyText,
-    })
-    .strict(),
-]);
-export type VcsIntegrationChoice = z.infer<typeof vcsIntegrationChoiceSchema>;
+export const vcsMergeResolutionSchema = z
+  .object({
+    coordinate: vcsMergeCoordinateRefSchema,
+    resolution: vcsMergeResolutionKindSchema,
+    rationale: nonEmptyText.max(2_000).optional(),
+  })
+  .strict();
 
-const integrateInput = {
-  ...mutationEnvelope,
-  decision: vcsIntegrationChoiceSchema,
+const uniqueMergeCoordinates = <
+  T extends { coordinate: VcsMergeCoordinateRef } | VcsMergeCoordinateRef,
+>(
+  values: readonly T[],
+  context: z.RefinementCtx,
+  coordinateOf: (value: T) => VcsMergeCoordinateRef
+): void => {
+  const seen = new Set<string>();
+  values.forEach((value, index) => {
+    const coordinate = coordinateOf(value);
+    const key = `${coordinate.kind}:${coordinate.id}`;
+    if (seen.has(key)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [index],
+        message: `Duplicate merge coordinate ${key}`,
+      });
+    }
+    seen.add(key);
+  });
 };
-export const vcsIntegrateInputSchema = z.union([
-  z.object({ ...integrateInput, sourceEventId: id("Exact committed source event.") }).strict(),
-  z.object({ ...integrateInput, sourceDeltaId: id("Exact unapplied external delta.") }).strict(),
+
+export const vcsMergeSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("event"), eventId: id("Exact committed source event.") }).strict(),
+  z.object({ kind: z.literal("external-delta"), deltaId: id("Exact external delta.") }).strict(),
 ]);
-export type VcsIntegrateInput = z.infer<typeof vcsIntegrateInputSchema>;
+
+export const vcsMergeInputSchema = z
+  .object({
+    ...mutationEnvelope,
+    source: vcsMergeSourceSchema,
+    coordinates: z.array(vcsMergeCoordinateRefSchema).max(500).optional(),
+    resolutions: z.array(vcsMergeResolutionSchema).max(500).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    uniqueMergeCoordinates(value.coordinates ?? [], context, (coordinate) => coordinate);
+    uniqueMergeCoordinates(value.resolutions ?? [], context, (resolution) => resolution.coordinate);
+    const selected = new Set(
+      (value.coordinates ?? []).map((coordinate) => `${coordinate.kind}:${coordinate.id}`)
+    );
+    for (const resolution of value.resolutions ?? []) {
+      selected.add(`${resolution.coordinate.kind}:${resolution.coordinate.id}`);
+    }
+    if (selected.size > 500) {
+      context.addIssue({
+        code: z.ZodIssueCode.too_big,
+        type: "array",
+        maximum: 500,
+        inclusive: true,
+        exact: false,
+        path: ["coordinates"],
+        message: "A merge may select at most 500 distinct coordinates",
+      });
+    }
+  });
+export type VcsMergeInput = z.infer<typeof vcsMergeInputSchema>;
 
 export const vcsRevertInputSchema = z
   .object({ ...mutationEnvelope, changeIds: boundedIds("Change to counteract.") })
@@ -764,9 +823,6 @@ export const vcsCommitInputSchema = z
   .object({
     ...mutationEnvelope,
     message: nonEmptyText.optional(),
-    integratesEventIds: boundedIds(
-      "Optional sources for zero-change integration; when decisions exist, parents are derived and this value may only confirm the exact set."
-    ).optional(),
   })
   .strict();
 export type VcsCommitInput = z.infer<typeof vcsCommitInputSchema>;
@@ -1017,11 +1073,6 @@ export const vcsWorkingMutationResultSchema = z
   .strict();
 export type VcsWorkingMutationResult = z.infer<typeof vcsWorkingMutationResultSchema>;
 
-export const vcsIntegrateResultSchema = vcsWorkingMutationResultSchema.extend({
-  decisionId: id("Created integration decision."),
-});
-export type VcsIntegrateResult = z.infer<typeof vcsIntegrateResultSchema>;
-
 export const vcsCommitResultSchema = z
   .object({
     contextId,
@@ -1093,122 +1144,159 @@ export const vcsStatusResultSchema = z
   .strict();
 export type VcsStatusResult = z.infer<typeof vcsStatusResultSchema>;
 
-export const vcsChangeDispositionSchema = z.union([
-  z.object({ status: z.literal("shared") }).strict(),
-  z
-    .object({
-      status: z.literal("already-satisfied"),
-      evidence: z.array(vcsStatePredicateSchema).min(1).max(200),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("actionable"),
-      applicability: z.literal("applicable"),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("actionable"),
-      applicability: z.literal("conflicting"),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("actionable"),
-      applicability: z.literal("blocked"),
-      prerequisiteChangeIds: boundedIds("Earlier effective source change required first."),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("accounted"),
-      decisionIds: boundedIds("Decision accounting for the source change."),
-    })
-    .strict(),
-  z.object({ status: z.literal("historical") }).strict(),
-]);
-export type VcsChangeDisposition = z.infer<typeof vcsChangeDispositionSchema>;
-
-export const vcsComparedChangeSchema = z
+export const vcsIntentEvidenceSchema = z
+  .object({ text: nonEmptyText.max(1_200), tier: z.enum(["stated", "trigger", "mechanical"]) })
+  .strict();
+export const vcsIntentProjectionSchema = z
   .object({
-    changeId: id("Source change."),
-    workUnitId: id("Original authored work unit."),
-    kind: vcsChangeKindSchema,
+    workUnitId: id("Attributed work unit."),
+    side: z.enum(["ours", "theirs"]),
+    intent: vcsIntentEvidenceSchema,
+    coordinates: z.array(vcsMergeCoordinateRefSchema).max(500),
+    state: z.enum(["merged", "settled", "split", "contested", "pending"]).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if ((value.side === "theirs") !== (value.state !== undefined)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["state"],
+        message: "Only source-side intents carry merge state",
+      });
+    }
+  });
+
+export const vcsMergeAttributionSchema = z
+  .object({
+    changeId: id("Attributed change."),
+    workUnitId: id("Attributed work unit."),
+    undone: z.literal(true).optional(),
+  })
+  .strict();
+
+export const vcsMergeAspectSchema = z
+  .object({
+    aspect: z.enum(["content", "placement", "mode", "presence", "path"]),
+    base: z.unknown(),
+    ours: z.unknown(),
+    theirs: z.unknown(),
+    baseValues: z
+      .array(z.object({ eventId: id("Maximal base event."), value: z.unknown() }).strict())
+      .min(2)
+      .max(200)
+      .optional(),
+    status: z.enum(["adopt", "convergent", "composed", "conflict", "ours"]),
+  })
+  .strict();
+
+export const vcsMergeCoordinateSchema = z
+  .object({
+    coordinate: z
+      .object({
+        kind: z.enum(["file", "repository"]),
+        id: id("Stable coordinate identity."),
+        paths: z
+          .object({
+            base: z.string().optional(),
+            ours: z.string().optional(),
+            theirs: z.string().optional(),
+          })
+          .strict(),
+      })
+      .strict(),
+    status: z.enum(["adopt", "convergent", "composed", "conflict", "resolved"]),
+    aspects: z.array(vcsMergeAspectSchema).min(1).max(5),
+    attribution: z
+      .object({
+        ours: z.array(vcsMergeAttributionSchema).max(10_000),
+        theirs: z.array(vcsMergeAttributionSchema).max(10_000),
+      })
+      .strict(),
+    group: id("Coupled structural group.").optional(),
+    structuralConflicts: z.array(vcsMergeCoordinateRefSchema).min(1).max(10_000).optional(),
+    resolutions: z.array(vcsMergeResolutionKindSchema).max(4),
+    decisionId: id("Reachable resolving decision.").optional(),
     summary: nonEmptyText,
-    disposition: vcsChangeDispositionSchema,
+  })
+  .strict();
+
+export const vcsMergeResolutionStateSchema = z
+  .object({
+    complete: z.boolean(),
+    remainingCoordinateCount: z.number().int().nonnegative(),
+    concluded: z.boolean(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.complete !== (value.remainingCoordinateCount === 0)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["complete"],
+        message: "Merge is complete exactly when no coordinates remain",
+      });
+    }
+  });
+
+const mergeCountsSchema = z
+  .object({
+    adopt: z.number().int().nonnegative(),
+    convergent: z.number().int().nonnegative(),
+    composed: z.number().int().nonnegative(),
+    conflict: z.number().int().nonnegative(),
+    resolved: z.number().int().nonnegative(),
+  })
+  .strict();
+const intentCountsSchema = z
+  .object({
+    merged: z.number().int().nonnegative(),
+    settled: z.number().int().nonnegative(),
+    split: z.number().int().nonnegative(),
+    contested: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
   })
   .strict();
 
 const compareInput = {
   target: vcsStateNodeRefSchema,
-  view: z.enum(["overview", "changes"]).default("overview"),
-  disposition: z
-    .enum(["shared", "already-satisfied", "actionable", "accounted", "historical"])
-    .optional(),
+  source: vcsMergeSourceSchema,
   cursor: cursor.optional(),
   limit: pageLimit,
 };
-export const vcsCompareInputSchema = z.union([
-  z.object({ ...compareInput, sourceEventId: id("Exact committed source event.") }).strict(),
-  z.object({ ...compareInput, sourceDeltaId: id("Exact unapplied external delta.") }).strict(),
-]);
+export const vcsCompareInputSchema = z.object(compareInput).strict();
 export type VcsCompareInput = z.infer<typeof vcsCompareInputSchema>;
 
 export const vcsCompareResultSchema = z
   .object({
     target: vcsStateNodeRefSchema,
-    sourceEventId: id("Compared source event.").optional(),
-    sourceDeltaId: id("Compared external delta.").optional(),
-    resolution: z
-      .object({
-        complete: z
-          .boolean()
-          .describe("True when no effective source change still requires a decision."),
-        remainingChangeCount: z
-          .number()
-          .int()
-          .nonnegative()
-          .describe("Effective source changes still requiring adopt, reconcile, or decline."),
-      })
-      .strict(),
-    counts: z
-      .object({
-        shared: z.number().int().nonnegative(),
-        alreadySatisfied: z.number().int().nonnegative(),
-        actionable: z.number().int().nonnegative(),
-        conflicting: z.number().int().nonnegative(),
-        blocked: z.number().int().nonnegative(),
-        accounted: z
-          .number()
-          .int()
-          .nonnegative()
-          .describe("Source changes resolved by a reconciliation or decline decision."),
-        historical: z.number().int().nonnegative(),
-      })
-      .strict(),
-    changes: z.array(vcsComparedChangeSchema).max(500),
+    source: vcsMergeSourceSchema,
+    base: vcsStateNodeRefSchema,
+    bases: z.array(vcsStateNodeRefSchema).min(2).max(200).optional(),
+    resolution: vcsMergeResolutionStateSchema,
+    counts: mergeCountsSchema,
+    intentCounts: intentCountsSchema,
+    coordinates: z.array(vcsMergeCoordinateSchema).max(500),
+    intents: z.array(vcsIntentProjectionSchema).max(500),
+    intentsTruncated: z.boolean(),
     nextCursor: cursor.nullable(),
   })
-  .strict()
-  .superRefine((value, context) => {
-    if ((value.sourceEventId == null) === (value.sourceDeltaId == null)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Comparison requires exactly one source",
-      });
-    }
-  })
-  .superRefine((value, context) => {
-    if (value.resolution.complete !== (value.resolution.remainingChangeCount === 0)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["resolution", "complete"],
-        message: "Integration resolution is complete exactly when no changes remain",
-      });
-    }
-  });
+  .strict();
 export type VcsCompareResult = z.infer<typeof vcsCompareResultSchema>;
+
+export const vcsComposedReviewSchema = z
+  .object({
+    coordinate: vcsMergeCoordinateRefSchema,
+    ours: vcsIntentEvidenceSchema,
+    theirs: vcsIntentEvidenceSchema,
+  })
+  .strict();
+export const vcsMergeResultSchema = vcsWorkingMutationResultSchema.extend({
+  decisionId: id("Created merge decision."),
+  outcomes: z.array(vcsMergeCoordinateSchema).max(500),
+  resolution: vcsMergeResolutionStateSchema,
+  intents: z.array(vcsIntentProjectionSchema).max(500),
+  composed: z.array(vcsComposedReviewSchema).max(500),
+});
+export type VcsMergeResult = z.infer<typeof vcsMergeResultSchema>;
 
 export const vcsSemanticCommandSchema = z
   .object({
@@ -1564,6 +1652,8 @@ export const vcsHistoryEntrySchema = z
     node: vcsSemanticNodeRefSchema,
     createdAt: timestamp.nullable(),
     summary: nonEmptyText,
+    intent: vcsIntentEvidenceSchema.optional(),
+    viaDecisionId: id("Merge decision through which this authored change entered history.").optional(),
   })
   .strict();
 
@@ -1601,6 +1691,8 @@ export const vcsBlameSpanSchema = z
     change: vcsChangeNodeRefSchema.describe("Terminal authored change root."),
     appliedChange: vcsAppliedChangeNodeRefSchema.describe("Terminal applied change root."),
     workUnit: vcsWorkUnitNodeRefSchema.describe("Original authored work unit root."),
+    workUnitId: id("Original authored work unit."),
+    tier: z.enum(["stated", "trigger", "mechanical"]),
     command: vcsCommandNodeRefSchema.describe("Originating semantic command root."),
     path: z.array(vcsProvenanceEdgeSchema).max(200),
     stop: z.enum(["authored", "import-boundary"]),
@@ -1674,8 +1766,30 @@ export const vcsReadMemoryDecisionSchema = z
     decision: z
       .object({ kind: z.literal("decision"), decisionId: id("Integration decision.") })
       .strict(),
-    kind: z.enum(["adopted", "reconciled", "declined"]),
+    coordinate: vcsMergeCoordinateRefSchema,
+    resolution: z.enum(["adopt", "convergent", "composed", "ours", "current"]),
     rationale: nonEmptyText.nullable(),
+  })
+  .strict();
+
+export const vcsReadMemoryArrivalSchema = z
+  .object({
+    decision: z
+      .object({ kind: z.literal("decision"), decisionId: id("Anchoring integration decision.") })
+      .strict(),
+    resolution: z.enum(["adopt", "convergent", "composed", "ours", "current"]),
+    mode: z.enum(["arrived", "accepted"]),
+    rationale: nonEmptyText.nullable(),
+    parentIntents: z
+      .array(
+        z
+          .object({
+            workUnitId: id("Parent authoring work unit."),
+            intent: vcsIntentEvidenceSchema,
+          })
+          .strict()
+      )
+      .max(2),
   })
   .strict();
 
@@ -1689,7 +1803,8 @@ export const vcsReadMemoryEpisodeSchema = z
     command: vcsCommandNodeRefSchema,
     changeKind: vcsChangeKindSchema,
     counteractsChangeIds: z.array(id("Counteracted change.")).max(200),
-    intentSummary: nonEmptyText.nullable(),
+    intent: vcsIntentEvidenceSchema,
+    authorContextId: contextId,
     createdAt: timestamp,
     externalSnapshot: vcsExternalSnapshotSchema.nullable(),
     commit: z
@@ -1701,7 +1816,7 @@ export const vcsReadMemoryEpisodeSchema = z
       .strict()
       .nullable(),
     cause: vcsReadMemoryCauseSchema.nullable(),
-    decisions: z.array(vcsReadMemoryDecisionSchema).max(8),
+    arrival: vcsReadMemoryArrivalSchema.nullable(),
   })
   .strict();
 export type VcsReadMemoryEpisode = z.infer<typeof vcsReadMemoryEpisodeSchema>;
@@ -1916,22 +2031,23 @@ export const vcsErrorSchema = z.discriminatedUnion("code", [
     .object({
       code: z.literal("ConflictPresent"),
       ...errorBase,
-      sourceChangeIds: boundedIds("Conflicting source change."),
+      coordinates: z.array(vcsMergeCoordinateSchema).min(1).max(500),
     })
     .strict(),
   z
     .object({
-      code: z.literal("DependencyBlocked"),
+      code: z.literal("CoupledGroupIncomplete"),
       ...errorBase,
-      blockingChangeIds: boundedIds("Change whose live result must be handled first."),
+      group: id("Coupled structural group."),
+      coordinates: z.array(vcsMergeCoordinateRefSchema).min(2).max(500),
     })
     .strict(),
   z
     .object({
       code: z.literal("IntegrationIncomplete"),
       ...errorBase,
-      sourceEventId: id("Integration source event."),
-      unaccountedChangeIds: boundedIds("Unaccounted source change."),
+      source: vcsMergeSourceSchema,
+      unaccountedCoordinates: z.array(vcsMergeCoordinateRefSchema).min(1).max(500),
     })
     .strict(),
   z
@@ -1989,9 +2105,9 @@ const ERROR_DESCRIPTIONS: Record<VcsErrorCode, string> = {
   InvalidReference: "A typed semantic reference is invalid.",
   NoEffect: "The requested mutation has no semantic effect.",
   DestinationOccupied: "A move, copy, create, or import destination is occupied.",
-  ConflictPresent: "The selected source changes conflict at the exact target basis.",
-  DependencyBlocked: "A selected change has an unsatisfied semantic prerequisite.",
-  IntegrationIncomplete: "An integration commit still has unaccounted source changes.",
+  ConflictPresent: "An explicitly selected coordinate conflicts at the exact target basis.",
+  CoupledGroupIncomplete: "The selected coordinate subset splits a coupled structural group.",
+  IntegrationIncomplete: "An integration commit still has unaccounted source coordinates.",
   WorkingChangesPresent: "The operation requires a clean context.",
   CommandIdReuse: "The command identity was reused with a different request.",
   ScopeTooLarge: "The bounded operation requires a narrower request or page.",
@@ -2162,7 +2278,7 @@ const vcsSemanticMethods = defineVcsMethods({
     errors: [...MUTATION_ERRORS, ...methodErrors("DestinationOccupied")],
     seeAlso: ["vcs.move", "vcs.blame"],
   },
-  integrate: {
+  merge: {
     tier: {
       tier: "open",
       session: "family",
@@ -2172,18 +2288,17 @@ const vcsSemanticMethods = defineVcsMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Take one local adopt, reconcile, or decline step against an exact source event or coordinator-owned external delta.",
-    args: z.tuple([vcsIntegrateInputSchema]),
-    returns: vcsIntegrateResultSchema,
+      "Merge one bounded page of stable coordinates from an exact event or external delta by net effect.",
+    args: z.tuple([vcsMergeInputSchema]),
+    returns: vcsMergeResultSchema,
     access: WRITE_ACCESS,
     operationClass: "context-write",
     references: [
       ...commonMutationRefs,
-      ref("event", "source", "sourceEventId"),
-      ref("external-delta", "source", "sourceDeltaId"),
-      ref("change", "source", "decision", "sourceChangeIds", "*"),
+      ref("event", "source", "source", "eventId"),
+      ref("external-delta", "source", "source", "deltaId"),
     ],
-    errors: [...MUTATION_ERRORS, ...methodErrors("ConflictPresent", "DependencyBlocked")],
+    errors: [...MUTATION_ERRORS, ...methodErrors("ConflictPresent", "CoupledGroupIncomplete")],
     seeAlso: ["vcs.compare", "vcs.commit"],
   },
   revert: {
@@ -2201,7 +2316,7 @@ const vcsSemanticMethods = defineVcsMethods({
     access: DESTRUCTIVE_ACCESS,
     operationClass: "context-write",
     references: [...commonMutationRefs, ref("change", "source", "changeIds", "*")],
-    errors: [...MUTATION_ERRORS, ...methodErrors("ConflictPresent", "DependencyBlocked")],
+    errors: [...MUTATION_ERRORS, ...methodErrors("ConflictPresent")],
     seeAlso: ["vcs.history", "vcs.discard"],
   },
   commit: {
@@ -2214,12 +2329,12 @@ const vcsSemanticMethods = defineVcsMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Commit the complete local application chain; derive all integration parents from recorded decisions, or accept explicit zero-change sources.",
+      "Commit the complete local application chain; derive every integration parent from recorded merge decisions.",
     args: z.tuple([vcsCommitInputSchema]),
     returns: vcsCommitResultSchema,
     access: WRITE_ACCESS,
     operationClass: "context-write",
-    references: [...commonMutationRefs, ref("event", "source", "integratesEventIds", "*")],
+    references: commonMutationRefs,
     errors: [...MUTATION_ERRORS, ...methodErrors("IntegrationIncomplete")],
     seeAlso: ["vcs.status", "vcs.push"],
   },
@@ -2286,7 +2401,7 @@ const vcsSemanticMethods = defineVcsMethods({
       ref("external-delta", "source", "supersedesDeltaId"),
     ],
     errors: [...MUTATION_ERRORS, ...methodErrors("ExternalEffectFailed")],
-    seeAlso: ["vcs.compare", "vcs.integrate"],
+    seeAlso: ["vcs.compare", "vcs.merge"],
   },
   supersedeExternalDelta: {
     tier: {
@@ -2297,7 +2412,7 @@ const vcsSemanticMethods = defineVcsMethods({
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
-    description: "Retire one active external delta so it can no longer be integrated.",
+    description: "Retire one active external delta so it can no longer be merged.",
     args: z.tuple([vcsExternalDeltaLifecycleInputSchema]),
     returns: vcsExternalDeltaResultSchema,
     access: WRITE_ACCESS,
@@ -2393,11 +2508,11 @@ const vcsSemanticMethods = defineVcsMethods({
     operationClass: "read",
     references: [
       ref("state-node", "target", "target"),
-      ref("event", "source", "sourceEventId"),
-      ref("external-delta", "source", "sourceDeltaId"),
+      ref("event", "source", "source", "eventId"),
+      ref("external-delta", "source", "source", "deltaId"),
     ],
     errors: READ_ERRORS,
-    seeAlso: ["vcs.integrate", "vcs.inspect"],
+    seeAlso: ["vcs.merge", "vcs.inspect"],
   },
   inspect: {
     tier: {

@@ -78,7 +78,7 @@ describe("runtime surface schemaRef parity", () => {
     if (!vcs) throw new Error("missing VCS runtime surface");
     expect(VCS_MEMBERS).toEqual(Object.keys(vcsMethods));
     expect(vcs.members).toEqual(Object.keys(vcsMethods));
-    expect(vcs.members).toContain("integrate");
+    expect(vcs.members).toContain("merge");
     expect(vcs.members).toContain("move");
     expect(vcs.members).toContain("neighbors");
     expect(vcs.members).not.toContain("moveFiles");

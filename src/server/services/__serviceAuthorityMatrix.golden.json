@@ -9157,23 +9157,6 @@
         "capability": null,
         "presentation": null
       },
-      "integrate": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "protected-write",
-          "family": "vcs.control",
-          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "listDirectory": {
         "authority": {
           "inherits": true
@@ -9203,6 +9186,23 @@
           "session": "family",
           "residency": "transport",
           "family": "vcs.read",
+          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "merge": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "protected-write",
+          "family": "vcs.control",
           "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
         },
         "capability": null,

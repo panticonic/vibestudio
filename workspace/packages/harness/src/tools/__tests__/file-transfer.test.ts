@@ -85,7 +85,6 @@ describe("stable-identity file transfer tools", () => {
       contextId: "context:1",
       expectedWorkingHead: working,
       commandId: "command:move",
-      intentSummary: "Move packages/source/src/a.ts to panels/target/src/moved.ts",
       moves: [
         {
           kind: "file",
@@ -113,6 +112,7 @@ describe("stable-identity file transfer tools", () => {
       type: "text",
       text: expect.stringContaining('vcs({ operation: "inspect", root: {"kind":"file"'),
     });
+    expect(move.mock.calls[0]?.[0]).not.toHaveProperty("intentSummary");
   });
 
   it("copies from an exact source state", async () => {
@@ -124,11 +124,13 @@ describe("stable-identity file transfer tools", () => {
     const result = await tool.execute("call:2", {
       source: "packages/source/src/a.ts",
       destination: "panels/target/src/copied.ts",
+      intent: "Preserve the source adapter while creating the panel-specific variant",
     });
 
     expect(copy).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedWorkingHead: working,
+        intentSummary: "Preserve the source adapter while creating the panel-specific variant",
         copies: [
           {
             source: {

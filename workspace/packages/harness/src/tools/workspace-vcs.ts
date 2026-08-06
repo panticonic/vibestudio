@@ -15,7 +15,6 @@ import type {
 import { semanticRootSchema } from "./provenance.js";
 import {
   resolveToolFile,
-  resolveToolRepository,
   resolveToolWorkingState,
   toVcsPath,
   toolCommandId,
@@ -24,48 +23,9 @@ import {
   type ToolMutationContext,
 } from "./tool-vcs.js";
 
-const agentEvidenceSchema = Type.Union([
-  Type.Object(
-    {
-      kind: Type.Literal("file-content"),
-      path: Type.String({
-        minLength: 1,
-        description:
-          "Workspace file path whose exact current file identity and content hash are evidence.",
-      }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("file-placement"),
-      path: Type.String({
-        minLength: 1,
-        description:
-          "Workspace file path whose exact current file identity, repository, and placement are evidence.",
-      }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    { kind: Type.Literal("file-absent"), fileId: Type.String() },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      kind: Type.Literal("repository-present"),
-      path: Type.String({
-        minLength: 1,
-        description:
-          "Workspace repository path whose exact current identity and placement are evidence.",
-      }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    { kind: Type.Literal("repository-absent"), repositoryId: Type.String() },
-    { additionalProperties: false }
-  ),
+const coordinateSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("file"), id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+  Type.Object({ kind: Type.Literal("repository"), id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
 ]);
 
 const workspaceVcsSchema = Type.Union([
@@ -91,16 +51,6 @@ const workspaceVcsSchema = Type.Union([
     {
       operation: Type.Literal("compare"),
       sourceEventId: Type.String({ minLength: 1 }),
-      view: Type.Optional(Type.Union([Type.Literal("overview"), Type.Literal("changes")])),
-      disposition: Type.Optional(
-        Type.Union([
-          Type.Literal("shared"),
-          Type.Literal("already-satisfied"),
-          Type.Literal("actionable"),
-          Type.Literal("accounted"),
-          Type.Literal("historical"),
-        ])
-      ),
       after: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     },
@@ -108,49 +58,20 @@ const workspaceVcsSchema = Type.Union([
   ),
   Type.Object(
     {
-      operation: Type.Literal("integrate"),
+      operation: Type.Literal("merge"),
       sourceEventId: Type.String({ minLength: 1 }),
-      decision: Type.Union([
-        Type.Object(
-          {
-            kind: Type.Literal("adopted"),
-            sourceChangeIds: Type.Array(Type.String({ minLength: 1 }), {
-              minItems: 1,
-              maxItems: 200,
-            }),
-          },
-          { additionalProperties: false }
-        ),
-        Type.Object(
-          {
-            kind: Type.Literal("reconciled"),
-            sourceChangeIds: Type.Array(Type.String({ minLength: 1 }), {
-              minItems: 1,
-              maxItems: 200,
-            }),
-            evidence: Type.Array(agentEvidenceSchema, {
-              minItems: 1,
-              maxItems: 200,
-              description:
-                "Exact target-state evidence. Paths must already exist in the current target working state; a source-only file-create cannot be cited before it is adopted or authored in the target. Prefer path-based file-content, file-placement, or repository-present entries; the tool resolves their stable identities at the current working state.",
-            }),
-            rationale: Type.String({ minLength: 1 }),
-          },
-          { additionalProperties: false }
-        ),
-        Type.Object(
-          {
-            kind: Type.Literal("declined"),
-            sourceChangeIds: Type.Array(Type.String({ minLength: 1 }), {
-              minItems: 1,
-              maxItems: 200,
-            }),
-            rationale: Type.String({ minLength: 1 }),
-          },
-          { additionalProperties: false }
-        ),
-      ]),
-      intentSummary: Type.Optional(Type.String({ minLength: 1 })),
+      coordinates: Type.Optional(Type.Array(coordinateSchema, { maxItems: 500 })),
+      resolutions: Type.Optional(Type.Array(Type.Object({
+        coordinate: coordinateSchema,
+        resolution: Type.Union([
+          Type.Literal("composed"),
+          Type.Literal("theirs"),
+          Type.Literal("ours"),
+          Type.Literal("current"),
+        ]),
+        rationale: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+      }, { additionalProperties: false }), { maxItems: 500 })),
+      intent: Type.Optional(Type.String({ minLength: 1 })),
     },
     { additionalProperties: false }
   ),
@@ -158,7 +79,7 @@ const workspaceVcsSchema = Type.Union([
     {
       operation: Type.Literal("revert"),
       changeIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 200 }),
-      intentSummary: Type.Optional(Type.String({ minLength: 1 })),
+      intent: Type.Optional(Type.String({ minLength: 1 })),
     },
     { additionalProperties: false }
   ),
@@ -169,14 +90,7 @@ const workspaceVcsSchema = Type.Union([
         minLength: 1,
         description: "Durable intent summary for the one atomic workspace event.",
       }),
-      integratesEventIds: Type.Optional(
-        Type.Array(Type.String({ minLength: 1 }), {
-          minItems: 1,
-          maxItems: 200,
-          description:
-            "Exact source events to add as parents after compare reports every effective source change accounted for.",
-        })
-      ),
+      intent: Type.Optional(Type.String({ minLength: 1 })),
     },
     { additionalProperties: false }
   ),
@@ -214,19 +128,18 @@ export type WorkspaceVcsToolInput =
   | {
       operation: "compare";
       sourceEventId: string;
-      view?: "overview" | "changes";
-      disposition?: "shared" | "already-satisfied" | "actionable" | "accounted" | "historical";
       after?: string;
       limit?: number;
     }
   | {
-      operation: "integrate";
+      operation: "merge";
       sourceEventId: string;
-      decision: AgentIntegrationDecisionInput;
-      intentSummary?: string;
+      coordinates?: Array<{ kind: "file" | "repository"; id: string }>;
+      resolutions?: Array<{ coordinate: { kind: "file" | "repository"; id: string }; resolution: "composed" | "theirs" | "ours" | "current"; rationale?: string }>;
+      intent?: string;
     }
-  | { operation: "revert"; changeIds: string[]; intentSummary?: string }
-  | { operation: "commit"; message: string; integratesEventIds?: string[] }
+  | { operation: "revert"; changeIds: string[]; intent?: string }
+  | { operation: "commit"; message: string; intent?: string }
   | { operation: "discard" }
   | {
       operation: "blame";
@@ -251,7 +164,7 @@ export type ToolWorkflowVcs = Pick<
   | "inspect"
   | "neighbors"
   | "compare"
-  | "integrate"
+  | "merge"
   | "revert"
   | "commit"
   | "discard"
@@ -265,25 +178,17 @@ function compareText(result: VcsCompareResult): string {
   const counts = result.counts;
   const lines = [
     result.resolution.complete
-      ? "Integration resolution is complete; no source changes still require a decision."
-      : `Integration resolution is incomplete; ${result.resolution.remainingChangeCount} source change${result.resolution.remainingChangeCount === 1 ? "" : "s"} still require a decision.`,
-    `Compared ${result.sourceEventId} with the current working state: ` +
-      `${counts.actionable} actionable (${counts.conflicting} conflicting, ${counts.blocked} blocked), ` +
-      `${counts.accounted} resolved by decision, ${counts.shared} shared, ` +
-      `${counts.alreadySatisfied} already satisfied, ${counts.historical} historical.`,
+      ? `Merge is complete${result.resolution.concluded ? " and concluded" : " but not yet concluded by a merge decision"}.`
+      : `Merge is incomplete; ${result.resolution.remainingCoordinateCount} coordinate${result.resolution.remainingCoordinateCount === 1 ? "" : "s"} remain.`,
+    `Compared ${result.source.kind === "event" ? result.source.eventId : result.source.deltaId}: ` +
+      `${counts.adopt} adopt, ${counts.convergent} convergent, ${counts.composed} composed, ` +
+      `${counts.conflict} conflict, ${counts.resolved} resolved.`,
   ];
-  for (const change of result.changes) {
-    const applicability =
-      change.disposition.status === "actionable" ? `/${change.disposition.applicability}` : "";
-    const accounting =
-      change.disposition.status === "accounted"
-        ? ` · decisions ${change.disposition.decisionIds.join(", ")}`
-        : "";
-    lines.push(
-      `${change.changeId} · ${change.kind} · ${change.disposition.status}${applicability}${accounting} · ${change.summary}`
-    );
+  for (const intent of result.intents) {
+    lines.push(`intent ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`);
   }
-  if (result.nextCursor) lines.push(`More changes: rerun compare with after=${result.nextCursor}`);
+  for (const coordinate of result.coordinates) lines.push(`${coordinate.coordinate.kind}:${coordinate.coordinate.id} · ${coordinate.status} · ${coordinate.summary}`);
+  if (result.nextCursor) lines.push(`More coordinates: rerun compare with after=${result.nextCursor}`);
   return lines.join("\n");
 }
 
@@ -316,7 +221,7 @@ export function createWorkspaceVcsTool(
     name: "vcs",
     label: "vcs",
     description:
-      "Inspect and change semantic workspace history: status, typed-root inspect/neighbors, compare, incrementally integrate, revert, commit, discard, blame, or push. Browse and edit ordinary paths with the dedicated filesystem tools.",
+      "Inspect and change semantic workspace history: compare intent and coordinate net effects, merge, review composed results, revert, commit, discard, blame, or push. Browse and edit ordinary paths with the dedicated filesystem tools.",
     parameters: workspaceVcsSchema,
     execute: async (
       _toolCallId,
@@ -378,34 +283,27 @@ export function createWorkspaceVcsTool(
         const target = await resolveToolWorkingState(vcs, context);
         const result = await vcs.compare({
           target,
-          sourceEventId: command.sourceEventId,
-          view: command.view ?? "changes",
-          ...(command.disposition ? { disposition: command.disposition } : {}),
+          source: { kind: "event", eventId: command.sourceEventId },
           ...(command.after ? { cursor: command.after } : {}),
           limit: command.limit ?? 100,
         });
         return resultOf(command.operation, compareText(result), result);
       }
 
-      if (command.operation === "integrate") {
+      if (command.operation === "merge") {
         const expectedWorkingHead = await resolveToolWorkingState(vcs, context);
-        const decision = await resolveAgentIntegrationDecision(
-          vcs,
-          expectedWorkingHead,
-          cwd,
-          command.decision
-        );
-        const result = await vcs.integrate({
+        const result = await vcs.merge({
           contextId,
           expectedWorkingHead,
           commandId: toolCommandId(context),
-          sourceEventId: command.sourceEventId,
-          decision,
-          ...(command.intentSummary ? { intentSummary: command.intentSummary } : {}),
+          source: { kind: "event", eventId: command.sourceEventId },
+          ...(command.coordinates ? { coordinates: command.coordinates } : {}),
+          ...(command.resolutions ? { resolutions: command.resolutions } : {}),
+          ...(command.intent ? { intentSummary: command.intent } : {}),
         });
         return resultOf(
           command.operation,
-          `${mutationText("Integrated one local step", result)} Decision ${result.decisionId}.`,
+          `${mutationText("Merged coordinate page", result)} Decision ${result.decisionId}; ${result.resolution.remainingCoordinateCount} coordinates remain.`,
           result
         );
       }
@@ -417,7 +315,7 @@ export function createWorkspaceVcsTool(
           expectedWorkingHead,
           commandId: toolCommandId(context),
           changeIds: command.changeIds,
-          ...(command.intentSummary ? { intentSummary: command.intentSummary } : {}),
+          ...(command.intent ? { intentSummary: command.intent } : {}),
         });
         return resultOf(
           command.operation,
@@ -435,9 +333,7 @@ export function createWorkspaceVcsTool(
           expectedWorkingHead,
           commandId: toolCommandId(context),
           message,
-          ...(command.integratesEventIds
-            ? { integratesEventIds: command.integratesEventIds }
-            : {}),
+          ...(command.intent ? { intentSummary: command.intent } : {}),
         });
         if (result.event.kind !== "event") throw new Error("vcs commit returned a non-event state");
         const status = await vcs.status({ contextId });
@@ -536,78 +432,6 @@ export function createWorkspaceVcsTool(
       );
     },
   };
-}
-
-type VcsIntegrationDecisionInput = Parameters<ToolVcs["integrate"]>[0]["decision"];
-
-type AgentIntegrationEvidence =
-  | { kind: "file-content"; path: string }
-  | { kind: "file-placement"; path: string }
-  | { kind: "file-absent"; fileId: string }
-  | { kind: "repository-present"; path: string }
-  | { kind: "repository-absent"; repositoryId: string };
-
-type AgentIntegrationDecisionInput =
-  | Extract<VcsIntegrationDecisionInput, { kind: "adopted" | "declined" }>
-  | {
-      kind: "reconciled";
-      sourceChangeIds: string[];
-      evidence: AgentIntegrationEvidence[];
-      rationale: string;
-    };
-
-async function resolveAgentIntegrationDecision(
-  vcs: Pick<ToolVcs, "resolveRepository" | "readFile">,
-  state: Parameters<typeof resolveToolFile>[1],
-  cwd: string,
-  decision: AgentIntegrationDecisionInput
-): Promise<VcsIntegrationDecisionInput> {
-  if (decision.kind !== "reconciled") return decision;
-  const evidence: Extract<VcsIntegrationDecisionInput, { kind: "reconciled" }>["evidence"] = [];
-  for (const item of decision.evidence) {
-    if (item.kind === "file-content" || item.kind === "file-placement") {
-      const path = toVcsPath(item.path, cwd);
-      const file = await resolveToolFile(vcs, state, path);
-      if (!file) {
-        throw Object.assign(
-          new Error(
-            `No managed target file at ${item.path}; reconciliation evidence must exist in the current target working state`
-          ),
-          {
-            code: "InvalidReference",
-            errorData: {
-              code: "InvalidReference",
-              referenceKind: "target-file-path",
-              reference: item.path,
-            },
-          }
-        );
-      }
-      evidence.push(
-        item.kind === "file-content"
-          ? { kind: item.kind, fileId: file.fileId, contentHash: file.contentHash }
-          : {
-              kind: item.kind,
-              fileId: file.fileId,
-              repositoryId: file.repositoryId,
-              path: file.path,
-            }
-      );
-      continue;
-    }
-    if (item.kind === "repository-present") {
-      const repoPath = toVcsPath(item.path, cwd);
-      const repository = await resolveToolRepository(vcs, state, repoPath);
-      evidence.push({
-        kind: item.kind,
-        repositoryId: repository.repositoryId,
-        repoPath: repository.repoPath,
-      });
-      continue;
-    }
-    evidence.push(item);
-  }
-  return { ...decision, evidence };
 }
 
 function stateLabel(

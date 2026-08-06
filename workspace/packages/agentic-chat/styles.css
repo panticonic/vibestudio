@@ -717,7 +717,7 @@
 
 .subagent-mode-badge,
 .subagent-status-badge,
-.subagent-integration-badge {
+.subagent-merge-badge {
   border-radius: 4px;
   text-transform: none;
 }

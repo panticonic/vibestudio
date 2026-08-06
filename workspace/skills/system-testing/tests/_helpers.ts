@@ -659,74 +659,32 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
     const sourceEventId = sourceEventIds.length === 1 ? sourceEventIds[0]! : null;
     const eventId = commit ? eventIdFromCommit(commit) : null;
     if (!commit || !sourceEventId || !eventId) continue;
-    const commitArgs = call.arguments ?? {};
-    if (
-      commitArgs["integratesEventIds"] !== undefined &&
-      JSON.stringify(commitArgs["integratesEventIds"]) !== JSON.stringify(sourceEventIds)
-    ) {
-      continue;
-    }
+    if ((call.arguments ?? {})["integratesEventIds"] !== undefined) continue;
     const sourceWasPublished = calls.slice(0, commitIndex).some((candidate) => {
       const push = focusedVcsResult(candidate, "push");
       return push?.["eventId"] === sourceEventId && push["mainEventId"] === sourceEventId;
     });
     if (!sourceWasPublished) continue;
-
-    const decisions = calls
+    const sourceMatches = (value: Record<string, unknown>): boolean => {
+      const source = recordField(value, "source");
+      return source?.["kind"] === "event" && source["eventId"] === sourceEventId;
+    };
+    const merges = calls
       .slice(0, commitIndex)
-      .map((candidate, relativeIndex) => {
-        const args = candidate.arguments ?? {};
-        const value = focusedVcsResult(candidate, "integrate");
-        const decision = recordField(args, "decision");
-        return {
-          index: relativeIndex,
-          args,
-          value,
-          decision,
-          sourceChangeIds:
-            decision && isStringArray(decision["sourceChangeIds"])
-              ? decision["sourceChangeIds"]
-              : [],
-          decisionKind: decision ? stringField(decision, "kind") : null,
-        };
-      })
-      .filter(
-        (
-          entry
-        ): entry is typeof entry & {
-          value: Record<string, unknown>;
-          decision: Record<string, unknown>;
-        } =>
-          entry.args["sourceEventId"] === sourceEventId &&
-          entry.value !== null &&
-          entry.decision !== null &&
-          entry.sourceChangeIds.length > 0 &&
-          Boolean(stringField(entry.value, "decisionId")) &&
-          Boolean(stringField(entry.value, "applicationId"))
+      .map((candidate, index) => ({ index, value: focusedVcsResult(candidate, "merge") }))
+      .filter((entry): entry is { index: number; value: Record<string, unknown> } =>
+        Boolean(
+          entry.value &&
+            stringField(entry.value, "decisionId") &&
+            stringField(entry.value, "applicationId")
+        )
       );
-    if (decisions.length === 0) continue;
-    const firstDecision = decisions[0]!;
+    if (merges.length === 0) continue;
+    const firstMerge = merges[0]!;
     const sourceCompare = calls
-      .slice(0, firstDecision.index)
+      .slice(0, firstMerge.index)
       .map((candidate, index) => ({ index, value: focusedVcsResult(candidate, "compare") }))
-      .find(({ value: compare }) => {
-        if (!compare || compare["sourceEventId"] !== sourceEventId) return false;
-        const comparedChanges = Array.isArray(compare["changes"]) ? compare["changes"] : [];
-        return decisions.every((entry) =>
-          entry.sourceChangeIds.every((changeId) =>
-            comparedChanges.some((candidate) => {
-              const disposition = isRecord(candidate)
-                ? recordField(candidate, "disposition")
-                : null;
-              return (
-                isRecord(candidate) &&
-                candidate["changeId"] === changeId &&
-                disposition?.["status"] === "actionable"
-              );
-            })
-          )
-        );
-      });
+      .find(({ value }) => value !== null && sourceMatches(value));
     if (!sourceCompare?.value) continue;
     const localTarget = recordField(sourceCompare.value, "target");
     const localEventId =
@@ -749,76 +707,27 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
     });
     if (localWasPublished) continue;
     const committedApplications = commit["committedApplicationIds"];
-    if (
-      !isStringArray(committedApplications) ||
-      decisions.some(
-        (entry) => !committedApplications.includes(entry.value["applicationId"] as string)
-      )
-    ) {
-      continue;
-    }
+    if (!isStringArray(committedApplications) || merges.some((entry) =>
+      !committedApplications.includes(entry.value["applicationId"] as string))) continue;
 
-    const lastDecision = decisions.at(-1)!;
+    const lastMerge = merges.at(-1)!;
     const resolvedCompare = calls
-      .slice(lastDecision.index + 1, commitIndex)
+      .slice(lastMerge.index + 1, commitIndex)
       .map((candidate) => focusedVcsResult(candidate, "compare"))
       .find((compare) => {
         if (
           !compare ||
-          compare["sourceEventId"] !== sourceEventId ||
-          !sameState(compare["target"], lastDecision.value["workingHead"])
+          !sourceMatches(compare) ||
+          !sameState(compare["target"], lastMerge.value["workingHead"])
         ) {
           return false;
         }
-        const counts = recordField(compare, "counts");
         const resolution = recordField(compare, "resolution");
-        if (
-          !counts ||
-          !resolution ||
-          resolution["complete"] !== true ||
-          resolution["remainingChangeCount"] !== 0 ||
-          counts["actionable"] !== 0 ||
-          counts["alreadySatisfied"] !== 0 ||
-          counts["conflicting"] !== 0 ||
-          counts["blocked"] !== 0
-        ) {
-          return false;
-        }
-        const comparedChanges = Array.isArray(compare["changes"]) ? compare["changes"] : [];
-        if (comparedChanges.length === 0) {
-          const adoptedCount = decisions
-            .filter((entry) => entry.decisionKind === "adopted")
-            .reduce((total, entry) => total + entry.sourceChangeIds.length, 0);
-          const accountedCount = decisions
-            .filter(
-              (entry) => entry.decisionKind === "reconciled" || entry.decisionKind === "declined"
-            )
-            .reduce((total, entry) => total + entry.sourceChangeIds.length, 0);
-          return (
-            typeof counts["shared"] === "number" &&
-            counts["shared"] >= adoptedCount &&
-            typeof counts["accounted"] === "number" &&
-            counts["accounted"] >= accountedCount
-          );
-        }
-        return decisions.every((entry) => {
-          const decisionId = entry.value["decisionId"] as string;
-          return entry.sourceChangeIds.every((changeId) =>
-            comparedChanges.some((candidate) => {
-              if (!isRecord(candidate) || candidate["changeId"] !== changeId) return false;
-              const disposition = recordField(candidate, "disposition");
-              if (entry.decisionKind === "adopted") {
-                return disposition?.["status"] === "shared";
-              }
-              return (
-                (entry.decisionKind === "reconciled" || entry.decisionKind === "declined") &&
-                disposition?.["status"] === "accounted" &&
-                isStringArray(disposition["decisionIds"]) &&
-                disposition["decisionIds"].includes(decisionId)
-              );
-            })
-          );
-        });
+        return Boolean(
+          resolution?.["complete"] === true &&
+            resolution["concluded"] === true &&
+            resolution["remainingCoordinateCount"] === 0
+        );
       });
     if (!resolvedCompare) continue;
 

@@ -142,7 +142,7 @@ describe("canonical VCS CLI", () => {
       .map((command) => command.name);
     for (const expected of [
       "compare",
-      "integrate",
+      "merge",
       "move-file",
       "copy-file",
       "import-snapshot",
@@ -159,7 +159,7 @@ describe("canonical VCS CLI", () => {
       "recall",
       "import-repos",
       "add-repo",
-      "merge",
+      "integrate",
       "rebase",
     ]) {
       expect(names).not.toContain(removed);
@@ -213,50 +213,45 @@ describe("canonical VCS CLI", () => {
     expect(flags).not.toContain("exclude");
   });
 
-  it("compares an explicit integration source and commits it as the second parent", async () => {
+  it("compares an explicit event source and keeps commit parent derivation internal", async () => {
     fixture.handler = (method, args) => {
       if (method === "vcs.status") return semanticFixture(method, args);
       if (method === "vcs.compare") {
         const input = args[0] as Record<string, unknown>;
         return {
           target: input["target"],
-          sourceEventId: input["sourceEventId"],
-          resolution: { complete: true, remainingChangeCount: 0 },
-          counts: {
-            shared: 0,
-            alreadySatisfied: 0,
-            actionable: 0,
-            conflicting: 0,
-            blocked: 0,
-            accounted: 1,
-            historical: 0,
-          },
-          changes: [],
+          source: input["source"],
+          base: { kind: "event", eventId: "event:base" },
+          resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+          counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 1 },
+          intentCounts: { merged: 1, settled: 0, split: 0, contested: 0, pending: 0 },
+          coordinates: [],
+          intents: [],
+          intentsTruncated: false,
           nextCursor: null,
         };
       }
       if (method === "vcs.commit") {
-        const input = args[0] as Record<string, unknown>;
         return {
           contextId: "context:1",
           event: { kind: "event", eventId: "event:integration" },
           committedApplicationIds: [],
-          integrationSourceEventIds: input["integratesEventIds"] ?? [],
+          integrationSourceEventIds: [],
         };
       }
       throw new Error(`unexpected ${method}`);
     };
 
     const compareCommand = findCommand(vcsCommands, "vcs", "compare")!;
+    expect(() =>
+      parseInvocation(compareCommand, ["event:source", "--view", "changes", "--json"])
+    ).toThrow("Unknown flag for vcs compare: --view");
     await expect(
-      compareCommand.run(
-        parseInvocation(compareCommand, ["event:source", "--view", "changes", "--json"]),
-        []
-      )
+      compareCommand.run(parseInvocation(compareCommand, ["event:source", "--json"]), [])
     ).resolves.toBe(0);
     expect(fixture.calls.at(-1)).toMatchObject({
       method: "vcs.compare",
-      args: [expect.objectContaining({ sourceEventId: "event:source" })],
+      args: [expect.objectContaining({ source: { kind: "event", eventId: "event:source" } })],
     });
 
     const commitCommand = findCommand(vcsCommands, "vcs", "commit")!;
@@ -265,8 +260,6 @@ describe("canonical VCS CLI", () => {
         parseInvocation(commitCommand, [
           "-m",
           "Close integration",
-          "--integrates",
-          "event:source",
           "--command-id",
           "command:integration",
           "--json",
@@ -282,7 +275,6 @@ describe("canonical VCS CLI", () => {
           expectedWorkingHead: working,
           message: "Close integration",
           commandId: "command:integration",
-          integratesEventIds: ["event:source"],
         },
       ],
     });
@@ -295,18 +287,14 @@ describe("canonical VCS CLI", () => {
         const input = args[0] as Record<string, unknown>;
         return {
           target: input["target"],
-          sourceDeltaId: input["sourceDeltaId"],
-          resolution: { complete: false, remainingChangeCount: 1 },
-          counts: {
-            shared: 0,
-            alreadySatisfied: 0,
-            actionable: 1,
-            conflicting: 0,
-            blocked: 0,
-            accounted: 0,
-            historical: 0,
-          },
-          changes: [],
+          source: input["source"],
+          base: { kind: "event", eventId: "event:base" },
+          resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
+          counts: { adopt: 1, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+          intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 1 },
+          coordinates: [],
+          intents: [],
+          intentsTruncated: false,
           nextCursor: null,
         };
       }
@@ -318,7 +306,9 @@ describe("canonical VCS CLI", () => {
     ).resolves.toBe(0);
     expect(fixture.calls.at(-1)).toMatchObject({
       method: "vcs.compare",
-      args: [expect.objectContaining({ sourceDeltaId: "delta:template" })],
+      args: [
+        expect.objectContaining({ source: { kind: "external-delta", deltaId: "delta:template" } }),
+      ],
     });
   });
 

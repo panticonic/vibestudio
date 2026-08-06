@@ -37,7 +37,7 @@ protected ref.
 
 Handle refusals by typed code:
 
-- compare and integrate when main advanced or ancestry diverged;
+- compare and merge when main advanced or ancestry diverged;
 - stop for required authorization or approval;
 - preserve integrity and host-effect diagnostics;
 - for a build/typecheck refusal, consume every diagnostic, repair the cited

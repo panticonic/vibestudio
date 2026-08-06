@@ -916,8 +916,8 @@ From eval, keep these boundaries explicit:
 - author `vcs.edit` requests with `expectedWorkingHead` and a stable
   `commandId`;
 - use `vcs.move` and `vcs.copy` for managed identity changes;
-- compare an exact target state with one source event, then integrate changes
-  through small adopt/reconcile/decline decisions;
+- compare an exact target state with one source event, then merge bounded
+  stable-coordinate pages and review the intent/composed projections;
 - commit or discard the complete local application chain;
 - run ordinary typecheck, test, and build services explicitly for advisory
   confidence before protected publication; do not infer that `vcs.push` runs

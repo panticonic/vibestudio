@@ -225,12 +225,13 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
     ).toBe(true);
     const story = await vcs.compare({
       target: before.committed,
-      sourceEventId: committed.event.eventId,
-      view: "changes",
+      source: { kind: "event", eventId: committed.event.eventId },
       limit: 100,
     });
     expect(
-      story.changes.some((change) => edited.changeIds.includes(change.changeId)),
+      story.coordinates.some((coordinate) =>
+        coordinate.attribution.theirs.some((change) => edited.changeIds.includes(change.changeId))
+      ),
       "comparison walks authored change"
     ).toBe(true);
   })

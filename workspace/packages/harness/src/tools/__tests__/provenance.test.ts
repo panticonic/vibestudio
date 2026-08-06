@@ -238,6 +238,8 @@ function fixture() {
                 decisionCount: 0,
                 decisionIds: [],
                 intentSummary: "Rename the public entry point",
+                authorContextId: "context:1",
+                triggerEvidence: null,
                 externalSnapshot: null,
                 contentClass: "internal" as const,
                 externalKeys: [],
@@ -377,12 +379,15 @@ function fixture() {
             node: {
               kind: "decision" as const,
               value: {
-                kind: "declined" as const,
                 decisionId: input.node.decisionId,
                 sourceState: working,
                 targetBasis: working,
-                sourceChangeIds: ["change:source"],
-                rationale: "Not relevant to this context",
+                entries: [{
+                  coordinate: { kind: "file" as const, id: "file:source" },
+                  resolution: "ours" as const,
+                  accountedSourceChangeIds: ["change:source"],
+                  rationale: "Not relevant to this context",
+                }],
               },
             },
           };

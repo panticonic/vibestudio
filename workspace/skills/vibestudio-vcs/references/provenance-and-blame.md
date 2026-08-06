@@ -38,7 +38,7 @@ The visible attachment is headed **workspace memory · why … lines … exist**
 its role is apparent without learning graph vocabulary. It groups the terminal
 blame spans for that range into a small number of work episodes and hydrates
 only the recorded facts a future agent can use:
-work intent, commit message, counteractions, reachable integration decisions,
+work intent, commit message, counteractions, reachable merge decisions,
 external snapshot boundary, originating invocation/turn/trigger message, and
 recent file history. The prose shows one copyable
 `provenance({ target: ... })` continuation per episode; complete typed roots
@@ -61,7 +61,7 @@ Common edges explain:
 - which applications apply work and basis-specific applied changes;
 - which stable authored change each applied change realizes;
 - which work unit authored or incorporated a change;
-- which decision accounts for a source change;
+- which coordinate decision accounts for a source attribution chain;
 - which change counteracts another;
 - which exact state/file endpoint an explicit copy named when it was authored;
 - which exact content coordinates preserve, copy, or incorporate earlier
@@ -118,8 +118,8 @@ service validates the range against that state's `coordinateExtent` and repeats
 the derived kind once on the blame result.
 
 Preserved edits walk through `preserves-content`. Copies walk through one
-`copies-content` edge per generation. Integrated content walks through
-`incorporates-content`. Moves change placement without creating content
+`copies-content` edge per generation. Hunk-composed content walks through
+mapped `incorporates` edges to both parent applied changes. Moves change placement without creating content
 origin. These are the same applied-change graph: blame and applied-change
 neighbors do not switch to a copy-specific lineage model.
 
@@ -152,10 +152,18 @@ preview; page `authored-change` neighbors only when full membership is needed.
 
 ## Explain a decision
 
-Inspect the decision, walk `decides-change` to source changes, and walk back to
-the work unit, application, command, and trajectory as needed. Reconciled and
-declined decisions include rationale; adopted decisions lead to the applied
-target changes and incorporation edges.
+Inspect the decision and its coordinate entries, then walk their accounted
+source changes back to work units, applications, commands, and trajectories.
+`ours` records an explicit decline, `current` links a hand-authored current
+result without fabricating a content mapping, and `theirs` or `composed` leads
+to the applied result. Hunk-composed results additionally expose mapped
+`incorporates` edges to both parent chains. The decision's entries recover
+which coordinates were mechanically combined and which intents they carried.
+
+Intent always displays its evidence tier. `stated` comes only from explicit
+authoring intent or a recorded work-unit description; `trigger` is a named
+sender's bounded request excerpt; `mechanical` is a labeled effect summary.
+Never promote a mechanical summary into claimed purpose.
 
 Report what the graph proves. Import has one deliberate terminal condition:
 blame calls an ordinary terminal change an import boundary when its owning work

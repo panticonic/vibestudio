@@ -67,20 +67,26 @@ function WorkspaceTemplateReview({
   onCompleted: () => void | Promise<void>;
 }) {
   const compare = useCallback(
-    (item: NonNullable<TemplateOperation["review"]>["items"][number]) =>
-      vcs.compareDelta(review.contextId, item.deltaId),
+    (item: NonNullable<TemplateOperation["review"]>["items"][number], cursor?: string) =>
+      vcs.compareDelta(review.contextId, item.deltaId, cursor),
     [review.contextId]
   );
-  const integrate = useCallback<TemplateReviewPanelProps["integrate"]>(
-    ({ item, expectedWorkingHead, decision }) =>
-      vcs.integrateDelta(review.contextId, expectedWorkingHead, item.deltaId, decision),
+  const merge = useCallback<TemplateReviewPanelProps["merge"]>(
+    ({ item, expectedWorkingHead, coordinates, resolutions }) =>
+      vcs.mergeDelta(
+        review.contextId,
+        expectedWorkingHead,
+        item.deltaId,
+        coordinates,
+        resolutions
+      ),
     [review.contextId]
   );
   return (
     <TemplateReviewPanel
       review={review}
       compare={compare}
-      integrate={integrate}
+      merge={merge}
       onCompleted={onCompleted}
     />
   );

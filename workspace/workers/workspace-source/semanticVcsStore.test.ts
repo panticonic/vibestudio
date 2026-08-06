@@ -20,13 +20,15 @@ const timestamp = "2026-07-15T00:00:00.000Z";
 
 describe("SemanticVcsError", () => {
   it("exposes its typed detail through the RPC error-data contract", () => {
-    const error = new SemanticVcsError("DependencyBlocked", "blocked", {
-      blockingChangeIds: ["change:later"],
+    const error = new SemanticVcsError("CoupledGroupIncomplete", "incomplete", {
+      group: "merge-group:files",
+      coordinates: [{ kind: "file", id: "file:later" }],
     });
 
     expect(error.errorData).toEqual({
-      code: "DependencyBlocked",
-      blockingChangeIds: ["change:later"],
+      code: "CoupledGroupIncomplete",
+      group: "merge-group:files",
+      coordinates: [{ kind: "file", id: "file:later" }],
     });
   });
 });
@@ -50,10 +52,12 @@ function noEffectApplication(input: {
   const externalKeys = externalSnapshot
     ? [`repo:${externalSnapshot.sourceUri}@${externalSnapshot.snapshotRevision}`]
     : [];
+  const evidence = { authorContextId: input.contextId, triggerEvidence: null };
   const workUnitId = workUnitIdentity({
     commandId: input.commandId,
     kind,
     intentSummary: null,
+    ...evidence,
     externalSnapshot,
     contentClass,
     externalKeys,
@@ -74,6 +78,7 @@ function noEffectApplication(input: {
       kind,
       authoredChangeIds: [],
       intentSummary: null,
+      ...evidence,
       externalSnapshot,
       contentClass,
       externalKeys,
@@ -261,19 +266,19 @@ describe("SemanticVcsStore reduced spine", () => {
     ).toThrow();
     sql.exec(
       `INSERT INTO gad_integration_decisions
-       (decision_id, kind, target_state_kind, target_state_id, source_event_id,
-        work_unit_id, rationale, evidence_predicates_json, created_at)
-       VALUES ('decision:one', 'adopted', 'event', 'event:one', 'event:source',
-               'work-unit:integration', NULL, NULL, ?)`,
+       (decision_id, target_state_kind, target_state_id, source_event_id,
+        work_unit_id, created_at, source_delta_id)
+       VALUES ('decision:one', 'event', 'event:one', 'event:source',
+               'work-unit:integration', ?, NULL)`,
       timestamp
     );
     expect(() =>
       sql.exec(
         `INSERT INTO gad_integration_decisions
-         (decision_id, kind, target_state_kind, target_state_id, source_event_id,
-          work_unit_id, rationale, evidence_predicates_json, created_at)
-         VALUES ('decision:two', 'declined', 'event', 'event:one', 'event:source',
-                 'work-unit:integration', 'no', NULL, ?)`,
+         (decision_id, target_state_kind, target_state_id, source_event_id,
+          work_unit_id, created_at, source_delta_id)
+         VALUES ('decision:two', 'event', 'event:one', 'event:source',
+                 'work-unit:integration', ?, NULL)`,
         timestamp
       )
     ).toThrow();
@@ -320,6 +325,8 @@ describe("SemanticVcsStore reduced spine", () => {
         commandId: "command:import",
         kind: "import",
         intentSummary: null,
+        authorContextId: initial.contextId,
+        triggerEvidence: null,
         externalSnapshot: null,
         contentClass: "internal",
         externalKeys: [],

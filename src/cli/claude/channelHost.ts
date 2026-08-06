@@ -221,7 +221,7 @@ export const WORKSPACE_SKILL_ADDENDUM = `> **You are reading a WORKSPACE skill a
 > It is written for the workspace's in-process (Pi) agents; translate as you read:
 >
 > - Pi loop tools named in skills (\`spawn_subagent\`, \`read_subagent\`,
->   \`inspect_subagent\`, \`integrate_subagent\`, \`suspend_turn\`, \`ask_user\`, panel
+>   \`inspect_subagent\`, \`merge_subagent\`, \`suspend_turn\`, \`ask_user\`, panel
 >   \`handle.*\`) are NOT your tools. Your MCP tools are \`say\` and \`complete\`;
 >   the \`vibestudio\` CLI is available for read-only \`fs\`/\`vcs\` orientation and
 >   channel/panel diagnostics. Managed mutations and eval require an in-process

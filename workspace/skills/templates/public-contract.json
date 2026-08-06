@@ -102,7 +102,7 @@
     "pass inspect.pin unchanged to add; add never resolves a URL, alias, catalog entry, or moving ref",
     "repository conflicts require explicit keep|take|skip choices before a mutation is proposed",
     "the current lock wins for every already-resolved URL; catalog selections and unseen dependencies resolve from the reviewed registry revision, while direct URLs use inspect's independently discovered exact pin",
-    "pending review items are opened through normal VCS compare/integrate using their context and delta ids; approval record identifiers are host-internal",
+    "pending review items are opened through normal VCS compare/merge using their context and delta ids; approval record identifiers are host-internal",
     "catalog rendering is cache-only; network refresh occurs only through catalog({ refresh: true })",
     "a catalog selection is rejected unless registryCommit and registrySnapshot exactly match the cached verified registry",
     "excluded trust/provider values come from acquired exact template pins and are accepted or declined through a separate individually approved action",

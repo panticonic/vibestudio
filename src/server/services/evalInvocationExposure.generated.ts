@@ -5420,20 +5420,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsIntegrate",
-    rpcPlane: "workspace-do",
-    capability: "workspace.source.admin",
-    authorityPrincipals: ["host"],
-    owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
-    source: "workers/workspace-source",
-    method: "vcsIntegrate",
-    sensitivity: "admin",
-    resourceDerivation: {
-      kind: "direct-target",
-      owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
-    },
-  },
-  {
     id: "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsIsStateDescendant",
     rpcPlane: "workspace-do",
     capability: "workspace.source.read",
@@ -5483,6 +5469,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
     source: "workers/workspace-source",
     method: "vcsListFiles",
+    sensitivity: "admin",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+    },
+  },
+  {
+    id: "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsMerge",
+    rpcPlane: "workspace-do",
+    capability: "workspace.source.admin",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+    source: "workers/workspace-source",
+    method: "vcsMerge",
     sensitivity: "admin",
     resourceDerivation: {
       kind: "direct-target",
@@ -5637,6 +5637,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
     source: "workers/workspace-source",
     method: "vcsSemanticEffectAck",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+    },
+  },
+  {
+    id: "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsSemanticHostReadAck",
+    rpcPlane: "workspace-do",
+    capability: "workspace.source.write",
+    authorityPrincipals: ["host"],
+    owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+    source: "workers/workspace-source",
+    method: "vcsSemanticHostReadAck",
     sensitivity: "write",
     resourceDerivation: {
       kind: "direct-target",
@@ -10599,19 +10613,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:vcs.integrate",
-    rpcPlane: "host-service",
-    capability: "service:vcs.integrate",
-    authorityPrincipals: ["user", "code", "host"],
-    owner: "vcs",
-    method: "integrate",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:vcs.integrate",
-    },
-  },
-  {
     id: "host:vcs.listDirectory",
     rpcPlane: "host-service",
     capability: "service:vcs.listDirectory",
@@ -10635,6 +10636,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:vcs.listFiles",
+    },
+  },
+  {
+    id: "host:vcs.merge",
+    rpcPlane: "host-service",
+    capability: "service:vcs.merge",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "vcs",
+    method: "merge",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:vcs.merge",
     },
   },
   {
@@ -13378,15 +13392,15 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "vcs",
-    method: "integrate",
-  },
-  {
-    service: "vcs",
     method: "listDirectory",
   },
   {
     service: "vcs",
     method: "listFiles",
+  },
+  {
+    service: "vcs",
+    method: "merge",
   },
   {
     service: "vcs",
@@ -14464,9 +14478,9 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:vcs.history",
   "service:vcs.importSnapshot",
   "service:vcs.inspect",
-  "service:vcs.integrate",
   "service:vcs.listDirectory",
   "service:vcs.listFiles",
+  "service:vcs.merge",
   "service:vcs.move",
   "service:vcs.neighbors",
   "service:vcs.push",

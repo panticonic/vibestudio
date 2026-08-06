@@ -41,7 +41,7 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
   },
   "vcs.commit": {
     description:
-      "commit({ contextId, expectedWorkingHead, commandId, integratesEventIds?, message? }) → one atomic workspace event containing the complete local application chain. Integration parents are derived from local decisions; pass integratesEventIds only for zero-change sources or to confirm the exact derived set. There is no staging or selective commit; use another context for an independent boundary.",
+      "commit({ contextId, expectedWorkingHead, commandId, message? }) → one atomic workspace event containing the complete local application chain. Integration parents are derived exclusively from local merge decisions. There is no staging or selective commit; use another context for an independent boundary.",
   },
   "runtime.createEntity": {
     description:

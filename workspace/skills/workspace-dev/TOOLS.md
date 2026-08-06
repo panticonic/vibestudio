@@ -473,7 +473,7 @@ state. Commands, work units, changes, applications, decisions, events, files,
 and content mappings are directly walkable.
 
 Read the canonical [Vibestudio VCS skill](../vibestudio-vcs/SKILL.md) before
-using this surface. Its references define state nodes, integration decisions,
+using this surface. Its references define state nodes, merge decisions,
 whole-chain commit/discard, file identity, counteractions, provenance reads,
 and typed recovery.
 
@@ -483,7 +483,7 @@ Core routing:
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Orient in a context          | `vcs.status()` uses the runtime's bound semantic context and returns committed event, working head, main relation, and local counts                                                  |
 | Compare committed work       | `vcs.compare` from an exact target state to one source event                                                                                                                         |
-| Account for incoming changes | `vcs.integrate` with one explicit adopt, reconcile, or decline decision                                                                                                              |
+| Account for incoming changes | `vcs.merge` over stable coordinates; review intents/composed results and resolve conflicts with `theirs`, `ours`, or `current` |
 | Commit coherent context work | `vcs.commit` consumes the complete local application chain                                                                                                                           |
 | Publish committed work       | `vcs.push` gates the affected build/typecheck closure, then advances protected main to one exact committed event                                                                     |
 | Read or list managed files   | `vcs.readFile` and `vcs.listFiles` at an event/application state                                                                                                                     |
@@ -501,10 +501,10 @@ when completion is uncertain; after changing any field or receiving a freshness
 failure, observe again and use a new ID.
 
 Comparison returns source changes classified as shared, already satisfied,
-actionable, accounted, or historical. Integrate small groups and continue from
+adoptable, convergent, composed, conflicted, or resolved. Merge bounded stable-coordinate pages and continue from
 each returned working head. Commit accepts no selection: it consumes the whole
 local chain. Use another context when work needs an independent commit boundary.
-An integration commit names the exact source event only after its effective
+An integration commit names the exact source event only after its touched
 changes are accounted for. Push creates no ancestry event.
 
 Managed file operations are semantic operations. Prefer the explicit batch
@@ -525,7 +525,7 @@ semantic receiver fan-out, so a large workspace cannot turn prompt setup into
 an unbounded burst of control-plane calls.
 
 Branch on result/error discriminants such as `RevisionChanged`,
-`DependencyBlocked`, `ConflictPresent`, `IntegrationIncomplete`,
+`CoupledGroupIncomplete`, `ConflictPresent`, `IntegrationIncomplete`,
 `ScopeTooLarge`, and `IntegrityFailure`.
 Explanatory text is for humans, not control flow. Preserve the user's semantic
 goal across recovery, but rederive applicability, liveness, dependencies, and

@@ -357,7 +357,7 @@ export type InvocationCompletedPayload = {
   };
   /** Present when this invocation is a subagent run terminating on the parent
    *  trajectory; `integration` records its semantic disposition. */
-  subagent?: { integration?: "integrated" | "conflicted" | "discarded" };
+  subagent?: { integration?: "merged" | "needs-decision" | "discarded" };
 };
 
 export type InvocationTerminalFailureOutcome = Exclude<InvocationOutcome, "success">;
@@ -374,7 +374,7 @@ type InvocationFailurePayloadBase<Outcome extends InvocationTerminalFailureOutco
   failure?: AgentToolFailure;
   /** Present when this invocation is a subagent run terminating on the parent
    *  trajectory; `integration` records its semantic disposition. */
-  subagent?: { integration?: "integrated" | "conflicted" | "discarded" };
+  subagent?: { integration?: "merged" | "needs-decision" | "discarded" };
 };
 
 export type InvocationFailedPayload = InvocationFailurePayloadBase<

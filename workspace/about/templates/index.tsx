@@ -80,25 +80,26 @@ function AboutTemplateReview({
   onCompleted: () => void | Promise<void>;
 }) {
   const compare = useCallback<TemplateReviewPanelProps["compare"]>(
-    async (item) => {
+    async (item, cursor) => {
       const status = await vcs.status({ contextId: review.contextId });
       return vcs.compare({
         target: status.workingHead,
-        sourceDeltaId: item.deltaId,
-        view: "changes",
+        source: { kind: "external-delta", deltaId: item.deltaId },
         limit: 200,
+        ...(cursor ? { cursor } : {}),
       });
     },
     [review.contextId]
   );
-  const integrate = useCallback<TemplateReviewPanelProps["integrate"]>(
-    ({ item, expectedWorkingHead, decision }) =>
-      vcs.integrate({
+  const merge = useCallback<TemplateReviewPanelProps["merge"]>(
+    ({ item, expectedWorkingHead, coordinates, resolutions }) =>
+      vcs.merge({
         commandId: commandId(),
         contextId: review.contextId,
         expectedWorkingHead,
-        sourceDeltaId: item.deltaId,
-        decision,
+        source: { kind: "external-delta", deltaId: item.deltaId },
+        coordinates,
+        resolutions,
       }),
     [review.contextId]
   );
@@ -106,7 +107,7 @@ function AboutTemplateReview({
     <TemplateReviewPanel
       review={review}
       compare={compare}
-      integrate={integrate}
+      merge={merge}
       onCompleted={onCompleted}
     />
   );

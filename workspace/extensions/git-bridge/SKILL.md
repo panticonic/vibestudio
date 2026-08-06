@@ -23,7 +23,7 @@ external remote ---- fetch ----> immutable Git HEAD tree
                                       v
                        dedicated candidate context + event
                                       |
-                                      | vcs.compare + small vcs.integrate steps
+                                      | vcs.compare + bounded vcs.merge pages
                                       v
                        local applications -> commit -> explicit vcs.push
                                       |
@@ -177,7 +177,7 @@ from protected main and outgoing Git publication.
 
 - Import an absent repository with one explicit userland
   `git.importProject()` call. It creates an unpublished candidate; only
-  ordinary VCS compare/integrate/commit/push may advance protected main.
+  ordinary VCS compare/merge/commit/push may advance protected main.
 - Upstream declarations describe synchronization only. They never cause a host
   startup import or partial initialization lifecycle.
 - A declaration with no credential is anonymous-first. A logical credential is
@@ -305,7 +305,7 @@ await serverLog.query({ tag: "BuildV2" });
 4. Pull once to import exact upstream HEAD as a committed candidate. Retain the
    returned context and event IDs; the pull does not advance protected `main`.
 5. If protected `main` advances while integrating, re-observe it and continue
-   with ordinary local compare/integrate steps before committing and explicitly
+   with ordinary local compare/merge steps before committing and explicitly
    retrying `vcs.push`. Do not create a bridge-specific merge session.
 6. After publication, run `upstreamStatus` again. Outgoing export/push may
    resume only after the candidate is no longer reported.

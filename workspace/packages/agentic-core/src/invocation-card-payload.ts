@@ -30,7 +30,7 @@ export interface SubagentRunState {
   parentContextId?: string | null;
   childEntityId?: string;
   label?: string;
-  integration?: "integrated" | "conflicted" | "discarded";
+  integration?: "merged" | "needs-decision" | "discarded";
   /** Reasoning engine of the child run. Drives the card's kind badge; tolerant
    *  of absence for older spawn payloads. */
   agentKind?: string;

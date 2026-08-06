@@ -65,21 +65,18 @@ describe("workspace VCS commit operation", () => {
     expect(vcs.lastCommitInput).not.toHaveProperty("selection");
   });
 
-  it("can close a fully-accounted integration with an exact source parent", async () => {
+  it("derives integration parents without exposing a second commit channel", async () => {
     const vcs = new StubVcs();
     const tool = commitTool(vcs);
     await tool.execute("invocation:integration", {
       operation: "commit",
       message: "Close the incremental integration",
-      integratesEventIds: ["event:source"],
     });
-    expect(vcs.lastCommitInput).toMatchObject({
-      commandId: "command:commit",
-      integratesEventIds: ["event:source"],
-    });
+    expect(vcs.lastCommitInput).toMatchObject({ commandId: "command:commit" });
+    expect(vcs.lastCommitInput).not.toHaveProperty("integratesEventIds");
   });
 
-  it("requires at least one source when integration parents are supplied", () => {
+  it("does not expose integration parents in the commit input", () => {
     const tool = commitTool(new StubVcs());
     const variants = (tool.parameters as unknown as { anyOf: Record<string, unknown>[] }).anyOf;
     const commit = variants.find((variant) => {
@@ -92,10 +89,6 @@ describe("workspace VCS commit operation", () => {
       | Record<string, Record<string, unknown>>
       | undefined;
 
-    expect(properties?.["integratesEventIds"]).toMatchObject({
-      type: "array",
-      minItems: 1,
-      maxItems: 200,
-    });
+    expect(properties).not.toHaveProperty("integratesEventIds");
   });
 });

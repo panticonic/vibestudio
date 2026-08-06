@@ -83,7 +83,7 @@ describe("tool failure classification", () => {
     expect(isSafeSubagentDomainRejection("close_subagent", "IntegrationIncomplete")).toBe(true);
     expect(isSafeSubagentDomainRejection("close_subagent", "WorkingChangesPresent")).toBe(true);
     expect(isSafeSubagentDomainRejection("close_subagent", "Unauthorized")).toBe(false);
-    expect(isSafeSubagentDomainRejection("integrate_subagent", "IntegrationIncomplete")).toBe(
+    expect(isSafeSubagentDomainRejection("merge_subagent", "IntegrationIncomplete")).toBe(
       false
     );
   });

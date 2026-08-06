@@ -10,7 +10,7 @@ export interface VaultPublishingSession {
   readonly repoPath: string;
   refresh(): ReturnType<VaultSemanticVcs["refresh"]>;
   integrateMain(): ReturnType<VaultSemanticVcs["integrateMain"]>;
-  keepLocalForMain(changeIds: string[]): ReturnType<VaultSemanticVcs["keepLocalForMain"]>;
+  keepLocalForMain(coordinates: Array<{ kind: "file" | "repository"; id: string }>): ReturnType<VaultSemanticVcs["keepLocalForMain"]>;
   commit(message: string | null): ReturnType<VaultSemanticVcs["commit"]>;
   pendingChangeCount(): ReturnType<VaultSemanticVcs["pendingChangeCount"]>;
   push(): ReturnType<VaultSemanticVcs["push"]>;
@@ -108,10 +108,10 @@ export class PublishController {
     }
   }
 
-  async keepLocal(changeIds: string[]): Promise<"integrated" | "conflicts" | "error"> {
+  async keepLocal(coordinates: Array<{ kind: "file" | "repository"; id: string }>): Promise<"integrated" | "conflicts" | "error"> {
     if (!this.session) return "error";
     try {
-      const result = await this.session.keepLocalForMain(changeIds);
+      const result = await this.session.keepLocalForMain(coordinates);
       return await this.finishIntegration(result);
     } catch (error) {
       this.set({ lastError: errorMessage(error) });

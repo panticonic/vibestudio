@@ -8,8 +8,9 @@ import type { SqlStorage } from "@vibestudio/durable";
  * mutable context/head pointer, or a durable host-effect command. Derived
  * views never become stored authorities: there are no frontier wrappers,
  * source capabilities, certificates, ancestry closures, application
- * sequences, traversal continuations, packet proofs, outcomes/realizations,
- * or copied actor/authorship columns. Version 56 is the first supported
+ * sequences, traversal continuations, packet proofs, or outcomes/realizations.
+ * Work units do retain their bounded author context and causal trigger evidence.
+ * Version 56 is the first supported
  * production shape; older experimental epochs are rejected intact because no
  * lossless historical translation exists.
  */
@@ -38,6 +39,7 @@ export const SEMANTIC_VCS_REQUIRED_TABLES = [
   "gad_content_edges",
   "gad_content_edge_mappings",
   "gad_integration_decisions",
+  "gad_merge_decision_entries",
   "gad_workspace_event_external_sources",
   "gad_decision_source_changes",
   "vcs_command_journal",
@@ -229,10 +231,13 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
       work_unit_id TEXT PRIMARY KEY,
       command_id TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (
-        kind IN ('edit', 'file-transfer', 'lifecycle', 'integrate', 'revert', 'import',
+        kind IN ('edit', 'file-transfer', 'lifecycle', 'merge', 'revert', 'import',
                  'external-unapplied')
       ),
       intent_summary TEXT,
+      author_context_id TEXT NOT NULL,
+      trigger_excerpt TEXT,
+      trigger_sender_json TEXT,
       external_snapshot_json TEXT,
       content_class TEXT NOT NULL CHECK (content_class IN ('internal', 'external')),
       external_lineage_json TEXT NOT NULL CHECK (
@@ -242,6 +247,12 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
       ),
       normalization_protocol TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      CHECK (
+        (trigger_excerpt IS NULL AND trigger_sender_json IS NULL)
+        OR (intent_summary IS NULL AND trigger_excerpt IS NOT NULL
+          AND trigger_sender_json IS NOT NULL
+          AND json_valid(trigger_sender_json) = 1)
+      ),
       CHECK (
         (kind = 'import'
           AND external_snapshot_json IS NOT NULL
@@ -409,18 +420,15 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
         parent_content_hash, parent_start, parent_end, content_edge_id
       );
 
-    -- An integration mutation owns one decision. Its incorporated changes and
-    -- result/application lineage are derived through these normalized owners.
+    -- A merge mutation owns one decision. Coordinate entries are the durable
+    -- state-anchored accounting ledger; source changes remain normalized edges.
     CREATE TABLE IF NOT EXISTS gad_integration_decisions (
       decision_id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL CHECK (kind IN ('adopted', 'reconciled', 'declined')),
       target_state_kind TEXT NOT NULL CHECK (target_state_kind IN ('event', 'application')),
       target_state_id TEXT NOT NULL,
       source_event_id TEXT,
       source_delta_id TEXT,
       work_unit_id TEXT NOT NULL,
-      rationale TEXT,
-      evidence_predicates_json TEXT,
       created_at TEXT NOT NULL,
       UNIQUE (work_unit_id),
       CHECK ((source_event_id IS NULL) <> (source_delta_id IS NULL))
@@ -431,10 +439,25 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
       ON gad_integration_decisions(source_delta_id, decision_id);
     CREATE INDEX IF NOT EXISTS idx_gad_decisions_target
       ON gad_integration_decisions(target_state_kind, target_state_id, decision_id);
+    CREATE TABLE IF NOT EXISTS gad_merge_decision_entries (
+      decision_id TEXT NOT NULL,
+      coordinate_kind TEXT NOT NULL CHECK (coordinate_kind IN ('file', 'repository')),
+      coordinate_id TEXT NOT NULL,
+      resolution TEXT NOT NULL CHECK (
+        resolution IN ('adopt', 'convergent', 'composed', 'ours', 'current')
+      ),
+      result_change_id TEXT,
+      rationale TEXT,
+      PRIMARY KEY (decision_id, coordinate_kind, coordinate_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_gad_merge_entries_coordinate
+      ON gad_merge_decision_entries(coordinate_kind, coordinate_id, decision_id);
     CREATE TABLE IF NOT EXISTS gad_decision_source_changes (
       decision_id TEXT NOT NULL,
+      coordinate_kind TEXT NOT NULL CHECK (coordinate_kind IN ('file', 'repository')),
+      coordinate_id TEXT NOT NULL,
       change_id TEXT NOT NULL,
-      PRIMARY KEY (decision_id, change_id)
+      PRIMARY KEY (decision_id, coordinate_kind, coordinate_id, change_id)
     );
     CREATE INDEX IF NOT EXISTS idx_gad_decision_source_changes_change
       ON gad_decision_source_changes(change_id, decision_id);

@@ -233,29 +233,29 @@ describe("joined VCS scenario validators", () => {
         {
           operation: "compare",
           result: {
-            sourceEventId,
+            source: { kind: "event", eventId: sourceEventId },
             target: { kind: "event", eventId: "event:local" },
-            resolution: { complete: false, remainingChangeCount: 1 },
-            counts: { actionable: 1, alreadySatisfied: 0, conflicting: 0, blocked: 0 },
-            changes: [
+            resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
+            counts: { adopt: 1, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+            coordinates: [
               {
-                changeId: sourceChangeId,
-                disposition: { status: "actionable", applicability: "applicable" },
+                coordinate: { kind: "file", id: "file:source", paths: {} },
+                status: "adopt",
+                attribution: { ours: [], theirs: [{ changeId: sourceChangeId, workUnitId: "work:source" }] },
               },
             ],
           },
         }
       ),
       invocation(
-        "integrate",
+        "merge",
         "vcs",
         {
-          operation: "integrate",
+          operation: "merge",
           sourceEventId,
-          decision: { kind: "adopted", sourceChangeIds: [sourceChangeId] },
         },
         {
-          operation: "integrate",
+          operation: "merge",
           result: {
             applicationId,
             decisionId,
@@ -270,23 +270,18 @@ describe("joined VCS scenario validators", () => {
         {
           operation: "compare",
           result: {
-            sourceEventId,
+            source: { kind: "event", eventId: sourceEventId },
             target: { kind: "application", applicationId },
-            resolution: { complete: true, remainingChangeCount: 0 },
-            counts: { actionable: 0, alreadySatisfied: 0, conflicting: 0, blocked: 0 },
-            changes: [
-              {
-                changeId: sourceChangeId,
-                disposition: { status: "shared" },
-              },
-            ],
+            resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+            counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 1 },
+            coordinates: [],
           },
         }
       ),
       invocation(
         "commit",
         "vcs",
-        { operation: "commit", message: "Integrate", integratesEventIds: [sourceEventId] },
+        { operation: "commit", message: "Integrate" },
         commit(integratedEventId, [applicationId], sourceEventId)
       ),
       invocation("status", "vcs", { operation: "status" }, status(integratedEventId)),
@@ -304,43 +299,12 @@ describe("joined VCS scenario validators", () => {
       "The incoming and local compatible changes are both present in the clean published result.";
     expect(test.validate(execution(final, calls))).toEqual({ passed: true, reason: undefined });
 
-    const reconciledOverview = structuredClone(calls);
-    reconciledOverview[3]!.invocation.arguments = {
-      operation: "integrate",
-      sourceEventId,
-      decision: {
-        kind: "reconciled",
-        sourceChangeIds: [sourceChangeId],
-        evidence: [{ kind: "file-content", path: "projects/demo/a.ts" }],
-        rationale: "The target result preserves the source intent.",
-      },
-    };
-    const overviewDetails = (
-      reconciledOverview[4]!.invocation.execution.result as {
-        details: Record<string, unknown>;
-      }
-    ).details;
-    const overviewResult = overviewDetails["result"] as {
-      counts: Record<string, number>;
-      changes: unknown[];
-    };
-    overviewResult.counts["shared"] = 0;
-    overviewResult.counts["accounted"] = 1;
-    overviewResult.changes = [];
-    expect(test.validate(execution(final, reconciledOverview))).toEqual({
-      passed: true,
-      reason: undefined,
-    });
-
     const fabricated = structuredClone(calls);
     const details = (
       fabricated[4]!.invocation.execution.result as { details: Record<string, unknown> }
     ).details;
-    const result = details["result"] as { changes: Array<{ disposition: unknown }> };
-    result.changes[0]!.disposition = {
-      status: "accounted",
-      decisionIds: ["decision:unrelated"],
-    };
+    const result = details["result"] as { source: { eventId: string } };
+    result.source.eventId = "event:unrelated";
     expect(test.validate(execution(final, fabricated)).passed).toBe(false);
 
     const unrelatedLocalTarget = structuredClone(calls);

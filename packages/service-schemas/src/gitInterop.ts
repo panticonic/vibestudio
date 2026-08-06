@@ -233,7 +233,7 @@ export const gitImportedWorkspaceRepoSchema = z
     path: z.string(),
     remote: gitRemoteSchema,
     candidate: gitImportResultSchema.describe(
-      "Semantic candidate to compare and integrate before explicitly publishing protected main."
+      "Semantic candidate to compare and merge before explicitly publishing protected main."
     ),
   })
   .strict();
@@ -817,7 +817,7 @@ export const gitInteropMethods = defineServiceMethods({
       },
     },
     description:
-      "Fetch a declared upstream and import its exact snapshot as a semantic candidate. With dryRun true, export and fetch only inside an isolated temporary checkout and mutate no managed Git, bridge, semantic, or remote state. A missing configured remote branch is reported explicitly as remoteBranchExists false with zero counts. Reconcile and publish an imported candidate only through vcs.compare, incremental vcs.integrate, vcs.commit, and vcs.push.",
+      "Fetch a declared upstream and import its exact snapshot as a semantic candidate. With dryRun true, export and fetch only inside an isolated temporary checkout and mutate no managed Git, bridge, semantic, or remote state. A missing configured remote branch is reported explicitly as remoteBranchExists false with zero counts. Review and publish an imported candidate only through vcs.compare, vcs.merge, vcs.commit, and vcs.push.",
     args: z.union([
       z.tuple([z.string().describe("Workspace-relative repo/unit path to pull.")]),
       z.tuple([

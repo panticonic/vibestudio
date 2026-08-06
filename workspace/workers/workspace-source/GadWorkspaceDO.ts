@@ -1448,8 +1448,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  vcsIntegrate(request: SemanticDispatchRequest): Promise<unknown> {
-    return this.vcsSemantic("integrate", request);
+  vcsMerge(request: SemanticDispatchRequest): Promise<unknown> {
+    return this.vcsSemantic("merge", request);
   }
 
   @schemaRpc()
@@ -1551,6 +1551,17 @@ export class GadWorkspaceDO extends DurableObjectBase {
   vcsSemanticEffectAck(input: { acknowledgement: SemanticEffectAcknowledgement }): unknown {
     this.ensureReady();
     return this.semanticWorkspace().acknowledgeEffect(input.acknowledgement);
+  }
+
+  @schemaRpc()
+  vcsSemanticHostReadAck(input: {
+    acknowledgement: {
+      request: GadJsonRecord;
+      files: Array<{ contentHash: string; text: string }>;
+    };
+  }): unknown {
+    this.ensureReady();
+    return this.semanticWorkspace().acknowledgeHostRead(input.acknowledgement);
   }
 
   @schemaRpc()

@@ -1,395 +1,57 @@
 # Subagents
 
-Use this guide when delegating work to a child agent, inspecting a child
-agent's work, integrating committed changes, choosing between the
-in-process Pi engine and an external engine (Claude Code), or reasoning about
-conversation forks versus subagent task channels.
+Subagents are supervised child agents with their own task channel and semantic workspace context. They are not repository branches and they do not publish directly into the parent.
 
-The parent-side tool surface is defined in `src/agent-worker-base.ts`. The run
-mechanics and child context orchestration live primarily in `src/agent-vessel.ts`
-and `src/subagent-runs.ts`.
+## Parent workflow
 
-## Vocabulary
+1. `spawn_subagent` with one bounded task and a useful label. Use `fresh` for independent work and `fork` when the child needs the current trajectory context.
+2. Keep doing useful foreground work. Child progress is pushed to the parent; do not poll an empty transcript.
+3. Use `send_to_subagent` for new instructions and `inspect_subagent` for exact status, diff, log, runtime diagnostics, or a child file.
+4. The child must commit its semantic work and call `complete` with a concise result. Uncommitted child work cannot merge.
+5. Call `merge_subagent({ runId })`. The helper compares the parent's exact working head with the child's committed event and invokes the ordinary coordinate merge engine.
+6. Review `intents` and every `composed` entry. A mechanically composed coordinate still needs semantic review.
+7. If the helper returns `needs-decision`, inspect the returned conflicts. Author any truthful combined state with ordinary parent edit tools, then call `merge_subagent` again with coordinate resolutions.
+8. Close only after the helper reports completion. `close_subagent` performs a fresh compare and requires `resolution.complete && resolution.concluded`; it never trusts the cached run label.
 
-- Conversation fork: an alternate chat branch. It is user-facing chat lineage,
-  not a source repo fork.
-- Context fork: an isolated semantic workspace state. Subagents use child
-  contexts so their changes remain isolated until the parent adopts them.
-- Subagent: a child agent spawned by `spawn_subagent`. It has its own task
-  channel transcript and child context. The parent supervises it through the
-  `*_subagent` tools.
+## Merge protocol
 
-## When To Spawn
+The helper returns `protocol: "vibestudio.subagent-merge.v1"`. Its bounded status union includes:
 
-Spawn a subagent when the work is meaningfully separable:
+- `working`: at least one merge page changed the parent working head and the source is complete and concluded;
+- `unchanged`: the source was already complete and concluded;
+- `needs-decision`: clean pages landed, but one or more coordinates remain unresolved;
+- `source-uncommitted`: the child's committed event does not include its current work;
+- `closed`: the retained lifecycle receipt is available but the child context is gone.
 
-- independent investigation or cross-checking
-- parallel workstreams
-- isolated work whose committed changes can be integrated later
-- long-running or exploratory work where a separate transcript is useful
+The result includes the source event, initial and current parent heads, every landed merge result in `merges`, aggregated intents, mechanically composed coordinates, conflicts, and global resolution. Multi-page work uses stable idempotent command IDs. If a later page fails, already landed pages remain visible in the structured result and the failure is retryable from a fresh comparison.
 
-Do not spawn for small linear tasks you can do directly in the current turn. A
-subagent adds coordination overhead: task design, progress reading, inspection,
-and closeout.
+The helper always performs the decision-establishing merge when a source is not concluded, even if it is convergent, net-zero, or conflict-only. Conflict-only work therefore returns a concluded decision plus unresolved coordinates instead of failing with an implicit conflict selection.
 
-## Parent Workflow
+## Resolve a conflict
 
-1. Create a precise task and short label.
-2. Call `spawn_subagent`.
-3. Track the returned `runId`.
-4. Steer with `send_to_subagent` only when the child needs correction or new
-   information.
-5. Use `read_subagent` to read the task-channel transcript when you need the
-   child's messages directly.
-6. Use `inspect_subagent` for child-context files and VCS state: `status`,
-   parent-relative `diff`, `log`, or a file path. For an extension-owned child,
-   `runtime` returns bounded provider process state and its log tail. Diff and
-   history log are paged; follow `nextCursor` only when more detail changes your
-   decision.
-7. Call `integrate_subagent` to adopt every currently applicable child change.
-   Conflicting or blocked changes remain explicit and require focused
-   adopt/reconcile/decline decisions through the canonical `vcs` service.
-   - `close_subagent({ discard: true })` records that you intentionally dropped
-     the child's work.
-8. Close the run once you no longer need the child context. Closing releases
-   the context and concurrency slot only after teardown succeeds, then retains
-   a durable supervision receipt under the same returned handle. If cleanup
-   fails, retry `close_subagent` with that handle; the terminal run continues
-   to own its slot until cleanup completes.
-
-A supervisor owns at most three child contexts by default. A terminal child
-keeps its slot until `close_subagent` completes teardown successfully, so
-inspect and integrate existing results instead of silently launching a
-replacement group.
-`send_to_subagent` is addressed to the exact child participant; use it for new
-facts or correction, not status polling.
-
-The runtime includes a bounded authoritative supervision ledger in every parent
-model call. It lists active, terminal, and closed runs with their returned
-handles, engine/config, and integration state. Do not reconstruct handles from
-old transcript text or spawn replacement work merely because a run is terminal
-or closed. `inspect_subagent` on a closed handle returns its lifecycle receipt;
-the released child filesystem and task transcript are no longer available.
-
-Example:
-
-```ts
-spawn_subagent({
-  mode: "fresh",
-  agentKind: "pi",
-  label: "API audit",
-  task: [
-    "Audit the workspace API docs for stale VCS integration examples.",
-    "Read relevant skills/docs first.",
-    "Use say only for meaningful milestones.",
-    "When finished, call complete with a concise report and list uncertainties.",
-  ].join("\n"),
-  config: {
-    model: "openai-codex:gpt-5.6-luna",
-    thinkingLevel: "minimal",
-  },
-});
+```js
+merge_subagent({
+  runId,
+  resolutions: [{
+    coordinate: { kind: "file", id: "file:..." },
+    resolution: "current",
+    rationale: "The parent-authored current value combines both reviewed intents"
+  }]
+})
 ```
 
-Pi uses `thinkingLevel`, never the external-launcher field `effort`. The tool
-schema exposes both because `config` is shared across engines; choose the field
-for the selected `agentKind`. Runtime selection belongs in `config`: writing a
-model name in `task` only gives the already-launched child an instruction and
-cannot change which model is executing. The spawn result and later inspection
-report `launchConfig`, so supervisors can verify the effective selection rather
-than inferring it from prose.
+- `theirs` accepts the child's coordinate.
+- `ours` explicitly declines it.
+- `current` accepts the parent head after you author the combined value with `edit` or `write` and a meaningful `intent` when the purpose is not obvious from the request.
 
-## Fresh Versus Fork
+Do not resolve at aspect granularity, fabricate evidence, or order source operations. Coordinates are the decision surface; aspects and attribution explain the conflict.
 
-- `mode: "fresh"` starts a child with an isolated trajectory and the assigned
-  task. Prefer this for independent research, audits, extraction work, or
-  isolated implementation.
-- `mode: "fork"` starts a child from your current trajectory. Prefer this when
-  the child needs the conversation context you already built, and repeating
-  that context in the task would be expensive or lossy. Forked subagents can
-  save a lot on tokens because the child starts from the parent's existing
-  trajectory and the context window cache is shared.
+## Run lifecycle
 
-When you choose `mode: "fork"`, the child is told that the parent owns the main
-line of work and that its job is to focus only on the task you gave it. Make
-the task narrow enough that the child does not try to take over the whole
-project.
+Durable merge projection values are `merged`, `needs-decision`, and `discarded`. A successful helper updates the projection, but closure still verifies live semantic state. `close_subagent({ discard: true })` deliberately drops unmerged child work and records `discarded`; cleanup retries preserve that decision.
 
-Every mode and engine requires one non-empty `task`. It is stored in the
-child's runtime identity and restated in the immediate prompt on every model
-call, so compaction, turn closure, retries, and ordinary progress cannot
-displace the assignment. The same task is the initial task-channel message for
-an inspectable transcript; these are two projections of one value, not
-independent instruction fields. `send_to_subagent` may refine the assignment
-later, but it replaces the durable task only when it explicitly says so.
+An unavailable or closed child runtime does not erase its committed semantic event. A closed run retains a bounded lifecycle receipt while releasing the task subscription and child context.
 
-The child runtime source is not configurable. A Pi child always inherits the
-parent vessel's executable identity; the disposable package or repository being
-edited is task context, not runnable agent code. Choose a different reasoning
-engine with `agentKind` instead of trying to substitute a source package.
+## Child behavior
 
-## External Engines (`agentKind`)
-
-`spawn_subagent` defaults to `agentKind: "pi"` — an in-process child of your own
-vessel class. Any other value names an extension-owned external launcher
-(`@workspace-extensions/<agentKind>`); `"claude-code"` runs a headless Claude
-Code session in the child context. Everything about supervision stays the same:
-the run gets a task channel and child context, bounded progress is pushed onto
-your run card without replacing your current goal, the run card badges the
-engine, and `send_to_subagent` /
-`inspect_subagent` / `integrate_subagent` /
-`close_subagent` all work identically. Depth and fan-out gates are shared.
-
-```ts
-spawn_subagent({
-  mode: "fresh",
-  agentKind: "claude-code",
-  label: "repo audit",
-  task: "Audit packages/foo for stale contracts. Make no edits; complete with exact findings.",
-  config: { model: "opus", effort: "high" },
-});
-```
-
-When to choose which engine:
-
-- **pi** (default): the child shares your loop machinery and model settings;
-  `mode: "fork"` gives it your full trajectory with a shared context-window
-  cache — the cheap option when the child needs context you already built.
-- **claude-code**: the child is a Claude Code session with its own harness,
-  skills, and a `vibestudio` CLI pre-scoped to the child context. Its operating
-  system view of managed workspace source is deliberately read-only. Choose it
-  for independent audits, diagnosis, log inspection, visual review, or a
-  second-model opinion. Its native file tools cannot author attributable
-  semantic workspace changes; attempted managed-source writes fail with
-  `EROFS`. Use a Pi child for edits and integration.
-
-  Claude may write ephemeral artifacts only under
-  `$VIBESTUDIO_LINKED_SCRATCH`. For frontend/UI diagnosis,
-  `vibestudio panel screenshot` writes a running own-context panel capture
-  there; Claude can read that image and pair it with
-  `vibestudio panel console --errors`.
-
-  Each launch also receives a disposable writable `CLAUDE_CONFIG_DIR` seeded
-  from the host login. Claude can refresh OAuth state and create session-hook
-  files without weakening the read-only workspace mount. On release, a changed
-  credential is promoted back only if the host credential still matches the
-  launch's starting snapshot; concurrent host changes win. All other
-  launch-specific config is removed with the materialized profile.
-
-This is a provenance boundary, not a temporary permission-mode limitation.
-Native external-process writes do not carry the exact in-process
-invocation-to-change causality required by semantic VCS. Do not loosen the
-filesystem sandbox to make them work. A future write-capable external engine
-must mutate through a causal MCP/CLI gateway that records the authenticated
-run, invocation, work unit, and resulting Change.
-
-External-engine specifics:
-
-- **`task` is always required** (both modes) and must be fully self-contained:
-  an external child never inherits your conversation trajectory — even with
-  `mode: "fork"` it starts from just your task text (plus the child context's
-  files). Prefer `mode: "fresh"` and write the task accordingly.
-- **`config` maps to the launcher CLI** (whitelisted; unknown keys and
-  flag-shaped values are dropped). For claude-code:
-
-  | key              | CLI flag            | values                                                                                                  |
-  | ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
-  | `model`          | `--model`           | alias (`"opus"`, `"sonnet"`, `"haiku"`) or full model name                                              |
-  | `effort`         | `--effort`          | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"`                                               |
-  | `permissionMode` | `--permission-mode` | `"auto"` (default) \| `"acceptEdits"` \| `"bypassPermissions"` \| `"manual"` \| `"dontAsk"` \| `"plan"` |
-  | `fallbackModel`  | `--fallback-model`  | model name                                                                                              |
-  | `maxBudgetUsd`   | `--max-budget-usd`  | positive number                                                                                         |
-
-- **Permissions default to `auto`**: your spawn is the authorization, and a
-  headless run blocked on interactive prompts would hang. Override
-  `permissionMode` only when you deliberately want the child's tool use relayed
-  as workspace approvals.
-- **The child gets the same task-channel etiquette** as a Pi child (`say`
-  sparingly; make one actionable final report), delivered through its session
-  instructions. A Pi child settles with the `complete` tool. A supervised
-  external print-mode child settles from the launcher's typed terminal result;
-  text that merely looks like `complete({...})` has no lifecycle meaning. The
-  commit-before-completion rule applies only to an engine with a causal mutation
-  path. Claude Code is currently read-only and must report findings without
-  claiming edits.
-- **Crashes cannot dangle the run**: a successful typed result settles with its
-  report; a missing/malformed result, signal, or non-zero exit settles as
-  `failed` with process evidence. Treat a failed child like any other — inspect
-  status/diff for partial work before discarding.
-- Cancellation (`close_subagent`) kills the external process and releases its
-  session credential. The run becomes closed only after both external release
-  and child-context destruction succeed. Cleanup failures are structured and
-  retryable with the same handle; as with Pi, the closed supervision receipt
-  remains after successful teardown.
-
-## Writing Good Tasks
-
-A good subagent task says:
-
-- goal and expected output
-- source files, docs, credentials, or constraints already known
-- required skills/docs to read
-- allowed and disallowed tools or side effects
-- how to report progress
-- what counts as done
-- what to do if blocked
-
-Avoid vague tasks like "look into this". Use bounded instructions like "inspect
-these three files, identify the failing contract, propose or implement a fix,
-run this test, and complete with findings plus residual risk."
-
-## Progress And Chattiness
-
-Subagents should keep the task channel quiet by default.
-
-- Use `say` for meaningful milestones: "I found the failing contract", "OCR is
-  required", "tests pass", or "blocked on missing credential".
-- Do not use `say` for every internal step.
-- Ordinary child messages and `say` updates are progress. They are not
-  terminal.
-- Ordinary messages and turn closure update the run card but do not prompt the
-  parent model. An intentional `say` resumes the parent with explicit
-  goal-preserving context.
-- Each `complete` updates that run's terminal card immediately. When a parent
-  owns multiple live siblings, only the final terminal sibling resumes the
-  parent, with a summary of the whole supervised group. This keeps one child
-  finishing early from truncating the larger delegated goal.
-- The parent should not assume the run is finished until the child calls
-  `complete`.
-
-## Child-Side Rules
-
-If you are the spawned subagent (these rules apply whatever your engine — Pi
-children get them as a runtime prompt, external children like Claude Code get
-them in their session instructions, with `say`/`complete` as MCP tools and the
-`vibestudio` CLI for workspace access):
-
-The runtime restates the exact supervisor-assigned task on every model call.
-Treat it as authoritative. Do not search files, runtime metadata, or older
-conversation history for a different assignment.
-
-Managed Claude subagents use `--strict-mcp-config`: only the linked Vibestudio
-bridge is loaded. User/project MCP servers are intentionally not inherited
-because they would add unreviewed tools, processes, and startup latency outside
-the launch contract.
-
-1. Do the assigned task in the child context.
-2. Own execution in that context. When the task asks for edits, inspect and
-   apply them with your own file tools; do not send the parent a plan or code
-   block to copy. Return advice only for an analysis task or a concrete blocker.
-3. Read required skills/docs yourself.
-4. Use `say` sparingly for parent-visible progress.
-5. If your engine has a causal workspace mutation path, run focused
-   verification and commit child-context
-   edits when the task asks for durable work — the parent integrates your
-   committed changes from this context. Do not push `main` yourself; the
-   parent owns integration and publication decisions. The current Claude Code
-   launcher is read-only: do not attempt or claim managed-source edits.
-6. Finish exactly once with:
-
-```ts
-complete({
-  outcome: "success",
-  report: "What changed, verification run, uncertainties, and any integration considerations.",
-});
-```
-
-Use `outcome: "failed"` when the task cannot be completed. Include the blocking
-condition, what you tried, and whether partial work exists.
-
-Do not treat normal final text, idle, or turn closure as completion. Only
-`complete` ends the subagent run.
-
-If you are a forked subagent, you inherited the parent's trajectory and the
-context window cache is shared. The durable assigned task is the authoritative
-current instruction; earlier parent and user messages are context, not
-additional work to execute. Assume the parent will do the main work. Stay
-focused on the particular task the parent assigned; do not broaden the scope,
-redo parent work, or spawn more subagents unless that child task explicitly
-requires it. The runtime makes this boundary explicit in the fork's first task
-prompt: inherited instructions are reference context, the child is not a
-continuation of the parent's plan, and the enclosed delegated task is its sole
-active assignment. Pi and external launcher engines receive the same first-task
-boundary.
-
-## Reading Versus Inspecting
-
-`read_subagent` and `inspect_subagent` answer different questions:
-
-- `read_subagent({ runId, afterSeq })` reads the task-channel transcript since
-  a cursor and returns `nextSeq`. Keep the cursor if you will poll again.
-- `inspect_subagent({ runId, query, limit?, cursor? })` reads the child
-  context's workspace state. Use `query: "status"`, `"diff"`, `"log"`, or a
-  file path. `"log"` pages history from the child's committed event; uncommitted
-  state remains explicit in `"status"`. For an external engine,
-  `query: "runtime"` reads its bounded provider-owned process state and log tail
-  without leaking a host path. Diff compares the child's committed event to the
-  parent's current working state and returns at most `limit` change records (20
-  by default).
-  When the child is dirty, `workingCounts` makes the uncommitted remainder
-  explicit instead of expanding the whole semantic graph into the transcript.
-  A Pi child has no separate provider runtime; asking for `"runtime"` returns a
-  structured `available: false`, `reason: "not-external"` result and directs
-  the caller to status, log, or `read_subagent`.
-
-Every subagent tool accepts the exact `runId` or any sufficiently long unique
-prefix. The ellipsis shown in compact display handles is optional, so a copied
-handle and a model-retained unique prefix resolve the same run.
-  Qualify a file with its repository path, such as
-  `projects/example/src/index.ts`, whenever the same relative path may exist in
-  multiple repositories. An ambiguous run abbreviation or file path returns a
-  typed `InvalidReference` refusal with candidate repository paths and performs
-  no read; select the exact returned identity and retry.
-
-Use `read_subagent` for what the child said, semantic inspection for what it
-changed, and `runtime` to decide whether an external child is still working.
-Never close a running external child merely because its task channel is quiet;
-suspend the parent and let the completion or exit event wake it.
-
-## Integrate Or Discard
-
-Before taking child work, inspect it:
-
-```ts
-inspect_subagent({ runId, query: "status" });
-inspect_subagent({ runId, query: "diff" });
-```
-
-For read-only external runs, inspect semantic `status` and provider `runtime`,
-then close only after completion; there is nothing to integrate. For editing
-runs, `integrate_subagent` compares the parent's exact working state with the child's
-committed event and adopts each currently applicable child Change as an
-ordinary local application. It does not commit the parent, publish `main`,
-create marker files, or create a hidden pending-merge state. Parent work and
-adopted child work remain one local incremental chain until the parent commits.
-Several children may be integrated before that commit; the resulting event
-records every child source as an additional semantic parent.
-
-```ts
-integrate_subagent({ runId });
-```
-
-If the result reports conflicts or dependency blocks, use `vcs.compare` with
-the `changes` view and record explicit
-`vcs.integrate` adopt/reconcile/decline decisions. Paths are inspection
-coordinates, never a substitute for Change identity. Keep the child open while
-doing this: its context relationship is what makes unresolved source events
-reachable. Call `integrate_subagent` again after the decisions; only a
-`working` or `unchanged` result marks the child fully integrated. Verify the
-result in the parent context, then close it. `close_subagent` refuses
-never-integrated or unresolved work unless `discard:true` explicitly drops it.
-These precondition refusals are typed, no-effect lifecycle results:
-`IntegrationIncomplete` for unresolved source changes,
-`WorkingChangesPresent` for an uncommitted child, and `InvalidReference` when
-the parent relationship cannot be recovered. Treat them as instructions to
-repair lifecycle state, not as evidence that teardown partially happened.
-
-## Failure And Cleanup
-
-- If a child reports failure, read its report and inspect status/diff before
-  deciding whether to salvage partial work.
-- If the work is not useful, `close_subagent({ runId, discard: true })`.
-- If you integrated useful work, close the run once the parent has
-  verified and no longer needs the child context.
-- Do not leave subagents running as background memory. They are task workers,
-  not permanent collaborators.
+The child owns only its delegated task. It should inspect exact status, author managed changes with ordinary tools and meaningful optional `intent`, run focused verification, commit the complete local chain, and call `complete` once with the result. It should not push protected main, mutate the parent context, or ask the parent to replay its edits manually.

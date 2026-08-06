@@ -103,6 +103,8 @@ function importWorkUnitInspection(revision: string, sourceUri: string, workUnitI
         decisionCount: 0,
         decisionIds: [],
         intentSummary: "Import snapshot",
+        authorContextId: "context:import",
+        triggerEvidence: null,
         externalSnapshot: {
           sourceKind: "git" as const,
           sourceUri,

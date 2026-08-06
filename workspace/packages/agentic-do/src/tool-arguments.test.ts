@@ -45,7 +45,7 @@ describe("prepareAgentToolArguments", () => {
     const parameters = Type.Union([
       Type.Object({ operation: Type.Literal("status") }),
       Type.Object({
-        operation: Type.Literal("integrate"),
+        operation: Type.Literal("merge"),
         decision: Type.Union([
           Type.Object({
             kind: Type.Literal("adopted"),
@@ -62,7 +62,7 @@ describe("prepareAgentToolArguments", () => {
     const selected = { ...tool(), parameters } as AgentTool;
     expect(() =>
       prepareAgentToolArguments(selected, {
-        operation: "integrate",
+        operation: "merge",
         decision: { kind: "reconciled", sourceChangeIds: ["change:1"] },
       })
     ).toThrow("/decision/evidence: Expected required property");

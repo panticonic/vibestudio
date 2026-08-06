@@ -851,30 +851,29 @@ describe("full-stack template Git UX", () => {
             "vcs.compare",
             JSON.stringify([
               {
-                sourceDeltaId: deltaId,
+                source: { kind: "external-delta", deltaId },
                 target: current.workingHead,
-                view: "changes",
                 limit: 200,
               },
             ]),
             "--json",
           ]);
-          const actionable = comparison.value.changes
-            .filter((change) => change.disposition.status === "actionable")
-            .map((change) => change.changeId);
-          reviewedChanges += actionable.length;
-          if (actionable.length === 0) continue;
+          const mergeable = comparison.value.coordinates
+            .filter((coordinate) => coordinate.status !== "conflict")
+            .map((coordinate) => coordinate.coordinate);
+          reviewedChanges += mergeable.length;
+          if (mergeable.length === 0 && comparison.value.resolution.concluded) continue;
           await cli<unknown>([
             "agent",
             "call",
-            "vcs.integrate",
+            "vcs.merge",
             JSON.stringify([
               {
                 commandId: `template-adopt:${randomUUID()}`,
                 contextId,
                 expectedWorkingHead: current.workingHead,
-                sourceDeltaId: deltaId,
-                decision: { kind: "adopted", sourceChangeIds: actionable },
+                source: { kind: "external-delta", deltaId },
+                coordinates: mergeable,
               },
             ]),
             "--json",

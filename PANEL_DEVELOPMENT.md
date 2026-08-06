@@ -375,7 +375,7 @@ identical response. Disk is a projection of the returned working head.
 Publication is also workspace-wide. Run the ordinary build service against the
 exact context state, commit the complete local chain, then use `vcs.push` to
 approval-gate and atomically advance protected `main`. If main advanced, compare
-its event, integrate source changes through local decisions, recommit, and retry.
+its event, merge source changes through local decisions, recommit, and retry.
 There is no repository-group push, staging path, or rebase shortcut.
 
 ```typescript
@@ -384,7 +384,7 @@ import { contextId, vcs } from "@workspace/runtime";
 const command = (operation: string) => `panel-dev:${operation}:${contextId}:${crypto.randomUUID()}`;
 const status = await vcs.status({ contextId });
 if (status.mainRelation === "behind" || status.mainRelation === "diverged") {
-  throw new Error("Compare and integrate current main before committing");
+  throw new Error("Compare and merge current main before committing");
 }
 const committed = await vcs.commit({
   commandId: command("commit"),
@@ -403,7 +403,7 @@ console.log(`published ${result.eventId} as main ${result.mainEventId}`);
 
 Read the canonical
 [Vibestudio VCS skill](workspace/skills/vibestudio-vcs/SKILL.md) for
-compare/integrate decisions, complete-chain commit, move/copy provenance,
+compare/merge decisions, complete-chain commit, move/copy provenance,
 typed recovery, and protected publication.
 
 ---

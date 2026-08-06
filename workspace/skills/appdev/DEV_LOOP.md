@@ -14,7 +14,7 @@ update. Builds are separate source projections.
    command ID. Use `vcs.move`/`vcs.copy` for identity changes.
 2. Run focused typechecks, tests, and the ordinary build service against the
    current context.
-3. When `main` advanced, compare its exact event and integrate useful changes
+3. When `main` advanced, compare its exact event and merge useful coordinates
    in small local steps. Test between steps.
 4. Commit the complete local application chain. Split unrelated work into a
    different context instead of staging a subset.
@@ -31,7 +31,7 @@ An explicit check returns structured diagnostics but has no ref authority. It
 is the fast repair loop; the push gate repeats it against the exact candidate.
 A stale or diverged publication must return to exact comparison, deliberate
 semantic integration, whole-chain commit, and protected publication: observe
-current `main`, compare exact state nodes, adopt/reconcile/decline incoming
+current `main`, compare exact state nodes, merge incoming coordinates and review composed intents
 changes in local steps, commit the complete chain, and retry publication.
 Follow the typed recovery table in the canonical VCS skill.
 
@@ -120,7 +120,7 @@ Common failure modes:
   recorded at the working head
 - unrelated work was placed in the same context even though it needed a
   separate commit boundary
-- current `main` contains changes that have not been compared and integrated
+- current `main` contains coordinates that have not been compared and concluded
 - changes were committed but never published, so `main` and the active build
   did not advance
 

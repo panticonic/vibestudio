@@ -162,7 +162,7 @@ export class StubVcs implements ToolEditingVcs {
       contextId: input.contextId,
       event: { kind: "event" as const, eventId: this.committedEventId },
       committedApplicationIds: applications,
-      integrationSourceEventIds: input.integratesEventIds ?? [],
+      integrationSourceEventIds: [],
     };
   }
 }

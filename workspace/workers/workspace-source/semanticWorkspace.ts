@@ -21,7 +21,7 @@ import {
   type VcsHistoryInput,
   type VcsImportSnapshotInput,
   type VcsInspectInput,
-  type VcsIntegrateInput,
+  type VcsMergeInput,
   type VcsRegisterExternalDeltaInput,
   type VcsExternalDeltaLifecycleInput,
   type VcsListDirectoryInput,
@@ -48,6 +48,8 @@ import {
   emptyFileManifest,
   fileManifestEntryAt,
   planWorkspaceFactChangeSet,
+  threeWayTextMerge,
+  resolveIntent,
   workspaceFileStateIdentity,
   workspaceRepositoryStateIdentity,
   type ContentMapping,
@@ -239,32 +241,66 @@ interface MutationDraft {
   }>;
   appliedSourceChanges?: ChangeRecord[];
   contentEdges?: ContentEdgeRecord[];
-  decisions?: Array<Omit<IntegrationDecisionRecord, "decisionId" | "workUnitId" | "createdAt">>;
+  contentDerivations?: Array<{
+    childChangeRef: DraftChangeRef;
+    parent:
+      | { kind: "applied"; appliedChangeId: string }
+      | { kind: "change"; changeRef: DraftChangeRef };
+    mappings: ContentMapping[];
+  }>;
+  decisions?: Array<
+    Omit<IntegrationDecisionRecord, "decisionId" | "workUnitId" | "createdAt" | "entries"> & {
+      entries: Array<
+        Omit<IntegrationDecisionRecord["entries"][number], "resultChangeId"> & {
+          resultChangeRef?: DraftChangeRef;
+        }
+      >;
+    }
+  >;
   blobs?: Array<{ contentHash: string; base64: string }>;
 }
 
-type ComparedDisposition =
-  | { status: "shared" }
-  | { status: "already-satisfied"; evidence: StatePredicateRecord[] }
-  | {
-      status: "actionable";
-      applicability: "applicable" | "conflicting" | "blocked";
-      prerequisiteChangeIds?: string[];
-    }
-  | { status: "accounted"; decisionIds: string[] }
-  | { status: "historical" };
-
-interface ComparedSourceChange {
-  change: ChangeRecord;
-  disposition: ComparedDisposition;
+type MergeCoordinate = { kind: "file" | "repository"; id: string };
+type MergeAspectName = "content" | "placement" | "mode" | "presence" | "path";
+interface MergeAttributionEntry {
+  changeId: string;
+  workUnitId: string;
+  undone?: true;
 }
-
-interface IntegrationComparison {
+interface NetMergeAspect {
+  aspect: MergeAspectName;
+  base: unknown;
+  ours: unknown;
+  theirs: unknown;
+  baseValues?: Array<{ eventId: string; value: unknown }>;
+  status: "adopt" | "convergent" | "composed" | "conflict" | "ours";
+  composedText?: string;
+  composedMappings?: {
+    ours: Array<{ childStart: number; childEnd: number; parentStart: number; parentEnd: number }>;
+    theirs: Array<{ childStart: number; childEnd: number; parentStart: number; parentEnd: number }>;
+  };
+}
+interface NetMergeCoordinate {
+  coordinate: MergeCoordinate;
+  paths: { base?: string; ours?: string; theirs?: string };
+  status: "adopt" | "convergent" | "composed" | "conflict" | "resolved";
+  aspects: NetMergeAspect[];
+  attribution: { ours: MergeAttributionEntry[]; theirs: MergeAttributionEntry[] };
+  group?: string;
+  structuralConflicts?: MergeCoordinate[];
+  resolutions: Array<"composed" | "theirs" | "ours" | "current">;
+  decisionId?: string;
+  summary: string;
+}
+interface NetMergeComparison {
   targetState: StateNodeRef;
+  source: { kind: "event"; eventId: string } | { kind: "external-delta"; deltaId: string };
   sourceEventId: string | null;
   sourceDeltaId: string | null;
-  changes: ComparedSourceChange[];
-  unaccountedChangeIds: string[];
+  base: StateNodeRef;
+  bases: StateNodeRef[];
+  coordinates: NetMergeCoordinate[];
+  concluded: boolean;
 }
 
 type ChangePrerequisite =
@@ -1142,8 +1178,8 @@ export class SemanticWorkspace {
         return this.move(parsed as VcsMoveInput, request);
       case "copy":
         return this.copy(parsed as VcsCopyInput, request);
-      case "integrate":
-        return this.integrate(parsed as VcsIntegrateInput, request);
+      case "merge":
+        return this.merge(parsed as VcsMergeInput, request);
       case "revert":
         return this.revert(parsed as VcsRevertInput, request);
       case "commit":
@@ -1174,7 +1210,7 @@ export class SemanticWorkspace {
       case "status":
         return { kind: "complete", result: this.status(parsed as VcsStatusInput, request) };
       case "compare":
-        return { kind: "complete", result: this.compare(parsed as VcsCompareInput, request) };
+        return this.compare(parsed as VcsCompareInput, request);
       case "inspect":
         return { kind: "complete", result: this.inspect(parsed as VcsInspectInput, request) };
       case "neighbors":
@@ -1363,6 +1399,63 @@ export class SemanticWorkspace {
     };
   }
 
+  acknowledgeHostRead(input: {
+    request: Row;
+    files: Array<{ contentHash: string; text: string }>;
+  }): SemanticDispatchResult {
+    if (input.request["kind"] !== "read-merge-content") {
+      throw new SemanticVcsError(
+        "InvalidReference",
+        "Unsupported semantic host-read acknowledgement"
+      );
+    }
+    const operation = input.request["operation"];
+    if (operation !== "compare" && operation !== "merge") {
+      throw new SemanticVcsError("InvalidReference", "Unknown merge-content operation");
+    }
+    const expected = new Set(
+      Array.isArray(input.request["contentHashes"])
+        ? input.request["contentHashes"].map(String)
+        : []
+    );
+    const observed = new Map<string, string>();
+    for (const file of input.files) {
+      if (!expected.has(file.contentHash) || observed.has(file.contentHash)) {
+        throw internalSemanticIntegrityFailure(
+          "EffectMismatch",
+          `Merge observation contains unexpected or duplicate content ${file.contentHash}`,
+          { contract: "merge-content-observation", contentHash: file.contentHash }
+        );
+      }
+      const bytes = new TextEncoder().encode(file.text);
+      if (sha256Hex(bytes) !== file.contentHash) {
+        throw internalSemanticIntegrityFailure(
+          "EffectMismatch",
+          `Merge observation does not match ${file.contentHash}`,
+          { contract: "merge-content-observation", contentHash: file.contentHash }
+        );
+      }
+      observed.set(file.contentHash, file.text);
+    }
+    if (observed.size !== expected.size) {
+      throw internalSemanticIntegrityFailure(
+        "EffectMismatch",
+        "Merge content observation is incomplete",
+        { contract: "merge-content-observation" }
+      );
+    }
+    const request = {
+      input: input.request["input"],
+      ingress: input.request["ingress"],
+    } as SemanticDispatchRequest;
+    if (operation === "compare") {
+      const parsed = parseVcsSemanticRequest("compare", request.input).input as VcsCompareInput;
+      return this.compare(parsed, request, observed);
+    }
+    const parsed = parseVcsSemanticRequest("merge", request.input).input as VcsMergeInput;
+    return this.merge(parsed, request, observed);
+  }
+
   ensureContext(
     input: { contextId: string; commandId: string },
     ingress: SemanticDispatchRequest["ingress"]
@@ -1517,7 +1610,7 @@ export class SemanticWorkspace {
       edit: true,
       move: true,
       copy: true,
-      integrate: true,
+      merge: true,
       revert: true,
       commit: true,
       discard: true,
@@ -1981,17 +2074,70 @@ export class SemanticWorkspace {
       const changes: MutationDraft["changes"] = [];
       const fileResults: MutationDraft["fileResults"] = [];
       const repositoryResults: MutationDraft["repositoryResults"] = [];
+      const movingFileIds = new Set<string>();
+      const movingRepositoryIds = new Set<string>();
+      const fileDestinations = new Set<string>();
+      const repositoryDestinations = new Set<string>();
+      const plannedRepositoryPaths = new Map<string, string>();
+      for (const move of input.moves) {
+        if (move.kind === "file") {
+          if (movingFileIds.has(move.fileId)) {
+            throw new SemanticVcsError(
+              "InvalidReference",
+              `File ${move.fileId} is moved more than once`
+            );
+          }
+          movingFileIds.add(move.fileId);
+          const destination = `${move.destinationRepositoryId}:${move.destinationPath}`;
+          if (fileDestinations.has(destination)) {
+            throw new SemanticVcsError(
+              "DestinationOccupied",
+              `Multiple files target ${move.destinationPath}`,
+              {
+                repositoryId: move.destinationRepositoryId,
+                path: move.destinationPath,
+              }
+            );
+          }
+          fileDestinations.add(destination);
+        } else {
+          if (movingRepositoryIds.has(move.repositoryId)) {
+            throw new SemanticVcsError(
+              "InvalidReference",
+              `Repository ${move.repositoryId} is moved more than once`
+            );
+          }
+          movingRepositoryIds.add(move.repositoryId);
+          if (repositoryDestinations.has(move.destinationPath)) {
+            throw new SemanticVcsError(
+              "DestinationOccupied",
+              `Multiple repositories target ${move.destinationPath}`,
+              { path: move.destinationPath }
+            );
+          }
+          repositoryDestinations.add(move.destinationPath);
+          plannedRepositoryPaths.set(move.repositoryId, move.destinationPath);
+        }
+      }
       input.moves.forEach((move, operation) => {
         if (move.kind === "file") {
           const point = this.placedFile(root, move.repositoryId, move.fileId);
           const destination = this.presentRepository(root, move.destinationRepositoryId);
           if (
-            this.deps.store.facts.fileAtPath(
-              root,
-              move.destinationRepositoryId,
-              move.destinationPath
-            )
+            point.state.repositoryId === move.destinationRepositoryId &&
+            point.state.path === move.destinationPath
           ) {
+            throw new SemanticVcsError(
+              "InvalidReference",
+              `File ${move.fileId} is already at ${move.destinationPath}`
+            );
+          }
+          const occupied = this.deps.store.facts.fileAtPath(
+            root,
+            move.destinationRepositoryId,
+            move.destinationPath
+          );
+          if (occupied?.state.presence === "placed" && !movingFileIds.has(occupied.state.fileId)) {
             throw new SemanticVcsError(
               "DestinationOccupied",
               `Destination ${move.destinationPath} is occupied`,
@@ -2012,7 +2158,14 @@ export class SemanticWorkspace {
             ordinal: 0,
             kind: "file-move",
             base: endpointForFile(point.state, point.repository),
-            result: endpointForFile({ ...result, fileStateId: "planned" }, destination),
+            result: endpointForFile(
+              { ...result, fileStateId: "planned" },
+              {
+                ...destination,
+                repoPath:
+                  plannedRepositoryPaths.get(move.destinationRepositoryId) ?? destination.repoPath,
+              }
+            ),
             payload: move as unknown as Row,
           });
           fileResults.push({
@@ -2025,7 +2178,13 @@ export class SemanticWorkspace {
         } else {
           const repository = this.presentRepository(root, move.repositoryId);
           const occupied = this.deps.store.facts.repositoryAtPath(root, move.destinationPath);
-          if (occupied) {
+          if (repository.repoPath === move.destinationPath) {
+            throw new SemanticVcsError(
+              "InvalidReference",
+              `Repository ${move.repositoryId} is already at ${move.destinationPath}`
+            );
+          }
+          if (occupied && !movingRepositoryIds.has(occupied.repositoryId)) {
             throw new SemanticVcsError(
               "DestinationOccupied",
               `Repository path ${move.destinationPath} is occupied`,
@@ -2195,203 +2354,501 @@ export class SemanticWorkspace {
     });
   }
 
-  private integrate(
-    input: VcsIntegrateInput,
-    request: SemanticDispatchRequest
+  private merge(
+    input: VcsMergeInput,
+    request: SemanticDispatchRequest,
+    observed?: ReadonlyMap<string, string>
   ): SemanticDispatchResult {
-    return this.runMutation("integrate", input, request, () => {
-      const sourceEventId = "sourceEventId" in input ? input.sourceEventId : null;
-      const sourceDeltaId = "sourceDeltaId" in input ? input.sourceDeltaId : null;
-      const delta = sourceDeltaId ? this.deps.store.externalDelta(sourceDeltaId) : null;
-      if (sourceDeltaId && (!delta || delta.status !== "active")) {
+    const apply = (): SemanticDispatchResult => {
+      const source =
+        input.source.kind === "event"
+          ? { kind: "event" as const, eventId: input.source.eventId }
+          : { kind: "external-delta" as const, deltaId: input.source.deltaId };
+      const delta =
+        source.kind === "external-delta" ? this.deps.store.externalDelta(source.deltaId) : null;
+      if (source.kind === "external-delta" && (!delta || delta.status !== "active")) {
         throw new SemanticVcsError(
           "InvalidReference",
-          `External delta ${sourceDeltaId} is not active`
+          `External delta ${source.deltaId} is not active`
         );
       }
       if (delta && delta.ownerContextId !== input.contextId) {
         throw new SemanticVcsError(
           "InvalidReference",
-          `External delta ${sourceDeltaId} belongs to context ${delta.ownerContextId}`
+          `External delta ${source.deltaId} belongs to another context`
         );
       }
-      const comparison = sourceEventId
-        ? this.integrationComparison(asState(input.expectedWorkingHead), sourceEventId)
-        : this.integrationComparisonForDelta(asState(input.expectedWorkingHead), delta!);
-      const comparable = new Map(
-        comparison.changes.map((entry) => [entry.change.changeId, entry] as const)
+      const comparison = this.mergeComparison(
+        asState(input.expectedWorkingHead),
+        source,
+        observed ?? new Map()
       );
-      const sourceChanges = input.decision.sourceChangeIds.map((changeId) => {
-        const entry = comparable.get(changeId);
-        if (!entry) {
-          throw new SemanticVcsError(
-            "InvalidReference",
-            `Change ${changeId} is not effective in the selected integration source`
-          );
-        }
-        if (
-          entry.disposition.status !== "actionable" &&
-          entry.disposition.status !== "already-satisfied"
-        ) {
-          throw new SemanticVcsError(
-            "NoEffect",
-            `Source change ${changeId} is already ${entry.disposition.status}`
-          );
-        }
-        if (input.decision.kind === "adopted" && entry.disposition.status === "already-satisfied") {
-          throw new SemanticVcsError(
-            "NoEffect",
-            `Source change ${changeId} already holds and must be reconciled, not re-applied`
-          );
-        }
-        return entry.change;
-      });
-      if (input.decision.kind === "adopted") {
-        const blockedBy = input.decision.sourceChangeIds.flatMap((changeId) => {
-          const disposition = comparable.get(changeId)!.disposition;
-          if (disposition.status !== "actionable" || disposition.applicability !== "blocked") {
-            return [];
-          }
-          return disposition.prerequisiteChangeIds ?? [];
-        });
-        if (blockedBy.length > 0) {
-          throw new SemanticVcsError(
-            "DependencyBlocked",
-            "Adopt prerequisite changes in an earlier local integration step",
-            { blockingChangeIds: [...new Set(blockedBy)].sort(compareUtf16CodeUnits) }
-          );
-        }
-        const conflicting = input.decision.sourceChangeIds.filter((changeId) => {
-          const disposition = comparable.get(changeId)!.disposition;
-          return disposition.status === "actionable" && disposition.applicability === "conflicting";
-        });
-        if (conflicting.length > 0) {
-          throw new SemanticVcsError("ConflictPresent", "Selected source changes conflict", {
-            sourceChangeIds: conflicting,
-          });
+      if (!observed) {
+        const contentHashes = this.mergeTextContentHashes(comparison);
+        if (contentHashes.length > 0) {
+          return {
+            kind: "host-read",
+            request: {
+              kind: "read-merge-content",
+              operation: "merge",
+              input: input as unknown as Row,
+              ingress: request.ingress as unknown as Row,
+              contentHashes,
+            },
+          };
         }
       }
+      const byKey = new Map(
+        comparison.coordinates.map((coordinate) => [
+          `${coordinate.coordinate.kind}:${coordinate.coordinate.id}`,
+          coordinate,
+        ])
+      );
+      const resolutions = new Map<string, NonNullable<VcsMergeInput["resolutions"]>[number]>();
+      for (const resolution of input.resolutions ?? []) {
+        const key = `${resolution.coordinate.kind}:${resolution.coordinate.id}`;
+        if (resolutions.has(key)) {
+          throw new SemanticVcsError(
+            "InvalidReference",
+            `Resolution coordinate ${key} is duplicated`
+          );
+        }
+        resolutions.set(key, resolution);
+      }
+      const selected: NetMergeCoordinate[] = [];
+      const selectedKeys = new Set<string>();
+      for (const coordinate of input.coordinates ?? []) {
+        const key = `${coordinate.kind}:${coordinate.id}`;
+        const row = byKey.get(key);
+        if (!row || row.status === "resolved") {
+          throw new SemanticVcsError("InvalidReference", `Coordinate ${key} is not pending`);
+        }
+        if (selectedKeys.has(key)) {
+          throw new SemanticVcsError("InvalidReference", `Coordinate ${key} is duplicated`);
+        }
+        selectedKeys.add(key);
+        selected.push(row);
+      }
+      for (const resolution of input.resolutions ?? []) {
+        const key = `${resolution.coordinate.kind}:${resolution.coordinate.id}`;
+        const row = byKey.get(key);
+        if (!row || row.status === "resolved") {
+          throw new SemanticVcsError(
+            "InvalidReference",
+            `Resolution coordinate ${key} is not pending`
+          );
+        }
+        if (!row.resolutions.includes(resolution.resolution)) {
+          throw new SemanticVcsError(
+            "InvalidReference",
+            `Resolution ${resolution.resolution} is not available for coordinate ${key}`
+          );
+        }
+        if (!selectedKeys.has(key)) {
+          selectedKeys.add(key);
+          selected.push(row);
+        }
+      }
+      if (!input.coordinates) {
+        for (let index = 0; index < selected.length; index += 1) {
+          const coordinate = selected[index]!;
+          if (!coordinate.group) continue;
+          const group = comparison.coordinates.filter(
+            (candidate) => candidate.group === coordinate.group && candidate.status !== "resolved"
+          );
+          const missingCount = group.filter(
+            (member) => !selectedKeys.has(`${member.coordinate.kind}:${member.coordinate.id}`)
+          ).length;
+          if (group.length > 500 || selected.length + missingCount > 500) {
+            throw new SemanticVcsError(
+              "ScopeTooLarge",
+              `Coupled merge group ${coordinate.group} exceeds one merge operation`,
+              { maximum: 500 }
+            );
+          }
+          for (const member of group) {
+            const memberKey = `${member.coordinate.kind}:${member.coordinate.id}`;
+            if (selectedKeys.has(memberKey)) continue;
+            selectedKeys.add(memberKey);
+            selected.push(member);
+          }
+        }
+      }
+      if (!input.coordinates) {
+        for (const coordinate of comparison.coordinates) {
+          const key = `${coordinate.coordinate.kind}:${coordinate.coordinate.id}`;
+          if (
+            selectedKeys.has(key) ||
+            coordinate.status === "conflict" ||
+            coordinate.status === "resolved"
+          )
+            continue;
+          const group = coordinate.group
+            ? comparison.coordinates.filter(
+                (candidate) =>
+                  candidate.group === coordinate.group && candidate.status !== "resolved"
+              )
+            : [coordinate];
+          if (group.length > 500) {
+            throw new SemanticVcsError(
+              "ScopeTooLarge",
+              `Coupled merge group ${coordinate.group} exceeds one page`,
+              {
+                maximum: 500,
+              }
+            );
+          }
+          if (group.some((candidate) => candidate.status === "conflict")) continue;
+          if (selected.length + group.length > 500) break;
+          for (const member of group) {
+            const memberKey = `${member.coordinate.kind}:${member.coordinate.id}`;
+            if (selectedKeys.has(memberKey)) continue;
+            selectedKeys.add(memberKey);
+            selected.push(member);
+          }
+        }
+      }
+      if (selected.length > 500) {
+        throw new SemanticVcsError(
+          "ScopeTooLarge",
+          "A merge may select at most 500 distinct coordinates",
+          {
+            maximum: 500,
+          }
+        );
+      }
+      for (const coordinate of selected) {
+        if (!coordinate.group) continue;
+        const group = comparison.coordinates.filter(
+          (candidate) => candidate.group === coordinate.group && candidate.status !== "resolved"
+        );
+        const missing = group.filter(
+          (member) => !selectedKeys.has(`${member.coordinate.kind}:${member.coordinate.id}`)
+        );
+        if (missing.length > 0) {
+          throw new SemanticVcsError(
+            "CoupledGroupIncomplete",
+            `Merge selection splits coupled group ${coordinate.group}`,
+            {
+              group: coordinate.group,
+              coordinates: group.map((member) => member.coordinate),
+            }
+          );
+        }
+      }
+      const explicitConflicts = selected.filter(
+        (coordinate) =>
+          coordinate.status === "conflict" &&
+          !resolutions.has(`${coordinate.coordinate.kind}:${coordinate.coordinate.id}`)
+      );
+      if (explicitConflicts.length) {
+        throw new SemanticVcsError("ConflictPresent", "Selected coordinates require a resolution", {
+          coordinates: explicitConflicts.map((coordinate) =>
+            this.publicMergeCoordinate(coordinate)
+          ),
+        });
+      }
+      if (selected.length === 0 && comparison.concluded) {
+        throw new SemanticVcsError(
+          "NoEffect",
+          "Merge source is already concluded at the expected working head"
+        );
+      }
+      const root = this.deps.store.stateRoot(asState(input.expectedWorkingHead));
+      const sourceRoot =
+        source.kind === "event"
+          ? this.deps.store.stateRoot({ kind: "event", eventId: source.eventId })
+          : this.deps.store.stateRoot(this.externalDeltaState(delta!));
       const draft: MutationDraft = {
-        kind: "integrate",
+        kind: "merge",
         intentSummary: input.intentSummary ?? null,
-        incorporatedChangeIds: sourceChanges.map((change) => change.changeId),
+        incorporatedChangeIds: [],
         changes: [],
         fileResults: [],
         repositoryResults: [],
-        appliedSourceChanges: input.decision.kind === "adopted" ? sourceChanges : [],
+        appliedSourceChanges: [],
+        blobs: [],
       };
-      if (input.decision.kind === "adopted") {
-        const root = this.deps.store.stateRoot(asState(input.expectedWorkingHead));
-        for (const change of sourceChanges) {
-          const result = change.result;
-          if (!result) {
+      const entries: NonNullable<MutationDraft["decisions"]>[number]["entries"] = [];
+      for (const coordinate of selected) {
+        const key = `${coordinate.coordinate.kind}:${coordinate.coordinate.id}`;
+        const requested = resolutions.get(key);
+        const resolution =
+          requested?.resolution ?? (coordinate.status === "convergent" ? "theirs" : "theirs");
+        const accounted = [
+          ...new Set(coordinate.attribution.theirs.map((entry) => entry.changeId)),
+        ];
+        draft.incorporatedChangeIds.push(...accounted);
+        if (
+          resolution === "ours" ||
+          resolution === "current" ||
+          coordinate.status === "convergent"
+        ) {
+          entries.push({
+            coordinate: coordinate.coordinate,
+            resolution:
+              resolution === "current" ? "current" : resolution === "ours" ? "ours" : "convergent",
+            accountedSourceChangeIds: accounted,
+            rationale: requested?.rationale ?? null,
+          });
+          continue;
+        }
+        const oursEndpoint = this.coordinateEndpoint(root, coordinate.coordinate);
+        let resultEndpoint = this.coordinateEndpoint(sourceRoot, coordinate.coordinate);
+        if (source.kind === "external-delta") {
+          const sourceChanges = this.sourceChangesForDelta(delta!);
+          resultEndpoint =
+            [...sourceChanges].reverse().find((change) => {
+              const value = this.mergeChangeCoordinate(change);
+              return (
+                value?.kind === coordinate.coordinate.kind && value.id === coordinate.coordinate.id
+              );
+            })?.result ?? resultEndpoint;
+        }
+        const theirsEndpoint = resultEndpoint;
+        const forceTheirs = requested?.resolution === "theirs";
+        const terminalId = coordinate.attribution.theirs.at(-1)?.changeId;
+        const terminal = terminalId ? this.changeRequired(terminalId) : null;
+        const authored = forceTheirs
+          ? !this.sameCoordinateEndpoint(
+              coordinate.coordinate,
+              terminal?.result ?? null,
+              theirsEndpoint
+            )
+          : coordinate.status === "composed";
+        const contentDerivations: NonNullable<MutationDraft["contentDerivations"]> = [];
+        let changeRef: DraftChangeRef;
+        if (!authored) {
+          if (!terminalId || !terminal) {
             throw new SemanticVcsError(
               "IntegrityFailure",
-              `Source change ${change.changeId} has no result endpoint`
+              `Coordinate ${key} has no terminal source change`
             );
           }
-          if (result["kind"] === "missing" && typeof result["fileId"] === "string") {
-            const current = this.deps.store.facts.file(root, result["fileId"]);
-            if (!current || current.state.presence !== "placed") {
+          draft.appliedSourceChanges!.push(terminal);
+          changeRef = { kind: "existing", changeId: terminalId };
+        } else {
+          let merged = forceTheirs ? { ...theirsEndpoint } : { ...oursEndpoint };
+          for (const aspect of forceTheirs ? [] : coordinate.aspects) {
+            if (aspect.status === "ours" || aspect.status === "convergent") continue;
+            if (aspect.aspect === "content" && aspect.composedText !== undefined) {
+              const bytes = new TextEncoder().encode(aspect.composedText);
+              merged["contentHash"] = sha256Hex(bytes);
+              merged["contentKind"] = "text";
+              merged["byteLength"] = bytes.length;
+              merged["coordinateExtent"] = aspect.composedText.length;
+              draft.blobs!.push({
+                contentHash: String(merged["contentHash"]),
+                base64: base64FromBytes(bytes),
+              });
+              if (aspect.composedMappings) {
+                const oursParent = this.latestAppliedChangeForFile(
+                  asState(input.expectedWorkingHead),
+                  coordinate.coordinate.id
+                );
+                const theirsParent = this.latestAppliedChangeForFile(
+                  source.kind === "event"
+                    ? { kind: "event", eventId: source.eventId }
+                    : this.externalDeltaState(delta!),
+                  coordinate.coordinate.id
+                );
+                if (!oursParent || !theirsParent) {
+                  throw new SemanticVcsError(
+                    "IntegrityFailure",
+                    `Composed file ${coordinate.coordinate.id} lacks a parent content application`
+                  );
+                }
+                const childContentHash = String(merged["contentHash"]);
+                const mapped = (
+                  mappings: NonNullable<NetMergeAspect["composedMappings"]>["ours"],
+                  parentContentHash: string
+                ) =>
+                  mappings.map((mapping) =>
+                    contentMapping({
+                      coordinateKind: "utf16",
+                      childContentHash,
+                      childStart: mapping.childStart,
+                      childEnd: mapping.childEnd,
+                      parentContentHash,
+                      parentStart: mapping.parentStart,
+                      parentEnd: mapping.parentEnd,
+                    })
+                  );
+                contentDerivations.push(
+                  {
+                    childChangeRef: { kind: "authored", ordinal: draft.changes.length },
+                    parent: { kind: "applied", appliedChangeId: oursParent.appliedChangeId },
+                    mappings: mapped(
+                      aspect.composedMappings.ours,
+                      String((aspect.ours as Row)["hash"])
+                    ),
+                  },
+                  {
+                    childChangeRef: { kind: "authored", ordinal: draft.changes.length },
+                    parent: { kind: "applied", appliedChangeId: theirsParent.appliedChangeId },
+                    mappings: mapped(
+                      aspect.composedMappings.theirs,
+                      String((aspect.theirs as Row)["hash"])
+                    ),
+                  }
+                );
+              }
+            } else if (aspect.status === "adopt" || aspect.status === "conflict") {
+              if (
+                aspect.aspect === "content" &&
+                aspect.theirs &&
+                typeof aspect.theirs === "object"
+              ) {
+                merged["contentHash"] = (aspect.theirs as Row)["hash"];
+                merged["contentKind"] = (aspect.theirs as Row)["kind"];
+                merged["byteLength"] = (aspect.theirs as Row)["byteLength"];
+                merged["coordinateExtent"] = (aspect.theirs as Row)["coordinateExtent"];
+              } else if (
+                aspect.aspect === "placement" &&
+                aspect.theirs &&
+                typeof aspect.theirs === "object"
+              ) {
+                merged["repositoryId"] = (aspect.theirs as Row)["repositoryId"];
+                merged["path"] = (aspect.theirs as Row)["path"];
+              } else if (aspect.aspect === "mode") merged["mode"] = aspect.theirs;
+              else if (aspect.aspect === "path") merged["repoPath"] = aspect.theirs;
+              else if (aspect.aspect === "presence") merged = { ...theirsEndpoint };
+            }
+          }
+          resultEndpoint = merged;
+          const ordinal = draft.changes.length;
+          draft.changes.push({
+            operation: ordinal,
+            ordinal: 0,
+            kind: "merge",
+            base: oursEndpoint,
+            result: resultEndpoint,
+            payload: {
+              mergesChangeIds: [
+                ...new Set(
+                  [...coordinate.attribution.ours, ...coordinate.attribution.theirs].map(
+                    (entry) => entry.changeId
+                  )
+                ),
+              ],
+            },
+          });
+          changeRef = { kind: "authored", ordinal };
+          const resultContent = this.contentEndpoint(resultEndpoint);
+          const sourceContent = this.contentEndpoint(theirsEndpoint);
+          if (
+            contentDerivations.length === 0 &&
+            resultContent &&
+            sourceContent &&
+            resultContent.contentHash === sourceContent.contentHash &&
+            resultContent.coordinateKind === sourceContent.coordinateKind &&
+            resultContent.coordinateExtent === sourceContent.coordinateExtent
+          ) {
+            const sourceParent = this.latestAppliedChangeForFile(
+              source.kind === "event"
+                ? { kind: "event", eventId: source.eventId }
+                : this.externalDeltaState(delta!),
+              coordinate.coordinate.id
+            );
+            if (!sourceParent) {
               throw new SemanticVcsError(
                 "IntegrityFailure",
-                `Applicable source change ${change.changeId} has no placed target file`
+                `Merged file ${coordinate.coordinate.id} lacks its source content application`
               );
             }
+            const parentContent = this.appliedContentEndpoint(sourceParent.appliedChangeId);
+            if (
+              !parentContent ||
+              parentContent.contentHash !== sourceContent.contentHash ||
+              parentContent.coordinateKind !== sourceContent.coordinateKind ||
+              parentContent.coordinateExtent !== sourceContent.coordinateExtent
+            ) {
+              throw new SemanticVcsError(
+                "IntegrityFailure",
+                `Merged file ${coordinate.coordinate.id} source content lineage is inconsistent`
+              );
+            }
+            contentDerivations.push({
+              childChangeRef: changeRef,
+              parent: { kind: "applied", appliedChangeId: sourceParent.appliedChangeId },
+              mappings: [
+                mappingForWholeFile({
+                  childContentHash: resultContent.contentHash,
+                  parentContentHash: parentContent.contentHash,
+                  coordinateKind: resultContent.coordinateKind,
+                  coordinateExtent: resultContent.coordinateExtent,
+                }),
+              ],
+            });
+          }
+          draft.contentDerivations ??= [];
+          draft.contentDerivations.push(...contentDerivations);
+        }
+        if (coordinate.coordinate.kind === "file") {
+          const current = this.deps.store.facts.file(root, coordinate.coordinate.id);
+          if (resultEndpoint["kind"] === "missing") {
+            if (!current || current.state.presence !== "placed")
+              throw new SemanticVcsError(
+                "RevisionChanged",
+                `File ${coordinate.coordinate.id} is no longer placed`
+              );
             draft.fileResults.push({
-              fileId: current.state.fileId,
+              fileId: coordinate.coordinate.id,
               expected: current.state,
               result: {
-                fileId: current.state.fileId,
+                fileId: coordinate.coordinate.id,
                 presence: "deleted",
                 priorFileStateId: current.state.fileStateId,
               },
               newFile: false,
-              changeRef: { kind: "existing", changeId: change.changeId },
+              changeRef,
             });
-            continue;
-          }
-          if (result["kind"] === "file" && typeof result["fileId"] === "string") {
-            const current = this.deps.store.facts.file(root, result["fileId"]);
+          } else {
             draft.fileResults.push({
-              fileId: String(result["fileId"]),
+              fileId: coordinate.coordinate.id,
               expected: current?.state ?? null,
               result: {
-                fileId: String(result["fileId"]),
+                fileId: coordinate.coordinate.id,
                 presence: "placed",
-                repositoryId: String(result["repositoryId"]),
-                path: String(result["path"]),
-                contentHash: String(result["contentHash"]),
-                mode: Number(result["mode"]),
-                ...contentDescriptorFromEndpoint(result),
+                repositoryId: String(resultEndpoint["repositoryId"]),
+                path: String(resultEndpoint["path"]),
+                contentHash: String(resultEndpoint["contentHash"]),
+                mode: Number(resultEndpoint["mode"]),
+                ...contentDescriptorFromEndpoint(resultEndpoint),
               },
-              newFile:
-                current == null &&
-                this.deps.sql
-                  .exec(`SELECT 1 FROM vcs_files WHERE file_id = ?`, String(result["fileId"]))
-                  .toArray().length === 0,
-              changeRef: { kind: "existing", changeId: change.changeId },
+              newFile: false,
+              changeRef,
             });
-            continue;
           }
-          if (result["kind"] === "repository" && typeof result["repositoryId"] === "string") {
-            const repositoryId = result["repositoryId"];
-            const current = this.deps.store.facts.member(root, repositoryId);
-            const deleted = result["presence"] === "deleted";
-            if (deleted && (!current || current.presence !== "present")) {
-              throw new SemanticVcsError(
-                "IntegrityFailure",
-                `Applicable source change ${change.changeId} has no present target repository`
-              );
-            }
-            if (!deleted && typeof result["repoPath"] !== "string") {
-              throw new SemanticVcsError(
-                "IntegrityFailure",
-                `Repository result for ${change.changeId} has no path`
-              );
-            }
-            draft.repositoryResults.push({
-              repositoryId,
-              expected: current,
-              resultPath: deleted ? null : String(result["repoPath"]),
-              newRepository: false,
-              changeRef: { kind: "existing", changeId: change.changeId },
-            });
-            continue;
-          }
-          throw new SemanticVcsError(
-            "IntegrityFailure",
-            `Source change ${change.changeId} has an unknown result endpoint`
-          );
+        } else {
+          const current = this.deps.store.facts.member(root, coordinate.coordinate.id);
+          draft.repositoryResults.push({
+            repositoryId: coordinate.coordinate.id,
+            expected: current,
+            resultPath:
+              resultEndpoint["presence"] === "deleted" || resultEndpoint["presence"] === "absent"
+                ? null
+                : String(resultEndpoint["repoPath"]),
+            newRepository: false,
+            changeRef,
+          });
         }
-      } else if (input.decision.kind === "reconciled") {
-        for (const predicate of input.decision.evidence) {
-          if (
-            !this.predicateHolds(
-              asState(input.expectedWorkingHead),
-              predicate as StatePredicateRecord
-            )
-          ) {
-            throw new SemanticVcsError("RevisionChanged", "Reconciliation evidence does not hold");
-          }
-        }
+        entries.push({
+          coordinate: coordinate.coordinate,
+          resolution: forceTheirs ? "adopt" : authored ? "composed" : "adopt",
+          accountedSourceChangeIds: accounted,
+          resultChangeRef: changeRef,
+          rationale: requested?.rationale ?? null,
+        });
       }
-      const placeholderDecision: Omit<
-        IntegrationDecisionRecord,
-        "decisionId" | "workUnitId" | "createdAt"
-      > = {
-        kind: input.decision.kind,
-        targetState: asState(input.expectedWorkingHead),
-        sourceEventId,
-        sourceDeltaId,
-        sourceChangeIds: sourceChanges.map((change) => change.changeId),
-        evidencePredicates:
-          input.decision.kind === "reconciled"
-            ? (input.decision.evidence as StatePredicateRecord[])
-            : [],
-        rationale: input.decision.kind === "adopted" ? null : input.decision.rationale,
-      };
-      draft.decisions = [placeholderDecision];
+      draft.decisions = [
+        {
+          targetState: asState(input.expectedWorkingHead),
+          sourceEventId: source.kind === "event" ? source.eventId : null,
+          sourceDeltaId: source.kind === "external-delta" ? source.deltaId : null,
+          entries,
+        },
+      ];
       const result = this.persistWorkingMutation(
         input,
         draft,
@@ -2399,16 +2856,36 @@ export class SemanticWorkspace {
         request.ingress.contextIntegrity
       );
       const decisionIdValue = result.decisionIds[0];
-      if (!decisionIdValue) {
-        throw new SemanticVcsError("IntegrityFailure", "Integration did not persist its decision");
-      }
-      const publicResult = { ...result, decisionId: decisionIdValue };
+      if (!decisionIdValue)
+        throw new SemanticVcsError("IntegrityFailure", "Merge did not persist its decision");
+      const after = this.mergeComparison(result.workingHead, source);
+      const intent = this.intentProjection(after);
+      const publicResult = {
+        ...result,
+        decisionId: decisionIdValue,
+        outcomes: selected.map((coordinate) => this.publicMergeCoordinate(coordinate)),
+        resolution: this.comparisonResolution(after),
+        intents: intent.intents,
+        composed: selected
+          .filter((coordinate) => coordinate.status === "composed")
+          .map((coordinate) => ({
+            coordinate: coordinate.coordinate,
+            ours: this.intentForWorkUnit(
+              coordinate.attribution.ours.filter((entry) => !entry.undone).at(-1)?.workUnitId ??
+                result.workUnitId
+            ),
+            theirs: this.intentForWorkUnit(
+              coordinate.attribution.theirs.filter((entry) => !entry.undone).at(-1)?.workUnitId ??
+                result.workUnitId
+            ),
+          })),
+      };
       const effect = this.queueMaterialization(
         input.contextId,
         input.commandId,
         asState(input.expectedWorkingHead),
         result.workingHead,
-        [],
+        draft.blobs ?? [],
         draft
       );
       this.deps.store.finishCommand({
@@ -2419,7 +2896,33 @@ export class SemanticWorkspace {
         effectPending: true,
       });
       return { kind: "effects-pending", result: publicResult, effects: [effect] };
-    });
+    };
+    if (observed) {
+      return this.deps.transaction(() => {
+        const command = this.deps.store.command(input.commandId);
+        if (command?.status === "pending") {
+          const requestDigest = compactId("merge-request", input);
+          const cause = causalCommandRef(request.ingress);
+          if (
+            command.scopeKind !== "context" ||
+            command.scopeId !== input.contextId ||
+            command.method !== "merge" ||
+            command.requestDigest !== requestDigest ||
+            canonicalJson(command.cause) !== canonicalJson(cause)
+          ) {
+            throw new SemanticVcsError(
+              "CommandIdReuse",
+              `Command ${input.commandId} was reused for different merge content`,
+              { commandId: input.commandId }
+            );
+          }
+          return apply();
+        }
+        const replay = this.mutationReplay("merge", input, request);
+        return replay ?? apply();
+      });
+    }
+    return this.runMutation("merge", input, request, apply);
   }
 
   private revert(input: VcsRevertInput, request: SemanticDispatchRequest): SemanticDispatchResult {
@@ -2478,9 +2981,9 @@ export class SemanticWorkspace {
           );
           if (blockers.length > 0) {
             throw new SemanticVcsError(
-              "DependencyBlocked",
-              `Change ${changeId} has later effective changes that must be counteracted first`,
-              { blockingChangeIds: blockers }
+              "InvalidReference",
+              `Change ${changeId} is not a live counteraction frontier`,
+              { referenceKind: "change", reference: changeId }
             );
           }
         }
@@ -2548,9 +3051,9 @@ export class SemanticWorkspace {
               });
             if (blockers.length > 0) {
               throw new SemanticVcsError(
-                "DependencyBlocked",
-                `Repository restoration requires its contained file restorations`,
-                { blockingChangeIds: [...new Set(blockers)].sort(compareUtf16CodeUnits) }
+                "InvalidReference",
+                `Repository change ${changeId} is not a live counteraction frontier`,
+                { referenceKind: "change", reference: changeId }
               );
             }
             if (selectedRestores.size < priorFiles.values.length) {
@@ -2706,10 +3209,11 @@ export class SemanticWorkspace {
               return change ? [change.changeId] : [];
             });
           if (blockers.length > 0) {
+            const causeId = [...planned.causes].sort(compareUtf16CodeUnits)[0]!;
             throw new SemanticVcsError(
-              "DependencyBlocked",
-              `Repository creation has live contained-file changes that must be counteracted first`,
-              { blockingChangeIds: [...new Set(blockers)].sort(compareUtf16CodeUnits) }
+              "InvalidReference",
+              `Repository change ${causeId} is not a live counteraction frontier`,
+              { referenceKind: "change", reference: causeId }
             );
           }
           if (selectedRemovals.size !== page.values.length) {
@@ -2784,34 +3288,24 @@ export class SemanticWorkspace {
       const before = this.deps.store.workingChain(input.contextId, MAX_WORKING_APPLICATIONS);
       const derivedSources = this.integrationSourceEventIds(before.applicationIds);
       const derivedDeltaSources = this.integrationSourceDeltaIds(before.applicationIds);
-      const explicitSources = [...new Set(input.integratesEventIds ?? [])].sort(
-        compareUtf16CodeUnits
-      );
-      if (
-        explicitSources.length > 0 &&
-        derivedSources.length > 0 &&
-        canonicalJson(explicitSources) !== canonicalJson(derivedSources)
-      ) {
-        throw new SemanticVcsError(
-          "InvalidReference",
-          "Explicit commit sources disagree with the sources recorded by integration decisions",
-          { explicitSourceEventIds: explicitSources, derivedSourceEventIds: derivedSources }
-        );
-      }
-      const integrationSourceEventIds =
-        derivedSources.length > 0 ? derivedSources : explicitSources;
+      const integrationSourceEventIds = derivedSources;
       for (const sourceEventId of integrationSourceEventIds) {
-        const comparison = this.integrationComparison(
-          asState(input.expectedWorkingHead),
-          sourceEventId
-        );
-        if (comparison.unaccountedChangeIds.length) {
+        const comparison = this.mergeComparison(asState(input.expectedWorkingHead), {
+          kind: "event",
+          eventId: sourceEventId,
+        });
+        const remaining = comparison.coordinates
+          .filter(
+            (coordinate) => coordinate.status !== "resolved" && coordinate.status !== "convergent"
+          )
+          .map((coordinate) => coordinate.coordinate);
+        if (remaining.length) {
           throw new SemanticVcsError(
             "IntegrationIncomplete",
             `Integration of ${sourceEventId} has unaccounted effective changes`,
             {
-              sourceEventId,
-              unaccountedChangeIds: comparison.unaccountedChangeIds,
+              source: { kind: "event", eventId: sourceEventId },
+              unaccountedCoordinates: remaining,
             }
           );
         }
@@ -2821,15 +3315,23 @@ export class SemanticWorkspace {
         if (!delta || delta.status !== "active") {
           throw new SemanticVcsError("InvalidReference", `External delta ${deltaId} is not active`);
         }
-        const comparison = this.integrationComparisonForDelta(
-          asState(input.expectedWorkingHead),
-          delta
-        );
-        if (comparison.unaccountedChangeIds.length) {
+        const comparison = this.mergeComparison(asState(input.expectedWorkingHead), {
+          kind: "external-delta",
+          deltaId,
+        });
+        const remaining = comparison.coordinates
+          .filter(
+            (coordinate) => coordinate.status !== "resolved" && coordinate.status !== "convergent"
+          )
+          .map((coordinate) => coordinate.coordinate);
+        if (remaining.length) {
           throw new SemanticVcsError(
             "IntegrationIncomplete",
             `Integration of external delta ${deltaId} is incomplete`,
-            { deltaId, unaccountedChangeIds: comparison.unaccountedChangeIds }
+            {
+              source: { kind: "external-delta", deltaId },
+              unaccountedCoordinates: remaining,
+            }
           );
         }
       }
@@ -3026,15 +3528,23 @@ export class SemanticWorkspace {
         );
       }
       if (method === "finalizeExternalDelta") {
-        const comparison = this.integrationComparisonForDelta(
-          asState(input.expectedWorkingHead),
-          delta
-        );
-        if (comparison.unaccountedChangeIds.length) {
+        const comparison = this.mergeComparison(asState(input.expectedWorkingHead), {
+          kind: "external-delta",
+          deltaId: input.deltaId,
+        });
+        const remaining = comparison.coordinates
+          .filter(
+            (coordinate) => coordinate.status !== "resolved" && coordinate.status !== "convergent"
+          )
+          .map((coordinate) => coordinate.coordinate);
+        if (remaining.length) {
           throw new SemanticVcsError(
             "IntegrationIncomplete",
             `External delta ${input.deltaId} still has undecided changes`,
-            { unaccountedChangeIds: comparison.unaccountedChangeIds }
+            {
+              source: { kind: "external-delta", deltaId: input.deltaId },
+              unaccountedCoordinates: remaining,
+            }
           );
         }
       }
@@ -3372,9 +3882,23 @@ export class SemanticWorkspace {
       oldSnapshot,
       newSnapshot,
     });
-    const workUnitIdValue = compactId("work-unit", {
+    const externalKeys = [
+      `repo:${this.externalSourceIdentity(input.oldSource)}`,
+      `repo:${this.externalSourceIdentity(input.newSource)}`,
+    ].sort(compareUtf16CodeUnits);
+    const evidence = this.workUnitEvidence(
+      input.contextId,
+      input.commandId,
+      input.intentSummary ?? null
+    );
+    const workUnitIdValue = workUnitIdentity({
+      commandId: input.commandId,
       kind: "external-unapplied",
-      deltaId,
+      intentSummary: input.intentSummary ?? null,
+      ...evidence,
+      externalSnapshot: null,
+      contentClass: "external",
+      externalKeys,
     });
     const oldByPath = new Map(input.oldFiles.map((file) => [file.path, file]));
     const newByPath = new Map(input.newFiles.map((file) => [file.path, file]));
@@ -3383,6 +3907,7 @@ export class SemanticWorkspace {
     );
     const root = this.deps.store.stateRoot(asState(input.expectedWorkingHead));
     const changes: ChangeRecord[] = [];
+    const newFileIds = new Set<string>();
     for (const [operation, path] of paths.entries()) {
       const oldFile = oldByPath.get(path);
       const newFile = newByPath.get(path);
@@ -3398,6 +3923,7 @@ export class SemanticWorkspace {
       const fileId =
         point?.state.fileId ??
         compactId("external-file", { deltaId, repositoryId: input.repositoryId, path });
+      if (!point) newFileIds.add(fileId);
       const endpoint = (file: typeof oldFile): Row | null => {
         if (!file) return null;
         const descriptor = observed.get(file.contentHash)!;
@@ -3466,14 +3992,116 @@ export class SemanticWorkspace {
       kind: "external-unapplied",
       authoredChangeIds: changes.map((change) => change.changeId),
       intentSummary: input.intentSummary ?? null,
+      ...evidence,
       externalSnapshot: null,
       contentClass: "external",
-      externalKeys: [
-        `repo:${this.externalSourceIdentity(input.oldSource)}`,
-        `repo:${this.externalSourceIdentity(input.newSource)}`,
-      ].sort(compareUtf16CodeUnits),
+      externalKeys,
       normalizationProtocol: NORMALIZATION_PROTOCOL,
       createdAt,
+    };
+    const fileTransitions: FileTransition[] = changes.flatMap((change) => {
+      const endpoint = change.result;
+      const fileId = String(endpoint?.["fileId"] ?? change.base?.["fileId"] ?? "");
+      if (!fileId) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `External delta change ${change.changeId} has no file coordinate`
+        );
+      }
+      const existing = this.deps.store.facts.file(root, fileId)?.state ?? null;
+      let result: WorkspaceFileState;
+      if (endpoint?.["kind"] === "file") {
+        result = workspaceFileStateIdentity({
+          fileId,
+          presence: "placed",
+          repositoryId: String(endpoint["repositoryId"]),
+          path: String(endpoint["path"]),
+          contentHash: String(endpoint["contentHash"]),
+          mode: Number(endpoint["mode"]),
+          ...contentDescriptorFromEndpoint(endpoint),
+        });
+      } else {
+        if (existing?.presence !== "placed") return [];
+        result = workspaceFileStateIdentity({
+          fileId,
+          presence: "deleted",
+          priorFileStateId: existing.fileStateId,
+          tombstoneChangeId: change.changeId,
+        });
+      }
+      return [
+        {
+          fileId,
+          expected: existing,
+          result,
+          changeId: change.changeId,
+          newFile: existing === null,
+        },
+      ];
+    });
+    const workspaceChangeSet = fileTransitions.length
+      ? this.planWorkspaceFacts(root, fileTransitions, [])
+      : null;
+    const resultRoot = workspaceChangeSet
+      ? this.deps.store.facts.compose(workspaceChangeSet).resultRoot.workspaceFactRootId
+      : root;
+    const transitionByChangeId = new Map(
+      fileTransitions.map((transition) => [transition.changeId, transition])
+    );
+    const appliedDrafts = changes.map((change, ordinal) => {
+      const transition = transitionByChangeId.get(change.changeId);
+      const fileId = String(change.result?.["fileId"] ?? change.base?.["fileId"] ?? "");
+      return {
+        changeId: change.changeId,
+        ordinal,
+        appliedBase: change.base,
+        appliedResult: change.result,
+        resultPredicates: transition
+          ? [predicateForState(transition.result)]
+          : [{ kind: "file-absent", fileId }],
+      };
+    });
+    const applicationIdValue = applicationIdentity({
+      workUnitId: workUnitIdValue,
+      basis: asState(input.expectedWorkingHead),
+      resultWorkspaceFactRootId: resultRoot,
+      semanticProtocol: SEMANTIC_PROTOCOL,
+      changes: appliedDrafts,
+    });
+    const appliedChanges: AppliedChangeRecord[] = appliedDrafts.map((value) => {
+      const withoutIdentity = { ...value, applicationId: applicationIdValue };
+      return { ...withoutIdentity, appliedChangeId: appliedChangeIdentity(withoutIdentity) };
+    });
+    const candidate: ApplicationPersistencePlan = {
+      contextId: input.contextId,
+      expectedWorkingHead: asState(input.expectedWorkingHead),
+      workUnit,
+      changes,
+      application: {
+        applicationId: applicationIdValue,
+        workUnitId: workUnitIdValue,
+        basis: asState(input.expectedWorkingHead),
+        appliedChangeIds: appliedChanges.map((change) => change.appliedChangeId),
+        resultWorkspaceFactRootId: resultRoot,
+        semanticProtocol: SEMANTIC_PROTOCOL,
+      },
+      appliedChanges,
+      contentEdges: [],
+      decisions: [],
+      workspaceChangeSet,
+      newRepositories: [],
+      newFiles: [...newFileIds].map((fileId) => {
+        const change = changes.find(
+          (candidate) =>
+            String(candidate.result?.["fileId"] ?? candidate.base?.["fileId"]) === fileId
+        )!;
+        const endpoint = change.result?.["kind"] === "file" ? change.result : change.base!;
+        return {
+          fileId,
+          repositoryId: String(endpoint["repositoryId"]),
+          changeId: change.changeId,
+        };
+      }),
     };
     const record: ExternalDeltaRecord = {
       deltaId,
@@ -3501,9 +4129,7 @@ export class SemanticWorkspace {
     };
     const existing = this.deps.store.externalDelta(deltaId);
     if (existing) {
-      return this.publicExternalDelta(
-        this.deps.store.registerExternalDelta(record, workUnit, changes)
-      );
+      return this.publicExternalDelta(this.deps.store.registerExternalDelta(record, candidate));
     }
     if (input.supersedesDeltaId) {
       const superseded = this.deps.store.externalDelta(input.supersedesDeltaId);
@@ -3520,9 +4146,7 @@ export class SemanticWorkspace {
         deltaId
       );
     }
-    return this.publicExternalDelta(
-      this.deps.store.registerExternalDelta(record, workUnit, changes)
-    );
+    return this.publicExternalDelta(this.deps.store.registerExternalDelta(record, candidate));
   }
 
   private externalSourceIdentity(source: VcsRegisterExternalDeltaInput["oldSource"]): string {
@@ -3734,64 +4358,250 @@ export class SemanticWorkspace {
     };
   }
 
-  private compare(input: VcsCompareInput, request: SemanticDispatchRequest): Row {
-    const sourceEventId = "sourceEventId" in input ? input.sourceEventId : null;
-    const sourceDeltaId = "sourceDeltaId" in input ? input.sourceDeltaId : null;
-    const delta = sourceDeltaId ? this.deps.store.externalDelta(sourceDeltaId) : null;
-    if (sourceDeltaId && !delta) {
-      throw new SemanticVcsError("InvalidReference", `Unknown external delta ${sourceDeltaId}`);
+  private intentForWorkUnit(workUnitId: string): {
+    text: string;
+    tier: "stated" | "trigger" | "mechanical";
+  } {
+    const row = this.deps.sql
+      .exec(
+        `SELECT kind, intent_summary, trigger_excerpt, trigger_sender_json
+           FROM gad_work_units WHERE work_unit_id = ?`,
+        workUnitId
+      )
+      .toArray()[0] as Row | undefined;
+    if (!row) throw new SemanticVcsError("IntegrityFailure", `Missing work unit ${workUnitId}`);
+    const storedSender =
+      row["trigger_sender_json"] == null
+        ? null
+        : trajectorySenderRef(JSON.parse(String(row["trigger_sender_json"])));
+    return resolveIntent({
+      stated: row["intent_summary"] == null ? null : String(row["intent_summary"]),
+      trigger:
+        row["trigger_excerpt"] != null && storedSender
+          ? { text: String(row["trigger_excerpt"]), sender: storedSender.id }
+          : null,
+      mechanical: this.mechanicalIntentForWorkUnit(workUnitId, String(row["kind"])),
+    });
+  }
+
+  private workUnitEvidence(
+    contextId: string,
+    commandId: string,
+    intentSummary: string | null
+  ): Pick<WorkUnitRecord, "authorContextId" | "triggerEvidence"> {
+    if (intentSummary != null) return { authorContextId: contextId, triggerEvidence: null };
+    const cause = this.readMemoryCause(commandId);
+    const text =
+      cause?.["triggerText"] == null
+        ? null
+        : boundedMemoryText(String(cause["triggerText"]), 1_200);
+    const sender = trajectorySenderRef(cause?.["sender"]);
+    return {
+      authorContextId: contextId,
+      triggerEvidence: text && sender ? { text, sender } : null,
+    };
+  }
+
+  private mechanicalIntentForWorkUnit(workUnitId: string, workKind: string): string {
+    const changes = (
+      this.deps.sql
+        .exec(
+          `SELECT change_id FROM gad_changes
+          WHERE work_unit_id = ? ORDER BY operation, ordinal, change_id`,
+          workUnitId
+        )
+        .toArray() as Row[]
+    ).map((entry) => this.changeRequired(String(entry["change_id"])));
+    if (changes.length === 0) return `${workKind} decision with no fact transition`;
+    const summaries = changes.map((change) => {
+      const endpoint = change.result ?? change.base ?? {};
+      const subject =
+        this.coordinatePath(endpoint) ??
+        (typeof endpoint["fileId"] === "string"
+          ? String(endpoint["fileId"])
+          : typeof endpoint["repositoryId"] === "string"
+            ? String(endpoint["repositoryId"])
+            : "workspace coordinate");
+      return `${publicChangeKind(change.kind)} ${subject}`;
+    });
+    const unique = [...new Set(summaries)];
+    const visible = unique.slice(0, 12).join("; ");
+    return unique.length > 12 ? `${visible}; and ${unique.length - 12} more effects` : visible;
+  }
+
+  private intentProjection(comparison: NetMergeComparison): {
+    intents: Row[];
+    intentCounts: Record<"merged" | "settled" | "split" | "contested" | "pending", number>;
+    truncated: boolean;
+  } {
+    const decisionIds = [
+      ...new Set(
+        comparison.coordinates.flatMap((coordinate) =>
+          coordinate.decisionId ? [coordinate.decisionId] : []
+        )
+      ),
+    ];
+    const decisionResolutions = new Map<string, string>();
+    if (decisionIds.length > 0) {
+      const rows = this.deps.sql
+        .exec(
+          `SELECT decision_id, coordinate_kind, coordinate_id, resolution
+             FROM gad_merge_decision_entries
+            WHERE decision_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`,
+          canonicalJson(decisionIds)
+        )
+        .toArray() as Row[];
+      for (const row of rows) {
+        decisionResolutions.set(
+          `${row["decision_id"]}:${row["coordinate_kind"]}:${row["coordinate_id"]}`,
+          String(row["resolution"])
+        );
+      }
     }
-    const comparison = sourceEventId
-      ? this.integrationComparison(asState(input.target), sourceEventId)
-      : this.integrationComparisonForDelta(asState(input.target), delta!);
-    const selected = input.disposition
-      ? comparison.changes.filter(({ disposition }) => disposition.status === input.disposition)
-      : comparison.changes;
-    const rows = selected.map(({ change, disposition }) => ({
-      changeId: change.changeId,
-      workUnitId: change.workUnitId,
-      kind: publicChangeKind(change.kind),
-      summary: publicChangeKind(change.kind),
-      disposition,
-    }));
-    const counts = {
-      shared: comparison.changes.filter((row) => row.disposition.status === "shared").length,
-      alreadySatisfied: comparison.changes.filter(
-        (row) => row.disposition.status === "already-satisfied"
-      ).length,
-      actionable: comparison.changes.filter((row) => row.disposition.status === "actionable")
-        .length,
-      conflicting: comparison.changes.filter(
-        (row) =>
-          row.disposition.status === "actionable" && row.disposition.applicability === "conflicting"
-      ).length,
-      blocked: comparison.changes.filter(
-        (row) =>
-          row.disposition.status === "actionable" && row.disposition.applicability === "blocked"
-      ).length,
-      accounted: comparison.changes.filter((row) => row.disposition.status === "accounted").length,
-      historical: comparison.changes.filter((row) => row.disposition.status === "historical")
-        .length,
+    const groups = new Map<
+      string,
+      { side: "ours" | "theirs"; coordinates: Map<string, NetMergeCoordinate> }
+    >();
+    for (const coordinate of comparison.coordinates) {
+      for (const side of ["ours", "theirs"] as const) {
+        for (const attribution of coordinate.attribution[side]) {
+          const key = `${side}:${attribution.workUnitId}`;
+          const group = groups.get(key) ?? { side, coordinates: new Map() };
+          group.coordinates.set(
+            `${coordinate.coordinate.kind}:${coordinate.coordinate.id}`,
+            coordinate
+          );
+          groups.set(key, group);
+        }
+      }
+    }
+    const counts = { merged: 0, settled: 0, split: 0, contested: 0, pending: 0 };
+    const priority = { split: 0, contested: 1, pending: 2, merged: 3, settled: 4 } as const;
+    const rows = [...groups.entries()].map(([key, group]) => {
+      const workUnitId = key.slice(key.indexOf(":") + 1);
+      const coordinates = [...group.coordinates.values()];
+      let state: keyof typeof counts | undefined;
+      if (group.side === "theirs") {
+        const dispositions = coordinates.map((coordinate) => {
+          if (coordinate.status !== "resolved") return coordinate.status;
+          const resolution = decisionResolutions.get(
+            `${coordinate.decisionId}:${coordinate.coordinate.kind}:${coordinate.coordinate.id}`
+          );
+          if (!resolution) {
+            throw new SemanticVcsError(
+              "IntegrityFailure",
+              `Resolved coordinate ${coordinate.coordinate.kind}:${coordinate.coordinate.id} has no decision entry`
+            );
+          }
+          return resolution === "ours" || resolution === "current" ? "settled" : "merged";
+        });
+        const contested = dispositions.filter((value) => value === "conflict").length;
+        if (contested > 0 && contested < dispositions.length) state = "split";
+        else if (contested === dispositions.length) state = "contested";
+        else if (dispositions.some((value) => value === "adopt" || value === "composed"))
+          state = "pending";
+        else if (dispositions.some((value) => value === "settled")) state = "settled";
+        else state = "merged";
+        counts[state] += 1;
+      }
+      return {
+        workUnitId,
+        side: group.side,
+        intent: this.intentForWorkUnit(workUnitId),
+        coordinates: coordinates.map((coordinate) => coordinate.coordinate),
+        ...(state ? { state } : {}),
+      };
+    });
+    rows.sort((left, right) => {
+      if (left.side !== right.side) return left.side === "theirs" ? -1 : 1;
+      const leftPriority = left.state ? priority[left.state] : 5;
+      const rightPriority = right.state ? priority[right.state] : 5;
+      return (
+        leftPriority - rightPriority || compareUtf16CodeUnits(left.workUnitId, right.workUnitId)
+      );
+    });
+    return { intents: rows.slice(0, 500), intentCounts: counts, truncated: rows.length > 500 };
+  }
+
+  private publicMergeCoordinate(coordinate: NetMergeCoordinate): Row {
+    return {
+      coordinate: { ...coordinate.coordinate, paths: coordinate.paths },
+      status: coordinate.status,
+      aspects: coordinate.aspects.map(
+        ({ composedText: _composedText, composedMappings: _composedMappings, ...aspect }) => aspect
+      ),
+      attribution: coordinate.attribution,
+      ...(coordinate.group ? { group: coordinate.group } : {}),
+      ...(coordinate.structuralConflicts
+        ? { structuralConflicts: coordinate.structuralConflicts }
+        : {}),
+      resolutions: coordinate.resolutions,
+      ...(coordinate.decisionId ? { decisionId: coordinate.decisionId } : {}),
+      summary: coordinate.summary,
     };
-    const cursorBasis = {
-      target: input.target,
-      ...(sourceEventId ? { sourceEventId } : { sourceDeltaId }),
-      view: input.view,
+  }
+
+  private comparisonResolution(comparison: NetMergeComparison) {
+    const remainingCoordinateCount = comparison.coordinates.filter(
+      (coordinate) => coordinate.status !== "resolved" && coordinate.status !== "convergent"
+    ).length;
+    return {
+      complete: remainingCoordinateCount === 0,
+      remainingCoordinateCount,
+      concluded: comparison.concluded,
     };
+  }
+
+  private compare(
+    input: VcsCompareInput,
+    request: SemanticDispatchRequest,
+    observed?: ReadonlyMap<string, string>
+  ): SemanticDispatchResult {
+    const source =
+      input.source.kind === "event"
+        ? { kind: "event" as const, eventId: input.source.eventId }
+        : { kind: "external-delta" as const, deltaId: input.source.deltaId };
+    const comparison = this.mergeComparison(asState(input.target), source, observed ?? new Map());
+    if (!observed) {
+      const contentHashes = this.mergeTextContentHashes(comparison);
+      if (contentHashes.length > 0) {
+        return {
+          kind: "host-read",
+          request: {
+            kind: "read-merge-content",
+            operation: "compare",
+            input: input as unknown as Row,
+            ingress: request.ingress as unknown as Row,
+            contentHashes,
+          },
+        };
+      }
+    }
+    const intent = this.intentProjection(comparison);
+    const counts = { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 0 };
+    for (const coordinate of comparison.coordinates) counts[coordinate.status] += 1;
+    const cursorBasis = { target: input.target, source: input.source };
     const offset = cursorOffset(input.cursor, cursorBasis);
     return {
-      target: input.target,
-      ...(sourceEventId ? { sourceEventId } : { sourceDeltaId }),
-      resolution: {
-        complete: comparison.unaccountedChangeIds.length === 0,
-        remainingChangeCount: comparison.unaccountedChangeIds.length,
+      kind: "complete",
+      result: {
+        target: input.target,
+        source: input.source,
+        base: comparison.base,
+        ...(comparison.bases.length > 1 ? { bases: comparison.bases } : {}),
+        resolution: this.comparisonResolution(comparison),
+        counts,
+        intentCounts: intent.intentCounts,
+        coordinates: comparison.coordinates
+          .slice(offset, offset + input.limit)
+          .map((coordinate) => this.publicMergeCoordinate(coordinate)),
+        intents: intent.intents,
+        intentsTruncated: intent.truncated,
+        nextCursor:
+          offset + input.limit < comparison.coordinates.length
+            ? semanticCursor("compare", cursorBasis, { offset: offset + input.limit })
+            : null,
       },
-      counts,
-      changes: input.view === "changes" ? rows.slice(offset, offset + input.limit) : [],
-      nextCursor:
-        offset + input.limit < rows.length
-          ? semanticCursor("compare", cursorBasis, { offset: offset + input.limit })
-          : null,
     };
   }
 
@@ -4048,10 +4858,15 @@ export class SemanticWorkspace {
 
     const decisionRows = this.deps.sql
       .exec(
-        `SELECT decision.decision_id, decision.kind, decision.rationale
+        `SELECT decision.decision_id, source.coordinate_kind, source.coordinate_id,
+                entry.resolution, entry.rationale
            FROM gad_decision_source_changes source
            JOIN gad_integration_decisions decision
              ON decision.decision_id = source.decision_id
+           JOIN gad_merge_decision_entries entry
+             ON entry.decision_id = source.decision_id
+            AND entry.coordinate_kind = source.coordinate_kind
+            AND entry.coordinate_id = source.coordinate_id
           WHERE source.change_id = ?
           ORDER BY decision.created_at DESC, decision.decision_id
           LIMIT 32`,
@@ -4068,7 +4883,11 @@ export class SemanticWorkspace {
       .slice(0, 8)
       .map((row) => ({
         decision: { kind: "decision", decisionId: String(row["decision_id"]) },
-        kind: String(row["kind"]),
+        coordinate: {
+          kind: String(row["coordinate_kind"]),
+          id: String(row["coordinate_id"]),
+        },
+        resolution: String(row["resolution"]),
         rationale: row["rationale"] == null ? null : String(row["rationale"]),
       }));
 
@@ -4097,6 +4916,21 @@ export class SemanticWorkspace {
   }
 
   private readMemoryCause(commandId: string): Row | null {
+    const command = this.deps.sql
+      .exec(
+        `SELECT cause_log_id, cause_head, cause_invocation_id
+           FROM vcs_command_journal WHERE command_id = ?`,
+        commandId
+      )
+      .toArray()[0] as Row | undefined;
+    if (
+      !command ||
+      command["cause_log_id"] == null ||
+      command["cause_head"] == null ||
+      command["cause_invocation_id"] == null
+    ) {
+      return null;
+    }
     const row = this.deps.sql
       .exec(
         `SELECT command.cause_log_id, command.cause_head, command.cause_invocation_id,
@@ -4117,12 +4951,7 @@ export class SemanticWorkspace {
         commandId
       )
       .toArray()[0] as Row | undefined;
-    if (
-      !row ||
-      row["cause_log_id"] == null ||
-      row["cause_head"] == null ||
-      row["cause_invocation_id"] == null
-    ) {
+    if (!row) {
       return null;
     }
     const logId = String(row["cause_log_id"]);
@@ -4748,10 +5577,12 @@ export class SemanticWorkspace {
     const basisRoot = this.deps.store.stateRoot(basis);
     const createdAt = this.deps.now();
     const contentIntegrity = this.contentIntegrityForMutation(basis, draft, contextIntegrity);
+    const evidence = this.workUnitEvidence(input.contextId, commandId, draft.intentSummary);
     const workUnitIdValue = workUnitIdentity({
       commandId,
       kind: draft.kind,
       intentSummary: draft.intentSummary,
+      ...evidence,
       externalSnapshot: draft.externalSnapshot ?? null,
       contentClass: contentIntegrity.class,
       externalKeys: contentIntegrity.externalKeys,
@@ -4991,13 +5822,52 @@ export class SemanticWorkspace {
       };
       return [{ ...withoutIdentity, contentEdgeId: contentEdgeIdentity(withoutIdentity) }];
     });
-    const contentEdges = [...(draft.contentEdges ?? []), ...derivedContentEdges].filter(
+    const composedContentEdges = (draft.contentDerivations ?? []).map((derivation) => {
+      const childChangeId = changeIdFor(derivation.childChangeRef);
+      const child = appliedChanges.find((applied) => applied.changeId === childChangeId);
+      if (!child) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Composed content child ${childChangeId} was not applied`
+        );
+      }
+      const parentAppliedChangeId =
+        derivation.parent.kind === "applied"
+          ? derivation.parent.appliedChangeId
+          : (() => {
+              const parentChangeId = changeIdFor(derivation.parent.changeRef);
+              const parent = appliedChanges.find((applied) => applied.changeId === parentChangeId);
+              if (!parent) {
+                throw new SemanticVcsError(
+                  "IntegrityFailure",
+                  `Composed content parent ${parentChangeId} was not applied`
+                );
+              }
+              return parent.appliedChangeId;
+            })();
+      const withoutIdentity: Omit<ContentEdgeRecord, "contentEdgeId"> = {
+        childAppliedChangeId: child.appliedChangeId,
+        parentAppliedChangeId,
+        relation: "incorporates",
+        mappings: derivation.mappings,
+      };
+      return { ...withoutIdentity, contentEdgeId: contentEdgeIdentity(withoutIdentity) };
+    });
+    const contentEdges = [
+      ...(draft.contentEdges ?? []),
+      ...derivedContentEdges,
+      ...composedContentEdges,
+    ].filter(
       (edge, index, values) =>
         values.findIndex((candidate) => candidate.contentEdgeId === edge.contentEdgeId) === index
     );
     const decisions: IntegrationDecisionRecord[] = (draft.decisions ?? []).map((decision) => {
       const complete: Omit<IntegrationDecisionRecord, "decisionId"> = {
         ...decision,
+        entries: decision.entries.map(({ resultChangeRef, ...entry }) => ({
+          ...entry,
+          resultChangeId: resultChangeRef ? changeIdFor(resultChangeRef) : null,
+        })),
         workUnitId: workUnitIdValue,
         createdAt,
       };
@@ -5009,6 +5879,7 @@ export class SemanticWorkspace {
       kind: draft.kind,
       authoredChangeIds: changes.map((value) => value.changeId),
       intentSummary: draft.intentSummary,
+      ...evidence,
       externalSnapshot: draft.externalSnapshot ?? null,
       contentClass: contentIntegrity.class,
       externalKeys: contentIntegrity.externalKeys,
@@ -5331,12 +6202,6 @@ export class SemanticWorkspace {
             const basisRoot = this.deps.store.materializedRepositoryContentRoot(previousRoot, key);
             if (basisRoot) {
               const changes = this.materializationChanges(draft, key);
-              if (changes.length === 0 && member.fileManifestId !== previous.fileManifestId) {
-                throw new SemanticVcsError(
-                  "IntegrityFailure",
-                  `Repository ${key} changed manifest without file changes`
-                );
-              }
               return [
                 {
                   repositoryId: key,
@@ -5395,13 +6260,14 @@ export class SemanticWorkspace {
     const changes = new Map<string, WorkspaceMaterializationChange>();
     for (const file of draft.fileResults) {
       if (file.expected?.presence === "placed" && file.expected.repositoryId === repositoryId) {
+        const existing = changes.get(file.expected.path);
         changes.set(file.expected.path, {
           path: file.expected.path,
-          expected: {
+          expected: existing?.expected ?? {
             contentHash: file.expected.contentHash,
             mode: file.expected.mode,
           },
-          result: null,
+          result: existing?.result ?? null,
         });
       }
       if (file.result.presence === "placed" && file.result.repositoryId === repositoryId) {
@@ -5581,15 +6447,36 @@ export class SemanticWorkspace {
 
   private publicDecision(row: Row): Row {
     const decisionId = String(row["decision_id"]);
-    const ids = (sql: string, ...params: unknown[]): string[] =>
-      (this.deps.sql.exec(sql, ...params).toArray() as Row[]).map((value) => String(value["id"]));
-    const sourceChangeIds = ids(
-      `SELECT change_id AS id
-         FROM gad_decision_source_changes
-        WHERE decision_id = ? ORDER BY change_id`,
-      decisionId
-    );
-    const base = {
+    const entries = (
+      this.deps.sql
+        .exec(
+          `SELECT coordinate_kind, coordinate_id, resolution, result_change_id, rationale
+           FROM gad_merge_decision_entries WHERE decision_id = ?
+          ORDER BY coordinate_kind, coordinate_id`,
+          decisionId
+        )
+        .toArray() as Row[]
+    ).map((entry) => ({
+      coordinate: { kind: String(entry["coordinate_kind"]), id: String(entry["coordinate_id"]) },
+      resolution: String(entry["resolution"]),
+      accountedSourceChangeIds: (
+        this.deps.sql
+          .exec(
+            `SELECT change_id FROM gad_decision_source_changes
+              WHERE decision_id = ? AND coordinate_kind = ? AND coordinate_id = ?
+              ORDER BY change_id`,
+            decisionId,
+            entry["coordinate_kind"],
+            entry["coordinate_id"]
+          )
+          .toArray() as Row[]
+      ).map((change) => String(change["change_id"])),
+      ...(entry["result_change_id"] == null
+        ? {}
+        : { resultChangeId: String(entry["result_change_id"]) }),
+      ...(entry["rationale"] == null ? {} : { rationale: String(entry["rationale"]) }),
+    }));
+    return {
       decisionId,
       sourceState:
         row["source_delta_id"] == null
@@ -5599,216 +6486,1214 @@ export class SemanticWorkspace {
         row["target_state_kind"] === "event"
           ? { kind: "event", eventId: String(row["target_state_id"]) }
           : { kind: "application", applicationId: String(row["target_state_id"]) },
-      sourceChangeIds,
+      entries,
     };
-    if (row["kind"] === "adopted") {
-      return {
-        kind: "adopted",
-        ...base,
-        resultAppliedChangeIds: ids(
-          `SELECT applied.applied_change_id AS id
-             FROM gad_work_unit_applications application
-             JOIN gad_applied_changes applied
-               ON applied.application_id = application.application_id
-            WHERE application.work_unit_id = ?
-            ORDER BY applied.ordinal, applied.applied_change_id`,
-          String(row["work_unit_id"])
-        ),
-      };
-    }
-    if (row["kind"] === "reconciled") {
-      return {
-        kind: "reconciled",
-        ...base,
-        evidence: JSON.parse(String(row["evidence_predicates_json"])),
-        rationale: String(row["rationale"]),
-      };
-    }
-    return { kind: "declined", ...base, rationale: String(row["rationale"]) };
   }
 
-  /** One bounded first-parent view powers comparison, decision admission,
-   * integration commits, and publication revalidation. Second parents carry
-   * ancestry/story only; content enters this view solely through applications
-   * on the first-parent line. */
-  private integrationComparison(
-    targetState: StateNodeRef,
-    sourceEventId: string
-  ): IntegrationComparison {
-    if (!this.deps.store.event(sourceEventId)) {
-      throw new SemanticVcsError("InvalidReference", `Unknown event ${sourceEventId}`);
+  private sameValue(left: unknown, right: unknown): boolean {
+    return canonicalJson(left) === canonicalJson(right);
+  }
+
+  private sameAspectValue(aspect: MergeAspectName, left: unknown, right: unknown): boolean {
+    if (
+      aspect === "presence" &&
+      (left === "absent" || left === "deleted") &&
+      (right === "absent" || right === "deleted")
+    ) {
+      return true;
     }
-    const target = this.firstParentLineage(targetState);
-    const targetEvents = new Set(target.eventIds);
-    const sourceStoryReverse: string[] = [];
-    let current: string | null = sourceEventId;
-    while (current) {
-      if (targetEvents.has(current)) {
-        break;
+    return this.sameValue(left, right);
+  }
+
+  private sameCoordinateEndpoint(
+    coordinate: MergeCoordinate,
+    left: Row | null,
+    right: Row
+  ): boolean {
+    if (!left) return false;
+    const aspects: MergeAspectName[] =
+      coordinate.kind === "file"
+        ? ["presence", "content", "placement", "mode"]
+        : ["presence", "path"];
+    return aspects.every((aspect) =>
+      this.sameAspectValue(aspect, this.aspectValue(left, aspect), this.aspectValue(right, aspect))
+    );
+  }
+
+  private eventAncestorGraph(eventId: string): Map<string, string[]> {
+    const rows = this.deps.sql
+      .exec(
+        `WITH RECURSIVE ancestry(event_id) AS (
+           SELECT ?
+           UNION
+           SELECT parent.parent_event_id
+             FROM ancestry
+             JOIN gad_workspace_event_parents parent ON parent.event_id = ancestry.event_id
+            LIMIT ?
+         )
+         SELECT event.event_id, parent.parent_event_id
+           FROM ancestry
+           JOIN gad_workspace_events event ON event.event_id = ancestry.event_id
+           LEFT JOIN gad_workspace_event_parents parent ON parent.event_id = event.event_id
+          ORDER BY event.event_id, parent.ordinal
+          LIMIT ?`,
+        eventId,
+        MAX_ANCESTRY_EDGES + 1,
+        MAX_ANCESTRY_EDGES + 1
+      )
+      .toArray() as Row[];
+    if (rows.length >= MAX_ANCESTRY_EDGES + 1) {
+      throw new SemanticVcsError("ScopeTooLarge", "Merge ancestry exceeds its row bound", {
+        maximum: MAX_ANCESTRY_EDGES,
+      });
+    }
+    const graph = new Map<string, string[]>();
+    for (const row of rows) {
+      const current = String(row["event_id"]);
+      const parents = graph.get(current) ?? [];
+      if (row["parent_event_id"] != null) parents.push(String(row["parent_event_id"]));
+      graph.set(current, parents);
+    }
+    if (!graph.has(eventId)) {
+      throw new SemanticVcsError("IntegrityFailure", `Missing event ${eventId}`);
+    }
+    for (const parents of graph.values()) {
+      for (const parentEventId of parents) {
+        if (!graph.has(parentEventId)) {
+          throw new SemanticVcsError("IntegrityFailure", `Missing event ${parentEventId}`);
+        }
       }
-      if (sourceStoryReverse.length >= MAX_ANCESTRY_EDGES) {
-        throw new SemanticVcsError(
-          "ScopeTooLarge",
-          "Integration comparison exceeds its event bound",
-          {
-            maximum: MAX_ANCESTRY_EDGES,
+    }
+    return graph;
+  }
+
+  private eventAncestors(eventId: string): Set<string> {
+    return new Set(this.eventAncestorGraph(eventId).keys());
+  }
+
+  private stateEvent(state: StateNodeRef): string {
+    const events = this.firstParentLineage(state).eventIds;
+    const eventId = events.at(-1);
+    if (!eventId) throw new SemanticVcsError("IntegrityFailure", "State has no committed basis");
+    return eventId;
+  }
+
+  private maximalMergeBases(target: StateNodeRef, sourceEventId: string): string[] {
+    const targetAncestors = this.eventAncestorGraph(this.stateEvent(target));
+    const sourceAncestors = this.eventAncestorGraph(sourceEventId);
+    const common = [...sourceAncestors.keys()].filter((eventId) => targetAncestors.has(eventId));
+    const commonSet = new Set(common);
+    const nonmaximal = new Set<string>();
+    let traversedEdges = 0;
+    for (const eventId of common) {
+      const parentEventIds = sourceAncestors.get(eventId)!;
+      traversedEdges += parentEventIds.length;
+      if (traversedEdges > MAX_ANCESTRY_EDGES) {
+        throw new SemanticVcsError("ScopeTooLarge", "Merge-base analysis exceeds its edge bound", {
+          maximum: MAX_ANCESTRY_EDGES,
+        });
+      }
+      for (const parentEventId of parentEventIds) {
+        if (commonSet.has(parentEventId)) nonmaximal.add(parentEventId);
+      }
+    }
+    const maximal = common.filter((candidate) => !nonmaximal.has(candidate));
+    if (maximal.length === 0) {
+      throw new SemanticVcsError("IntegrityFailure", "Merge histories have no common ancestor");
+    }
+    const generation = new Map<string, number>();
+    const visit = (rootEventId: string): number => {
+      const stack: Array<{ eventId: string; expanded: boolean }> = [
+        { eventId: rootEventId, expanded: false },
+      ];
+      const visiting = new Set<string>();
+      let generationEdges = 0;
+      while (stack.length > 0) {
+        const frame = stack.pop()!;
+        if (generation.has(frame.eventId)) continue;
+        const parentEventIds = sourceAncestors.get(frame.eventId);
+        if (!parentEventIds) {
+          throw new SemanticVcsError("IntegrityFailure", `Missing event ${frame.eventId}`);
+        }
+        if (frame.expanded) {
+          let parentGeneration = -1;
+          for (const parentEventId of parentEventIds) {
+            const value = generation.get(parentEventId);
+            if (value === undefined) {
+              throw new SemanticVcsError(
+                "IntegrityFailure",
+                `Event generation is incomplete at ${frame.eventId}`
+              );
+            }
+            parentGeneration = Math.max(parentGeneration, value);
           }
-        );
+          generation.set(frame.eventId, parentGeneration >= 0 ? parentGeneration + 1 : 0);
+          visiting.delete(frame.eventId);
+          continue;
+        }
+        if (visiting.has(frame.eventId)) {
+          throw new SemanticVcsError(
+            "IntegrityFailure",
+            `Workspace event ancestry contains a cycle at ${frame.eventId}`
+          );
+        }
+        visiting.add(frame.eventId);
+        generationEdges += parentEventIds.length;
+        if (generationEdges > MAX_ANCESTRY_EDGES) {
+          throw new SemanticVcsError(
+            "ScopeTooLarge",
+            "Merge-base generation analysis exceeds its edge bound",
+            { maximum: MAX_ANCESTRY_EDGES }
+          );
+        }
+        stack.push({ eventId: frame.eventId, expanded: true });
+        for (let index = parentEventIds.length - 1; index >= 0; index -= 1) {
+          const parentEventId = parentEventIds[index]!;
+          if (!generation.has(parentEventId)) {
+            stack.push({ eventId: parentEventId, expanded: false });
+          }
+        }
       }
-      sourceStoryReverse.push(current);
-      const event = this.deps.store.event(current);
-      if (!event) {
-        throw new SemanticVcsError("IntegrityFailure", `Missing source event ${current}`);
-      }
-      current = event.parentEventIds[0] ?? null;
+      return generation.get(rootEventId)!;
+    };
+    return maximal.sort(
+      (left, right) => visit(right) - visit(left) || compareUtf16CodeUnits(left, right)
+    );
+  }
+
+  private coordinateEndpoint(root: string, coordinate: MergeCoordinate): Row {
+    if (coordinate.kind === "repository") {
+      const member = this.deps.store.facts.member(root, coordinate.id);
+      return !member
+        ? { kind: "repository", repositoryId: coordinate.id, presence: "absent" }
+        : member.presence === "present"
+          ? {
+              kind: "repository",
+              repositoryId: coordinate.id,
+              presence: "present",
+              repoPath: member.repoPath,
+            }
+          : { kind: "repository", repositoryId: coordinate.id, presence: "deleted" };
     }
-    const sourceEventIds = sourceStoryReverse.reverse();
-    const sourceApplicationIds = sourceEventIds.flatMap(
-      (eventId) => this.deps.store.event(eventId)?.applicationIds ?? []
-    );
-    const sourceChanges = this.changesInApplications(sourceApplicationIds);
-    const targetChanges = this.changesInApplications(target.applicationIds);
-    const sourceActiveChangeIds = this.activeChangeIds(sourceChanges);
-    const targetActiveChangeIds = this.activeChangeIds(targetChanges);
-    const targetCounteractions = new Set(
-      targetChanges
-        .filter((change) => targetActiveChangeIds.has(change.changeId))
-        .flatMap((change) => this.counteractedChangeIds(change))
-    );
-    const decisions = this.reachableDecisionsBySourceChange(target.applicationIds);
-    const changes = sourceChanges.map((change): ComparedSourceChange => {
-      let disposition: ComparedDisposition;
-      const counteracts = this.counteractedChangeIds(change);
-      if (
-        !sourceActiveChangeIds.has(change.changeId) ||
-        targetCounteractions.has(change.changeId)
-      ) {
-        disposition = { status: "historical" };
-      } else if (targetActiveChangeIds.has(change.changeId)) {
-        disposition = { status: "shared" };
-      } else if ((decisions.get(change.changeId)?.length ?? 0) > 0) {
-        disposition = {
-          status: "accounted",
-          decisionIds: decisions.get(change.changeId)!,
+    const point = this.deps.store.facts.file(root, coordinate.id);
+    if (!point) return { kind: "missing", fileId: coordinate.id, presence: "absent" };
+    if (point.state.presence === "deleted") {
+      return { kind: "missing", fileId: coordinate.id, presence: "deleted" };
+    }
+    return point.repository.presence === "present"
+      ? endpointForFile(point.state, point.repository)
+      : {
+          kind: "file",
+          fileId: point.state.fileId,
+          repositoryId: point.state.repositoryId,
+          repoPath: "",
+          path: point.state.path,
+          contentHash: point.state.contentHash,
+          mode: point.state.mode,
+          contentKind: point.state.contentKind,
+          byteLength: point.state.byteLength,
+          coordinateExtent: point.state.coordinateExtent,
         };
-      } else if (
-        counteracts.length > 0 &&
-        !counteracts.some((changeId) => targetActiveChangeIds.has(changeId))
-      ) {
-        disposition = { status: "historical" };
-      } else {
-        const evidence = this.resultEvidence(change).filter((predicate) =>
-          this.predicateHolds(targetState, predicate)
-        );
-        if (this.changeResultHolds(targetState, change) && evidence.length > 0) {
-          disposition = { status: "already-satisfied", evidence };
-        } else {
-          disposition = {
-            status: "actionable",
-            applicability: "applicable",
-          };
-        }
-      }
-      return { change, disposition };
-    });
-    const prior: ComparedSourceChange[] = [];
-    for (const entry of changes) {
-      if (entry.disposition.status === "actionable") {
-        const unmet = this.changePrerequisites(entry.change).filter(
-          (condition) => !this.prerequisiteHolds(targetState, condition)
-        );
-        const prerequisiteChangeIds: string[] = [];
-        let unresolved = false;
-        for (const condition of unmet) {
-          const prerequisite = [...prior]
-            .reverse()
-            .find((candidate) => this.changeEstablishes(candidate.change, condition));
-          if (prerequisite?.disposition.status === "actionable") {
-            prerequisiteChangeIds.push(prerequisite.change.changeId);
-          } else {
-            unresolved = true;
-          }
-        }
-        if (unmet.length === 0) {
-          entry.disposition = { status: "actionable", applicability: "applicable" };
-        } else if (!unresolved && prerequisiteChangeIds.length > 0) {
-          entry.disposition = {
-            status: "actionable",
-            applicability: "blocked",
-            prerequisiteChangeIds: [...new Set(prerequisiteChangeIds)].sort(compareUtf16CodeUnits),
-          };
-        } else {
-          entry.disposition = { status: "actionable", applicability: "conflicting" };
-        }
-      }
-      prior.push(entry);
-    }
-    return {
-      targetState,
-      sourceEventId,
-      sourceDeltaId: null,
-      changes,
-      unaccountedChangeIds: changes
-        .filter(
-          ({ disposition }) =>
-            disposition.status === "actionable" || disposition.status === "already-satisfied"
-        )
-        .map(({ change }) => change.changeId),
-    };
   }
 
-  private integrationComparisonForDelta(
-    targetState: StateNodeRef,
-    delta: ExternalDeltaRecord
-  ): IntegrationComparison {
-    const sourceChanges = (
+  private aspectValue(endpoint: Row, aspect: MergeAspectName): unknown {
+    const kind = endpoint["kind"];
+    if (aspect === "presence") {
+      if (kind === "file") return "present";
+      if (kind === "missing") return endpoint["presence"] === "absent" ? "absent" : "deleted";
+      return endpoint["presence"] ?? (endpoint["repoPath"] == null ? "deleted" : "present");
+    }
+    const present = kind === "file" || (kind === "repository" && endpoint["repoPath"] != null);
+    if (!present) return null;
+    if (aspect === "content") {
+      return kind === "file"
+        ? {
+            hash: endpoint["contentHash"],
+            kind: endpoint["contentKind"],
+            byteLength: endpoint["byteLength"],
+            coordinateExtent: endpoint["coordinateExtent"],
+          }
+        : null;
+    }
+    if (aspect === "placement") {
+      return kind === "file"
+        ? { repositoryId: endpoint["repositoryId"], path: endpoint["path"] }
+        : null;
+    }
+    if (aspect === "mode") return kind === "file" ? endpoint["mode"] : null;
+    return kind === "repository" ? endpoint["repoPath"] : null;
+  }
+
+  private coordinatePath(endpoint: Row): string | undefined {
+    if (endpoint["kind"] === "repository" && typeof endpoint["repoPath"] === "string") {
+      return endpoint["repoPath"];
+    }
+    if (
+      endpoint["kind"] === "file" &&
+      typeof endpoint["repoPath"] === "string" &&
+      typeof endpoint["path"] === "string"
+    ) {
+      return `${endpoint["repoPath"]}/${endpoint["path"]}`;
+    }
+    return undefined;
+  }
+
+  private mergeChangeCoordinate(change: ChangeRecord): MergeCoordinate | null {
+    const endpoint = change.result ?? change.base;
+    if (!endpoint) return null;
+    if (endpoint["kind"] === "repository" && typeof endpoint["repositoryId"] === "string") {
+      return { kind: "repository", id: endpoint["repositoryId"] };
+    }
+    if (
+      (endpoint["kind"] === "file" || endpoint["kind"] === "missing") &&
+      typeof endpoint["fileId"] === "string"
+    ) {
+      return { kind: "file", id: endpoint["fileId"] };
+    }
+    return null;
+  }
+
+  private changesByMergeCoordinate(changes: readonly ChangeRecord[]): Map<string, ChangeRecord[]> {
+    const result = new Map<string, ChangeRecord[]>();
+    for (const change of changes) {
+      const coordinate = this.mergeChangeCoordinate(change);
+      if (!coordinate) continue;
+      const key = `${coordinate.kind}:${coordinate.id}`;
+      const values = result.get(key) ?? [];
+      values.push(change);
+      result.set(key, values);
+    }
+    return result;
+  }
+
+  private coordinateAttribution(
+    changes: readonly ChangeRecord[],
+    coordinate: MergeCoordinate,
+    base: Row,
+    final: Row
+  ): MergeAttributionEntry[] {
+    const touching = changes.filter((change) => {
+      const value = this.mergeChangeCoordinate(change);
+      return value?.kind === coordinate.kind && value.id === coordinate.id;
+    });
+    const aspects: MergeAspectName[] =
+      coordinate.kind === "file"
+        ? ["presence", "content", "placement", "mode"]
+        : ["presence", "path"];
+    let first = touching.length;
+    for (const aspect of aspects) {
+      if (
+        this.sameAspectValue(
+          aspect,
+          this.aspectValue(base, aspect),
+          this.aspectValue(final, aspect)
+        )
+      )
+        continue;
+      let current = this.aspectValue(base, aspect);
+      let start = -1;
+      for (let index = 0; index < touching.length; index += 1) {
+        const change = touching[index]!;
+        const before = this.aspectValue(change.base ?? {}, aspect);
+        const after = this.aspectValue(change.result ?? {}, aspect);
+        if (this.sameAspectValue(aspect, before, after)) continue;
+        if (start < 0) {
+          const equivalentMissingPresence =
+            aspect === "presence" &&
+            (before === "absent" || before === "deleted") &&
+            (current === "absent" || current === "deleted");
+          if (!this.sameAspectValue(aspect, before, current) && !equivalentMissingPresence) {
+            if (!this.isDecisionAccountedIntroduction(change, coordinate, aspect, current)) {
+              continue;
+            }
+          }
+          start = index;
+        } else if (!this.sameAspectValue(aspect, before, current)) {
+          throw new SemanticVcsError(
+            "IntegrityFailure",
+            `Provenance discontinuity at ${coordinate.kind} ${coordinate.id}/${aspect}`,
+            { coordinates: [coordinate] }
+          );
+        }
+        current = after;
+      }
+      if (start < 0 || !this.sameAspectValue(aspect, current, this.aspectValue(final, aspect))) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `State difference is not covered at ${coordinate.kind} ${coordinate.id}/${aspect}`,
+          { coordinates: [coordinate] }
+        );
+      }
+      first = Math.min(first, start);
+    }
+    const attributed = this.expandMergeAttribution(touching.slice(first));
+    const attributedActive = this.attributionActiveChangeIds(attributed);
+    return attributed.map((change) => ({
+      changeId: change.changeId,
+      workUnitId: change.workUnitId,
+      ...(!attributedActive.has(change.changeId) ? { undone: true as const } : {}),
+    }));
+  }
+
+  private isDecisionAccountedIntroduction(
+    change: ChangeRecord,
+    coordinate: MergeCoordinate,
+    aspect: MergeAspectName,
+    expectedSourceValue: unknown
+  ): boolean {
+    const rows = this.deps.sql
+      .exec(
+        `SELECT source.change_id
+           FROM gad_merge_decision_entries entry
+           JOIN gad_decision_source_changes source
+             ON source.decision_id = entry.decision_id
+            AND source.coordinate_kind = entry.coordinate_kind
+            AND source.coordinate_id = entry.coordinate_id
+          WHERE entry.result_change_id = ?
+            AND entry.coordinate_kind = ?
+            AND entry.coordinate_id = ?
+          ORDER BY source.change_id
+          LIMIT 10001`,
+        change.changeId,
+        coordinate.kind,
+        coordinate.id
+      )
+      .toArray() as Row[];
+    if (rows.length > 10_000) {
+      throw new SemanticVcsError(
+        "ScopeTooLarge",
+        `Merge decision attribution for ${coordinate.kind} ${coordinate.id} exceeds its bound`,
+        { maximum: 10_000 }
+      );
+    }
+    return rows.some((row) => {
+      const source = this.changeRequired(String(row["change_id"]));
+      const value = this.aspectValue(source.result ?? {}, aspect);
+      if (this.sameAspectValue(aspect, value, expectedSourceValue)) return true;
+      return (
+        aspect === "presence" &&
+        (value === "absent" || value === "deleted") &&
+        (expectedSourceValue === "absent" || expectedSourceValue === "deleted")
+      );
+    });
+  }
+
+  private expandMergeAttribution(changes: readonly ChangeRecord[]): ChangeRecord[] {
+    const result: ChangeRecord[] = [];
+    const emitted = new Set<string>();
+    const visiting = new Set<string>();
+    const visit = (change: ChangeRecord): void => {
+      if (emitted.has(change.changeId)) return;
+      if (visiting.has(change.changeId)) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Merge attribution contains a cycle at ${change.changeId}`
+        );
+      }
+      visiting.add(change.changeId);
+      const contributors = change.payload["mergesChangeIds"];
+      if (Array.isArray(contributors)) {
+        for (const contributorId of contributors) {
+          if (typeof contributorId !== "string") {
+            throw new SemanticVcsError(
+              "IntegrityFailure",
+              `Merge attribution ${change.changeId} contains an invalid contributor`
+            );
+          }
+          visit(this.changeRequired(contributorId));
+        }
+      }
+      visiting.delete(change.changeId);
+      emitted.add(change.changeId);
+      result.push(change);
+      if (result.length > 10_000) {
+        throw new SemanticVcsError("ScopeTooLarge", "Merge attribution exceeds its change bound", {
+          maximum: 10_000,
+        });
+      }
+    };
+    for (const change of changes) visit(change);
+    return result;
+  }
+
+  private sourceChangesForDelta(delta: ExternalDeltaRecord): ChangeRecord[] {
+    return (
       this.deps.sql
         .exec(
-          `SELECT change_id FROM gad_changes WHERE work_unit_id = ?
-           ORDER BY operation, ordinal`,
+          `SELECT change_id FROM gad_changes WHERE work_unit_id = ? ORDER BY operation, ordinal`,
           delta.workUnitId
         )
         .toArray() as Row[]
     ).map((row) => this.changeRequired(String(row["change_id"])));
-    const target = this.firstParentLineage(targetState);
-    const targetChanges = this.changesInApplications(target.applicationIds);
-    const targetActiveChangeIds = this.activeChangeIds(targetChanges);
-    const decisions = this.reachableDecisionsBySourceChange(target.applicationIds);
-    const changes = sourceChanges.map((change): ComparedSourceChange => {
-      let disposition: ComparedDisposition;
-      if ((decisions.get(change.changeId)?.length ?? 0) > 0) {
-        disposition = { status: "accounted", decisionIds: decisions.get(change.changeId)! };
-      } else {
-        const evidence = this.resultEvidence(change).filter((predicate) =>
-          this.predicateHolds(targetState, predicate)
+  }
+
+  private externalDeltaState(delta: ExternalDeltaRecord): StateNodeRef {
+    const row = this.deps.sql
+      .exec(
+        `SELECT application_id FROM gad_work_unit_applications
+          WHERE work_unit_id = ? ORDER BY application_id LIMIT 1`,
+        delta.workUnitId
+      )
+      .toArray()[0] as Row | undefined;
+    if (!row) {
+      throw new SemanticVcsError(
+        "IntegrityFailure",
+        `External delta ${delta.deltaId} has no candidate application`
+      );
+    }
+    return { kind: "application", applicationId: String(row["application_id"]) };
+  }
+
+  private reachableCoordinateDecisions(
+    applicationIds: readonly string[],
+    source: NetMergeComparison["source"]
+  ): Map<string, string> {
+    if (!applicationIds.length) return new Map();
+    const rows = this.deps.sql
+      .exec(
+        `SELECT entry.coordinate_kind, entry.coordinate_id, decision.decision_id
+           FROM gad_integration_decisions decision
+           JOIN gad_merge_decision_entries entry ON entry.decision_id = decision.decision_id
+          WHERE decision.work_unit_id IN (
+            SELECT application.work_unit_id FROM gad_work_unit_applications application
+            JOIN json_each(?) selected ON application.application_id = CAST(selected.value AS TEXT)
+          ) AND ${source.kind === "event" ? "decision.source_event_id" : "decision.source_delta_id"} = ?
+          ORDER BY decision.created_at DESC, decision.decision_id`,
+        canonicalJson(applicationIds),
+        source.kind === "event" ? source.eventId : source.deltaId
+      )
+      .toArray() as Row[];
+    const result = new Map<string, string>();
+    for (const row of rows) {
+      const key = `${row["coordinate_kind"]}:${row["coordinate_id"]}`;
+      if (!result.has(key)) result.set(key, String(row["decision_id"]));
+    }
+    return result;
+  }
+
+  private mergeComparison(
+    targetState: StateNodeRef,
+    source: NetMergeComparison["source"],
+    observed: ReadonlyMap<string, string> = new Map()
+  ): NetMergeComparison {
+    const targetLine = this.firstParentLineage(targetState);
+    let baseStates: StateNodeRef[];
+    let sourceRoot: string;
+    let sourceChanges: ChangeRecord[];
+    let sourceEventId: string | null = null;
+    let sourceDeltaId: string | null = null;
+    if (source.kind === "event") {
+      if (!this.deps.store.event(source.eventId)) {
+        throw new SemanticVcsError("InvalidReference", `Unknown event ${source.eventId}`);
+      }
+      sourceEventId = source.eventId;
+      baseStates = this.maximalMergeBases(targetState, source.eventId).map((eventId) => ({
+        kind: "event" as const,
+        eventId,
+      }));
+      sourceRoot = this.deps.store.stateRoot({ kind: "event", eventId: source.eventId });
+      sourceChanges = this.changesInApplications(
+        this.firstParentLineage({ kind: "event", eventId: source.eventId }).applicationIds
+      );
+    } else {
+      const delta = this.deps.store.externalDelta(source.deltaId);
+      if (!delta)
+        throw new SemanticVcsError("InvalidReference", `Unknown external delta ${source.deltaId}`);
+      sourceDeltaId = source.deltaId;
+      baseStates = [delta.targetState];
+      sourceRoot = this.deps.store.stateRoot(this.externalDeltaState(delta));
+      sourceChanges = this.sourceChangesForDelta(delta);
+    }
+    const base = baseStates[0]!;
+    const baseRoot = this.deps.store.stateRoot(base);
+    const targetRoot = this.deps.store.stateRoot(targetState);
+    const decisions = this.reachableCoordinateDecisions(targetLine.applicationIds, source);
+    const sourceCoordinates = new Map<string, MergeCoordinate>();
+    for (const change of sourceChanges) {
+      const coordinate = this.mergeChangeCoordinate(change);
+      if (coordinate) sourceCoordinates.set(`${coordinate.kind}:${coordinate.id}`, coordinate);
+    }
+    if (sourceCoordinates.size > 10_000) {
+      throw new SemanticVcsError("ScopeTooLarge", "Merge comparison exceeds its coordinate bound", {
+        maximum: 10_000,
+      });
+    }
+    const targetChanges = this.changesInApplications(targetLine.applicationIds);
+    const sourceChangesByCoordinate = this.changesByMergeCoordinate(sourceChanges);
+    const targetChangesByCoordinate = this.changesByMergeCoordinate(targetChanges);
+    // Structural conflicts are coordinate-set conflicts. If a source result
+    // occupies a path held by a target-only identity, that target identity must
+    // participate too; otherwise "theirs" cannot vacate the destination.
+    const structuralPeerKeys = new Set<string>();
+    for (const coordinate of [...sourceCoordinates.values()]) {
+      const endpoint = this.coordinateEndpoint(sourceRoot, coordinate);
+      let peer: MergeCoordinate | null = null;
+      if (coordinate.kind === "file" && endpoint["kind"] === "file") {
+        const occupied = this.deps.store.facts.fileAtPath(
+          targetRoot,
+          String(endpoint["repositoryId"]),
+          String(endpoint["path"])
         );
-        if (this.changeResultHolds(targetState, change) && evidence.length > 0) {
-          disposition = { status: "already-satisfied", evidence };
-        } else {
-          const unmet = this.changePrerequisites(change).filter(
-            (condition) => !this.prerequisiteHolds(targetState, condition)
-          );
-          disposition =
-            unmet.length === 0
-              ? { status: "actionable", applicability: "applicable" }
-              : { status: "actionable", applicability: "conflicting" };
+        if (occupied && occupied.state.fileId !== coordinate.id) {
+          peer = { kind: "file", id: occupied.state.fileId };
+        }
+      } else if (
+        coordinate.kind === "repository" &&
+        endpoint["presence"] === "present" &&
+        typeof endpoint["repoPath"] === "string"
+      ) {
+        const occupied = this.deps.store.facts.repositoryAtPath(targetRoot, endpoint["repoPath"]);
+        if (occupied && occupied.repositoryId !== coordinate.id) {
+          peer = { kind: "repository", id: occupied.repositoryId };
         }
       }
-      if (targetActiveChangeIds.has(change.changeId)) disposition = { status: "shared" };
-      return { change, disposition };
-    });
+      if (!peer) continue;
+      const peerKey = `${peer.kind}:${peer.id}`;
+      if (!sourceCoordinates.has(peerKey)) {
+        sourceCoordinates.set(peerKey, peer);
+        structuralPeerKeys.add(peerKey);
+      }
+    }
+    if (sourceCoordinates.size > 10_000) {
+      throw new SemanticVcsError("ScopeTooLarge", "Merge comparison exceeds its coordinate bound", {
+        maximum: 10_000,
+      });
+    }
+    const decisionTargets = new Map<
+      string,
+      {
+        root: string;
+        changesByCoordinate: Map<string, ChangeRecord[]>;
+        resultRoot: string;
+        laterChangesByCoordinate: Map<string, ChangeRecord[]>;
+      }
+    >();
+    const coordinates: NetMergeCoordinate[] = [];
+    const comparisonBaseEndpoints = new Map<string, Row>();
+    const sourceEndpoints = new Map<string, Row>();
+    for (const [key, coordinate] of [...sourceCoordinates].sort(([left], [right]) =>
+      compareUtf16CodeUnits(left, right)
+    )) {
+      const coordinateSourceChanges = sourceChangesByCoordinate.get(key) ?? [];
+      const authoredExternalBase =
+        source.kind === "external-delta"
+          ? coordinateSourceChanges.find((change) => change.base !== null)?.base
+          : null;
+      const baseEndpoints = authoredExternalBase
+        ? [{ eventId: this.stateEvent(base), endpoint: authoredExternalBase }]
+        : baseStates.map((state) => ({
+            eventId: state.kind === "event" ? state.eventId : this.stateEvent(state),
+            endpoint: this.coordinateEndpoint(this.deps.store.stateRoot(state), coordinate),
+          }));
+      const baseEndpoint = baseEndpoints[0]!.endpoint;
+      comparisonBaseEndpoints.set(key, baseEndpoint);
+      const oursEndpoint = this.coordinateEndpoint(targetRoot, coordinate);
+      let theirsEndpoint = this.coordinateEndpoint(sourceRoot, coordinate);
+      if (source.kind === "external-delta") {
+        const last = [...sourceChanges].reverse().find((change) => {
+          const value = this.mergeChangeCoordinate(change);
+          return value?.kind === coordinate.kind && value.id === coordinate.id;
+        });
+        if (last?.result) theirsEndpoint = last.result;
+      }
+      const aspectNames: MergeAspectName[] =
+        coordinate.kind === "file"
+          ? ["presence", "content", "placement", "mode"]
+          : ["presence", "path"];
+      const sourceDiffersFromBase = aspectNames.some((aspect) =>
+        baseEndpoints.some(
+          ({ endpoint }) =>
+            !this.sameAspectValue(
+              aspect,
+              this.aspectValue(endpoint, aspect),
+              this.aspectValue(theirsEndpoint, aspect)
+            )
+        )
+      );
+      if (!sourceDiffersFromBase && !structuralPeerKeys.has(key)) continue;
+      sourceEndpoints.set(key, theirsEndpoint);
+      const aspects: NetMergeAspect[] = [];
+      for (const aspect of aspectNames) {
+        const baseValue = this.aspectValue(baseEndpoint, aspect);
+        const oursValue = this.aspectValue(oursEndpoint, aspect);
+        const theirsValue = this.aspectValue(theirsEndpoint, aspect);
+        const theirsChanged = !this.sameAspectValue(aspect, baseValue, theirsValue);
+        const oursChanged = !this.sameAspectValue(aspect, baseValue, oursValue);
+        if (!theirsChanged && !oursChanged) continue;
+        const baseValues = baseEndpoints.map(({ eventId, endpoint }) => ({
+          eventId,
+          value: this.aspectValue(endpoint, aspect),
+        }));
+        const ambiguous = baseValues.some(
+          (value) => !this.sameAspectValue(aspect, value.value, baseValues[0]!.value)
+        );
+        let status: NetMergeAspect["status"];
+        let composedText: string | undefined;
+        let composedMappings: NetMergeAspect["composedMappings"];
+        if (ambiguous) status = "conflict";
+        else if (!theirsChanged) status = "ours";
+        else if (!oursChanged) status = "adopt";
+        else if (this.sameAspectValue(aspect, oursValue, theirsValue)) status = "convergent";
+        else if (aspect === "content") {
+          const hashes = [baseValue, oursValue, theirsValue].map((value) =>
+            value && typeof value === "object" ? String((value as Row)["hash"] ?? "") : ""
+          );
+          const texts = hashes.map((hash) => observed.get(hash));
+          if (texts.every((text): text is string => text !== undefined)) {
+            const merged = threeWayTextMerge(texts[0]!, texts[1]!, texts[2]!);
+            if (merged.kind === "too-large") {
+              throw new SemanticVcsError(
+                "ScopeTooLarge",
+                `Text merge analysis exceeds its LCS bound for ${coordinate.kind} ${coordinate.id}`,
+                { coordinates: [coordinate] }
+              );
+            }
+            if (merged.kind === "composed") {
+              status = "composed";
+              composedText = merged.text;
+              composedMappings = {
+                ours: [...merged.oursMappings],
+                theirs: [...merged.theirsMappings],
+              };
+            } else status = "conflict";
+          } else status = "conflict";
+        } else status = "conflict";
+        aspects.push({
+          aspect,
+          base: baseValue,
+          ours: oursValue,
+          theirs: theirsValue,
+          ...(ambiguous ? { baseValues } : {}),
+          status,
+          ...(composedText !== undefined ? { composedText } : {}),
+          ...(composedMappings ? { composedMappings } : {}),
+        });
+      }
+      if (!aspects.length) continue;
+      const decisionId = decisions.get(key);
+      const sourceAttribution = decisionId
+        ? this.decisionCoordinateAttribution(decisionId, coordinate, sourceChanges)
+        : this.coordinateAttribution(
+            coordinateSourceChanges,
+            coordinate,
+            baseEndpoint,
+            theirsEndpoint
+          );
+      let oursAttribution: MergeAttributionEntry[] = [];
+      if (
+        aspects.some((aspect) => !this.sameAspectValue(aspect.aspect, aspect.base, aspect.ours))
+      ) {
+        if (decisionId) {
+          let cached = decisionTargets.get(decisionId);
+          if (!cached) {
+            const decisionTarget = this.decisionTargetState(decisionId);
+            const decisionResult = this.decisionResultState(decisionId, targetLine.applicationIds);
+            const decisionApplicationIndex = targetLine.applicationIds.indexOf(
+              decisionResult.applicationId
+            );
+            if (decisionApplicationIndex < 0) {
+              throw new SemanticVcsError(
+                "IntegrityFailure",
+                `Merge decision ${decisionId} result is not in the target lineage`
+              );
+            }
+            cached = {
+              root: this.deps.store.stateRoot(decisionTarget),
+              changesByCoordinate: this.changesByMergeCoordinate(
+                this.changesInApplications(this.firstParentLineage(decisionTarget).applicationIds)
+              ),
+              resultRoot: this.deps.store.stateRoot(decisionResult),
+              laterChangesByCoordinate: this.changesByMergeCoordinate(
+                this.changesInApplications(
+                  targetLine.applicationIds.slice(decisionApplicationIndex + 1)
+                )
+              ),
+            };
+            decisionTargets.set(decisionId, cached);
+          }
+          const decisionTargetEndpoint = this.coordinateEndpoint(cached.root, coordinate);
+          const beforeDecision = this.coordinateAttribution(
+            cached.changesByCoordinate.get(key) ?? [],
+            coordinate,
+            baseEndpoint,
+            decisionTargetEndpoint
+          );
+          const afterDecision = this.coordinateAttribution(
+            cached.laterChangesByCoordinate.get(key) ?? [],
+            coordinate,
+            this.coordinateEndpoint(cached.resultRoot, coordinate),
+            oursEndpoint
+          );
+          const unique = new Map<string, MergeAttributionEntry>();
+          for (const entry of [...beforeDecision, ...afterDecision]) {
+            unique.set(entry.changeId, entry);
+          }
+          oursAttribution = [...unique.values()];
+        } else {
+          const targetCoordinateChanges = targetChangesByCoordinate.get(key) ?? [];
+          const externalPathIsLocallyAbsent =
+            source.kind === "external-delta" &&
+            coordinate.kind === "file" &&
+            oursEndpoint["kind"] === "missing" &&
+            targetCoordinateChanges.length === 0;
+          oursAttribution = externalPathIsLocallyAbsent
+            ? []
+            : this.coordinateAttribution(
+                targetCoordinateChanges,
+                coordinate,
+                baseEndpoint,
+                oursEndpoint
+              );
+        }
+      }
+      let status: NetMergeCoordinate["status"];
+      if (decisionId) status = "resolved";
+      else if (aspects.some((aspect) => aspect.status === "conflict")) status = "conflict";
+      else if (
+        aspects.some((aspect) => aspect.status === "composed") ||
+        (aspects.some((aspect) => aspect.status === "adopt") &&
+          aspects.some((aspect) => aspect.status === "ours"))
+      )
+        status = "composed";
+      else if (aspects.some((aspect) => aspect.status === "adopt")) status = "adopt";
+      else status = "convergent";
+      coordinates.push({
+        coordinate,
+        paths: {
+          ...(this.coordinatePath(baseEndpoint) ? { base: this.coordinatePath(baseEndpoint) } : {}),
+          ...(this.coordinatePath(oursEndpoint) ? { ours: this.coordinatePath(oursEndpoint) } : {}),
+          ...(this.coordinatePath(theirsEndpoint)
+            ? { theirs: this.coordinatePath(theirsEndpoint) }
+            : {}),
+        },
+        status,
+        aspects,
+        attribution: { ours: oursAttribution, theirs: sourceAttribution },
+        resolutions: decisionId
+          ? []
+          : status === "composed"
+            ? ["composed", "theirs", "ours", "current"]
+            : ["theirs", "ours", "current"],
+        ...(decisionId ? { decisionId } : {}),
+        summary: `${status} ${coordinate.kind} ${this.coordinatePath(theirsEndpoint) ?? coordinate.id}`,
+      });
+    }
+    const sourceAlreadyAncestor =
+      source.kind === "event" &&
+      this.eventAncestors(this.stateEvent(targetState)).has(source.eventId);
+    const concluded =
+      sourceAlreadyAncestor ||
+      (targetLine.applicationIds.length > 0 &&
+        this.integrationDecisionForSource(targetLine.applicationIds, source) !== null);
+    this.applyStructuralMergeConstraints(
+      coordinates,
+      targetRoot,
+      baseRoot,
+      comparisonBaseEndpoints,
+      sourceEndpoints
+    );
     return {
       targetState,
-      sourceEventId: null,
-      sourceDeltaId: delta.deltaId,
-      changes,
-      unaccountedChangeIds: changes
-        .filter(
-          ({ disposition }) =>
-            disposition.status === "actionable" || disposition.status === "already-satisfied"
-        )
-        .map(({ change }) => change.changeId),
+      source,
+      sourceEventId,
+      sourceDeltaId,
+      base,
+      bases: baseStates,
+      coordinates,
+      concluded,
     };
+  }
+
+  private applyStructuralMergeConstraints(
+    coordinates: NetMergeCoordinate[],
+    targetRoot: string,
+    baseRoot: string,
+    baseEndpoints: ReadonlyMap<string, Row>,
+    sourceEndpoints: ReadonlyMap<string, Row>
+  ): void {
+    if (coordinates.length > 10_000) {
+      throw new SemanticVcsError("ScopeTooLarge", "Merge comparison exceeds its coordinate bound", {
+        maximum: 10_000,
+      });
+    }
+    const keyFor = (coordinate: MergeCoordinate) => `${coordinate.kind}:${coordinate.id}`;
+    const touched = new Map(
+      coordinates.map((coordinate) => [keyFor(coordinate.coordinate), coordinate])
+    );
+    const endpoints = new Map<string, Row>();
+    for (const coordinate of coordinates) {
+      const ours = this.coordinateEndpoint(targetRoot, coordinate.coordinate);
+      const theirs = sourceEndpoints.get(keyFor(coordinate.coordinate));
+      if (!theirs) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Merge source endpoint is missing for ${keyFor(coordinate.coordinate)}`,
+          { coordinate: coordinate.coordinate }
+        );
+      }
+      if (coordinate.status === "conflict" || coordinate.status === "resolved") {
+        endpoints.set(keyFor(coordinate.coordinate), ours);
+        continue;
+      }
+      let result = { ...ours };
+      for (const aspect of coordinate.aspects) {
+        if (aspect.status === "ours" || aspect.status === "conflict") continue;
+        if (aspect.aspect === "presence") {
+          result = { ...theirs };
+        } else if (
+          aspect.aspect === "placement" &&
+          aspect.theirs &&
+          typeof aspect.theirs === "object"
+        ) {
+          result["repositoryId"] = (aspect.theirs as Row)["repositoryId"];
+          result["path"] = (aspect.theirs as Row)["path"];
+          result["repoPath"] = theirs["repoPath"];
+        } else if (aspect.aspect === "path") {
+          result["repoPath"] = aspect.theirs;
+        }
+      }
+      endpoints.set(keyFor(coordinate.coordinate), result);
+    }
+
+    const repositoryOwners = new Map<string, MergeCoordinate[]>();
+    const fileOwners = new Map<string, MergeCoordinate[]>();
+    const targetRepositoryOccupants = new Map<string, MergeCoordinate>();
+    const targetFileOccupants = new Map<string, MergeCoordinate>();
+    const addOwner = (
+      map: Map<string, MergeCoordinate[]>,
+      path: string,
+      coordinate: MergeCoordinate
+    ) => map.set(path, [...(map.get(path) ?? []), coordinate]);
+    for (const entry of this.deps.store.facts.entries(targetRoot, "repository")) {
+      const coordinate = { kind: "repository" as const, id: entry.key };
+      const current = this.coordinateEndpoint(targetRoot, coordinate);
+      if (current["presence"] === "present" && typeof current["repoPath"] === "string") {
+        targetRepositoryOccupants.set(String(current["repoPath"]), coordinate);
+      }
+      const endpoint =
+        endpoints.get(keyFor(coordinate)) ?? this.coordinateEndpoint(targetRoot, coordinate);
+      if (endpoint["presence"] === "present" && typeof endpoint["repoPath"] === "string") {
+        addOwner(repositoryOwners, String(endpoint["repoPath"]), coordinate);
+      }
+    }
+    for (const coordinate of coordinates.filter((row) => row.coordinate.kind === "repository")) {
+      if (this.deps.store.facts.member(targetRoot, coordinate.coordinate.id)) continue;
+      const endpoint = endpoints.get(keyFor(coordinate.coordinate))!;
+      if (endpoint["presence"] === "present" && typeof endpoint["repoPath"] === "string") {
+        addOwner(repositoryOwners, String(endpoint["repoPath"]), coordinate.coordinate);
+      }
+    }
+    for (const entry of this.deps.store.facts.entries(targetRoot, "file")) {
+      const coordinate = { kind: "file" as const, id: entry.key };
+      const current = this.coordinateEndpoint(targetRoot, coordinate);
+      if (current["kind"] === "file") {
+        targetFileOccupants.set(`${current["repositoryId"]}:${current["path"]}`, coordinate);
+      }
+      const endpoint =
+        endpoints.get(keyFor(coordinate)) ?? this.coordinateEndpoint(targetRoot, coordinate);
+      if (endpoint["kind"] === "file") {
+        addOwner(fileOwners, `${endpoint["repositoryId"]}:${endpoint["path"]}`, coordinate);
+      }
+    }
+    for (const coordinate of coordinates.filter((row) => row.coordinate.kind === "file")) {
+      if (this.deps.store.facts.file(targetRoot, coordinate.coordinate.id)) continue;
+      const endpoint = endpoints.get(keyFor(coordinate.coordinate))!;
+      if (endpoint["kind"] === "file") {
+        addOwner(
+          fileOwners,
+          `${endpoint["repositoryId"]}:${endpoint["path"]}`,
+          coordinate.coordinate
+        );
+      }
+    }
+
+    const graph = new Map<string, Set<string>>();
+    const connect = (left: MergeCoordinate, right: MergeCoordinate) => {
+      const leftKey = keyFor(left);
+      const rightKey = keyFor(right);
+      if (!touched.has(leftKey) || !touched.has(rightKey) || leftKey === rightKey) return;
+      (graph.get(leftKey) ?? graph.set(leftKey, new Set()).get(leftKey)!).add(rightKey);
+      (graph.get(rightKey) ?? graph.set(rightKey, new Set()).get(rightKey)!).add(leftKey);
+    };
+    const markStructuralConflict = (
+      coordinate: MergeCoordinate,
+      aspect: "placement" | "path" | "presence",
+      peers: MergeCoordinate[],
+      path: string
+    ) => {
+      const row = touched.get(keyFor(coordinate));
+      if (!row || row.status === "resolved") return;
+      const current = row.aspects.find((candidate) => candidate.aspect === aspect);
+      const source = sourceEndpoints.get(keyFor(coordinate));
+      if (!source) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Structural conflict source endpoint is missing for ${keyFor(coordinate)}`
+        );
+      }
+      if (current) {
+        current.status = "conflict";
+      } else {
+        row.aspects.push({
+          aspect,
+          base: this.aspectValue(
+            baseEndpoints.get(keyFor(coordinate)) ?? this.coordinateEndpoint(baseRoot, coordinate),
+            aspect
+          ),
+          ours: this.aspectValue(this.coordinateEndpoint(targetRoot, coordinate), aspect),
+          theirs: this.aspectValue(source, aspect),
+          status: "conflict",
+        });
+      }
+      const conflicts = new Map(
+        (row.structuralConflicts ?? []).map((peer) => [keyFor(peer), peer])
+      );
+      for (const peer of peers) conflicts.set(keyFor(peer), peer);
+      row.structuralConflicts = [...conflicts.values()].sort((left, right) =>
+        compareUtf16CodeUnits(keyFor(left), keyFor(right))
+      );
+      row.status = "conflict";
+      row.summary = `structural conflict at ${path} with ${row.structuralConflicts
+        .map(keyFor)
+        .join(", ")}`;
+    };
+    for (const [path, owners] of repositoryOwners) {
+      if (owners.length < 2) continue;
+      for (const owner of owners) {
+        markStructuralConflict(
+          owner,
+          "path",
+          owners.filter((peer) => keyFor(peer) !== keyFor(owner)),
+          path
+        );
+        for (const peer of owners) connect(owner, peer);
+      }
+    }
+    for (const [path, owners] of fileOwners) {
+      if (owners.length < 2) continue;
+      for (const owner of owners) {
+        markStructuralConflict(
+          owner,
+          "placement",
+          owners.filter((peer) => keyFor(peer) !== keyFor(owner)),
+          path
+        );
+        for (const peer of owners) connect(owner, peer);
+      }
+    }
+    // A destination is not actually available until its current owner moves or
+    // disappears.  Model that dependency explicitly so swaps and move chains
+    // are selected as one atomic structural operation.
+    for (const coordinate of coordinates) {
+      const endpoint = endpoints.get(keyFor(coordinate.coordinate))!;
+      const destination =
+        coordinate.coordinate.kind === "file" && endpoint["kind"] === "file"
+          ? `${endpoint["repositoryId"]}:${endpoint["path"]}`
+          : coordinate.coordinate.kind === "repository" && endpoint["presence"] === "present"
+            ? String(endpoint["repoPath"])
+            : null;
+      if (destination === null) continue;
+      const occupant =
+        coordinate.coordinate.kind === "file"
+          ? targetFileOccupants.get(destination)
+          : targetRepositoryOccupants.get(destination);
+      if (!occupant || keyFor(occupant) === keyFor(coordinate.coordinate)) continue;
+      const occupantResult = endpoints.get(keyFor(occupant));
+      if (!occupantResult) continue;
+      const occupantDestination =
+        occupant.kind === "file" && occupantResult["kind"] === "file"
+          ? `${occupantResult["repositoryId"]}:${occupantResult["path"]}`
+          : occupant.kind === "repository" && occupantResult["presence"] === "present"
+            ? String(occupantResult["repoPath"])
+            : null;
+      if (occupantDestination !== destination) connect(coordinate.coordinate, occupant);
+    }
+    for (const coordinate of coordinates.filter((row) => row.coordinate.kind === "file")) {
+      const endpoint = endpoints.get(keyFor(coordinate.coordinate))!;
+      if (endpoint["kind"] !== "file") continue;
+      const repository = { kind: "repository" as const, id: String(endpoint["repositoryId"]) };
+      const repositoryEndpoint =
+        endpoints.get(keyFor(repository)) ?? this.coordinateEndpoint(targetRoot, repository);
+      const targetRepositoryEndpoint = this.coordinateEndpoint(targetRoot, repository);
+      if (
+        targetRepositoryEndpoint["presence"] !== "present" &&
+        repositoryEndpoint["presence"] === "present"
+      ) {
+        connect(coordinate.coordinate, repository);
+      }
+      if (repositoryEndpoint["presence"] !== "present") {
+        markStructuralConflict(
+          coordinate.coordinate,
+          "presence",
+          [repository],
+          `${endpoint["repositoryId"]}:${endpoint["path"]}`
+        );
+      }
+    }
+
+    const visited = new Set<string>();
+    for (const key of [...graph.keys()].sort(compareUtf16CodeUnits)) {
+      if (visited.has(key)) continue;
+      const component: string[] = [];
+      const stack = [key];
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (visited.has(current)) continue;
+        visited.add(current);
+        component.push(current);
+        stack.push(...(graph.get(current) ?? []));
+      }
+      if (component.length < 2) continue;
+      component.sort(compareUtf16CodeUnits);
+      const group = compactId("merge-group", component);
+      for (const member of component) touched.get(member)!.group = group;
+    }
+  }
+
+  private decisionCoordinateAttribution(
+    decisionId: string,
+    coordinate: MergeCoordinate,
+    knownSourceChanges?: readonly ChangeRecord[]
+  ): MergeAttributionEntry[] {
+    const decision = this.deps.sql
+      .exec(
+        `SELECT source_event_id, source_delta_id FROM gad_integration_decisions
+          WHERE decision_id = ?`,
+        decisionId
+      )
+      .toArray()[0] as Row | undefined;
+    if (!decision) {
+      throw new SemanticVcsError("IntegrityFailure", `Missing merge decision ${decisionId}`);
+    }
+    const accounted = new Set(
+      (
+        this.deps.sql
+          .exec(
+            `SELECT change_id FROM gad_decision_source_changes
+            WHERE decision_id = ? AND coordinate_kind = ? AND coordinate_id = ?`,
+            decisionId,
+            coordinate.kind,
+            coordinate.id
+          )
+          .toArray() as Row[]
+      ).map((row) => String(row["change_id"]))
+    );
+    const sourceChanges =
+      knownSourceChanges ??
+      (decision["source_event_id"] != null
+        ? this.changesInApplications(
+            this.firstParentLineage({
+              kind: "event",
+              eventId: String(decision["source_event_id"]),
+            }).applicationIds
+          )
+        : this.sourceChangesForDelta(
+            this.deps.store.externalDelta(String(decision["source_delta_id"])) ??
+              (() => {
+                throw new SemanticVcsError(
+                  "IntegrityFailure",
+                  `Decision ${decisionId} references a missing external delta`
+                );
+              })()
+          ));
+    const selected = this.expandMergeAttribution(
+      sourceChanges.filter((change) => accounted.has(change.changeId))
+    );
+    const active = this.attributionActiveChangeIds(selected);
+    return selected.map((change) => ({
+      changeId: change.changeId,
+      workUnitId: change.workUnitId,
+      ...(!active.has(change.changeId) ? { undone: true as const } : {}),
+    }));
+  }
+
+  private decisionTargetState(decisionId: string): StateNodeRef {
+    const row = this.deps.sql
+      .exec(
+        `SELECT target_state_kind, target_state_id
+           FROM gad_integration_decisions WHERE decision_id = ?`,
+        decisionId
+      )
+      .toArray()[0] as Row | undefined;
+    if (!row) {
+      throw new SemanticVcsError("IntegrityFailure", `Missing merge decision ${decisionId}`);
+    }
+    return row["target_state_kind"] === "event"
+      ? { kind: "event", eventId: String(row["target_state_id"]) }
+      : { kind: "application", applicationId: String(row["target_state_id"]) };
+  }
+
+  private decisionResultState(
+    decisionId: string,
+    lineageApplicationIds: readonly string[]
+  ): { kind: "application"; applicationId: string } {
+    const row = this.deps.sql
+      .exec(
+        `SELECT application.application_id
+           FROM gad_integration_decisions decision
+           JOIN gad_work_unit_applications application
+             ON application.work_unit_id = decision.work_unit_id
+           JOIN json_each(?) lineage
+             ON application.application_id = CAST(lineage.value AS TEXT)
+          WHERE decision.decision_id = ?
+          ORDER BY CAST(lineage.key AS INTEGER)
+          LIMIT 1`,
+        canonicalJson(lineageApplicationIds),
+        decisionId
+      )
+      .toArray()[0] as Row | undefined;
+    if (!row) {
+      throw new SemanticVcsError(
+        "IntegrityFailure",
+        `Merge decision ${decisionId} has no application in the target lineage`
+      );
+    }
+    return { kind: "application", applicationId: String(row["application_id"]) };
+  }
+
+  private mergeTextContentHashes(comparison: NetMergeComparison): string[] {
+    const hashes = new Set<string>();
+    for (const coordinate of comparison.coordinates) {
+      for (const aspect of coordinate.aspects) {
+        if (aspect.aspect !== "content" || aspect.status !== "conflict" || aspect.baseValues) {
+          continue;
+        }
+        const values = [aspect.base, aspect.ours, aspect.theirs];
+        if (
+          !values.every(
+            (value): value is Row =>
+              value !== null &&
+              typeof value === "object" &&
+              (value as Row)["kind"] === "text" &&
+              typeof (value as Row)["hash"] === "string"
+          )
+        ) {
+          continue;
+        }
+        for (const value of values) hashes.add(String(value["hash"]));
+      }
+    }
+    return [...hashes].sort(compareUtf16CodeUnits);
+  }
+
+  private integrationDecisionForSource(
+    applicationIds: readonly string[],
+    source: NetMergeComparison["source"]
+  ): string | null {
+    if (!applicationIds.length) return null;
+    const row = this.deps.sql
+      .exec(
+        `SELECT decision.decision_id
+           FROM gad_integration_decisions decision
+           JOIN gad_work_unit_applications application ON application.work_unit_id = decision.work_unit_id
+           JOIN json_each(?) selected ON application.application_id = CAST(selected.value AS TEXT)
+          WHERE ${source.kind === "event" ? "decision.source_event_id" : "decision.source_delta_id"} = ?
+          ORDER BY decision.created_at DESC, decision.decision_id LIMIT 1`,
+        canonicalJson(applicationIds),
+        source.kind === "event" ? source.eventId : source.deltaId
+      )
+      .toArray()[0] as Row | undefined;
+    return row ? String(row["decision_id"]) : null;
   }
 
   private assertIntegrationHistoryValid(mainEventId: string, publishedEventId: string): void {
@@ -5830,15 +7715,34 @@ export class SemanticWorkspace {
             `Integration event ${eventId} has no source`
           );
         }
+        const resultApplicationId = event.applicationIds.at(-1);
+        if (!resultApplicationId) {
+          throw new SemanticVcsError(
+            "IntegrityFailure",
+            `Integration event ${eventId} has no merge application`
+          );
+        }
+        const resultState = {
+          kind: "application" as const,
+          applicationId: resultApplicationId,
+        };
         for (const sourceEventId of sourceEventIds) {
-          const comparison = this.integrationComparison({ kind: "event", eventId }, sourceEventId);
-          if (comparison.unaccountedChangeIds.length > 0) {
+          const comparison = this.mergeComparison(resultState, {
+            kind: "event",
+            eventId: sourceEventId,
+          });
+          const remaining = comparison.coordinates
+            .filter(
+              (coordinate) => coordinate.status !== "resolved" && coordinate.status !== "convergent"
+            )
+            .map((coordinate) => coordinate.coordinate);
+          if (remaining.length > 0) {
             throw new SemanticVcsError(
               "IntegrationIncomplete",
               `Integration event ${eventId} no longer validates source ${sourceEventId}`,
               {
-                sourceEventId,
-                unaccountedChangeIds: comparison.unaccountedChangeIds,
+                source: { kind: "event", eventId: sourceEventId },
+                unaccountedCoordinates: remaining,
               }
             );
           }
@@ -5851,14 +7755,22 @@ export class SemanticWorkspace {
               `Integration event ${eventId} references missing external delta ${sourceDeltaId}`
             );
           }
-          const comparison = this.integrationComparisonForDelta({ kind: "event", eventId }, delta);
-          if (comparison.unaccountedChangeIds.length > 0) {
+          const comparison = this.mergeComparison(resultState, {
+            kind: "external-delta",
+            deltaId: sourceDeltaId,
+          });
+          const remaining = comparison.coordinates
+            .filter(
+              (coordinate) => coordinate.status !== "resolved" && coordinate.status !== "convergent"
+            )
+            .map((coordinate) => coordinate.coordinate);
+          if (remaining.length > 0) {
             throw new SemanticVcsError(
               "IntegrationIncomplete",
               `Integration event ${eventId} no longer validates external delta ${sourceDeltaId}`,
               {
-                sourceDeltaId,
-                unaccountedChangeIds: comparison.unaccountedChangeIds,
+                source: { kind: "external-delta", deltaId: sourceDeltaId },
+                unaccountedCoordinates: remaining,
               }
             );
           }
@@ -6058,6 +7970,107 @@ export class SemanticWorkspace {
     return active;
   }
 
+  /** Return the changes whose authored contribution still reaches the final
+   * attributed state. Explicit counteractions suppress changes first; ordinary
+   * later changes then supersede the exact aspects whose result they consume.
+   * Merge changes preserve their contributors while their result is live. */
+  private attributionActiveChangeIds(changes: readonly ChangeRecord[]): Set<string> {
+    const counteractionActive = this.activeChangeIds(changes);
+    const liveAspects = new Map<string, Set<MergeAspectName>>();
+    const authoredAspects = new Map<string, Set<MergeAspectName>>();
+    const coordinateKeys = new Map<string, string>();
+    const changesById = new Map(changes.map((change) => [change.changeId, change]));
+    const aspectsFor = (change: ChangeRecord): MergeAspectName[] => {
+      const coordinate = this.mergeChangeCoordinate(change);
+      if (!coordinate) return [];
+      const aspects: MergeAspectName[] =
+        coordinate.kind === "file"
+          ? ["presence", "content", "placement", "mode"]
+          : ["presence", "path"];
+      return aspects.filter(
+        (aspect) =>
+          !this.sameAspectValue(
+            aspect,
+            this.aspectValue(change.base ?? {}, aspect),
+            this.aspectValue(change.result ?? {}, aspect)
+          )
+      );
+    };
+    for (const change of changes) {
+      const coordinate = this.mergeChangeCoordinate(change);
+      if (!coordinate) continue;
+      const aspects = new Set(aspectsFor(change));
+      authoredAspects.set(change.changeId, new Set(aspects));
+      if (!counteractionActive.has(change.changeId)) continue;
+      coordinateKeys.set(change.changeId, `${coordinate.kind}:${coordinate.id}`);
+      liveAspects.set(change.changeId, aspects);
+    }
+    for (let index = 0; index < changes.length; index += 1) {
+      const change = changes[index]!;
+      if (!counteractionActive.has(change.changeId) || change.kind === "merge") continue;
+      const coordinateKey = coordinateKeys.get(change.changeId);
+      if (!coordinateKey) continue;
+      for (const aspect of aspectsFor(change)) {
+        const before = this.aspectValue(change.base ?? {}, aspect);
+        for (let previous = index - 1; previous >= 0; previous -= 1) {
+          const candidate = changes[previous]!;
+          if (
+            coordinateKeys.get(candidate.changeId) !== coordinateKey ||
+            !liveAspects.get(candidate.changeId)?.has(aspect)
+          ) {
+            continue;
+          }
+          const candidateResult = this.aspectValue(candidate.result ?? {}, aspect);
+          if (!this.sameAspectValue(aspect, candidateResult, before)) continue;
+          liveAspects.get(candidate.changeId)!.delete(aspect);
+          break;
+        }
+      }
+    }
+    const deactivateContributorAspects = (
+      change: ChangeRecord,
+      aspects: ReadonlySet<MergeAspectName>,
+      visiting: Set<string>
+    ): void => {
+      if (visiting.has(change.changeId)) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Merge attribution contains a cycle at ${change.changeId}`
+        );
+      }
+      visiting.add(change.changeId);
+      const contributors = change.payload["mergesChangeIds"];
+      if (Array.isArray(contributors)) {
+        for (const contributorId of contributors) {
+          if (typeof contributorId !== "string") continue;
+          const contributorAspects = liveAspects.get(contributorId);
+          for (const aspect of aspects) contributorAspects?.delete(aspect);
+          const contributor = changesById.get(contributorId);
+          if (contributor) deactivateContributorAspects(contributor, aspects, visiting);
+        }
+      }
+      visiting.delete(change.changeId);
+    };
+    for (const change of changes) {
+      if (change.kind !== "merge") continue;
+      const authored = authoredAspects.get(change.changeId) ?? new Set<MergeAspectName>();
+      const live = liveAspects.get(change.changeId) ?? new Set<MergeAspectName>();
+      const superseded = new Set(
+        [...authored].filter(
+          (aspect) => !counteractionActive.has(change.changeId) || !live.has(aspect)
+        )
+      );
+      if (superseded.size > 0) {
+        deactivateContributorAspects(change, superseded, new Set());
+      }
+    }
+    return new Set(
+      [...liveAspects.entries()]
+        .filter(([, aspects]) => aspects.size > 0)
+        .map(([changeId]) => changeId)
+    );
+  }
+
   private changeCoordinate(change: ChangeRecord): string | null {
     const endpoint = change.result ?? change.base;
     if (typeof endpoint?.["fileId"] === "string") return `file:${endpoint["fileId"]}`;
@@ -6207,39 +8220,6 @@ export class SemanticWorkspace {
     return false;
   }
 
-  private resultEvidence(change: ChangeRecord): StatePredicateRecord[] {
-    const result = change.result;
-    if (!result) return [];
-    if (result["kind"] === "file" && typeof result["fileId"] === "string") {
-      return typeof result["contentHash"] === "string"
-        ? [
-            {
-              kind: "file-content",
-              fileId: result["fileId"],
-              contentHash: result["contentHash"],
-            },
-          ]
-        : [];
-    }
-    if (result["kind"] === "missing" && typeof result["fileId"] === "string") {
-      return [{ kind: "file-absent", fileId: result["fileId"] }];
-    }
-    if (result["kind"] === "repository" && typeof result["repositoryId"] === "string") {
-      return result["presence"] === "deleted"
-        ? [{ kind: "repository-absent", repositoryId: result["repositoryId"] }]
-        : typeof result["repoPath"] === "string"
-          ? [
-              {
-                kind: "repository-present",
-                repositoryId: result["repositoryId"],
-                repoPath: result["repoPath"],
-              },
-            ]
-          : [];
-    }
-    return [];
-  }
-
   private assertChangeReachableFromEvent(changeId: string, eventId: string): void {
     const row = this.deps.sql
       .exec(
@@ -6292,36 +8272,6 @@ export class SemanticWorkspace {
           .toArray() as Row[]
       ).map((row) => String(row["change_id"]))
     );
-  }
-
-  private predicateHolds(state: StateNodeRef, predicate: StatePredicateRecord): boolean {
-    const root = this.deps.store.stateRoot(state);
-    const fileId = typeof predicate["fileId"] === "string" ? predicate["fileId"] : null;
-    const file = fileId ? this.deps.store.facts.file(root, fileId) : null;
-    switch (predicate.kind) {
-      case "file-content":
-        return (
-          file?.state.presence === "placed" && file.state.contentHash === predicate["contentHash"]
-        );
-      case "file-placement":
-        return (
-          file?.state.presence === "placed" &&
-          file.state.repositoryId === predicate["repositoryId"] &&
-          file.state.path === predicate["path"]
-        );
-      case "file-absent":
-        return !file || file.state.presence === "deleted";
-      case "repository-present": {
-        const repository = this.deps.store.facts.member(root, String(predicate["repositoryId"]));
-        return repository?.presence === "present" && repository.repoPath === predicate["repoPath"];
-      }
-      case "repository-absent": {
-        const repository = this.deps.store.facts.member(root, String(predicate["repositoryId"]));
-        return !repository || repository.presence === "deleted";
-      }
-      default:
-        return false;
-    }
   }
 
   private publicAppliedChange(row: Row): Row {
@@ -6491,6 +8441,14 @@ export class SemanticWorkspace {
                 WHERE work_unit_id = ? ORDER BY created_at, decision_id LIMIT 200`
             ),
             intentSummary: row["intent_summary"] == null ? null : String(row["intent_summary"]),
+            authorContextId: String(row["author_context_id"]),
+            triggerEvidence:
+              row["trigger_excerpt"] == null || row["trigger_sender_json"] == null
+                ? null
+                : {
+                    text: String(row["trigger_excerpt"]),
+                    sender: JSON.parse(String(row["trigger_sender_json"])),
+                  },
             externalSnapshot:
               storedExternalSnapshot == null
                 ? null

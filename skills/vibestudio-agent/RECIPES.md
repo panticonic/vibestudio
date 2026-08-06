@@ -22,7 +22,7 @@ vibestudio eval run -e 'return await help("vcs")'
 ```
 
 Load `file-move-copy.md` before managed identity changes,
-`compare-and-integrate.md` before bringing in another context, and
+`compare-and-merge.md` before bringing in another context, and
 `typed-recovery.md` before retrying an uncertain mutation.
 
 ## Explore and edit managed source
@@ -104,7 +104,7 @@ vibestudio agent detach featureA --rm
 ```
 
 Each context has its own committed event and working head. Bring work between
-contexts with `compare` and incremental `integrate` decisions; do not copy
+contexts with `compare` and incremental `merge` decisions; do not copy
 projected directories between them.
 
 ## Channels

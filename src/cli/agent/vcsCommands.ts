@@ -43,20 +43,10 @@ const MESSAGE_FLAG: FlagSpec = {
   takesValue: true,
   description: "Commit message",
 };
-const INTEGRATES_FLAG: FlagSpec = {
-  name: "integrates",
-  takesValue: true,
-  description: "Exact fully-accounted source event to add as integration parent",
-};
 const COMMAND_ID_FLAG: FlagSpec = {
   name: "command-id",
   takesValue: true,
   description: "Stable retry identity (generated and printed when omitted)",
-};
-const VIEW_FLAG: FlagSpec = {
-  name: "view",
-  takesValue: true,
-  description: "overview | changes",
 };
 const LIMIT_FLAG: FlagSpec = {
   name: "limit",
@@ -216,20 +206,15 @@ const status = (inv: ParsedInvocation) => run(inv, (vcs, contextId) => vcs.statu
 const compare = (inv: ParsedInvocation) =>
   run(inv, async (vcs, contextId) => {
     const current = await vcs.status({ contextId });
-    const view = String(inv.flags["view"] ?? "overview");
-    if (view !== "overview" && view !== "changes") {
-      throw new UsageError("--view must be overview or changes");
-    }
     const sourceDeltaId = typeof inv.flags["delta"] === "string" ? inv.flags["delta"] : undefined;
     if (sourceDeltaId && inv.positionals[0]) {
       throw new UsageError("pass either SOURCE_EVENT_ID or --delta DELTA_ID, not both");
     }
     return vcs.compare({
       target: current.workingHead,
-      ...(sourceDeltaId
-        ? { sourceDeltaId }
-        : { sourceEventId: inv.positionals[0] ?? current.mainEventId }),
-      view,
+      source: sourceDeltaId
+        ? { kind: "external-delta", deltaId: sourceDeltaId }
+        : { kind: "event", eventId: inv.positionals[0] ?? current.mainEventId },
       limit: pageLimit(inv),
     });
   });
@@ -408,15 +393,12 @@ const commit = (inv: ParsedInvocation) =>
   run(inv, async (vcs, contextId, serverUrl) => {
     const message = typeof inv.flags["message"] === "string" ? inv.flags["message"].trim() : "";
     if (!message) throw new UsageError("commit requires -m MESSAGE");
-    const integratesEventId =
-      typeof inv.flags["integrates"] === "string" ? inv.flags["integrates"] : null;
-    const integrationArgs = integratesEventId ? { integratesEventIds: [integratesEventId] } : {};
     return runRetriableMutation(
       inv,
       vcs,
       { contextId, serverUrl },
       "commit",
-      { message, ...integrationArgs },
+      { message },
       async (id) => {
         const current = await vcs.status({ contextId });
         const input: VcsCommitInput = {
@@ -424,7 +406,6 @@ const commit = (inv: ParsedInvocation) =>
           expectedWorkingHead: current.workingHead,
           message,
           commandId: id,
-          ...integrationArgs,
         };
         return input;
       }
@@ -480,7 +461,7 @@ export const vcsCommands: CliCommand[] = [
     name: "compare",
     summary: "Compare the working state with an event or external delta",
     usage: "vibestudio vcs compare [SOURCE_EVENT_ID] [--delta DELTA_ID]",
-    flags: [DELTA_FLAG, VIEW_FLAG, LIMIT_FLAG, ...common],
+    flags: [DELTA_FLAG, LIMIT_FLAG, ...common],
     run: compare,
   },
   {
@@ -518,8 +499,8 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "commit",
     summary: "Commit the complete local application chain",
-    usage: "vibestudio vcs commit -m MESSAGE [--integrates SOURCE_EVENT_ID]",
-    flags: [MESSAGE_FLAG, INTEGRATES_FLAG, ...commandFlags],
+    usage: "vibestudio vcs commit -m MESSAGE",
+    flags: [MESSAGE_FLAG, ...commandFlags],
     run: commit,
   },
   {
@@ -539,7 +520,7 @@ export const vcsCommands: CliCommand[] = [
   ...(
     [
       ["edit", "Submit an identity-checked edit transaction"],
-      ["integrate", "Take one local integration decision"],
+      ["merge", "Merge one bounded coordinate page by net effect"],
       ["revert", "Counteract exact semantic changes"],
       ["importSnapshot", "Import an exact external snapshot"],
       ["inspect", "Inspect one typed semantic node"],

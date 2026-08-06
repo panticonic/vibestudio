@@ -335,7 +335,7 @@ key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 | Edit a file                 | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                                                                                                                                                                                                                               |
 | Check compiler/build        | `eval` — `return await services.build.getBuildReport("panels/my-app", \`ctx:${ctx.contextId}\`)`; inspect its structured target diagnostics and rerun after repairs.                                                                                                                                                                                                 |
 | Run tests                   | `eval` — `await extensions.invoke("@workspace-extensions/test-runner", "run", [{ target: "packages/my-lib" }])`                                                                                                                                                                                                                                                      |
-| Operate workspace VCS       | Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md); retain the exact working head, integrate in local steps, commit the complete chain, then publish                                                                                                                                                                                                                  |
+| Operate workspace VCS       | Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md); retain the exact working head, merge stable-coordinate pages, review intents/composed results, commit the complete chain, then publish |
 | Move/copy managed files     | Use `vcs.move` or `vcs.copy`; runtime `fs.rename`/`fs.copyFile` and agent `move_file`/`copy_file` route through the same identity-aware adapter                                                                                                                                                                                                                      |
 | Import an external snapshot | Use `vcs.importSnapshot` with a canonical credential-free source URI, exact source revision, and complete repository/file descriptors; the semantic workspace verifies host-observed CAS descriptors, derives the snapshot digest, and atomically returns the committed event/application/work-unit/repository/snapshot evidence                                     |
 
@@ -346,7 +346,7 @@ key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 and execution-session context in panels, workers, and server-side eval.)
 
 The development loop is semantic: author work from the exact working head;
-compare with an exact committed source event; integrate incoming changes in
+compare with an exact committed source event; merge incoming coordinates in
 small local steps; test; commit the complete local application chain; then
 publish the clean committed event. Work needing another commit boundary belongs
 in another context. See [WORKFLOW.md](WORKFLOW.md) for the development loop and the

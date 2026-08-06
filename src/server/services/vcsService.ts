@@ -372,13 +372,18 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         : ctx.caller;
     const result = await invoke(ctx, dispatchMethod, parsed.input, effectCaller);
     if (
-      method === "integrate" &&
-      typeof (parsed.input as { sourceDeltaId?: unknown }).sourceDeltaId === "string"
+      method === "merge" &&
+      (parsed.input as { source?: { kind?: unknown; deltaId?: unknown } }).source?.kind ===
+        "external-delta" &&
+      typeof (parsed.input as { source?: { deltaId?: unknown } }).source?.deltaId === "string"
     ) {
-      const integration = parsed.input as { contextId: string; sourceDeltaId: string };
+      const integration = parsed.input as {
+        contextId: string;
+        source: { kind: "external-delta"; deltaId: string };
+      };
       await deps.onExternalDeltaIntegrated?.(ctx, {
         contextId: integration.contextId,
-        sourceDeltaId: integration.sourceDeltaId,
+        sourceDeltaId: integration.source.deltaId,
       });
     }
     return result;

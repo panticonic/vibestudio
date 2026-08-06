@@ -83,7 +83,7 @@ function requireCanonicalStatus(result: TestExecutionResult) {
       call.execution.isError !== true &&
       (["edit", "write", "move_file", "copy_file"].includes(call.name) ||
         (call.name === "vcs" &&
-          ["edit", "move", "copy", "integrate", "revert", "commit", "discard", "push"].includes(
+          ["edit", "move", "copy", "merge", "revert", "commit", "discard", "push"].includes(
             String(call.arguments?.["operation"])
           )))
   );
@@ -298,7 +298,7 @@ export const vcsTests: TestCase[] = [
       if (!invocations.passed) return invocations;
       const operations = requireVcsEvidence(result, [
         "vcs.compare",
-        "vcs.integrate",
+        "vcs.merge",
         "vcs.commit",
         "vcs.push",
         "vcs.status",

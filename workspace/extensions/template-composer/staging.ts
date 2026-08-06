@@ -476,53 +476,23 @@ export async function reviewTemplateUpdates(
     registeredDeltas.push({ repoPath, deltaId: delta.deltaId });
   }
   for (const { repoPath, deltaId } of registeredDeltas) {
-    let satisfiedBatch = 0;
-    for (;;) {
-      const latest = await status(ctx, contextId);
-      const comparison = await ctx.rpc.call<{
-        resolution: { complete: boolean };
-        changes: Array<{
-          changeId: string;
-          disposition: { status: string; evidence?: unknown[] };
-        }>;
-      }>("main", "vcs.compare", {
-        target: latest.workingHead,
-        sourceDeltaId: deltaId,
-        view: "changes",
-        limit: 200,
-      });
-      const alreadySatisfied = comparison.changes.find(
-        (change) => change.disposition.status === "already-satisfied"
-      );
-      if (!alreadySatisfied) break;
-      if (!alreadySatisfied.disposition.evidence?.length) {
-        throw new Error(
-          `VCS reported ${alreadySatisfied.changeId} as already satisfied without reconciliation evidence`
-        );
-      }
-      await ctx.rpc.call("main", "vcs.integrate", {
-        commandId: `${contextId}:account-satisfied:${repoPath}:${satisfiedBatch}`,
-        contextId,
-        expectedWorkingHead: latest.workingHead,
-        sourceDeltaId: deltaId,
-        decision: {
-          kind: "reconciled",
-          sourceChangeIds: [alreadySatisfied.changeId],
-          evidence: alreadySatisfied.disposition.evidence,
-          rationale: "The exact template source change already holds in the workspace",
-        },
-      });
-      satisfiedBatch += 1;
-    }
     const latest = await status(ctx, contextId);
     const compared = await ctx.rpc.call<{
-      resolution: { complete: boolean };
+      resolution: { complete: boolean; concluded: boolean };
     }>("main", "vcs.compare", {
       target: latest.workingHead,
-      sourceDeltaId: deltaId,
-      view: "overview",
+      source: { kind: "external-delta", deltaId },
       limit: 1,
     });
+    if (compared.resolution.complete && !compared.resolution.concluded) {
+      await ctx.rpc.call("main", "vcs.merge", {
+        commandId: `${contextId}:conclude-convergent:${repoPath}`,
+        contextId,
+        expectedWorkingHead: latest.workingHead,
+        source: { kind: "external-delta", deltaId },
+        intentSummary: "Conclude a convergent template update so its source remains in ancestry",
+      });
+    }
     if (!compared.resolution.complete) {
       items.push({ repoPath, deltaId });
       continue;

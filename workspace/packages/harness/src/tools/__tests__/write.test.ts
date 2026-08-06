@@ -13,10 +13,12 @@ describe("canonical write tool", () => {
     const result = await tool.execute("invocation:1", {
       path: "meta/out.txt",
       content: "hello",
+      intent: "Create the durable handoff consumed by the next pipeline stage",
     });
     expect(vcs.read("meta/out.txt")).toBe("hello");
     expect(vcs.lastEditInput).toMatchObject({
       commandId: "command:write",
+      intentSummary: "Create the durable handoff consumed by the next pipeline stage",
       expectedWorkingHead: { kind: "event", eventId: "event:committed" },
       changes: [
         {

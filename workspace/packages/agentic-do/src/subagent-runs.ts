@@ -25,7 +25,7 @@ export type SubagentRunStatus =
    * durable, handle-resolvable lifecycle receipt. */
   | "closed";
 
-export type SubagentRunIntegration = "integrated" | "conflicted" | "discarded";
+export type SubagentRunIntegration = "merged" | "needs-decision" | "discarded";
 
 /** The reasoning engine behind a subagent: "pi" is the in-process vessel; any
  *  other string names an extension-owned external launcher. */
@@ -72,8 +72,8 @@ const SUBAGENT_RUN_STATUSES = [
   "closed",
 ] as const satisfies readonly SubagentRunStatus[];
 const SUBAGENT_RUN_INTEGRATIONS = [
-  "integrated",
-  "conflicted",
+  "merged",
+  "needs-decision",
   "discarded",
 ] as const satisfies readonly SubagentRunIntegration[];
 

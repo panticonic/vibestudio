@@ -55,7 +55,7 @@ read in structured details instead of attaching history from different bytes
 or adding warning prose to the file content. The visible
 **workspace memory** block answers why the displayed lines exist using
 blame-selected work episodes, intent/commit/original-request evidence when
-recorded, integration decisions, and recent file history. It shows one
+recorded, merge decisions, and recent file history. It shows one
 copyable deeper target per episode; the structured details retain every typed
 root. This is a projection of canonical GAD facts, not a second claims store.
 
@@ -88,6 +88,9 @@ For a direct causally bound service request, supply:
 - the exact expected working head;
 - one globally unique command ID;
 - one or more changes over stable repository/file identities;
+- optional `intentSummary` only when the author explicitly supplied meaningful
+  purpose. Agent-facing tools expose this as `intent`; never manufacture a
+  summary from the operation or path.
 - an optional concise intent summary.
 
 Treat one edit request as one work unit and one local application. Keep the

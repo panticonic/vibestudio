@@ -12,7 +12,6 @@ import { vcs, type VcsClient } from "@workspace/runtime";
 import type {
   VcsReadFileResult,
   VcsStateNodeRef,
-  VcsStatePredicate,
   VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
 import type { ReplaceEditOp } from "../coedit/commitEdits";
@@ -25,7 +24,7 @@ export type VaultVcsPort = Pick<
   | "listFiles"
   | "edit"
   | "compare"
-  | "integrate"
+  | "merge"
   | "revert"
   | "commit"
   | "push"
@@ -45,8 +44,8 @@ export interface VaultChange {
 }
 
 export interface VaultIntegrationConflict {
-  changeId: string;
-  kind: string;
+  coordinate: { kind: "file" | "repository"; id: string };
+  coordinates: Array<{ kind: "file" | "repository"; id: string }>;
   summary: string;
 }
 
@@ -224,7 +223,7 @@ export class VaultSemanticVcs {
     return (await this.refresh()).status.workingCounts.changes;
   }
 
-  /** Integrate protected main as ordinary local decisions, then commit that chain. */
+  /** Merge protected main by net effect, then commit that chain. */
   async integrateMain(): Promise<VaultIntegrationResult> {
     const revision = await this.refresh();
     if (revision.status.mainRelation === "at" || revision.status.mainRelation === "ahead") {
@@ -233,121 +232,84 @@ export class VaultSemanticVcs {
 
     const sourceEventId = revision.status.mainEventId;
     for (;;) {
-      const applicable: string[] = [];
-      const satisfied: Array<{ changeId: string; evidence: VcsStatePredicate[] }> = [];
-      const conflicting: VaultIntegrationConflict[] = [];
-      const blocked: Array<{ changeId: string; prerequisiteChangeIds: string[] }> = [];
-      let cursor: string | undefined;
-      do {
-        const page = await this.client.compare({
-          target: revision.status.workingHead,
-          sourceEventId,
-          view: "changes",
-          limit: 500,
-          ...(cursor ? { cursor } : {}),
-        });
-        for (const change of page.changes) {
-          if (change.disposition.status === "actionable") {
-            if (change.disposition.applicability === "applicable") {
-              applicable.push(change.changeId);
-            } else if (change.disposition.applicability === "conflicting") {
-              conflicting.push({
-                changeId: change.changeId,
-                kind: change.kind,
-                summary: change.summary,
-              });
-            } else {
-              blocked.push({
-                changeId: change.changeId,
-                prerequisiteChangeIds: change.disposition.prerequisiteChangeIds,
-              });
-            }
-          } else if (change.disposition.status === "already-satisfied") {
-            satisfied.push({ changeId: change.changeId, evidence: change.disposition.evidence });
-          }
+      const comparison = await this.client.compare({
+        target: revision.status.workingHead,
+        source: { kind: "event", eventId: sourceEventId },
+        limit: 500,
+      });
+      if (comparison.counts.conflict > 0) {
+        const coordinates = [...comparison.coordinates];
+        let page = comparison;
+        while (page.nextCursor) {
+          page = await this.client.compare({
+            target: revision.status.workingHead,
+            source: { kind: "event", eventId: sourceEventId },
+            limit: 500,
+            cursor: page.nextCursor,
+          });
+          coordinates.push(...page.coordinates);
         }
-        cursor = page.nextCursor ?? undefined;
-      } while (cursor);
-
-      if (conflicting.length > 0) {
-        return { status: "conflicts", sourceEventId, conflicts: conflicting };
+        const conflicts = coordinates
+          .filter((coordinate) => coordinate.status === "conflict")
+          .map((coordinate) => ({
+            coordinate: {
+              kind: coordinate.coordinate.kind,
+              id: coordinate.coordinate.id,
+            },
+            coordinates: (coordinate.group
+              ? coordinates.filter(
+                  (candidate) =>
+                    candidate.group === coordinate.group && candidate.status !== "resolved"
+                )
+              : [coordinate]
+            ).map((member) => ({
+              kind: member.coordinate.kind,
+              id: member.coordinate.id,
+            })),
+            summary: coordinate.summary,
+          }));
+        return { status: "conflicts", sourceEventId, conflicts };
       }
-
-      const nextApplicable = applicable[0];
-      if (nextApplicable) {
-        const result = await this.client.integrate({
-          contextId: this.contextId,
-          expectedWorkingHead: revision.status.workingHead,
-          commandId: commandId("integrate-main"),
-          sourceEventId,
-          decision: { kind: "adopted", sourceChangeIds: [nextApplicable] },
-        });
-        revision.status.workingHead = result.workingHead;
-        continue;
-      }
-
-      const nextSatisfied = satisfied[0];
-      if (nextSatisfied) {
-        const result = await this.client.integrate({
-          contextId: this.contextId,
-          expectedWorkingHead: revision.status.workingHead,
-          commandId: commandId("account-for-main"),
-          sourceEventId,
-          decision: {
-            kind: "reconciled",
-            sourceChangeIds: [nextSatisfied.changeId],
-            evidence: nextSatisfied.evidence,
-            rationale: "The current vault already satisfies this published change.",
-          },
-        });
-        revision.status.workingHead = result.workingHead;
-        continue;
-      }
-
-      if (blocked.length > 0) {
-        const explanation = blocked
-          .map(
-            ({ changeId, prerequisiteChangeIds }) =>
-              `${changeId} after ${prerequisiteChangeIds.join(", ")}`
-          )
-          .join("; ");
-        throw new Error(
-          `Published changes remain blocked after safe integration steps: ${explanation}`
-        );
-      }
-      break;
+      if (comparison.resolution.complete && comparison.resolution.concluded) break;
+      const result = await this.client.merge({
+        contextId: this.contextId,
+        expectedWorkingHead: revision.status.workingHead,
+        commandId: commandId("merge-main"),
+        source: { kind: "event", eventId: sourceEventId },
+      });
+      revision.status.workingHead = result.workingHead;
     }
 
     await this.client.commit({
       contextId: this.contextId,
       expectedWorkingHead: revision.status.workingHead,
       commandId: commandId("commit-integration"),
-      integratesEventIds: [sourceEventId],
       message: "Integrate published vault changes",
     });
     await this.refresh();
     return "integrated";
   }
 
-  /** Explicitly keep the current vault result for selected conflicting source changes. */
-  async keepLocalForMain(changeIds: string[]): Promise<VaultIntegrationResult> {
-    if (changeIds.length === 0) return this.integrateMain();
+  /** Explicitly keep the current vault result for selected conflicting coordinates. */
+  async keepLocalForMain(
+    coordinates: Array<{ kind: "file" | "repository"; id: string }>
+  ): Promise<VaultIntegrationResult> {
+    if (coordinates.length === 0) return this.integrateMain();
     const revision = await this.refresh();
     const sourceEventId = revision.status.mainEventId;
-    for (const changeId of changeIds) {
-      const result = await this.client.integrate({
-        contextId: this.contextId,
-        expectedWorkingHead: revision.status.workingHead,
-        commandId: commandId("decline-main"),
-        sourceEventId,
-        decision: {
-          kind: "declined",
-          sourceChangeIds: [changeId],
-          rationale: "Keep the current vault content instead of this conflicting published change.",
-        },
-      });
-      revision.status.workingHead = result.workingHead;
-    }
+    const result = await this.client.merge({
+      contextId: this.contextId,
+      expectedWorkingHead: revision.status.workingHead,
+      commandId: commandId("decline-main"),
+      source: { kind: "event", eventId: sourceEventId },
+      coordinates,
+      resolutions: coordinates.map((coordinate) => ({
+        coordinate,
+        resolution: "ours" as const,
+        rationale: "Keep the current vault content instead of this conflicting published coordinate.",
+      })),
+    });
+    revision.status.workingHead = result.workingHead;
     return this.integrateMain();
   }
 

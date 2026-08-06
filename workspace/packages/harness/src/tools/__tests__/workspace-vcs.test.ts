@@ -14,40 +14,56 @@ function fixture() {
   }));
   const compare = vi.fn(async (input: Parameters<ToolWorkflowVcs["compare"]>[0]) => ({
     target: input.target,
-    ...("sourceEventId" in input
-      ? { sourceEventId: input.sourceEventId }
-      : { sourceDeltaId: input.sourceDeltaId }),
-    resolution: { complete: false, remainingChangeCount: 1 },
-    counts: {
-      shared: 1,
-      alreadySatisfied: 0,
-      actionable: 1,
-      conflicting: 0,
-      blocked: 0,
-      accounted: 0,
-      historical: 0,
-    },
-    changes: [
+    source: input.source,
+    base: { kind: "event" as const, eventId: "event:base" },
+    resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
+    counts: { adopt: 1, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+    intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 1 },
+    coordinates: [
       {
-        changeId: "change:source",
-        workUnitId: "work:source",
-        kind: "text-edit" as const,
-        summary: "Update the source",
-        disposition: { status: "actionable" as const, applicability: "applicable" as const },
+        coordinate: { kind: "file" as const, id: "file:source" },
+        paths: { base: "packages/demo/a.ts", ours: "packages/demo/a.ts", theirs: "packages/demo/a.ts" },
+        status: "adopt" as const,
+        aspects: [{
+          aspect: "content" as const,
+          base: { hash: "blob:base" },
+          ours: { hash: "blob:base" },
+          theirs: { hash: "blob:source" },
+          status: "adopt" as const,
+        }],
+        attribution: {
+          ours: [],
+          theirs: [{ changeId: "change:source", workUnitId: "work:source" }],
+        },
+        resolutions: ["theirs" as const, "ours" as const, "current" as const],
+        summary: "adopt file packages/demo/a.ts",
       },
     ],
+    intents: [{
+      workUnitId: "work:source",
+      side: "theirs" as const,
+      intent: { text: "Update the source", tier: "stated" as const },
+      coordinates: [{ kind: "file" as const, id: "file:source" }],
+      state: "pending" as const,
+    }],
+    intentsTruncated: false,
     nextCursor: null,
   }));
-  const integrate = vi.fn(async (input: Parameters<ToolWorkflowVcs["integrate"]>[0]) => ({
+  const merge = vi.fn(async (input: Parameters<ToolWorkflowVcs["merge"]>[0]) => ({
     contextId: input.contextId,
-    workUnitId: "work:integration",
-    applicationId: "application:integration",
+    workUnitId: "work:merge",
+    applicationId: "application:merge",
     changeCount: 0,
     changeIds: [],
-    incorporatedChangeCount: input.decision.sourceChangeIds.length,
-    incorporatedChangeIds: input.decision.sourceChangeIds,
-    workingHead: { kind: "application" as const, applicationId: "application:integration" },
-    decisionId: "decision:integration",
+    incorporatedChangeCount: 1,
+    incorporatedChangeIds: ["change:source"],
+    decisionIds: ["decision:merge"],
+    workingHead: { kind: "application" as const, applicationId: "application:merge" },
+    decisionId: "decision:merge",
+    outcomes: [],
+    resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+    intents: [],
+    composed: [],
   }));
   const revert = vi.fn();
   const discard = vi.fn(async (input: Parameters<ToolWorkflowVcs["discard"]>[0]) => ({
@@ -91,7 +107,7 @@ function fixture() {
   const vcs = {
     status,
     compare,
-    integrate,
+    merge,
     revert,
     discard,
     blame,
@@ -141,7 +157,7 @@ function fixture() {
     vcs,
     status,
     compare,
-    integrate,
+    merge,
     discard,
     blame,
     push,
@@ -168,11 +184,14 @@ describe("workspace VCS agent tool", () => {
       sourceEventId: "event:source",
     });
     expect(f.compare).toHaveBeenCalledWith(
-      expect.objectContaining({ target: f.working, sourceEventId: "event:source" })
+      expect.objectContaining({
+        target: f.working,
+        source: { kind: "event", eventId: "event:source" },
+      })
     );
     expect(compared.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("change:source"),
+      text: expect.stringContaining("file:file:source"),
     });
   });
 
@@ -229,90 +248,81 @@ describe("workspace VCS agent tool", () => {
     });
   });
 
-  it("records one exact incremental integration decision", async () => {
+  it("records one exact coordinate merge decision", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
-      commandId: "command:integrate",
+      commandId: "command:merge",
     });
-    const result = await tool.execute("call:integrate", {
-      operation: "integrate",
+    const result = await tool.execute("call:merge", {
+      operation: "merge",
       sourceEventId: "event:source",
-      decision: { kind: "adopted", sourceChangeIds: ["change:source"] },
+      coordinates: [{ kind: "file", id: "file:source" }],
+      intent: "Merge the source behavior after coordinate review",
     });
-    expect(f.integrate).toHaveBeenCalledWith({
+    expect(f.merge).toHaveBeenCalledWith({
       contextId: "context:test",
       expectedWorkingHead: f.working,
-      commandId: "command:integrate",
-      sourceEventId: "event:source",
-      decision: { kind: "adopted", sourceChangeIds: ["change:source"] },
+      commandId: "command:merge",
+      source: { kind: "event", eventId: "event:source" },
+      coordinates: [{ kind: "file", id: "file:source" }],
+      intentSummary: "Merge the source behavior after coordinate review",
     });
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("Decision decision:integration"),
+      text: expect.stringContaining("Decision decision:merge"),
     });
   });
 
-  it("resolves path-based reconciliation evidence at the exact working state", async () => {
+  it("passes an exact current-value resolution at the observed working head", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
       commandId: "command:reconcile",
     });
 
-    await tool.execute("call:reconcile", {
-      operation: "integrate",
+    await tool.execute("call:resolve", {
+      operation: "merge",
       sourceEventId: "event:source",
-      decision: {
-        kind: "reconciled",
-        sourceChangeIds: ["change:source"],
-        evidence: [{ kind: "file-content", path: "packages/demo/a.ts" }],
-        rationale: "The merged file preserves both intended behaviors.",
-      },
+      resolutions: [{
+        coordinate: { kind: "file", id: "file:source" },
+        resolution: "current",
+        rationale: "The authored file preserves both intended behaviors.",
+      }],
     });
 
-    expect(f.integrate).toHaveBeenCalledWith({
+    expect(f.merge).toHaveBeenCalledWith({
       contextId: "context:test",
       expectedWorkingHead: f.working,
       commandId: "command:reconcile",
-      sourceEventId: "event:source",
-      decision: {
-        kind: "reconciled",
-        sourceChangeIds: ["change:source"],
-        evidence: [{ kind: "file-content", fileId: "file:demo", contentHash: "blob:demo" }],
-        rationale: "The merged file preserves both intended behaviors.",
-      },
+      source: { kind: "event", eventId: "event:source" },
+      resolutions: [{
+        coordinate: { kind: "file", id: "file:source" },
+        resolution: "current",
+        rationale: "The authored file preserves both intended behaviors.",
+      }],
     });
   });
 
-  it("returns a typed invalid reference when reconciliation evidence is absent from target state", async () => {
+  it("passes an explicit ours resolution without filesystem evidence lookup", async () => {
     const f = fixture();
-    vi.mocked(f.vcs.readFile).mockResolvedValueOnce(null);
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
-      commandId: "command:missing-evidence",
+      commandId: "command:decline",
     });
 
-    await expect(
-      tool.execute("call:missing-evidence", {
-        operation: "integrate",
-        sourceEventId: "event:source",
-        decision: {
-          kind: "reconciled",
-          sourceChangeIds: ["change:source"],
-          evidence: [{ kind: "file-content", path: "packages/demo/new.ts" }],
-          rationale: "The target already has the intended generated fixture.",
-        },
-      })
-    ).rejects.toMatchObject({
-      code: "InvalidReference",
-      errorData: {
-        code: "InvalidReference",
-        referenceKind: "target-file-path",
-        reference: "packages/demo/new.ts",
-      },
+    await tool.execute("call:decline", {
+      operation: "merge",
+      sourceEventId: "event:source",
+      resolutions: [{
+        coordinate: { kind: "file", id: "file:source" },
+        resolution: "ours",
+      }],
     });
-    expect(f.integrate).not.toHaveBeenCalled();
+    expect(f.merge).toHaveBeenCalledWith(expect.objectContaining({
+      resolutions: [{ coordinate: { kind: "file", id: "file:source" }, resolution: "ours" }],
+    }));
+    expect(f.vcs.readFile).not.toHaveBeenCalled();
   });
 
   it("resolves a friendly file path for bounded blame", async () => {

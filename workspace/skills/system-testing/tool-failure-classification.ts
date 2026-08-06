@@ -1,7 +1,7 @@
 const ARGUMENT_REJECTION = /(?:^|unknown_tool_failure:\s*)Invalid arguments for tool\s+/i;
 const SAFE_VCS_REJECTIONS = new Set([
   "ConflictPresent",
-  "DependencyBlocked",
+  "CoupledGroupIncomplete",
   "DestinationOccupied",
   "IntegrationIncomplete",
   "InvalidReference",

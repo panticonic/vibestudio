@@ -24,13 +24,46 @@ async function authorityFixture() {
   const sql = await createInMemorySql();
   createSemanticVcsSchema(sql);
   sql.exec(`
-    CREATE TABLE trajectory_invocations (
+      CREATE TABLE trajectory_invocations (
+        log_id TEXT NOT NULL,
+        head TEXT NOT NULL,
+        invocation_id TEXT NOT NULL,
+        turn_id TEXT,
+        kind TEXT,
+        status TEXT NOT NULL,
+        terminal_outcome TEXT,
+        request_ref_json TEXT,
+        started_event_id TEXT,
+        completed_event_id TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (log_id, head, invocation_id)
+      )
+    `);
+  sql.exec(`
+    CREATE TABLE trajectory_turns (
       log_id TEXT NOT NULL,
       head TEXT NOT NULL,
-      invocation_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      opened_at TEXT,
+      closed_at TEXT,
+      summary TEXT,
+      ordinal INTEGER,
+      trigger_message_id TEXT,
+      PRIMARY KEY (log_id, head, turn_id)
+    )
+  `);
+  sql.exec(`
+    CREATE TABLE trajectory_messages (
+      log_id TEXT NOT NULL,
+      head TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      turn_id TEXT,
+      role TEXT NOT NULL,
       status TEXT NOT NULL,
+      started_event_id TEXT,
+      completed_event_id TEXT,
       updated_at TEXT NOT NULL,
-      PRIMARY KEY (log_id, head, invocation_id)
+      PRIMARY KEY (log_id, head, message_id)
     )
   `);
   sql.exec(
@@ -552,7 +585,7 @@ describe("SemanticWorkspace snapshot import", () => {
   });
 
   it("registers, compares, integrates, commits, finalizes, and releases an external delta", async () => {
-    const { semantic, store, initial } = await authorityFixture();
+    const { semantic, sql, store, initial } = await authorityFixture();
     const ingress: SemanticDispatchRequest["ingress"] = {
       causalParent: {
         kind: "trajectory-invocation",
@@ -596,6 +629,7 @@ describe("SemanticWorkspace snapshot import", () => {
       contextId: "context:test",
       commandId: "command:register-delta",
       expectedWorkingHead: { kind: "event" as const, eventId: imported.eventId },
+      intentSummary: "Update the generated template from v1 to v2",
       repositoryId,
       repoPath: "projects/delta",
       oldSource: {
@@ -631,18 +665,36 @@ describe("SemanticWorkspace snapshot import", () => {
     const retry = acknowledgeImportObservation(semantic, retried, observedContent);
     expect(retry).toMatchObject({ kind: "complete", result: { deltaId: delta.deltaId } });
     expect(store.application(delta.deltaId)).toBeNull();
+    expect(
+      sql
+        .exec(
+          `SELECT application.application_id, COUNT(applied.applied_change_id) AS applied_change_count
+           FROM gad_work_unit_applications application
+           LEFT JOIN gad_applied_changes applied ON applied.application_id = application.application_id
+          WHERE application.work_unit_id = (
+            SELECT work_unit_id FROM gad_external_deltas WHERE delta_id = ?
+          )
+          GROUP BY application.application_id`,
+          delta.deltaId
+        )
+        .toArray()
+    ).toEqual([
+      {
+        application_id: expect.stringMatching(/^application:/u),
+        applied_change_count: delta.changeIds.length,
+      },
+    ]);
     expect(semantic.contentGcRoots().contentHashes).toContain(newFile.descriptor.contentHash);
 
     const foreign = store.forkContext("context:test", "context:foreign");
     await expect(
-      semantic.dispatch("integrate", {
+      semantic.dispatch("merge", {
         ingress,
         input: {
           contextId: "context:foreign",
-          commandId: "command:integrate-foreign-delta",
+          commandId: "command:merge-foreign-delta",
           expectedWorkingHead: foreign.working.ref,
-          sourceDeltaId: delta.deltaId,
-          decision: { kind: "adopted", sourceChangeIds: delta.changeIds },
+          source: { kind: "external-delta", deltaId: delta.deltaId },
         },
       })
     ).rejects.toMatchObject({ code: "InvalidReference" });
@@ -651,25 +703,25 @@ describe("SemanticWorkspace snapshot import", () => {
       ingress,
       input: {
         target: { kind: "event", eventId: imported.eventId },
-        sourceDeltaId: delta.deltaId,
-        view: "changes",
+        source: { kind: "external-delta", deltaId: delta.deltaId },
         limit: 100,
       },
     });
     if (compared.kind !== "complete") throw new Error("delta compare did not complete");
     expect(compared.result).toMatchObject({
-      sourceDeltaId: delta.deltaId,
-      resolution: { complete: false, remainingChangeCount: 1 },
+      source: { kind: "external-delta", deltaId: delta.deltaId },
+      resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
+      intentCounts: { pending: 1 },
+      intents: [{ side: "theirs", state: "pending", intent: { tier: "stated" } }],
     });
 
-    const integrated = await semantic.dispatch("integrate", {
+    const integrated = await semantic.dispatch("merge", {
       ingress,
       input: {
         contextId: "context:test",
-        commandId: "command:integrate-delta",
+        commandId: "command:merge-delta",
         expectedWorkingHead: { kind: "event", eventId: imported.eventId },
-        sourceDeltaId: delta.deltaId,
-        decision: { kind: "adopted", sourceChangeIds: delta.changeIds },
+        source: { kind: "external-delta", deltaId: delta.deltaId },
       },
     });
     acknowledgeMaterialization(semantic, integrated);
@@ -766,6 +818,371 @@ describe("SemanticWorkspace snapshot import", () => {
       })
     ).resolves.toMatchObject({ kind: "complete", result: { status: "superseded" } });
   });
+
+  it("merges an external content update against its authored base without reverting a local mode", async () => {
+    const { semantic, store, initial } = await authorityFixture();
+    const ingress: SemanticDispatchRequest["ingress"] = {
+      causalParent: {
+        kind: "trajectory-invocation",
+        logId: "trajectory:test",
+        head: "main",
+        invocationId: "invocation:test",
+      },
+      contextIntegrity: { class: "internal", externalKeys: [] },
+    };
+    const oldFile = textFile("index.ts", "old\n");
+    const newFile = textFile("index.ts", "new\n");
+    const imported = await completeImport(
+      semantic,
+      {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: "command:external-local-basis",
+          expectedWorkingHead: initial.working.ref,
+          source: {
+            kind: "generated",
+            uri: "fixture://external-local-basis",
+            snapshotRevision: "v1",
+          },
+          repositories: [{ repoPath: "projects/external-local", files: [oldFile.descriptor] }],
+        },
+      },
+      new Map([[oldFile.descriptor.contentHash, oldFile.bytes]])
+    );
+    const repositoryId = imported.importedRepositoryIds[0]!;
+    const importedRoot = store.stateRoot({ kind: "event", eventId: imported.eventId });
+    const file = store.facts.fileAtPath(importedRoot, repositoryId, oldFile.descriptor.path);
+    if (!file || file.state.presence !== "placed") throw new Error("missing imported file");
+    const localMode = await semantic.dispatch("edit", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:external-local-mode",
+        expectedWorkingHead: { kind: "event", eventId: imported.eventId },
+        changes: [{ kind: "file-mode", repositoryId, fileId: file.state.fileId, mode: 0o755 }],
+      },
+    });
+    if (localMode.kind !== "effects-pending") throw new Error("local mode did not complete");
+    const localHead = (
+      localMode.result as { workingHead: { kind: "application"; applicationId: string } }
+    ).workingHead;
+    acknowledgeMaterialization(semantic, localMode);
+    const snapshot = (candidate: ReturnType<typeof textFile>) =>
+      canonicalSnapshotDigest([
+        {
+          path: candidate.descriptor.path,
+          mode: 0o100644,
+          size: candidate.bytes.byteLength,
+          contentHash: candidate.descriptor.contentHash,
+        },
+      ]);
+    const registration = await semantic.dispatch("registerExternalDelta", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:external-local-register",
+        expectedWorkingHead: localHead,
+        repositoryId,
+        repoPath: "projects/external-local",
+        oldSource: {
+          kind: "generated",
+          uri: "fixture://external-local/v1",
+          snapshotRevision: "v1",
+          snapshot: snapshot(oldFile),
+        },
+        newSource: {
+          kind: "generated",
+          uri: "fixture://external-local/v2",
+          snapshotRevision: "v2",
+          snapshot: snapshot(newFile),
+        },
+        oldFiles: [oldFile.descriptor],
+        newFiles: [newFile.descriptor],
+      },
+    });
+    const registered = acknowledgeImportObservation(
+      semantic,
+      registration,
+      new Map([
+        [oldFile.descriptor.contentHash, oldFile.bytes],
+        [newFile.descriptor.contentHash, newFile.bytes],
+      ])
+    );
+    if (registered.kind !== "complete") throw new Error("delta registration did not complete");
+    const deltaId = (registered.result as { deltaId: string }).deltaId;
+    const compared = await semantic.dispatch("compare", {
+      ingress,
+      input: {
+        target: localHead,
+        source: { kind: "external-delta", deltaId },
+        limit: 100,
+      },
+    });
+    if (compared.kind !== "complete") throw new Error("delta comparison did not complete");
+    expect(compared.result).toMatchObject({ counts: { composed: 1, conflict: 0 } });
+    const [coordinate] = (
+      compared.result as {
+        coordinates: Array<{
+          status: string;
+          aspects: Array<{ aspect: string; status: string }>;
+        }>;
+      }
+    ).coordinates;
+    expect(coordinate?.status).toBe("composed");
+    expect(coordinate?.aspects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ aspect: "content", status: "adopt" }),
+        expect.objectContaining({ aspect: "mode", status: "ours" }),
+      ])
+    );
+    const merge = await semantic.dispatch("merge", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:external-local-merge",
+        expectedWorkingHead: localHead,
+        source: { kind: "external-delta", deltaId },
+      },
+    });
+    if (merge.kind !== "effects-pending") throw new Error("delta merge did not complete");
+    const mergedHead = (
+      merge.result as { workingHead: { kind: "application"; applicationId: string } }
+    ).workingHead;
+    acknowledgeMaterialization(semantic, merge);
+    expect(store.facts.file(store.stateRoot(mergedHead), file.state.fileId)?.state).toMatchObject({
+      contentHash: newFile.descriptor.contentHash,
+      mode: 0o755,
+    });
+  });
+
+  it("accepts an external deletion when the same path is already locally absent", async () => {
+    const { semantic, store, initial } = await authorityFixture();
+    const ingress: SemanticDispatchRequest["ingress"] = {
+      causalParent: null,
+      contextIntegrity: { class: "internal", externalKeys: [] },
+    };
+    const oldFile = textFile("obsolete.ts", "obsolete\n");
+    const imported = await completeImport(
+      semantic,
+      {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: "command:external-delete-basis",
+          expectedWorkingHead: initial.working.ref,
+          source: {
+            kind: "generated",
+            uri: "fixture://external-delete-basis",
+            snapshotRevision: "v1",
+          },
+          repositories: [{ repoPath: "projects/external-delete", files: [oldFile.descriptor] }],
+        },
+      },
+      new Map([[oldFile.descriptor.contentHash, oldFile.bytes]])
+    );
+    const repositoryId = imported.importedRepositoryIds[0]!;
+    const importedRoot = store.stateRoot({ kind: "event", eventId: imported.eventId });
+    const file = store.facts.fileAtPath(importedRoot, repositoryId, oldFile.descriptor.path);
+    if (!file || file.state.presence !== "placed") throw new Error("missing imported file");
+    const deletion = await semantic.dispatch("edit", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:local-delete-before-external",
+        expectedWorkingHead: { kind: "event", eventId: imported.eventId },
+        changes: [{ kind: "file-delete", repositoryId, fileId: file.state.fileId }],
+      },
+    });
+    if (deletion.kind !== "effects-pending") throw new Error("local deletion did not complete");
+    const localHead = (
+      deletion.result as { workingHead: { kind: "application"; applicationId: string } }
+    ).workingHead;
+    acknowledgeMaterialization(semantic, deletion);
+    const oldSnapshot = canonicalSnapshotDigest([
+      {
+        path: oldFile.descriptor.path,
+        mode: 0o100644,
+        size: oldFile.bytes.byteLength,
+        contentHash: oldFile.descriptor.contentHash,
+      },
+    ]);
+    const emptySnapshot = canonicalSnapshotDigest([]);
+    const registration = await semantic.dispatch("registerExternalDelta", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:register-already-absent-delete",
+        expectedWorkingHead: localHead,
+        repositoryId,
+        repoPath: "projects/external-delete",
+        oldSource: {
+          kind: "generated",
+          uri: "fixture://external-delete/v1",
+          snapshotRevision: "v1",
+          snapshot: oldSnapshot,
+        },
+        newSource: {
+          kind: "generated",
+          uri: "fixture://external-delete/v2",
+          snapshotRevision: "v2",
+          snapshot: emptySnapshot,
+        },
+        oldFiles: [oldFile.descriptor],
+        newFiles: [],
+      },
+    });
+    const registered = acknowledgeImportObservation(
+      semantic,
+      registration,
+      new Map([[oldFile.descriptor.contentHash, oldFile.bytes]])
+    );
+    if (registered.kind !== "complete") throw new Error("delta registration did not complete");
+    const deltaId = (registered.result as { deltaId: string }).deltaId;
+    await expect(
+      semantic.dispatch("compare", {
+        ingress,
+        input: {
+          target: localHead,
+          source: { kind: "external-delta", deltaId },
+          limit: 100,
+        },
+      })
+    ).resolves.toMatchObject({
+      kind: "complete",
+      result: { counts: { convergent: 1, conflict: 0 } },
+    });
+  });
+
+  it("reserves merge capacity for an explicit resolution before selecting clean coordinates", async () => {
+    const { semantic, store, initial } = await authorityFixture();
+    const ingress: SemanticDispatchRequest["ingress"] = {
+      causalParent: {
+        kind: "trajectory-invocation",
+        logId: "trajectory:test",
+        head: "main",
+        invocationId: "invocation:test",
+      },
+      contextIntegrity: { class: "internal", externalKeys: [] },
+    };
+    const files = Array.from({ length: 501 }, (_, index) =>
+      textFile(
+        `file-${String(index).padStart(3, "0")}.ts`,
+        `export const value${index} = ${index};\n`
+      )
+    );
+    const imported = await completeImport(
+      semantic,
+      {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: "command:merge-page-basis",
+          expectedWorkingHead: initial.working.ref,
+          source: {
+            kind: "generated",
+            uri: "fixture://merge-page-basis",
+            snapshotRevision: "v1",
+          },
+          repositories: [
+            { repoPath: "projects/merge-page", files: files.map((file) => file.descriptor) },
+          ],
+        },
+      },
+      new Map(files.map((file) => [file.descriptor.contentHash, file.bytes]))
+    );
+    const repositoryId = imported.importedRepositoryIds[0]!;
+    store.forkContext("context:test", "context:target");
+    const root = store.stateRoot({ kind: "event", eventId: imported.eventId });
+    const fileIds = files.map((file) => {
+      const point = store.facts.fileAtPath(root, repositoryId, file.descriptor.path);
+      if (!point || point.state.presence !== "placed") throw new Error("missing imported file");
+      return point.state.fileId;
+    });
+
+    let sourceHead:
+      | { kind: "event"; eventId: string }
+      | {
+          kind: "application";
+          applicationId: string;
+        } = { kind: "event", eventId: imported.eventId };
+    for (let offset = 0; offset < fileIds.length; offset += 200) {
+      const sourceEdit = await semantic.dispatch("edit", {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: `command:source-mode-page-${offset / 200}`,
+          expectedWorkingHead: sourceHead,
+          changes: fileIds.slice(offset, offset + 200).map((fileId) => ({
+            kind: "file-mode" as const,
+            repositoryId,
+            fileId,
+            mode: 0o755,
+          })),
+        },
+      });
+      if (sourceEdit.kind !== "effects-pending") throw new Error("source edit did not complete");
+      sourceHead = (sourceEdit.result as { workingHead: typeof sourceHead }).workingHead;
+      acknowledgeMaterialization(semantic, sourceEdit);
+    }
+    const sourceCommit = await semantic.dispatch("commit", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:commit-merge-page-source",
+        expectedWorkingHead: sourceHead,
+      },
+    });
+    if (sourceCommit.kind !== "effects-pending") throw new Error("source commit did not complete");
+    const sourceEvent = (sourceCommit.result as { event: { kind: "event"; eventId: string } })
+      .event;
+    acknowledgeMaterialization(semantic, sourceCommit);
+
+    const targetEdit = await semantic.dispatch("edit", {
+      ingress,
+      input: {
+        contextId: "context:target",
+        commandId: "command:target-mode-conflict",
+        expectedWorkingHead: { kind: "event", eventId: imported.eventId },
+        changes: [{ kind: "file-mode", repositoryId, fileId: fileIds[0]!, mode: 0o600 }],
+      },
+    });
+    if (targetEdit.kind !== "effects-pending") throw new Error("target edit did not complete");
+    const targetHead = (
+      targetEdit.result as { workingHead: { kind: "application"; applicationId: string } }
+    ).workingHead;
+    acknowledgeMaterialization(semantic, targetEdit);
+
+    const merge = await semantic.dispatch("merge", {
+      ingress,
+      input: {
+        contextId: "context:target",
+        commandId: "command:resolve-before-clean-page",
+        expectedWorkingHead: targetHead,
+        source: { kind: "event", eventId: sourceEvent.eventId },
+        resolutions: [
+          {
+            coordinate: { kind: "file", id: fileIds[0]! },
+            resolution: "theirs",
+          },
+        ],
+      },
+    });
+    if (merge.kind !== "effects-pending") throw new Error("merge did not complete");
+    const result = merge.result as {
+      workingHead: { kind: "application"; applicationId: string };
+      outcomes: unknown[];
+      resolution: { complete: boolean; remainingCoordinateCount: number };
+    };
+    acknowledgeMaterialization(semantic, merge);
+    expect(result.outcomes).toHaveLength(500);
+    expect(result.resolution).toMatchObject({ complete: false, remainingCoordinateCount: 1 });
+    expect(store.facts.file(store.stateRoot(result.workingHead), fileIds[0]!)?.state).toMatchObject(
+      {
+        mode: 0o755,
+      }
+    );
+  }, 30_000);
 
   it("rejects invalid host-observed intrinsic descriptors atomically", async () => {
     const source = textFile("src/index.ts", "a😀éz");
@@ -1488,142 +1905,47 @@ describe("SemanticWorkspace snapshot import", () => {
       "context:integration-target",
       "command:integration-target-genesis"
     );
-    const compare = async (
-      targetState:
-        | { kind: "event"; eventId: string }
-        | {
-            kind: "application";
-            applicationId: string;
-          }
-    ) => {
-      const dispatch = await semantic.dispatch("compare", {
-        ingress,
-        input: {
-          target: targetState,
-          sourceEventId: source.eventId,
-          view: "changes",
-          limit: 20,
-        },
-      });
-      if (dispatch.kind !== "complete") throw new Error("comparison did not complete");
-      return (
-        dispatch.result as {
-          changes: Array<{
-            changeId: string;
-            kind: string;
-            disposition: { status: string; applicability?: string };
-          }>;
-        }
-      ).changes;
+    const compared = await semantic.dispatch("compare", {
+      ingress,
+      input: {
+        target: target.working.ref,
+        source: { kind: "event", eventId: source.eventId },
+        limit: 20,
+      },
+    });
+    if (compared.kind !== "complete") throw new Error("comparison did not complete");
+    const preview = compared.result as {
+      coordinates: Array<{ coordinate: { kind: string; id: string }; group?: string }>;
+      resolution: { remainingCoordinateCount: number; concluded: boolean };
     };
+    expect(preview.coordinates.map((row) => row.coordinate.kind).sort()).toEqual([
+      "file",
+      "repository",
+    ]);
+    expect(preview.resolution).toMatchObject({ remainingCoordinateCount: 2, concluded: false });
 
-    const initialComparison = await compare(target.working.ref);
-    const repositoryCreate = initialComparison.find(
-      (change) => change.kind === "repository-create"
-    );
-    const blockedFileCreate = initialComparison.find((change) => change.kind === "file-create");
-    expect(repositoryCreate?.disposition).toMatchObject({
-      status: "actionable",
-      applicability: "applicable",
-    });
-    expect(blockedFileCreate?.disposition).toMatchObject({
-      status: "actionable",
-      applicability: "blocked",
-    });
-    if (!repositoryCreate) throw new Error("repository creation is absent");
-
-    const repositoryStep = await semantic.dispatch("integrate", {
+    const merged = await semantic.dispatch("merge", {
       ingress,
       input: {
         contextId: "context:integration-target",
-        commandId: "command:integrate-repository",
+        commandId: "command:merge-imported-project",
         expectedWorkingHead: target.working.ref,
-        sourceEventId: source.eventId,
-        decision: { kind: "adopted", sourceChangeIds: [repositoryCreate.changeId] },
+        source: { kind: "event", eventId: source.eventId },
+        intentSummary: "Merge the imported repository and its file as one reviewed state",
       },
     });
-    if (repositoryStep.kind !== "effects-pending") {
-      throw new Error("repository integration did not materialize");
-    }
-    acknowledgeMaterialization(semantic, repositoryStep);
-    let repositoryHead = (
-      repositoryStep.result as {
-        workingHead: { kind: "application"; applicationId: string };
-      }
-    ).workingHead;
-
-    const discardedRepository = await semantic.dispatch("discard", {
-      ingress,
-      input: {
-        contextId: "context:integration-target",
-        commandId: "command:discard-integrated-repository",
-        expectedWorkingHead: repositoryHead,
-      },
-    });
-    if (discardedRepository.kind !== "effects-pending") {
-      throw new Error("repository discard did not materialize");
-    }
-    expect(discardedRepository.effects[0]?.payload).toMatchObject({
-      mode: "patch",
-      repositories: [
-        {
-          repositoryId: source.importedRepositoryIds[0],
-          repoPath: "projects/incremental",
-          presence: "deleted",
-        },
-      ],
-    });
-    acknowledgeMaterialization(semantic, discardedRepository);
-
-    const repeatedRepositoryStep = await semantic.dispatch("integrate", {
-      ingress,
-      input: {
-        contextId: "context:integration-target",
-        commandId: "command:integrate-repository-again",
-        expectedWorkingHead: target.working.ref,
-        sourceEventId: source.eventId,
-        decision: { kind: "adopted", sourceChangeIds: [repositoryCreate.changeId] },
-      },
-    });
-    if (repeatedRepositoryStep.kind !== "effects-pending") {
-      throw new Error("repeated repository integration did not materialize");
-    }
-    acknowledgeMaterialization(semantic, repeatedRepositoryStep);
-    repositoryHead = (
-      repeatedRepositoryStep.result as {
-        workingHead: { kind: "application"; applicationId: string };
-      }
-    ).workingHead;
-
-    const afterRepository = await compare(repositoryHead);
-    const fileCreate = afterRepository.find((change) => change.kind === "file-create");
-    expect(fileCreate?.disposition).toMatchObject({
-      status: "actionable",
-      applicability: "applicable",
-    });
-    if (!fileCreate) throw new Error("file creation is absent");
-
-    const fileStep = await semantic.dispatch("integrate", {
-      ingress,
-      input: {
-        contextId: "context:integration-target",
-        commandId: "command:integrate-file",
-        expectedWorkingHead: repositoryHead,
-        sourceEventId: source.eventId,
-        decision: { kind: "adopted", sourceChangeIds: [fileCreate.changeId] },
-      },
-    });
-    if (fileStep.kind !== "effects-pending")
-      throw new Error("file integration did not materialize");
-    acknowledgeMaterialization(semantic, fileStep);
+    if (merged.kind !== "effects-pending") throw new Error("merge did not materialize");
+    acknowledgeMaterialization(semantic, merged);
     const fileHead = (
-      fileStep.result as {
+      merged.result as {
         workingHead: { kind: "application"; applicationId: string };
+        resolution: { complete: boolean; concluded: boolean };
+        outcomes: unknown[];
       }
     ).workingHead;
-    expect(
-      (await compare(fileHead)).every((change) => change.disposition.status !== "actionable")
-    ).toBe(true);
+    expect(merged.result).toMatchObject({
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+    });
 
     const committed = await semantic.dispatch("commit", {
       ingress,
@@ -1631,7 +1953,6 @@ describe("SemanticWorkspace snapshot import", () => {
         contextId: "context:integration-target",
         commandId: "command:commit-incremental-import",
         expectedWorkingHead: fileHead,
-        integratesEventIds: [source.eventId],
         message: "Integrate imported project incrementally",
       },
     });
@@ -2136,17 +2457,24 @@ describe("SemanticWorkspace snapshot import", () => {
     );
     sql.exec(
       `INSERT INTO gad_integration_decisions
-       (decision_id, kind, target_state_kind, target_state_id, source_event_id,
-        work_unit_id, rationale, evidence_predicates_json, created_at)
-       VALUES ('decision:change-adjacency', 'adopted', 'event', ?, ?, ?, NULL, NULL, ?)`,
+       (decision_id, target_state_kind, target_state_id, source_event_id,
+        work_unit_id, created_at, source_delta_id)
+       VALUES ('decision:change-adjacency', 'event', ?, ?, ?, ?, NULL)`,
       imported.eventId,
       imported.eventId,
       imported.workUnitId,
       timestamp
     );
     sql.exec(
-      `INSERT INTO gad_decision_source_changes (decision_id, change_id)
-       VALUES ('decision:change-adjacency', ?)`,
+      `INSERT INTO gad_merge_decision_entries
+       (decision_id, coordinate_kind, coordinate_id, resolution, result_change_id, rationale)
+       VALUES ('decision:change-adjacency', 'file', 'file:adjacency', 'adopt', ?, NULL)`,
+      changeId
+    );
+    sql.exec(
+      `INSERT INTO gad_decision_source_changes
+       (decision_id, coordinate_kind, coordinate_id, change_id)
+       VALUES ('decision:change-adjacency', 'file', 'file:adjacency', ?)`,
       changeId
     );
     // Workerd rejects compound SELECTs with more than five terms. Keep this

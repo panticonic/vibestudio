@@ -114,7 +114,8 @@ describe("generated read-memory renderer corpus", () => {
             ? [
                 {
                   decision: { kind: "decision", decisionId: `decision:${index}` },
-                  kind: "reconciled",
+                  coordinate: { kind: "file", id: `file:${index}` },
+                  resolution: "composed",
                   rationale: `Reconcile generated branch ${index}`,
                 },
               ]
@@ -155,7 +156,7 @@ describe("generated read-memory renderer corpus", () => {
     expect(first).toContain("counteracts change:prior:0");
     expect(first).toContain('original request "User requested invariant 1"');
     expect(first).toContain('committed as "Commit preserves invariant 0"');
-    expect(first).toContain("decision reconciled");
+    expect(first).toContain('decision composed for {"kind":"file","id":"file:1"}');
     expect(first).toContain("external source git https://example.test/library-0.git @ revision-0");
     expect(first).toContain("earlier file history");
     expect(first).toContain(

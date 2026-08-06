@@ -40,6 +40,10 @@ const editSchema = Type.Object({
   path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
   oldText: Type.String({ description: "Exact text to find and replace (must match exactly)" }),
   newText: Type.String({ description: "New text to replace the old text with" }),
+  intent: Type.Optional(Type.String({
+    minLength: 1,
+    description: "Optional purpose when it is not already clear from the request; preserved as stated provenance.",
+  })),
 });
 
 export type EditToolInput = Static<typeof editSchema>;
@@ -209,6 +213,7 @@ export function createEditTool(
           contextId: toolContextId(context),
           expectedWorkingHead: workingHead,
           commandId: toolCommandId(context),
+          ...(input.intent?.trim() ? { intentSummary: input.intent.trim() } : {}),
           changes: [
             {
               kind: "text-edit",

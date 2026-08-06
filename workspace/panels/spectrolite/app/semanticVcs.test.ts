@@ -34,13 +34,54 @@ function client(overrides: Partial<VaultVcsPort> = {}): VaultVcsPort {
     listFiles: unreachable,
     edit: unreachable,
     compare: unreachable,
-    integrate: unreachable,
+    merge: unreachable,
     revert: unreachable,
     commit: unreachable,
     push: unreachable,
     ...overrides,
   } as VaultVcsPort;
 }
+
+const compareResult = (
+  coordinates: Array<{
+    coordinate: { kind: "file" | "repository"; id: string; paths: { base?: string; ours?: string; theirs?: string } };
+    status: "adopt" | "convergent" | "composed" | "conflict" | "resolved";
+    group?: string;
+    summary: string;
+  }> = [],
+  concluded = coordinates.length === 0
+): Awaited<ReturnType<VaultVcsPort["compare"]>> => ({
+  target: working,
+  source: { kind: "event", eventId: "event:main" },
+  base: committed,
+  resolution: {
+    complete: coordinates.length === 0,
+    remainingCoordinateCount: coordinates.length,
+    concluded,
+  },
+  counts: {
+    adopt: coordinates.filter((row) => row.status === "adopt").length,
+    convergent: coordinates.filter((row) => row.status === "convergent").length,
+    composed: coordinates.filter((row) => row.status === "composed").length,
+    conflict: coordinates.filter((row) => row.status === "conflict").length,
+    resolved: coordinates.filter((row) => row.status === "resolved").length,
+  },
+  intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 0 },
+  coordinates: coordinates.map((row) => ({
+    ...row,
+    aspects: [{ aspect: "content" as const, base: null, ours: null, theirs: "next", status: row.status === "conflict" ? "conflict" as const : "adopt" as const }],
+    attribution: { ours: [], theirs: [{ changeId: "change:source", workUnitId: "work:source" }] },
+    resolutions:
+      row.status === "resolved"
+        ? []
+        : row.status === "composed"
+          ? ["composed" as const, "theirs" as const, "ours" as const, "current" as const]
+          : ["theirs" as const, "ours" as const, "current" as const],
+  })),
+  intents: [],
+  intentsTruncated: false,
+  nextCursor: null,
+});
 
 describe("VaultSemanticVcs", () => {
   it("resolves the repository directly at the exact working state", async () => {
@@ -50,50 +91,156 @@ describe("VaultSemanticVcs", () => {
     const revision = await session.refresh();
 
     expect(revision.repositoryId).toBe("repo:notes");
-    expect(resolveRepository).toHaveBeenCalledWith({
-      state: working,
-      repoPath: "projects/default",
-    });
+    expect(resolveRepository).toHaveBeenCalledWith({ state: working, repoPath: "projects/default" });
   });
 
-  it("returns conflicting main changes for an explicit product decision", async () => {
+  it("returns coordinate conflicts for an explicit product decision", async () => {
+    const conflict = {
+      coordinate: {
+        kind: "file" as const,
+        id: "file:note",
+        paths: { base: "projects/default/Note.mdx", ours: "projects/default/Note.mdx", theirs: "projects/default/Note.mdx" },
+      },
+      status: "conflict" as const,
+      summary: "conflict file projects/default/Note.mdx",
+    };
     const session = new VaultSemanticVcs(
       "ctx",
       "projects/default",
       client({
         status: async () => status({ mainRelation: "diverged" }),
-        compare: async () => ({
-          target: working,
-          sourceEventId: "event:main",
-          resolution: { complete: false, remainingChangeCount: 1 },
-          counts: {
-            shared: 0,
-            alreadySatisfied: 0,
-            actionable: 1,
-            conflicting: 1,
-            blocked: 0,
-            accounted: 0,
-            historical: 0,
-          },
-          changes: [
-            {
-              changeId: "change:conflict",
-              workUnitId: "work:main",
-              kind: "text-edit",
-              summary: "Change the title",
-              disposition: { status: "actionable", applicability: "conflicting" },
-            },
-          ],
-          nextCursor: null,
-        }),
+        compare: async () => compareResult([conflict], false),
       })
     );
 
     await expect(session.integrateMain()).resolves.toEqual({
       status: "conflicts",
       sourceEventId: "event:main",
-      conflicts: [{ changeId: "change:conflict", kind: "text-edit", summary: "Change the title" }],
+      conflicts: [
+        {
+          coordinate: { kind: "file", id: "file:note" },
+          coordinates: [{ kind: "file", id: "file:note" }],
+          summary: conflict.summary,
+        },
+      ],
     });
+  });
+
+  it("finds conflicts on later comparison pages before attempting a merge", async () => {
+    const lateConflict = {
+      coordinate: {
+        kind: "file" as const,
+        id: "file:late",
+        paths: { theirs: "projects/default/Late.mdx" },
+      },
+      status: "conflict" as const,
+      summary: "conflict file projects/default/Late.mdx",
+    };
+    const first = {
+      ...compareResult([], true),
+      resolution: { complete: false, remainingCoordinateCount: 1, concluded: true },
+      counts: { adopt: 0, convergent: 0, composed: 0, conflict: 1, resolved: 500 },
+      nextCursor: "page:2",
+    };
+    const compare = vi.fn(async (input: Parameters<VaultVcsPort["compare"]>[0]) =>
+      input.cursor ? compareResult([lateConflict], true) : first
+    );
+    const merge = vi.fn(client().merge);
+    const session = new VaultSemanticVcs(
+      "ctx",
+      "projects/default",
+      client({ status: async () => status({ mainRelation: "diverged" }), compare, merge })
+    );
+
+    await expect(session.integrateMain()).resolves.toEqual({
+      status: "conflicts",
+      sourceEventId: "event:main",
+      conflicts: [
+        {
+          coordinate: { kind: "file", id: "file:late" },
+          coordinates: [{ kind: "file", id: "file:late" }],
+          summary: lateConflict.summary,
+        },
+      ],
+    });
+    expect(compare).toHaveBeenCalledTimes(2);
+    expect(merge).not.toHaveBeenCalled();
+  });
+
+  it("round-trips a displayed conflict as its complete coupled group", async () => {
+    const conflict = {
+      coordinate: {
+        kind: "file" as const,
+        id: "file:note",
+        paths: { ours: "projects/default/Note.mdx", theirs: "projects/default/Note.mdx" },
+      },
+      status: "conflict" as const,
+      group: "group:note",
+      summary: "conflict file projects/default/Note.mdx",
+    };
+    const repository = {
+      coordinate: {
+        kind: "repository" as const,
+        id: "repository:notes",
+        paths: { theirs: "projects/default" },
+      },
+      status: "adopt" as const,
+      group: "group:note",
+      summary: "adopt repository projects/default",
+    };
+    const statusCall = vi
+      .fn()
+      .mockResolvedValueOnce(status({ mainRelation: "diverged" }))
+      .mockResolvedValue(status({ mainRelation: "ahead" }));
+    const merge = vi.fn(async (input: Parameters<VaultVcsPort["merge"]>[0]) => ({
+      contextId: "ctx",
+      commandId: input.commandId,
+      workUnitId: "work:decision",
+      applicationId: "application:decision",
+      decisionId: "decision:local",
+      changeIds: [],
+      changeCount: 0,
+      incorporatedChangeIds: [],
+      incorporatedChangeCount: 0,
+      decisionIds: ["decision:local"],
+      workingHead: { kind: "application" as const, applicationId: "application:decision" },
+      outcomes: [],
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+      intents: [],
+      composed: [],
+    }));
+    const session = new VaultSemanticVcs(
+      "ctx",
+      "projects/default",
+      client({
+        status: statusCall,
+        compare: async () => compareResult([conflict, repository], false),
+        merge,
+      })
+    );
+    const result = await session.integrateMain();
+    if (typeof result === "string") throw new Error("expected a conflict result");
+
+    await session.keepLocalForMain(result.conflicts[0]!.coordinates);
+
+    expect(merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        coordinates: [
+          { kind: "file", id: "file:note" },
+          { kind: "repository", id: "repository:notes" },
+        ],
+        resolutions: [
+          expect.objectContaining({
+            coordinate: { kind: "file", id: "file:note" },
+            resolution: "ours",
+          }),
+          expect.objectContaining({
+            coordinate: { kind: "repository", id: "repository:notes" },
+            resolution: "ours",
+          }),
+        ],
+      })
+    );
   });
 
   it("authors text edits against the exact working state", async () => {
@@ -130,241 +277,87 @@ describe("VaultSemanticVcs", () => {
       })
     );
 
-    const result = await session.edit([
-      {
-        kind: "replace",
-        path: "projects/default/Note.mdx",
-        hunks: [{ start: 0, end: 3, oldText: "old", newText: "new" }],
-      },
-    ]);
+    const result = await session.edit([{ kind: "replace", path: "projects/default/Note.mdx", hunks: [{ start: 0, end: 3, oldText: "old", newText: "new" }] }]);
 
     expect(result.changeIds).toEqual(["change:edit"]);
-    expect(edit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextId: "ctx",
-        expectedWorkingHead: working,
-        changes: [
-          {
-            kind: "text-edit",
-            repositoryId: "repo:notes",
-            fileId: "file:note",
-            edits: [{ start: 0, end: 3, text: "new" }],
-          },
-        ],
-      })
-    );
+    expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+      contextId: "ctx",
+      expectedWorkingHead: working,
+      changes: [{ kind: "text-edit", repositoryId: "repo:notes", fileId: "file:note", edits: [{ start: 0, end: 3, text: "new" }] }],
+    }));
   });
 
-  it("integrates applicable main changes locally and commits the integration parent", async () => {
+  it("merges a clean coordinate page, observes conclusion, and commits the source parent", async () => {
     let currentStatus = status({ mainRelation: "behind", clean: true });
-    let comparisonOrdinal = 0;
-    const integrate = vi.fn(async (input: Parameters<VaultVcsPort["integrate"]>[0]) => ({
+    let compared = 0;
+    const merge = vi.fn(async (input: Parameters<VaultVcsPort["merge"]>[0]) => ({
       contextId: "ctx",
       commandId: input.commandId,
-      workUnitId: "work:integration",
-      applicationId: "application:integrated",
-      decisionId: "decision:adopt",
+      workUnitId: "work:merge",
+      applicationId: "application:merged",
+      decisionId: "decision:merge",
       changeIds: [],
       changeCount: 0,
       incorporatedChangeIds: ["change:source"],
       incorporatedChangeCount: 1,
-      decisionIds: ["decision:adopt"],
-      workingHead: { kind: "application" as const, applicationId: "application:integrated" },
+      decisionIds: ["decision:merge"],
+      workingHead: { kind: "application" as const, applicationId: "application:merged" },
+      outcomes: [],
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+      intents: [],
+      composed: [],
     }));
-    const commit = vi.fn(async (_input: unknown) => ({
-      contextId: "ctx",
-      event: { kind: "event" as const, eventId: "event:integrated" },
-      committedApplicationIds: ["application:integrated"],
-      integrationSourceEventIds: ["event:main"],
-    }));
-    const session = new VaultSemanticVcs(
-      "ctx",
-      "projects/default",
-      client({
-        status: async () => currentStatus,
-        compare: async () => {
-          const actionable = comparisonOrdinal++ === 0;
-          return {
-            target: working,
-            sourceEventId: "event:main",
-            resolution: {
-              complete: !actionable,
-              remainingChangeCount: actionable ? 1 : 0,
-            },
-            counts: {
-              shared: 0,
-              alreadySatisfied: 0,
-              actionable: actionable ? 1 : 0,
-              conflicting: 0,
-              blocked: 0,
-              accounted: actionable ? 0 : 1,
-              historical: 0,
-            },
-            changes: actionable
-              ? [
-                  {
-                    changeId: "change:source",
-                    workUnitId: "work:source",
-                    kind: "text-edit" as const,
-                    summary: "edit note",
-                    disposition: {
-                      status: "actionable" as const,
-                      applicability: "applicable" as const,
-                    },
-                  },
-                ]
-              : [],
-            nextCursor: null,
-          };
-        },
-        integrate,
-        commit: async (input) => {
-          const result = await commit(input);
-          currentStatus = status({
-            committed: result.event,
-            workingHead: result.event,
-            mainRelation: "at",
-            clean: true,
-          });
-          return result;
-        },
-      })
-    );
-
-    await expect(session.integrateMain()).resolves.toBe("integrated");
-    expect(integrate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceEventId: "event:main",
-        decision: { kind: "adopted", sourceChangeIds: ["change:source"] },
-      })
-    );
-    expect(commit).toHaveBeenCalledWith(
-      expect.objectContaining({ integratesEventIds: ["event:main"] })
-    );
-  });
-
-  it("recompares after each local step so derived prerequisites clear naturally", async () => {
-    let currentStatus = status({ mainRelation: "behind", clean: true });
-    let comparisonOrdinal = 0;
-    const integrate = vi.fn(async (input: Parameters<VaultVcsPort["integrate"]>[0]) => {
-      const changeId = input.decision.sourceChangeIds[0]!;
-      const suffix = changeId.endsWith("first") ? "first" : "second";
-      return {
-        contextId: "ctx",
-        commandId: input.commandId,
-        workUnitId: `work:${suffix}`,
-        applicationId: `application:${suffix}`,
-        decisionId: `decision:${suffix}`,
-        changeIds: [],
-        changeCount: 0,
-        incorporatedChangeIds: [changeId],
-        incorporatedChangeCount: 1,
-        decisionIds: [`decision:${suffix}`],
-        workingHead: {
-          kind: "application" as const,
-          applicationId: `application:${suffix}`,
-        },
-      };
-    });
-    const compare: VaultVcsPort["compare"] = async () => {
-      const ordinal = comparisonOrdinal++;
-      const changes =
-        ordinal === 0
-          ? [
-              {
-                changeId: "change:first",
-                workUnitId: "work:source",
-                kind: "content-replace" as const,
-                summary: "first content step",
-                disposition: {
-                  status: "actionable" as const,
-                  applicability: "applicable" as const,
-                },
-              },
-              {
-                changeId: "change:second",
-                workUnitId: "work:source",
-                kind: "content-replace" as const,
-                summary: "second content step",
-                disposition: {
-                  status: "actionable" as const,
-                  applicability: "blocked" as const,
-                  prerequisiteChangeIds: ["change:first"],
-                },
-              },
-            ]
-          : ordinal === 1
-            ? [
-                {
-                  changeId: "change:second",
-                  workUnitId: "work:source",
-                  kind: "content-replace" as const,
-                  summary: "second content step",
-                  disposition: {
-                    status: "actionable" as const,
-                    applicability: "applicable" as const,
-                  },
-                },
-              ]
-            : [];
-      return {
-        target: working,
-        sourceEventId: "event:main",
-        resolution: { complete: changes.length === 0, remainingChangeCount: changes.length },
-        counts: {
-          shared: 0,
-          alreadySatisfied: 0,
-          actionable: changes.length,
-          conflicting: 0,
-          blocked: ordinal === 0 ? 1 : 0,
-          accounted: ordinal,
-          historical: 0,
-        },
-        changes,
-        nextCursor: null,
-      };
-    };
     const commit = vi.fn(async () => ({
       contextId: "ctx",
       event: { kind: "event" as const, eventId: "event:integrated" },
-      committedApplicationIds: ["application:first", "application:second"],
+      committedApplicationIds: ["application:merged"],
       integrationSourceEventIds: ["event:main"],
     }));
-    const session = new VaultSemanticVcs(
-      "ctx",
-      "projects/default",
-      client({
-        status: async () => currentStatus,
-        compare,
-        integrate,
-        commit: async () => {
-          const result = await commit();
-          currentStatus = status({
-            committed: result.event,
-            workingHead: result.event,
-            mainRelation: "at",
-            clean: true,
-          });
-          return result;
-        },
-      })
-    );
+    const pending = {
+      coordinate: { kind: "file" as const, id: "file:note", paths: { theirs: "projects/default/Note.mdx" } },
+      status: "adopt" as const,
+      summary: "adopt file projects/default/Note.mdx",
+    };
+    const session = new VaultSemanticVcs("ctx", "projects/default", client({
+      status: async () => currentStatus,
+      compare: async () => compared++ === 0 ? compareResult([pending], false) : compareResult([], true),
+      merge,
+      commit: async () => {
+        const result = await commit();
+        currentStatus = status({ committed: result.event, workingHead: result.event, mainRelation: "at", clean: true });
+        return result;
+      },
+    }));
 
     await expect(session.integrateMain()).resolves.toBe("integrated");
-    expect(integrate).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        expectedWorkingHead: working,
-        decision: { kind: "adopted", sourceChangeIds: ["change:first"] },
-      })
-    );
-    expect(integrate).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        expectedWorkingHead: { kind: "application", applicationId: "application:first" },
-        decision: { kind: "adopted", sourceChangeIds: ["change:second"] },
-      })
-    );
-    expect(comparisonOrdinal).toBe(3);
+    expect(merge).toHaveBeenCalledWith(expect.objectContaining({
+      source: { kind: "event", eventId: "event:main" },
+      expectedWorkingHead: working,
+    }));
+    expect(commit).toHaveBeenCalledOnce();
+  });
+
+  it("passes selected coordinates as explicit ours resolutions", async () => {
+    const merge = vi.fn(async (input: Parameters<VaultVcsPort["merge"]>[0]) => ({
+      contextId: "ctx", commandId: input.commandId, workUnitId: "work:merge", applicationId: "application:merged",
+      decisionId: "decision:merge", changeIds: [], changeCount: 0,
+      incorporatedChangeIds: ["change:source"], incorporatedChangeCount: 1,
+      decisionIds: ["decision:merge"], workingHead: working, outcomes: [],
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: true }, intents: [], composed: [],
+    }));
+    const session = new VaultSemanticVcs("ctx", "projects/default", client({
+      status: async () => status({ mainRelation: "diverged" }),
+      merge,
+      compare: async () => compareResult([], true),
+      commit: async () => ({ contextId: "ctx", event: committed, committedApplicationIds: [], integrationSourceEventIds: ["event:main"] }),
+    }));
+    const coordinate = { kind: "file" as const, id: "file:note" };
+
+    await session.keepLocalForMain([coordinate]);
+
+    expect(merge).toHaveBeenCalledWith(expect.objectContaining({
+      coordinates: [coordinate],
+      resolutions: [expect.objectContaining({ coordinate, resolution: "ours" })],
+    }));
   });
 });

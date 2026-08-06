@@ -152,7 +152,8 @@ Keep these out of initial setup:
 
 Keep the two publication boundaries explicit:
 
-1. Commit a managed edit with `vcs({ operation: "commit", message })`, then
+1. Commit a managed edit with `vcs({ operation: "commit", message, intent })`
+   when the commit's purpose is not already explicit in the trigger, then
    publish it with `vcs({ operation: "push" })`.
 2. Call `git.pushUpstream(repo)` to export that protected-main snapshot and
    push it to GitHub.
@@ -160,7 +161,8 @@ Keep the two publication boundaries explicit:
    `git.pullUpstream(repo, { dryRun: true })`; this uses isolated temporary Git state
    and mutates neither the managed checkout nor semantic state. Then call
    `git.pullUpstream(repo)` once. Retain the returned candidate event.
-4. Compare and incrementally integrate the candidate, check, commit, and
+4. Compare and merge the candidate by stable coordinate, review composed
+   intents, check, commit, and
    publish through semantic VCS; then re-run fresh status and
    `git.pushUpstream(repo)`.
 

@@ -24,8 +24,11 @@ function createPort() {
   let prepared = false;
   let taskTail: "import" | "escaped" | "file" | "local-file" = "import";
   let publishedFileLive = false;
+  let publishedFileIsCreation = false;
   let reportedSnapshotRevision: string | null = null;
   let taskCreatedRepositories: Array<{ repositoryId: string; repoPath: string }> = [];
+  const counteractedRepositories = new Set<string>();
+  const counteractedFileChanges = new Set<string>();
   const destroyContext = vi.fn(async (_contextId: string) => undefined);
   const putText = vi.fn(async (text: string) => ({
     digest: text.includes("fixtureValue") ? "b".repeat(64) : "a".repeat(64),
@@ -190,6 +193,17 @@ function createPort() {
           node.changeId === "change:repository" ||
           node.changeId === "change:escaped" ||
           taskCreated !== undefined;
+        const fileCreate = node.changeId !== "change:file" || publishedFileIsCreation;
+        const fileId =
+          node.changeId === "change:file"
+            ? publishedFileIsCreation
+              ? "file:integrated"
+              : "file:source"
+            : node.changeId === "change:source"
+              ? "file:source"
+              : node.changeId === "change:package"
+                ? "file:package"
+                : `file:${node.changeId}`;
         const repositoryId =
           taskCreated?.repositoryId ??
           (node.changeId === "change:escaped" ? "repository:escaped" : "repository:fixture");
@@ -201,7 +215,11 @@ function createPort() {
               changeId: node.changeId,
               authoredByWorkUnitId: "work:escaped",
               operation: 0,
-              kind: repositoryCreate ? ("repository-create" as const) : ("file-create" as const),
+              kind: repositoryCreate
+                ? ("repository-create" as const)
+                : fileCreate
+                  ? ("file-create" as const)
+                  : ("text-edit" as const),
               effects: repositoryCreate
                 ? [
                     {
@@ -218,8 +236,13 @@ function createPort() {
                 : [
                     {
                       kind: "placement" as const,
-                      fileId: `file:${node.changeId}`,
-                      before: null,
+                      fileId,
+                      before: fileCreate
+                        ? null
+                        : {
+                            repositoryId: "repository:fixture",
+                            path: "src/index.ts",
+                          },
                       after: { repositoryId: "repository:fixture", path: "src/index.ts" },
                     },
                   ],
@@ -237,7 +260,12 @@ function createPort() {
         ({ repositoryId }) => repositoryId === node.repositoryId
       );
       const isEscaped = node.repositoryId === "repository:escaped";
-      if ((isEscaped && !escaped) || (!isEscaped && !taskCreated && !published)) {
+      const fixturePresent = published || (prepared && taskCreatedRepositories.length > 0);
+      if (
+        counteractedRepositories.has(node.repositoryId) ||
+        (isEscaped && !escaped) ||
+        (!isEscaped && !taskCreated && !fixturePresent)
+      ) {
         throw Object.assign(new Error("repository is absent"), { code: "InvalidReference" });
       }
       return {
@@ -288,6 +316,25 @@ function createPort() {
       cursor,
       limit = 500,
     }: Parameters<WorkspaceRepoFixturePort["vcs"]["history"]>[0]) => {
+      if (root.kind === "file") {
+        const ids =
+          root.fileId === "file:source"
+            ? ["change:counteraction:1", "change:file", "change:source"]
+            : root.fileId === "file:package"
+              ? ["change:package"]
+              : ["change:file"];
+        const offset = cursor ? Number(cursor) : 0;
+        const end = Math.min(offset + limit, ids.length);
+        return {
+          root,
+          entries: ids.slice(offset, end).map((changeId) => ({
+            node: { kind: "change" as const, changeId },
+            createdAt: "2026-07-15T00:00:00.000Z",
+            summary: changeId,
+          })),
+          nextCursor: end < ids.length ? String(end) : null,
+        };
+      }
       const histories: Record<string, string[]> = {
         "event:main": ["event:main"],
         "event:import": ["event:import", "event:main"],
@@ -296,7 +343,6 @@ function createPort() {
         "event:local": ["event:local", "event:import", "event:main"],
         "event:external": ["event:external", "event:import", "event:main"],
       };
-      if (root.kind !== "event") throw new Error("fixture history requires an event root");
       const ids = histories[root.eventId] ?? [];
       const offset = cursor ? Number(cursor) : 0;
       const end = Math.min(offset + limit, ids.length);
@@ -311,18 +357,75 @@ function createPort() {
       };
     }
   );
+  const listFiles = vi.fn(
+    async ({ state, repositoryId }: Parameters<WorkspaceRepoFixturePort["vcs"]["listFiles"]>[0]) => {
+      const isFixture = repositoryId === "repository:fixture";
+      const files: Array<{ fileId: string; authoredChangeId: string }> = [];
+      if (isFixture) {
+        if (
+          publishedFileLive &&
+          publishedFileIsCreation &&
+          !counteractedFileChanges.has("change:file")
+        ) {
+          files.push({ fileId: "file:integrated", authoredChangeId: "change:file" });
+        }
+        if (!counteractedFileChanges.has("change:source")) {
+          files.push({
+            fileId: "file:source",
+            authoredChangeId:
+              publishedFileLive && !publishedFileIsCreation
+                ? "change:file"
+                : state.kind === "application" &&
+                    state.applicationId === "application:revert:1" &&
+                    !publishedFileIsCreation
+                  ? "change:counteraction:1"
+                  : "change:source",
+          });
+        }
+        if (!counteractedFileChanges.has("change:package")) {
+          files.push({ fileId: "file:package", authoredChangeId: "change:package" });
+        }
+      }
+      return {
+        state,
+        repositoryId,
+        files: files.map(({ fileId, authoredChangeId }, index) => ({
+          fileId,
+          path: `file-${index}.txt`,
+          contentHash: `content:${authoredChangeId}`,
+          authoredChangeId,
+          authoredByWorkUnitId: "work:fixture",
+          contentClass: "internal" as const,
+          externalKeys: [],
+          mode: 0o644,
+          contentKind: "text" as const,
+          byteLength: 1,
+          coordinateExtent: 1,
+        })),
+        nextCursor: null,
+      };
+    }
+  );
   const revert = vi.fn(
     async ({ contextId, changeIds }: { contextId: string; changeIds: string[] }) => {
-      if (changeIds.includes("change:repository") && publishedFileLive) {
-        throw Object.assign(new Error("later file still depends on repository creation"), {
-          code: "DependencyBlocked",
-          errorData: {
-            code: "DependencyBlocked",
-            blockingChangeIds: ["change:file"],
-          },
-        });
-      }
       if (changeIds.includes("change:file")) publishedFileLive = false;
+      if (changeIds.includes("change:source")) counteractedFileChanges.add("change:source");
+      if (changeIds.includes("change:package")) counteractedFileChanges.add("change:package");
+      if (changeIds.includes("change:file") && publishedFileIsCreation) {
+        counteractedFileChanges.add("change:file");
+      }
+      if (changeIds.includes("change:repository")) {
+        counteractedRepositories.add("repository:fixture");
+      }
+      if (changeIds.includes("change:escaped")) {
+        counteractedRepositories.add("repository:escaped");
+      }
+      for (const changeId of changeIds) {
+        if (!changeId.startsWith("change:task-created:")) continue;
+        const index = Number(changeId.slice("change:task-created:".length));
+        const repository = taskCreatedRepositories[index];
+        if (repository) counteractedRepositories.add(repository.repositoryId);
+      }
       const ordinal = revert.mock.calls.length;
       return {
         contextId,
@@ -356,7 +459,17 @@ function createPort() {
   });
 
   const port = {
-    vcs: { status, importSnapshot, inspect, neighbors, history, revert, commit, push },
+    vcs: {
+      status,
+      importSnapshot,
+      inspect,
+      neighbors,
+      history,
+      listFiles,
+      revert,
+      commit,
+      push,
+    },
     blobstore: { putText },
     createContext: vi.fn(async () => ({ contextId: `context:${++contexts}` })),
     destroyContext,
@@ -370,6 +483,7 @@ function createPort() {
     inspect,
     neighbors,
     history,
+    listFiles,
     revert,
     commit,
     push,
@@ -398,11 +512,13 @@ function createPort() {
       published = true;
       taskTail = "file";
       publishedFileLive = true;
+      publishedFileIsCreation = false;
     },
     publishWithUnattributedFile: () => {
       published = true;
       taskTail = "import";
       publishedFileLive = true;
+      publishedFileIsCreation = true;
     },
     publishThenEditLocally: () => {
       published = true;
@@ -558,9 +674,9 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
       unexpectedPublishedRepositoriesRemoved: [],
       counteractedChangeIds: [
         "change:task-created:0",
-        "change:repository",
-        "change:package",
         "change:source",
+        "change:package",
+        "change:repository",
       ],
     });
   });
@@ -745,11 +861,11 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
         repoPath: "projects/system-test-content",
       },
       unexpectedPublishedRepositoriesRemoved: [],
-      counteractedChangeIds: ["change:repository", "change:package", "change:source"],
+      counteractedChangeIds: ["change:source", "change:package", "change:repository"],
     });
     expect(fake.revert).toHaveBeenCalledWith(
       expect.objectContaining({
-        changeIds: ["change:repository", "change:package", "change:source"],
+        changeIds: ["change:source", "change:package", "change:repository"],
       })
     );
     expect(fake.commit).toHaveBeenCalledWith(
@@ -805,13 +921,10 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
       ],
       counteractedChangeIds: [
         "change:escaped",
-        "change:repository",
-        "change:package",
-        "change:source",
       ],
     });
     expect(fake.createContext).toHaveBeenCalledTimes(2);
-    expect(fake.revert).toHaveBeenCalledTimes(2);
+    expect(fake.revert).toHaveBeenCalledTimes(1);
     expect(fake.destroyContext).toHaveBeenCalledTimes(2);
   });
 
@@ -847,9 +960,9 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
       publishedFixtureRemoved: { repositoryId: "repository:fixture" },
       counteractedChangeIds: [
         "change:file",
-        "change:repository",
-        "change:package",
         "change:source",
+        "change:package",
+        "change:repository",
       ],
     });
     expect(fake.revert).toHaveBeenCalledTimes(2);
@@ -867,14 +980,14 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
           kind: "application",
           applicationId: "application:revert:1",
         },
-        changeIds: ["change:repository", "change:package", "change:source"],
+        changeIds: ["change:source", "change:package", "change:repository"],
       })
     );
     expect(fake.commit).toHaveBeenCalledTimes(1);
     expect(fake.push).toHaveBeenCalledTimes(1);
   });
 
-  it("discovers and counteracts an incorporated blocker outside first-parent authored work", async () => {
+  it("uses the live repository frontier even when a file came from an integration parent", async () => {
     const fake = createPort();
     const fixture = new WorkspaceRepoFixtureLifecycle(
       fake.port,
@@ -888,40 +1001,28 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     await expect(fixture.cleanup(state)).resolves.toMatchObject({
       counteractedChangeIds: [
         "change:file",
-        "change:repository",
-        "change:package",
         "change:source",
+        "change:package",
+        "change:repository",
       ],
     });
-    expect(fake.revert).toHaveBeenNthCalledWith(
-      1,
+    expect(fake.revert).toHaveBeenCalledTimes(1);
+    expect(fake.revert).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedWorkingHead: event("event:import"),
-        changeIds: ["change:repository", "change:package", "change:source"],
-      })
-    );
-    expect(fake.revert).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        expectedWorkingHead: event("event:import"),
-        changeIds: ["change:file"],
-      })
-    );
-    expect(fake.revert).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        expectedWorkingHead: {
-          kind: "application",
-          applicationId: "application:revert:2",
-        },
-        changeIds: ["change:repository", "change:package", "change:source"],
+        changeIds: [
+          "change:file",
+          "change:source",
+          "change:package",
+          "change:repository",
+        ],
       })
     );
     expect(fake.commit).toHaveBeenCalledTimes(1);
     expect(fake.push).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed when DependencyBlocked omits its typed blocker identities", async () => {
+  it("fails closed when semantic counteraction reports an integrity failure", async () => {
     const fake = createPort();
     const fixture = new WorkspaceRepoFixtureLifecycle(
       fake.port,
@@ -932,14 +1033,12 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     const state = await fixture.prepare();
     fake.publish();
     fake.revert.mockRejectedValueOnce(
-      Object.assign(new Error("blocked without structured detail"), {
-        code: "DependencyBlocked",
+      Object.assign(new Error("stored change chain is discontinuous"), {
+        code: "IntegrityFailure",
       })
     );
 
-    await expect(fixture.cleanup(state)).rejects.toThrow(
-      "DependencyBlocked did not provide any blocking change identities"
-    );
+    await expect(fixture.cleanup(state)).rejects.toThrow("stored change chain is discontinuous");
     expect(fake.commit).not.toHaveBeenCalled();
     expect(fake.push).not.toHaveBeenCalled();
     expect(fake.destroyContext).toHaveBeenCalledTimes(2);
@@ -957,13 +1056,13 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     fake.publishThenEditLocally();
 
     await expect(fixture.cleanup(state)).resolves.toMatchObject({
-      counteractedChangeIds: ["change:repository", "change:package", "change:source"],
+      counteractedChangeIds: ["change:source", "change:package", "change:repository"],
     });
     expect(fake.revert).toHaveBeenCalledTimes(1);
     expect(fake.revert).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedWorkingHead: event("event:import"),
-        changeIds: ["change:repository", "change:package", "change:source"],
+        changeIds: ["change:source", "change:package", "change:repository"],
       })
     );
     expect(fake.revert).not.toHaveBeenCalledWith(

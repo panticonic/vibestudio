@@ -29,8 +29,11 @@ const fileTransferSchema = Type.Object(
       description:
         "Unoccupied destination path. Managed files preserve semantic identity/provenance; .tmp paths use context-local scratch storage.",
     }),
-    intentSummary: Type.Optional(
-      Type.String({ minLength: 1, description: "Optional semantic reason for the move or copy." })
+    intent: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Optional purpose when it is not already clear from the request; preserved as stated provenance.",
+      })
     ),
   },
   { additionalProperties: false }
@@ -190,16 +193,14 @@ function createFileTransferTool(
         repositoryId: destinationRepository.repositoryId,
         path: destinationRoute.repoRelPath,
       };
-      const intentSummary =
-        input.intentSummary?.trim() ||
-        `${kind === "move" ? "Move" : "Copy"} ${sourcePath} to ${destinationPath}`;
+      const intentSummary = input.intent?.trim();
       const result =
         kind === "move"
           ? await vcs.move({
               contextId: toolContextId(context),
               expectedWorkingHead: workingHead,
               commandId,
-              intentSummary,
+              ...(intentSummary ? { intentSummary } : {}),
               moves: [
                 {
                   kind: "file",
@@ -214,7 +215,7 @@ function createFileTransferTool(
               contextId: toolContextId(context),
               expectedWorkingHead: workingHead,
               commandId,
-              intentSummary,
+              ...(intentSummary ? { intentSummary } : {}),
               copies: [
                 {
                   source: {

@@ -21,7 +21,7 @@ The lifecycle is:
    materialization. Use its structured typecheck diagnostics as the repair
    loop; tests and runtime checks are additional evidence.
 4. If main or another source advanced, compare the exact source event. Adopt,
-   reconcile, or decline useful changes through small `vcs.integrate` steps and
+   merge useful changes through bounded coordinate pages, review composed intents, and
    run checks between them.
 5. Commit the complete local application chain. Work that needs a different
    commit boundary belongs in another context.
@@ -148,7 +148,7 @@ const comparison = await vcs.compare({
   view: "changes",
 });
 
-console.log(comparison.counts, comparison.changes);
+console.log(comparison.counts, comparison.coordinates, comparison.intents);
 ```
 
 The portable runtime VCS client is bound to the panel/worker/eval semantic
@@ -158,9 +158,11 @@ orientation call while provenance reads such as `vcs.inspect()` keep their
 strict context-free payload. Pass `{ contextId }` only to methods whose schema
 accepts it and only when intentionally addressing another authorized context.
 
-If there is incoming work, use `vcs.integrate` to adopt applicable source
-changes, reconcile with exact state-predicate evidence, or decline with a
-rationale. Continue from each successful result's returned working head.
+If there is incoming work, use `vcs.merge` to adopt mergeable stable
+coordinates. Review the intent projection and every composed coordinate;
+resolve conflicts with `theirs`, `ours`, or `current` after authoring any
+truthful combined value. Continue from each returned working head until the
+comparison is both complete and concluded.
 When judgment changes product intent, show the alternatives and ask the user.
 
 5. Commit the complete local chain as one truthful semantic boundary:
@@ -171,6 +173,7 @@ const committed = await vcs.commit({
   contextId: ctx.contextId,
   expectedWorkingHead: latestWorkingHead,
   message: "Implement the panel behavior",
+  intentSummary: "Preserve the reviewed interaction contract as one deployable milestone",
 });
 ```
 
@@ -179,7 +182,7 @@ context before authoring it. Use `vcs.revert` for a deliberate counteraction or
 `vcs.discard` to drop the complete uncommitted chain.
 
 6. Publish only after the context is clean and the intended event passes its
-   ordinary checks. If current main advanced, compare and integrate it locally,
+   ordinary checks. If current main advanced, compare and merge it locally,
    commit the resulting complete chain, then retry publication. The protected
    push gate rechecks the exact candidate build/typecheck state before approval;
    a failure returns diagnostics and moves no protected pointer. Repair, make

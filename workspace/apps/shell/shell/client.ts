@@ -43,7 +43,7 @@ import { workspaceStateMethods } from "@vibestudio/service-schemas/workspaceStat
 import {
   vcsMethods,
   type VcsCompareResult,
-  type VcsIntegrationChoice,
+  type VcsMergeResolutionKind,
 } from "@vibestudio/service-schemas/vcs";
 import {
   hubControlMethods,
@@ -743,27 +743,32 @@ export const credentials = {
 /** Standard semantic VCS review flow, including coordinator-owned external deltas. */
 export const vcs = {
   status: (contextId: string) => vcsClient.status({ contextId }),
-  compareDelta: async (contextId: string, sourceDeltaId: string) => {
+  compareDelta: async (contextId: string, sourceDeltaId: string, cursor?: string) => {
     const status = await vcsClient.status({ contextId });
     return vcsClient.compare({
       target: status.workingHead,
-      sourceDeltaId,
-      view: "changes",
+      source: { kind: "external-delta", deltaId: sourceDeltaId },
       limit: 200,
+      ...(cursor ? { cursor } : {}),
     });
   },
-  integrateDelta: (
+  mergeDelta: (
     contextId: string,
     expectedWorkingHead: VcsCompareResult["target"],
     sourceDeltaId: string,
-    decision: VcsIntegrationChoice
+    coordinates: Array<{ kind: "file" | "repository"; id: string }>,
+    resolutions: Array<{
+      coordinate: { kind: "file" | "repository"; id: string };
+      resolution: VcsMergeResolutionKind;
+    }>
   ) =>
-    vcsClient.integrate({
+    vcsClient.merge({
       commandId: crypto.randomUUID(),
       contextId,
       expectedWorkingHead,
-      sourceDeltaId,
-      decision,
+      source: { kind: "external-delta", deltaId: sourceDeltaId },
+      coordinates,
+      resolutions,
     }),
 };
 // =============================================================================

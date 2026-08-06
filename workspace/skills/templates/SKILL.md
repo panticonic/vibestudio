@@ -107,8 +107,8 @@ commandId })` only after the user asks to update.
 2. The inspection and approval prompt describe parts that changed. Clean
    parts apply after approval; parts changed locally must be reviewed one by
    one.
-3. Use the normal VCS compare/integrate workflow from
-   [vibestudio-vcs compare and integrate](../vibestudio-vcs/references/compare-and-integrate.md)
+3. Use the normal VCS compare/merge workflow from
+   [vibestudio-vcs compare and merge](../vibestudio-vcs/references/compare-and-merge.md)
    for each review. A pending operation's `review.items` names the exact part
    and external delta for that normal workflow. Confirm finalization only
    after all resulting decisions are accounted for.

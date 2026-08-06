@@ -377,7 +377,7 @@ manifest section.
    lock/pin coordinates and digest-checked), it records an external delta
    as **evidence, not a state transition**: a node carrying new-vs-old
    changes with old-content predicates, no parent state, no application.
-   `compare` and `integrate` are extended to accept this node as a source
+   `compare` and `merge` are extended to accept this node as a source
    alongside committed events; classification uses its predicates against
    the target, and only an integration decision + commit _applies_ anything
    to workspace state — at which point the recorded transition is real.
@@ -387,7 +387,7 @@ manifest section.
    side is always rebuilt from coordinates. Template updates are never
    auto-published.
 4. Per-repository decisions may happen incrementally through ordinary public
-   `vcs.compare` and `vcs.integrate`. Each delta is owned by the exact template
+   `vcs.compare` and `vcs.merge`. Each delta is owned by the exact template
    operation context. A completed integration automatically wakes the
    coordinator; there is no template-specific review method or pull retry.
 5. Finalization is **indivisible**: once every per-repo delta has a
@@ -426,7 +426,7 @@ ownerContextId, repositoryId, oldSubtreeDigest, newSubtreeDigest)`.
   different content is an integrity failure.
 - **What it mints**: one real `WorkUnit` (flagged `external-unapplied`)
   and ordinary `Change` rows (text-edit / file-create / file-delete with
-  bases drawn from old-side content) — so `integrate`'s existing
+  bases drawn from old-side content) — so `merge`'s existing
   `decision.sourceChangeIds` contract applies unchanged. What it never
   mints: a `WorkApplication`, an event, or a state node.
 - **Path mapping**: old-side paths resolve to current repository/file IDs
@@ -434,8 +434,8 @@ ownerContextId, repositoryId, oldSubtreeDigest, newSubtreeDigest)`.
   `(repositoryId, path)`; paths unknown at the target (template-added
   files) mint fresh file IDs in the change results, mirroring
   `importSnapshot` planning.
-- **Compare/integrate extension**: `vcsCompareInputSchema` and
-  `vcsIntegrateInputSchema` gain a `sourceDeltaId` alternative to
+- **Compare/merge extension**: `vcsCompareInputSchema` and
+  `vcsMergeInputSchema` gain a `sourceDeltaId` alternative to
   `sourceEventId` (exclusive union). Comparison's "source story" for a
   delta is its change list; classification runs the same predicate
   machinery against the target. Adopted changes are applied by the normal
@@ -942,7 +942,7 @@ approval):**
   re-decides. Unanswered conflicts default to `keep`.
 - `templates.pull({alias, toRef?})` — starts U4; returns the per-part
   delta handles so the agent can walk the user through each review using
-  the ordinary vibestudio-vcs compare/integrate surface. The coordinator
+  the ordinary vibestudio-vcs compare/merge surface. The coordinator
   observes the final decision automatically and owns terminal cleanup and
   publication.
 - `templates.remove({alias})` — U5 card; result reports orphaned vs
@@ -972,8 +972,8 @@ Follows the `vibestudio-vcs` skill shape (SKILL.md + `references/` +
      with `choices` pre-filled — "the approval card should confirm what
      we already discussed, not surprise them."
   3. _Update_: `check` → `pull` → walk each diverged part through
-     compare/integrate (cross-link `vibestudio-vcs`
-     `references/compare-and-integrate.md`) → confirm finalization.
+     compare/merge (cross-link `vibestudio-vcs`
+     `references/compare-and-merge.md`) → confirm finalization.
   4. _Suggest back_: divergence summary → `suggest` → hand back the
      branch link.
      Hard rules, stated as invariants: never edit `meta/templates/*.yml`
@@ -1023,7 +1023,7 @@ general-agent assistance share one contract.
   list, `templates.lock.yml` generation, approval surfacing of
   template-suggested excluded sections.
 - **WP-T4 — Pull + update discovery.** The unapplied external change-set
-  contract (host-only registration + public `compare`/`integrate` accepting
+  contract (host-only registration + public `compare`/`merge` accepting
   it as a source); operation-context ownership, automatic decision
   observation, pin-bump flow, per-repo deltas, indivisible
   finalization (fragment + pin + digest + lock in one publication), lock

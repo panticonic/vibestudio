@@ -110,7 +110,7 @@ the exact basis. Unchanged files do not get fake changes.
 A whole-content external replacement records exact before and after endpoints
 but no inferred preservation mapping. Similar bytes do not prove coordinate
 continuity. Because import changes use the ordinary vocabulary, they appear in
-normal compare pages, can be integrated in small local steps, and can be
+normal compare pages, can be merged in bounded coordinate pages, and can be
 reverted without an import-specific workflow.
 
 ## Verify the result

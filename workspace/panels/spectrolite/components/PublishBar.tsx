@@ -108,8 +108,8 @@ export function PublishBar({
             reconcile them, or explicitly keep the local result.
           </Text>
           {snapshot.conflicts.map((conflict) => (
-            <Flex key={conflict.changeId} align="center" justify="between" gap="2">
-              <Text size="1" truncate title={`${conflict.kind}: ${conflict.summary}`}>
+            <Flex key={`${conflict.coordinate.kind}:${conflict.coordinate.id}`} align="center" justify="between" gap="2">
+              <Text size="1" truncate title={`${conflict.coordinate.kind}: ${conflict.summary}`}>
                 {conflict.summary}
               </Text>
               <Button
@@ -117,8 +117,8 @@ export function PublishBar({
                 variant="soft"
                 color="amber"
                 disabled={snapshot.publishing}
-                onClick={() => void app.publish.keepLocal([conflict.changeId])}
-                data-testid={`spectrolite-keep-local-${conflict.changeId}`}
+                onClick={() => void app.publish.keepLocal(conflict.coordinates)}
+                data-testid={`spectrolite-keep-local-${conflict.coordinate.id}`}
               >
                 Keep local
               </Button>

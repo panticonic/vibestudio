@@ -399,7 +399,11 @@ function manifestRadixUpdates(updates: readonly FileManifestPathUpdate[]): Persi
   for (const update of updates) {
     if (update.expectedPath) {
       const current = paths.get(update.expectedPath);
-      if (current && current.expectedValue !== update.fileId) {
+      if (
+        current?.expectedValue !== null &&
+        current?.expectedValue !== undefined &&
+        current.expectedValue !== update.fileId
+      ) {
         throw new WorkspaceFactError(
           "ExpectedMemberMismatch",
           `manifest path ${update.expectedPath} has conflicting expected owners`

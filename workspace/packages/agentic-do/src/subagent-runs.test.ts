@@ -20,7 +20,7 @@ describe("SubagentRunStore schema", () => {
       label: "child",
       depth: 1,
       status: "running",
-      integration: "integrated",
+      integration: "merged",
       startedAt: 1,
       lastActivityAt: 2,
       agentKind: "pi",
@@ -35,7 +35,7 @@ describe("SubagentRunStore schema", () => {
     expect(store.countAllocated()).toBe(0);
     expect(store.resolveReference("run-1")).toMatchObject({
       kind: "exact",
-      run: { status: "closed", integration: "integrated" },
+      run: { status: "closed", integration: "merged" },
     });
   });
 

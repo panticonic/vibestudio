@@ -130,7 +130,7 @@ semantic integration.
 | Push local Git commits to upstream | Git transport        | Credential grant for the remote URL plus push approval/egress policy.                                                                                                                                          |
 | Pull/fetch from upstream           | Git transport        | Credential grant for the remote URL; provider-specific helpers may verify repository access first.                                                                                                             |
 | Import exact Git tree as candidate | git-bridge plus VCS  | Creates one committed import event in a dedicated context. It does not request or perform protected-main publication.                                                                                          |
-| Integrate and publish a candidate  | Semantic VCS         | Ordinary compare/integrate/check/commit steps followed by an explicit protected-main push, host-computed approval, and atomic ref advance. Build checks are explicit advisory work, not publication authority. |
+| Merge and publish a candidate      | Semantic VCS         | Ordinary compare/merge/check/commit steps followed by an explicit protected-main push, host-computed approval, and atomic ref advance. Build checks are explicit advisory work, not publication authority. |
 | `autoPush: true`                   | Background trigger   | Applies only to outgoing exports of already-published main events. It requires the upstream declaration and stored credential and stops at `integration-required`.                                             |
 | Extension provider update          | Extension system     | Install, source push to active branch, or explicit dependency update goes through the elevated extension approval path.                                                                                        |
 
@@ -181,7 +181,7 @@ snapshot revision, digest, and target repository IDs.
    export, or Git-push over that candidate.
 2. From the working context where the external work should land, compare its
    exact working head with the candidate event. Adopt, reconcile, or decline
-   small groups of ordinary changes with one `vcs.integrate` decision at a time
+   bounded stable-coordinate pages with `vcs.merge`
    and test between steps.
 3. Commit the complete local application chain. Its recorded decisions derive
    the candidate source parent; a caller-supplied source must match, and mixed

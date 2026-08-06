@@ -100,7 +100,7 @@ through change, application, and applied-change edges.
 and classifies source changes as shared, already satisfied, actionable,
 accounted, or historical. It creates no session or durable plan.
 
-`vcs.integrate` records one local adopted, reconciled, or declined decision at a
+`vcs.merge` records one local coordinate-accounting decision at a
 time:
 
 - adopted applies the original source change and records exact incorporation

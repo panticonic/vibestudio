@@ -456,7 +456,7 @@ If the bug is in workspace-owned runtime source — from your file root that is
 `apps/`, `extensions/`, `packages/`, `panels/`, `workers/`, or `skills/` —
 edit the files directly in your context with the `edit`/`write` tools. Then use
 the canonical [Vibestudio VCS protocol](../vibestudio-vcs/SKILL.md): retain the
-exact working state, integrate current main through local incremental decisions
+exact working state, merge current main through bounded coordinate pages
 when necessary, commit the complete local chain, and publish the exact committed
 event. These trees are live build inputs.
 
@@ -600,7 +600,7 @@ For workspace-owned source, publication is a semantic protocol:
 2. Confirm the repair is represented by coherent work units and changes, not
    only by projected bytes.
 3. If main moved, compare its exact event and incorporate incoming changes
-   through truthful local adopt/reconcile/decline decisions.
+   through truthful coordinate merge decisions and review composed intents.
 4. Commit the complete local application chain, adding the integrated source
    event as a parent when applicable.
 5. Run explicit checks against the context when the repair needs build or type
@@ -720,7 +720,7 @@ if (retest.result.passed) {
 - **Use `git.importProject()` to create a workspace repo from a remote.** It
   clones into operational server state under `state/git-checkouts/`, records the
   shared remote and matching upstream with auto-push off, and returns a
-  committed candidate context and event. Compare and integrate that candidate
+  committed candidate context and event. Compare and merge that candidate
   incrementally, check it, commit the complete chain, and explicitly publish it
   before treating the repo as available to other contexts. Build V2 reads exact
   semantic/CAS state, never this checkout. Use the destination path to choose

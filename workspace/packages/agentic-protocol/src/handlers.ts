@@ -114,7 +114,7 @@ export interface ProjectedInvocation {
     parentContextId?: string | null;
     childEntityId?: string;
     label?: string;
-    integration?: "integrated" | "conflicted" | "discarded";
+    integration?: "merged" | "needs-decision" | "discarded";
     /** Reasoning engine of the child run — SubagentRunCard badge. */
     agentKind?: string;
   };

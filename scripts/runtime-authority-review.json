@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:28a1b758a6855a16cada98ebecd5cb6a1972bdecad25c442b1b01584a8b01bbd",
+  "censusDigest": "sha256:309a63225c84476d2615f9b84d3cc7bc6304eb2b2cb0e8a88d8fb64c9c5c5ccd",
   "decisions": {
     "host:credentials.resolveCredential": {
       "review": "handler-owned-exact-credential-use-approval",
@@ -88,7 +88,7 @@
     },
     "host:vcs.supersedeExternalDelta": {
       "review": "context-bound-external-delta-retirement",
-      "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, integration, or foreign lifecycle authority."
+      "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, merge, or foreign lifecycle authority."
     },
     "host:runtime.listContexts": {
       "review": "bounded-context-id-discovery",
@@ -96,7 +96,7 @@
     },
     "host:vcs.registerExternalDelta": {
       "review": "context-bound-exact-external-delta-registration",
-      "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and integrate. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to integration."
+      "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and merge. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to merge review."
     },
     "host:hubControl.routeWorkspace": {
       "review": "read-only-exact-workspace-routing",
@@ -125,6 +125,10 @@
     "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsIsStateDescendant": {
       "review": "bounded-semantic-state-ancestry-read",
       "change": "Adds an open read-only causal ancestry check between two exact semantic state references. The receiver traverses bounded semantic history and performs no source mutation or filesystem projection."
+    },
+    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsSemanticHostReadAck": {
+      "review": "host-only-exact-merge-content-continuation",
+      "change": "Adds the host-only acknowledgement that resumes one exact compare or merge after the host returns the content hashes named by the engine. The receiver binds the operation, input digest, causal ingress, and complete hash set; it cannot select different content, mutate another context, or bypass ordinary VCS authorization."
     },
     "host:attachedHosts.attachClient": {
       "review": "owner-scoped-attached-host-client-open",

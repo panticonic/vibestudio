@@ -406,7 +406,7 @@ Human import and pull output still names the repository/branch, exact observed
 commit, whether the semantic snapshot changed, candidate context/event, the
 fact that protected main is unchanged, and the complete next workflow. While
 `vcs git status` reports `integration-required`, use
-the ordinary semantic compare/integrate/check/commit workflow and publish
+the ordinary semantic compare/merge/check/commit workflow and publish
 explicitly. Outgoing export and Git push remain blocked until that candidate is
 accounted for.
 

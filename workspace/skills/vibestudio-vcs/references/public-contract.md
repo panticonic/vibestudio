@@ -18,13 +18,13 @@ mutation except `push` advances an exact context working head; `commit` and
 | `vcs.edit` | `context-write` | Atomically create repositories with their initial files or author exact text, binary, file-create, delete, and mode changes on the working head. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `DestinationOccupied` |
 | `vcs.move` | `context-write` | Move stable file or repository identities without reconstructing intent from bytes. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `DestinationOccupied` |
 | `vcs.copy` | `context-write` | Copy exact source files into new identities with immediate coordinate provenance. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `DestinationOccupied` |
-| `vcs.integrate` | `context-write` | Take one local adopt, reconcile, or decline step against an exact source event or coordinator-owned external delta. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `ConflictPresent`, `DependencyBlocked` |
-| `vcs.revert` | `context-write` | Author explicit counteractions of exact semantic changes. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `ConflictPresent`, `DependencyBlocked` |
-| `vcs.commit` | `context-write` | Commit the complete local application chain; derive all integration parents from recorded decisions, or accept explicit zero-change sources. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `IntegrationIncomplete` |
+| `vcs.merge` | `context-write` | Merge one bounded page of stable coordinates from an exact event or external delta by net effect. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `ConflictPresent`, `CoupledGroupIncomplete` |
+| `vcs.revert` | `context-write` | Author explicit counteractions of exact semantic changes. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `ConflictPresent` |
+| `vcs.commit` | `context-write` | Commit the complete local application chain; derive every integration parent from recorded merge decisions. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `IntegrationIncomplete` |
 | `vcs.discard` | `context-write` | Discard the complete uncommitted chain and return to the committed event. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure` |
 | `vcs.importSnapshot` | `context-write` | Import one exact complete external snapshot as ordinary changes on an import work unit and atomically return the committed event, application, work unit, admitted repository IDs, and canonical external snapshot. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `DestinationOccupied`, `WorkingChangesPresent`, `ExternalEffectFailed` |
 | `vcs.registerExternalDelta` | `context-write` | Register one exact unapplied old-to-new external repository delta. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `ExternalEffectFailed` |
-| `vcs.supersedeExternalDelta` | `context-write` | Retire one active external delta so it can no longer be integrated. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure` |
+| `vcs.supersedeExternalDelta` | `context-write` | Retire one active external delta so it can no longer be merged. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure` |
 | `vcs.finalizeExternalDelta` | `context-write` | Finalize one fully decided external delta and release its dedicated GC roots. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `NoEffect`, `CommandIdReuse`, `ScopeTooLarge`, `IntegrityFailure`, `IntegrationIncomplete` |
 | `vcs.push` | `workspace-write` | Publish one exact already-committed event to protected main. | `RevisionChanged`, `Unauthorized`, `InvalidReference`, `WorkingChangesPresent`, `CommandIdReuse`, `ExternalEffectFailed`, `BuildGateFailed`, `IntegrityFailure` |
 | `vcs.status` | `read` | Return context pointers, clean state, main relation, and compact working counts. | `Unauthorized`, `InvalidReference`, `ScopeTooLarge`, `IntegrityFailure` |
@@ -44,7 +44,7 @@ mutation except `push` advances an exact context working head; `commit` and
 - `BuildGateFailed`
 - `CommandIdReuse`
 - `ConflictPresent`
-- `DependencyBlocked`
+- `CoupledGroupIncomplete`
 - `DestinationOccupied`
 - `ExternalEffectFailed`
 - `IntegrationIncomplete`

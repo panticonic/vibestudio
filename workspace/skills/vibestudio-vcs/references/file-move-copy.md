@@ -25,7 +25,10 @@ For a move, supply the current repository/file identities plus the destination
 repository and vacant path. For a copy, also retain the exact source state;
 copying from an older event is valid and remains explicit.
 
-Use the focused `move_file` and `copy_file` tools for one file. An agent-bound
+Use the focused `move_file` and `copy_file` tools for one file. Supply optional
+`intent` when the transfer serves a purpose the trigger does not reveal, for
+example `intent: "Keep the generic adapter while creating a panel-owned variant"`.
+Never fill it with the source and destination paths. An agent-bound
 relay must retain the exact causal invocation. An authorized direct client may
 use `vcs.move` or `vcs.copy` for an atomic batch, but its provenance stops at the
 command; do not wrap it in a synthetic agent.

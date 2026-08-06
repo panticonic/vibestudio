@@ -119,9 +119,8 @@ function inspectedNodeSummary(inspection: CanonicalProvenanceInspection): string
       const value = node.value;
       return [
         "decision",
-        value.kind,
-        `${value.sourceChangeIds.length} source change${value.sourceChangeIds.length === 1 ? "" : "s"}`,
-        "rationale" in value ? `rationale ${quoted(value.rationale)}` : null,
+        `${value.entries.length} coordinate entr${value.entries.length === 1 ? "y" : "ies"}`,
+        `${value.entries.reduce((count, entry) => count + entry.accountedSourceChangeIds.length, 0)} accounted source changes`,
       ]
         .filter(Boolean)
         .join(" · ");

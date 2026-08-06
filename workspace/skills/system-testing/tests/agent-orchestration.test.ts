@@ -155,7 +155,7 @@ describe("agent orchestration validators", () => {
         completedTool(`inspect-${runId}`, "inspect_subagent", { runId }),
         completedTool(
           `integrate-${runId}`,
-          "integrate_subagent",
+          "merge_subagent",
           { runId },
           {
             status: runId === "fixture-c" ? "needs-decision" : "working",
@@ -219,13 +219,13 @@ describe("agent orchestration validators", () => {
         messages.push(
           completedTool(
             `integrate-incomplete-${runId}`,
-            "integrate_subagent",
+            "merge_subagent",
             { runId },
             { status: "needs-decision", sourceEventId: sourceEventIds[index] }
           ),
           completedTool(
             `integrate-${runId}`,
-            "integrate_subagent",
+            "merge_subagent",
             { runId },
             { status: "working", sourceEventId: sourceEventIds[index] }
           )
@@ -233,8 +233,8 @@ describe("agent orchestration validators", () => {
       } else {
         messages.push(
           completedTool(`integrate-${runId}`, "vcs", {
-            operation: "integrate",
-            sourceEventId: sourceEventIds[index],
+            operation: "merge",
+            source: { kind: "event", eventId: sourceEventIds[index] },
           })
         );
       }

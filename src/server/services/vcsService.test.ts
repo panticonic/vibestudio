@@ -120,21 +120,23 @@ describe("canonical vcsService", () => {
     });
   });
 
-  it("notifies the owning host coordinator after an ordinary delta integration", async () => {
+  it("notifies the owning host coordinator after an ordinary delta merge", async () => {
     const onExternalDeltaIntegrated = vi.fn(async () => undefined);
     const { definition } = service({ onExternalDeltaIntegrated });
     const ctx = shellContext();
-    await definition.handler(ctx, "integrate", [
+    await definition.handler(ctx, "merge", [
       {
         contextId: "template-composer-operation-pull-base",
-        commandId: "command:integrate-template",
+        commandId: "command:merge-template",
         expectedWorkingHead: EVENT,
-        sourceDeltaId: "delta:template",
-        decision: {
-          kind: "declined",
-          sourceChangeIds: ["change:one"],
-          rationale: "Keep the workspace version",
-        },
+        source: { kind: "external-delta", deltaId: "delta:template" },
+        resolutions: [
+          {
+            coordinate: { kind: "file", id: "file:one" },
+            resolution: "ours",
+            rationale: "Keep the workspace version",
+          },
+        ],
       },
     ]);
     expect(onExternalDeltaIntegrated).toHaveBeenCalledWith(ctx, {
@@ -440,8 +442,7 @@ describe("canonical vcsService", () => {
       definition.handler(workerContext(), "compare", [
         {
           target: EVENT,
-          sourceEventId: "event:foreign",
-          view: "changes",
+          source: { kind: "event", eventId: "event:foreign" },
           limit: 20,
         },
       ])
@@ -471,8 +472,7 @@ describe("canonical vcsService", () => {
       definition.handler(workerContext(), "compare", [
         {
           target: EVENT,
-          sourceDeltaId: "delta:foreign",
-          view: "changes",
+          source: { kind: "external-delta", deltaId: "delta:foreign" },
           limit: 20,
         },
       ])

@@ -16571,48 +16571,6 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsIntegrate",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
-      "source": "workers/workspace-source",
-      "method": "vcsIntegrate",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "admin",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "schema-open",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
       "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsIsStateDescendant",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
@@ -16744,6 +16702,48 @@
       "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
       "source": "workers/workspace-source",
       "method": "vcsListFiles",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "admin",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "workspace.source.admin",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "schema-open",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsMerge",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+      "source": "workers/workspace-source",
+      "method": "vcsMerge",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
@@ -17239,6 +17239,48 @@
       "r3b": {
         "review": "schema-authority",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsSemanticHostReadAck",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+      "source": "workers/workspace-source",
+      "method": "vcsSemanticHostReadAck",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "workspace.source.write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "schema-open",
+      "r3b": {
+        "review": "host-only-exact-merge-content-continuation",
+        "change": "Adds the host-only acknowledgement that resumes one exact compare or merge after the host returns the content hashes named by the engine. The receiver binds the operation, input digest, causal ingress, and complete hash set; it cannot select different content, mutate another context, or bypass ordinary VCS authorization."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -34597,52 +34639,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:vcs.integrate",
-      "rpcPlane": "host-service",
-      "owner": "vcs",
-      "method": "integrate",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "protected-write",
-      "mechanismFamily": "vcs.control",
-      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:vcs.integrate"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:vcs.integrate),allOf(capability(user,service:vcs.integrate),workspace-member),allOf(capability(code,service:vcs.integrate),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:vcs.integrate",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:vcs.listDirectory",
       "rpcPlane": "host-service",
       "owner": "vcs",
@@ -34732,6 +34728,52 @@
         "change": null
       },
       "capability": "service:vcs.listFiles",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:vcs.merge",
+      "rpcPlane": "host-service",
+      "owner": "vcs",
+      "method": "merge",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "protected-write",
+      "mechanismFamily": "vcs.control",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:vcs.merge"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:vcs.merge),allOf(capability(user,service:vcs.merge),workspace-member),allOf(capability(code,service:vcs.merge),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:vcs.merge",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -35005,7 +35047,7 @@
       "r3aRequirement": "anyOf(capability(host,service:vcs.registerExternalDelta),allOf(capability(user,service:vcs.registerExternalDelta),workspace-member),allOf(capability(code,service:vcs.registerExternalDelta),workspace-member))",
       "r3b": {
         "review": "context-bound-exact-external-delta-registration",
-        "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and integrate. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to integration."
+        "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and merge. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to merge review."
       },
       "capability": "service:vcs.registerExternalDelta",
       "parityAssertion": "generated-census:host-authority"
@@ -35189,7 +35231,7 @@
       "r3aRequirement": "anyOf(capability(host,service:vcs.supersedeExternalDelta),allOf(capability(user,service:vcs.supersedeExternalDelta),workspace-member),allOf(capability(code,service:vcs.supersedeExternalDelta),workspace-member))",
       "r3b": {
         "review": "context-bound-external-delta-retirement",
-        "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, integration, or foreign lifecycle authority."
+        "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, merge, or foreign lifecycle authority."
       },
       "capability": "service:vcs.supersedeExternalDelta",
       "parityAssertion": "generated-census:host-authority"

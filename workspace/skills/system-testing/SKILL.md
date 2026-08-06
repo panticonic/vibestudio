@@ -363,7 +363,7 @@ commands. The test subject must read
 
 - exact committed-event and local-application identities;
 - complete-chain commit with no staging or selective remainder protocol;
-- compare plus small local adopt/reconcile/decline integration steps;
+- compare plus bounded coordinate merge pages, intent review, and explicit conflict resolutions;
 - exact-event publication to protected main;
 - explicit move/copy operations with stable move identity and copy ancestry;
 - counteraction-based revert without erased history;

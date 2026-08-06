@@ -203,7 +203,7 @@ const failurePayloadSchema = z
 const invocationOutcomeSchema = z.enum(INVOCATION_OUTCOMES);
 
 const subagentTerminalSchema = z
-  .object({ integration: z.enum(["integrated", "conflicted", "discarded"]).optional() })
+  .object({ integration: z.enum(["merged", "needs-decision", "discarded"]).optional() })
   .strict();
 
 const invocationTerminalFailurePayloadSchema = failurePayloadSchema

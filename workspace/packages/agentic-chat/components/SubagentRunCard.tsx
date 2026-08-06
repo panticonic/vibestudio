@@ -42,8 +42,8 @@ const INTEGRATION_LABEL: Record<
   NonNullable<SubagentRunState["integration"]>,
   { label: string; color: "green" | "amber" | "gray" }
 > = {
-  integrated: { label: "Integrated", color: "green" },
-  conflicted: { label: "Conflicted", color: "amber" },
+  merged: { label: "Merged", color: "green" },
+  "needs-decision": { label: "Needs decision", color: "amber" },
   discarded: { label: "Discarded", color: "gray" },
 };
 
@@ -224,7 +224,7 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
               )}
               {integration && (
                 <Badge
-                  className="subagent-integration-badge"
+                  className="subagent-merge-badge"
                   size="1"
                   variant="soft"
                   color={integration.color}

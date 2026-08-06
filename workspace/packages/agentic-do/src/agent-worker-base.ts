@@ -628,10 +628,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         },
       } as AgentTool,
       {
-        name: "integrate_subagent",
-        label: "integrate_subagent",
+        name: "merge_subagent",
+        label: "merge_subagent",
         description:
-          "Adopt every currently applicable committed change from a subagent into your local working state. Inspect its status and comparison first; conflicts require explicit adopt/reconcile/decline decisions. This does not commit or publish your work.",
+          "Merge a subagent's committed net effect into your local working state. Returns intents first, a composed-review checklist, and any coordinate conflicts. Pass resolutions after editing a truthful combined result or choosing ours/theirs. This does not commit or publish your work.",
         parameters: {
           type: "object",
           properties: {
@@ -640,12 +640,39 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
               description:
                 "The exact subagent runId or any sufficiently long unique prefix; the display ellipsis is optional.",
             },
+            resolutions: {
+              type: "array",
+              maxItems: 500,
+              items: {
+                type: "object",
+                properties: {
+                  coordinate: {
+                    type: "object",
+                    properties: {
+                      kind: { enum: ["file", "repository"] },
+                      id: { type: "string", minLength: 1 },
+                    },
+                    required: ["kind", "id"],
+                    additionalProperties: false,
+                  },
+                  resolution: { enum: ["composed", "theirs", "ours", "current"] },
+                  rationale: { type: "string", minLength: 1, maxLength: 2000 },
+                },
+                required: ["coordinate", "resolution"],
+                additionalProperties: false,
+              },
+            },
           },
           required: ["runId"],
         } as never,
         execute: async (_toolCallId, params) => {
-          const p = params as { runId?: unknown };
-          return this.integrateSubagent(String(p.runId ?? ""), channelId, toolRpc);
+          const p = params as { runId?: unknown; resolutions?: unknown };
+          return this.mergeSubagent(
+            String(p.runId ?? ""),
+            channelId,
+            Array.isArray(p.resolutions) ? (p.resolutions as never) : [],
+            toolRpc
+          );
         },
       } as AgentTool,
       {
@@ -681,7 +708,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "close_subagent",
         label: "close_subagent",
         description:
-          "Close a completed read-only subagent, or an editing subagent after integrate_subagent reports working or unchanged and every conflict has been resolved. The server verifies a never-integrated child has no effective changes before teardown. Closing releases the child context and concurrency slot only after teardown succeeds, then retains a durable, handle-resolvable supervision receipt. A cleanup error is retryable with the same runId and keeps the slot owned. Set discard:true only when intentionally dropping unintegrated work.",
+          "Close a completed read-only subagent, or an editing subagent after merge_subagent reports working or unchanged and every conflict has been resolved. The server freshly verifies complete and concluded merge state before teardown. Set discard:true only when intentionally dropping unmerged work.",
         parameters: {
           type: "object",
           properties: {

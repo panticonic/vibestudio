@@ -24,6 +24,7 @@ import {
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import type { RpcChannelMessage } from "@workspace/pubsub";
+import type { VcsCompareResult } from "@vibestudio/service-schemas/vcs";
 import { AgentVesselBase } from "./agent-vessel.js";
 import type { ChannelClient } from "./channel-client.js";
 import type { AgentLoopDriver } from "./agent-loop-driver.js";
@@ -1684,8 +1685,8 @@ class SubagentSpawnProbe extends TestVessel {
   async inspectSubagentForTest(runId: string, query: string, parentChannelId = CHANNEL) {
     return this.inspectSubagent(runId, query, parentChannelId);
   }
-  async integrateSubagentForTest(runId: string, parentChannelId = CHANNEL) {
-    return this.integrateSubagent(runId, parentChannelId);
+  async mergeSubagentForTest(runId: string, parentChannelId = CHANNEL) {
+    return this.mergeSubagent(runId, parentChannelId);
   }
   respondToVcs(method: string, ...responses: unknown[]) {
     this.vcsResponses.set(`vcs.${method}`, [...responses]);
@@ -1770,34 +1771,28 @@ function semanticStatus(
 function semanticComparison(
   target: { kind: "event"; eventId: string } | { kind: "application"; applicationId: string },
   sourceEventId: string,
-  changes: Array<{
-    changeId: string;
-    disposition: { status: "actionable"; applicability: "applicable" | "conflicting" | "blocked" };
-  }>
-) {
-  const conflicting = changes.filter(
-    (change) => change.disposition.applicability === "conflicting"
-  ).length;
-  const blocked = changes.filter((change) => change.disposition.applicability === "blocked").length;
+  coordinates: Array<{ id: string; status: "adopt" | "conflict" }>,
+  concluded = coordinates.length === 0
+): VcsCompareResult {
+  const conflict = coordinates.filter((coordinate) => coordinate.status === "conflict").length;
+  const adopt = coordinates.length - conflict;
   return {
     target,
-    sourceEventId,
-    resolution: { complete: changes.length === 0, remainingChangeCount: changes.length },
-    counts: {
-      shared: 0,
-      alreadySatisfied: 0,
-      actionable: changes.length,
-      conflicting,
-      blocked,
-      accounted: 0,
-      historical: 0,
-    },
-    changes: changes.map((change) => ({
-      ...change,
-      workUnitId: `work:${change.changeId}`,
-      kind: "file-create" as const,
-      summary: change.changeId,
+    source: { kind: "event" as const, eventId: sourceEventId },
+    base: { kind: "event" as const, eventId: "event:base" },
+    resolution: { complete: coordinates.length === 0, remainingCoordinateCount: coordinates.length, concluded },
+    counts: { adopt, convergent: 0, composed: 0, conflict, resolved: 0 },
+    intentCounts: { merged: 0, settled: 0, split: 0, contested: conflict, pending: adopt },
+    coordinates: coordinates.map((entry) => ({
+      coordinate: { kind: "file" as const, id: entry.id, paths: { theirs: `${entry.id}.ts` } },
+      status: entry.status,
+      aspects: [{ aspect: "content" as const, base: null, ours: null, theirs: entry.id, status: entry.status }],
+      attribution: { ours: [], theirs: [{ changeId: `change:${entry.id}`, workUnitId: `work:${entry.id}` }] },
+      resolutions: ["theirs", "ours", "current"],
+      summary: entry.id,
     })),
+    intents: [],
+    intentsTruncated: false,
     nextCursor: null,
   };
 }
@@ -2568,18 +2563,14 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     );
     probe.respondToVcs(
       "compare",
-      semanticComparison(parentHead, "event:child", [
-        {
-          changeId: "change:child",
-          disposition: { status: "actionable", applicability: "applicable" },
-        },
-      ])
+      semanticComparison(parentHead, "event:child", [{ id: "child", status: "adopt" }])
     );
 
     const out = await probe.inspectSubagentForTest(runId, "diff");
     const text = (out.content[0] as { text?: string } | undefined)?.text ?? "";
 
-    expect(text).toContain('"sourceEventId": "event:child"');
+    expect(text).toContain('"source": {');
+    expect(text).toContain('"eventId": "event:child"');
     expect(text.length).toBeLessThan(20_000);
     expect(probe.rpcCalls.filter(({ method }) => method.startsWith("vcs."))).toEqual([
       {
@@ -2703,30 +2694,44 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       semanticStatus("ctx-1", "event:parent", target, false),
       semanticStatus("ctx-child", sourceEventId, { kind: "event", eventId: sourceEventId }, true)
     );
+    const initialComparison = semanticComparison(target, sourceEventId, [
+      { id: "one", status: "adopt" },
+    ]);
+    initialComparison.intents = [
+      {
+        workUnitId: "work:child",
+        side: "theirs",
+        state: "pending",
+        intent: { tier: "trigger", text: "asked by user:owner: Build the fixture corpus" },
+        coordinates: [{ kind: "file", id: "one" }],
+      },
+    ];
     probe.respondToVcs(
       "compare",
-      semanticComparison(target, sourceEventId, [
-        {
-          changeId: "change:1",
-          disposition: { status: "actionable", applicability: "applicable" },
-        },
-      ]),
+      initialComparison,
       semanticComparison(integrated, sourceEventId, [])
     );
-    probe.respondToVcs("integrate", integration);
+    probe.respondToVcs("merge", {
+      ...integration,
+      outcomes: [],
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+      intents: [],
+      composed: [],
+    });
 
-    const result = await probe.integrateSubagentForTest(runId);
+    const result = await probe.mergeSubagentForTest(runId);
 
     expect(result.details).toMatchObject({
-      protocol: "vibestudio.subagent-integration.v2",
+      protocol: "vibestudio.subagent-merge.v1",
       runId,
       status: "working",
       sourceEventId,
       initialWorkingHead: target,
       workingHead: integrated,
-      integrations: [integration],
+      merges: [expect.objectContaining({ decisionId: "decision:1" })],
+      sourceHeadline: "asked by user:owner: Build the fixture corpus",
     });
-    expect(probe.subagentRunForTest(runId)?.integration).toBe("integrated");
+    expect(probe.subagentRunForTest(runId)?.integration).toBe("merged");
     const vcsCalls = probe.rpcCalls.filter(
       ({ target: callTarget, method }) => callTarget === "main" && method.startsWith("vcs.")
     );
@@ -2734,18 +2739,18 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       "vcs.status",
       "vcs.status",
       "vcs.compare",
-      "vcs.integrate",
+      "vcs.merge",
       "vcs.compare",
     ]);
-    const integrateInput = vcsCalls.find(({ method }) => method === "vcs.integrate")
+    const integrateInput = vcsCalls.find(({ method }) => method === "vcs.merge")
       ?.args[0] as Record<string, unknown>;
     expect(integrateInput).toMatchObject({
       contextId: "ctx-1",
       expectedWorkingHead: target,
-      sourceEventId,
-      decision: { kind: "adopted", sourceChangeIds: ["change:1"] },
+      source: { kind: "event", eventId: sourceEventId },
     });
-    expect(integrateInput["commandId"]).toMatch(/^subagent-integrate:[a-f0-9]{64}$/);
+    expect(integrateInput["commandId"]).toMatch(/^subagent-merge:[a-f0-9]{64}$/);
+    expect(integrateInput).not.toHaveProperty("intentSummary");
     expect(vcsCalls.some(({ method }) => method === "vcs.commit")).toBe(false);
   });
 
@@ -2762,19 +2767,56 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     );
     probe.respondToVcs("compare", semanticComparison(target, sourceEventId, []));
 
-    const result = await probe.integrateSubagentForTest(runId);
+    const result = await probe.mergeSubagentForTest(runId);
 
     expect(result.details).toMatchObject({
       status: "unchanged",
       sourceEventId,
       initialWorkingHead: target,
       workingHead: target,
-      integrations: [],
+      merges: [],
     });
-    expect(probe.subagentRunForTest(runId)?.integration).toBe("integrated");
+    expect(probe.subagentRunForTest(runId)?.integration).toBe("merged");
     const methods = probe.rpcCalls.map(({ method }) => method);
-    expect(methods).not.toContain("vcs.integrate");
+    expect(methods).not.toContain("vcs.merge");
     expect(methods).not.toContain("vcs.commit");
+  });
+
+  it("pages conflict details when the first comparison page contains none", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    const runId = "inv-paged-conflict";
+    probe.insertSubagentRunForTest({ runId, status: "running" });
+    const target = { kind: "application" as const, applicationId: "application:target" };
+    const sourceEventId = "event:source";
+    probe.respondToVcs(
+      "status",
+      semanticStatus("ctx-1", "event:parent", target, false),
+      semanticStatus("ctx-child", sourceEventId, { kind: "event", eventId: sourceEventId }, true)
+    );
+    const firstPage = semanticComparison(target, sourceEventId, [], true);
+    firstPage.resolution = { complete: false, remainingCoordinateCount: 1, concluded: true };
+    firstPage.counts.conflict = 1;
+    firstPage.nextCursor = "cursor:late-conflict";
+    const latePage = semanticComparison(
+      target,
+      sourceEventId,
+      [{ id: "late-conflict", status: "conflict" }],
+      true
+    );
+    probe.respondToVcs("compare", firstPage, latePage);
+
+    const result = await probe.mergeSubagentForTest(runId);
+
+    expect(result.details).toMatchObject({
+      status: "needs-decision",
+      conflicts: [
+        expect.objectContaining({
+          coordinate: expect.objectContaining({ id: "late-conflict" }),
+        }),
+      ],
+    });
+    expect(probe.rpcCalls.filter(({ method }) => method === "vcs.compare")).toHaveLength(2);
+    expect(probe.rpcCalls.some(({ method }) => method === "vcs.merge")).toBe(false);
   });
 
   it("keeps adopted changes local and reports remaining conflicting changes", async () => {
@@ -2784,10 +2826,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     const target = { kind: "application" as const, applicationId: "application:target" };
     const integrated = { kind: "application" as const, applicationId: "application:partial" };
     const sourceEventId = "event:source";
-    const conflicting = {
-      changeId: "change:conflicting",
-      disposition: { status: "actionable" as const, applicability: "conflicting" as const },
-    };
+    const conflicting = { id: "conflicting", status: "conflict" as const };
     probe.respondToVcs(
       "status",
       semanticStatus("ctx-1", "event:parent", target, false),
@@ -2796,15 +2835,12 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     probe.respondToVcs(
       "compare",
       semanticComparison(target, sourceEventId, [
-        {
-          changeId: "change:applicable",
-          disposition: { status: "actionable", applicability: "applicable" },
-        },
+        { id: "applicable", status: "adopt" },
         conflicting,
       ]),
-      semanticComparison(integrated, sourceEventId, [conflicting])
+      semanticComparison(integrated, sourceEventId, [conflicting], true)
     );
-    probe.respondToVcs("integrate", {
+    probe.respondToVcs("merge", {
       contextId: "ctx-1",
       workUnitId: "work:partial",
       applicationId: integrated.applicationId,
@@ -2812,29 +2848,36 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       incorporatedChangeIds: ["change:applicable"],
       workingHead: integrated,
       decisionId: "decision:partial",
+      outcomes: [],
+      resolution: { complete: false, remainingCoordinateCount: 1, concluded: true },
+      intents: [],
+      composed: [],
     });
 
-    const result = await probe.integrateSubagentForTest(runId);
+    const result = await probe.mergeSubagentForTest(runId);
 
     expect(result.details).toMatchObject({
       status: "needs-decision",
       sourceEventId,
       workingHead: integrated,
-      unresolved: [
-        {
-          changeId: "change:conflicting",
-          disposition: { status: "actionable", applicability: "conflicting" },
-        },
+      conflicts: [
+        expect.objectContaining({ coordinate: expect.objectContaining({ id: "conflicting" }), status: "conflict" }),
       ],
     });
-    expect(probe.subagentRunForTest(runId)?.integration).toBe("conflicted");
+    expect(probe.subagentRunForTest(runId)?.integration).toBe("needs-decision");
     const methods = probe.rpcCalls.map(({ method }) => method);
-    expect(methods.filter((method) => method === "vcs.integrate")).toHaveLength(1);
+    expect(methods.filter((method) => method === "vcs.merge")).toHaveLength(1);
     expect(methods).not.toContain("vcs.commit");
 
+    probe.respondToVcs(
+      "status",
+      semanticStatus("ctx-1", "event:parent", integrated, false),
+      semanticStatus("ctx-child", sourceEventId, { kind: "event", eventId: sourceEventId }, true)
+    );
+    probe.respondToVcs("compare", semanticComparison(integrated, sourceEventId, [conflicting], true));
     await expect(probe.closeSubagentForTest(runId)).rejects.toMatchObject({
       code: "IntegrationIncomplete",
-      message: expect.stringContaining("unresolved integration decisions"),
+      message: expect.stringContaining("unmerged coordinate"),
       errorData: {
         code: "IntegrationIncomplete",
         operation: "subagent-close",
@@ -2927,7 +2970,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(probe.subagentRunForTest(runId)).toMatchObject({
       runId,
       status: "closed",
-      integration: "integrated",
+      integration: "merged",
     });
     await expect(
       probe.inspectSubagentForTest("call_close_reference_1234567890_...", "status")
@@ -2935,7 +2978,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       details: {
         runId: "call_close_reference_123…",
         status: "closed",
-        integration: "integrated",
+        integration: "merged",
         available: false,
         reason: "closed",
       },

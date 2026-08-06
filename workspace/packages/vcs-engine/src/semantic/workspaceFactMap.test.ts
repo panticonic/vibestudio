@@ -152,6 +152,44 @@ describe("workspace fact root", () => {
     ).toEqual({ path: "src/a.ts", fileId: "file-1" });
   });
 
+  it("swaps two manifest owners atomically", () => {
+    const empty = emptyFileManifest("repo-1");
+    const nodes = new Map([[empty.node.nodeId, empty.node]]);
+    const initial = composeFileManifest({
+      basis: empty.manifest,
+      updates: [
+        { fileId: "file-a", expectedPath: null, resultPath: "a.ts" },
+        { fileId: "file-b", expectedPath: null, resultPath: "b.ts" },
+      ],
+      readNode: memoryReader(nodes),
+    });
+    for (const node of initial.createdNodes) nodes.set(node.nodeId, node);
+    const swapped = composeFileManifest({
+      basis: initial.resultManifest,
+      updates: [
+        { fileId: "file-a", expectedPath: "a.ts", resultPath: "b.ts" },
+        { fileId: "file-b", expectedPath: "b.ts", resultPath: "a.ts" },
+      ],
+      readNode: memoryReader(nodes),
+    });
+    for (const node of swapped.createdNodes) nodes.set(node.nodeId, node);
+
+    expect(
+      fileManifestEntryAt({
+        manifest: swapped.resultManifest,
+        path: "a.ts",
+        readNode: memoryReader(nodes),
+      })
+    ).toEqual({ path: "a.ts", fileId: "file-b" });
+    expect(
+      fileManifestEntryAt({
+        manifest: swapped.resultManifest,
+        path: "b.ts",
+        readNode: memoryReader(nodes),
+      })
+    ).toEqual({ path: "b.ts", fileId: "file-a" });
+  });
+
   it("authenticates roots using their identity without a duplicate digest", () => {
     const { root } = emptyWorkspaceFactRoot();
     expect(() => authenticateWorkspaceFactRoot(root)).not.toThrow();

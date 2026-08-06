@@ -82,7 +82,7 @@ export interface WorkspaceSemanticPort {
   vcsEdit(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsMove(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsCopy(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
-  vcsIntegrate(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
+  vcsMerge(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsRevert(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsCommit(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsDiscard(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
@@ -117,6 +117,12 @@ export interface WorkspaceSemanticPort {
       effectId: string;
       payloadDigest: string;
       receipt: Record<string, unknown>;
+    };
+  }): Promise<WorkspaceSourceSemanticDispatchResult>;
+  semanticHostReadAck(input: {
+    acknowledgement: {
+      request: Record<string, unknown>;
+      files: Array<{ contentHash: string; text: string }>;
     };
   }): Promise<WorkspaceSourceSemanticDispatchResult>;
   pendingSemanticEffects(): Promise<WorkspaceSourceSemanticEffect[]>;
@@ -170,7 +176,7 @@ export function createWorkspaceSemanticPort(
     vcsEdit: (input) => invoke("vcsEdit", input),
     vcsMove: (input) => invoke("vcsMove", input),
     vcsCopy: (input) => invoke("vcsCopy", input),
-    vcsIntegrate: (input) => invoke("vcsIntegrate", input),
+    vcsMerge: (input) => invoke("vcsMerge", input),
     vcsRevert: (input) => invoke("vcsRevert", input),
     vcsCommit: (input) => invoke("vcsCommit", input),
     vcsDiscard: (input) => invoke("vcsDiscard", input),
@@ -191,6 +197,7 @@ export function createWorkspaceSemanticPort(
     vcsListDirectory: (input) => invoke("vcsListDirectory", input),
     vcsListFiles: (input) => invoke("vcsListFiles", input),
     semanticEffectAck: (input) => invoke("vcsSemanticEffectAck", input),
+    semanticHostReadAck: (input) => invoke("vcsSemanticHostReadAck", input),
     pendingSemanticEffects: () => invokeNoArgs("vcsPendingSemanticEffects"),
     ensureContext: (input) => invoke("vcsEnsureContext", input),
     contextMaterializationCommand: (input) => invoke("vcsContextMaterializationCommand", input),

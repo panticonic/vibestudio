@@ -4,8 +4,17 @@ import { serializeSystemTestError } from "./structured-error.js";
 
 type FixtureVcs = Pick<
   VcsClient,
-  "status" | "inspect" | "neighbors" | "history" | "importSnapshot" | "revert" | "commit" | "push"
+  | "status"
+  | "inspect"
+  | "neighbors"
+  | "history"
+  | "listFiles"
+  | "importSnapshot"
+  | "revert"
+  | "commit"
+  | "push"
 >;
+type FixtureState = Parameters<FixtureVcs["listFiles"]>[0]["state"];
 
 interface FixtureBlobstore {
   putText(text: string): Promise<{ digest: string; size: number }>;
@@ -97,6 +106,7 @@ interface FixtureTaskWork {
 interface TaskCreatedRepository {
   repositoryId: string;
   repoPath: string;
+  creationChangeId: string;
 }
 
 /**
@@ -107,10 +117,11 @@ interface TaskCreatedRepository {
  * There is no fixture-only repository API, moving-main reconciler, or
  * ownership registry.
  * If the test publishes, teardown finds the newest task event reachable from
- * current main, counteracts that exact published work in reverse causal order,
- * then commits and pushes once. Newer local work disappears with the task
- * context. If no task event reached main, destroying that context is the whole
- * cleanup.
+ * current main and uses that lineage to prove the repositories this fixture
+ * owns. It then peels each owned repository's exact live file frontier until
+ * repository creation itself is counteractable, commits the removal chain, and
+ * pushes once. Newer local work disappears with the task context. If no task
+ * event reached main, destroying that context is the whole cleanup.
  */
 export class WorkspaceRepoFixtureLifecycle {
   private contextId: string | null = null;
@@ -357,7 +368,7 @@ export class WorkspaceRepoFixtureLifecycle {
           state,
           cleanupContextId,
           cleanupStatus,
-          publishedWork,
+          publishedChanges.createdRepositories,
           onPhase
         );
       }
@@ -411,55 +422,39 @@ export class WorkspaceRepoFixtureLifecycle {
     state: WorkspaceRepoFixtureState,
     cleanupContextId: string,
     status: Awaited<ReturnType<FixtureVcs["status"]>>,
-    publishedWork: FixtureTaskWork[],
+    createdRepositories: TaskCreatedRepository[],
     onPhase?: (phase: string) => void
   ): Promise<string[]> {
     let workingHead = status.workingHead;
     const counteractedChangeIds: string[] = [];
-    const counteracted = new Set<string>();
-    const revertDependencyClosure = async (
-      requestedChangeIds: string[],
-      blockerAncestry = new Set<string>()
-    ): Promise<void> => {
-      const changeIds = [...new Set(requestedChangeIds)].filter(
-        (changeId) => !counteracted.has(changeId)
+    const cleanupChangeIds = new Set<string>();
+    const counteractedOriginalIds = new Set<string>();
+    const observedFrontiers = new Set<string>();
+    while (true) {
+      const changeIds = await this.currentRepositoryFrontier(
+        workingHead,
+        createdRepositories,
+        cleanupChangeIds,
+        counteractedOriginalIds
       );
-      if (changeIds.length === 0) return;
-      try {
-        onPhase?.("counteract-revert");
-        const reverted = await this.port.vcs.revert({
-          contextId: cleanupContextId,
-          commandId: this.command("revert-work"),
-          expectedWorkingHead: workingHead,
-          changeIds,
-          intentSummary: `Remove published system-test work from ${this.scopeLabel(state)}`,
-        });
-        workingHead = reverted.workingHead;
-        for (const changeId of changeIds) {
-          counteracted.add(changeId);
-          counteractedChangeIds.push(changeId);
-        }
-      } catch (error) {
-        const blockers = dependencyBlockingChangeIds(error);
-        if (blockers === null) throw error;
-        if (blockers.length === 0) {
-          throw new Error("DependencyBlocked did not provide any blocking change identities");
-        }
-        const cycle = blockers.find((changeId) => blockerAncestry.has(changeId));
-        if (cycle) {
-          throw new Error(`Workspace fixture cleanup dependency cycle reached ${cycle}`);
-        }
-        const before = counteracted.size;
-        await revertDependencyClosure(blockers, new Set([...blockerAncestry, ...blockers]));
-        if (counteracted.size === before) {
-          throw new Error("Workspace fixture cleanup dependency closure made no progress");
-        }
-        await revertDependencyClosure(changeIds, blockerAncestry);
+      if (changeIds.length === 0) break;
+      const frontier = JSON.stringify({ workingHead, changeIds });
+      if (observedFrontiers.has(frontier)) {
+        throw new Error("Workspace fixture cleanup counteraction frontier did not advance");
       }
-    };
-
-    for (const work of publishedWork) {
-      await revertDependencyClosure(work.changeIds);
+      observedFrontiers.add(frontier);
+      onPhase?.("counteract-revert");
+      const reverted = await this.port.vcs.revert({
+        contextId: cleanupContextId,
+        commandId: this.command("revert-work"),
+        expectedWorkingHead: workingHead,
+        changeIds,
+        intentSummary: `Remove published system-test work from ${this.scopeLabel(state)}`,
+      });
+      workingHead = reverted.workingHead;
+      counteractedChangeIds.push(...changeIds);
+      for (const changeId of changeIds) counteractedOriginalIds.add(changeId);
+      for (const changeId of reverted.changeIds) cleanupChangeIds.add(changeId);
     }
     if (counteractedChangeIds.length === 0) return [];
     onPhase?.("counteract-commit");
@@ -482,8 +477,139 @@ export class WorkspaceRepoFixtureLifecycle {
     return counteractedChangeIds;
   }
 
+  /**
+   * Repository teardown is a state operation, so its dependencies must come
+   * from the exact state being removed. Historical task changes only prove
+   * ownership. An incorporated merge can realize a current file with a change
+   * authored on another parent, outside the task context's first-parent work.
+   *
+   * `listFiles` exposes the canonical authored change for every current file
+   * version. An edit frontier restores a prior version, whose newest author is
+   * then the cleanup counteraction itself; file history supplies the next
+   * original predecessor while cleanup-authored and already-counteracted IDs
+   * are excluded. The repository-create change joins the final peel only when
+   * every remaining file frontier removes its file (or the repository is empty).
+   */
+  private async currentRepositoryFrontier(
+    state: FixtureState,
+    createdRepositories: TaskCreatedRepository[],
+    cleanupChangeIds: ReadonlySet<string>,
+    counteractedOriginalIds: ReadonlySet<string>
+  ): Promise<string[]> {
+    const changeIds: string[] = [];
+    const seen = new Set<string>();
+    const add = (changeId: string) => {
+      if (seen.has(changeId)) return;
+      seen.add(changeId);
+      changeIds.push(changeId);
+    };
+
+    for (const repository of [...createdRepositories].sort(
+      (left, right) =>
+        left.repoPath.localeCompare(right.repoPath) ||
+        left.repositoryId.localeCompare(right.repositoryId)
+    )) {
+      const present = await this.inspectPresentRepository(state, repository.repositoryId);
+      if (!present) continue;
+      const files: Array<{ fileId: string; authoredChangeId: string }> = [];
+      let cursor: string | undefined;
+      do {
+        const page = await this.port.vcs.listFiles({
+          state,
+          repositoryId: repository.repositoryId,
+          limit: 500,
+          ...(cursor ? { cursor } : {}),
+        });
+        files.push(
+          ...page.files.map((file) => ({
+            fileId: file.fileId,
+            authoredChangeId: file.authoredChangeId,
+          }))
+        );
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      const removals = await Promise.all(
+        files.map(async (file) => {
+          const changeId = await this.originalFileFrontier(
+            state,
+            repository.repositoryId,
+            file,
+            cleanupChangeIds,
+            counteractedOriginalIds
+          );
+          return {
+            fileId: file.fileId,
+            authoredChangeId: changeId,
+            removesFile: await this.counteractionRemovesFile(changeId, file.fileId),
+          };
+        })
+      );
+      if (removals.every((file) => file.removesFile)) {
+        for (const file of removals) add(file.authoredChangeId);
+        add(repository.creationChangeId);
+      } else {
+        for (const file of removals) {
+          if (!file.removesFile) add(file.authoredChangeId);
+        }
+      }
+    }
+    return changeIds;
+  }
+
+  private async originalFileFrontier(
+    state: FixtureState,
+    repositoryId: string,
+    file: { fileId: string; authoredChangeId: string },
+    cleanupChangeIds: ReadonlySet<string>,
+    counteractedOriginalIds: ReadonlySet<string>
+  ): Promise<string> {
+    const available = (changeId: string) =>
+      !cleanupChangeIds.has(changeId) && !counteractedOriginalIds.has(changeId);
+    if (available(file.authoredChangeId)) return file.authoredChangeId;
+
+    const root = {
+      kind: "file" as const,
+      state,
+      repositoryId,
+      fileId: file.fileId,
+    };
+    let cursor: string | undefined;
+    do {
+      const page = await this.port.vcs.history({
+        root,
+        direction: "past",
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const entry of page.entries) {
+        if (entry.node.kind === "change" && available(entry.node.changeId)) {
+          return entry.node.changeId;
+        }
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    throw new Error(`Placed fixture file ${file.fileId} has no remaining original frontier`);
+  }
+
+  private async counteractionRemovesFile(changeId: string, fileId: string): Promise<boolean> {
+    const inspected = await this.port.vcs.inspect({
+      node: { kind: "change", changeId },
+      edgeLimit: 1,
+    });
+    if (inspected.node.kind !== "change") {
+      throw new Error(`Workspace fixture could not inspect live change ${changeId}`);
+    }
+    return inspected.node.value.effects.some(
+      (effect) =>
+        effect.kind === "placement" &&
+        effect.fileId === fileId &&
+        effect.before === null &&
+        effect.after !== null
+    );
+  }
+
   private async inspectPresentRepository(
-    state: Awaited<ReturnType<FixtureVcs["status"]>>["committed"],
+    state: FixtureState,
     repositoryId: string
   ): Promise<WorkspaceRepoFixtureRepository | null> {
     let inspected;
@@ -653,6 +779,7 @@ export class WorkspaceRepoFixtureLifecycle {
             createdRepositories.set(effect.repositoryId, {
               repositoryId: effect.repositoryId,
               repoPath: effect.afterPath,
+              creationChangeId: changeId,
             });
           }
         }
@@ -914,17 +1041,4 @@ function repositorySeedFiles(
 
 function semanticErrorCode(error: unknown): string | undefined {
   return serializeSystemTestError(error).code;
-}
-
-/** Return the exact typed blockers for a dependency failure, null for any
- * other error, and an empty vector for a malformed dependency payload. */
-function dependencyBlockingChangeIds(error: unknown): string[] | null {
-  const structured = serializeSystemTestError(error);
-  if (structured.code !== "DependencyBlocked") return null;
-  const data = structured.errorData;
-  if (!data || Array.isArray(data) || typeof data !== "object") return [];
-  const blockers = data["blockingChangeIds"];
-  if (!Array.isArray(blockers) || blockers.length === 0) return [];
-  if (blockers.some((value) => typeof value !== "string" || value.length === 0)) return [];
-  return [...new Set(blockers as string[])];
 }

@@ -94,24 +94,9 @@ describe("template composer staging", () => {
         return { deltaId: `delta-${repoPath}` };
       }
       if (method === "vcs.compare") {
-        const deltaId = String(input["sourceDeltaId"]);
-        if (input["view"] === "changes") {
-          if (deltaId.endsWith("panels/one") && !integrationStarted) {
-            return {
-              resolution: { complete: false },
-              changes: [
-                {
-                  changeId: "change-one",
-                  disposition: { status: "already-satisfied", evidence: [{ kind: "same" }] },
-                },
-              ],
-            };
-          }
-          return { resolution: { complete: true }, changes: [] };
-        }
-        return { resolution: { complete: true } };
+        return { resolution: { complete: true, remainingCoordinateCount: 0, concluded: integrationStarted } };
       }
-      if (method === "vcs.integrate") {
+      if (method === "vcs.merge") {
         integrationStarted = true;
         return {};
       }

@@ -4940,18 +4940,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "vcs.integrate": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "protected-write",
-      family: "vcs.control",
-      rationale:
-        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
   "vcs.listDirectory": {
     tier: {
       tier: "open",
@@ -4970,6 +4958,18 @@ export const HOST_AUTHORITY_METHODS = {
       session: "family",
       residency: "transport",
       family: "vcs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "vcs.merge": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
       rationale:
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },

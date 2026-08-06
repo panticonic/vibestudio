@@ -153,7 +153,7 @@ describe("system-testing validation helpers", () => {
       passed: true,
       reason: undefined,
     });
-    expect(requireVcsEvidence(result, ["vcs.integrate"]).passed).toBe(false);
+    expect(requireVcsEvidence(result, ["vcs.merge"]).passed).toBe(false);
 
     invocation.name = "provenance";
     invocation.arguments = { target: "command:1" };
