@@ -41,9 +41,26 @@ function unit(kind: "extension" | "app" | "panel" | "worker", name: string): Rev
 }
 
 describe("UnitInstallReviewCoordinator", () => {
+  it("refuses to offer a review without an exact effective version", () => {
+    const approvalQueue = { request: vi.fn(async () => "accepted" as const) };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(approvalQueue),
+    });
+
+    expect(() =>
+      coordinator.enqueue({
+        trigger: "startup",
+        entries: [{ ...unit("app", "shell"), ev: null }],
+        applyApproved: vi.fn(async () => undefined),
+        applyDenied: vi.fn(),
+      })
+    ).toThrow(/without an effective version/);
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
   it("combines app and extension startup approvals into one install review", async () => {
     const approvalQueue = {
-      request: vi.fn(async () => "once" as const),
+      request: vi.fn(async () => "accepted" as const),
     };
     const coordinator = new UnitInstallReviewCoordinator({
       approvalQueue: exactApprovalQueue(approvalQueue),
@@ -85,7 +102,7 @@ describe("UnitInstallReviewCoordinator", () => {
 
   it("keeps explicitly partitioned host targets in separate reviews", async () => {
     const approvalQueue = {
-      request: vi.fn(async () => "once" as const),
+      request: vi.fn(async () => "accepted" as const),
     };
     const coordinator = new UnitInstallReviewCoordinator({
       approvalQueue: exactApprovalQueue(approvalQueue),
@@ -120,7 +137,7 @@ describe("UnitInstallReviewCoordinator", () => {
 
   it("applies approved requests concurrently, starting extensions first", async () => {
     const approvalQueue = {
-      request: vi.fn(async () => "once" as const),
+      request: vi.fn(async () => "accepted" as const),
     };
     const coordinator = new UnitInstallReviewCoordinator({
       approvalQueue: exactApprovalQueue(approvalQueue),
@@ -201,11 +218,11 @@ describe("UnitInstallReviewCoordinator", () => {
   });
 
   it("can publish a queued batch before the timer fires", async () => {
-    let resolveDecision!: (decision: "once") => void;
+    let resolveDecision!: (decision: "accepted") => void;
     const approvalQueue = {
       request: vi.fn(
         () =>
-          new Promise<"once">((resolve) => {
+          new Promise<"accepted">((resolve) => {
             resolveDecision = resolve;
           })
       ),
@@ -228,7 +245,7 @@ describe("UnitInstallReviewCoordinator", () => {
     expect(approvalQueue.request).toHaveBeenCalledOnce();
     expect(applyApp).not.toHaveBeenCalled();
 
-    resolveDecision("once");
+    resolveDecision("accepted");
     await pending;
     expect(applyApp).toHaveBeenCalledOnce();
   });
@@ -236,7 +253,7 @@ describe("UnitInstallReviewCoordinator", () => {
   it("holds startup publication until every runtime kind has joined the shared batch", async () => {
     vi.useFakeTimers();
     try {
-      const approvalQueue = { request: vi.fn(async () => "once" as const) };
+      const approvalQueue = { request: vi.fn(async () => "accepted" as const) };
       const coordinator = new UnitInstallReviewCoordinator({
         approvalQueue: exactApprovalQueue(approvalQueue),
         delayMs: 1,
@@ -283,7 +300,7 @@ describe("UnitInstallReviewCoordinator", () => {
     // "approved and launching" forever. A released trigger stays open.
     vi.useFakeTimers();
     try {
-      const approvalQueue = { request: vi.fn(async () => "once" as const) };
+      const approvalQueue = { request: vi.fn(async () => "accepted" as const) };
       const coordinator = new UnitInstallReviewCoordinator({
         approvalQueue: exactApprovalQueue(approvalQueue),
         delayMs: 1,
@@ -316,7 +333,7 @@ describe("UnitInstallReviewCoordinator", () => {
 
   it("exposes approved activation settlement to startup readiness", async () => {
     const coordinator = new UnitInstallReviewCoordinator({
-      approvalQueue: exactApprovalQueue({ request: vi.fn(async () => "once" as const) }),
+      approvalQueue: exactApprovalQueue({ request: vi.fn(async () => "accepted" as const) }),
       delayMs: 10_000,
     });
     let releaseApply!: () => void;
@@ -349,7 +366,7 @@ describe("UnitInstallReviewCoordinator", () => {
 
   it("settles only the unit applications selected by a launch gate", async () => {
     const approvalQueue = {
-      request: vi.fn(async () => "once" as const),
+      request: vi.fn(async () => "accepted" as const),
     };
     const coordinator = new UnitInstallReviewCoordinator({
       approvalQueue: exactApprovalQueue(approvalQueue),
@@ -394,7 +411,7 @@ describe("UnitInstallReviewCoordinator", () => {
     const app = unit("app", "shell");
     const reportInstallLanding = vi.fn();
     const approvalQueue = {
-      request: vi.fn(async () => "once" as const),
+      request: vi.fn(async () => "accepted" as const),
       listPending: vi.fn(() => [
         {
           approvalId: "install-review",
@@ -464,7 +481,7 @@ describe("UnitInstallReviewCoordinator", () => {
       approvalQueue: {
         requestWithHandle: vi.fn(() => ({
           approvalId: "current-review",
-          decision: Promise.resolve("once" as const),
+          decision: Promise.resolve("accepted" as const),
         })),
         listPending: vi.fn(
           () =>
@@ -504,7 +521,7 @@ describe("UnitInstallReviewCoordinator", () => {
       approvalQueue: {
         requestWithHandle: vi.fn(() => ({
           approvalId: "shared-review",
-          decision: Promise.resolve("once" as const),
+          decision: Promise.resolve("accepted" as const),
         })),
         listPending: vi.fn(
           () =>
@@ -544,7 +561,7 @@ describe("UnitInstallReviewCoordinator", () => {
   it("propagates application failures through both publication and enqueue settlement", async () => {
     const failure = new Error("provider activation failed");
     const coordinator = new UnitInstallReviewCoordinator({
-      approvalQueue: exactApprovalQueue({ request: vi.fn(async () => "once" as const) }),
+      approvalQueue: exactApprovalQueue({ request: vi.fn(async () => "accepted" as const) }),
       delayMs: 10_000,
     });
     const enqueued = coordinator.enqueue({

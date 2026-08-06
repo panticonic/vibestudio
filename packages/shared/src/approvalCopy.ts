@@ -10,7 +10,7 @@ import type {
   PendingDeviceCodeApproval,
   PendingMissionReviewApproval,
   PendingSecretInputApproval,
-  PendingUnitBatchApproval,
+  PendingUnitInstallReviewApproval,
 } from "./approvals.js";
 import { HOST_APPROVAL_COPY } from "./hostApprovalCopy.js";
 
@@ -28,12 +28,21 @@ function isOpaqueId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(value) || /^[0-9a-f]{24,}$/i.test(value);
 }
 
-/** Drop common id prefixes for a friendlier fallback label when no title exists. */
-function prettifyApprovalId(id: string): string {
-  const stripped = id.replace(/^(do-service:|do:|worker:|panel:|app:|extension:)/, "");
-  const segments = stripped.split(":");
-  const last = segments[segments.length - 1] ?? stripped;
-  return truncateId(last);
+/**
+ * Runtime ids are useful in Developer details, but they are not display names.
+ * In particular, Durable Object targets look superficially like labels while
+ * being both long and meaningless to the person answering the prompt.
+ */
+function userFacingCallerLabel(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (
+    !normalized ||
+    isOpaqueId(normalized) ||
+    /^(?:do(?:-service)?|worker|panel|app|extension|session):/i.test(normalized)
+  ) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function isIdentityScopedVersionApproval(approval: PendingApproval): boolean {
@@ -120,10 +129,18 @@ export function getApprovalCallerPresentation(
   approval: PendingApproval
 ): ApprovalCallerPresentation {
   if (approval.requester) {
+    const kindLabel = getRequesterCategoryLabel(approval.requester.category);
     return {
       label:
-        approval.requester.title ?? approval.callerTitle ?? prettifyApprovalId(approval.callerId),
-      kindLabel: getRequesterCategoryLabel(approval.requester.category),
+        userFacingCallerLabel(approval.requester.title) ??
+        userFacingCallerLabel(approval.callerTitle) ??
+        userFacingCallerLabel(
+          approval.requester.breadcrumbs.find((breadcrumb) => breadcrumb.category === "agent")
+            ?.label
+        ) ??
+        userFacingCallerLabel(basename(approval.requester.repoPath || approval.repoPath)) ??
+        kindLabel,
+      kindLabel,
       kind: approval.requester.kind,
       ...(approval.requester.panel?.id
         ? { panelId: approval.requester.panel.id }
@@ -134,17 +151,12 @@ export function getApprovalCallerPresentation(
     };
   }
 
-  const label =
-    approval.callerTitle?.trim() ||
-    (approval.callerKind === "system" ? "Workspace" : "") ||
-    (approval.callerKind === "worker" ||
-    approval.callerKind === "app" ||
-    approval.callerKind === "do" ||
-    approval.callerKind === "extension"
-      ? basename(approval.repoPath)
-      : "") ||
-    prettifyApprovalId(approval.callerId);
   const kindLabel = callerKindToLabel(approval.callerKind);
+  const label =
+    userFacingCallerLabel(approval.callerTitle) ||
+    (approval.callerKind === "system" ? "Workspace" : "") ||
+    userFacingCallerLabel(basename(approval.repoPath)) ||
+    kindLabel;
   return {
     label,
     kindLabel,
@@ -154,14 +166,34 @@ export function getApprovalCallerPresentation(
   };
 }
 
+const INSTALL_REVIEW_CATEGORY: Record<PendingUnitInstallReviewApproval["mode"], string> = {
+  "adopt-root": HOST_APPROVAL_COPY.categories.workspaceSetup,
+  install: HOST_APPROVAL_COPY.categories.templateAdd,
+  update: HOST_APPROVAL_COPY.categories.templateUpdate,
+  remove: HOST_APPROVAL_COPY.categories.templateRemove,
+  "part-changed": HOST_APPROVAL_COPY.categories.partChanged,
+};
+
 export function getApprovalOperationKindLabel(kind: ApprovalOperationDescriptor["kind"]): string {
   return HOST_APPROVAL_COPY.operationKinds[kind];
 }
 
 export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone {
   if (approval.kind === "mission-review") return "caution";
-  if (approval.kind === "unit-batch") {
-    return approval.units.some((unit) => unit.unitKind === "extension") ? "danger" : "caution";
+  if (approval.kind === "unit-install-review") {
+    // Adopting a root is the workspace describing itself — the welcome after
+    // creation, and the launch gate before it. It arrives with every extension
+    // the base ships, which under a per-part rule painted `Welcome — here's
+    // what's in your workspace` red and put a hazard triangle over it. Nothing
+    // is wrong, nobody is being warned, and dressing an inventory as an alarm is
+    // the theater §1 rules out: a surface that always looks urgent teaches
+    // people that urgent means nothing.
+    if (approval.mode === "adopt-root") return "standard";
+    // Adding or updating a template someone chose is ordinary. Native code
+    // running outside our protections is the one thing here worth a raised
+    // voice, and a raised voice is amber — the copy still says it in full, and
+    // §7.2 keeps that sentence unhidable regardless of tone.
+    return approval.parts.some((part) => part.kind === "extension") ? "caution" : "standard";
   }
   if (approval.kind === "credential" && approval.oauthAudienceDomainMismatch) {
     return "caution";
@@ -200,32 +232,10 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.kind === "device-code") {
     return HOST_APPROVAL_COPY.categories.deviceSignIn;
   }
-  if (approval.kind === "unit-batch") {
-    if (approval.units.length === 0) {
-      if (approval.trigger === "management") return HOST_APPROVAL_COPY.categories.unitManagement;
-      if (approval.trigger === "source-change") return HOST_APPROVAL_COPY.categories.unitSource;
-      return HOST_APPROVAL_COPY.categories.workspaceSetup;
-    }
-    if (approval.trigger === "management") {
-      if (approval.units.every((unit) => unit.unitKind === "app"))
-        return HOST_APPROVAL_COPY.categories.appManagement;
-      if (approval.units.every((unit) => unit.unitKind === "extension"))
-        return HOST_APPROVAL_COPY.categories.extensionManagement;
-      return HOST_APPROVAL_COPY.categories.unitManagement;
-    }
-    if (approval.trigger === "source-change") {
-      if (approval.units.every((unit) => unit.unitKind === "app"))
-        return HOST_APPROVAL_COPY.categories.appSource;
-      if (approval.units.every((unit) => unit.unitKind === "extension"))
-        return HOST_APPROVAL_COPY.categories.extensionSource;
-      return HOST_APPROVAL_COPY.categories.unitSource;
-    }
-    if (approval.units.every((unit) => unit.unitKind === "app"))
-      return HOST_APPROVAL_COPY.categories.appSetup;
-    if (approval.units.every((unit) => unit.unitKind === "extension"))
-      return HOST_APPROVAL_COPY.categories.extensionSetup;
-    return HOST_APPROVAL_COPY.categories.workspaceSetup;
+  if (approval.kind === "unit-install-review") {
+    return INSTALL_REVIEW_CATEGORY[approval.mode];
   }
+
   if (approval.capability === "workspace-main-advance") {
     const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith(
       "workspace-source-change:"
@@ -307,13 +317,13 @@ export function getAllowedStandardApprovalDecisions(
 function approvalAgentName(
   approval: PendingCredentialApproval | PendingCapabilityApproval
 ): string {
-  if (approval.kind === "capability" && approval.snapshot?.agentName) {
-    return approval.snapshot.agentName;
-  }
-  return (
-    approval.requester?.breadcrumbs.find((breadcrumb) => breadcrumb.category === "agent")?.label ??
-    "this agent"
-  );
+  const candidates = [
+    approval.requester?.title,
+    approval.requester?.breadcrumbs.find((breadcrumb) => breadcrumb.category === "agent")?.label,
+    approval.callerTitle,
+    approval.kind === "capability" ? approval.snapshot?.agentName : undefined,
+  ];
+  return candidates.map(userFacingCallerLabel).find(Boolean) ?? "this agent";
 }
 
 export function getStandardApprovalDecisionActions(
@@ -611,80 +621,72 @@ export function getStandardActionCopy(
 }
 
 /**
- * The durable reviewed-subject grant is the normal choice whenever the
- * approval supports one: exact code identity for installed units, stable agent
- * identity for agent-owned eval. Once-only operations such as force pushes do
- * not offer either durable choice.
+ * A task grant is the normal choice whenever the approval offers one: it lets
+ * the agent finish the current task without turning an ordinary approval into
+ * standing trust. Durable reviewed-subject grants remain the recommendation
+ * only for approvals that do not have a task-scoped option. Once-only
+ * operations such as force pushes do not offer either reusable choice.
  */
 export function getRecommendedStandardDecision(
   approval: PendingCredentialApproval | PendingCapabilityApproval
 ): Extract<StandardApprovalDecision, "once" | "session" | "task" | "agent" | "version"> {
   const allowed = getAllowedStandardApprovalDecisions(approval);
   const copy = getStandardActionCopy(approval);
+  if (allowed.includes("task")) return "task";
   if (copy.version && allowed.includes("version")) return "version";
   if (allowed.includes("agent")) return "agent";
   if (allowed.includes("once")) return "once";
-  if (allowed.includes("task")) return "task";
   return "session";
 }
 
-export interface UnitBatchActionCopy {
-  once: { label: string; description: string };
-  session?: { label: string; description: string };
-  deny: { label: string; description: string };
+/**
+ * The two actions an install review offers, and what each one means.
+ *
+ * There is no third "allow for a while": clearance is a durable decision the
+ * user can revisit in Permissions, and a timed version of it would be a promise
+ * about the future that nothing enforces.
+ */
+export interface InstallReviewActionCopy {
+  accept: { label: string; description: string };
+  /** Absent on the creation review, where the workspace already exists. */
+  decline?: { label: string; description: string };
 }
 
-export function getUnitBatchActionCopy(approval: PendingUnitBatchApproval): UnitBatchActionCopy {
-  const count = approval.units.length;
-  const unitLabel = unitBatchLabel(approval).singular;
-  const composition = unitBatchComposition(approval);
-  const isSourceChange = approval.trigger === "source-change";
-  const isManagement = approval.trigger === "management";
-
+export function getInstallReviewActionCopy(
+  approval: PendingUnitInstallReviewApproval
+): InstallReviewActionCopy {
+  const copy = HOST_APPROVAL_COPY.installReview;
+  const accept = {
+    label: copy.actionLabels[approval.mode],
+    description: copy.actionDescriptions[approval.mode],
+  };
+  if (approval.mode === "adopt-root") {
+    // §7.1: no "Not now" — the workspace is already created. The equivalent
+    // escape is deselecting everything, which leaves every part asking at use.
+    return { accept };
+  }
+  const addsOnly =
+    approval.mode === "part-changed" &&
+    approval.parts.length > 0 &&
+    approval.parts.every((part) => part.change === "added");
+  if (addsOnly) {
+    return {
+      accept: {
+        label: copy.actionLabels["adopt-root"],
+        description: copy.actionDescriptions["adopt-root"],
+      },
+      decline: {
+        label: copy.actionLabels.notNow,
+        description: copy.actionDescriptions.notNow,
+      },
+    };
+  }
   return {
-    once: {
-      label: isSourceChange
-        ? HOST_APPROVAL_COPY.unitReview.actionLabels.sourceChange
-        : isManagement
-          ? HOST_APPROVAL_COPY.unitReview.actionLabels.management
-          : count > 1
-            ? HOST_APPROVAL_COPY.unitReview.actionLabels.all
-            : count === 1
-              ? HOST_APPROVAL_COPY.unitReview.actionLabels.management
-              : HOST_APPROVAL_COPY.unitReview.actionLabels.allow,
-      description: isSourceChange
-        ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.sourceChange(unitLabel)
-        : isManagement
-          ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.management(unitLabel)
-          : count > 0
-            ? unitBatchApproveDescription(approval, unitLabel)
-            : HOST_APPROVAL_COPY.unitReview.actionDescriptions.config,
-    },
-    ...(approval.trigger === "meta-change" || isSourceChange
-      ? {
-          session: {
-            label: HOST_APPROVAL_COPY.unitReview.actionLabels.devSession,
-            description: isSourceChange
-              ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.sourceDevSession(unitLabel)
-              : HOST_APPROVAL_COPY.unitReview.actionDescriptions.configDevSession,
-          },
-        }
-      : {}),
-    deny: {
-      label:
-        isSourceChange || isManagement || count <= 1
-          ? HOST_APPROVAL_COPY.unitReview.actionLabels.deny
-          : HOST_APPROVAL_COPY.unitReview.actionLabels.denyAll,
-      description: isSourceChange
-        ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectSource
-        : isManagement
-          ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectManagement
-          : count > 0
-            ? unitLabel === HOST_APPROVAL_COPY.unitReview.kinds.mixed.singular
-              ? HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectComposition(composition)
-              : HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectKind(unitLabel, count)
-            : HOST_APPROVAL_COPY.unitReview.actionDescriptions.rejectConfig,
-    },
+    accept,
+    decline:
+      approval.mode === "part-changed"
+        ? { label: copy.actionLabels.keepOld, description: copy.actionDescriptions.keepOld }
+        : { label: copy.actionLabels.notNow, description: copy.actionDescriptions.notNow },
   };
 }
 
@@ -742,8 +744,8 @@ export function getApprovalCopy(approval: PendingApproval): {
       return getMissionReviewCopy(approval);
     case "browser-permission":
       return getBrowserPermissionCopy(approval);
-    case "unit-batch":
-      return getUnitBatchCopy(approval);
+    case "unit-install-review":
+      return getInstallReviewCopy(approval);
     case "capability":
       return getCapabilityCopy(approval);
     case "client-config":
@@ -756,7 +758,7 @@ export function getApprovalCopy(approval: PendingApproval): {
     case "secret-input":
       return {
         title: approval.title,
-        summary: approval.description ?? HOST_APPROVAL_COPY.headlines.secretInputFallback,
+        summary: spoken(approval.description) ?? HOST_APPROVAL_COPY.headlines.secretInputFallback,
         warning: approval.warning,
       };
     case "device-code":
@@ -791,27 +793,64 @@ function getBrowserPermissionCopy(approval: PendingBrowserPermissionApproval) {
   };
 }
 
-function getUnitBatchCopy(approval: PendingUnitBatchApproval) {
-  const count = approval.units.length;
-  const unitLabel = unitBatchLabel(approval);
-  const composition = unitBatchComposition(approval);
-  const fallbackTitle = HOST_APPROVAL_COPY.unitReview.title(
-    approval.trigger,
-    count,
-    unitLabel.singular,
-    composition
-  );
-  const fallbackSummary = HOST_APPROVAL_COPY.unitReview.summary(
-    approval.trigger,
-    count,
-    unitLabel.singular,
-    unitLabel.nativeCode,
-    composition
-  );
+/**
+ * Text a producer supplied, or nothing — never the empty string.
+ *
+ * Every fallback in this file guards against a *missing* value with `??`, which
+ * is the wrong test for text that arrives from outside the host. A template may
+ * simply omit its description; a hostile one may supply a description that
+ * sanitization strips to nothing. Both produce `""`, both pass `??`, and both
+ * render a card with a blank summary — the one outcome a copy layer exists to
+ * prevent, and the one an attacker gets for free by writing something we refuse
+ * to print. Whitespace counts as nothing for the same reason.
+ */
+function spoken(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function getInstallReviewCopy(approval: PendingUnitInstallReviewApproval): ApprovalCopyResult {
+  const copy = HOST_APPROVAL_COPY.installReview;
+  const templateTitle = spoken(approval.template?.title);
+  // The producer's own heading wins when it set one: the launch gate asks
+  // "Start this workspace?", the creation review welcomes. Both are adopt-root,
+  // and only the producer knows which surface it is.
+  const title =
+    approval.mode === "adopt-root"
+      ? (spoken(approval.title) ?? copy.heading["adopt-root"])
+      : approval.mode === "part-changed"
+        ? (spoken(approval.title) ??
+          (approval.parts.length === 1
+            ? copy.heading["part-changed"](spoken(approval.parts[0]?.title) ?? "A part")
+            : `${approval.parts.length} parts changed`))
+        : templateTitle
+          ? copy.heading[approval.mode](templateTitle)
+          : approval.title;
+  // A template that gave itself no purpose — or one whose purpose sanitization
+  // refused to print — falls through to the operation's own description rather
+  // than heading a card with an empty line where the reason should be.
+  const summary =
+    approval.mode === "part-changed"
+      ? (spoken(approval.description) ??
+        (approval.parts.length === 1
+          ? copy.summary.partChanged
+          : "Someone edited these parts in your workspace."))
+      : approval.parts.length === 0 && approval.unchangedPartCount > 0
+        ? copy.summary.noPermissionChanges(approval.unchangedPartCount)
+        : (spoken(approval.template?.purpose) ??
+          spoken(approval.description) ??
+          // Last resort, and never blank: the platform's own count of what is
+          // arriving. It says nothing the template claimed, which is exactly
+          // right for a template that claimed nothing printable.
+          copy.adds(approval.summary));
   return {
-    title: concreteBatchCopy(approval.title, fallbackTitle),
-    summary: concreteBatchCopy(approval.description, fallbackSummary),
-    ...(count > 0 ? { warning: unitBatchWarning(approval) } : {}),
+    title,
+    summary,
+    // The one warning that never hides: native code runs outside our
+    // protections, and that is true of every extension regardless of origin.
+    ...(approval.parts.some((part) => part.kind === "extension")
+      ? { warning: copy.nativeCodeWarning }
+      : {}),
   };
 }
 
@@ -847,28 +886,26 @@ const CAPABILITY_COPY_HANDLERS: Record<
   "network.response.read"(approval) {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     const fallback = HOST_APPROVAL_COPY.headlines.networkConnect(destination);
-    return { title: fallback.title, summary: approval.description ?? fallback.summary };
+    return { title: fallback.title, summary: spoken(approval.description) ?? fallback.summary };
   },
   "cors-response-read"(approval) {
     const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
     const fallback = HOST_APPROVAL_COPY.headlines.corsRead(destination);
-    return { title: fallback.title, summary: approval.description ?? fallback.summary };
+    return { title: fallback.title, summary: spoken(approval.description) ?? fallback.summary };
   },
   "workerd.inspector"(approval) {
     const target = approval.resource?.value ?? approval.operation?.object?.value ?? "workerd";
     const fallback = HOST_APPROVAL_COPY.headlines.inspectRuntime(target);
     return {
       title: targetAwareGenericTitle(approval.title, fallback.title),
-      summary: approval.description ?? fallback.summary,
+      summary: spoken(approval.description) ?? fallback.summary,
     };
   },
   "context.boundary"(approval) {
     const owner = approval.details?.find((d) => d.label === "Owner")?.value;
     const target =
       approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
-    const subject = owner
-      ? `the workspace branch owned by ${owner}`
-      : `workspace branch ${target}`;
+    const subject = owner ? `the workspace branch owned by ${owner}` : `workspace branch ${target}`;
     const fallbackTitle = contextBoundaryFallbackTitle(
       approval.operation?.verb ?? approval.title,
       subject
@@ -876,7 +913,8 @@ const CAPABILITY_COPY_HANDLERS: Record<
     return {
       title: targetAwareGenericTitle(approval.title, fallbackTitle),
       summary:
-        approval.description ?? HOST_APPROVAL_COPY.headlines.contextBoundarySummary(subject),
+        spoken(approval.description) ??
+        HOST_APPROVAL_COPY.headlines.contextBoundarySummary(subject),
       warning: HOST_APPROVAL_COPY.headlines.contextBoundaryWarning,
     };
   },
@@ -885,7 +923,7 @@ const CAPABILITY_COPY_HANDLERS: Record<
     const fallback = HOST_APPROVAL_COPY.headlines.disableService(formatServiceName(target));
     return {
       title: targetAwareGenericTitle(approval.title, fallback.title),
-      summary: approval.description ?? fallback.summary,
+      summary: spoken(approval.description) ?? fallback.summary,
     };
   },
 };
@@ -907,7 +945,7 @@ function getCapabilityCopy(approval: PendingCapabilityApproval): ApprovalCopyRes
   const fallback = HOST_APPROVAL_COPY.headlines.genericCapability(target);
   return {
     title: targetAwareGenericTitle(approval.title, fallback.title),
-    summary: approval.description ?? fallback.summary,
+    summary: spoken(approval.description) ?? fallback.summary,
   };
 }
 
@@ -945,7 +983,7 @@ function getCredentialCopy(approval: PendingCredentialApproval): ApprovalCopyRes
   }
   return {
     ...HOST_APPROVAL_COPY.headlines.credentialUse(
-      approval.bindingLabel ?? approval.credentialLabel,
+      spoken(approval.bindingLabel) ?? approval.credentialLabel,
       approval.credentialLabel,
       formatCredentialUseTarget(approval)
     ),
@@ -960,14 +998,15 @@ function concreteBatchCopy(value: string | undefined, fallback: string): string 
   return candidate && !/\bunits?\b/iu.test(candidate) ? candidate : fallback;
 }
 
-const CALLER_KIND_TO_CATEGORY: Record<string, keyof typeof HOST_APPROVAL_COPY.requesterCategories> = {
-  panel: "panel",
-  app: "workspace-app",
-  worker: "worker",
-  do: "durable-object",
-  extension: "extension",
-  system: "system",
-};
+const CALLER_KIND_TO_CATEGORY: Record<string, keyof typeof HOST_APPROVAL_COPY.requesterCategories> =
+  {
+    panel: "panel",
+    app: "workspace-app",
+    worker: "worker",
+    do: "durable-object",
+    extension: "extension",
+    system: "system",
+  };
 
 function callerKindToLabel(kind: string): string {
   const categoryKey = CALLER_KIND_TO_CATEGORY[kind] ?? kind;
@@ -987,7 +1026,7 @@ export function getCapabilityPrimaryDestination(approval: PendingCapabilityAppro
 }
 
 export function shouldOpenApprovalDetails(approval: PendingApproval): boolean {
-  return approval.kind === "unit-batch" || approval.kind === "mission-review";
+  return approval.kind === "unit-install-review" || approval.kind === "mission-review";
 }
 
 function isBrowserOpenApproval(approval: PendingCapabilityApproval): boolean {
@@ -1048,131 +1087,6 @@ function targetAwareGenericTitle(title: string | undefined, fallback: string): s
     "profile workers via the workerd inspector",
   ]);
   return genericTitles.has(normalized) ? fallback : title;
-}
-
-function unitBatchLabel(approval: PendingUnitBatchApproval): {
-  singular: string;
-  plural: string;
-  nativeCode: boolean;
-  scheduledJob: boolean;
-} {
-  const hasExtensions = approval.units.some((unit) => unit.unitKind === "extension");
-  const hasApps = approval.units.some((unit) => unit.unitKind === "app");
-  const hasPanels = approval.units.some((unit) => unit.unitKind === "panel");
-  const hasWorkers = approval.units.some((unit) => unit.unitKind === "worker");
-  const hasScheduledJobs = approval.units.some((unit) => unit.unitKind === "scheduled-job");
-  const hasAgentHeartbeats = approval.units.some((unit) => unit.unitKind === "agent-heartbeat");
-  const presentKindCount = [
-    hasExtensions,
-    hasApps,
-    hasPanels,
-    hasWorkers,
-    hasScheduledJobs,
-    hasAgentHeartbeats,
-  ].filter(Boolean).length;
-  if (hasExtensions && presentKindCount === 1) {
-    return {
-      ...HOST_APPROVAL_COPY.unitReview.kinds.extension,
-      nativeCode: true,
-      scheduledJob: false,
-    };
-  }
-  if (hasApps && presentKindCount === 1) {
-    return { ...HOST_APPROVAL_COPY.unitReview.kinds.app, nativeCode: false, scheduledJob: false };
-  }
-  if (hasPanels && presentKindCount === 1) {
-    return { ...HOST_APPROVAL_COPY.unitReview.kinds.panel, nativeCode: false, scheduledJob: false };
-  }
-  if (hasWorkers && presentKindCount === 1) {
-    return {
-      ...HOST_APPROVAL_COPY.unitReview.kinds.worker,
-      nativeCode: false,
-      scheduledJob: false,
-    };
-  }
-  if (hasScheduledJobs && presentKindCount === 1) {
-    return {
-      ...HOST_APPROVAL_COPY.unitReview.kinds.scheduledJob,
-      nativeCode: false,
-      scheduledJob: true,
-    };
-  }
-  if (hasAgentHeartbeats && presentKindCount === 1) {
-    return {
-      ...HOST_APPROVAL_COPY.unitReview.kinds.agentHeartbeat,
-      nativeCode: false,
-      scheduledJob: true,
-    };
-  }
-  return {
-    ...HOST_APPROVAL_COPY.unitReview.kinds.mixed,
-    nativeCode: hasExtensions,
-    scheduledJob: hasScheduledJobs,
-  };
-}
-
-function unitBatchWarning(approval: PendingUnitBatchApproval): string {
-  const count = (kind: PendingUnitBatchApproval["units"][number]["unitKind"]) =>
-    approval.units.filter((unit) => unit.unitKind === kind).length;
-  const warnings: string[] = [];
-  const extensions = count("extension");
-  const apps = count("app");
-  const panels = count("panel");
-  const workers = count("worker");
-  const scheduledJobs = count("scheduled-job");
-  const agentHeartbeats = count("agent-heartbeat");
-  if (extensions) warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.extension(extensions));
-  if (apps) warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.app(apps));
-  if (panels) warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.panel(panels));
-  if (workers) warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.worker(workers));
-  if (scheduledJobs)
-    warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.scheduledJob(scheduledJobs));
-  if (agentHeartbeats)
-    warnings.push(HOST_APPROVAL_COPY.unitReview.warningEffects.agentHeartbeat(agentHeartbeats));
-  return HOST_APPROVAL_COPY.unitReview.warning(warnings);
-}
-
-function unitBatchComposition(approval: PendingUnitBatchApproval): string {
-  const labels = [
-    ["extension", HOST_APPROVAL_COPY.unitReview.kinds.extension],
-    ["app", HOST_APPROVAL_COPY.unitReview.kinds.app],
-    ["panel", HOST_APPROVAL_COPY.unitReview.kinds.panel],
-    ["worker", HOST_APPROVAL_COPY.unitReview.kinds.worker],
-    ["scheduled-job", HOST_APPROVAL_COPY.unitReview.kinds.scheduledJob],
-    ["agent-heartbeat", HOST_APPROVAL_COPY.unitReview.kinds.agentHeartbeat],
-  ] as const;
-  const parts = labels.flatMap(([kind, label]) => {
-    const count = approval.units.filter((entry) => entry.unitKind === kind).length;
-    return count === 0 ? [] : [`${count} ${count === 1 ? label.singular : label.plural}`];
-  });
-  if (parts.length === 0) return "this workspace configuration change";
-  if (parts.length === 1) return parts[0]!;
-  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
-  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
-}
-
-function unitBatchApproveDescription(
-  approval: PendingUnitBatchApproval,
-  unitLabel: string
-): string {
-  const count = approval.units.length;
-  if (unitLabel === HOST_APPROVAL_COPY.unitReview.kinds.scheduledJob.singular) {
-    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.scheduledJobs(count);
-  }
-  if (unitLabel === HOST_APPROVAL_COPY.unitReview.kinds.agentHeartbeat.singular) {
-    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.agentHeartbeats(count);
-  }
-  if (unitLabel === HOST_APPROVAL_COPY.unitReview.kinds.panel.singular) {
-    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.panels(count);
-  }
-  if (unitLabel === HOST_APPROVAL_COPY.unitReview.kinds.worker.singular) {
-    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.workers(count);
-  }
-  if (unitLabel === HOST_APPROVAL_COPY.unitReview.kinds.mixed.singular) {
-    return HOST_APPROVAL_COPY.unitReview.actionDescriptions.mixed(unitBatchComposition(approval));
-  }
-  const hasExtensions = approval.units.some((unit) => unit.unitKind === "extension");
-  return HOST_APPROVAL_COPY.unitReview.actionDescriptions.install(count, unitLabel, hasExtensions);
 }
 
 export function originForUrl(raw: string): string {

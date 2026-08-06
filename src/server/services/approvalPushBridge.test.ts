@@ -96,12 +96,12 @@ function requestCapability(queue: ReturnType<typeof createQueue>) {
 
 function requestAppSourceChange(queue: ReturnType<typeof createQueue>) {
   return queue.request({
-    kind: "unit-batch",
+    kind: "unit-install-review",
     callerId: "panel-1",
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
-    trigger: "source-change",
+    mode: "part-changed",
     title: "@workspace-apps/shell app source change",
     description: "Accepting this push updates trusted workspace app code.",
     units: [
@@ -122,12 +122,12 @@ function requestAppSourceChange(queue: ReturnType<typeof createQueue>) {
 
 function requestUnitManagement(queue: ReturnType<typeof createQueue>) {
   return queue.request({
-    kind: "unit-batch",
+    kind: "unit-install-review",
     callerId: "panel-1",
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
-    trigger: "management",
+    mode: "part-changed",
     title: "Reload extension",
     description: "Allow panel panel-1 to reload @workspace-extensions/image-service.",
     units: [
@@ -148,12 +148,12 @@ function requestUnitManagement(queue: ReturnType<typeof createQueue>) {
 
 function requestStartupUnit(queue: ReturnType<typeof createQueue>) {
   return queue.request({
-    kind: "unit-batch",
+    kind: "unit-install-review",
     callerId: "system:units",
     callerKind: "system",
     repoPath: "meta",
     effectiveVersion: "",
-    trigger: "startup",
+    mode: "adopt-root",
     title: "Approve workspace extensions",
     description: "Approve startup extensions.",
     units: [
@@ -467,14 +467,19 @@ describe("approvalPushBridge", () => {
       DELIVERED_TARGETS,
       expect.objectContaining({
         data: expect.objectContaining({
-          approvalKind: "unit-batch",
+          approvalKind: "unit-install-review",
           actionsJson: JSON.stringify([{ id: "open", title: "Open" }]),
         }),
       })
     );
 
-    queue.resolve(queue.listPending()[0]!.approvalId, "session");
-    await expect(promise).resolves.toBe("session");
+    const pending = queue.listPending()[0]!;
+    if (pending.kind !== "unit-install-review") throw new Error("expected install review");
+    await queue.resolveInstallReview(pending.approvalId, {
+      decision: "update",
+      allowNow: pending.parts.map((part) => ({ identityKey: part.identityKey })),
+    });
+    await expect(promise).resolves.toBe("accepted");
   });
 
   it("keeps unit management decisions in app", async () => {
@@ -498,14 +503,19 @@ describe("approvalPushBridge", () => {
       DELIVERED_TARGETS,
       expect.objectContaining({
         data: expect.objectContaining({
-          approvalKind: "unit-batch",
+          approvalKind: "unit-install-review",
           actionsJson: JSON.stringify([{ id: "open", title: "Open" }]),
         }),
       })
     );
 
-    queue.resolve(queue.listPending()[0]!.approvalId, "once");
-    await expect(promise).resolves.toBe("once");
+    const pending = queue.listPending()[0]!;
+    if (pending.kind !== "unit-install-review") throw new Error("expected install review");
+    await queue.resolveInstallReview(pending.approvalId, {
+      decision: "update",
+      allowNow: pending.parts.map((part) => ({ identityKey: part.identityKey })),
+    });
+    await expect(promise).resolves.toBe("accepted");
   });
 
   it("does not mirror startup unit approvals into push notifications", async () => {
@@ -526,8 +536,13 @@ describe("approvalPushBridge", () => {
     await flush();
 
     expect(push.sendToTargets).not.toHaveBeenCalled();
-    queue.resolve(queue.listPending()[0]!.approvalId, "once");
-    await expect(promise).resolves.toBe("once");
+    const pending = queue.listPending()[0]!;
+    if (pending.kind !== "unit-install-review") throw new Error("expected install review");
+    await queue.resolveInstallReview(pending.approvalId, {
+      decision: "adopt-root",
+      allowNow: pending.parts.map((part) => ({ identityKey: part.identityKey })),
+    });
+    await expect(promise).resolves.toBe("accepted");
   });
 
   it("labels service-origin approvals by their workspace source in push copy", async () => {

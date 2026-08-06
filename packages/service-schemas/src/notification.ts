@@ -48,6 +48,14 @@ export const NotificationActionSchema = z.object({
           })
           .strict(),
       }),
+      z
+        .object({
+          type: z.literal("runtime.execution.recover"),
+          entityId: z.string().min(1),
+          expectedExecutionDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+          strategy: z.enum(["restore-exact", "replace-incarnation"]),
+        })
+        .strict(),
       z.object({ type: z.literal("desktop.installNpmUpdate") }),
       z.object({ type: z.literal("desktop.copyNpmUpdateCommand") }),
       z.object({ type: z.literal("browser.downloadOpen"), downloadId: z.string() }),

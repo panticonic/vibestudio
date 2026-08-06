@@ -102,12 +102,10 @@ function actionPayloadFor(approval: PendingApproval): Array<{ id: string; title:
   return actionsFor(approval).map((id) => ({
     id,
     title:
-      id === "once" && approval.kind === "unit-batch"
-        ? approval.trigger === "source-change"
-          ? HOST_APPROVAL_COPY.pushActions.approveChange
-          : approval.trigger === "management"
-            ? HOST_APPROVAL_COPY.pushActions.approve
-            : HOST_APPROVAL_COPY.pushActions.approveAll
+      // A notification can open a review; it can never resolve one. So the
+      // action reads as an invitation to look, not as a decision (§7.8).
+      id === "once" && approval.kind === "unit-install-review"
+        ? HOST_APPROVAL_COPY.pushActions.review
         : (standardCopy?.get(id) ?? ACTION_TITLES[id] ?? id),
   }));
 }
@@ -136,7 +134,10 @@ function payloadFor(
 }
 
 function shouldPushApproval(approval: PendingApproval): boolean {
-  return !(approval.kind === "unit-batch" && approval.trigger === "startup");
+  // The launch gate is answered on the device that is starting, in a host-owned
+  // window. Pushing it to a phone would offer a decision that device cannot
+  // carry out.
+  return !(approval.kind === "unit-install-review" && approval.mode === "adopt-root");
 }
 
 export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): ApprovalPushBridge {

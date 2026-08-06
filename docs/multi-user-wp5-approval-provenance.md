@@ -73,7 +73,7 @@ hash chains / cryptographic audit** — trusted members (plan §0.0).
     `resolved_by_json` (`workspace/workers/workspace-source/GadWorkspaceDO.ts`, `projectApproval`
     `:4008-4056`).
   - **(b) Host approval-queue resolutions** — credential, capability, client-config,
-    credential-input, userland, unit-batch, device-code, external-agent — resolve in-process
+    credential-input, userland, unit-install-review, device-code, external-agent — resolve in-process
     with no durable, queryable record. **This is the gap WP5 fills.**
 
 ---
@@ -137,7 +137,7 @@ export interface ApprovalProvenanceRecord {
     | "credential-input"
     | "secret-input"
     | "userland"
-    | "unit-batch"
+    | "unit-install-review"
     | "device-code"
     | "external-agent";
   decision: "once" | "session" | "version" | "deny" | "dismiss" | "submit";

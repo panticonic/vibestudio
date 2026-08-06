@@ -86,6 +86,12 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     if (request.entries.length === 0) {
       return request.applyApproved();
     }
+    const versionless = request.entries.find((entry) => !entry.ev);
+    if (versionless) {
+      throw new Error(
+        `Cannot offer install review for ${versionless.source.repo} without an effective version`
+      );
+    }
     const key = batchKey(request.trigger, request.batchKey);
     let batch = this.pending.get(key);
     if (!batch) {
@@ -213,11 +219,7 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
             if (resolvedDecision === "deny" || resolvedDecision === "dismiss") {
               request.applyDenied();
               request.resolve();
-            } else if (
-              resolvedDecision === "once" ||
-              resolvedDecision === "session" ||
-              resolvedDecision === "version"
-            ) {
+            } else if (resolvedDecision === "accepted") {
               acceptedDecision = true;
               try {
                 await request.applyApproved();

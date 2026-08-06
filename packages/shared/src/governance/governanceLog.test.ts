@@ -152,9 +152,7 @@ describe("GovernanceLog", () => {
     raw.close();
     const before = readFileSync(databasePath);
 
-    expect(() => new GovernanceLog({ databasePath })).toThrow(
-      /schema version is 0, expected 1/
-    );
+    expect(() => new GovernanceLog({ databasePath })).toThrow(/schema version is 0, expected 1/);
     expect(readFileSync(databasePath)).toEqual(before);
   });
 

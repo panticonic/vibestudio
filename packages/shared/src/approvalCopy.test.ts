@@ -1,4 +1,5 @@
 import type { PendingApproval } from "./approvals.js";
+import type { InstallReviewPart } from "./authority/unitInstallReview.js";
 import {
   formatAccount,
   formatGitRemoteSummary,
@@ -6,12 +7,15 @@ import {
   formatNetworkDestination,
   formatServiceName,
   getApprovalAttribution,
+  getApprovalCallerPresentation,
   getApprovalCategoryLabel,
   getApprovalCopy,
   getApprovalRiskTone,
+  getRecommendedStandardDecision,
   getRequesterCategoryLabel,
   getStandardActionCopy,
-  getUnitBatchActionCopy,
+  getStandardApprovalDecisionActions,
+  getInstallReviewActionCopy,
   originForUrl,
   shouldOpenApprovalDetails,
 } from "./approvalCopy.js";
@@ -24,6 +28,55 @@ const base = {
   effectiveVersion: "v1",
   requestedAt: 1,
 } as const;
+
+/** One part, as the server derives it for every review surface. */
+function reviewPart(overrides: Record<string, unknown> = {}) {
+  return {
+    identityKey: "unit:1",
+    kind: "panel",
+    label: "Panel",
+    surfaces: [],
+    name: "panels/news",
+    title: "News",
+    purpose: "Reads your feeds and shows briefings.",
+    repoPath: "panels/news",
+    effectiveVersion: "ev-1",
+    version: "1.2.0",
+    requiredUnitKeys: [],
+    runsInBackground: false,
+    origin: {
+      url: "https://github.com/panticonic/news",
+      originKey: "github.com/panticonic",
+      registrableDomain: "github.com",
+      version: "v1.2.0",
+      isHostBuild: false,
+      firstEncounter: true,
+    },
+    notableRows: [],
+    everydayRows: [],
+    change: "added",
+    section: "template",
+    ...overrides,
+  } as unknown as InstallReviewPart;
+}
+
+function installReview(overrides: Record<string, unknown>) {
+  return {
+    kind: "unit-install-review",
+    mode: "install",
+    title: "Add News",
+    description: "Read and discuss personalized news briefings.",
+    template: null,
+    parts: [],
+    summary: { panels: 0, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+    unchangedPartCount: 0,
+    configWrite: null,
+    ...overrides,
+  } as unknown as Omit<
+    Extract<PendingApproval, { kind: "unit-install-review" }>,
+    keyof typeof base
+  >;
+}
 
 describe("approvalCopy", () => {
   const fixtures: Array<{
@@ -265,63 +318,65 @@ describe("approvalCopy", () => {
       risk: "caution",
     },
     {
-      name: "app source change unit batch",
+      name: "a part edited in the workspace",
       approval: {
         ...base,
-        kind: "unit-batch",
-        trigger: "source-change",
-        title: "Shell app source change",
-        description: "Accepting this push updates trusted workspace app code.",
-        units: [
-          {
-            unitKind: "app",
-            unitName: "@workspace-apps/shell",
-            displayName: "Shell",
-            version: "1.0.0",
-            target: "electron",
-            source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-            ev: "ev-shell",
-            capabilities: ["notifications"],
-          },
-        ],
-        configWrite: null,
+        ...installReview({
+          mode: "part-changed",
+          title: "News changed",
+          description: "Someone edited this part in your workspace.",
+          parts: [reviewPart()],
+          summary: { panels: 1, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+        }),
       },
-      category: "App code update",
-      title: "Shell app source change",
-      summaryIncludes: "trusted workspace app",
-      warning: "You are approving an app that runs in your workspace.",
+      category: "A part changed",
+      title: "News changed",
+      summaryIncludes: "edited this part",
       detailsOpen: true,
-      risk: "caution",
+      // Someone editing a panel in their own workspace is not an alarm; the
+      // tone rule reserves amber for native code (§1, §7.4).
+      risk: "standard",
     },
     {
-      name: "extension management unit batch",
+      name: "a template that ships native code",
       approval: {
         ...base,
-        kind: "unit-batch",
-        trigger: "management",
-        title: "Reload extension",
-        description: "Allow panel panel-1 to reload @workspace-extensions/acme.",
-        units: [
-          {
-            unitKind: "extension",
-            unitName: "@workspace-extensions/acme",
-            displayName: "Acme",
-            version: "1.2.3",
-            target: null,
-            source: { kind: "workspace-repo", repo: "extensions/acme", ref: "main" },
-            ev: "ev-acme",
-            capabilities: ["node:fs", "node:child_process"],
+        ...installReview({
+          parts: [
+            reviewPart({
+              identityKey: "unit:ext",
+              kind: "extension",
+              label: "Extension",
+              title: "Feed Reader",
+              name: "extensions/feed-reader",
+              repoPath: "extensions/feed-reader",
+            }),
+          ],
+          summary: { panels: 0, agents: 0, services: 0, clientApps: 0, extensions: 1 },
+          template: {
+            title: "News",
+            purpose: "Read and discuss personalized news briefings.",
+            origin: {
+              url: "https://github.com/panticonic/news",
+              originKey: "github.com/panticonic",
+              registrableDomain: "github.com",
+              version: "v1.2.0",
+              isHostBuild: false,
+              firstEncounter: true,
+            },
+            fromVersion: null,
+            toVersion: "1.2.0",
           },
-        ],
-        configWrite: null,
+        }),
       },
-      category: "Manage extensions",
-      title: "Reload extension",
-      summaryIncludes: "reload @workspace-extensions/acme",
-      warning:
-        "You are approving an extension with full access to your files, internet, and system.",
+      category: "Add a template",
+      title: "Add News",
+      summaryIncludes: "news briefings",
+      warning: "Extensions run outside Vibestudio's protections, with access to this computer.",
       detailsOpen: true,
-      risk: "danger",
+      // Native code is the one thing here worth a raised voice, and a raised
+      // voice is amber — the warning above says it in full either way.
+      risk: "caution",
     },
     {
       name: "context boundary",
@@ -414,7 +469,6 @@ describe("approvalCopy", () => {
     });
     // Capability/unit-batch requests have no secondary chip.
     expect(getApprovalAttribution(byName("capability"))).toEqual({});
-
   });
 
   it("formats standard action labels by approval subtype", () => {
@@ -482,137 +536,188 @@ describe("approvalCopy", () => {
     );
   });
 
-  it("formats unit-batch action labels for mixed scheduled jobs and apps", () => {
-    const approval: Extract<PendingApproval, { kind: "unit-batch" }> = {
-      ...base,
-      kind: "unit-batch",
-      trigger: "meta-change",
-      title: "Workspace units changed",
-      description: "Adds scheduled jobs and apps.",
-      units: [
-        {
-          unitKind: "scheduled-job",
-          unitName: "news-briefing",
-          displayName: "news-briefing (every 1d at 08:00)",
-          source: { kind: "workspace-repo", repo: "meta", ref: "state:next" },
-          capabilities: ["invokes workers/news-agent:NewsAgentWorker/news.runScheduledJob"],
-        },
-        {
-          unitKind: "app",
-          unitName: "@workspace-apps/news",
-          displayName: "News",
-          source: { kind: "workspace-repo", repo: "apps/news", ref: "main" },
-          capabilities: ["panel-hosting"],
-        },
-      ],
+  it("recommends task scope when a gated action offers it", () => {
+    const capability = fixtures.find((fixture) => fixture.name === "capability")!.approval;
+    const approval: Extract<PendingApproval, { kind: "capability" }> = {
+      ...(capability as Extract<PendingApproval, { kind: "capability" }>),
+      allowedDecisions: ["once", "task", "agent", "deny"],
     };
 
-    expect(getUnitBatchActionCopy(approval)).toMatchObject({
-      once: {
-        label: "Approve all",
-        description: "Approve 1 app and 1 scheduled task.",
-      },
-      session: {
-        label: "Allow for 4 hours",
-        description: "Allow settings changes without asking for 4 hours.",
-      },
-      deny: {
-        label: "Deny all",
-        description: "Don't approve 1 app and 1 scheduled task.",
-      },
+    expect(getRecommendedStandardDecision(approval)).toBe("task");
+  });
+
+  it("keeps runtime ids out of caller copy and standing-action labels", () => {
+    const capability = fixtures.find((fixture) => fixture.name === "capability")!.approval;
+    const approval: Extract<PendingApproval, { kind: "capability" }> = {
+      ...(capability as Extract<PendingApproval, { kind: "capability" }>),
+      callerId: "do:workers/agent-worker:AiChatWorker:ai-chat-2ec1-f7a9fd80",
+      callerTitle: "Build Trello-style task tracker agent",
+      repoPath: "workers/agent-worker",
+      allowedDecisions: ["agent"] as ["agent"],
+      snapshot: {
+        agentName: "do:workers/agent-worker:AiChatWorker:ai-chat-2ec1-f7a9fd80",
+      } as NonNullable<Extract<PendingApproval, { kind: "capability" }>["snapshot"]>,
+    };
+
+    expect(getApprovalCallerPresentation(approval).label).toBe(
+      "Build Trello-style task tracker agent"
+    );
+    expect(getStandardApprovalDecisionActions(approval)).toEqual([
+      expect.objectContaining({
+        decision: "agent",
+        label: "Always for Build Trello-style task tracker agent",
+      }),
+    ]);
+
+    const opaqueOnly = { ...approval, callerTitle: undefined };
+    expect(getStandardApprovalDecisionActions(opaqueOnly)).toEqual([
+      expect.objectContaining({ decision: "agent", label: "Always for this agent" }),
+    ]);
+    expect(getStandardApprovalDecisionActions(opaqueOnly)[0]?.label).not.toContain("do:workers/");
+  });
+
+  it("offers two actions, and no 'not now' on the review a workspace cannot decline", () => {
+    const install = installReview({ parts: [reviewPart()] }) as Extract<
+      PendingApproval,
+      { kind: "unit-install-review" }
+    >;
+    expect(getInstallReviewActionCopy({ ...base, ...install })).toMatchObject({
+      accept: { label: "Add template" },
+      decline: { label: "Not now" },
+    });
+
+    // §7.1: the workspace is already created, so the equivalent escape is
+    // deselecting everything rather than a button that undoes nothing.
+    const creation = installReview({ mode: "adopt-root", parts: [reviewPart()] }) as Extract<
+      PendingApproval,
+      { kind: "unit-install-review" }
+    >;
+    const creationCopy = getInstallReviewActionCopy({ ...base, ...creation });
+    expect(creationCopy.accept.label).toBe("Add to workspace");
+    expect(creationCopy.decline).toBeUndefined();
+
+    const edited = installReview({
+      mode: "part-changed",
+      parts: [reviewPart({ change: "changed" })],
+    }) as Extract<PendingApproval, { kind: "unit-install-review" }>;
+    expect(getInstallReviewActionCopy({ ...base, ...edited })).toMatchObject({
+      accept: { label: "Use the new version" },
+      decline: { label: "Keep the old version" },
+    });
+
+    const added = installReview({ mode: "part-changed", parts: [reviewPart()] }) as Extract<
+      PendingApproval,
+      { kind: "unit-install-review" }
+    >;
+    expect(getInstallReviewActionCopy({ ...base, ...added })).toMatchObject({
+      accept: { label: "Add to workspace" },
+      decline: { label: "Not now" },
     });
   });
 
-  it("names panels and workers in shared unit-batch consent copy", () => {
-    const approval: Extract<PendingApproval, { kind: "unit-batch" }> = {
-      ...base,
-      kind: "unit-batch",
-      trigger: "startup",
-      title: "Review workspace units",
-      description: "Review exact versions before first activation.",
-      units: [
-        {
-          unitKind: "panel",
-          unitName: "panels/chat",
-          displayName: "Chat",
-          source: { kind: "workspace-repo", repo: "panels/chat", ref: "main" },
-          capabilities: ["AI conversations"],
-        },
-        {
-          unitKind: "worker",
-          unitName: "workers/ai-chat",
-          displayName: "AI Chat Worker",
-          source: { kind: "workspace-repo", repo: "workers/ai-chat", ref: "main" },
-          capabilities: ["AI model access"],
-        },
+  it("keeps the producer's aggregate change heading instead of naming its first part", () => {
+    const edited = installReview({
+      mode: "part-changed",
+      title: "18 parts changed",
+      description: "Someone edited these parts in your workspace.",
+      parts: [
+        reviewPart({ title: "Git Bridge", kind: "extension", label: "Extension" }),
+        reviewPart({ identityKey: "unit:2", title: "Task Board" }),
       ],
-    };
+    }) as Extract<PendingApproval, { kind: "unit-install-review" }>;
 
-    expect(getUnitBatchActionCopy(approval).once.description).toBe(
-      "Approve 1 panel and 1 background task."
-    );
-    expect(getApprovalCopy(approval).title).toBe("Start 1 panel and 1 background task");
-    expect(getApprovalCopy(approval).summary).toBe(
-      "Review exact versions before first activation."
-    );
+    expect(getApprovalCopy({ ...base, ...edited })).toMatchObject({
+      title: "18 parts changed",
+      summary: "Someone edited these parts in your workspace.",
+    });
+  });
+
+  it("says an upgrade that changes nothing in one line, never as a list", () => {
+    const upgrade = installReview({
+      mode: "update",
+      parts: [],
+      unchangedPartCount: 12,
+      template: {
+        title: "News",
+        purpose: "Read and discuss personalized news briefings.",
+        origin: {
+          url: "https://github.com/panticonic/news",
+          originKey: "github.com/panticonic",
+          registrableDomain: "github.com",
+          version: "v1.4.0",
+          isHostBuild: false,
+          firstEncounter: false,
+        },
+        fromVersion: "1.2.0",
+        toVersion: "1.4.0",
+      },
+    }) as Extract<PendingApproval, { kind: "unit-install-review" }>;
+
+    expect(getApprovalCopy({ ...base, ...upgrade })).toMatchObject({
+      title: "Update News",
+      summary: "Updates 12 parts. No permission changes.",
+    });
+  });
+
+  // A template may omit its description, and a hostile one may supply a
+  // description sanitization strips to nothing. `??` catches neither, and both
+  // used to render the card's summary as an empty line — the one outcome a copy
+  // layer exists to prevent, handed to an attacker for writing something we
+  // refuse to print.
+  it("never renders a blank summary for a template that stated no purpose", () => {
+    const template = (purpose: string) => ({
+      title: "News",
+      purpose,
+      origin: {
+        url: "https://github.com/panticonic/news",
+        originKey: "github.com/panticonic",
+        registrableDomain: "github.com",
+        version: "v1.2.0",
+        isHostBuild: false,
+        firstEncounter: true,
+      },
+      fromVersion: null,
+      toVersion: "1.2.0",
+    });
+
+    const empty = installReview({
+      template: template(""),
+      description: "Read and discuss personalized news briefings.",
+      parts: [reviewPart()],
+      summary: { panels: 1, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+    }) as Extract<PendingApproval, { kind: "unit-install-review" }>;
+    expect(getApprovalCopy({ ...base, ...empty })).toMatchObject({
+      title: "Add News",
+      summary: "Read and discuss personalized news briefings.",
+    });
+
+    // Whitespace is nothing, for the same reason.
+    const blank = installReview({
+      template: template("   \n "),
+      description: "  ",
+      parts: [reviewPart()],
+      summary: { panels: 1, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+    }) as Extract<PendingApproval, { kind: "unit-install-review" }>;
+    // Nothing printable was supplied at all, so the platform's own count of
+    // what is arriving stands in — never an empty line.
+    expect(getApprovalCopy({ ...base, ...blank })).toMatchObject({
+      title: "Add News",
+      summary: "Adds 1 panel",
+    });
+  });
+
+  it("never speaks the runtime's vocabulary on the review a person reads", () => {
+    const review = installReview({
+      parts: [reviewPart(), reviewPart({ identityKey: "unit:2", kind: "worker", label: "Agent" })],
+    }) as Extract<PendingApproval, { kind: "unit-install-review" }>;
+    const copy = getApprovalCopy({ ...base, ...review });
+    const actions = getInstallReviewActionCopy({ ...base, ...review });
+
     expect(
-      [
-        getApprovalCopy(approval).title,
-        getApprovalCopy(approval).summary,
-        getUnitBatchActionCopy(approval).once.description,
-      ].join(" ")
-    ).not.toMatch(/\bunits?\b/iu);
-    expect(getApprovalCopy(approval).warning).toBe(
-      "You are approving a panel that appears and works in your workspace and a background task that runs in your workspace."
-    );
-  });
-
-  it("keeps empty and singular autonomous batch copy truthful and grammatical", () => {
-    const empty: Extract<PendingApproval, { kind: "unit-batch" }> = {
-      ...base,
-      kind: "unit-batch",
-      trigger: "meta-change",
-      title: "Workspace settings changed",
-      description: "Updates workspace settings.",
-      units: [],
-    };
-    const scheduled: Extract<PendingApproval, { kind: "unit-batch" }> = {
-      ...empty,
-      units: [
-        {
-          unitKind: "scheduled-job",
-          unitName: "daily-news",
-          displayName: "Daily news",
-          source: { kind: "workspace-repo", repo: "meta", ref: "state:next" },
-          capabilities: [],
-        },
-      ],
-    };
-    const heartbeat: Extract<PendingApproval, { kind: "unit-batch" }> = {
-      ...empty,
-      units: [
-        {
-          unitKind: "agent-heartbeat",
-          unitName: "research-check",
-          displayName: "Research check",
-          source: { kind: "workspace-repo", repo: "meta", ref: "state:next" },
-          capabilities: [],
-        },
-      ],
-    };
-
-    expect(getApprovalCategoryLabel(empty)).toBe("Workspace setup");
-    expect(getApprovalCopy(empty).summary).toBe("Updates workspace settings.");
-    expect(getUnitBatchActionCopy(empty).once).toEqual({
-      label: "Allow",
-      description: "Allow this settings change.",
-    });
-    expect(getUnitBatchActionCopy(scheduled).once.description).toBe(
-      "Approve 1 scheduled task to run automatically."
-    );
-    expect(getUnitBatchActionCopy(heartbeat).once.description).toBe(
-      "Approve 1 recurring agent check to run on its own."
-    );
+      [copy.title, copy.summary, actions.accept.description, actions.decline?.description]
+        .filter(Boolean)
+        .join(" ")
+    ).not.toMatch(/\bunits?\b|\bmanifest\b|\bcapabilit/iu);
   });
 
   it("formats low-level detail helpers", () => {

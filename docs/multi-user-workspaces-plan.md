@@ -485,7 +485,7 @@ systems, and only one is journaled today.**
   `:4008-4056`). This is _already_ a hash-chained, replayable, fork-aware "who requested /
   who resolved" ledger — the exact skeleton we want.
 - **(b) Host approval-queue resolutions** — _the shared queue this plan cares about_
-  (credential, capability, client-config, credential-input, userland, unit-batch,
+  (credential, capability, client-config, credential-input, userland, unit-install-review,
   device-code, external-agent). These resolve **in-process** via `shellApprovalService` /
   protected-push approval effect / `credentialService`; their only durable trace is the
   protected-publication audit + an **in-memory metric counter**
@@ -532,7 +532,7 @@ acted (WP5 §6). The _agent-approval_ half (a) additionally extends GAD's existi
 // host-owned governance record (governance/governance.db); WP5 §5 is authoritative
 {
   approvalId,
-  approvalKind,        // credential | capability | client-config | credential-input | secret-input | userland | unit-batch | device-code | external-agent
+  approvalKind,        // credential | capability | client-config | credential-input | secret-input | userland | unit-install-review | device-code | external-agent
   decision,            // once | session | version | deny | dismiss | submit
   granted,             // deny/dismiss → false
   workspaceId,

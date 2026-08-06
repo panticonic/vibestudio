@@ -11,7 +11,7 @@
  * userland GAD. Identity is the host-verified `subject`, never the wire (INV-3).
  */
 
-/** The nine host approval-queue kinds a resolution can attribute (§5). */
+/** The eleven host approval-queue kinds a resolution can attribute (§5). */
 export type ApprovalProvenanceKind =
   | "credential"
   | "capability"
@@ -19,7 +19,7 @@ export type ApprovalProvenanceKind =
   | "credential-input"
   | "secret-input"
   | "userland"
-  | "unit-batch"
+  | "unit-install-review"
   | "mission-review"
   | "device-code"
   | "external-agent"

@@ -9,7 +9,22 @@
 import { randomUUID } from "node:crypto";
 
 import { canonicalKey } from "@vibestudio/shared/canonicalKey";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
+import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type { TemplateInstallResolution } from "@vibestudio/shared/authority/unitInstallReview";
+import type {
+  InstallReviewLanding,
+  InstallReviewResolution,
+  InstallReviewResolvedPart,
+} from "@vibestudio/service-schemas/shellApproval";
+import type { InstallReviewSelectionStore } from "./installReviewSelections.js";
+import { reviewedUnitPart, unresolvedOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
+import {
+  summarizeParts,
+  type InstallReviewOrigin,
+  type InstallReviewPart,
+} from "@vibestudio/shared/authority/unitInstallReview";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type {
   ApprovalDecision,
@@ -26,7 +41,8 @@ import type {
   PendingClientConfigApproval,
   PendingDeviceCodeApproval,
   PendingMissionReviewApproval,
-  PendingUnitBatchApproval,
+  PendingUnitInstallReviewApproval,
+  ReviewedUnit,
 } from "@vibestudio/shared/approvals";
 import type {
   AccountIdentity,
@@ -57,7 +73,7 @@ export type GrantedDecision =
   | "block"
   | "deny";
 /** Terminal queue result. Dismiss is deliberately distinct from an explicit deny. */
-export type ApprovalQueueDecision =
+export type AuthorityApprovalQueueDecision =
   | "once"
   | "task"
   | "mission"
@@ -67,7 +83,8 @@ export type ApprovalQueueDecision =
   | "version"
   | "deny"
   | "dismiss";
-export type UnitBatchApprovalDecision = "once" | "session" | "version" | "deny" | "dismiss";
+export type UnitInstallReviewQueueDecision = "accepted" | "deny" | "dismiss";
+export type ApprovalQueueDecision = AuthorityApprovalQueueDecision | UnitInstallReviewQueueDecision;
 export type BrowserPermissionApprovalDecision = "once" | "session" | "always" | "block" | "dismiss";
 
 /**
@@ -90,6 +107,8 @@ interface ApprovalQueueRequestBase {
   callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
   repoPath: string;
   effectiveVersion: string;
+  /** Presentation routing only; it never changes the approval's authority semantics. */
+  attention?: "interrupt" | "queue";
   /**
    * The REQUESTING user's `subject.userId` (WP5 §5.1), stamped by the enqueuing
    * service so a resolution record can name both parties. Attribution only.
@@ -100,7 +119,7 @@ interface ApprovalQueueRequestBase {
   /**
    * Host-computed diff-review payload (provenance-aware-diff-merge-plan §9), forwarded
    * verbatim onto the pending approval. Set by the main-advance gate for
-   * capability (advance/delete/restore) and unit-batch (meta) prompts.
+   * capability (advance/delete/restore) and unit-install-review (meta) prompts.
    */
   diffReview?: DiffReviewEntry[];
   signal?: AbortSignal;
@@ -131,9 +150,9 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   capability: string;
   severity?: PendingCapabilityApproval["severity"];
   /**
-   * Override pending-request deduplication for capability prompts. `null`
-   * isolates this request so a one-shot approval cannot release unrelated
-   * waiters for the same resource.
+   * Producer identity for an otherwise exact duplicate. `null` isolates this
+   * request. A value may narrow coalescing, but never widens it across distinct
+   * consent facts.
    */
   dedupKey?: string | null;
   title: string;
@@ -161,14 +180,252 @@ export interface BrowserPermissionApprovalQueueRequest extends ApprovalQueueRequ
   deviceLabel: string;
 }
 
-export interface UnitBatchApprovalQueueRequest extends ApprovalQueueRequestBase {
-  kind: "unit-batch";
+/**
+ * Assemble the parts a review renders from the units its producers described.
+ *
+ * Every classification — timing, clearance, notability — happens here, on the
+ * server, from facts the platform verified. The client renders; it never
+ * decides, and an acceptance that names a row this did not offer is refused.
+ */
+function installReviewParts(
+  req: UnitInstallReviewQueueRequest,
+  /**
+   * Where a part came from before whatever owns it now, asked per repository.
+   *
+   * A dep rather than a field every request site has to remember, for the same
+   * reason admission asks for its source rather than being told: a site that
+   * forgot would silently drop the only audit trail explaining the grants a
+   * removed template's parts still hold (§U2, §7.7). A request that already
+   * knows the answer may still say so, and wins.
+   */
+  historicalOriginFor?: (repoPath: string) => string | null
+): InstallReviewPart[] {
+  // One review can coalesce several producers — declared extensions and the ones
+  // a host target requires, apps staged by more than one reconcile pass — and
+  // the same unit version legitimately arrives from more than one of them.
+  // Listing it twice is never right: the user would read the same part, with the
+  // same rows, as though it were two things being added.
+  const units = new Map<string, ReviewedUnit>();
+  for (const unit of req.units) {
+    units.set(`${unit.source.repo}\0${unit.ev ?? ""}`, unit);
+  }
+  // Receiver definitions carried by the same operation, so a service declared by
+  // one part is classified rather than unknown for the part that calls it.
+  const userlandDefinitions = new Map(
+    [...units.values()].flatMap((unit) =>
+      (unit.authority?.provides ?? []).map(
+        (definition) => [`workspace-service:${definition.name}`, definition] as const
+      )
+    )
+  );
+  return [...units.values()].map((unit) => {
+    const repoPath = unit.source.repo;
+    const previousRequests = req.previousRequests?.get(repoPath);
+    const previouslyCleared = req.previouslyCleared?.get(repoPath);
+    const section = req.sections?.get(repoPath);
+    // Only for a part whose current ownership and recorded source disagree —
+    // the resolver answers null while a live template still claims it, so this
+    // never doubles the origin line the card already shows.
+    const originallyInstalledFrom =
+      req.originallyInstalledFrom?.get(repoPath) ?? historicalOriginFor?.(repoPath) ?? null;
+    return reviewedUnitPart({
+      unit,
+      identityKey: req.identityKeys?.get(repoPath) ?? `${repoPath}@${unit.ev ?? ""}`,
+      origin: req.origins?.get(repoPath) ?? unresolvedOrigin(),
+      userlandDefinitions,
+      ...(previousRequests === undefined ? {} : { previousRequests }),
+      ...(previouslyCleared ? { previouslyCleared } : {}),
+      ...(section ? { section } : {}),
+      ...(originallyInstalledFrom ? { originallyInstalledFrom } : {}),
+      change: previousRequests === undefined ? "added" : "changed",
+    });
+  });
+}
+
+/**
+ * The result state of a review, in the words §7.2 gives it.
+ *
+ * Three tenses, and which one is used is decided by evidence, never by hope:
+ * past tense only for a landing that was reported, present continuous for one
+ * nobody watched, and a named failure when parts did not arrive. `News added`
+ * on an operation the server did not see finish would be the one lie this
+ * surface cannot afford — the user would go looking for a panel that is not
+ * there and conclude the permission screen lies.
+ */
+const INSTALL_RESULT_VERB: Record<
+  PendingUnitInstallReviewApproval["mode"],
+  { done: string; doing: string }
+> = {
+  install: { done: "added", doing: "Adding" },
+  update: { done: "updated", doing: "Updating" },
+  remove: { done: "removed", doing: "Removing" },
+  "adopt-root": { done: "ready", doing: "Setting up" },
+  "part-changed": { done: "updated", doing: "Updating" },
+};
+
+/** What this decision was about: the template, or the one part that changed. */
+function installResultSubject(approval: PendingUnitInstallReviewApproval): string | null {
+  const templateTitle = approval.template?.title?.trim();
+  if (templateTitle) return templateTitle;
+  if (approval.mode === "part-changed") return approval.parts[0]?.title?.trim() || null;
+  return null;
+}
+
+function installResultHeading(input: {
+  approval: PendingUnitInstallReviewApproval;
+  decision: "accepted" | "cancelled";
+  subject: string | null;
+  landing: InstallReviewLanding | undefined;
+}): string {
+  const { approval, subject, landing } = input;
+  const verb = INSTALL_RESULT_VERB[approval.mode];
+  // Adopting a root is the workspace itself, which has no title to name and
+  // reads badly in the template's grammar: "Your workspace ready".
+  const workspaceScale = approval.mode === "adopt-root" || !subject;
+  if (input.decision === "cancelled") {
+    return workspaceScale ? "Nothing changed" : `${subject} was not ${verb.done}`;
+  }
+  if (!landing) {
+    return workspaceScale ? "Setting up your workspace…" : `${verb.doing} ${subject}…`;
+  }
+  if (landing.failed.length === 0) {
+    return workspaceScale ? "Your workspace is ready" : `${subject} ${verb.done}`;
+  }
+  if (landing.landed.length === 0) {
+    return workspaceScale
+      ? "Nothing could be set up"
+      : `${subject} could not be ${verb.done === "ready" ? "set up" : verb.done}`;
+  }
+  return workspaceScale
+    ? "Only part of your workspace was set up"
+    : `${subject} was only partly ${verb.done}`;
+}
+
+function installResultDetail(input: {
+  decision: "accepted" | "cancelled";
+  landing: InstallReviewLanding | undefined;
+}): string | undefined {
+  if (input.decision === "cancelled") {
+    // The one place this system may promise a clean slate without asking
+    // anyone: cancel never reached the operation, so there is nothing to unwind
+    // (§8).
+    return "Your workspace is unchanged.";
+  }
+  const landing = input.landing;
+  if (!landing || landing.failed.length === 0) return undefined;
+  const names = landing.failed.map((failure) => failure.title).join(", ");
+  // "leaves nothing behind" is a claim about residue, and only the operation
+  // that failed knows whether its own partial failure unwound. Say it when it
+  // was guaranteed; otherwise say what is certain — which parts are missing —
+  // and say nothing at all about the rest.
+  const residue = landing.workspaceUnchanged
+    ? " Nothing was left behind."
+    : landing.landed.length > 0
+      ? ` The other ${landing.landed.length === 1 ? "part" : `${landing.landed.length} parts`} arrived.`
+      : "";
+  return `These parts did not arrive: ${names}.${residue}`;
+}
+
+/**
+ * Where to go next, when the accepted slate contains something a person opens.
+ *
+ * A panel is the openable thing; an agent or an extension has no place to send
+ * anyone. Never offered for a part a reported landing says did not arrive —
+ * `Open News →` pointing at nothing is worse than no link.
+ */
+function installResultEntryPoint(
+  approval: PendingUnitInstallReviewApproval,
+  landing: InstallReviewLanding | undefined
+): InstallReviewResolution["entryPoint"] {
+  if (approval.mode === "remove") return undefined;
+  const openable = approval.parts.filter(
+    (part) =>
+      (part.kind === "panel" || part.kind === "app") &&
+      part.section !== "repair" &&
+      part.change !== "removed" &&
+      (!landing || landing.landed.includes(part.identityKey))
+  );
+  const chosen = openable.find((part) => part.kind === "panel") ?? openable[0];
+  if (!chosen) return undefined;
+  return {
+    identityKey: chosen.identityKey,
+    repoPath: chosen.repoPath,
+    title: chosen.displayName ?? chosen.title,
+    kind: chosen.kind === "panel" ? "panel" : "app",
+  };
+}
+
+export interface UnitInstallReviewQueueRequest extends ApprovalQueueRequestBase {
+  kind: "unit-install-review";
   dedupKey?: string | null;
-  trigger: PendingUnitBatchApproval["trigger"];
+  mode: PendingUnitInstallReviewApproval["mode"];
   title: string;
   description: string;
-  units: PendingUnitBatchApproval["units"];
-  configWrite?: PendingUnitBatchApproval["configWrite"];
+  /** The units this operation lands, as their producers describe them. */
+  units: ReviewedUnit[];
+  template?: PendingUnitInstallReviewApproval["template"];
+  charters?: PendingUnitInstallReviewApproval["charters"];
+  /** Parts updated with no declared-authority change; shown as one line (§5.4). */
+  unchangedPartCount?: number;
+  configWrite?: PendingUnitInstallReviewApproval["configWrite"];
+  /** Previously admitted declarations, keyed by repo path, for a differential review. */
+  previousRequests?: ReadonlyMap<string, readonly UnitAuthorityRequest[]>;
+  /** Rows the user had already cleared, keyed by repo path (§7.3). */
+  previouslyCleared?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Where each unit's bytes came from, keyed by repo path. */
+  origins?: ReadonlyMap<string, InstallReviewOrigin>;
+  /** Identity keys, keyed by repo path, so acceptance can name exact versions. */
+  identityKeys?: ReadonlyMap<string, string>;
+  /**
+   * Which section each part belongs to, keyed by repo path (§5.3).
+   *
+   * A template publication may also carry agent-authored fixes to parts the
+   * template does not own. Those are changes the user did not ask for, arriving
+   * inside an operation about something else, so they are shown separately and
+   * default to unchecked. Absent for operations with only one kind of part.
+   */
+  sections?: ReadonlyMap<string, "template" | "repair">;
+  /**
+   * `News 1.2.0` — where a part came from, keyed by repo path, for parts whose
+   * current ownership is no longer the relationship that brought them (§U2).
+   *
+   * Supplied only by a request site that has already resolved it; otherwise the
+   * queue asks its own resolver, so no site can drop the fact by forgetting.
+   */
+  originallyInstalledFrom?: ReadonlyMap<string, string>;
+  /**
+   * This requester will call `reportInstallLanding` once its operation has
+   * concluded, either way (§7.2).
+   *
+   * Opt-in, and load-bearing that it is: an accepted resolution waits for the
+   * report, so declaring it without sending one would hang the surface that
+   * asked. A requester that does not declare it produces a resolution whose
+   * landing is simply absent — the card then says the operation is under way,
+   * which is the only honest thing to say about an outcome nobody watched.
+   */
+  reportsLanding?: boolean;
+  /**
+   * Exact operation rendezvous for a requester that reports landing after the
+   * approval entry itself has settled and left the pending queue.
+   */
+  landingToken?: string;
+}
+
+/** How an accepted operation actually went, from the site that performed it. */
+export interface InstallLandingReport {
+  /** Identity keys whose admission committed. Nothing else counts as landed. */
+  landed: readonly string[];
+  /** Parts that did not land, with a reason a person can read. */
+  failed?: readonly { identityKey: string; reason: string }[];
+  /**
+   * The reporter guarantees the workspace is untouched.
+   *
+   * Never inferred. §8 requires cancel and failure to leave no grants and no
+   * partial activation, but only the operation knows whether its own partial
+   * failure actually unwound — so this is a claim its owner makes, not one the
+   * queue makes on its behalf.
+   */
+  workspaceUnchanged?: boolean;
 }
 
 export interface MissionReviewApprovalQueueRequest extends ApprovalQueueRequestBase {
@@ -245,7 +502,7 @@ export interface DeviceCodeApprovalHandle {
 export type ApprovalQueueRequest =
   | CredentialApprovalQueueRequest
   | CapabilityApprovalQueueRequest
-  | UnitBatchApprovalQueueRequest
+  | UnitInstallReviewQueueRequest
   | MissionReviewApprovalQueueRequest
   | ClientConfigApprovalQueueRequest
   | CredentialInputApprovalQueueRequest
@@ -255,7 +512,11 @@ export type ApprovalQueueRequest =
 export type DecisionApprovalQueueRequest =
   | CredentialApprovalQueueRequest
   | CapabilityApprovalQueueRequest
-  | UnitBatchApprovalQueueRequest;
+  | UnitInstallReviewQueueRequest;
+type AuthorityApprovalQueueRequest = Exclude<
+  DecisionApprovalQueueRequest,
+  UnitInstallReviewQueueRequest
+>;
 
 export type MissionReviewApprovalResult =
   | {
@@ -307,7 +568,9 @@ interface QueueEntry {
 }
 
 export interface ApprovalQueue {
-  request(req: DecisionApprovalQueueRequest): Promise<ApprovalQueueDecision>;
+  request(req: UnitInstallReviewQueueRequest): Promise<UnitInstallReviewQueueDecision>;
+  request(req: AuthorityApprovalQueueRequest): Promise<AuthorityApprovalQueueDecision>;
+  requestWithHandle?(req: DecisionApprovalQueueRequest): ApprovalQueueRequestHandle;
   requestBrowserPermission?(
     req: BrowserPermissionApprovalQueueRequest
   ): Promise<BrowserPermissionApprovalDecision>;
@@ -331,6 +594,40 @@ export interface ApprovalQueue {
     resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" },
     resolver: ApprovalResolver
   ): Promise<void>;
+  /**
+   * Accept a pending install review with exactly what the user selected, or
+   * cancel it.
+   *
+   * The server derives the offerable set itself and rejects anything outside
+   * it: an unknown identity, an unknown row, or a row whose policy keeps it
+   * asking at use. A client renders what it was given and never invents a row.
+   *
+   * `resolver` is optional because the launch gate answers before any workspace
+   * session exists and may carry no authenticated subject. Who is allowed to
+   * answer is a property of the surface, enforced by the service handler that
+   * owns it — not of the queue, which only records what was decided.
+   */
+  resolveInstallReview(
+    approvalId: string,
+    resolution: TemplateInstallResolution,
+    resolver?: ApprovalResolver
+  ): Promise<InstallReviewResolution>;
+  /**
+   * Say how an accepted operation went, from the site that performed it.
+   *
+   * Called once, after the operation commits or fails, by a requester that
+   * declared `reportsLanding`. It is what turns the resolution's `landing` from
+   * absent into a fact, and therefore what lets the card say `News added`
+   * rather than `Adding News…`. A report for an approval with no open channel
+   * is dropped: nobody is waiting for it, and inventing a listener would be a
+   * second way for the same landing to be described.
+   *
+   * Optional on the interface for the same reason `resolveMatching` is: the
+   * queue implementation always has it, and the many narrow stand-ins that only
+   * ever answer capability prompts do not need to grow a method to stay valid.
+   */
+  reportInstallLanding?(approvalId: string, report: InstallLandingReport): void;
+  reportInstallLandingByToken?(landingToken: string, report: InstallLandingReport): void;
   resolveMatching?(
     predicate: (approval: PendingApproval) => boolean,
     decision: GrantedDecision
@@ -355,7 +652,20 @@ export interface ApprovalQueue {
   cancelForCaller(callerId: string): void;
 }
 
+export interface ApprovalQueueRequestHandle<
+  Decision extends ApprovalQueueDecision = ApprovalQueueDecision,
+> {
+  approvalId: string;
+  decision: Promise<Decision>;
+}
+
 export interface ApprovalQueueWithListeners extends ApprovalQueue {
+  requestWithHandle(
+    req: UnitInstallReviewQueueRequest
+  ): ApprovalQueueRequestHandle<UnitInstallReviewQueueDecision>;
+  requestWithHandle(
+    req: AuthorityApprovalQueueRequest
+  ): ApprovalQueueRequestHandle<AuthorityApprovalQueueDecision>;
   onPendingChanged(listener: (pending: PendingApproval[]) => void): () => void;
   resolveMatching(
     predicate: (approval: PendingApproval) => boolean,
@@ -367,6 +677,11 @@ export type SensitiveActionQueue = ApprovalQueue;
 
 export function createApprovalQueue(deps: {
   eventService: EventService;
+  /**
+   * Carries what the user checked from the review that accepted it to the
+   * admission that mints it. Absent only in tests that never accept a review.
+   */
+  installReviewSelections?: InstallReviewSelectionStore;
   /**
    * Optional resolver for server-controlled display titles. When set, every
    * pending approval includes `callerTitle` and userland-issuer `label`
@@ -390,6 +705,17 @@ export function createApprovalQueue(deps: {
    * → provenance is not persisted (the live surface still fires).
    */
   recordProvenance?: (record: ApprovalResolvedEvent) => void | Promise<void>;
+  /**
+   * Where a part was originally installed from, when that is a different fact
+   * from where it comes from now (§U2, §7.7).
+   *
+   * Derived server-side from the template lock and the admission ledger — never
+   * asserted by anything under review — and asked here so every review surface
+   * shows it without each request site having to carry it. Absent in tests and
+   * in hosts with no workspace: a part then simply states no history, which is
+   * the honest failure.
+   */
+  originallyInstalledFrom?: (repoPath: string) => string | null;
 }): ApprovalQueueWithListeners {
   const { eventService } = deps;
   const resolveTitle = deps.resolveTitle ?? (() => undefined);
@@ -407,6 +733,60 @@ export function createApprovalQueue(deps: {
       }
     }
     eventService.emit("shell-approval:pending-changed", { pending });
+  }
+
+  /**
+   * Landing reports in flight, keyed by approval id (§7.2 result state).
+   *
+   * A decision and its landing are two events, in that order: the review
+   * settles, the operation that lands the parts resumes, and only then is there
+   * anything true to say about whether they arrived. The queue keeps the
+   * question open across that gap so the resolution can answer it, and holds
+   * exactly one channel per approval — a second report is the same landing
+   * described twice, never a second landing.
+   */
+  const landingChannels = new Map<
+    string,
+    {
+      promise: Promise<InstallLandingReport | null>;
+      settle: (report: InstallLandingReport) => void;
+    }
+  >();
+  const landingApprovalIdsByToken = new Map<string, string>();
+  const landingTokensByApprovalId = new Map<string, Set<string>>();
+
+  function openLandingChannel(approvalId: string, landingToken?: string): void {
+    // A duplicate watched requester shares the one operation and therefore the
+    // one landing report. Never replace the channel a resolver may already be
+    // awaiting.
+    if (landingToken) {
+      const existing = landingApprovalIdsByToken.get(landingToken);
+      if (existing && existing !== approvalId) {
+        throw new Error(`Install landing token ${landingToken} is already bound to another review`);
+      }
+    }
+    if (!landingChannels.has(approvalId)) {
+      let settle!: (report: InstallLandingReport) => void;
+      const promise = new Promise<InstallLandingReport | null>((resolve) => {
+        settle = resolve;
+      });
+      landingChannels.set(approvalId, { promise, settle });
+    }
+    if (landingToken) {
+      landingApprovalIdsByToken.set(landingToken, approvalId);
+      const tokens = landingTokensByApprovalId.get(approvalId) ?? new Set<string>();
+      tokens.add(landingToken);
+      landingTokensByApprovalId.set(approvalId, tokens);
+    }
+  }
+
+  /** Drop a channel nobody will report on — a cancelled review lands nothing. */
+  function closeLandingChannel(approvalId: string): void {
+    landingChannels.delete(approvalId);
+    for (const token of landingTokensByApprovalId.get(approvalId) ?? []) {
+      landingApprovalIdsByToken.delete(token);
+    }
+    landingTokensByApprovalId.delete(approvalId);
   }
 
   function removeEntry(entry: QueueEntry): void {
@@ -463,7 +843,7 @@ export function createApprovalQueue(deps: {
       case "device-code":
         return { value: approval.credentialLabel };
       case "secret-input":
-      case "unit-batch":
+      case "unit-install-review":
         return { value: approval.title };
       case "mission-review":
         return { key: approval.missionId, value: approval.closureDigest };
@@ -578,23 +958,39 @@ export function createApprovalQueue(deps: {
   }
 
   function dedupKeyFor(req: ApprovalQueueRequest): string {
-    if (req.operation?.groupKey) {
-      return canonicalKey(["operation", req.callerId, req.operation.groupKey]);
-    }
     if (req.kind === "capability") {
       if (req.dedupKey === null) {
         return canonicalKey(["capability-isolated", randomUUID()]);
       }
-      if (req.dedupKey) {
-        return canonicalKey(["capability-custom", req.callerId, req.dedupKey]);
-      }
+      // A groupKey is navigation/presentation metadata, not a consent identity.
+      // Coalesce only byte-for-byte equivalent security and user-visible facts;
+      // otherwise one card could release waiters for an action it never showed.
       return canonicalKey([
         "capability",
-        req.callerId,
-        req.repoPath,
-        req.effectiveVersion,
-        req.capability,
-        req.resource?.value ?? "",
+        canonicalJson({
+          callerId: req.callerId,
+          callerKind: req.callerKind,
+          repoPath: req.repoPath,
+          effectiveVersion: req.effectiveVersion,
+          requestedByUserId: req.requestedByUserId ?? null,
+          requesterCategory: req.requesterCategory ?? null,
+          producerKey: req.dedupKey ?? null,
+          capability: req.capability,
+          severity: req.severity ?? null,
+          title: req.title,
+          description: req.description ?? null,
+          resource: req.resource ?? null,
+          resourceScope: req.resourceScope ?? null,
+          grantResourceKey: req.grantResourceKey ?? null,
+          details: req.details ?? null,
+          snapshot: req.snapshot ?? null,
+          cardType: req.cardType ?? null,
+          allowedDecisions: req.allowedDecisions ? [...req.allowedDecisions].sort() : null,
+          authorityRow: req.authorityRow ?? null,
+          operationSubstance: req.operationSubstance ?? null,
+          operation: req.operation ?? null,
+          diffReview: req.diffReview ?? null,
+        }),
       ]);
     }
     if (req.kind === "browser-permission") {
@@ -608,40 +1004,17 @@ export function createApprovalQueue(deps: {
         ...req.capabilities.slice().sort(),
       ]);
     }
-    if (req.kind === "unit-batch") {
+    if (req.kind === "unit-install-review") {
       if (req.dedupKey === null) {
-        return canonicalKey(["unit-batch-isolated", randomUUID()]);
+        return canonicalKey(["unit-install-review-isolated", randomUUID()]);
       }
-      if (req.dedupKey) {
-        return canonicalKey(["unit-batch-custom", req.callerId, req.dedupKey]);
-      }
-      // Coalesce duplicate reconciles for the same trigger + set onto one
-      // prompt. Include each unit's source repo/ref/ev and the config
-      // write, so batches that differ only in those (same names) don't collapse
-      // and surface stale consent details.
+      // A producer key may narrow coalescing, never replace the consent facts.
+      // Bind every server-derived and user-visible fact so a reused producer
+      // key cannot let a newer operation ride an older card.
       return canonicalKey([
-        "unit-batch",
-        req.trigger,
-        ...req.units
-          .slice()
-          .sort((a, b) =>
-            `${a.unitKind}:${a.unitName}`.localeCompare(`${b.unitKind}:${b.unitName}`)
-          )
-          .flatMap((unit) => [
-            unit.unitKind,
-            unit.unitName,
-            unit.target ?? null,
-            unit.source.repo,
-            unit.source.ref,
-            unit.ev ?? null,
-            unit.integrity ?? null,
-            unit.provider?.name ?? null,
-            unit.provider?.activeEv ?? null,
-            unit.provider?.activeBuildKey ?? null,
-            unit.provider?.contractVersion ?? null,
-          ]),
-        req.configWrite?.repoPath ?? null,
-        req.configWrite?.summary ?? null,
+        "unit-install-review",
+        req.dedupKey ?? null,
+        canonicalJson(unitInstallReviewConsentFacts(req)),
       ]);
     }
     if (req.kind === "mission-review") {
@@ -682,6 +1055,44 @@ export function createApprovalQueue(deps: {
       req.effectiveVersion,
       req.credentialId,
     ]);
+  }
+
+  function unitInstallReviewConsentFacts(req: UnitInstallReviewQueueRequest): unknown {
+    const sortedMap = <T>(map: ReadonlyMap<string, T> | undefined, value: (item: T) => unknown) =>
+      map
+        ? [...map.entries()]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, item]) => [key, value(item)])
+        : null;
+    const units = req.units
+      .map((unit) => canonicalJson(unit))
+      .sort()
+      .map((unit) => JSON.parse(unit) as unknown);
+    return {
+      callerId: req.callerId,
+      callerKind: req.callerKind,
+      repoPath: req.repoPath,
+      effectiveVersion: req.effectiveVersion,
+      requestedByUserId: req.requestedByUserId ?? null,
+      requesterCategory: req.requesterCategory ?? null,
+      mode: req.mode,
+      landingToken: req.landingToken ?? null,
+      title: req.title,
+      description: req.description,
+      units,
+      template: req.template ?? null,
+      charters: req.charters ?? null,
+      unchangedPartCount: req.unchangedPartCount ?? 0,
+      previousRequests: sortedMap(req.previousRequests, (requests) => requests),
+      previouslyCleared: sortedMap(req.previouslyCleared, (keys) => [...keys].sort()),
+      origins: sortedMap(req.origins, (origin) => origin),
+      originallyInstalledFrom: sortedMap(req.originallyInstalledFrom, (origin) => origin),
+      identityKeys: sortedMap(req.identityKeys, (identity) => identity),
+      sections: sortedMap(req.sections, (section) => section),
+      configWrite: req.configWrite ?? null,
+      operation: req.operation ?? null,
+      diffReview: req.diffReview ?? null,
+    };
   }
 
   function resolveRequesterFor(
@@ -739,7 +1150,7 @@ export function createApprovalQueue(deps: {
       }
       return { kind: "unknown", verb: req.title, ...(object ? { object } : {}) };
     }
-    if (req.kind === "unit-batch") {
+    if (req.kind === "unit-install-review") {
       return { kind: "workspace", verb: req.title };
     }
     if (req.kind === "mission-review") {
@@ -795,6 +1206,7 @@ export function createApprovalQueue(deps: {
       repoPath: req.repoPath,
       effectiveVersion: req.effectiveVersion,
       requestedAt: Date.now(),
+      ...(req.attention ? { attention: req.attention } : {}),
       ...(callerTitle !== undefined ? { callerTitle } : {}),
       ...(requester ? { requester } : {}),
       operation,
@@ -833,16 +1245,21 @@ export function createApprovalQueue(deps: {
         deviceLabel: req.deviceLabel,
       } satisfies PendingBrowserPermissionApproval;
     }
-    if (req.kind === "unit-batch") {
+    if (req.kind === "unit-install-review") {
+      const parts = installReviewParts(req, deps.originallyInstalledFrom);
       const approval = {
         ...base,
-        kind: "unit-batch",
-        trigger: req.trigger,
+        kind: "unit-install-review",
+        mode: req.mode,
         title: req.title,
         description: req.description,
-        units: req.units,
+        template: req.template ?? null,
+        parts,
+        summary: summarizeParts(parts),
+        unchangedPartCount: req.unchangedPartCount ?? 0,
+        ...(req.charters?.length ? { charters: req.charters } : {}),
         configWrite: req.configWrite ?? null,
-      } satisfies PendingUnitBatchApproval;
+      } satisfies PendingUnitInstallReviewApproval;
       const copy = getApprovalCopy(approval);
       return { ...approval, title: copy.title, description: copy.summary };
     }
@@ -1078,13 +1495,23 @@ export function createApprovalQueue(deps: {
     entry.missionReviewWaiters.clear();
   }
 
-  function enqueueDecision(req: DecisionApprovalQueueRequest): Promise<ApprovalQueueDecision>;
-  function enqueueDecision(
-    req: BrowserPermissionApprovalQueueRequest
-  ): Promise<BrowserPermissionApprovalDecision>;
-  function enqueueDecision(
+  function enqueueDecisionWithHandle(
+    req: UnitInstallReviewQueueRequest
+  ): ApprovalQueueRequestHandle<UnitInstallReviewQueueDecision>;
+  function enqueueDecisionWithHandle(
+    req: AuthorityApprovalQueueRequest
+  ): ApprovalQueueRequestHandle<AuthorityApprovalQueueDecision>;
+  function enqueueDecisionWithHandle(req: DecisionApprovalQueueRequest): ApprovalQueueRequestHandle;
+  function enqueueDecisionWithHandle(req: BrowserPermissionApprovalQueueRequest): {
+    approvalId: string;
+    decision: Promise<BrowserPermissionApprovalDecision>;
+  };
+  function enqueueDecisionWithHandle(
     req: DecisionApprovalQueueRequest | BrowserPermissionApprovalQueueRequest
-  ): Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision> {
+  ): {
+    approvalId: string;
+    decision: Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision>;
+  } {
     if (
       "credentialId" in req &&
       (!Array.isArray(req.allowedDecisions) || req.allowedDecisions.length === 0)
@@ -1109,42 +1536,84 @@ export function createApprovalQueue(deps: {
       entriesById.set(approval.approvalId, entry);
       entriesByDedupKey.set(dedupKey, entry);
       newEntry = true;
+      // A requester that promises to say how the landing went gets a channel
+      // opened for it now, while its approval id is in hand. Opened only on the
+      // promise: a resolution must never wait on a report nobody will send.
     }
 
     const bound = entry;
-    return new Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision>((resolve) => {
-      const waiterId = bound.nextWaiterId++;
-      const waiter: QueueWaiter = { resolve, signal: req.signal };
+    // A duplicate requester may be the first one that can observe the
+    // operation's landing. Upgrade the shared pending entry to a watched
+    // review even when the original waiter did not promise a report.
+    if (req.kind === "unit-install-review" && req.reportsLanding) {
+      try {
+        openLandingChannel(bound.approval.approvalId, req.landingToken);
+      } catch (error) {
+        if (newEntry) removeEntry(bound);
+        throw error;
+      }
+    }
+    const decision = new Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision>(
+      (resolve) => {
+        const waiterId = bound.nextWaiterId++;
+        const waiter: QueueWaiter = { resolve, signal: req.signal };
 
-      if (req.signal) {
-        const onAbort = () => {
-          const e = entriesById.get(bound.approval.approvalId);
-          if (!e) {
+        if (req.signal) {
+          const onAbort = () => {
+            const e = entriesById.get(bound.approval.approvalId);
+            if (!e) {
+              resolve("deny");
+              return;
+            }
+            if (e.settlement) return;
+            e.waiters.delete(waiterId);
+            if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0) {
+              if (e.approval.kind === "unit-install-review") {
+                closeLandingChannel(e.approval.approvalId);
+              }
+              removeEntry(e);
+              emitPendingChanged();
+            }
             resolve("deny");
-            return;
+          };
+          waiter.onAbort = onAbort;
+          if (req.signal.aborted) {
+            queueMicrotask(onAbort);
+          } else {
+            req.signal.addEventListener("abort", onAbort, { once: true });
           }
-          if (e.settlement) return;
-          e.waiters.delete(waiterId);
-          if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0) {
-            removeEntry(e);
-            emitPendingChanged();
-          }
-          resolve("deny");
-        };
-        waiter.onAbort = onAbort;
-        if (req.signal.aborted) {
-          queueMicrotask(onAbort);
-        } else {
-          req.signal.addEventListener("abort", onAbort, { once: true });
+        }
+
+        bound.waiters.set(waiterId, waiter);
+
+        if (newEntry) {
+          emitPendingChanged();
         }
       }
+    );
+    return { approvalId: bound.approval.approvalId, decision };
+  }
 
-      bound.waiters.set(waiterId, waiter);
+  function requestDecision(
+    req: UnitInstallReviewQueueRequest
+  ): Promise<UnitInstallReviewQueueDecision>;
+  function requestDecision(
+    req: AuthorityApprovalQueueRequest
+  ): Promise<AuthorityApprovalQueueDecision>;
+  function requestDecision(req: DecisionApprovalQueueRequest): Promise<ApprovalQueueDecision> {
+    return enqueueDecisionWithHandle(req).decision;
+  }
 
-      if (newEntry) {
-        emitPendingChanged();
-      }
-    });
+  function requestDecisionWithHandle(
+    req: UnitInstallReviewQueueRequest
+  ): ApprovalQueueRequestHandle<UnitInstallReviewQueueDecision>;
+  function requestDecisionWithHandle(
+    req: AuthorityApprovalQueueRequest
+  ): ApprovalQueueRequestHandle<AuthorityApprovalQueueDecision>;
+  function requestDecisionWithHandle(
+    req: DecisionApprovalQueueRequest
+  ): ApprovalQueueRequestHandle {
+    return enqueueDecisionWithHandle(req);
   }
 
   function enqueueMissionReview(
@@ -1216,12 +1685,12 @@ export function createApprovalQueue(deps: {
   }
 
   return {
-    request(req) {
-      return enqueueDecision(req);
-    },
+    request: requestDecision,
+
+    requestWithHandle: requestDecisionWithHandle,
 
     requestBrowserPermission(req) {
-      return enqueueDecision(req);
+      return enqueueDecisionWithHandle(req).decision;
     },
 
     requestMissionReview(req) {
@@ -1310,6 +1779,9 @@ export function createApprovalQueue(deps: {
     async resolve(approvalId, decision, resolver) {
       const entry = entriesById.get(approvalId);
       if (!entry) return;
+      if (entry.approval.kind === "unit-install-review") {
+        throw new Error("Unit install reviews must be resolved through resolveInstallReview");
+      }
       if (
         (entry.approval.kind === "capability" || entry.approval.kind === "credential") &&
         decision !== "dismiss" &&
@@ -1389,6 +1861,158 @@ export function createApprovalQueue(deps: {
       );
     },
 
+    async resolveInstallReview(approvalId, resolution, resolver) {
+      const entry = entriesById.get(approvalId);
+      if (!entry || entry.approval.kind !== "unit-install-review") {
+        // Already answered, or never here. Historically a silent no-op, and it
+        // stays one — a second answer to a settled review must not resolve
+        // anything twice. It reports the one thing that is certainly true: this
+        // call decided nothing.
+        // A previous resolver may still be waiting for the operation's landing.
+        // A stale second answer must not delete that rendezvous; the reporter
+        // will close it after the first resolution receives its result.
+        return {
+          approvalId,
+          mode: "install",
+          decision: "cancelled",
+          heading: "This review is no longer open",
+          parts: [],
+        };
+      }
+      const approval = entry.approval;
+      const parts = new Map(approval.parts.map((part) => [part.identityKey, part]));
+      if (resolution.decision === "cancel") {
+        // Cancel leaves the workspace untouched, and the selection can never be
+        // applied later by a stale hand-off.
+        deps.installReviewSelections?.discard([...parts.keys()]);
+        closeLandingChannel(approvalId);
+        await settle(
+          entry,
+          { decision: "dismiss", granted: false, grantScopeStored: null, resolver },
+          (current) => settleDecisionEntry(current, "dismiss")
+        );
+        const subject = installResultSubject(approval);
+        return {
+          approvalId,
+          mode: approval.mode,
+          decision: "cancelled",
+          heading: installResultHeading({
+            approval,
+            decision: "cancelled",
+            subject,
+            landing: undefined,
+          }),
+          ...(installResultDetail({ decision: "cancelled", landing: undefined })
+            ? { detail: installResultDetail({ decision: "cancelled", landing: undefined })! }
+            : {}),
+          ...(subject ? { subject } : {}),
+          parts: [],
+        };
+      }
+
+      const selections: Array<[string, readonly string[]]> = [];
+      const seenIdentityKeys = new Set<string>();
+      for (const allowed of resolution.allowNow) {
+        if (seenIdentityKeys.has(allowed.identityKey)) {
+          throw new Error("Install review acceptance repeats a part");
+        }
+        seenIdentityKeys.add(allowed.identityKey);
+        const part = parts.get(allowed.identityKey);
+        if (!part) {
+          throw new Error("Install review acceptance names a part that is not under review");
+        }
+        // Only rows this review actually offered may be cleared. Contextual and
+        // critical rows carry no checkbox precisely because a decision here
+        // cannot grant them, so accepting one is refused rather than ignored.
+        const offerable = new Set(
+          [...part.notableRows, ...part.everydayRows]
+            .filter((row) => row.selectable)
+            .map((row) => row.key)
+        );
+        const requested = allowed.permissions ?? [...offerable];
+        if (new Set(requested).size !== requested.length) {
+          throw new Error("Install review acceptance repeats a permission");
+        }
+        const refused = requested.filter((key) => !offerable.has(key));
+        if (refused.length > 0) {
+          throw new Error(
+            `Install review acceptance names ${refused.length} permission(s) this review did not offer`
+          );
+        }
+        selections.push([allowed.identityKey, requested]);
+      }
+      // Every part is admitted, selected or not: a part absent from `allowNow`
+      // still arrives and still runs, it simply holds no standing grant (U5).
+      for (const identityKey of parts.keys()) {
+        if (!selections.some(([key]) => key === identityKey)) selections.push([identityKey, []]);
+      }
+      deps.installReviewSelections?.record(selections);
+      await settle(
+        entry,
+        { decision: "version", granted: true, grantScopeStored: "version", resolver },
+        // The review answers a product question (accept these exact parts), not
+        // an authority-scope question. Version admission is recorded above and
+        // in installReviewSelections; callers receive the semantic outcome and
+        // decide how their own protected operation is authorized.
+        (current) => settleDecisionEntry(current, "accepted")
+      );
+
+      // The decision is recorded; the operation that lands these parts runs
+      // next. Wait for its report only when its requester promised one — this
+      // is the one point where the queue can hold the answering surface open
+      // long enough to tell the user what actually happened, and the one place
+      // it must not wait on a report that will never come.
+      const channel = landingChannels.get(approvalId);
+      const report = channel ? await channel.promise : null;
+      closeLandingChannel(approvalId);
+      const allowedNow = new Set(
+        selections.filter(([, rowKeys]) => rowKeys.length > 0).map(([identityKey]) => identityKey)
+      );
+      const landing: InstallReviewLanding | undefined = report
+        ? {
+            landed: report.landed.filter((identityKey) => parts.has(identityKey)),
+            failed: (report.failed ?? []).map((failure) => ({
+              identityKey: failure.identityKey,
+              // The part's own title, not the reporter's — a failure names the
+              // part in the same words the card just used for it.
+              title: parts.get(failure.identityKey)?.title ?? failure.identityKey,
+              reason: failure.reason,
+            })),
+            workspaceUnchanged: report.workspaceUnchanged === true,
+          }
+        : undefined;
+      const subject = installResultSubject(approval);
+      const detail = installResultDetail({ decision: "accepted", landing });
+      const entryPoint = installResultEntryPoint(approval, landing);
+      const resolved: InstallReviewResolvedPart[] = approval.parts.map((part) => ({
+        identityKey: part.identityKey,
+        title: part.title,
+        kind: part.kind,
+        label: part.label,
+        clearance: allowedNow.has(part.identityKey) ? "allowed-now" : "asks-when-needed",
+      }));
+      return {
+        approvalId,
+        mode: approval.mode,
+        decision: "accepted",
+        heading: installResultHeading({ approval, decision: "accepted", subject, landing }),
+        ...(detail ? { detail } : {}),
+        ...(subject ? { subject } : {}),
+        parts: resolved,
+        ...(entryPoint ? { entryPoint } : {}),
+        ...(landing ? { landing } : {}),
+      };
+    },
+
+    reportInstallLanding(approvalId, report) {
+      landingChannels.get(approvalId)?.settle(report);
+    },
+
+    reportInstallLandingByToken(landingToken, report) {
+      const approvalId = landingApprovalIdsByToken.get(landingToken);
+      if (approvalId) landingChannels.get(approvalId)?.settle(report);
+    },
+
     resolveMatching(predicate, decision) {
       const matching = Array.from(entriesById.values()).filter(
         (entry) => !entry.settlement && predicate(entry.approval)
@@ -1423,6 +2047,9 @@ export function createApprovalQueue(deps: {
         (entry) => !entry.settlement && entry.approval.callerId === callerId
       );
       for (const entry of matching) {
+        if (entry.approval.kind === "unit-install-review") {
+          closeLandingChannel(entry.approval.approvalId);
+        }
         removeEntry(entry);
         for (const waiter of entry.waiters.values()) {
           if (waiter.signal && waiter.onAbort) {

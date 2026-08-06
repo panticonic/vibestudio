@@ -12,10 +12,7 @@ import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import { z } from "zod";
 
-import {
-  openCanonicalSqliteDatabase,
-  type CanonicalSqliteSchema,
-} from "@vibestudio/sqlite";
+import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "@vibestudio/sqlite";
 import {
   governanceRecordTimestamp,
   isApprovalProvenanceRecord,
@@ -44,7 +41,7 @@ export const ApprovalRecordSchema = z
       "credential-input",
       "secret-input",
       "userland",
-      "unit-batch",
+      "unit-install-review",
       "mission-review",
       "device-code",
       "external-agent",

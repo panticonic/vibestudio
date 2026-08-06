@@ -259,6 +259,8 @@ export interface PendingApprovalBase {
   repoPath: string;
   effectiveVersion: string;
   requestedAt: number;
+  /** Whether shell chrome should open this request immediately or keep it in the waiting pill. */
+  attention?: "interrupt" | "queue";
   /**
    * Server-resolved display title for the caller, if known. Surfaced by the
    * shell instead of the opaque `callerId`. The id remains available for
@@ -400,23 +402,26 @@ export interface UnitApprovalCommit {
   timestamp: number;
 }
 
-export type UnitBatchEntryKind =
-  | "extension"
-  | "app"
-  | "panel"
-  | "worker"
-  | "scheduled-job"
-  | "agent-heartbeat";
+/**
+ * The four kinds of executable unit a review presents. Scheduled jobs and agent
+ * heartbeats are deliberately absent: they are unattended charters, not units
+ * with a source identity and a manifest, and they are reviewed as charters
+ * alongside the parts (docs/template-install-unit-approval-ux-plan.md §8).
+ */
+export type ReviewedUnitKind = "extension" | "app" | "panel" | "worker";
 
 /**
- * One workspace-owned unit in a joint `unit-batch` approval. Carries the
- * informed-consent overview the prompt renders per row.
+ * One workspace-owned unit an arriving publication lands, as its producer
+ * describes it. The review surface renders `InstallReviewPart`s derived from
+ * these; this is the raw material, not the decision contract.
  */
-export interface UnitBatchEntry {
-  unitKind: UnitBatchEntryKind;
+export interface ReviewedUnit {
+  unitKind: ReviewedUnitKind;
   unitName: string;
   displayName: string;
   version?: string | null;
+  /** One sentence, from the unit's own description: what it is for. */
+  purpose?: string;
   target?: "electron" | "react-native" | "terminal" | null;
   source: { kind: "workspace-repo"; repo: string; ref: string };
   ev?: string | null;
@@ -445,21 +450,55 @@ export interface UnitBatchEntry {
 }
 
 /**
- * Joint, informed-consent approval for the set of unapproved declared
- * workspace units. Raised at workspace startup (`trigger: "startup"`, system
- * principal) and at the protected-main boundary whenever committed source,
- * dependencies, providers, or workspace configuration change an exact unit
- * identity (`trigger: "meta-change"`). The same accepted identity is handed to
- * activation, so publication and activation never ask the same question twice.
- * One decision approves or denies the whole set.
+ * An unattended charter arriving with a publication — a scheduled job or an
+ * agent heartbeat.
+ *
+ * These have no source identity and no manifest, so they are not parts. They do
+ * act without anyone opening anything and they cost money, which is exactly what
+ * a reasonable person wants to know before accepting, so they ride the same
+ * review as a plainly-worded behavioral fact rather than disappearing into a
+ * config-file summary.
  */
-export interface PendingUnitBatchApproval extends PendingApprovalBase {
-  kind: "unit-batch";
-  trigger: "startup" | "meta-change" | "source-change" | "management";
+export interface InstallReviewCharter {
+  kind: "scheduled-job" | "agent-heartbeat";
+  name: string;
+  /** `every hour at :05` — the schedule in words, never a cron string. */
+  schedule: string;
+  /** One sentence: what it does when it wakes up. */
+  purpose: string;
+  change: "added" | "removed" | "changed";
+}
+
+/**
+ * The one review every arrival of code shares
+ * (docs/template-install-unit-approval-ux-plan.md §7).
+ *
+ * Creating a workspace from a template, installing one, updating one, and
+ * accepting an edit to a part already in the workspace are the same decision
+ * with the same rows and the same copy. What differs is the heading, whether
+ * there is a "Not now", and whether the list is differential.
+ *
+ * Accepting admits every part the operation lands — selected or not — and mints
+ * standing clearance only for what `allowNow` names. Selection withholds a
+ * grant; it never withholds a part (U5).
+ */
+export interface PendingUnitInstallReviewApproval extends PendingApprovalBase {
+  kind: "unit-install-review";
+  mode: import("./authority/unitInstallReview.js").UnitInstallReviewMode;
   title: string;
   description: string;
-  units: UnitBatchEntry[];
-  /** Present on `meta-change`: the workspace-config write this state advance performs. */
+  /** The template being adopted, installed, or updated. Absent for a plain edit. */
+  template?: import("./authority/unitInstallReview.js").InstallReviewTemplate | null;
+  parts: import("./authority/unitInstallReview.js").InstallReviewPart[];
+  summary: import("./authority/unitInstallReview.js").InstallReviewSummary;
+  /**
+   * Parts this operation also updates whose declared authority did not change.
+   * Rendered as one line — `9 other parts updated with no permission changes` —
+   * because digest churn is not a decision anyone can evaluate (U7, §5.4).
+   */
+  unchangedPartCount: number;
+  charters?: InstallReviewCharter[];
+  /** Present when the same publication writes workspace config. */
   configWrite?: { repoPath: string; summary: string } | null;
 }
 
@@ -575,7 +614,7 @@ export type SecretInputRequest = z.infer<typeof secretInputRequestSchema>;
 export type PendingApproval =
   | PendingCredentialApproval
   | PendingCapabilityApproval
-  | PendingUnitBatchApproval
+  | PendingUnitInstallReviewApproval
   | PendingMissionReviewApproval
   | PendingClientConfigApproval
   | PendingCredentialInputApproval

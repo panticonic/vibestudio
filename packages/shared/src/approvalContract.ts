@@ -13,14 +13,23 @@ export const APPROVAL_DECISIONS = [
 ] as const;
 export type ApprovalDecisionId = (typeof APPROVAL_DECISIONS)[number];
 
+/** Decisions that can settle an authority acquisition rendezvous. */
+export const AUTHORITY_ACQUISITION_DECISIONS = [
+  "once",
+  "task",
+  "mission",
+  "agent",
+  "lock",
+  "session",
+  "version",
+  "deny",
+] as const;
+export type AuthorityAcquisitionDecision =
+  (typeof AUTHORITY_ACQUISITION_DECISIONS)[number];
+
 // Notification action ids (subset of decisions + "open"). Order matters for iOS:
 // the system prioritizes earlier actions in constrained notification layouts.
-export const NOTIFICATION_ACTION_IDS_STANDARD = [
-  "once",
-  "deny",
-  "open",
-  "version",
-] as const;
+export const NOTIFICATION_ACTION_IDS_STANDARD = ["once", "deny", "open", "version"] as const;
 export const NOTIFICATION_ACTION_IDS_INPUT_REQUIRED = ["open"] as const;
 export const NOTIFICATION_ACTION_IDS_BROWSER_PERMISSION = [
   "once",
@@ -40,7 +49,7 @@ export type PushApprovalDataPayload = {
   approvalKind?:
     | "credential"
     | "capability"
-    | "unit-batch"
+    | "unit-install-review"
     | "mission-review"
     | "client-config"
     | "credential-input"

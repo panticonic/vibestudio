@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApprovalQueue, type UnitBatchApprovalQueueRequest } from "./approvalQueue.js";
+import { createApprovalQueue, type UnitInstallReviewQueueRequest } from "./approvalQueue.js";
 
 function createQueue(overrides: Partial<Parameters<typeof createApprovalQueue>[0]> = {}) {
   const emit = vi.fn();
@@ -7,16 +7,16 @@ function createQueue(overrides: Partial<Parameters<typeof createApprovalQueue>[0
   return { queue, emit };
 }
 
-function unitBatchRequest(
-  overrides: Partial<UnitBatchApprovalQueueRequest> = {}
-): UnitBatchApprovalQueueRequest {
+function unitInstallReviewRequest(
+  overrides: Partial<UnitInstallReviewQueueRequest> = {}
+): UnitInstallReviewQueueRequest {
   return {
-    kind: "unit-batch" as const,
+    kind: "unit-install-review" as const,
     callerId: "panel-1",
     callerKind: "panel" as const,
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
-    trigger: "source-change" as const,
+    mode: "part-changed" as const,
     title: "Update trusted unit source",
     description: "Accepting this push updates trusted native extension code.",
     units: [
@@ -259,7 +259,7 @@ describe("approvalQueue", () => {
     queue.resolve(queue.listPending()[0]!.approvalId, "deny");
   });
 
-  it("coalesces decision approvals that share an operation group", async () => {
+  it("coalesces only exact duplicate decision approvals", async () => {
     const { queue } = createQueue();
     const first = queue.request({
       kind: "capability",
@@ -283,6 +283,45 @@ describe("approvalQueue", () => {
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
       capability: "context.boundary",
+      title: "Open panel",
+      operation: {
+        kind: "panel",
+        verb: "openPanel",
+        object: { type: "panel", label: "Panel", value: "workers/runtime-fixture" },
+        groupKey: "runtime-open:ctx-1:workers/runtime-fixture",
+      },
+    });
+
+    expect(queue.listPending()).toHaveLength(1);
+    queue.resolve(queue.listPending()[0]!.approvalId, "once");
+    await expect(first).resolves.toBe("once");
+    await expect(second).resolves.toBe("once");
+  });
+
+  it("does not let an operation group merge distinct consent facts", async () => {
+    const { queue } = createQueue();
+    const common = {
+      callerId: "panel-1",
+      callerKind: "panel" as const,
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+    };
+    const first = queue.request({
+      ...common,
+      kind: "capability",
+      capability: "context.boundary",
+      title: "Open panel",
+      operation: {
+        kind: "panel",
+        verb: "openPanel",
+        object: { type: "panel", label: "Panel", value: "workers/runtime-fixture" },
+        groupKey: "runtime-open:ctx-1:workers/runtime-fixture",
+      },
+    });
+    const second = queue.request({
+      ...common,
+      kind: "capability",
+      capability: "context.boundary",
       title: "Spawn worker",
       operation: {
         kind: "worker-lifecycle",
@@ -292,10 +331,13 @@ describe("approvalQueue", () => {
       },
     });
 
-    expect(queue.listPending()).toHaveLength(1);
-    queue.resolve(queue.listPending()[0]!.approvalId, "once");
+    expect(queue.listPending()).toHaveLength(2);
+    const [openApproval, spawnApproval] = queue.listPending();
+    queue.resolve(openApproval!.approvalId, "once");
     await expect(first).resolves.toBe("once");
-    await expect(second).resolves.toBe("once");
+    expect(queue.listPending()).toEqual([spawnApproval]);
+    queue.resolve(spawnApproval!.approvalId, "deny");
+    await expect(second).resolves.toBe("deny");
   });
 
   it("preserves severe capability approval tone in pending state", async () => {
@@ -462,36 +504,49 @@ describe("approvalQueue", () => {
     await expect(second).resolves.toBe("deny");
   });
 
-  it("honors custom unit-batch approval dedup keys", async () => {
+  it("uses a custom unit-review key only to narrow otherwise exact consent facts", async () => {
     const { queue } = createQueue();
     const first = queue.request(
-      unitBatchRequest({ dedupKey: "unit-source-change:extension:typecheck:main" })
+      unitInstallReviewRequest({ dedupKey: "unit-source-change:extension:typecheck:main" })
     );
     const second = queue.request(
-      unitBatchRequest({
+      unitInstallReviewRequest({
         dedupKey: "unit-source-change:extension:typecheck:main",
         effectiveVersion: "newer-commit",
       })
     );
 
     const pending = queue.listPending();
-    expect(pending).toHaveLength(1);
+    expect(pending).toHaveLength(2);
 
-    queue.resolve(pending[0]!.approvalId, "session");
-    await expect(first).resolves.toBe("session");
-    await expect(second).resolves.toBe("session");
+    await queue.resolveInstallReview(pending[0]!.approvalId, {
+      decision: "adopt-root",
+      allowNow:
+        pending[0]!.kind === "unit-install-review"
+          ? pending[0]!.parts.map((part) => ({ identityKey: part.identityKey, permissions: [] }))
+          : [],
+    });
+    await queue.resolveInstallReview(pending[1]!.approvalId, {
+      decision: "adopt-root",
+      allowNow:
+        pending[1]!.kind === "unit-install-review"
+          ? pending[1]!.parts.map((part) => ({ identityKey: part.identityKey, permissions: [] }))
+          : [],
+    });
+    await expect(first).resolves.toBe("accepted");
+    await expect(second).resolves.toBe("accepted");
   });
 
-  it("keeps custom unit-batch approval dedup scoped to the concrete caller", async () => {
+  it("keeps custom install-review dedup scoped to the concrete caller", async () => {
     const { queue } = createQueue();
     const first = queue.request(
-      unitBatchRequest({
+      unitInstallReviewRequest({
         callerId: "panel-1",
         dedupKey: "unit-source-change:extension:typecheck:main",
       })
     );
     const second = queue.request(
-      unitBatchRequest({
+      unitInstallReviewRequest({
         callerId: "panel-2",
         dedupKey: "unit-source-change:extension:typecheck:main",
       })
@@ -500,10 +555,16 @@ describe("approvalQueue", () => {
     const pending = queue.listPending();
     expect(pending).toHaveLength(2);
 
-    queue.resolve(pending[0]!.approvalId, "once");
-    queue.resolve(pending[1]!.approvalId, "deny");
-    await expect(first).resolves.toBe("once");
-    await expect(second).resolves.toBe("deny");
+    await queue.resolveInstallReview(pending[0]!.approvalId, {
+      decision: "adopt-root",
+      allowNow:
+        pending[0]!.kind === "unit-install-review"
+          ? pending[0]!.parts.map((part) => ({ identityKey: part.identityKey, permissions: [] }))
+          : [],
+    });
+    await queue.resolveInstallReview(pending[1]!.approvalId, { decision: "cancel" });
+    await expect(first).resolves.toBe("accepted");
+    await expect(second).resolves.toBe("dismiss");
   });
 
   it("does not deduplicate credential approvals across concrete callers", async () => {
@@ -708,15 +769,15 @@ describe("approvalQueue", () => {
     await expect(second).resolves.toEqual({ decision: "deny" });
   });
 
-  describe("unit-batch approvals", () => {
-    const batchRequest = (overrides: Record<string, unknown> = {}) => ({
-      kind: "unit-batch" as const,
+  describe("unit install reviews", () => {
+    const startupInstallReviewRequest = (overrides: Record<string, unknown> = {}) => ({
+      kind: "unit-install-review" as const,
       callerId: "system:extensions",
       callerKind: "system" as const,
       repoPath: "meta",
       effectiveVersion: "",
-      trigger: "startup" as const,
-      title: "Approve workspace extensions",
+      mode: "adopt-root" as const,
+      title: "Start this workspace?",
       description: "2 extensions need approval.",
       units: [
         {
@@ -745,39 +806,123 @@ describe("approvalQueue", () => {
       ...overrides,
     });
 
-    it("creates a pending unit-batch approval carrying the unit list", async () => {
+    it("creates a pending install review carrying the unit list", async () => {
       const { queue } = createQueue();
-      void queue.request(batchRequest());
+      void queue.request(startupInstallReviewRequest());
       await Promise.resolve();
       const pending = queue.listPending();
       expect(pending).toHaveLength(1);
       expect(pending[0]).toMatchObject({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         callerKind: "system",
-        units: [
-          { unitKind: "extension", unitName: "@workspace-extensions/image-service" },
-          { unitKind: "extension", unitName: "@workspace-extensions/file-tools" },
+        parts: [
+          expect.objectContaining({
+            kind: "extension",
+            name: "@workspace-extensions/image-service",
+          }),
+          expect.objectContaining({ kind: "extension", name: "@workspace-extensions/file-tools" }),
         ],
       });
     });
 
+    it("refuses to settle a unit review through the generic resolver", async () => {
+      const { queue } = createQueue();
+      const waiting = queue.request(startupInstallReviewRequest());
+      await Promise.resolve();
+      const approval = queue.listPending()[0]!;
+      await expect(queue.resolve(approval.approvalId, "once")).rejects.toThrow(
+        "resolveInstallReview"
+      );
+      expect(queue.listPending()).toHaveLength(1);
+      await queue.resolveInstallReview(approval.approvalId, { decision: "cancel" });
+      await expect(waiting).resolves.toBe("dismiss");
+    });
+
     it("coalesces duplicate reconciles for the same trigger + set onto one prompt", async () => {
       const { queue } = createQueue();
-      void queue.request(batchRequest());
-      void queue.request(batchRequest());
+      void queue.request(startupInstallReviewRequest());
+      void queue.request(startupInstallReviewRequest());
       await Promise.resolve();
       expect(queue.listPending()).toHaveLength(1);
     });
 
+    it("puts a repair in its own section, with its new authority unchecked", async () => {
+      // §5.3: a template publication may carry agent-authored fixes to parts
+      // the template does not own. The user asked for the template, not for
+      // these, so they are shown separately and nothing about them is
+      // pre-authorized.
+      const { queue } = createQueue();
+      const withAuthority = (repo: string, name: string) => ({
+        unitKind: "worker" as const,
+        unitName: name,
+        displayName: name,
+        source: { kind: "workspace-repo" as const, repo, ref: "main" },
+        ev: `ev-${repo}`,
+        capabilities: [],
+        authority: {
+          requests: [
+            {
+              capability: "workspace.files.write",
+              resource: { kind: "prefix" as const, prefix: "" },
+              tier: "gated" as const,
+            },
+          ],
+          provides: [],
+        },
+      });
+      void queue.request(
+        startupInstallReviewRequest({
+          mode: "install",
+          units: [
+            withAuthority("workers/news-agent", "@workspace/news-agent"),
+            withAuthority("workers/chat", "@workspace/chat"),
+          ],
+          sections: new Map([
+            ["workers/news-agent", "template"],
+            ["workers/chat", "repair"],
+          ]),
+        })
+      );
+      await Promise.resolve();
+      const parts = (
+        queue.listPending()[0] as unknown as {
+          parts: Array<{
+            repoPath: string;
+            section: string;
+            notableRows: Array<{ selectable: boolean; selectedByDefault: boolean }>;
+            everydayRows: Array<{ selectable: boolean; selectedByDefault: boolean }>;
+          }>;
+        }
+      ).parts;
+      const byRepo = new Map(parts.map((part) => [part.repoPath, part]));
+      expect(byRepo.get("workers/news-agent")!.section).toBe("template");
+      expect(byRepo.get("workers/chat")!.section).toBe("repair");
+      const rowsOf = (repo: string) => [
+        ...byRepo.get(repo)!.notableRows,
+        ...byRepo.get(repo)!.everydayRows,
+      ];
+      expect(rowsOf("workers/chat").filter((row) => row.selectedByDefault)).toHaveLength(0);
+      expect(
+        rowsOf("workers/news-agent").filter((row) => row.selectable && row.selectedByDefault).length
+      ).toBeGreaterThan(0);
+    });
+
     it("resolves all waiters when the batch is approved", async () => {
       const { queue } = createQueue();
-      const first = queue.request(batchRequest());
-      const second = queue.request(batchRequest());
+      const first = queue.request(startupInstallReviewRequest());
+      const second = queue.request(startupInstallReviewRequest());
       await Promise.resolve();
-      queue.resolve(queue.listPending()[0]!.approvalId, "once");
-      await expect(first).resolves.toBe("once");
-      await expect(second).resolves.toBe("once");
+      const pending = queue.listPending()[0]!;
+      await queue.resolveInstallReview(pending.approvalId, {
+        decision: "adopt-root",
+        allowNow:
+          pending.kind === "unit-install-review"
+            ? pending.parts.map((part) => ({ identityKey: part.identityKey, permissions: [] }))
+            : [],
+      });
+      await expect(first).resolves.toBe("accepted");
+      await expect(second).resolves.toBe("accepted");
     });
   });
 
@@ -1033,5 +1178,312 @@ describe("approvalQueue", () => {
       );
       expect(queue.listPending()).toEqual([]);
     });
+  });
+});
+
+/**
+ * The install review's two ends: where a part came from before whatever owns it
+ * now (§U2, §7.7), and what answering the review actually did (§7.2).
+ */
+describe("install review provenance and result", () => {
+  const panelUnit = (repo: string, name: string) => ({
+    unitKind: "panel" as const,
+    unitName: name,
+    displayName: name,
+    source: { kind: "workspace-repo" as const, repo, ref: "main" },
+    ev: `ev-${repo}`,
+    capabilities: [],
+    authority: {
+      requests: [
+        {
+          capability: "workspace.files.read",
+          resource: { kind: "prefix" as const, prefix: "" },
+          tier: "gated" as const,
+          evidence: "exact" as const,
+        },
+      ],
+      provides: [],
+      // The review derives its own rows from `requests`; these carry the
+      // producer's precomputed view, which this fixture does not exercise.
+      previousProvides: [],
+      rows: [],
+      diff: { added: [], removed: [], unchanged: [], retiered: [] },
+    },
+  });
+
+  const installRequest = (
+    overrides: Partial<UnitInstallReviewQueueRequest> = {}
+  ): UnitInstallReviewQueueRequest => ({
+    kind: "unit-install-review",
+    callerId: "system:templates",
+    callerKind: "system",
+    repoPath: "meta",
+    effectiveVersion: "",
+    mode: "install",
+    title: "Add News",
+    description: "Read and discuss personalized news briefings.",
+    units: [panelUnit("panels/news", "News")],
+    template: {
+      title: "News",
+      purpose: "Read and discuss personalized news briefings.",
+      origin: {
+        url: "https://github.com/panticonic/news",
+        originKey: "github.com/panticonic",
+        registrableDomain: "github.com",
+        version: "v1.2.0",
+        isHostBuild: false,
+        firstEncounter: true,
+      },
+      fromVersion: null,
+      toVersion: "1.2.0",
+    },
+    configWrite: null,
+    ...overrides,
+  });
+
+  const pendingReview = async (queue: ReturnType<typeof createQueue>["queue"]) => {
+    await Promise.resolve();
+    const pending = queue.listPending()[0];
+    if (!pending || pending.kind !== "unit-install-review") throw new Error("no review pending");
+    return pending;
+  };
+
+  it("keeps a removed template's parts attributed to it on every review surface", async () => {
+    const { queue } = createQueue({
+      // Derived server-side from the lock and the admission ledger; a request
+      // site never has to remember to carry it.
+      originallyInstalledFrom: (repoPath) => (repoPath === "panels/news" ? "News 1.2.0" : null),
+    });
+    void queue.request(
+      installRequest({ units: [panelUnit("panels/news", "News"), panelUnit("panels/own", "Own")] })
+    );
+    const pending = await pendingReview(queue);
+
+    expect(pending.parts.map((part) => part.originallyInstalledFrom)).toEqual([
+      "News 1.2.0",
+      undefined,
+    ]);
+    // Never a commit id or a content digest, at any disclosure level.
+    expect(JSON.stringify(pending.parts)).not.toMatch(/[0-9a-f]{40}/u);
+  });
+
+  it("does not turn missing provenance into a host-build attribution", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest({ origins: undefined }));
+    const pending = await pendingReview(queue);
+
+    expect(pending.parts[0]!.origin).toMatchObject({
+      url: null,
+      originKey: "source unavailable",
+      isHostBuild: false,
+      originStatus: "unresolved",
+    });
+  });
+
+  it("lets a request site that already resolved the history state it", async () => {
+    const { queue } = createQueue({ originallyInstalledFrom: () => "Wrong 0.1" });
+    void queue.request(
+      installRequest({ originallyInstalledFrom: new Map([["panels/news", "News 1.2.0"]]) })
+    );
+
+    expect((await pendingReview(queue)).parts[0]?.originallyInstalledFrom).toBe("News 1.2.0");
+  });
+
+  it("reports an accepted decision in the present tense when nobody watched it land", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest());
+    const pending = await pendingReview(queue);
+
+    const result = await queue.resolveInstallReview(pending.approvalId, {
+      decision: "install",
+      allowNow: [{ identityKey: pending.parts[0]!.identityKey }],
+    });
+
+    // No landing site reported, so the outcome is under way — not good.
+    expect(result).toMatchObject({
+      decision: "accepted",
+      subject: "News",
+      heading: "Adding News…",
+      parts: [{ title: "news", clearance: "allowed-now" }],
+      entryPoint: { repoPath: "panels/news", title: "News", kind: "panel" },
+    });
+    expect(result.landing).toBeUndefined();
+  });
+
+  it("says a part will ask rather than pretending it was allowed", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest());
+    const pending = await pendingReview(queue);
+
+    const result = await queue.resolveInstallReview(pending.approvalId, {
+      decision: "install",
+      allowNow: [{ identityKey: pending.parts[0]!.identityKey, permissions: [] }],
+    });
+
+    // U5: unchecked is "ask when needed", a real decision and not a failure.
+    expect(result.parts).toEqual([
+      expect.objectContaining({ clearance: "asks-when-needed", title: "news" }),
+    ]);
+  });
+
+  it("rejects duplicate part identities in one install decision", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest());
+    const pending = await pendingReview(queue);
+    const identityKey = pending.parts[0]!.identityKey;
+
+    await expect(
+      queue.resolveInstallReview(pending.approvalId, {
+        decision: "install",
+        allowNow: [{ identityKey }, { identityKey }],
+      })
+    ).rejects.toThrow("repeats a part");
+  });
+
+  it("names the parts that failed, and never claims a clean slate it was not promised", async () => {
+    const { queue } = createQueue();
+    void queue.request(
+      installRequest({
+        reportsLanding: true,
+        units: [panelUnit("panels/news", "News"), panelUnit("panels/reader", "Reader")],
+      })
+    );
+    const pending = await pendingReview(queue);
+    const [news, reader] = pending.parts;
+
+    const resolved = queue.resolveInstallReview(pending.approvalId, {
+      decision: "install",
+      allowNow: pending.parts.map((part) => ({ identityKey: part.identityKey })),
+    });
+    queue.reportInstallLanding?.(pending.approvalId, {
+      landed: [reader!.identityKey],
+      failed: [{ identityKey: news!.identityKey, reason: "build failed" }],
+    });
+    const result = await resolved;
+
+    expect(result.heading).toBe("News was only partly added");
+    expect(result.landing).toEqual({
+      landed: [reader!.identityKey],
+      failed: [{ identityKey: news!.identityKey, title: "news", reason: "build failed" }],
+      workspaceUnchanged: false,
+    });
+    // The reporter did not guarantee a clean unwind, so the copy does not claim
+    // one — it says only what is certain.
+    expect(result.detail).toBe("These parts did not arrive: news. The other part arrived.");
+    expect(result.detail).not.toContain("Nothing was left behind");
+    // And nothing offers to open a part that is not there.
+    expect(result.entryPoint?.title).toBe("Reader");
+  });
+
+  it("says nothing was left behind only when the landing guaranteed it", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest({ reportsLanding: true }));
+    const pending = await pendingReview(queue);
+
+    const resolved = queue.resolveInstallReview(pending.approvalId, {
+      decision: "install",
+      allowNow: [{ identityKey: pending.parts[0]!.identityKey }],
+    });
+    queue.reportInstallLanding?.(pending.approvalId, {
+      landed: [],
+      failed: [{ identityKey: pending.parts[0]!.identityKey, reason: "publication rejected" }],
+      workspaceUnchanged: true,
+    });
+    const result = await resolved;
+
+    expect(result.heading).toBe("News could not be added");
+    expect(result.detail).toBe("These parts did not arrive: news. Nothing was left behind.");
+    expect(result.entryPoint).toBeUndefined();
+  });
+
+  it("reports a landing that fully arrived in the past tense, with somewhere to go", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest({ reportsLanding: true }));
+    const pending = await pendingReview(queue);
+
+    const resolved = queue.resolveInstallReview(pending.approvalId, {
+      decision: "install",
+      allowNow: [{ identityKey: pending.parts[0]!.identityKey }],
+    });
+    queue.reportInstallLanding?.(pending.approvalId, { landed: [pending.parts[0]!.identityKey] });
+    const result = await resolved;
+
+    expect(result.heading).toBe("News added");
+    expect(result.detail).toBeUndefined();
+    expect(result.entryPoint).toMatchObject({ title: "News", kind: "panel" });
+  });
+
+  it("reports post-settlement landing through the operation's exact token", async () => {
+    const { queue } = createQueue();
+    const handle = queue.requestWithHandle!(
+      installRequest({ reportsLanding: true, landingToken: "publication:news" })
+    );
+    const pending = await pendingReview(queue);
+    expect(handle.approvalId).toBe(pending.approvalId);
+
+    const resolved = queue.resolveInstallReview(pending.approvalId, {
+      decision: "install",
+      allowNow: [{ identityKey: pending.parts[0]!.identityKey }],
+    });
+    queue.reportInstallLandingByToken?.("publication:news", {
+      landed: [pending.parts[0]!.identityKey],
+    });
+
+    await expect(resolved).resolves.toMatchObject({
+      decision: "accepted",
+      heading: "News added",
+      landing: { landed: [pending.parts[0]!.identityKey], failed: [] },
+    });
+    await expect(handle.decision).resolves.toBe("accepted");
+  });
+
+  it("reports a cancel as the one outcome that is provably clean", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest({ reportsLanding: true }));
+    const pending = await pendingReview(queue);
+
+    // Cancel never reaches the operation, so it never waits for a landing.
+    const result = await queue.resolveInstallReview(pending.approvalId, { decision: "cancel" });
+
+    expect(result).toMatchObject({
+      decision: "cancelled",
+      heading: "News was not added",
+      detail: "Your workspace is unchanged.",
+      parts: [],
+    });
+    expect(queue.listPending()).toEqual([]);
+  });
+
+  it("decides nothing twice for a review that is already settled", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest());
+    const pending = await pendingReview(queue);
+    await queue.resolveInstallReview(pending.approvalId, { decision: "cancel" });
+
+    const second = await queue.resolveInstallReview(pending.approvalId, { decision: "cancel" });
+    expect(second).toMatchObject({ heading: "This review is no longer open", parts: [] });
+  });
+
+  it("keeps the landing rendezvous alive when a stale client answers twice", async () => {
+    const { queue } = createQueue();
+    void queue.request(installRequest({ reportsLanding: true }));
+    const pending = await pendingReview(queue);
+
+    const first = queue.resolveInstallReview(pending.approvalId, {
+      decision: "install",
+      allowNow: [{ identityKey: pending.parts[0]!.identityKey }],
+    });
+    // Let the first resolver settle the decision and begin waiting for landing.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(
+      queue.resolveInstallReview(pending.approvalId, { decision: "cancel" })
+    ).resolves.toMatchObject({ decision: "cancelled" });
+    queue.reportInstallLanding?.(pending.approvalId, {
+      landed: [pending.parts[0]!.identityKey],
+    });
+
+    await expect(first).resolves.toMatchObject({ decision: "accepted" });
   });
 });

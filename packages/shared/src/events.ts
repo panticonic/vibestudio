@@ -92,6 +92,12 @@ export interface NotificationAction {
           entityId: string;
         };
       }
+    | {
+        type: "runtime.execution.recover";
+        entityId: string;
+        expectedExecutionDigest: string;
+        strategy: "restore-exact" | "replace-incarnation";
+      }
     | { type: "desktop.installNpmUpdate" }
     | { type: "desktop.copyNpmUpdateCommand" }
     | { type: "browser.downloadOpen"; downloadId: string }
@@ -230,7 +236,7 @@ export interface EventPayloads {
     panelId: string;
     stateArgs: Record<string, unknown>;
   };
-  "panel-title-updated": { panelId: string; title: string; explicit?: boolean };
+  "panel-title-updated": { panelId: string; title: string | null; explicit?: boolean };
   "panel-presentation-changed": { revision: number; panelIds: string[] };
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;

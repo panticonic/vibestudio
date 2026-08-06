@@ -1,5 +1,6 @@
+import YAML from "yaml";
 import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
-import type { DiffReviewEntry, DiffReviewFile, UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type { DiffReviewEntry, DiffReviewFile, ReviewedUnit } from "@vibestudio/shared/approvals";
 import type {
   HostAuthorityEffect,
   AuthorityChallengePresentation,
@@ -7,12 +8,32 @@ import type {
   VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type {
+  InstallReviewOrigin,
+  InstallReviewTemplate,
+  UnitInstallSourceOrigin,
+} from "@vibestudio/shared/authority/unitInstallReview";
+import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import { templateOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
+import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
+import { assertTemplateLockIntegrityForRead } from "@vibestudio/workspace/templateLock";
+import {
+  normalizeTemplateGitUrl,
+  templateGitTransportUrl,
+} from "@vibestudio/workspace/templateCoordinates";
+import type { WorkspaceTemplateLock } from "@vibestudio/workspace-contracts/types";
+import { sanitizeTemplateDisplayText } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { compareUtf16CodeUnits, EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
 import { blobPath, diffTrees, getBytes, statBlob } from "./blobstoreService.js";
 import { joinRepoPrefix } from "../vcsHost/paths.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
-import type { RefGate, RefGateBatch, RefGateBatchEntry } from "./protectedRefStore.js";
+import { isAuthorizedChrome, isInteractiveChrome } from "./chromeTrust.js";
+import type {
+  RefGate,
+  RefGateBatch,
+  RefGateBatchEntry,
+  RefGateCompletion,
+} from "./protectedRefStore.js";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 
@@ -28,7 +49,7 @@ const SLOW_PUBLICATION_STAGE_MS = 10_000;
 // shape)—there is no distinct restore capability; restore semantics are GAD-owned.
 
 /**
- * A candidate protected-ref (`repo` → main) advance awaiting approval. The
+ * One atomic protected-ref publication awaiting approval. The
  * `changedPaths` are SERVER-COMPUTED (content-store `diffTrees` between the
  * ref's current and candidate trees, re-rooted workspace-relative) — never
  * caller-supplied (see {@link createMainRefAdvanceGate}).
@@ -37,8 +58,8 @@ export interface MainAdvanceApprovalCandidate {
   caller: VerifiedCaller;
   /** Cancellation of the originating publication request. */
   signal?: AbortSignal;
-  /** The repo whose `main` ref is advancing. */
-  repoPath: string;
+  /** Repositories advanced by this one atomic protected publication. */
+  repoPaths: readonly string[];
   /** Server-computed changed paths, workspace-rooted. */
   changedPaths: string[];
   /** The composed workspace view AT THE CANDIDATE (the workspace as it would
@@ -46,6 +67,8 @@ export interface MainAdvanceApprovalCandidate {
    *  group push shares ONE candidate view across its repos, so the whole group
    *  coalesces into one prompt/grant. */
   stateHash: string;
+  /** Exact protected publication whose commit completes this review. */
+  publicationId: string;
   /** Display-only "requested by X via Y" attribution: the DO identity a
    *  caller-driven advance was dispatched through (§4). The AUTHORITATIVE
    *  principal is `caller` (host-resolved); `via` is prompt copy only. */
@@ -110,15 +133,24 @@ export function createMainRefAdvanceGate(deps: {
    *  derived from the build dependency graph at the live workspace view. Absent
    *  ⇒ no dependents surfaced. */
   computeDeleteDependents?(repoPath: string): Promise<string[]>;
+  /** Records that the ungated creation publication owes a creation review (§7.1). */
+  onWorkspaceInitialized?(): void;
 }): RefGate {
-  return async (batch: RefGateBatch): Promise<void> => {
+  return async (batch: RefGateBatch): Promise<RefGateCompletion | undefined> => {
     const context = batch.gateContext as RefAdvanceGateContext | undefined;
     if (!context || (context.kind !== "workspace-initialization" && context.kind !== "caller")) {
       // Fail CLOSED: a protected-main update without an explicit advance
       // context is a programming error, never an implicit allow.
       throw new Error(`Protected main update carries no gate context`);
     }
-    if (context.kind === "workspace-initialization") return;
+    if (context.kind === "workspace-initialization") {
+      // There is no workspace yet and nobody to ask, so this publication does not
+      // prompt. It is not a silent trust path either: the units it lands are
+      // admitted by the creation review, held in the new workspace immediately
+      // after it opens (§5.2, §7.1). This records that obligation durably.
+      deps.onWorkspaceInitialized?.();
+      return;
+    }
 
     // ONE candidate workspace view for the whole batch: current mains ⊕ entries
     // (deletes remove the repo). The shared view hash is the dedup key that
@@ -180,44 +212,72 @@ export function createMainRefAdvanceGate(deps: {
       });
     }
     const diffReview = perEntry.map((e) => e.review);
+    const completions: MainAdvanceApprovalCompletion[] = [];
+    const advances: Array<{ entry: RefGateBatchEntry; changedPaths: string[] }> = [];
 
-    for (const { entry, review, changedPaths } of perEntry) {
-      // The ONLY host-side classification is a REMOVAL, derived from the host's
-      // own CAS request shape (`next === null`) — never from a caller-supplied
-      // VCS-operation label. Everything else is an ordinary content advance;
-      // the VCS workflow (push/merge/import/restore) lives in the DO.
-      if (entry.next === null) {
-        // Removal → severe per-repo deletion capability, inside the batch. The
-        // dependents warning (repos whose build breaks) is host-computed from
-        // the build dependency graph, exactly like the file count is from the
-        // CAS diff (§5) — never caller-supplied.
-        const dependents = deps.computeDeleteDependents
-          ? await deps.computeDeleteDependents(entry.repoPath).catch(() => [])
-          : [];
-        await deps.approvalGate.approveRepoDeletion({
-          caller: context.caller,
-          ...(context.signal ? { signal: context.signal } : {}),
-          repoPath: entry.repoPath,
-          fileCount: review.diffStat.filesChanged,
-          stateHash: entry.old ?? EMPTY_STATE_HASH,
-          dependents,
-          diffReview,
-        });
-        continue;
+    try {
+      for (const { entry, review, changedPaths } of perEntry) {
+        // The ONLY host-side classification is a REMOVAL, derived from the host's
+        // own CAS request shape (`next === null`) — never from a caller-supplied
+        // VCS-operation label. Everything else is an ordinary content advance;
+        // the VCS workflow (push/merge/import/restore) lives in the DO.
+        if (entry.next === null) {
+          // Removal → severe per-repo deletion capability, inside the batch. The
+          // dependents warning (repos whose build breaks) is host-computed from
+          // the build dependency graph, exactly like the file count is from the
+          // CAS diff (§5) — never caller-supplied.
+          const dependents = deps.computeDeleteDependents
+            ? await deps.computeDeleteDependents(entry.repoPath).catch(() => [])
+            : [];
+          await deps.approvalGate.approveRepoDeletion({
+            caller: context.caller,
+            ...(context.signal ? { signal: context.signal } : {}),
+            repoPath: entry.repoPath,
+            fileCount: review.diffStat.filesChanged,
+            stateHash: entry.old ?? EMPTY_STATE_HASH,
+            dependents,
+            diffReview,
+          });
+          continue;
+        }
+
+        advances.push({ entry, changedPaths });
       }
 
-      // Ordinary advance: changed paths are the server-computed tree delta,
-      // re-rooted to the repo (never anything the caller proposed).
-      await deps.approvalGate.approve({
-        caller: context.caller,
-        ...(context.signal ? { signal: context.signal } : {}),
-        repoPath: entry.repoPath,
-        changedPaths,
-        stateHash: candidateView,
-        diffReview,
-        ...(context.via ? { via: context.via } : {}),
-      });
+      // Protected refs commit the batch atomically, the review describes the
+      // whole candidate view, and its landing receipt is keyed by publication.
+      // Authorize that same operation once. Per-repository authorization made
+      // the second member of a batch compete for the first member's landing
+      // channel after the user had already accepted the complete review.
+      if (advances.length > 0) {
+        const completion = await deps.approvalGate.approve({
+          caller: context.caller,
+          ...(context.signal ? { signal: context.signal } : {}),
+          repoPaths: advances.map(({ entry }) => entry.repoPath),
+          changedPaths: advances.flatMap(({ changedPaths }) => changedPaths),
+          stateHash: candidateView,
+          publicationId: batch.publication.publicationId,
+          diffReview,
+          ...(context.via ? { via: context.via } : {}),
+        });
+        if (completion) completions.push(completion);
+      }
+    } catch (error) {
+      for (const completion of completions) await completion.failed(error);
+      throw error;
     }
+    if (completions.length === 0) return;
+    return {
+      prepare: async () => {
+        for (const completion of completions) await completion.prepare();
+      },
+      committed: async () => {
+        for (const completion of completions) await completion.committed();
+      },
+      failed: async (error) => {
+        for (const completion of completions) await completion.failed(error);
+      },
+    } satisfies RefGateCompletion;
   };
 }
 
@@ -452,68 +512,533 @@ export interface SemanticAdvanceApprovalCandidate {
   via?: string;
 }
 
+const TEMPLATE_LOCK_PATH = "meta/templates.lock.yml";
+// A heading and a single line under it. Same bounds the manifest schema applies
+// on the way in, restated here because this side must hold even if a lock was
+// written by an older composer that had looser ones.
+const TEMPLATE_NAME_MAX = 60;
+const TEMPLATE_PURPOSE_MAX = 200;
+
+/** `installReview` as this gate presents it. */
+export type InstallReviewPresentation = NonNullable<
+  AuthorityChallengePresentation["installReview"]
+>;
+
+/**
+ * What a publication does to this workspace's template relationships (§5.3).
+ *
+ * A template pulls foreign code over the network — categorically unlike an edit
+ * to code already present — so it gets the install surface rather than "someone
+ * edited this part in your workspace". Everything needed to say that is derived
+ * here, on the server, and nothing about it is asked of the caller.
+ */
+export interface TemplateOperationRecognition {
+  mode: "install" | "update" | "remove";
+  template: InstallReviewTemplate;
+  /** Where each repository the lock claims came from, at the state being published. */
+  origins: ReadonlyMap<string, InstallReviewOrigin>;
+  /** Repositories delivered by the closure of the template this operation moves. */
+  ownedRepoPaths: ReadonlySet<string>;
+}
+
+/**
+ * Recognize a template operation from the two locks, and from nothing else.
+ *
+ * §13.9 requires both directions to fail at the server boundary: a template
+ * operation cannot be disguised as an ordinary publication to get the generic
+ * card, and an ordinary publication cannot claim to be a template install to
+ * borrow its framing. A flag on the request — or the composer's own operation
+ * record, which is userland state written by the extension that wants the
+ * framing — answers neither, because both are assertions by the party under
+ * review.
+ *
+ * `meta/templates.lock.yml` is different. It is the workspace's committed
+ * projection of its template closure, its fingerprint covers every node, pin,
+ * and repository ownership entry, and `assertTemplateLockIntegrityForRead`
+ * additionally re-derives each node id from its own pin and each alias from its
+ * own URL. Diffing the lock the workspace has against the lock the publication
+ * would install is therefore not a claim about the operation — it IS the
+ * operation, stated in the only terms that survive verification: which template
+ * roots this publication adds, re-pins, or drops. A publication that changes no
+ * root changes no template relationship, and gets the ordinary part-changed
+ * review no matter who published it or what it says about itself.
+ *
+ * A lock that fails integrity is not evidence of anything, so it recognizes
+ * nothing and the publication falls back to the generic review. Failing that
+ * way round matters: the risk being defended against is a forged lock buying
+ * install framing, never a real one losing it.
+ */
+export function recognizeTemplateOperation(input: {
+  /** The lock the workspace currently has, or null when it composes nothing. */
+  currentLock: WorkspaceTemplateLock | null;
+  /** The lock at the state being published. */
+  candidateLock: WorkspaceTemplateLock | null;
+  /** Sources the user has already run code from, for first encounter. */
+  admittedOriginKeys: ReadonlySet<string>;
+}): TemplateOperationRecognition | null {
+  const current = rootNodes(input.currentLock);
+  const candidate = rootNodes(input.candidateLock);
+  const moved: Array<{
+    mode: TemplateOperationRecognition["mode"];
+    url: string;
+  }> = [];
+  for (const [url, node] of candidate) {
+    const before = current.get(url);
+    if (!before) moved.push({ mode: "install", url });
+    // The commit is the exact identity of a pin and never leaves this function:
+    // it decides whether the pin moved, and the review shows only the human ref.
+    else if (before.pin.commit !== node.pin.commit) moved.push({ mode: "update", url });
+  }
+  for (const url of current.keys()) {
+    if (!candidate.has(url)) moved.push({ mode: "remove", url });
+  }
+  // Two templates moving at once is a real state — a recompose, a cutover — but
+  // it has no single name, and naming it after one of them would head the card
+  // with a template that is not the whole story. The generic review is the
+  // honest surface for it.
+  if (moved.length !== 1) return null;
+  const operation = moved[0]!;
+
+  const lock = operation.mode === "remove" ? input.currentLock : input.candidateLock;
+  const rootNode = (operation.mode === "remove" ? current : candidate).get(operation.url)!;
+  const fromVersion = current.get(operation.url)?.pin.ref ?? null;
+  const toVersion = candidate.get(operation.url)?.pin.ref ?? null;
+
+  // A root's closure is the root plus everything it depends on: the lock orders
+  // dependencies before dependents and records them as `parents`. Repositories
+  // owned by that closure are what this template delivers; everything else the
+  // same publication touches is a repair (§5.3).
+  const nodesById = new Map((lock?.nodes ?? []).map((node) => [node.nodeId, node]));
+  const closure = new Set<string>();
+  const pending = [rootNode.nodeId];
+  while (pending.length > 0) {
+    const nodeId = pending.pop()!;
+    if (closure.has(nodeId)) continue;
+    closure.add(nodeId);
+    for (const parent of nodesById.get(nodeId)?.parents ?? []) pending.push(parent);
+  }
+
+  const origins = new Map<string, InstallReviewOrigin>();
+  const ownedRepoPaths = new Set<string>();
+  for (const [repoPath, repository] of Object.entries(lock?.repositories ?? {})) {
+    const owner = nodesById.get(repository.nodeId);
+    if (!owner) continue;
+    // Origin follows the node that actually owns the bytes, never the root of
+    // the operation: a nested template's parts came from the nested template's
+    // URL, and attributing them to the template the user named would be exactly
+    // the identity claim §7.6.3 forbids.
+    const ownerName = sanitizeTemplateDisplayText(owner.presentation?.name, TEMPLATE_NAME_MAX);
+    origins.set(
+      repoPath,
+      templateOrigin({
+        url: owner.pin.url,
+        version: owner.pin.ref,
+        ...(ownerName ? { selfName: ownerName } : {}),
+        admittedOriginKeys: input.admittedOriginKeys,
+      })
+    );
+    if (closure.has(repository.nodeId)) ownedRepoPaths.add(repoPath);
+  }
+
+  // What the template says it is called and what it says it does, re-sanitized
+  // at the point of use. The lock's fingerprint proves these bytes are the ones
+  // the composer wrote; it proves nothing about whether the template authored
+  // them hostile, and this is the last place before they reach a person.
+  const selfName = sanitizeTemplateDisplayText(rootNode.presentation?.name, TEMPLATE_NAME_MAX);
+  const selfPurpose = sanitizeTemplateDisplayText(
+    rootNode.presentation?.description,
+    TEMPLATE_PURPOSE_MAX
+  );
+
+  return {
+    mode: operation.mode,
+    template: {
+      // The template's own name may head the card, because a heading is a title
+      // and titles are attributed to the thing they name. It may NOT become the
+      // origin: `origin` below is built from the pin URL alone, so a template
+      // calling itself Vibestudio changes what the card is headed and nothing
+      // about where the review says its bytes came from (§7.6.3). When the
+      // manifest offers no usable name — or offered one the sanitizer refused —
+      // the URL stem stands in, which is a worse heading and an honest one.
+      title: selfName ?? templateTitleFromUrl(rootNode.pin.url),
+      purpose: selfPurpose ?? "",
+      origin: templateOrigin({
+        url: rootNode.pin.url,
+        version: toVersion ?? fromVersion,
+        // Carried beside the URL rather than instead of it: every renderer that
+        // shows `selfName` shows it as the template's claim about itself, next
+        // to the identity it cannot alter.
+        ...(selfName ? { selfName } : {}),
+        admittedOriginKeys: input.admittedOriginKeys,
+      }),
+      fromVersion,
+      toVersion,
+    },
+    origins,
+    ownedRepoPaths,
+  };
+}
+
+/** The declared roots of a lock, keyed by normalized URL, with their nodes. */
+function rootNodes(
+  lock: WorkspaceTemplateLock | null
+): ReadonlyMap<string, WorkspaceTemplateLock["nodes"][number]> {
+  const roots = new Map<string, WorkspaceTemplateLock["nodes"][number]>();
+  if (!lock) return roots;
+  for (const root of lock.roots) {
+    const url = normalizeTemplateGitUrl(root.url);
+    const node = lock.nodes.find((candidate) => normalizeTemplateGitUrl(candidate.pin.url) === url);
+    // Integrity already refuses a root without a node; skipping is belt to that
+    // brace rather than a case that can reach here.
+    if (node) roots.set(url, node);
+  }
+  return roots;
+}
+
+/**
+ * The human name of a template, derived from its URL and only from its URL.
+ *
+ * Same derivation the lock's alias uses, minus the content-addressed suffix
+ * that makes an alias collision-proof and a heading unreadable.
+ */
+function templateTitleFromUrl(url: string): string {
+  try {
+    const transport = new URL(templateGitTransportUrl(normalizeTemplateGitUrl(url)));
+    return (
+      transport.pathname
+        .split("/")
+        .filter(Boolean)
+        .at(-1)
+        ?.replace(/\.git$/u, "")
+        .replace(/^vibestudio-(?:template|workspace)-/u, "")
+        .replace(/^template-/u, "") || "template"
+    );
+  } catch {
+    return "template";
+  }
+}
+
 export interface MainAdvanceApprovalGate {
-  approve(candidate: MainAdvanceApprovalCandidate): Promise<void>;
+  approve(
+    candidate: MainAdvanceApprovalCandidate
+  ): Promise<MainAdvanceApprovalCompletion | undefined>;
   /** Gate a new semantic event even when it preserves every protected byte. */
   approveSemanticAdvance(candidate: SemanticAdvanceApprovalCandidate): Promise<void>;
   /** Gate a severe, global-state whole-repo deletion. Throws if denied. */
   approveRepoDeletion(candidate: RepoDeletionApprovalCandidate): Promise<void>;
 }
 
+export interface MainAdvanceApprovalCompletion {
+  prepare(): void | Promise<void>;
+  committed(): void | Promise<void>;
+  failed(error: unknown): void | Promise<void>;
+}
+
 export function createMainAdvanceApprovalGate(deps: {
   authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  getProviders(): Array<UnitChangeApprovalProvider<UnitBatchEntry> | null | undefined>;
+  getProviders(): Array<UnitChangeApprovalProvider<ReviewedUnit> | null | undefined>;
+  /**
+   * Row keys a part already holds standing clearance for. An update re-mints
+   * exactly these ∩ the new manifest ∩ current policy, so a permission the user
+   * declined stays declined and one that was working keeps working (§7.3).
+   */
+  heldClearanceFor?: (repoPath: string) => ReadonlySet<string> | null;
+  /**
+   * Where each unit's bytes came from, keyed by repo path.
+   *
+   * A publication review names parts the same way every other surface does, and
+   * origin is part of that name. Without it every part falls back to the host's
+   * own build, so a unit that arrived with someone else's template would be
+   * presented as ours — the one claim this system must never make by accident.
+   */
+  resolveUnitOrigins?: (
+    repoPaths: readonly string[]
+  ) => Promise<ReadonlyMap<string, InstallReviewOrigin>>;
+  /**
+   * `meta/templates.lock.yml` at an exact composed workspace state, and at the
+   * live workspace when `stateHash` is null.
+   *
+   * This is the whole input to recognizing a template operation, and it is
+   * deliberately a raw read: the gate parses and integrity-checks the bytes
+   * itself rather than being handed someone's interpretation of them.
+   */
+  readTemplateLock?: (stateHash: string | null) => Promise<string | null>;
+  /** Sources the user has already run code from, for first encounter. */
+  admittedOriginKeys?: () => ReadonlySet<string>;
+  reportInstallLandingByToken?: (
+    landingToken: string,
+    report: import("./approvalQueue.js").InstallLandingReport
+  ) => void;
 }): MainAdvanceApprovalGate {
+  // One publication reaches this gate once per repository it advances, each
+  // time with the same candidate view. The recognition is a property of that
+  // view, so it is computed once and reused for the whole batch.
+  let recognized: { stateHash: string; result: TemplateOperationRecognition | null } | null = null;
+  const recognizeFor = async (stateHash: string): Promise<TemplateOperationRecognition | null> => {
+    if (!deps.readTemplateLock) return null;
+    if (recognized?.stateHash === stateHash) return recognized.result;
+    let result: TemplateOperationRecognition | null = null;
+    try {
+      const [currentText, candidateText] = await Promise.all([
+        deps.readTemplateLock(null),
+        deps.readTemplateLock(stateHash),
+      ]);
+      result = recognizeTemplateOperation({
+        currentLock: verifiedTemplateLock(currentText, "the workspace"),
+        candidateLock: verifiedTemplateLock(candidateText, "this publication"),
+        admittedOriginKeys: deps.admittedOriginKeys?.() ?? new Set<string>(),
+      });
+    } catch (error) {
+      // Nothing about the decision depends on recognizing the operation being
+      // possible: failing here costs the template framing, never the review.
+      console.warn(
+        `[Units] Could not read template relationships for this publication: ${message(error)}`
+      );
+      result = null;
+    }
+    recognized = { stateHash, result };
+    return result;
+  };
   return {
     async approve(candidate) {
       if (candidate.changedPaths.length === 0) return;
       const metaChanged = candidate.changedPaths.some(isMetaPath);
 
       const runtimeKind = candidate.caller.runtime.kind;
-      if (isAuthorizedChrome(candidate.caller, { hasAppCapability: deps.hasAppCapability })) {
-        return;
-      }
+      // Trusted first-party UI writing for the user in front of it — setup,
+      // settings, layout. The click IS the consent, so these publications record
+      // admission and stay silent (§5.2). A `server` or `headless-host`
+      // publication has no user and no click, so it falls through to the
+      // ordinary gate below even though it also holds `panel-hosting`.
+      const interactiveChrome = isInteractiveChrome(candidate.caller, {
+        hasAppCapability: deps.hasAppCapability,
+      });
 
-      const callerKind = userlandCallerKind(runtimeKind);
-      if (!callerKind) {
-        throw new Error(`Workspace main advances from ${runtimeKind} callers are not supported`);
-      }
+      if (!interactiveChrome) {
+        const callerKind = userlandCallerKind(runtimeKind);
+        if (!callerKind) {
+          throw new Error(`Workspace main advances from ${runtimeKind} callers are not supported`);
+        }
 
-      const identity = candidate.caller.code;
-      if (!identity || identity.callerKind !== runtimeKind) {
-        throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
+        const identity = candidate.caller.code;
+        if (!identity || identity.callerKind !== runtimeKind) {
+          throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
+        }
       }
 
       const providers = deps
         .getProviders()
         .filter(
-          (provider): provider is UnitChangeApprovalProvider<UnitBatchEntry> =>
+          (provider): provider is UnitChangeApprovalProvider<ReviewedUnit> =>
             provider !== null && provider !== undefined
         );
       const approvals = await observePublicationStage(
         "resolve-unit-review",
-        { repoPaths: [candidate.repoPath] },
+        { repoPaths: [...candidate.repoPaths] },
         () =>
           Promise.all(
             providers.map(async (provider) => ({
               provider,
-              approval: await provider.unitChangeApprovalForCommit(candidate.stateHash),
+              approval: await provider.unitChangeApprovalForCommit(candidate.stateHash, {
+                changedPaths: candidate.changedPaths,
+              }),
             }))
           )
       );
       const units = approvals.flatMap(({ approval }) => approval.units);
+      const charters = approvals.flatMap(({ approval }) => approval.charters ?? []);
+      const unchangedPartCount = approvals.reduce(
+        (total, { approval }) => total + (approval.unchangedCount ?? 0),
+        0
+      );
+      const previousRequests = new Map(
+        approvals.flatMap(({ approval }) => [...(approval.previousRequests ?? [])])
+      );
+      const identityKeys = new Map(
+        approvals.flatMap(({ approval }) => [...(approval.identityKeysByRepo ?? [])])
+      );
+      const previouslyCleared = new Map(
+        [...previousRequests.keys()].flatMap((repoPath) => {
+          const held = deps.heldClearanceFor?.(repoPath);
+          return held ? [[repoPath, held] as const] : [];
+        })
+      );
+      type PreparedUnitTrust = {
+        committed(): void | Promise<void>;
+        failed(error: unknown): void | Promise<void>;
+      };
+      const failPreparedUnits = async (
+        prepared: readonly PreparedUnitTrust[],
+        error: unknown
+      ): Promise<void> => {
+        const rollbackErrors: unknown[] = [];
+        for (const transaction of [...prepared].reverse()) {
+          try {
+            await transaction.failed(error);
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
+          }
+        }
+        if (rollbackErrors.length > 0) {
+          throw new AggregateError(
+            [error, ...rollbackErrors],
+            "Unit trust preparation could not be rolled back"
+          );
+        }
+      };
+      const commitPreparedUnits = async (prepared: readonly PreparedUnitTrust[]): Promise<void> => {
+        const commitErrors: unknown[] = [];
+        for (const transaction of prepared) {
+          try {
+            await transaction.committed();
+          } catch (commitError) {
+            commitErrors.push(commitError);
+          }
+        }
+        if (commitErrors.length > 0) {
+          throw new AggregateError(commitErrors, "Unit trust preparation could not be committed");
+        }
+      };
+      const prepareReviewedUnits = async (
+        origin: "chrome" | "publication",
+        sourceOrigins?: ReadonlyMap<string, UnitInstallSourceOrigin | null>
+      ): Promise<PreparedUnitTrust[]> => {
+        const prepared: PreparedUnitTrust[] = [];
+        try {
+          for (const { provider, approval } of approvals) {
+            const hasSourceOrigins =
+              approval.identityKeys.length > 0 &&
+              sourceOrigins !== undefined &&
+              sourceOrigins.size > 0;
+            const transaction = hasSourceOrigins
+              ? provider.preparePreapprovedTrust?.(
+                  approval.identityKeys,
+                  origin,
+                  undefined,
+                  sourceOrigins
+                )
+              : provider.preparePreapprovedTrust?.(approval.identityKeys, origin);
+            if (transaction) prepared.push(transaction);
+            else if (!provider.preparePreapprovedTrust) {
+              // Stateless providers retain the one-shot API. Every provider
+              // that records durable trust implements the two-phase form.
+              if (hasSourceOrigins) {
+                provider.acceptPreapprovedTrust(
+                  approval.identityKeys,
+                  origin,
+                  undefined,
+                  sourceOrigins
+                );
+              } else {
+                provider.acceptPreapprovedTrust(approval.identityKeys, origin);
+              }
+            }
+          }
+          return prepared;
+        } catch (error) {
+          await failPreparedUnits(prepared, error);
+          throw error;
+        }
+      };
 
-      if (!metaChanged && units.length === 0) {
-        await approveWorkspaceMainAdvance(deps, candidate);
-        return;
+      let preparedTransactions: PreparedUnitTrust[] = [];
+      let prepared = false;
+
+      if (interactiveChrome) {
+        // Silent, but never trust-free. Admission is committed with the refs,
+        // never merely with authorization for a publication that may fail.
+        return {
+          prepare: async () => {
+            if (prepared) return;
+            preparedTransactions = await prepareReviewedUnits("chrome");
+            prepared = true;
+          },
+          committed: async () => {
+            if (!prepared) {
+              preparedTransactions = await prepareReviewedUnits("chrome");
+              prepared = true;
+            }
+            await commitPreparedUnits(preparedTransactions);
+          },
+          failed: async (error) => {
+            await failPreparedUnits(preparedTransactions, error);
+          },
+        };
       }
 
+      const template = await recognizeFor(candidate.stateHash);
+
+      // Nothing changed about what any part can do, and no charter arrived:
+      // this is an ordinary content advance, not a permission decision. A
+      // template operation is never that, even when it lands nothing but
+      // effective-version churn — an upgrade that changes no declared authority
+      // is still a decision about foreign code, and §5.4 gives it one line
+      // rather than no card at all.
+      if (!template && !metaChanged && units.length === 0 && charters.length === 0) {
+        await approveWorkspaceMainAdvance(deps, candidate);
+        return {
+          prepare: async () => {
+            if (prepared) return;
+            preparedTransactions = await prepareReviewedUnits("publication");
+            prepared = true;
+          },
+          committed: async () => {
+            if (!prepared) {
+              preparedTransactions = await prepareReviewedUnits("publication");
+              prepared = true;
+            }
+            await commitPreparedUnits(preparedTransactions);
+          },
+          failed: async (error) => {
+            await failPreparedUnits(preparedTransactions, error);
+          },
+        };
+      }
+
+      const repoPaths = units.map((unit) => unit.source.repo);
+      const origins = new Map(await (deps.resolveUnitOrigins?.(repoPaths) ?? []));
+      // The resolver answers from the lock the workspace HAS. A template
+      // arriving now is not in it, so every part it lands would print as the
+      // workspace's own code — the one claim this system must never make by
+      // accident. The candidate lock is the same evidence one state later, so
+      // it wins wherever it claims a repository.
+      for (const [repoPath, origin] of template?.origins ?? []) origins.set(repoPath, origin);
+      // Inside a template publication every changed unit is one of two things:
+      // a part the template delivers, or a fix the same publication makes to a
+      // part already in the workspace, which the user did not ask for and which
+      // is therefore shown in its own always-expanded section, unchecked (§5.3).
+      const sections = template
+        ? new Map(
+            repoPaths.map(
+              (repoPath) =>
+                [repoPath, template.ownedRepoPaths.has(repoPath) ? "template" : "repair"] as const
+            )
+          )
+        : null;
       await approveWorkspaceMainAdvance(deps, candidate, {
-        trigger: metaChanged ? "meta-change" : "source-change",
-        title: unitChangeTitle(units, metaChanged),
-        description: unitChangeDescription(units, metaChanged),
+        // An edit to code already in the workspace is the part-changed review
+        // (§7.4): the question is not "may this run" but "someone edited this
+        // part; do you want the new version?". A template operation asks the
+        // other question — may this arrive at all — and says so in its heading.
+        mode: template?.mode ?? "part-changed",
+        reportsLanding: true,
+        landingToken: candidate.publicationId,
+        title: template
+          ? HOST_APPROVAL_COPY.installReview.heading[template.mode](template.template.title)
+          : unitChangeTitle(units, previousRequests, metaChanged),
+        ...(template
+          ? {}
+          : { description: unitChangeDescription(units, previousRequests, metaChanged) }),
+        ...(template ? { template: template.template } : {}),
+        ...(sections ? { sections } : {}),
         units,
+        ...(charters.length > 0 ? { charters } : {}),
+        unchangedPartCount,
+        previousRequests,
+        previouslyCleared,
+        identityKeys,
+        origins,
         configWrite: metaChanged
           ? {
               repoPath: "meta",
@@ -521,9 +1046,53 @@ export function createMainAdvanceApprovalGate(deps: {
             }
           : null,
       });
-      for (const { provider, approval } of approvals) {
-        provider.acceptPreapprovedTrust(approval.identityKeys);
-      }
+      const partIdentityKeys = [
+        ...new Set(
+          units.map(
+            (unit) => identityKeys.get(unit.source.repo) ?? `${unit.source.repo}@${unit.ev ?? ""}`
+          )
+        ),
+      ];
+      return {
+        prepare: async () => {
+          if (prepared) return;
+          preparedTransactions = await prepareReviewedUnits("publication", origins);
+          prepared = true;
+        },
+        committed: async () => {
+          try {
+            if (!prepared) {
+              preparedTransactions = await prepareReviewedUnits("publication", origins);
+              prepared = true;
+            }
+            await commitPreparedUnits(preparedTransactions);
+            deps.reportInstallLandingByToken?.(candidate.publicationId, {
+              landed: partIdentityKeys,
+            });
+          } catch (error) {
+            deps.reportInstallLandingByToken?.(candidate.publicationId, {
+              landed: [],
+              failed: partIdentityKeys.map((identityKey) => ({
+                identityKey,
+                reason: message(error),
+              })),
+              workspaceUnchanged: false,
+            });
+            throw error;
+          }
+        },
+        failed: async (error) => {
+          await failPreparedUnits(preparedTransactions, error);
+          deps.reportInstallLandingByToken?.(candidate.publicationId, {
+            landed: [],
+            failed: partIdentityKeys.map((identityKey) => ({
+              identityKey,
+              reason: message(error),
+            })),
+            workspaceUnchanged: true,
+          });
+        },
+      };
     },
 
     async approveSemanticAdvance(candidate) {
@@ -634,44 +1203,65 @@ export function createMainAdvanceApprovalGate(deps: {
 async function approveWorkspaceMainAdvance(
   deps: { authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void> },
   candidate: MainAdvanceApprovalCandidate,
-  unitBatch?: NonNullable<AuthorityChallengePresentation["unitBatch"]> & {
+  installReview?: InstallReviewPresentation & {
     title: string;
-    description: string;
+    description?: string;
   }
 ): Promise<void> {
-  const resourceKey = `workspace-source-change:${candidate.repoPath}:main`;
+  const resourceKey = `workspace-source-change:publication:${candidate.publicationId}`;
+  const groupKey = `workspace-publication:${candidate.publicationId}`;
+  const repoLabel =
+    candidate.repoPaths.length === 1
+      ? `${candidate.repoPaths[0]} main`
+      : `${candidate.repoPaths.length} workspace repositories`;
   await authorizeProtectedPublication(deps, candidate.caller, {
     ...(candidate.signal ? { signal: candidate.signal } : {}),
     capability: WORKSPACE_MAIN_ADVANCE_CAPABILITY,
     resourceKey,
     tier: "gated",
-    args: [candidate.repoPath, candidate.stateHash, candidate.changedPaths],
+    args: [
+      candidate.publicationId,
+      candidate.repoPaths,
+      candidate.stateHash,
+      candidate.changedPaths,
+    ],
     preparedState: candidate,
     challenge: {
-      dedupKey: `${resourceKey}:${candidate.stateHash}`,
-      resource: { type: "vcs-head", label: "Head", value: `${candidate.repoPath} main` },
+      dedupKey: groupKey,
+      resource: { type: "vcs-head", label: "Head", value: repoLabel },
       operation: {
         kind: "workspace",
         verb: "update workspace main",
-        object: { type: "vcs-head", label: "Head", value: `${candidate.repoPath} main` },
-        groupKey: `${resourceKey}:${candidate.stateHash}`,
+        object: { type: "vcs-head", label: "Head", value: repoLabel },
+        groupKey,
       },
-      title: unitBatch?.title ?? mainAdvanceTitle(candidate),
-      description: unitBatch?.description ?? mainAdvanceDescription(candidate),
+      title: installReview?.title ?? mainAdvanceTitle(candidate),
+      description: installReview?.description ?? mainAdvanceDescription(candidate),
       details: mainAdvanceDetails(candidate),
       ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
-      ...(unitBatch
-        ? {
-            unitBatch: {
-              trigger: unitBatch.trigger,
-              units: unitBatch.units,
-              configWrite: unitBatch.configWrite ?? null,
-            },
-          }
-        : {}),
+      ...(installReview ? { installReview: presentedInstallReview(installReview) } : {}),
       deniedReason: "Workspace main update denied",
     },
   });
+}
+
+/** The review as the dispatcher carries it: everything the card needs, nothing else. */
+function presentedInstallReview(input: InstallReviewPresentation): InstallReviewPresentation {
+  return {
+    mode: input.mode,
+    ...(input.reportsLanding ? { reportsLanding: true } : {}),
+    ...(input.landingToken ? { landingToken: input.landingToken } : {}),
+    units: input.units,
+    ...(input.charters ? { charters: input.charters } : {}),
+    ...(input.template ? { template: input.template } : {}),
+    ...(input.previousRequests ? { previousRequests: input.previousRequests } : {}),
+    ...(input.previouslyCleared ? { previouslyCleared: input.previouslyCleared } : {}),
+    ...(input.origins ? { origins: input.origins } : {}),
+    ...(input.identityKeys ? { identityKeys: input.identityKeys } : {}),
+    ...(input.sections ? { sections: input.sections } : {}),
+    unchangedPartCount: input.unchangedPartCount ?? 0,
+    configWrite: input.configWrite ?? null,
+  };
 }
 
 async function authorizeProtectedPublication(
@@ -698,7 +1288,9 @@ async function authorizeProtectedPublication(
       method: "vcsPush",
       capability: input.capability,
       resourceKey: input.resourceKey,
-      requirement: requirementForPrincipals(["host", "user", "code", "session"], input.capability),
+      // The code family already admits evaluated sessions; naming session again
+      // duplicates the same branch and repeats one missing-grant reason.
+      requirement: requirementForPrincipals(["host", "user", "code"], input.capability),
       tier: input.tier,
       sessionAdmission: "family",
       args: input.args,
@@ -707,6 +1299,31 @@ async function authorizeProtectedPublication(
       sensitivity: "write",
     }
   );
+}
+
+/**
+ * A lock nobody has verified is not evidence. Parse it, check its fingerprint
+ * and its internal derivations, and treat any failure as "there is no lock
+ * here" — the answer that can only ever cost a publication its template
+ * framing, never grant one framing it did not earn.
+ */
+function verifiedTemplateLock(
+  content: string | null,
+  source: string
+): WorkspaceTemplateLock | null {
+  if (content === null) return null;
+  try {
+    return assertTemplateLockIntegrityForRead(YAML.parse(content) as unknown);
+  } catch (error) {
+    console.warn(
+      `[Units] ${TEMPLATE_LOCK_PATH} in ${source} failed integrity checks: ${message(error)}`
+    );
+    return null;
+  }
+}
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isMetaPath(filePath: string): boolean {
@@ -727,9 +1344,6 @@ function userlandCallerKind(kind: string): "panel" | "app" | "worker" | "do" | "
 }
 
 function metaChangeSummary(candidate: MainAdvanceApprovalCandidate): string {
-  // Advances are strictly per-repo: the ref gate re-roots every changed path
-  // with the single advancing repo, so a meta-changing candidate's paths are
-  // ALL under `meta/` — there is no mixed meta/non-meta case to summarize.
   const metaPaths = candidate.changedPaths.filter(isMetaPath);
   return metaPaths.length === 0
     ? "workspace config change"
@@ -738,73 +1352,54 @@ function metaChangeSummary(candidate: MainAdvanceApprovalCandidate): string {
       : `${metaPaths.length} workspace config files changed`;
 }
 
-function unitChangeTitle(units: UnitBatchEntry[], metaChanged: boolean): string {
-  const hasApps = units.some((unit) => unit.unitKind === "app");
-  const hasExtensions = units.some((unit) => unit.unitKind === "extension");
-  const hasPanels = units.some((unit) => unit.unitKind === "panel");
-  const hasWorkers = units.some((unit) => unit.unitKind === "worker");
-  const hasScheduledJobs = units.some((unit) => unit.unitKind === "scheduled-job");
-  const hasAgentHeartbeats = units.some((unit) => unit.unitKind === "agent-heartbeat");
-  if (
-    [hasApps, hasExtensions, hasPanels, hasWorkers, hasScheduledJobs, hasAgentHeartbeats].filter(
-      Boolean
-    ).length > 1
-  ) {
-    return "Workspace units changed";
+/**
+ * The heading for a publication that changes what code in this workspace can
+ * do (§7.4).
+ *
+ * This is the agent-edits-its-own-code case, and its question is not "may this
+ * run" — the code is already here — but "someone edited this part; do you want
+ * the new version?". So it names the parts rather than counting privileges.
+ */
+function unitChangeTitle(
+  units: ReviewedUnit[],
+  previousRequests: ReadonlyMap<string, readonly UnitAuthorityRequest[]>,
+  metaChanged: boolean
+): string {
+  if (units.length === 0)
+    return metaChanged ? "Change workspace settings" : "Update workspace main";
+  const added = units.filter((unit) => !previousRequests.has(unit.source.repo));
+  if (units.length === 1) {
+    const unit = units[0]!;
+    const name = unit.displayName || unit.unitName;
+    return added.length === 1 ? `Add ${name}?` : `${name} changed`;
   }
-  if (hasApps) return "Workspace apps changed";
-  if (hasExtensions) return "Workspace extensions changed";
-  if (hasPanels) return "Workspace panels changed";
-  if (hasWorkers) return "Workspace workers changed";
-  if (hasScheduledJobs) return "Workspace scheduled jobs changed";
-  if (hasAgentHeartbeats) return "Workspace agent heartbeats changed";
-  return metaChanged ? "Edit workspace config" : "Update workspace main";
+  if (added.length === units.length) return `Add ${units.length} workspace parts?`;
+  return `${units.length} parts changed`;
 }
 
-function unitChangeDescription(units: UnitBatchEntry[], metaChanged: boolean): string {
-  const appCount = units.filter((unit) => unit.unitKind === "app").length;
-  const extensionCount = units.filter((unit) => unit.unitKind === "extension").length;
-  const panelCount = units.filter((unit) => unit.unitKind === "panel").length;
-  const workerCount = units.filter((unit) => unit.unitKind === "worker").length;
-  const jobCount = units.filter((unit) => unit.unitKind === "scheduled-job").length;
-  const heartbeatCount = units.filter((unit) => unit.unitKind === "agent-heartbeat").length;
-  const parts: string[] = [];
-  if (extensionCount > 0) {
-    parts.push(
-      `${extensionCount} extension${extensionCount === 1 ? "" : "s"} that will run as native code`
-    );
-  }
-  if (appCount > 0) {
-    parts.push(
-      `${appCount} privileged app${appCount === 1 ? "" : "s"} that will run in the app host`
-    );
-  }
-  if (panelCount > 0) {
-    parts.push(
-      `${panelCount} panel${panelCount === 1 ? "" : "s"} that will run in the workspace UI`
-    );
-  }
-  if (workerCount > 0) {
-    parts.push(
-      `${workerCount} worker${workerCount === 1 ? "" : "s"} that will run in the workspace runtime`
-    );
-  }
-  if (jobCount > 0) {
-    parts.push(`${jobCount} scheduled job${jobCount === 1 ? "" : "s"} that will run automatically`);
-  }
-  if (heartbeatCount > 0) {
-    parts.push(
-      `${heartbeatCount} agent heartbeat${heartbeatCount === 1 ? "" : "s"} that will run unattended`
-    );
-  }
-  if (parts.length > 0) {
+function unitChangeDescription(
+  units: ReviewedUnit[],
+  previousRequests: ReadonlyMap<string, readonly UnitAuthorityRequest[]>,
+  metaChanged: boolean
+): string {
+  if (units.length === 0) {
     return metaChanged
-      ? `This push edits workspace config and updates ${parts.join(" and ")}.`
-      : `This push updates ${parts.join(" and ")}. Approving trusts the exact reviewed versions for first activation.`;
+      ? "This changes settings that affect how your workspace starts and runs."
+      : "This advance moves workspace main.";
   }
-  return metaChanged
-    ? "This push edits sensitive workspace configuration."
-    : "This push updates workspace main.";
+  const allAdded = units.every((unit) => !previousRequests.has(unit.source.repo));
+  if (allAdded) {
+    const added =
+      units.length === 1
+        ? "This adds a new part to your workspace."
+        : "This adds new parts to your workspace.";
+    return metaChanged ? `${added} It also changes workspace settings.` : added;
+  }
+  const edited =
+    units.length === 1
+      ? "Someone edited this part in your workspace."
+      : "Someone edited these parts in your workspace.";
+  return metaChanged ? `${edited} It also changes workspace settings.` : edited;
 }
 
 function mainAdvanceTitle(_candidate: MainAdvanceApprovalCandidate): string {
@@ -819,7 +1414,10 @@ function mainAdvanceDetails(
   candidate: MainAdvanceApprovalCandidate
 ): Array<{ label: string; value: string }> {
   return [
-    { label: "Repo", value: candidate.repoPath },
+    {
+      label: candidate.repoPaths.length === 1 ? "Repo" : "Repos",
+      value: candidate.repoPaths.join(", "),
+    },
     ...(candidate.via ? [{ label: "Via", value: candidate.via }] : []),
     { label: "State", value: candidate.stateHash },
     { label: "Changes", value: changedPathsSummary(candidate.changedPaths) },

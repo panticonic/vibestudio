@@ -1,10 +1,10 @@
 import type { RpcClient } from "@vibestudio/rpc";
 import type { ApprovalDecisionId } from "@vibestudio/shared/approvalContract";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
+import type { TemplateInstallResolution } from "@vibestudio/shared/authority/unitInstallReview";
+import type { InstallReviewResolution } from "@vibestudio/service-schemas/shellApproval";
 import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
-import {
-  SHELL_APPROVAL_PENDING_CHANGED_EVENT,
-} from "@vibestudio/shell-core/approvalState";
+import { SHELL_APPROVAL_PENDING_CHANGED_EVENT } from "@vibestudio/shell-core/approvalState";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
@@ -17,6 +17,21 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 export interface ApprovalsClient {
   list(): Promise<PendingApproval[]>;
   resolve(approvalId: string, decision: ApprovalDecisionId): Promise<void>;
+  /**
+   * The only valid resolution for a `unit-install-review` approval (§8 of
+   * docs/template-install-unit-approval-ux-plan.md): it carries the per-part
+   * `allowNow` selection the review offered, never a bare decision id, so
+   * `resolve` above cannot be used for this approval kind.
+   *
+   * Returns what actually happened — which parts landed, which failed, and
+   * whether the workspace was left unchanged — because the surface that gave the
+   * answer is the one that has to be able to say what came of it, including
+   * that nothing did.
+   */
+  resolveInstallReview(
+    approvalId: string,
+    resolution: TemplateInstallResolution
+  ): Promise<InstallReviewResolution>;
   /** Subscribe to queue changes; returns an unsubscribe. */
   onChange(listener: () => void): () => void;
 }
@@ -36,6 +51,9 @@ export function createApprovalsClient(rpc: RpcClient): ApprovalsClient {
     },
     async resolve(approvalId, decision) {
       await shellApproval.resolve(approvalId, decision);
+    },
+    async resolveInstallReview(approvalId, resolution) {
+      return await shellApproval.resolveInstallReview(approvalId, resolution);
     },
     onChange(listener) {
       const stopListening = events.on(SHELL_APPROVAL_PENDING_CHANGED_EVENT, () => listener());

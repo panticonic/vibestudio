@@ -10,19 +10,21 @@ import type {
   DiffReviewEntry,
   PendingApproval,
   PendingMissionReviewApproval,
-  PendingUnitBatchApproval,
-  UnitBatchEntry,
+  PendingUnitInstallReviewApproval,
+  InstallReviewCharter,
 } from "@vibestudio/shared/approvals";
+import type {
+  InstallReviewOrigin,
+  InstallReviewPart,
+  InstallReviewRow,
+  TemplateInstallResolution,
+} from "@vibestudio/shared/authority/unitInstallReview";
 import type { AuthorityRequirement, InvocationSnapshot } from "@vibestudio/rpc";
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/authorityDomains";
 import type { AuthorityRowDiff } from "@vibestudio/shared/authority/authorityRowDiff";
-import {
-  UnitAuthorityRequestSchema,
-  UserlandCapabilityDefinitionSchema,
-} from "./build.js";
 import { authorityRowSchema } from "./authority.js";
 export { authorityRowSchema } from "./authority.js";
 import { missionCharterSchema } from "./missions.js";
@@ -162,6 +164,7 @@ const pendingApprovalBaseShape = {
   repoPath: z.string(),
   effectiveVersion: z.string(),
   requestedAt: z.number(),
+  attention: z.enum(["interrupt", "queue"]).optional(),
   callerTitle: z.string().optional(),
   requester: approvalRequesterSchema.optional(),
   operation: approvalOperationSchema.optional(),
@@ -177,69 +180,281 @@ export const authorityRowDiffSchema = z
   })
   .strict() satisfies z.ZodType<AuthorityRowDiff>;
 
-const unitBatchEntrySchema = z
-  .object({
-    unitKind: z.enum(["extension", "app", "panel", "worker", "scheduled-job", "agent-heartbeat"]),
-    unitName: z.string(),
-    displayName: z.string(),
-    version: z.string().nullable().optional(),
-    target: z.enum(["electron", "react-native", "terminal"]).nullable().optional(),
-    source: z
-      .object({ kind: z.literal("workspace-repo"), repo: z.string(), ref: z.string() })
-      .strict(),
-    ev: z.string().nullable().optional(),
-    capabilities: z.array(z.string()),
-    authority: z
-      .object({
-        requests: z.array(UnitAuthorityRequestSchema).readonly(),
-        provides: z.array(UserlandCapabilityDefinitionSchema).readonly(),
-        previousProvides: z.array(UserlandCapabilityDefinitionSchema).readonly(),
-        rows: z.array(authorityRowSchema),
-        diff: authorityRowDiffSchema,
-      })
-      .strict()
-      .optional(),
-    dependencyEvs: z.record(z.string()).optional(),
-    externalDeps: z.record(z.string()).optional(),
-    integrity: z.string().nullable().optional(),
-    provider: z
-      .object({
-        name: z.string(),
-        activeEv: z.string().nullable(),
-        activeBuildKey: z.string().nullable(),
-        contractVersion: z.string(),
-      })
-      .strict()
-      .nullable()
-      .optional(),
-    commit: z
-      .object({
-        author: z.object({ name: z.string(), email: z.string() }).strict(),
-        committer: z.object({ name: z.string(), email: z.string() }).strict(),
-        message: z.string(),
-        timestamp: z.number(),
-      })
-      .strict()
-      .nullable()
-      .optional(),
-  })
-  .strict() satisfies z.ZodType<UnitBatchEntry>;
+const installRowBaseShape = {
+  key: z.string().min(1),
+  timing: z.enum(["on-add", "asks-when-needed", "asks-every-time", "behavioral"]),
+  notability: z.enum(["headline", "everyday"]),
+  selectable: z.boolean(),
+  selectedByDefault: z.boolean(),
+  change: z.enum(["added", "removed", "retiered"]).optional(),
+};
 
-export const pendingUnitBatchApprovalSchema = z
+const installReviewRowSchema = z.union([
+  z
+    .object({ ...installRowBaseShape, kind: z.literal("permission"), row: authorityRowSchema })
+    .strict(),
+  z
+    .object({
+      ...installRowBaseShape,
+      kind: z.literal("behavior"),
+      fact: z.enum(["runs-in-background", "runs-on-schedule", "reachable-without-opening"]),
+      timing: z.literal("behavioral"),
+      notability: z.literal("headline"),
+      selectable: z.literal(false),
+      selectedByDefault: z.literal(false),
+    })
+    .strict(),
+]) satisfies z.ZodType<InstallReviewRow>;
+
+/**
+ * Where bytes came from, at human scale (§7.6.3).
+ *
+ * No commit id and no content digest appears here, because none may appear on
+ * any review surface: a 40-character hash is unreadable, and printing it implies
+ * the user should check it against something they have no way to check.
+ */
+const installReviewOriginSchema = z
+  .object({
+    url: z.string().nullable(),
+    originKey: z.string(),
+    registrableDomain: z.string().nullable(),
+    version: z.string().nullable(),
+    selfName: z.string().optional(),
+    isHostBuild: z.boolean(),
+    isWorkspaceRoot: z.boolean().optional(),
+    originStatus: z.literal("unresolved").optional(),
+    firstEncounter: z.boolean(),
+  })
+  .strict() satisfies z.ZodType<InstallReviewOrigin>;
+
+const installReviewPartSchema = z
+  .object({
+    identityKey: z.string().min(1),
+    kind: z.enum(["panel", "worker", "app", "extension"]),
+    label: z.enum(["Panel", "Agent", "Service", "Client App", "Extension"]),
+    surfaces: z.array(
+      z.object({ kind: z.enum(["durable-object", "service"]), name: z.string() }).strict()
+    ),
+    name: z.string(),
+    displayName: z.string().min(1).optional(),
+    title: z.string(),
+    purpose: z.string(),
+    repoPath: z.string(),
+    effectiveVersion: z.string(),
+    version: z.string().nullable(),
+    requiredUnitKeys: z.array(z.string()),
+    runsInBackground: z.boolean(),
+    target: z.enum(["electron", "react-native", "terminal"]).nullable().optional(),
+    origin: installReviewOriginSchema,
+    notableRows: z.array(installReviewRowSchema),
+    everydayRows: z.array(installReviewRowSchema),
+    change: z.enum(["added", "removed", "changed", "unchanged"]),
+    section: z.enum(["template", "repair"]),
+    originallyInstalledFrom: z.string().optional(),
+  })
+  .strict() satisfies z.ZodType<InstallReviewPart>;
+
+const installReviewCharterSchema = z
+  .object({
+    kind: z.enum(["scheduled-job", "agent-heartbeat"]),
+    name: z.string(),
+    schedule: z.string(),
+    purpose: z.string(),
+    change: z.enum(["added", "removed", "changed"]),
+  })
+  .strict() satisfies z.ZodType<InstallReviewCharter>;
+
+export const pendingUnitInstallReviewApprovalSchema = z
   .object({
     ...pendingApprovalBaseShape,
-    kind: z.literal("unit-batch"),
-    trigger: z.enum(["startup", "meta-change", "source-change", "management"]),
+    kind: z.literal("unit-install-review"),
+    mode: z.enum(["adopt-root", "install", "update", "remove", "part-changed"]),
     title: z.string(),
     description: z.string(),
-    units: z.array(unitBatchEntrySchema),
+    template: z
+      .object({
+        title: z.string(),
+        purpose: z.string(),
+        origin: installReviewOriginSchema,
+        fromVersion: z.string().nullable(),
+        toVersion: z.string().nullable(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    parts: z.array(installReviewPartSchema),
+    summary: z
+      .object({
+        panels: z.number().int().nonnegative(),
+        agents: z.number().int().nonnegative(),
+        services: z.number().int().nonnegative(),
+        clientApps: z.number().int().nonnegative(),
+        extensions: z.number().int().nonnegative(),
+      })
+      .strict(),
+    unchangedPartCount: z.number().int().nonnegative(),
+    charters: z.array(installReviewCharterSchema).optional(),
     configWrite: z
       .object({ repoPath: z.string(), summary: z.string() })
       .strict()
       .nullable()
       .optional(),
   })
-  .strict() satisfies z.ZodType<PendingUnitBatchApproval>;
+  .strict() satisfies z.ZodType<PendingUnitInstallReviewApproval>;
+
+/**
+ * Accepting a review.
+ *
+ * Every part of the operation is always installed; `allowNow` decides only what
+ * is pre-authorized. There is no "install a subset" result, because there is no
+ * mechanism behind one (U5).
+ */
+const templateInstallAcceptanceSchema = z
+  .object({
+    decision: z.enum(["install", "update", "adopt-root"]),
+    allowNow: z.array(
+      z
+        .object({
+          identityKey: z.string().min(1),
+          /** Absent means every install-clearable row for the part. */
+          permissions: z.array(z.string()).optional(),
+        })
+        .strict()
+    ),
+  })
+  .strict()
+  .superRefine((resolution, ctx) => {
+    const seen = new Set<string>();
+    resolution.allowNow.forEach((allowed, index) => {
+      if (seen.has(allowed.identityKey)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["allowNow", index, "identityKey"],
+          message: "Install review acceptance repeats a part",
+        });
+      }
+      seen.add(allowed.identityKey);
+    });
+  });
+
+export const templateInstallResolutionSchema = z.union([
+  templateInstallAcceptanceSchema,
+  z.object({ decision: z.literal("cancel") }).strict(),
+]) satisfies z.ZodType<TemplateInstallResolution>;
+
+/**
+ * What answering a review actually did (§7.2 result state).
+ *
+ * The card that asked the question is the only surface that knows a decision
+ * was made, and until this existed it simply unmounted: an accepted install
+ * ended in silence, and a failed one ended in whatever error string happened to
+ * reach the client. `News added / Open News →` needs three things a client
+ * cannot derive — what landed, what to offer opening, and what failed — so the
+ * server states all three.
+ *
+ * Every claim here is scoped to what the server actually watched. A resolution
+ * settles the decision; the operation that lands the parts runs after it, and
+ * only a landing site that reports back turns `landing` from absent into a
+ * fact. Absent means "not watched", never "fine" — which is why the heading for
+ * that case is written in the present tense.
+ */
+export interface InstallReviewResolvedPart {
+  identityKey: string;
+  title: string;
+  kind: InstallReviewPart["kind"];
+  label: InstallReviewPart["label"];
+  /**
+   * What this decision pre-authorized for the part (U5).
+   *
+   * `asks-when-needed` is a real decision, not a failure: the part still
+   * arrives and still runs, it simply holds no standing grant.
+   */
+  clearance: "allowed-now" | "asks-when-needed";
+}
+
+/** What a landing site observed, once the operation it owns has concluded. */
+export interface InstallReviewLanding {
+  /** Identity keys whose admission committed. Nothing else counts as landed. */
+  landed: readonly string[];
+  /** Parts that did not land, named, with a reason a person can read. */
+  failed: readonly { identityKey: string; title: string; reason: string }[];
+  /**
+   * The workspace is provably untouched.
+   *
+   * Only ever set by a reporter that guarantees it. §8 requires cancel and
+   * failure to leave no grants and no partial activation, but a *partial*
+   * failure is not automatically a clean one, so this is never inferred from
+   * an empty `landed` list.
+   */
+  workspaceUnchanged: boolean;
+}
+
+export interface InstallReviewResolution {
+  approvalId: string;
+  mode: PendingUnitInstallReviewApproval["mode"];
+  decision: "accepted" | "cancelled";
+  /** Ready to render, never blank, and never a claim beyond what was observed. */
+  heading: string;
+  /** One supporting line, when there is something true to add. */
+  detail?: string;
+  /** The template this decision was about, when it was about one. */
+  subject?: string;
+  parts: readonly InstallReviewResolvedPart[];
+  /**
+   * `Open News →`. Offered only for a part that can be opened and, where the
+   * landing was watched, only for one that actually landed.
+   */
+  entryPoint?: { identityKey: string; repoPath: string; title: string; kind: "panel" | "app" };
+  /** Absent when no landing site reported — the outcome is under way, not good. */
+  landing?: InstallReviewLanding;
+}
+
+const installReviewResolvedPartSchema = z
+  .object({
+    identityKey: z.string().min(1),
+    title: z.string(),
+    kind: z.enum(["panel", "worker", "app", "extension"]),
+    label: z.enum(["Panel", "Agent", "Service", "Client App", "Extension"]),
+    clearance: z.enum(["allowed-now", "asks-when-needed"]),
+  })
+  .strict() satisfies z.ZodType<InstallReviewResolvedPart>;
+
+export const installReviewResolutionSchema = z
+  .object({
+    approvalId: z.string().min(1),
+    mode: z.enum(["adopt-root", "install", "update", "remove", "part-changed"]),
+    decision: z.enum(["accepted", "cancelled"]),
+    heading: z.string().min(1),
+    detail: z.string().optional(),
+    subject: z.string().optional(),
+    parts: z.array(installReviewResolvedPartSchema),
+    entryPoint: z
+      .object({
+        identityKey: z.string().min(1),
+        repoPath: z.string().min(1),
+        title: z.string().min(1),
+        kind: z.enum(["panel", "app"]),
+      })
+      .strict()
+      .optional(),
+    landing: z
+      .object({
+        landed: z.array(z.string()),
+        failed: z.array(
+          z
+            .object({
+              identityKey: z.string().min(1),
+              title: z.string(),
+              reason: z.string(),
+            })
+            .strict()
+        ),
+        workspaceUnchanged: z.boolean(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict() satisfies z.ZodType<InstallReviewResolution>;
 
 export const pendingMissionReviewApprovalSchema = z
   .object({
@@ -383,14 +598,15 @@ export const invocationSnapshotSchema = z
     callerPrincipal: z.string() as z.ZodType<InvocationSnapshot["callerPrincipal"]>,
     sessionId: z.string(),
     taskRef: z.string().optional(),
+    taskAuthority: z.string().startsWith("task:").optional() as z.ZodType<
+      InvocationSnapshot["taskAuthority"]
+    >,
     agentBindingId: z.string().optional(),
     agentName: z.string().optional(),
     lineageClasses: z.array(z.string()).readonly().optional(),
     irreversible: z.boolean().optional(),
     agentScopeEligible: z.boolean().optional(),
-    reviewedClosureSubject: z.string() as z.ZodType<
-      InvocationSnapshot["reviewedClosureSubject"]
-    >,
+    reviewedClosureSubject: z.string() as z.ZodType<InvocationSnapshot["reviewedClosureSubject"]>,
     snippetDigest: z.string(),
     codeLineage: z
       .object({
@@ -544,7 +760,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       deviceLabel: z.string(),
     })
     .strict(),
-  pendingUnitBatchApprovalSchema,
+  pendingUnitInstallReviewApprovalSchema,
   pendingMissionReviewApprovalSchema,
   z
     .object({
@@ -608,6 +824,23 @@ const RESOLVE_ACCESS: MethodAccessDescriptor = {
 const LIST_PENDING_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
+
+export const workspaceCreationReviewStateSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("preparing") }).strict(),
+  z
+    .object({
+      status: z.literal("pending"),
+      approvalId: z.string().min(1),
+      partCount: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z.object({ status: z.literal("not-required") }).strict(),
+  z.object({ status: z.literal("resolved") }).strict(),
+  z.object({ status: z.literal("unresolved") }).strict(),
+  z.object({ status: z.literal("failed"), error: z.string().min(1) }).strict(),
+]);
+
+export type WorkspaceCreationReviewState = z.infer<typeof workspaceCreationReviewStateSchema>;
 
 export const shellApprovalMethods = defineServiceMethods({
   resolve: {
@@ -674,6 +907,44 @@ export const shellApprovalMethods = defineServiceMethods({
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { decision: "dismiss" }] }],
   },
+  /**
+   * Accept an install review with exactly what the user selected.
+   *
+   * Every part the operation lands is admitted whatever this says; `allowNow`
+   * decides only what standing clearance is minted. The server validates the
+   * pending review, rejects any identity or row key absent from it, and rejects
+   * any row whose policy is contextual or whose tier is critical — a client
+   * cannot ask for more than it was offered (§8).
+   */
+  resolveInstallReview: {
+    capability: "approvals.decide",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale: "G5: trusted approval plumbing resolving an exact queued install review",
+    },
+    presentation: {
+      title: "Add or update parts of this workspace",
+      action: "add or update parts of this workspace",
+      description: "Allows {requesterKind} to answer a queued review of arriving parts.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
+    description:
+      "Accept a pending install review, allowing the selected parts and permissions now, or cancel it.",
+    args: z.tuple([z.string(), templateInstallResolutionSchema]),
+    // The decision's own receipt (§7.2). The card that asked is the only surface
+    // that knows the answer was given, so it is the one that has to be able to
+    // say what happened — including that nothing did.
+    returns: installReviewResolutionSchema,
+    access: RESOLVE_ACCESS,
+    examples: [{ args: ["approval-123", { decision: "cancel" }] }],
+  },
   resolveBootstrap: {
     capability: "approvals.decide",
     tier: {
@@ -695,11 +966,18 @@ export const shellApprovalMethods = defineServiceMethods({
       },
     },
     description:
-      "Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval.",
-    args: z.tuple([z.string(), z.enum(["once", "deny"])]),
-    returns: z.void(),
+      "Convergently resolve a snapshot of pending startup-app approvals. IDs already settled by an earlier partial attempt are reported as not pending so the remaining decisions can continue.",
+    args: z.tuple([z.array(z.string().min(1)).min(1).max(256), z.enum(["once", "deny"])]),
+    returns: z.array(
+      z
+        .object({
+          approvalId: z.string(),
+          status: z.enum(["resolved", "not-pending"]),
+        })
+        .strict()
+    ),
     access: RESOLVE_ACCESS,
-    examples: [{ args: ["approval-123", "deny"] }],
+    examples: [{ args: [["approval-123"], "deny"] }],
   },
   submitClientConfig: {
     capability: "protected-input.submit",
@@ -806,6 +1084,31 @@ export const shellApprovalMethods = defineServiceMethods({
       "List the approvals currently awaiting a decision, used to rehydrate the consent approval bar on mount.",
     args: z.tuple([]),
     returns: z.array(pendingApprovalSchema),
+    access: LIST_PENDING_ACCESS,
+  },
+  getWorkspaceCreationReviewState: {
+    capability: "approvals.read",
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale: "G5: host infrastructure plumbing; semantic startup-review preparation state",
+    },
+    presentation: {
+      title: "View requests awaiting your decision",
+      action: "view requests awaiting your decision",
+      description: "Allows {requesterKind} to view requests awaiting your decision.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
+    description:
+      "Return the host-owned preparation state for the workspace creation review without waiting for a human decision.",
+    args: z.tuple([]),
+    returns: workspaceCreationReviewStateSchema,
     access: LIST_PENDING_ACCESS,
   },
 });

@@ -67,7 +67,8 @@ export function parseApprovalMarkdown(source: string): ApprovalMarkdownBlock[] {
     const paragraph: string[] = [];
     while (index < lines.length) {
       const current = lines[index] ?? "";
-      if (!current.trim() || FENCE.test(current) || BULLET.test(current) || ORDERED.test(current)) break;
+      if (!current.trim() || FENCE.test(current) || BULLET.test(current) || ORDERED.test(current))
+        break;
       paragraph.push(current.trim());
       index += 1;
     }
@@ -97,7 +98,10 @@ function parseInline(source: string, depth: number): ApprovalMarkdownInline[] {
     if (source.startsWith("**", index)) {
       const end = source.indexOf("**", index + 2);
       if (end > index + 2) {
-        nodes.push({ kind: "strong", children: parseInline(source.slice(index + 2, end), depth + 1) });
+        nodes.push({
+          kind: "strong",
+          children: parseInline(source.slice(index + 2, end), depth + 1),
+        });
         index = end + 2;
         continue;
       }
@@ -105,7 +109,10 @@ function parseInline(source: string, depth: number): ApprovalMarkdownInline[] {
     if (source[index] === "*" && source[index + 1] !== "*") {
       const end = source.indexOf("*", index + 1);
       if (end > index + 1 && source[end + 1] !== "*") {
-        nodes.push({ kind: "emphasis", children: parseInline(source.slice(index + 1, end), depth + 1) });
+        nodes.push({
+          kind: "emphasis",
+          children: parseInline(source.slice(index + 1, end), depth + 1),
+        });
         index = end + 1;
         continue;
       }

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type { ReviewedUnit } from "@vibestudio/shared/approvals";
 import {
   createVerifiedCaller,
   type HostAuthorityEffect,
@@ -12,14 +12,25 @@ import {
 import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { mirrorWorktreeTree, putBytes } from "./blobstoreService.js";
+import YAML from "yaml";
+import { templateLockFingerprint } from "@vibestudio/workspace/templateLock";
+import {
+  canonicalTemplateNodeId,
+  normalizeTemplateGitUrl,
+  templateAliasFromUrl,
+} from "@vibestudio/workspace/templateCoordinates";
+import type { WorkspaceTemplateLock } from "@vibestudio/workspace-contracts/types";
 import {
   createMainAdvanceApprovalGate,
   createMainRefAdvanceGate,
+  type InstallReviewPresentation,
   type MainAdvanceApprovalCandidate,
   type RefAdvanceGateContext,
   type RepoDeletionApprovalCandidate,
   type SemanticAdvanceApprovalCandidate,
 } from "./mainAdvanceApproval.js";
+
+type TemplateLockNode = WorkspaceTemplateLock["nodes"][number];
 
 const roots: string[] = [];
 
@@ -33,7 +44,7 @@ function tempStatePath(): string {
   return root;
 }
 
-const unit: UnitBatchEntry = {
+const unit: ReviewedUnit = {
   unitKind: "extension",
   unitName: "@workspace-extensions/tools",
   displayName: "Tools",
@@ -42,16 +53,16 @@ const unit: UnitBatchEntry = {
   capabilities: [],
 };
 
-/** A protected-ref advance candidate as the ref gate produces it: caller +
- *  repo + SERVER-COMPUTED changed paths + candidate view. */
+/** A protected publication candidate as the ref gate produces it. */
 function candidate(
   overrides: Partial<MainAdvanceApprovalCandidate> = {}
 ): MainAdvanceApprovalCandidate {
   return {
     caller: panelCaller(),
-    repoPath: "meta",
+    repoPaths: ["meta"],
     changedPaths: ["meta/vibestudio.yml"],
     stateHash: "state:next",
+    publicationId: "publication:next",
     ...overrides,
   };
 }
@@ -82,7 +93,7 @@ function gateDeps(opts: { decision?: "once" | "session" | "version" | "deny" } =
   });
   return {
     authorizeEffect,
-    getProviders: () => [] as UnitChangeApprovalProvider<UnitBatchEntry>[],
+    getProviders: () => [] as UnitChangeApprovalProvider<ReviewedUnit>[],
   };
 }
 
@@ -104,14 +115,86 @@ describe("createMainAdvanceApprovalGate", () => {
       }),
       expect.objectContaining({
         capability: "workspace-main-advance",
-        resourceKey: "workspace-source-change:meta:main",
+        resourceKey: "workspace-source-change:publication:publication:next",
       })
     );
   });
 
-  it("approves main meta advances with the semantic unit-batch prompt", async () => {
+  it("approves main meta advances with the semantic install-review prompt", async () => {
     const deps = gateDeps({ decision: "session" });
-    const provider: UnitChangeApprovalProvider<UnitBatchEntry> = {
+    const provider: UnitChangeApprovalProvider<ReviewedUnit> = {
+      unitChangeApprovalForCommit: vi.fn(async () => ({
+        units: [unit],
+        identityKeys: ["identity:unit"],
+      })),
+      acceptPreapprovedTrust: vi.fn(),
+    };
+    const reportInstallLandingByToken = vi.fn();
+    const gate = createMainAdvanceApprovalGate({
+      ...deps,
+      getProviders: () => [provider],
+      reportInstallLandingByToken,
+    });
+
+    const completion = await gate.approve(candidate());
+
+    expect(provider.unitChangeApprovalForCommit).toHaveBeenCalledWith("state:next", {
+      changedPaths: ["meta/vibestudio.yml"],
+    });
+    expect(deps.authorizeEffect).toHaveBeenCalledWith(
+      expect.objectContaining({ authorityAcquisition: "wait" }),
+      expect.objectContaining({
+        capability: "workspace-main-advance",
+        resourceKey: "workspace-source-change:publication:publication:next",
+        challenge: expect.objectContaining({
+          installReview: expect.objectContaining({
+            mode: "part-changed",
+            reportsLanding: true,
+            landingToken: "publication:next",
+            configWrite: {
+              repoPath: "meta",
+              summary: "meta/vibestudio.yml changed",
+            },
+            units: [unit],
+          }),
+        }),
+      })
+    );
+    expect(provider.acceptPreapprovedTrust).not.toHaveBeenCalled();
+    await completion?.committed();
+    expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith(["identity:unit"], "publication");
+    expect(reportInstallLandingByToken).toHaveBeenCalledWith("publication:next", {
+      landed: ["extensions/tools@"],
+    });
+  });
+
+  it("records admission for an interactive chrome publication without prompting", async () => {
+    const deps = gateDeps();
+    const provider: UnitChangeApprovalProvider<ReviewedUnit> = {
+      unitChangeApprovalForCommit: vi.fn(async () => ({
+        units: [unit],
+        identityKeys: ["identity:unit"],
+      })),
+      acceptPreapprovedTrust: vi.fn(),
+    };
+    const gate = createMainAdvanceApprovalGate({ ...deps, getProviders: () => [provider] });
+
+    const completion = await gate.approve(
+      candidate({ caller: createVerifiedCaller("shell", "shell") })
+    );
+
+    // The click IS the consent, so no prompt — but the units it introduced are
+    // admitted rather than left to fall through to per-unit prompts later.
+    expect(deps.authorizeEffect).not.toHaveBeenCalled();
+    expect(provider.acceptPreapprovedTrust).not.toHaveBeenCalled();
+    await completion?.committed();
+    expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith(["identity:unit"], "chrome");
+  });
+
+  it("does not admit a reviewed unit when the protected publication fails", async () => {
+    const deps = gateDeps();
+    const reportInstallLandingByToken = vi.fn();
+    const provider: UnitChangeApprovalProvider<ReviewedUnit> = {
       unitChangeApprovalForCommit: vi.fn(async () => ({
         units: [unit],
         identityKeys: ["identity:unit"],
@@ -121,34 +204,43 @@ describe("createMainAdvanceApprovalGate", () => {
     const gate = createMainAdvanceApprovalGate({
       ...deps,
       getProviders: () => [provider],
+      reportInstallLandingByToken,
     });
+    const completion = await gate.approve(candidate());
+    const failure = new Error("protected refs rejected the publication");
 
-    await gate.approve(candidate());
+    await completion?.failed(failure);
 
-    expect(provider.unitChangeApprovalForCommit).toHaveBeenCalledWith("state:next");
-    expect(deps.authorizeEffect).toHaveBeenCalledWith(
-      expect.objectContaining({ authorityAcquisition: "wait" }),
-      expect.objectContaining({
-        capability: "workspace-main-advance",
-        resourceKey: "workspace-source-change:meta:main",
-        challenge: expect.objectContaining({
-          unitBatch: {
-            trigger: "meta-change",
-            configWrite: {
-              repoPath: "meta",
-              summary: "meta/vibestudio.yml changed",
-            },
-            units: [unit],
-          },
-        }),
-      })
-    );
-    expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith(["identity:unit"]);
+    expect(provider.acceptPreapprovedTrust).not.toHaveBeenCalled();
+    expect(reportInstallLandingByToken).toHaveBeenCalledWith("publication:next", {
+      landed: [],
+      failed: [
+        {
+          identityKey: "extensions/tools@",
+          reason: failure.message,
+        },
+      ],
+      workspaceUnchanged: true,
+    });
+  });
+
+  it("gates a headless-host publication, which has no user and no click", async () => {
+    const deps = gateDeps();
+    const provider: UnitChangeApprovalProvider<ReviewedUnit> = {
+      unitChangeApprovalForCommit: vi.fn(async () => ({ units: [], identityKeys: [] })),
+      acceptPreapprovedTrust: vi.fn(),
+    };
+    const gate = createMainAdvanceApprovalGate({ ...deps, getProviders: () => [provider] });
+
+    await expect(
+      gate.approve(candidate({ caller: createVerifiedCaller("headless-host", "shell") }))
+    ).rejects.toThrow(/not supported|Unknown caller identity/u);
+    expect(provider.acceptPreapprovedTrust).not.toHaveBeenCalled();
   });
 
   it("routes retries through canonical authority so its grant store decides reuse", async () => {
     const deps = gateDeps({ decision: "once" });
-    const provider: UnitChangeApprovalProvider<UnitBatchEntry> = {
+    const provider: UnitChangeApprovalProvider<ReviewedUnit> = {
       unitChangeApprovalForCommit: vi.fn(async () => ({
         units: [unit],
         identityKeys: ["identity:unit"],
@@ -161,8 +253,10 @@ describe("createMainAdvanceApprovalGate", () => {
     });
     const cand = candidate();
 
-    await gate.approve(cand);
-    await gate.approve(cand);
+    const first = await gate.approve(cand);
+    const second = await gate.approve(cand);
+    await first?.committed();
+    await second?.committed();
 
     expect(deps.authorizeEffect).toHaveBeenCalledTimes(2);
     expect(provider.acceptPreapprovedTrust).toHaveBeenCalledTimes(2);
@@ -170,32 +264,34 @@ describe("createMainAdvanceApprovalGate", () => {
 
   it("combines a non-meta main advance and affected unit trust in one prompt", async () => {
     const deps = gateDeps({ decision: "version" });
-    const provider: UnitChangeApprovalProvider<UnitBatchEntry> = {
+    const provider: UnitChangeApprovalProvider<ReviewedUnit> = {
       unitChangeApprovalForCommit: vi.fn(async () => ({ units: [unit], identityKeys: [] })),
       acceptPreapprovedTrust: vi.fn(),
     };
     const gate = createMainAdvanceApprovalGate({ ...deps, getProviders: () => [provider] });
 
-    await gate.approve(
-      candidate({ repoPath: "apps/shell", changedPaths: ["apps/shell/index.tsx"] })
+    const completion = await gate.approve(
+      candidate({ repoPaths: ["apps/shell"], changedPaths: ["apps/shell/index.tsx"] })
     );
 
     expect(deps.authorizeEffect).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        resourceKey: "workspace-source-change:apps/shell:main",
+        resourceKey: "workspace-source-change:publication:publication:next",
         challenge: expect.objectContaining({
-          title: "Workspace extensions changed",
-          unitBatch: {
-            trigger: "source-change",
+          installReview: expect.objectContaining({
+            mode: "part-changed",
             units: [unit],
             configWrite: null,
-          },
+          }),
         }),
       })
     );
-    expect(provider.unitChangeApprovalForCommit).toHaveBeenCalledWith("state:next");
-    expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith([]);
+    expect(provider.unitChangeApprovalForCommit).toHaveBeenCalledWith("state:next", {
+      changedPaths: ["apps/shell/index.tsx"],
+    });
+    await completion?.committed();
+    expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith([], "publication");
   });
 
   it("approves a content-identical semantic advance with its exact event edge", async () => {
@@ -241,7 +337,7 @@ describe("createMainAdvanceApprovalGate", () => {
       candidate({
         caller: shell,
         via: "do:workers/workspace-source:GadWorkspaceDO:workspace",
-        repoPath: "apps/shell",
+        repoPaths: ["apps/shell"],
         changedPaths: ["apps/shell/index.tsx"],
       })
     );
@@ -275,7 +371,7 @@ describe("createMainAdvanceApprovalGate", () => {
       expect.anything(),
       expect.objectContaining({
         challenge: expect.objectContaining({
-          unitBatch: expect.objectContaining({
+          installReview: expect.objectContaining({
             configWrite: {
               repoPath: "meta",
               summary: "meta/vibestudio.yml changed",
@@ -292,7 +388,7 @@ describe("createMainAdvanceApprovalGate", () => {
 
     await gate.approve(
       candidate({
-        repoPath: "apps/shell",
+        repoPaths: ["apps/shell"],
         changedPaths: [],
         diffReview: [
           {
@@ -327,7 +423,7 @@ describe("createMainAdvanceApprovalGate", () => {
 
     await gate.approve(
       candidate({
-        repoPath: "apps/shell",
+        repoPaths: ["apps/shell"],
         changedPaths: ["apps/shell/index.tsx"],
         diffReview,
         signal,
@@ -337,9 +433,9 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(deps.authorizeEffect).toHaveBeenCalledWith(
       expect.objectContaining({ authorityAcquisition: "wait", signal }),
       expect.objectContaining({
-        resourceKey: "workspace-source-change:apps/shell:main",
+        resourceKey: "workspace-source-change:publication:publication:next",
         challenge: expect.objectContaining({
-          dedupKey: "workspace-source-change:apps/shell:main:state:next",
+          dedupKey: "workspace-publication:publication:next",
           resource: expect.objectContaining({ value: "apps/shell main" }),
           diffReview,
         }),
@@ -367,7 +463,7 @@ describe("createMainAdvanceApprovalGate", () => {
     await expect(
       gate.approve(
         candidate({
-          repoPath: "panels/spectrolite",
+          repoPaths: ["panels/spectrolite"],
           changedPaths: ["panels/spectrolite/index.tsx"],
         })
       )
@@ -418,6 +514,545 @@ describe("createMainAdvanceApprovalGate", () => {
     });
   });
 
+  /**
+   * Template operations (§5.3, §5.4, §7.2, §7.3, §13.9).
+   *
+   * Every case here drives the gate with locks alone. Nothing in the candidate,
+   * the caller, or the provider says "this is a template install" — that is the
+   * point: the framing is earned by what the publication does to the committed
+   * template closure, and by nothing a caller can write down.
+   */
+  describe("template operations", () => {
+    const NEWS_URL = "git+https://github.com/panticonic/news";
+    const OTHER_URL = "git+https://github.com/panticonic/weather";
+
+    function node(input: {
+      url: string;
+      ref: string;
+      commit: string;
+      parents?: string[];
+      presentation?: { name?: string; description?: string };
+    }): TemplateLockNode {
+      return {
+        nodeId: canonicalTemplateNodeId(input.url, input.commit),
+        alias: templateAliasFromUrl(input.url),
+        pin: {
+          url: normalizeTemplateGitUrl(input.url),
+          ref: input.ref,
+          commit: input.commit,
+          snapshot: `v1-sha256:${"a".repeat(64)}`,
+        },
+        parents: input.parents ?? [],
+        fragmentDigest: `v1-sha256:${"b".repeat(64)}`,
+        ...(input.presentation ? { presentation: input.presentation } : {}),
+        suggestions: {},
+      };
+    }
+
+    /** A lock exactly as the composer commits one: fingerprint over its closure. */
+    function lockYaml(input: {
+      nodes: TemplateLockNode[];
+      repositories: Record<string, string>;
+    }): string {
+      const body = {
+        version: 1 as const,
+        roots: input.nodes
+          .filter((candidate) => candidate.parents.length === 0)
+          .map((candidate) => ({ url: candidate.pin.url }))
+          .sort((left, right) => left.url.localeCompare(right.url)),
+        overrides: {},
+        conflicts: {},
+        nodes: input.nodes,
+        repositories: Object.fromEntries(
+          Object.entries(input.repositories).map(
+            ([repoPath, nodeId]) =>
+              [repoPath, { nodeId, subtreeDigest: `v1-sha256:${"c".repeat(64)}` as const }] as const
+          )
+        ),
+        verification: "verified" as const,
+      };
+      return YAML.stringify({ ...body, fingerprint: templateLockFingerprint(body) });
+    }
+
+    const newsNode = node({ url: NEWS_URL, ref: "v1.2.0", commit: "1".repeat(40) });
+    const newsNodeUpdated = node({ url: NEWS_URL, ref: "v1.4.0", commit: "2".repeat(40) });
+
+    function templateUnit(repo: string, name: string): ReviewedUnit {
+      return {
+        unitKind: "worker",
+        unitName: name,
+        displayName: name,
+        version: "1.0.0",
+        source: { kind: "workspace-repo", repo, ref: "main" },
+        ev: `ev-${repo}`,
+        capabilities: [],
+      };
+    }
+
+    /** The gate with a workspace lock (`null`) and a candidate lock. */
+    function templateGate(input: {
+      current: string | null;
+      next: string | null;
+      units?: ReviewedUnit[];
+      unchangedCount?: number;
+      previousRequests?: Map<string, readonly []>;
+    }) {
+      const deps = gateDeps({ decision: "version" });
+      const provider: UnitChangeApprovalProvider<ReviewedUnit> = {
+        unitChangeApprovalForCommit: vi.fn(async () => ({
+          units: input.units ?? [],
+          identityKeys: (input.units ?? []).map((u) => `identity:${u.source.repo}`),
+          unchangedCount: input.unchangedCount ?? 0,
+          ...(input.previousRequests ? { previousRequests: input.previousRequests } : {}),
+        })),
+        acceptPreapprovedTrust: vi.fn(),
+      };
+      const gate = createMainAdvanceApprovalGate({
+        ...deps,
+        getProviders: () => [provider],
+        readTemplateLock: async (stateHash) => (stateHash === null ? input.current : input.next),
+        admittedOriginKeys: () => new Set<string>(),
+      });
+      return { deps, provider, gate };
+    }
+
+    /** The installReview the gate handed the dispatcher. */
+    function reviewOf(deps: { authorizeEffect: { mock: { calls: unknown[][] } } }) {
+      const effect = deps.authorizeEffect.mock.calls.at(-1)![1] as {
+        challenge: {
+          title: string;
+          installReview?: InstallReviewPresentation;
+          dedupKey?: string | null;
+        };
+      };
+      return effect.challenge;
+    }
+
+    it("recognizes an install from the lock the publication would leave behind", async () => {
+      const { deps, gate } = templateGate({
+        current: null,
+        next: lockYaml({
+          nodes: [newsNode],
+          repositories: {
+            "panels/news": newsNode.nodeId,
+            "workers/news-agent": newsNode.nodeId,
+          },
+        }),
+        units: [
+          templateUnit("panels/news", "@workspace/news"),
+          templateUnit("workers/news-agent", "@workspace/news-agent"),
+        ],
+      });
+
+      await gate.approve(
+        candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] })
+      );
+
+      const challenge = reviewOf(deps);
+      expect(challenge.installReview?.mode).toBe("install");
+      // §7.2's header: a URL-derived title, the origin, and human refs only.
+      expect(challenge.installReview?.template).toEqual({
+        title: "news",
+        purpose: "",
+        origin: expect.objectContaining({
+          // The lock's normalized identity URL, never abbreviated away — the
+          // same string `UnitOriginResolver` gives every other surface.
+          url: "git+https://github.com/panticonic/news",
+          originKey: "github.com/panticonic",
+          version: "v1.2.0",
+          isHostBuild: false,
+          firstEncounter: true,
+        }),
+        fromVersion: null,
+        toVersion: "v1.2.0",
+      });
+      expect(challenge.installReview?.template?.origin.selfName).toBeUndefined();
+      // Parts the template delivers carry the template's origin, not ours.
+      expect(challenge.installReview?.origins?.get("panels/news")).toMatchObject({
+        url: "git+https://github.com/panticonic/news",
+        version: "v1.2.0",
+      });
+      expect(challenge.installReview?.sections?.get("panels/news")).toBe("template");
+      expect(challenge.installReview?.sections?.get("workers/news-agent")).toBe("template");
+      // One decision, one publication: every repository in the batch coalesces.
+      expect(challenge.dedupKey).toBe("workspace-publication:publication:next");
+      expect(challenge.title).toBe("Add news");
+    });
+
+    describe("what a template says it is called (§7.2, §7.6.3)", () => {
+      const namedNews = node({
+        url: NEWS_URL,
+        ref: "v1.2.0",
+        commit: "1".repeat(40),
+        presentation: {
+          name: "News",
+          description: "Read and discuss personalized news briefings.",
+        },
+      });
+
+      it("heads the card with the template's own name and sentence", async () => {
+        const { deps, gate } = templateGate({
+          current: null,
+          next: lockYaml({
+            nodes: [namedNews],
+            repositories: { "panels/news": namedNews.nodeId },
+          }),
+          units: [templateUnit("panels/news", "@workspace/news")],
+        });
+
+        await gate.approve(
+          candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] })
+        );
+
+        const review = reviewOf(deps).installReview!;
+        // §7.2's header verbatim: `Add News` over the template's own sentence.
+        expect(reviewOf(deps).title).toBe("Add News");
+        expect(review.template?.title).toBe("News");
+        expect(review.template?.purpose).toBe("Read and discuss personalized news briefings.");
+      });
+
+      it("keeps the URL as identity while the name rides along as a claim", async () => {
+        const { deps, gate } = templateGate({
+          current: null,
+          next: lockYaml({
+            nodes: [namedNews],
+            repositories: { "panels/news": namedNews.nodeId },
+          }),
+          units: [templateUnit("panels/news", "@workspace/news")],
+        });
+
+        await gate.approve(
+          candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] })
+        );
+
+        const review = reviewOf(deps).installReview!;
+        // The name never becomes any part of who this is: not the URL, not the
+        // first-encounter key, not the emphasized domain.
+        expect(review.template?.origin).toMatchObject({
+          url: "git+https://github.com/panticonic/news",
+          originKey: "github.com/panticonic",
+          registrableDomain: "github.com",
+          selfName: "News",
+          isHostBuild: false,
+        });
+        // Parts carry their owning node's claim the same way.
+        expect(review.origins?.get("panels/news")).toMatchObject({
+          originKey: "github.com/panticonic",
+          selfName: "News",
+        });
+      });
+
+      it("a template calling itself Vibestudio is titled, never identified, as one", async () => {
+        const impostorUrl = "git+https://github.com/attacker/news";
+        const impostor = node({
+          url: impostorUrl,
+          ref: "v9.9.9",
+          commit: "3".repeat(40),
+          presentation: { name: "Vibestudio", description: "The official base." },
+        });
+        const { deps, gate } = templateGate({
+          current: null,
+          next: lockYaml({
+            nodes: [impostor],
+            repositories: { "panels/news": impostor.nodeId },
+          }),
+          units: [templateUnit("panels/news", "@workspace/news")],
+        });
+
+        await gate.approve(
+          candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] })
+        );
+
+        const review = reviewOf(deps).installReview!;
+        const origin = review.template!.origin;
+        // The heading is attributed to the template, so it may say this. Every
+        // identity field still says attacker, and `isHostBuild` — the one flag
+        // that means "this is our own code" — is unmoved.
+        expect(review.template?.title).toBe("Vibestudio");
+        expect(origin.isHostBuild).toBe(false);
+        expect(origin.originKey).toBe("github.com/attacker");
+        expect(origin.url).toBe("git+https://github.com/attacker/news");
+        expect(origin.registrableDomain).toBe("github.com");
+        expect(review.origins?.get("panels/news")).toMatchObject({
+          originKey: "github.com/attacker",
+          isHostBuild: false,
+        });
+      });
+
+      it.each([
+        ["a control character", "News\u0007Alert"],
+        ["a right-to-left override", "News \u202Etxt.exe"],
+        ["a zero-width joiner", "New\u200Bs"],
+        ["an interpunct that forges the origin line", "News \u00B7 github.com/vibestudio"],
+        ["a name longer than a heading", "N".repeat(61)],
+      ])("renders nothing rather than a name carrying %s", async (_case, hostile) => {
+        const hostileNode = node({
+          url: NEWS_URL,
+          ref: "v1.2.0",
+          commit: "1".repeat(40),
+          presentation: { name: hostile },
+        });
+        const { deps, gate } = templateGate({
+          current: null,
+          next: lockYaml({
+            nodes: [hostileNode],
+            repositories: { "panels/news": hostileNode.nodeId },
+          }),
+          units: [templateUnit("panels/news", "@workspace/news")],
+        });
+
+        await gate.approve(
+          candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] })
+        );
+
+        const review = reviewOf(deps).installReview!;
+        // Falls back to the URL stem: a worse heading, and an honest one.
+        expect(review.template?.title).toBe("news");
+        expect(review.template?.purpose).toBe("");
+        expect(review.template?.origin.selfName).toBeUndefined();
+        expect(review.origins?.get("panels/news")?.selfName).toBeUndefined();
+      });
+    });
+
+    it("puts a fix to a part the template does not own in the repair section", async () => {
+      const { deps, gate } = templateGate({
+        current: null,
+        next: lockYaml({
+          nodes: [newsNode],
+          repositories: { "panels/news": newsNode.nodeId },
+        }),
+        units: [
+          templateUnit("panels/news", "@workspace/news"),
+          // A part already in the workspace that the same publication also
+          // changes: the build gate's in-context fix (§5.3).
+          templateUnit("panels/chat", "@workspace/chat"),
+        ],
+      });
+
+      await gate.approve(
+        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.lock.yml"] })
+      );
+
+      const review = reviewOf(deps).installReview!;
+      expect(review.sections?.get("panels/news")).toBe("template");
+      expect(review.sections?.get("panels/chat")).toBe("repair");
+      // A repair is not attributed to the template that arrived beside it.
+      expect(review.origins?.get("panels/chat")?.url).not.toBe(
+        "git+https://github.com/panticonic/news"
+      );
+    });
+
+    it("presents an update differentially, with both human refs and no commit", async () => {
+      const previousRequests = new Map<string, readonly []>([["panels/news", []]]);
+      const { deps, gate } = templateGate({
+        current: lockYaml({
+          nodes: [newsNode],
+          repositories: { "panels/news": newsNode.nodeId },
+        }),
+        next: lockYaml({
+          nodes: [newsNodeUpdated],
+          repositories: { "panels/news": newsNodeUpdated.nodeId },
+        }),
+        units: [templateUnit("panels/news", "@workspace/news")],
+        previousRequests,
+        unchangedCount: 9,
+      });
+
+      await gate.approve(
+        candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] })
+      );
+
+      const review = reviewOf(deps).installReview!;
+      expect(review.mode).toBe("update");
+      expect(review.template?.fromVersion).toBe("v1.2.0");
+      expect(review.template?.toVersion).toBe("v1.4.0");
+      // The differential list is exactly what the provider found changed, and
+      // the rest is a count (§5.4).
+      expect(review.units).toHaveLength(1);
+      expect(review.unchangedPartCount).toBe(9);
+      expect(review.previousRequests?.get("panels/news")).toEqual([]);
+      expect(JSON.stringify(review.template)).not.toContain("1".repeat(40));
+      expect(JSON.stringify(review.template)).not.toContain("2".repeat(40));
+    });
+
+    it("gives an effective-version-only update one line instead of no card at all", async () => {
+      const { deps, provider, gate } = templateGate({
+        current: lockYaml({
+          nodes: [newsNode],
+          repositories: { "panels/news": newsNode.nodeId },
+        }),
+        next: lockYaml({
+          nodes: [newsNodeUpdated],
+          repositories: { "panels/news": newsNodeUpdated.nodeId },
+        }),
+        units: [],
+        unchangedCount: 12,
+      });
+
+      // A repository advance with no meta write and no authority change: the
+      // ordinary path returns silently here, and a template update must not.
+      const completion = await gate.approve(
+        candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] })
+      );
+
+      const review = reviewOf(deps).installReview!;
+      expect(review.mode).toBe("update");
+      expect(review.units).toHaveLength(0);
+      expect(review.unchangedPartCount).toBe(12);
+      await completion?.committed();
+      expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith([], "publication");
+    });
+
+    it("recognizes a removal from the root the publication drops", async () => {
+      const { deps, gate } = templateGate({
+        current: lockYaml({
+          nodes: [newsNode],
+          repositories: { "panels/news": newsNode.nodeId },
+        }),
+        next: null,
+      });
+
+      await gate.approve(
+        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.lock.yml"] })
+      );
+
+      const review = reviewOf(deps).installReview!;
+      expect(review.mode).toBe("remove");
+      expect(review.template?.fromVersion).toBe("v1.2.0");
+      expect(review.template?.toVersion).toBeNull();
+      expect(reviewOf(deps).title).toBe("Remove news");
+    });
+
+    it("severs the relationship with one gated review, not a deletion prompt", async () => {
+      // §U2: removal deletes nothing. The composer's removal plan orphans the
+      // repositories it owned and rewrites `meta/` — it drops no repository — so
+      // this publication reaches the gate as a single meta advance and must be
+      // asked as one ordinary gated question. A per-repo deletion cascade here
+      // would be the workspace telling the user their parts are going away in
+      // exactly the operation whose copy promises they are not.
+      const { deps, gate } = templateGate({
+        current: lockYaml({
+          nodes: [newsNode],
+          repositories: {
+            "panels/news": newsNode.nodeId,
+            "workers/news-agent": newsNode.nodeId,
+          },
+        }),
+        next: null,
+      });
+
+      await gate.approve(
+        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.lock.yml"] })
+      );
+
+      expect(deps.authorizeEffect).toHaveBeenCalledTimes(1);
+      const effect = deps.authorizeEffect.mock.calls.at(-1)![1] as HostAuthorityEffect;
+      expect(effect.capability).toBe("workspace-main-advance");
+      expect(effect.tier).toBe("gated");
+      expect(effect.challenge?.severity).toBeUndefined();
+      const review = reviewOf(deps).installReview!;
+      expect(review.mode).toBe("remove");
+      // No part is named as going anywhere, so no admission and no grant is
+      // implicated: severing is a change to a relationship, not to a part.
+      expect(review.units).toEqual([]);
+    });
+
+    it("leaves an ordinary publication on the part-changed card", async () => {
+      const lock = lockYaml({
+        nodes: [newsNode],
+        repositories: { "panels/news": newsNode.nodeId },
+      });
+      const { deps, gate } = templateGate({
+        current: lock,
+        // Same closure on both sides: nothing about template relationships moved.
+        next: lock,
+        units: [templateUnit("panels/news", "@workspace/news")],
+      });
+
+      await gate.approve(
+        candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] })
+      );
+
+      const review = reviewOf(deps).installReview!;
+      expect(review.mode).toBe("part-changed");
+      expect(review.template).toBeUndefined();
+      expect(review.sections).toBeUndefined();
+    });
+
+    it("refuses install framing to a publication whose lock does not verify", async () => {
+      // §13.9: an ordinary publication cannot claim to be a template install to
+      // borrow its framing. Here the caller IS the composer, the candidate lock
+      // says a whole template arrived, and the only thing wrong with it is that
+      // its fingerprint does not cover its own contents.
+      const forged = YAML.parse(
+        lockYaml({ nodes: [newsNode], repositories: { "panels/news": newsNode.nodeId } })
+      ) as { nodes: TemplateLockNode[] };
+      forged.nodes[0]!.pin.ref = "v9.9.9";
+      const { deps, gate } = templateGate({
+        current: null,
+        next: YAML.stringify(forged),
+        units: [templateUnit("panels/news", "@workspace/news")],
+      });
+
+      await gate.approve(
+        candidate({
+          caller: extensionCaller(),
+          repoPaths: ["panels/news"],
+          changedPaths: ["panels/news/x.ts"],
+        })
+      );
+
+      const review = reviewOf(deps).installReview!;
+      expect(review.mode).toBe("part-changed");
+      expect(review.template).toBeUndefined();
+    });
+
+    it("names no single template when a publication moves two of them", async () => {
+      const otherNode = node({ url: OTHER_URL, ref: "v0.3.0", commit: "3".repeat(40) });
+      const { deps, gate } = templateGate({
+        current: null,
+        next: lockYaml({
+          nodes: [newsNode, otherNode],
+          repositories: {
+            "panels/news": newsNode.nodeId,
+            "panels/weather": otherNode.nodeId,
+          },
+        }),
+        units: [templateUnit("panels/news", "@workspace/news")],
+      });
+
+      await gate.approve(
+        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.lock.yml"] })
+      );
+
+      expect(reviewOf(deps).installReview!.mode).toBe("part-changed");
+    });
+
+    it("discards the whole operation, repairs included, when the decision is no", async () => {
+      const { deps, provider, gate } = templateGate({
+        current: null,
+        next: lockYaml({
+          nodes: [newsNode],
+          repositories: { "panels/news": newsNode.nodeId },
+        }),
+        units: [
+          templateUnit("panels/news", "@workspace/news"),
+          templateUnit("panels/chat", "@workspace/chat"),
+        ],
+      });
+      deps.authorizeEffect.mockImplementation(async () => {
+        throw new Error("Workspace main update denied");
+      });
+
+      await expect(
+        gate.approve(candidate({ repoPaths: ["panels/news"], changedPaths: ["panels/news/x.ts"] }))
+      ).rejects.toThrow(/denied/u);
+      // Declining fails the publication itself, so nothing is admitted — not
+      // the template's parts and not the repairs riding with them (§5.3).
+      expect(provider.acceptPreapprovedTrust).not.toHaveBeenCalled();
+    });
+  });
+
   // Phase 4/5: `approveRepoRestore` + the dedicated restore capability are gone.
   // A restore re-creates the ref (`expectedOld: null`) and flows through the
   // generic advance prompt as an add-repo (see the createMainRefAdvanceGate
@@ -452,11 +1087,13 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     // Full candidates (incl. the diff-review payload) captured separately so the
     // existing summary assertions on `deletions` stay exact.
     const deletionCandidates: RepoDeletionApprovalCandidate[] = [];
+    const initializations: boolean[] = [];
     const gate = createMainRefAdvanceGate({
       blobsDir,
       approvalGate: {
         approve: async (candidate) => {
           approvals.push(candidate);
+          return undefined;
         },
         approveSemanticAdvance: async (candidate) => {
           semanticAdvances.push(candidate);
@@ -472,8 +1109,19 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
         if (stateHash === EMPTY_STATE_HASH) await mirrorWorktreeTree(blobsDir, []);
       },
       workspaceViewWithReposAt: async () => "state:composed-fallback",
+      onWorkspaceInitialized: () => {
+        initializations.push(true);
+      },
     });
-    return { gate, approvals, semanticAdvances, deletions, restores, deletionCandidates };
+    return {
+      gate,
+      approvals,
+      semanticAdvances,
+      deletions,
+      restores,
+      deletionCandidates,
+      initializations,
+    };
   }
 
   type Entry = {
@@ -524,6 +1172,16 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
 
     await gate(batch([{ next }], { kind: "workspace-initialization" }));
     expect(approvals).toHaveLength(0);
+  });
+
+  it("records that the ungated creation publication owes a creation review", async () => {
+    const blobsDir = path.join(tempStatePath(), "blobs");
+    const { gate, initializations } = refGateDeps(blobsDir);
+    const next = await stageTree(blobsDir, [{ path: "a.txt", body: "a\n" }]);
+
+    await gate(batch([{ next }], { kind: "workspace-initialization" }));
+
+    expect(initializations).toEqual([true]);
   });
 
   it("fails closed for the former generic system authority", async () => {
@@ -579,7 +1237,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       "panels/x/changed.txt",
       "panels/x/removed.txt",
     ]);
-    expect(candidate.repoPath).toBe("panels/x");
+    expect(candidate.repoPaths).toEqual(["panels/x"]);
     // No candidate view supplied → the gate composes one itself.
     expect(candidate.stateHash).toBe("state:composed-fallback");
   });
@@ -669,6 +1327,31 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     expect(deletions).toEqual([{ repoPath: "panels/old", fileCount: 2, stateHash: oldState }]);
   });
 
+  it("a template removal touches meta only, so nothing routes to the deletion gate", async () => {
+    // The established fact behind §U2, asserted at the layer that would break
+    // it: removal's publication carries no `next: null` entry, because the
+    // composer's plan orphans repositories rather than dropping them. The severe
+    // deletion capability is reachable only from a genuine repository deletion.
+    const blobsDir = path.join(tempStatePath(), "blobs");
+    const { gate, approvals, deletions } = refGateDeps(blobsDir);
+    const before = await stageTree(blobsDir, [
+      { path: "templates.lock.yml", body: "version: 1\n" },
+      { path: "templates/t-abc.yml", body: "systemEpoch: 1\n" },
+    ]);
+    const after = await stageTree(blobsDir, [{ path: "vibestudio.yml", body: "id: w\n" }]);
+
+    await gate(
+      batch([{ repoPath: "meta", old: before, next: after }], {
+        kind: "caller",
+        caller: extensionCaller(),
+      } satisfies RefAdvanceGateContext)
+    );
+
+    expect(deletions).toEqual([]);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]!.repoPaths).toEqual(["meta"]);
+  });
+
   it("treats a re-creation (old null, non-null next) as an ordinary content advance", async () => {
     // Phase 5: the host no longer classifies restores. A previously-deleted
     // repo's re-creation is just an expectedOld:null → tree advance; the
@@ -686,7 +1369,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
 
     expect(restores).toHaveLength(0);
     expect(approvals).toHaveLength(1);
-    expect(approvals[0]!.repoPath).toBe("panels/old");
+    expect(approvals[0]!.repoPaths).toEqual(["panels/old"]);
     expect([...approvals[0]!.changedPaths]).toEqual(["panels/old/a.txt"]);
   });
 
@@ -710,9 +1393,41 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       )
     );
 
-    expect(approvals.map((c) => c.repoPath)).toEqual(["panels/keep"]);
+    expect(approvals.map((c) => c.repoPaths)).toEqual([["panels/keep"]]);
     expect(approvals[0]!.stateHash).toBe("state:batch-view");
     expect(deletions.map((d) => d.repoPath)).toEqual(["panels/drop"]);
+  });
+
+  it("authorizes a multi-repository advance as one atomic publication", async () => {
+    const blobsDir = path.join(tempStatePath(), "blobs");
+    const { gate, approvals } = refGateDeps(blobsDir);
+    const panel = await stageTree(blobsDir, [{ path: "index.tsx", body: "export {}\n" }]);
+    const worker = await stageTree(blobsDir, [{ path: "index.ts", body: "export {}\n" }]);
+
+    await gate(
+      batch(
+        [
+          { repoPath: "panels/task-board", next: panel },
+          { repoPath: "workers/task-board-store", next: worker },
+        ],
+        {
+          kind: "caller",
+          caller: panelCaller(),
+          candidateWorkspaceState: "state:task-board-publication",
+        } satisfies RefAdvanceGateContext
+      )
+    );
+
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      repoPaths: ["panels/task-board", "workers/task-board-store"],
+      publicationId: "publication:test",
+      stateHash: "state:task-board-publication",
+    });
+    expect(approvals[0]!.changedPaths).toEqual([
+      "panels/task-board/index.tsx",
+      "workers/task-board-store/index.ts",
+    ]);
   });
 
   describe("diff-review payload (§5.1)", () => {

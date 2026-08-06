@@ -19,6 +19,30 @@ export interface EditableCapabilityCopy {
   group: string;
 }
 
+type InstallPartCounts = {
+  panels: number;
+  agents: number;
+  services: number;
+  clientApps: number;
+  extensions: number;
+};
+
+function describeInstallParts(verb: string, empty: string, summary: InstallPartCounts): string {
+  const phrases = [
+    [summary.panels, "panel", "panels"],
+    [summary.agents, "agent", "agents"],
+    [summary.services, "service", "services"],
+    [summary.clientApps, "client app", "client apps"],
+    [summary.extensions, "extension", "extensions"],
+  ] as const;
+  const parts = phrases
+    .filter(([count]) => count > 0)
+    .map(([count, singular, plural]) => `${count} ${count === 1 ? singular : plural}`);
+  if (parts.length === 0) return empty;
+  if (parts.length === 1) return `${verb} ${parts[0]}`;
+  return `${verb} ${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
 export const HOST_APPROVAL_COPY = {
   chrome: {
     deny: "Deny",
@@ -96,15 +120,13 @@ export const HOST_APPROVAL_COPY = {
     serviceSetup: "Set up a connection",
     privilegedInput: "Enter a secret",
     deviceSignIn: "Device sign-in",
-    appManagement: "Manage apps",
-    extensionManagement: "Manage extensions",
-    unitManagement: "Manage workspace",
-    appSource: "App code update",
-    extensionSource: "Extension code update",
-    unitSource: "Workspace code update",
-    appSetup: "Install apps",
-    extensionSetup: "Install extensions",
-    workspaceSetup: "Workspace setup",
+    // The install review's category chip, by mode. Plain nouns for what is
+    // happening, never the runtime's word for it.
+    workspaceSetup: "Your workspace",
+    templateAdd: "Add a template",
+    templateUpdate: "Template update",
+    templateRemove: "Remove a template",
+    partChanged: "A part changed",
     workspaceSource: "Workspace code update",
     configEdit: "Settings change",
     writeRequest: "Save changes",
@@ -284,125 +306,173 @@ export const HOST_APPROVAL_COPY = {
     deny: "Deny",
     open: "Open",
     version: "Trust this version",
-    approveChange: "Approve change",
-    approve: "Approve",
-    approveAll: "Approve all",
+    // A notification opens a review; it never resolves one, and never approves
+    // code from a lock screen (§7.8).
+    review: "Review",
   },
 
-  unitReview: {
-    directPermissions: "What this workspace item can do",
-    evaluatedCodePermissions: "What code launched by it may ask to do",
-    evaluatedCodeExplanation:
-      "This is a maximum, not automatic access. The launched code still needs an applicable approval before it can act.",
-    kinds: {
-      extension: { singular: "extension", plural: "extensions" },
-      app: { singular: "app", plural: "apps" },
-      panel: { singular: "panel", plural: "panels" },
-      worker: { singular: "background task", plural: "background tasks" },
-      scheduledJob: { singular: "scheduled task", plural: "scheduled tasks" },
-      agentHeartbeat: { singular: "recurring agent check", plural: "recurring agent checks" },
-      mixed: { singular: "workspace item", plural: "workspace items" },
+  /**
+   * The one review every arrival of code shares
+   * (docs/template-install-unit-approval-ux-plan.md §7).
+   *
+   * Copy here is normative. It says what a part can do in the words a person
+   * would use, never in the words the runtime uses, and it never implies we have
+   * reviewed, approved, or vouched for anyone — because we have not.
+   */
+  installReview: {
+    heading: {
+      "adopt-root": "Welcome — here's what's in your workspace",
+      install: (template: string) => `Add ${template}`,
+      update: (template: string) => `Update ${template}`,
+      remove: (template: string) => `Remove ${template}`,
+      "part-changed": (part: string) => `${part} changed`,
     },
-    warningEffects: {
-      extension: (count: number) =>
-        count === 1
-          ? "an extension with full access to your files, internet, and system"
-          : `${count} extensions with full access to your files, internet, and system`,
-      app: (count: number) =>
-        count === 1
-          ? "an app that runs in your workspace"
-          : `${count} apps that run in your workspace`,
-      panel: (count: number) =>
-        count === 1
-          ? "a panel that appears and works in your workspace"
-          : `${count} panels that appear and work in your workspace`,
-      worker: (count: number) =>
-        count === 1
-          ? "a background task that runs in your workspace"
-          : `${count} background tasks that run in your workspace`,
-      scheduledJob: (count: number) =>
-        count === 1
-          ? "a task that runs on a schedule without asking"
-          : `${count} tasks that run on a schedule without asking`,
-      agentHeartbeat: (count: number) =>
-        count === 1
-          ? "an agent that checks in periodically and takes actions on its own"
-          : `${count} agents that check in periodically and take actions on their own`,
+    summary: {
+      partChanged: "Someone edited this part in your workspace.",
+      /** An upgrade that changes no declared authority is one line, never a list. */
+      noPermissionChanges: (count: number) =>
+        `Updates ${count} part${count === 1 ? "" : "s"}. No permission changes.`,
+      unchangedParts: (count: number) =>
+        `${count} other part${count === 1 ? "" : "s"} updated with no permission changes`,
     },
-    warning: (effects: readonly string[]) => {
-      if (effects.length === 0) return "Approving this workspace settings change.";
-      if (effects.length === 1) return `You are approving ${effects[0]}.`;
-      return `You are approving ${effects.slice(0, -1).join("; ")} and ${effects[effects.length - 1]}.`;
+    /** `Adds 1 panel and 2 agents` */
+    adds: (summary: {
+      panels: number;
+      agents: number;
+      services: number;
+      clientApps: number;
+      extensions: number;
+    }): string => describeInstallParts("Adds", "Adds nothing new", summary),
+    /** `Updates 3 client apps and 13 extensions` */
+    updates: (summary: {
+      panels: number;
+      agents: number;
+      services: number;
+      clientApps: number;
+      extensions: number;
+    }): string => describeInstallParts("Updates", "Updates no existing parts", summary),
+    /** `Removes 1 panel` */
+    removes: (summary: {
+      panels: number;
+      agents: number;
+      services: number;
+      clientApps: number;
+      extensions: number;
+    }): string => describeInstallParts("Removes", "Removes no parts", summary),
+    /** The row's own footprint when it has nothing headline to say. */
+    nothingUnusual: (everydayCount: number) =>
+      everydayCount === 0
+        ? "Nothing unusual"
+        : `Nothing unusual · ${everydayCount} everyday permission${everydayCount === 1 ? "" : "s"}`,
+    sections: {
+      everyday: (count: number) => `Plus ${count} everyday permission${count === 1 ? "" : "s"}`,
+      everydayFraming:
+        "These are the ordinary things parts do here. Ordinary doesn't mean harmless — open any one to see what it does.",
+      showAllNotable: (count: number) => `Show all ${count} notable`,
+      details: "Details",
+      /**
+       * A part has two workspace relationships, and they are opposites: what it
+       * hosts for everything else, and what it leans on. One label rendered over
+       * both facts was a bug — each gets its own honest sentence.
+       */
+      hostsForWorkspace: "What the rest of your workspace can use it for",
+      needsFromWorkspace: "What it needs from the rest of your workspace",
+      repairs: (count: number) =>
+        `Also changes ${count} part${count === 1 ? "" : "s"} already in your workspace`,
+      charters: "Also runs on its own",
+      reviewChanges: "Review changes",
+      /** Shown above the list once it is long enough to need narrowing (§7.2). */
+      filterAll: "All",
+      filterPanels: "Panels",
+      filterAgents: "Agents and services",
+      filterClientApps: "Client apps",
+      filterExtensions: "Extensions",
+      noMatches: "No parts match what you typed.",
+      /** The right-hand pane's own prompt before anything is picked. */
+      pickAPart: "Pick a part to see what it can do.",
     },
-    title: (
-      trigger: "startup" | "meta-change" | "source-change" | "management",
-      count: number,
-      singular: string,
-      composition: string
-    ) =>
-      trigger === "management"
-        ? `Manage ${composition}`
-        : trigger === "source-change"
-          ? `Update ${singular} code`
-          : trigger === "meta-change" || count === 0
-            ? "Change workspace settings"
-            : `Start ${composition}`,
-    summary: (
-      trigger: "startup" | "meta-change" | "source-change" | "management",
-      count: number,
-      singular: string,
-      nativeCode: boolean,
-      composition: string
-    ) =>
-      count === 0
-        ? "Changes workspace settings."
-        : trigger === "management"
-          ? `Manages ${composition}.`
-          : trigger === "source-change"
-            ? nativeCode
-              ? "Updates the code for a trusted extension."
-              : "Updates the code for a trusted app."
-            : count === 1
-              ? `This ${singular} needs your approval before it can start.`
-              : `These ${composition} need your approval before they can start.`,
+    /** Hover and focus copy for an unchecked row or part. */
+    willAsk: "Will ask before it does these things.",
+    /** The same sentence for a checked one: what the checkbox actually does. */
+    willAllow: "Allowed as soon as it's added. Uncheck to be asked instead.",
+    noNewPermissions: "No new permissions.",
+    /** The rest of a differential line, when a part changed in more ways than fit. */
+    moreChanges: (count: number) => `+${count} more`,
+    /**
+     * Search and the kind filter, which appear only above a long slate.
+     *
+     * Filtering narrows what is on screen and nothing else: the hidden parts are
+     * still arriving, still selected, and still counted in the status line.
+     * Saying so is the difference between a filter and a lie.
+     */
+    filters: {
+      search: "Search parts",
+      kind: "Filter by kind",
+      allKinds: "All kinds",
+      hidden: (hidden: number, allowed: number) =>
+        `${hidden} part${hidden === 1 ? "" : "s"} hidden by your search or filter — still added, ${
+          allowed === 0 ? "none allowed now" : `${allowed} still allowed now`
+        }.`,
+    },
+    /**
+     * A refused acceptance, in the review's own voice.
+     *
+     * What a surface can honestly say is what it can see: the operation did not
+     * happen, and the selection on screen is untouched. It deliberately does not
+     * name which parts failed or claim the workspace is clean — neither is
+     * visible from the surface, and "leave nothing behind" is a promise the
+     * server keeps, not one a card may make on its behalf.
+     */
+    failure: {
+      heading: {
+        "adopt-root": "Couldn't add these parts",
+        install: "Couldn't add these parts",
+        update: "Couldn't update these parts",
+        remove: "Couldn't remove this template",
+        "part-changed": "Couldn't use the new version",
+      },
+      aftermath: "Your selection is still here, exactly as you left it. You can try again.",
+    },
+    /**
+     * What came of a review that has already been answered (§7.2's result).
+     *
+     * Distinct from `failure` above, which speaks to a review still on screen.
+     * Once the review has left the queue there is no selection to return to, so
+     * these say what is now true instead of inviting another attempt.
+     */
+    result: {
+      /** §7.2 verbatim: `Open News →`. */
+      openEntryPoint: (title: string) => `Open ${title} →`,
+      /**
+       * Said only when the server reports the workspace was genuinely left
+       * alone. `failure.aftermath` cannot stand in for it: that sentence
+       * promises the selection is still on screen, which is true of a refusal
+       * and false of a resolved review.
+       */
+      workspaceUnchanged: "Nothing was added. Your workspace is exactly as it was.",
+    },
     actionLabels: {
-      sourceChange: "Approve update",
-      management: "Approve",
-      all: "Approve all",
-      allow: "Allow",
-      devSession: "Allow for 4 hours",
-      deny: "Deny",
-      denyAll: "Deny all",
+      "adopt-root": "Add to workspace",
+      install: "Add template",
+      update: "Update",
+      remove: "Remove template",
+      "part-changed": "Use the new version",
+      notNow: "Not now",
+      keepOld: "Keep the old version",
+      deny: "Don't allow",
     },
     actionDescriptions: {
-      sourceChange: (component: string) => `Allow this ${component} code update.`,
-      management: (component: string) => `Allow this ${component} change.`,
-      config: "Allow this settings change.",
-      sourceDevSession: (component: string) =>
-        `Allow ${component} code updates without asking for 4 hours.`,
-      configDevSession: "Allow settings changes without asking for 4 hours.",
-      rejectSource: "Reject this code update.",
-      rejectManagement: "Reject this change.",
-      rejectComposition: (composition: string) => `Don't approve ${composition}.`,
-      rejectKind: (component: string, count: number) =>
-        count === 1 ? `Don't install this ${component}.` : `Don't install these ${component}s.`,
-      rejectConfig: "Reject this settings change.",
-      scheduledJobs: (count: number) =>
-        `Approve ${count} scheduled task${count === 1 ? "" : "s"} to run automatically.`,
-      agentHeartbeats: (count: number) =>
-        `Approve ${count} recurring agent check${count === 1 ? "" : "s"} to run on ${
-          count === 1 ? "its" : "their"
-        } own.`,
-      panels: (count: number) =>
-        `Approve ${count} panel${count === 1 ? "" : "s"} to run in your workspace.`,
-      workers: (count: number) =>
-        `Approve ${count} background task${count === 1 ? "" : "s"} to run in your workspace.`,
-      mixed: (composition: string) => `Approve ${composition}.`,
-      install: (count: number, component: string, nativeCode: boolean) =>
-        `Install and run ${count} ${component}${count === 1 ? "" : "s"}${nativeCode ? " with full system access" : ""}.`,
+      "adopt-root": "Add these parts to your workspace and allow what's checked.",
+      install: "Add these parts and allow what's checked.",
+      update: "Update these parts and allow what's checked.",
+      remove: "Stop following this template. Its parts stay in your workspace.",
+      "part-changed": "Use the edited version of this part.",
+      notNow: "Leave your workspace exactly as it is.",
+      keepOld: "Keep running the version you already reviewed.",
     },
-    noDeclaredComponents:
-      "This change only affects workspace settings. No new apps or tasks are being added.",
+    /** Extensions run outside our protections; that sentence never hides. */
+    nativeCodeWarning:
+      "Extensions run outside Vibestudio's protections, with access to this computer.",
   },
 
   headlines: {
@@ -557,6 +627,26 @@ interface SemanticCapabilityRow {
 }
 
 const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
+  {
+    // Parts talk to each other constantly; this is the machinery of being a
+    // part here, not a power over anything. The authorization floor is the
+    // receiving part's own method policy, which decides open, gated, or
+    // always-confirms independently of this row.
+    prefix: "rpc:",
+    authorityCategory: { domain: "automation", verb: "act" },
+    title: "Work with other parts",
+    action: "work with other parts of your workspace",
+    description: "Use features other parts of this workspace offer",
+    group: "runtime",
+  },
+  {
+    prefix: "event:",
+    authorityCategory: { domain: "automation", verb: "see" },
+    title: "Hear from other parts",
+    action: "receive updates from other parts of your workspace",
+    description: "Follow updates other parts of this workspace publish",
+    group: "runtime",
+  },
   {
     prefix: "missions.",
     authorityCategory: { domain: "automation", verb: "manage" },
