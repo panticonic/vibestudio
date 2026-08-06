@@ -13,7 +13,6 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import { execFile } from "node:child_process";
 import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
@@ -44,7 +43,7 @@ import {
   sealAndDrainDurableObjectRelays,
 } from "./workerdRpcRelay.js";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
-import { isSuccessfulDevTemplateMirrorExit } from "./devTemplateMirror.js";
+import { mirrorDevTemplatePublication } from "./devTemplateMirror.js";
 import { getProductBootManifest } from "./internalDOs/productBootManifest.js";
 import {
   AppliedWorkspaceUnitDeclarations,
@@ -1126,7 +1125,8 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests, putBytes } = await import("./services/blobstoreService.js");
+  const { collectTreeReachableDigests, getBytes, putBytes } =
+    await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
     statePath: layout.refsDir,
@@ -1225,9 +1225,10 @@ async function main() {
     // Dev extraction gate (Phase-2 revision §3): project a push-to-`main` OUT to
     // the source dir only when there is a persistent dev source to extract to.
     // `devTemplateMirrorDir` is the existing signal (pnpm dev + a real
-    // `<appRoot>/workspace` template); the rsync mirror below then bridges the
-    // exported source dir to that checkout. Off in production ephemeral
-    // workspaces, which have no source dir. Computed just above this block.
+    // `<appRoot>/workspace` template); the guarded publication mirror below
+    // independently persists the same exact changes to that checkout. Off in
+    // production ephemeral workspaces, which have no source dir. Computed just
+    // above this block.
     extractMainToSource: devTemplateMirrorDir !== null,
   });
   // Set only by the trusted one-time import from the host-shipped workspace
@@ -1449,8 +1450,9 @@ async function main() {
   //  - meta/ changes reload workspace config from the exact published state
   //    and reconcile declared units
   //  - any change invalidates the tree scanner cache
-  //  - pnpm dev mode mirrors the committed tree back to the template checkout
-  let devMirrorTimer: NodeJS.Timeout | null = null;
+  //  - pnpm dev mode persists protected publications back to the template
+  //    checkout through an exact previous-state guard
+  let devMirrorQueue = Promise.resolve();
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
   let latestMetaConfigReloadSeq = 0;
@@ -1489,32 +1491,59 @@ async function main() {
       });
     }
     if (devTemplateMirrorDir) {
-      // Debounced non-destructive rsync — state advances can arrive in bursts
-      // during agent commit loops; mirror once things settle.
-      if (devMirrorTimer) clearTimeout(devMirrorTimer);
-      devMirrorTimer = setTimeout(() => {
-        devMirrorTimer = null;
-        execFile(
-          "rsync",
-          [
-            "-a",
-            "--exclude=.git",
-            "--exclude=node_modules",
-            "--exclude=.contexts",
-            "--exclude=.context-projections",
-            "--exclude=.gad",
-            "--exclude=.cache",
-            "--exclude=.databases",
-            `${workspacePath}/`,
-            `${devTemplateMirrorDir}/`,
-          ],
-          (err) => {
-            if (!isSuccessfulDevTemplateMirrorExit(err)) {
-              console.warn("[DevMirror] rsync to template failed:", err?.message);
-            }
+      // Preserve publication order: each event expects the checkout state left
+      // by its predecessor. A divergent repository is never overwritten.
+      devMirrorQueue = devMirrorQueue
+        .then(async () => {
+          const result = await mirrorDevTemplatePublication({
+            destinationRoot: devTemplateMirrorDir,
+            publication: event,
+            inspectRepository: async (repoPath) => {
+              const repositoryRoot = path.join(devTemplateMirrorDir, ...repoPath.split("/"));
+              try {
+                const stat = await fs.promises.lstat(repositoryRoot);
+                if (!stat.isDirectory()) {
+                  return { files: [], skippedPaths: [repoPath] };
+                }
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                  return { files: [], skippedPaths: [] };
+                }
+                throw error;
+              }
+              const inspected = await workspaceVcs.contentProjection.localState(repositoryRoot, {
+                exact: true,
+              });
+              return {
+                files: inspected.files.map((file) => ({
+                  path: file.path,
+                  contentHash: file.contentHash,
+                  executable: (file.mode & 0o111) !== 0,
+                })),
+                skippedPaths: inspected.skipped.map((entry) => entry.path),
+              };
+            },
+            readState: async (stateHash) =>
+              (await workspaceVcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
+                path: file.path,
+                contentHash: file.content_hash,
+                executable: (file.mode & 0o111) !== 0,
+              })),
+            readBlob: (contentHash) => getBytes(layout.blobsDir, contentHash),
+          });
+          if (result.conflicts.length > 0) {
+            console.warn(
+              "[DevMirror] checkout changed concurrently; publication was not written back:",
+              result.conflicts
+            );
           }
-        );
-      }, 500);
+        })
+        .catch((error: unknown) => {
+          console.warn(
+            "[DevMirror] publication write-back failed:",
+            error instanceof Error ? error.message : String(error)
+          );
+        });
     }
   });
   // ===========================================================================
