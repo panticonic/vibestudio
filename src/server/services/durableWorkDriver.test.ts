@@ -57,7 +57,31 @@ describe("DurableWorkDriver", () => {
   });
   afterEach(() => {
     vi.clearAllTimers();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("retains transition traces without serializing or emitting them at info level", async () => {
+    vi.stubEnv("VIBESTUDIO_LOG_LEVEL", "info");
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const stringify = vi.spyOn(JSON, "stringify");
+    const pending = [claim("effect-1")];
+    const suite = handlers({ claim: vi.fn(async () => pending.splice(0)) });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      workerId: "driver-1",
+    });
+
+    driver.start();
+    driver.notify({ owner: owner("a"), queues: ["agent-effect"] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(driver.inspect().recentTrace.length).toBeGreaterThan(0);
+    expect(stringify).not.toHaveBeenCalled();
+    expect(consoleLog).not.toHaveBeenCalled();
+    await driver.quiesce();
   });
 
   it("coalesces disposable hints and settles the exact claimed generation", async () => {
@@ -258,6 +282,34 @@ describe("DurableWorkDriver", () => {
     expect(maxActive).toBe(1);
   });
 
+  it("reports an unchanged permanent readiness failure only once while continuing probes", async () => {
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const registration = { owner: owner("blocked"), queues: ["agent-effect"] as const };
+    const dispatch = vi.fn(async (_ref: DORef, method: string) => {
+      if (method === "durableWorkOwnerList") return [registration];
+      throw Object.assign(new Error("sealed execution unavailable"), {
+        code: "RUNTIME_IMAGE_UNAVAILABLE",
+      });
+    });
+    const scan = createDurableWorkOwnerScanner(
+      { dispatch } as never,
+      {
+        source: "vibestudio/internal",
+        className: "WorkspaceDO",
+        objectKey: "workspace",
+      },
+      "driver-generation-1"
+    );
+
+    await scan();
+    await scan();
+
+    expect(dispatch).toHaveBeenCalledTimes(4);
+    expect(
+      consoleWarn.mock.calls.filter(([message]) => String(message).includes("readiness blocked"))
+    ).toHaveLength(1);
+  });
+
   it("executes channel maintenance on its owner instead of requiring a participant target", async () => {
     const dispatch = vi.fn(async () => []);
     const dispatchHeldWithSignal = vi.fn(async () => ({ processed: true }));
@@ -277,5 +329,40 @@ describe("DurableWorkDriver", () => {
       "executeChannelMaintenanceClaim",
       { itemId: work.itemId, generation: 4 }
     );
+  });
+
+  it("adopts only on recovery claims", async () => {
+    const dispatch = vi.fn(async (_ref: DORef, method: string) =>
+      method === "claimReadyWork" ? [] : undefined
+    );
+    const record = createDurableWorkHandlers({
+      dispatch,
+      dispatchHeldWithSignal: vi.fn(),
+    } as never);
+    const request = {
+      workerId: "driver-1",
+      now: 1_000,
+      limit: 1,
+    };
+
+    await record["agent-effect"].claim(owner("agent-1"), {
+      ...request,
+      trigger: "hint",
+    });
+    await record["agent-effect"].claim(owner("agent-1"), {
+      ...request,
+      trigger: "continuation",
+    });
+    expect(dispatch).not.toHaveBeenCalledWith(
+      owner("agent-1"),
+      "adoptDurableWorkWorker",
+      "driver-1"
+    );
+
+    await record["agent-effect"].claim(owner("agent-1"), {
+      ...request,
+      trigger: "recovery",
+    });
+    expect(dispatch).toHaveBeenCalledWith(owner("agent-1"), "adoptDurableWorkWorker", "driver-1");
   });
 });

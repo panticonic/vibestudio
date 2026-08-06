@@ -163,6 +163,57 @@ function structuredFailureData(error: unknown): unknown | undefined {
   return errorData === undefined ? undefined : safeSerialize(errorData, 8);
 }
 
+function structuredFailureKind(error: unknown): SandboxFailureKind | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const errorData = (error as { errorData?: unknown }).errorData;
+  if (!errorData || typeof errorData !== "object") return undefined;
+  const data = errorData as Record<string, unknown>;
+  const vcsError = data["vcsError"];
+  // createProjects owns every byte of a newly generated scaffold. If its exact,
+  // immediate protected push fails the build gate, that is a template/build
+  // platform defect, not an exception authored by the eval guest.
+  if (
+    data["code"] === "scaffold_publication_failed" &&
+    vcsError &&
+    typeof vcsError === "object" &&
+    (vcsError as Record<string, unknown>)["code"] === "BuildGateFailed"
+  ) {
+    return "infrastructure";
+  }
+  // An in-band scaffold publication is supposed to remain parked at its review
+  // until the user answers. Returning `approval-required` after the presenter
+  // has already closed (`pending: false`) means the host failed to consume its
+  // own decision. Calling that user code encourages an agent to continue from
+  // a half-published workspace, compounding one platform fault into more edits.
+  const vcsData =
+    vcsError && typeof vcsError === "object"
+      ? (vcsError as Record<string, unknown>)["errorData"]
+      : undefined;
+  const acquisition =
+    vcsData && typeof vcsData === "object"
+      ? (vcsData as Record<string, unknown>)["acquisition"]
+      : undefined;
+  const authorityFailure =
+    vcsData && typeof vcsData === "object"
+      ? (vcsData as Record<string, unknown>)["authorityFailure"]
+      : undefined;
+  if (
+    data["code"] === "scaffold_publication_failed" &&
+    vcsError &&
+    typeof vcsError === "object" &&
+    (vcsError as Record<string, unknown>)["code"] === "EACQUIRE" &&
+    acquisition &&
+    typeof acquisition === "object" &&
+    (acquisition as Record<string, unknown>)["pending"] === false &&
+    authorityFailure &&
+    typeof authorityFailure === "object" &&
+    (authorityFailure as Record<string, unknown>)["reasonCode"] === "approval-required"
+  ) {
+    return "infrastructure";
+  }
+  return undefined;
+}
+
 async function runInfrastructurePhase<T>(
   code: string,
   operation: () => Promise<T>,
@@ -1527,7 +1578,7 @@ export async function executeSandbox(
           ? "infrastructure"
           : signal?.aborted
             ? "cancelled"
-            : "user-code",
+            : (structuredFailureKind(err) ?? "user-code"),
       failureCode:
         err instanceof SandboxInfrastructureError
           ? err.code

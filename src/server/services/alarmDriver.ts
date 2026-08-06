@@ -7,6 +7,7 @@ import {
 import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { LifecycleKey } from "@panticonic/builtin/workspace-state";
+import { isPermanentRuntimeReadinessError } from "../runtimeReadinessError.js";
 
 const log = createDevLogger("AlarmDriver");
 
@@ -27,6 +28,12 @@ export interface AlarmDriverDeps {
   concurrency?: number;
   workerId?: string;
   isAuthorityPaused?: (ref: DORef) => boolean;
+  onStateChange?: (event: {
+    ref: DORef;
+    state: "pending" | "claimed" | "blocked" | "cleared";
+    wakeAt?: number;
+    reason?: string;
+  }) => void;
 }
 
 /**
@@ -244,13 +251,16 @@ export class AlarmDriver {
       dispatchOwner: this.workerId,
       dispatchGeneration: target.dispatchGeneration,
     };
+    this.deps.onStateChange?.({ ref, state: "claimed", wakeAt: target.wakeAt });
     try {
       if (this.deps.isAuthorityPaused?.(ref)) {
+        const wakeAt = Date.now() + 60_000;
         await this.dispatchWorkspace("alarmSet", {
           ...ref,
           ...claim,
-          wakeAt: Date.now() + 60_000,
+          wakeAt,
         });
+        this.deps.onStateChange?.({ ref, state: "pending", wakeAt, reason: "authority-paused" });
         log.info(
           `state=paused authority lock deferred ${target.source}:${target.className}/${target.objectKey}`
         );
@@ -270,15 +280,34 @@ export class AlarmDriver {
         }
       } catch (err) {
         if (this.stopped && controller.signal.aborted) return;
+        if (isPermanentRuntimeReadinessError(err)) {
+          // The claimed row remains durable and owned by this scheduler
+          // generation. Rewriting its wake time would create an endless retry
+          // loop for an immutable integrity failure. A replacement generation
+          // adopts the row after the artifact/provider has been repaired.
+          log.warn(
+            `state=blocked alarm target ${target.source}:${target.className}/${target.objectKey}; ` +
+              "sealed execution is unavailable and the durable claim remains pending:",
+            err
+          );
+          this.deps.onStateChange?.({
+            ref,
+            state: "blocked",
+            reason: err instanceof Error ? err.message : String(err),
+          });
+          return;
+        }
         log.warn(
           `alarm dispatch failed for ${target.source}:${target.className}/${target.objectKey}; re-arming:`,
           err
         );
+        const wakeAt = Date.now() + 5_000;
         await this.dispatchWorkspace("alarmSet", {
           ...ref,
           ...claim,
-          wakeAt: Date.now() + 5_000,
+          wakeAt,
         });
+        this.deps.onStateChange?.({ ref, state: "pending", wakeAt, reason: "dispatch-failed" });
         return;
       } finally {
         this.activeDispatches.delete(controller);
@@ -289,8 +318,10 @@ export class AlarmDriver {
           ...claim,
           ...result.nextAlarm,
         });
+        this.deps.onStateChange?.({ ref, state: "pending", wakeAt: result.nextAlarm.wakeAt });
       } else {
         await this.dispatchWorkspace("alarmClear", { ...ref, ...claim });
+        this.deps.onStateChange?.({ ref, state: "cleared" });
       }
     } catch (err) {
       // Acknowledgement failure leaves the durable claim intact. Only explicit

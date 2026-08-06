@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import type { DODispatch } from "../doDispatch.js";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { DurableObjectExecutionReadiness } from "../durableObjectExecutionReadiness.js";
 import { AlarmDriver } from "./alarmDriver.js";
 
 type AlarmRow = {
@@ -371,6 +373,135 @@ describe("AlarmDriver durable concurrent scheduling", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(dispatchAlarm).toHaveBeenCalledTimes(2);
     replacement.stop();
+  });
+
+  it("leaves a permanently unavailable execution claimed instead of re-arming it", async () => {
+    const onStateChange = vi.fn();
+    const dispatchAlarm = vi.fn(async () => {
+      throw Object.assign(new Error("sealed execution unavailable"), {
+        code: "RUNTIME_IMAGE_UNAVAILABLE",
+      });
+    });
+    const harness = makeHarness(
+      [{ source: "workers/agent-worker", className: "AiChatWorker", objectKey: "a-1", wakeAt: 0 }],
+      dispatchAlarm
+    );
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: harness.doDispatch,
+      workerId: "driver-1",
+      onStateChange,
+    });
+
+    driver.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(dispatchAlarm).toHaveBeenCalledOnce();
+    expect(harness.alarms).toMatchObject([
+      {
+        objectKey: "a-1",
+        wakeAt: 0,
+        dispatchOwner: "driver-1",
+        dispatchGeneration: 1,
+      },
+    ]);
+    expect(onStateChange).toHaveBeenNthCalledWith(1, expect.objectContaining({ state: "claimed" }));
+    expect(onStateChange).toHaveBeenNthCalledWith(2, {
+      ref: {
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        objectKey: "a-1",
+      },
+      state: "blocked",
+      reason: "sealed execution unavailable",
+    });
+    driver.stop();
+  });
+
+  it("continues the sealed alarm execution across a publish while browser import is active", async () => {
+    const buildKey = "b".repeat(64);
+    const sealedDigest = "a".repeat(64);
+    const publishedDigest = "c".repeat(64);
+    const record: EntityRecord = {
+      id: "do:workers/agent-worker:AiChatWorker:agent-1",
+      kind: "do",
+      source: { repoPath: "workers/agent-worker", effectiveVersion: "ev-sealed" },
+      activeBuildKey: buildKey,
+      activeExecutionDigest: sealedDigest,
+      activeAuthority: { requests: [], provides: [] },
+      contextId: "ctx-agent",
+      className: "AiChatWorker",
+      key: "agent-1",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: true,
+    };
+    const latestByKey = { buildKey, executionDigest: sealedDigest };
+    const retainedByExecution = new Map([[sealedDigest, { ...latestByKey }]]);
+    let finishBrowserImport!: () => void;
+    let browserImportFinished = false;
+    const browserImport = new Promise<void>((resolve) => {
+      finishBrowserImport = () => {
+        browserImportFinished = true;
+        resolve();
+      };
+    });
+    const restoredDigests: string[] = [];
+    const readiness = new DurableObjectExecutionReadiness({
+      resolveActiveEntity: async () => record,
+      restoreExactExecution: async (active) => {
+        const retained = retainedByExecution.get(active.activeExecutionDigest!);
+        if (!retained || retained.buildKey !== active.activeBuildKey) {
+          throw Object.assign(new Error("sealed execution unavailable"), {
+            code: "RUNTIME_IMAGE_UNAVAILABLE",
+          });
+        }
+        restoredDigests.push(retained.executionDigest);
+      },
+    });
+    const visibleMessages: string[] = [];
+    const dispatchAlarm = vi.fn(async () => {
+      await readiness.ensureReady({
+        source: record.source.repoPath,
+        className: record.className!,
+        objectKey: record.key,
+      });
+      visibleMessages.push("published and complete");
+      return { nextAlarm: null };
+    });
+    const harness = makeHarness(
+      [
+        {
+          source: record.source.repoPath,
+          className: record.className!,
+          objectKey: record.key,
+          wakeAt: 0,
+        },
+      ],
+      dispatchAlarm
+    );
+    const driver = new AlarmDriver({
+      workspaceId: "ws-1",
+      doDispatch: harness.doDispatch,
+      workerId: "driver-1",
+    });
+
+    // Exact incident interleaving: an unrelated import remains active while a
+    // publication rebinds the logical build key before the alarm continuation.
+    latestByKey.executionDigest = publishedDigest;
+    driver.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(browserImportFinished).toBe(false);
+    expect(latestByKey.executionDigest).toBe(publishedDigest);
+    expect(restoredDigests).toEqual([sealedDigest]);
+    expect(visibleMessages).toEqual(["published and complete"]);
+    expect(harness.alarms).toEqual([]);
+
+    finishBrowserImport();
+    await browserImport;
+    driver.stop();
   });
 
   it("quiesce aborts and waits for scheduler-owned transports without acknowledging", async () => {

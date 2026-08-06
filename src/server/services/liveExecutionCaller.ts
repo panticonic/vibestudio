@@ -1,6 +1,7 @@
 import type { AgentExecutionSessionFact, AgentExecutionTestPolicy } from "@vibestudio/rpc";
 import type { VerifiedCaller, VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { codePrincipalMatches } from "@vibestudio/shared/authority/codePrincipal";
 
 /**
  * Materialize the code identity of the host-admitted harness for one marked
@@ -16,27 +17,27 @@ export function executionHarnessCodeIdentity(input: {
   if (runtime.kind !== "do") {
     throw new Error(`Evaluated execution runtime must be a Durable Object, got ${runtime.kind}`);
   }
-  const prefix = `code:${executionSession.harness.repoPath}@`;
-  if (!executionSession.harness.principal.startsWith(prefix)) {
-    throw new Error("Evaluated execution harness principal does not match its repository");
+  if (!codePrincipalMatches(executionSession.harness.principal, executionSession.harness)) {
+    throw new Error("Evaluated execution harness principal does not match its source identity");
   }
-  const executionDigest = executionSession.harness.principal.slice(prefix.length);
+  const executionDigest = executionSession.harness.executionDigest;
   if (!executionDigest) {
-    throw new Error("Evaluated execution harness principal has no execution digest");
+    throw new Error("Evaluated execution harness has no execution digest");
   }
-  const residentPrincipal = residentCode?.executionDigest
-    ? `code:${residentCode.repoPath}@${residentCode.executionDigest}`
-    : null;
+  // Sealed requests transfer only when the resident image is the very artifact
+  // the harness fact names — same reviewed unit version and same build.
+  const residentIsHarness = Boolean(
+    residentCode?.executionDigest === executionDigest &&
+    residentCode &&
+    codePrincipalMatches(executionSession.harness.principal, residentCode)
+  );
   return {
     callerId: runtime.id,
     callerKind: "do",
     repoPath: executionSession.harness.repoPath,
     effectiveVersion: executionSession.harness.effectiveVersion,
     executionDigest,
-    requested:
-      residentPrincipal === executionSession.harness.principal
-        ? (residentCode?.requested ?? [])
-        : [],
+    requested: residentIsHarness ? (residentCode?.requested ?? []) : [],
     ...(residentCode?.evalOrigin ? { evalOrigin: residentCode.evalOrigin } : {}),
   };
 }
@@ -82,13 +83,21 @@ export function resolveLiveExecutionCaller(input: {
   activeEntity: EntityRecord | null;
   executionSession: AgentExecutionSessionFact | null;
   contextTestPolicy: AgentExecutionTestPolicy | null;
+  taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal | null;
   /**
    * Re-evaluate exact-version approval at request time. Egress registrations
    * outlive individual calls, so this fact must not be frozen at registration.
    */
   isCodeApproved?: (code: VerifiedCodeIdentity) => boolean;
 }): VerifiedCaller | null {
-  const { registered, activeEntity, executionSession, contextTestPolicy, isCodeApproved } = input;
+  const {
+    registered,
+    activeEntity,
+    executionSession,
+    contextTestPolicy,
+    taskAuthority,
+    isCodeApproved,
+  } = input;
   const agentBinding = activeEntity?.agentBinding;
 
   if (
@@ -121,6 +130,7 @@ export function resolveLiveExecutionCaller(input: {
         ...(registeredCode ? { residentCode: registeredCode } : {}),
       })
     : registeredCode;
+  const resolvedTaskAuthority = executionSession?.taskAuthority ?? taskAuthority;
   const resolved: VerifiedCaller = {
     ...stable,
     ...(code ? { code } : {}),
@@ -128,6 +138,7 @@ export function resolveLiveExecutionCaller(input: {
     ...(agentBinding ? { agentBinding } : {}),
     ...(executionSession ? { executionSession } : {}),
     ...(testPolicy ? { testPolicy } : {}),
+    ...(resolvedTaskAuthority ? { taskAuthority: resolvedTaskAuthority } : {}),
   };
   return resolved.code && (resolved.codeApproved || isCodeApproved?.(resolved.code))
     ? { ...resolved, codeApproved: true }

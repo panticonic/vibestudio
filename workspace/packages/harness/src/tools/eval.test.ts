@@ -125,6 +125,8 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(Value.Check(tool.parameters, { code: "return 1", timeoutMs: 0 })).toBe(false);
     expect(Value.Check(tool.parameters, { code: "return 1", timeoutMs: 1.5 })).toBe(false);
     expect(tool.description).toContain("no implicit wall deadline");
+    expect(tool.description).toContain("never add a generic 120000/300000 safety timeout");
+    expect(tool.description).toContain("Bound a specific wait");
 
     await tool.execute("call-timeout", { code: "return 1", timeoutMs: 250 });
     expect(calls[0]?.[0]).toMatchObject({

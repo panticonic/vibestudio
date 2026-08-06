@@ -3,6 +3,7 @@ import {
   createEvalExecutor,
   createDeferredEvalExecutor,
   evalAuthorityInputSchema,
+  evalLifecycleFailureCodes,
   evalMethods,
   evalStartInputSchema,
   type EvalCall,
@@ -43,6 +44,13 @@ describe("eval lifecycle contract", () => {
         },
       }).success
     ).toBe(false);
+    expect(
+      evalStartInputSchema.safeParse({
+        runId: "run:1",
+        source: { kind: "inline", code: "return 1" },
+        authority: { approvals: "pregranted-only", preauthorize: [] },
+      }).success
+    ).toBe(true);
   });
 
   it("uses request presence as the exact-allowlist boundary and rejects combinations that could prompt unexpectedly", () => {
@@ -214,5 +222,47 @@ describe("eval lifecycle contract", () => {
     expect(Object.keys(evalMethods)).not.toEqual(
       expect.arrayContaining(["run", "startRun", "getRun"])
     );
+  });
+
+  it("declares the typed lifecycle failure codes drivers branch on", () => {
+    // Driver code references these literals; the spellings are load-bearing.
+    expect(evalLifecycleFailureCodes.runtimeGenerationLost).toBe("runtime_generation_lost");
+    expect(evalLifecycleFailureCodes.runtimeRestarted).toBe("eval_runtime_restarted");
+    expect(evalLifecycleFailureCodes.cancelled).toBe("eval_cancelled");
+    expect(evalLifecycleFailureCodes.deadlineExceeded).toBe("eval_deadline_exceeded");
+  });
+
+  it("carries a lifecycle-stamped result through a cancelled settlement, defaulting to user cancel", async () => {
+    const generationLost = {
+      success: false,
+      console: "",
+      error: "eval runtime generation was retired by a planned lifecycle transition",
+      failureKind: "infrastructure",
+      failureCode: evalLifecycleFailureCodes.runtimeGenerationLost,
+    };
+    const stamped = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run:1", status: "accepted" })
+      .mockResolvedValueOnce({ status: "cancelled", result: generationLost });
+    await expect(
+      createEvalExecutor(stamped, { pollDelay: async () => undefined })({
+        runId: "run:1",
+        source: { kind: "inline", code: "return 1" },
+      })
+    ).resolves.toEqual(generationLost);
+
+    const bare = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run:2", status: "accepted" })
+      .mockResolvedValueOnce({ status: "cancelled" });
+    await expect(
+      createEvalExecutor(bare, { pollDelay: async () => undefined })({
+        runId: "run:2",
+        source: { kind: "inline", code: "return 1" },
+      })
+    ).resolves.toMatchObject({
+      failureKind: "cancelled",
+      failureCode: evalLifecycleFailureCodes.cancelled,
+    });
   });
 });

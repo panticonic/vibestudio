@@ -108,6 +108,9 @@ function hasValidTerminalPayloadSignal(node: ts.Node, kind: TerminalKind): boole
 }
 
 describe("invocation terminal event literals", () => {
+  // This is a repository census, not a unit-sized assertion. Its isolated
+  // runtime is ~2s, but filesystem and parser contention in the full host
+  // suite can exceed Vitest's 5s default.
   it("carry a typed terminal outcome matching their exact event kind", () => {
     const misses: string[] = [];
     for (const root of ROOTS) {
@@ -145,5 +148,5 @@ describe("invocation terminal event literals", () => {
     }
 
     expect(misses).toEqual([]);
-  });
+  }, 30_000);
 });

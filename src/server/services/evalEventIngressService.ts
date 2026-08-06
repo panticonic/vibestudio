@@ -16,8 +16,12 @@ interface EvalEventSinkRoute {
   onTerminal?: () => void;
 }
 
+type ClosedEvalEventSinkRoute = Omit<EvalEventSinkRoute, "onTerminal">;
+
 export class EvalEventSinkRegistry {
+  private static readonly MAX_CLOSED_ROUTES = 1_000;
   private readonly byNonce = new Map<string, EvalEventSinkRoute>();
+  private readonly closedByNonce = new Map<string, ClosedEvalEventSinkRoute>();
 
   register(route: EvalEventSinkRoute): void {
     const existing = this.byNonce.get(route.nonce);
@@ -32,6 +36,7 @@ export class EvalEventSinkRegistry {
     ) {
       throw new Error("Eval event sink nonce was reused for a different route");
     }
+    this.closedByNonce.delete(route.nonce);
     this.byNonce.set(route.nonce, Object.freeze({ ...route }));
   }
 
@@ -40,14 +45,41 @@ export class EvalEventSinkRegistry {
   }
 
   close(nonce: string): void {
+    const route = this.byNonce.get(nonce);
+    if (!route) return;
     this.byNonce.delete(nonce);
+    this.rememberClosed(route);
+  }
+
+  resolveClosed(nonce: string): ClosedEvalEventSinkRoute | null {
+    return this.closedByNonce.get(nonce) ?? null;
   }
 
   terminal(nonce: string): void {
     const route = this.byNonce.get(nonce);
     if (!route) return;
     this.byNonce.delete(nonce);
+    this.rememberClosed(route);
     route.onTerminal?.();
+  }
+
+  private rememberClosed(route: EvalEventSinkRoute): void {
+    const identity: ClosedEvalEventSinkRoute = {
+      nonce: route.nonce,
+      runtimeId: route.runtimeId,
+      runId: route.runId,
+      contextId: route.contextId,
+      ownerCallerId: route.ownerCallerId,
+      initiatorCallerId: route.initiatorCallerId,
+      subKey: route.subKey,
+    };
+    this.closedByNonce.delete(route.nonce);
+    this.closedByNonce.set(route.nonce, Object.freeze(identity));
+    while (this.closedByNonce.size > EvalEventSinkRegistry.MAX_CLOSED_ROUTES) {
+      const oldest = this.closedByNonce.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.closedByNonce.delete(oldest);
+    }
   }
 }
 
@@ -70,15 +102,17 @@ export function createEvalEventIngressService(deps: {
       publish: async (ctx, [sinkNonce, runId, event]) => {
         const execution = ctx.caller.executionSession;
         const route = deps.sinks.resolve(sinkNonce);
+        const closedRoute = route ? null : deps.sinks.resolveClosed(sinkNonce);
+        const authenticatedRoute = route ?? closedRoute;
         if (
-          !route ||
           !execution ||
+          !authenticatedRoute ||
           execution.eval.eventSinkNonce !== sinkNonce ||
           execution.eval.runtimeId !== ctx.caller.runtime.id ||
           execution.eval.runId !== runId ||
-          route.runtimeId !== execution.eval.runtimeId ||
-          route.runId !== runId ||
-          route.contextId !== execution.contextId
+          authenticatedRoute.runtimeId !== execution.eval.runtimeId ||
+          authenticatedRoute.runId !== runId ||
+          authenticatedRoute.contextId !== execution.contextId
         ) {
           throw new ServiceAccessError(
             "evalEventIngress",
@@ -87,6 +121,11 @@ export function createEvalEventIngressService(deps: {
             "EACCES"
           );
         }
+        // The durable event is canonical. Once the host observer closes, an
+        // already queued producer delivery is expected and must terminate as
+        // a benign no-op. Closed routes are retained only as a small bounded
+        // identity tombstone, so unknown/forged sink nonces still fail.
+        if (!route) return { delivered: false };
         const entity = deps.entityStore.cache.resolveActive(ctx.caller.runtime.id);
         const entityState =
           entity?.stateArgs &&

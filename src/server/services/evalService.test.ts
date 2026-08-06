@@ -16,6 +16,7 @@ import {
 } from "../internalDOs/internalDoLoader.js";
 import { createEvalService } from "./evalService.js";
 import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
+import { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { createActivityRegistry } from "./activityRegistry.js";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
@@ -268,8 +269,14 @@ function createHarness(
     _onActivate() {},
     _onRetire() {},
   } as unknown as EntityCache;
-  const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
+  const entityStore = new WorkspaceEntityStore({
+    doDispatch,
+    workspaceId: "ws_1",
+    entityCache,
+    materializeExecution: async () => undefined,
+  });
   const executionSessions = new AgentExecutionSessionRegistry();
+  const taskAuthorities = new TaskAuthorityRegistry();
   const activity = createActivityRegistry();
   const eventSinkTerminal = new Map<string, () => void>();
   const eventSinks = {
@@ -281,6 +288,7 @@ function createHarness(
     },
   };
   const retireEntity = vi.fn(async () => {});
+  let shutdown: ((deadlineMs?: number) => Promise<void>) | null = null;
   const service = createEvalService({
     doDispatch,
     entityStore,
@@ -290,8 +298,12 @@ function createHarness(
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
     workspaceId: "ws_1",
     executionSessions,
+    taskAuthorities,
     eventSinks,
     activity,
+    onShutdown: (callback) => {
+      shutdown = callback;
+    },
     ...(options.systemTestHarness ? { isSystemTestHarness: () => true } : {}),
     kernelLeases: {
       touch: vi.fn(async () => {
@@ -311,6 +323,10 @@ function createHarness(
     executionSessions,
     activity,
     retireEntity,
+    shutdown: async (deadlineMs?: number) => {
+      if (!shutdown) throw new Error("shutdown callback was not registered");
+      await shutdown(deadlineMs);
+    },
     settleLiveEvent() {
       const callbacks = [...eventSinkTerminal.values()];
       eventSinkTerminal.clear();
@@ -320,6 +336,38 @@ function createHarness(
 }
 
 describe("createEvalService", () => {
+  it("cancels admitted eval runs and closes new admission during shared shutdown", async () => {
+    const ownerId = "session:default";
+    const harness = createHarness({ [ownerId]: "ctx_1" }, { executeRunPending: true });
+
+    await harness.service.handler(
+      { caller: authenticatedCaller("shell:dev_cli", "shell") },
+      "start",
+      [
+        inlineEvalStart({
+          target: { kind: "owner-session", sessionId: ownerId },
+          runId: "run:shutdown",
+          code: "await new Promise(() => {});",
+        }),
+      ]
+    );
+    expect(harness.activity.getActivity().activeRuns).toBe(1);
+
+    await harness.shutdown();
+    expect(harness.calls.some((call) => call.method === "cancel")).toBe(true);
+    expect(harness.activity.getActivity().activeRuns).toBe(0);
+
+    await expect(
+      harness.service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "start", [
+        inlineEvalStart({
+          target: { kind: "owner-session", sessionId: ownerId },
+          runId: "run:after-shutdown",
+          code: "return 1;",
+        }),
+      ])
+    ).rejects.toThrow(/shutting down/u);
+  });
+
   it("closes admission when kernel residency cannot be established", async () => {
     const ownerId = "session:default";
     const subKey = "default";
@@ -508,7 +556,12 @@ describe("createEvalService", () => {
       _onActivate() {},
       _onRetire() {},
     } as unknown as EntityCache;
-    const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws", entityCache });
+    const entityStore = new WorkspaceEntityStore({
+      doDispatch,
+      workspaceId: "ws",
+      entityCache,
+      materializeExecution: async () => undefined,
+    });
     const service = createEvalService({
       doDispatch,
       entityStore,
@@ -518,6 +571,7 @@ describe("createEvalService", () => {
       } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
       workspaceId: "ws",
       executionSessions: new AgentExecutionSessionRegistry(),
+      taskAuthorities: new TaskAuthorityRegistry(),
       kernelLeases: { touch: vi.fn(async () => {}) },
     });
 
@@ -795,10 +849,12 @@ describe("createEvalService", () => {
       contextId: "ctx:case",
       agentBinding: null,
       taskRef: "system-test:cancel-lifecycle-case",
+      taskAuthority: "task:system-test-cancel-lifecycle-case",
       harness: {
-        principal: `code:workers/system-test-runner@${"a".repeat(64)}`,
+        principal: `code:workers/system-test-runner@test`,
         repoPath: "workers/system-test-runner",
         effectiveVersion: "test",
+        executionDigest: "a".repeat(64),
       },
       eval: {
         runtimeId: "do:vibestudio/internal:EvalDO:cancel-lifecycle-child",
@@ -827,9 +883,9 @@ describe("createEvalService", () => {
     expect(executionSessions.testPolicyForContext("ctx:case")).not.toBeNull();
   });
 
-  it("releases the cell immediately when start returns its terminal snapshot", async () => {
+  it("does not re-enter execution for a non-agent caller and closes from the terminal event", async () => {
     const ownerId = "session:default";
-    const { service, calls, executionSessions, activity } = createHarness({
+    const { service, calls, executionSessions, activity, settleLiveEvent } = createHarness({
       [ownerId]: "ctx:held",
     });
 
@@ -844,12 +900,14 @@ describe("createEvalService", () => {
     const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${objectKey}`;
     expect(run).toMatchObject({
       runId: "run:held",
-      status: "terminal",
-      snapshot: { status: "done", result: { success: true } },
+      status: "accepted",
     });
+    expect(calls.some((call) => call.method === "executeRun")).toBe(false);
     expect(executionSessions.resolve(runtimeId)).toMatchObject({
       eval: { runtimeId, runId: "run:held" },
     });
+    expect(activity.getActivity().activeRuns).toBe(1);
+    settleLiveEvent();
     expect(activity.getActivity().activeRuns).toBe(0);
   });
 
@@ -1080,33 +1138,23 @@ describe("createEvalService", () => {
   });
 });
 
-/** Explicit deadlines retain a host-side CPU-starvation watchdog. It observes but does not execute
- * or deliver the EvalDO-owned asynchronous run. */
+/** Explicit deadlines retain a host-side CPU-starvation supervisor. It probes the
+ * canonical run but never invokes execution or completion. */
 function createHeldFailHarness(opts: {
   contextId: string;
   getRunResponse: { status: string; result?: unknown };
   heldMode?: "reject" | "hang" | "cooperative-timeout";
+  /** Per-probe behavior consumed in order; the last entry repeats. Overrides heldMode. */
+  getRunPlan?: Array<"running" | "done" | "hang" | "reject">;
   recoveryResult?: { status: string; result?: unknown };
   recoveryDelayMs?: number;
 }) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
   let getRunResponse = opts.getRunResponse;
-  let rejectHeld: ((error: Error) => void) | undefined;
+  let probeIndex = 0;
   const doDispatch = {
     async dispatchHeld(_ref: unknown, method: string, ..._args: unknown[]) {
-      if (method === "executeRun") {
-        if (opts.heldMode === "cooperative-timeout") {
-          return { success: false, console: "", error: "eval timed out after 5ms" };
-        }
-        if (opts.heldMode === "hang") {
-          return new Promise<never>((_resolve, reject) => {
-            rejectHeld = reject;
-          });
-        }
-        throw new Error("held connection dropped (server restart)");
-      }
-      // run (the synchronous held path) is not exercised here.
-      throw new Error(`unexpected dispatchHeld ${method}`);
+      throw new Error(`watchdog must not hold or execute ${method}`);
     },
     async dispatch(ref: unknown, method: string, ...args: unknown[]) {
       calls.push({ ref, method, args });
@@ -1116,7 +1164,20 @@ function createHeldFailHarness(opts: {
       if (method === "slotResolveByEntity") return null;
       if (method === "startRun")
         return { runId: (args[0] as { runId: string }).runId, status: "pending" };
-      if (method === "getRun") return getRunResponse;
+      if (method === "getRun") {
+        if (opts.getRunPlan) {
+          const step =
+            opts.getRunPlan[Math.min(probeIndex++, opts.getRunPlan.length - 1)] ?? "running";
+          if (step === "hang") return new Promise<never>(() => {});
+          if (step === "reject") throw new Error("simulated probe transport refusal");
+          if (step === "done")
+            return { status: "done", result: { success: true, console: "", scopeKeys: [] } };
+          return { status: "running" };
+        }
+        if (opts.heldMode === "hang") return new Promise<never>(() => {});
+        if (opts.heldMode === "reject") throw new Error("simulated probe transport refusal");
+        return getRunResponse;
+      }
       if (method === "onEvalComplete") return undefined;
       throw new Error(`unexpected dispatch ${method}`);
     },
@@ -1147,11 +1208,13 @@ function createHeldFailHarness(opts: {
     _onActivate() {},
     _onRetire() {},
   } as unknown as EntityCache;
-  const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
+  const entityStore = new WorkspaceEntityStore({
+    doDispatch,
+    workspaceId: "ws_1",
+    entityCache,
+    materializeExecution: async () => undefined,
+  });
   const recoverUnresponsiveSandbox = vi.fn(async () => {
-    // Model the real recovery race: killing workerd rejects the held request
-    // before the replacement runtime has restored the durable run state.
-    rejectHeld?.(new Error("held connection dropped during sandbox recovery"));
     if (opts.recoveryDelayMs) {
       await new Promise((resolve) => setTimeout(resolve, opts.recoveryDelayMs));
     }
@@ -1166,8 +1229,9 @@ function createHeldFailHarness(opts: {
     } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
     workspaceId: "ws_1",
     executionSessions: new AgentExecutionSessionRegistry(),
+    taskAuthorities: new TaskAuthorityRegistry(),
     recoverUnresponsiveSandbox,
-    watchdogGraceMs: 1,
+    livenessProbeMs: 2,
     kernelLeases: { touch: vi.fn(async () => {}) },
   });
   return { service, calls, ownerId, recoverUnresponsiveSandbox };
@@ -1196,7 +1260,7 @@ describe("createEvalService — explicit timeout process watchdog", () => {
     expect(calls.some((call) => call.method === "onEvalComplete")).toBe(false);
   });
 
-  it("recycles an unresponsive synchronous sandbox at its host deadline and delivers the reconciled terminal", async () => {
+  it("recycles only when the canonical liveness probe cannot execute", async () => {
     const interrupted = {
       success: false,
       console: "",
@@ -1225,9 +1289,8 @@ describe("createEvalService — explicit timeout process watchdog", () => {
     expect(recoverUnresponsiveSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "inv-watchdog", timeoutMs: 5 })
     );
-    // Terminal admission closure is producer-pushed; watchdog recovery never
-    // creates a per-run status polling loop.
-    expect(calls.some((call) => call.method === "getRun")).toBe(false);
+    expect(calls.some((call) => call.method === "getRun")).toBe(true);
+    expect(calls.some((call) => call.method === "executeRun")).toBe(false);
     expect(calls.some((call) => call.method === "onEvalComplete")).toBe(false);
   });
 
@@ -1251,6 +1314,111 @@ describe("createEvalService — explicit timeout process watchdog", () => {
     expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
     expect(calls.some((c) => c.method === "getRun")).toBe(false);
     expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
+  });
+
+  it("treats a rejected probe like a hang and recovers after one quick retry", async () => {
+    const { service, calls, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "running" },
+      getRunPlan: ["reject"],
+    });
+
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        code: "while (true) {}",
+        runId: "inv-probe-reject",
+        timeoutMs: 5,
+        resultReceiver: { kind: "caller" },
+      }),
+    ]);
+    await vi.waitFor(() => expect(recoverUnresponsiveSandbox).toHaveBeenCalledOnce(), {
+      timeout: 1_000,
+    });
+
+    // One quick retry absorbed a transient blip before recovery was invoked.
+    expect(calls.filter((call) => call.method === "getRun").length).toBeGreaterThanOrEqual(2);
+    expect(calls.some((call) => call.method === "executeRun")).toBe(false);
+  });
+
+  it("keeps probing after a live answer and recovers when the isolate wedges later", async () => {
+    const { service, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "running" },
+      getRunPlan: ["running", "hang"],
+    });
+
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        code: "while (true) {}",
+        runId: "inv-late-wedge",
+        timeoutMs: 5,
+        resultReceiver: { kind: "caller" },
+      }),
+    ]);
+
+    // The first probe answers live (which previously disarmed the watchdog
+    // permanently); the second hangs and must still trigger recovery.
+    await vi.waitFor(() => expect(recoverUnresponsiveSandbox).toHaveBeenCalledOnce(), {
+      timeout: 1_000,
+    });
+  });
+
+  it("disposes supervision once the probe observes a terminal run", async () => {
+    const { service, calls, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "running" },
+      getRunPlan: ["running", "done"],
+    });
+
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        code: "return 1;",
+        runId: "inv-terminal-dispose",
+        timeoutMs: 5,
+        resultReceiver: { kind: "caller" },
+      }),
+    ]);
+    await vi.waitFor(
+      () => expect(calls.filter((call) => call.method === "getRun").length).toBe(2),
+      { timeout: 1_000 }
+    );
+
+    // No further probes after terminal, and no recovery.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls.filter((call) => call.method === "getRun")).toHaveLength(2);
+    expect(recoverUnresponsiveSandbox).not.toHaveBeenCalled();
+  });
+
+  it("arms exactly one liveness supervisor per runId across replayed starts", async () => {
+    const { service, ownerId, recoverUnresponsiveSandbox } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "running" },
+      heldMode: "hang",
+    });
+    const start = () =>
+      service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+        inlineEvalStart({
+          scopeKey: "chan_1",
+          code: "while (true) {}",
+          runId: "inv-replayed",
+          timeoutMs: 5,
+          resultReceiver: { kind: "caller" },
+        }),
+      ]);
+
+    await start();
+    await start();
+    await vi.waitFor(() => expect(recoverUnresponsiveSandbox).toHaveBeenCalled(), {
+      timeout: 1_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Two replayed starts share one supervision record — a second independent
+    // loop would have invoked recovery a second time.
+    expect(recoverUnresponsiveSandbox).toHaveBeenCalledOnce();
   });
 
   // Plan §6.4: an `agent` caller binds to its host-verified entity binding with

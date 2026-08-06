@@ -4,19 +4,101 @@
  * network primitives, RPC kernels, loader hooks) is never copied here.
  */
 const SAFE_GUEST_GLOBALS = [
-  "AbortController", "AbortSignal", "AggregateError", "Array", "ArrayBuffer", "Atomics", "BigInt", "BigInt64Array",
-  "BigUint64Array", "Blob", "Boolean", "DOMException", "DataView", "Date", "Error",
-  "EvalError", "FinalizationRegistry", "Float32Array", "Float64Array", "FormData",
-  "Headers", "Infinity", "Int16Array", "Int32Array", "Int8Array", "Intl", "JSON",
-  "Map", "Math", "NaN", "Number", "Object", "Promise", "Proxy", "RangeError",
-  "ReferenceError", "Reflect", "RegExp", "Request", "Response", "Set",
-  "SharedArrayBuffer", "String", "Symbol", "SyntaxError", "TextDecoder", "TextEncoder",
-  "TypeError", "URIError", "URL", "URLSearchParams", "Uint16Array", "Uint32Array",
-  "Uint8Array", "Uint8ClampedArray", "WeakMap", "WeakRef", "WeakSet", "WebAssembly",
-  "Buffer", "atob", "btoa", "clearInterval", "clearTimeout", "crypto", "decodeURI",
-  "decodeURIComponent", "encodeURI", "encodeURIComponent", "escape", "isFinite",
-  "isNaN", "parseFloat", "parseInt", "performance", "queueMicrotask", "setInterval",
-  "setTimeout", "structuredClone", "undefined", "unescape",
+  "AbortController",
+  "AbortSignal",
+  "AggregateError",
+  "Array",
+  "ArrayBuffer",
+  "Atomics",
+  "BigInt",
+  "BigInt64Array",
+  "BigUint64Array",
+  "Blob",
+  "Boolean",
+  "DOMException",
+  "DataView",
+  "Date",
+  "Error",
+  "EvalError",
+  "FinalizationRegistry",
+  "Float32Array",
+  "Float64Array",
+  "FormData",
+  "Headers",
+  "Infinity",
+  "Int16Array",
+  "Int32Array",
+  "Int8Array",
+  "Intl",
+  "JSON",
+  "Map",
+  "Math",
+  "NaN",
+  "Number",
+  "Object",
+  "Promise",
+  "Proxy",
+  "RangeError",
+  "ReferenceError",
+  "Reflect",
+  "RegExp",
+  "Request",
+  "Response",
+  "Set",
+  "SharedArrayBuffer",
+  "String",
+  "Symbol",
+  "SyntaxError",
+  "TextDecoder",
+  "TextEncoder",
+  "TypeError",
+  "URIError",
+  "URL",
+  "URLSearchParams",
+  "Uint16Array",
+  "Uint32Array",
+  "Uint8Array",
+  "Uint8ClampedArray",
+  "WeakMap",
+  "WeakRef",
+  "WeakSet",
+  "WebAssembly",
+  "Buffer",
+  "atob",
+  "btoa",
+  "clearInterval",
+  "clearTimeout",
+  "crypto",
+  "decodeURI",
+  "decodeURIComponent",
+  "encodeURI",
+  "encodeURIComponent",
+  "escape",
+  "isFinite",
+  "isNaN",
+  "parseFloat",
+  "parseInt",
+  "performance",
+  "queueMicrotask",
+  "setInterval",
+  "setTimeout",
+  "structuredClone",
+  "undefined",
+  "unescape",
+] as const;
+
+// Ordinary JavaScript globals inherit these authority-free intrinsics from
+// Object.prototype. The confined facade intentionally has a null prototype,
+// so copy the standard callable surface explicitly. Libraries are allowed to
+// use forms such as `hasOwnProperty.call(value, key)` without regaining the
+// ambient host global through prototype lookup.
+const SAFE_GUEST_OBJECT_PROTOTYPE_GLOBALS = [
+  "hasOwnProperty",
+  "isPrototypeOf",
+  "propertyIsEnumerable",
+  "toLocaleString",
+  "toString",
+  "valueOf",
 ] as const;
 
 const SAFE_CONSOLE_METHODS = [
@@ -71,9 +153,7 @@ const TAMED_REALMS = new WeakMap<object, FunctionConstructor>();
 
 function inertConstructor(name: string, prototype: unknown): FunctionConstructor {
   const inert = function () {
-    throw new TypeError(
-      `${name} is disabled: this realm does not permit dynamic code generation`
-    );
+    throw new TypeError(`${name} is disabled: this realm does not permit dynamic code generation`);
   } as unknown as FunctionConstructor;
   Object.defineProperty(inert, "name", { value: name, configurable: true });
   Object.defineProperty(inert, "prototype", {
@@ -204,9 +284,7 @@ export function tameRealmCodegen(
 export function getRealmCompiler(
   realm: Record<string, unknown> = globalThis as Record<string, unknown>
 ): FunctionConstructor {
-  return (
-    TAMED_REALMS.get(realm as unknown as object) ?? (realm["Function"] as FunctionConstructor)
-  );
+  return TAMED_REALMS.get(realm as unknown as object) ?? (realm["Function"] as FunctionConstructor);
 }
 
 /**
@@ -245,6 +323,25 @@ export function createPrivateGuestGlobal(
       RECEIVER_SENSITIVE_GUEST_FUNCTIONS.has(name) && typeof value === "function"
         ? value.bind(realm)
         : value;
+  }
+  const realmObject = realm["Object"] as { prototype?: Record<string, unknown> } | undefined;
+  for (const name of SAFE_GUEST_OBJECT_PROTOTYPE_GLOBALS) {
+    const value = realmObject?.prototype?.[name];
+    if (typeof value !== "function") continue;
+    const intrinsic = value as (this: unknown, ...args: unknown[]) => unknown;
+    // On a real global these are inherited from Object.prototype, so a bare
+    // `toString()` / `valueOf()` observes the global as its receiver. Copied as
+    // unbound OWN properties into strict guest code, an extracted call would
+    // instead run with an undefined receiver (valueOf() would throw). Wrap so a
+    // missing receiver defaults to the guest facade, while the documented
+    // `hasOwnProperty.call(value, key)` form keeps its explicit receiver — a
+    // hard bind would break it.
+    const facadeDefaulted = function (this: unknown, ...args: unknown[]): unknown {
+      const receiver = this === undefined || this === null ? guest : this;
+      return Reflect.apply(intrinsic, receiver, args);
+    };
+    Object.defineProperty(facadeDefaulted, "name", { value: name, configurable: true });
+    Reflect.set(target, name, facadeDefaulted);
   }
   // Eval's named bindings are already reviewed endowments of this guest
   // invocation. Publish the same objects on the private facade so ordinary

@@ -16,10 +16,12 @@ function admission(
       bindingId: "binding:news",
     },
     taskRef: "task:one",
+    taskAuthority: "task:one",
     harness: {
-      principal: `code:workers/system-agent@${"a".repeat(64)}` as const,
+      principal: `code:workers/system-agent@ev:one` as const,
       repoPath: "workers/system-agent",
       effectiveVersion: "ev:one",
+      executionDigest: "a".repeat(64),
     },
     eval: {
       runtimeId,
@@ -302,8 +304,9 @@ describe("AgentExecutionSessionRegistry admission", () => {
       agentBinding: { bindingId: "binding:news", channelId: "channel:one" },
       causalParent: { invocationId: "invocation:one" },
       harness: {
-        principal: `code:workers/system-agent@${"a".repeat(64)}`,
+        principal: `code:workers/system-agent@ev:one`,
         effectiveVersion: "ev:one",
+        executionDigest: "a".repeat(64),
       },
     });
     expect(Object.isFrozen(fact)).toBe(true);

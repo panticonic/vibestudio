@@ -23,7 +23,10 @@ import {
 } from "@vibestudio/service-schemas/clients/evalImportLoader";
 import { executionArtifactRefSchema } from "@vibestudio/service-schemas/build";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
-import { EVAL_RESULT_RETURN_PREVIEW_CHARS } from "@vibestudio/service-schemas/eval";
+import {
+  EVAL_RESULT_RETURN_PREVIEW_CHARS,
+  evalLifecycleFailureCodes,
+} from "@vibestudio/service-schemas/eval";
 import { evalEngineMethods } from "@vibestudio/service-schemas/evalEngine";
 import { evalEventIngressMethods } from "@vibestudio/service-schemas/evalEventIngress";
 import { evalExecutionRootsMethods } from "@vibestudio/service-schemas/evalExecutionRoots";
@@ -89,6 +92,17 @@ const RESULT_ERROR_MAX_CHARS = 20_000;
 const RESULT_STORAGE_MAX_CHARS = 250_000;
 const CANCELLATION_GRACE_MS = 5_000;
 const MAX_KERNEL_IDLE_LEASE_MS = 60 * 60 * 1_000;
+/** Bounded EvalDO-side terminal-push redelivery (receivers dedupe). */
+const RESULT_REDELIVERY_MAX_ATTEMPTS = 3;
+const RESULT_REDELIVERY_BASE_DELAY_MS = 5_000;
+
+const EVAL_SCHEMA_TABLES = [
+  "runs",
+  "run_progress",
+  "run_events",
+  "eval_execution_roots",
+  "eval_result_redeliveries",
+] as const;
 
 interface RunCleanupPhase {
   active: boolean;
@@ -415,7 +429,7 @@ interface KernelLeaseState {
 
 export class EvalDO extends DurableObjectBase {
   static override rpcMethods = evalEngineMethods;
-  static override schemaVersion = 1;
+  static override schemaVersion = 2;
 
   private engine: EvalEngine | null = null;
   private scopeManager: ScopeManagerLike | null = null;
@@ -423,6 +437,7 @@ export class EvalDO extends DurableObjectBase {
   private scopeGeneration = 0;
   /** Instance field so cancellation timing can be exercised without a real five-second test. */
   private readonly cancellationGraceMs = CANCELLATION_GRACE_MS;
+  /** Instance field so the terminal drain bound can be exercised without a real one-second test. */
   /** Serializes eval runs — ScopeManager has a single in-progress flag + one current scope. */
   private runChain: Promise<unknown> = Promise.resolve();
   /** In-flight runs in THIS instance, keyed by runId → the single execution promise. A concurrent
@@ -442,10 +457,25 @@ export class EvalDO extends DurableObjectBase {
    * already-aborted signal; the cancelled program itself is no longer running.
    */
   private readonly runCleanupPhases = new Map<string, RunCleanupPhase>();
+  /**
+   * The execution currently invoking retained runtime objects. Panel handles
+   * survive across notebook cells, so their module-loader closure must resolve
+   * authority from the calling cell rather than the cell that created them.
+   * Async-local binding also keeps a force-reset overlap from borrowing a newer
+   * run's execution session.
+   */
+  private readonly activeEvalExecution = new asyncHooks.AsyncLocalStorage<EvalExecutionContext>();
   /** Run-scoped cleanup registered by evaluated orchestration code. Cancel
    *  executes these BEFORE aborting outbound RPC so child runtimes can retire
    *  through the normal authority path instead of becoming orphans. */
   private readonly runCancelHandlers = new Map<string, Set<() => void | Promise<void>>>();
+  /**
+   * Live event delivery is ordered per run. Terminal events close the host
+   * event-sink route, so concurrent waitUntil publishes would otherwise let a
+   * terminal event overtake earlier events and turn normal teardown into
+   * authenticated-session errors.
+   */
+  private readonly liveEventDeliveries = new Map<string, Promise<void>>();
   /**
    * Factories from the manifest-declared runtime unit (providers.evalRuntime),
    * loaded dynamically via the build service (see ensureRuntimeSupport). The
@@ -503,6 +533,11 @@ export class EvalDO extends DurableObjectBase {
     // Runs once per boot (this instance), before any run executes — so every `running`
     // row is orphaned by a prior instance whose held connection dropped (server restart).
     this.reconcileOrphanedRuns();
+    // Execution roots describe live module objects in this exact in-memory
+    // kernel, not merely builds used by historical runs. A new activation has
+    // no module heap to retain, so carrying these rows across an incarnation
+    // would reject a valid rebuild after the workspace head changes.
+    if (this.kernelRestarted) this.sql.exec(`DELETE FROM eval_execution_roots`);
   }
 
   protected createTables(): void {
@@ -556,6 +591,17 @@ export class EvalDO extends DurableObjectBase {
         retained_at INTEGER NOT NULL
       )
     `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS eval_result_redeliveries (
+        run_id TEXT PRIMARY KEY,
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+      )
+    `);
+  }
+
+  protected override requiredTables(): readonly string[] {
+    return EVAL_SCHEMA_TABLES;
   }
 
   /**
@@ -573,7 +619,7 @@ export class EvalDO extends DurableObjectBase {
         console: "",
         error: "eval interrupted by restart",
         failureKind: "infrastructure",
-        failureCode: "eval_runtime_restarted",
+        failureCode: evalLifecycleFailureCodes.runtimeRestarted,
       })
     );
     // A cancelling row means the old activation had already prevented normal
@@ -705,6 +751,19 @@ export class EvalDO extends DurableObjectBase {
     } catch {
       // Not an RPC service (or not describable) — reflection alone still gives the truthful surface.
     }
+    if (Object.keys(serviceMethods).length === 0) {
+      for (const method of liveMethods) {
+        for (const target of ["panel", "workerRuntime"] as const) {
+          const entry = await docs
+            .describe(`runtime:${target}.${name}.${method}`)
+            .catch(() => null);
+          if (entry) {
+            serviceMethods[method] = entry;
+            break;
+          }
+        }
+      }
+    }
     return describeEvalBindingSurface(
       name,
       liveMethods,
@@ -826,9 +885,83 @@ export class EvalDO extends DurableObjectBase {
   }
 
   override async releaseForLifecycle(_input: LifecyclePrepareInput): Promise<{ status: "ready" }> {
-    await this.clearLifecycleRelease();
+    const failures: unknown[] = [];
+    try {
+      await this.cancelRunsForLifecycle();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await this.clearLifecycleRelease();
+    } catch (error) {
+      failures.push(error);
+    }
     if (this.kernelLease) this.settleKernelLease(this.kernelLease, "released");
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "eval lifecycle release failed");
+    }
     return { status: "ready" };
+  }
+
+  /**
+   * A lifecycle release is a process-boundary operation, not just a notebook
+   * lease release. Any pending/running durable run owns work inside this
+   * activation and must be cancelled before the activation can claim that it
+   * is ready to disappear. The durable CAS in cancel() makes a late execution
+   * unable to resurrect a completed result after shutdown.
+   */
+  private async cancelRunsForLifecycle(): Promise<void> {
+    const runIds = this.sql
+      .exec(
+        `SELECT run_id FROM runs
+         WHERE status IN ('pending', 'running', 'cancelling')
+         ORDER BY started_at ASC, run_id ASC`
+      )
+      .toArray()
+      .map((row) => String(row["run_id"]));
+    if (runIds.length === 0) return;
+    const results = await Promise.allSettled(
+      runIds.map(async (runId) => {
+        // Persist the infrastructure terminal before aborting execution. The
+        // execution promise and cancellation owner race to resume after abort;
+        // stamping afterward could let executeAndDeliver publish an ordinary
+        // eval_cancelled terminal first.
+        this.markRunGenerationLost(runId);
+        await this.cancel(runId);
+      })
+    );
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `eval lifecycle cancellation failed for ${runIds.length} run(s)`
+      );
+    }
+  }
+
+  /**
+   * A planned lifecycle suspend is infrastructure, never user intent. Stamp the
+   * active row with the typed `runtime_generation_lost` result before its abort
+   * is issued, so the execution and cancellation continuations observe the
+   * same canonical terminal. A run that raced to a real result keeps it.
+   */
+  private markRunGenerationLost(runId: string): void {
+    this.sql.exec(
+      `UPDATE runs SET result = ?
+        WHERE run_id = ?
+          AND status IN ('pending', 'running', 'cancelling', 'cancelled')
+          AND result IS NULL`,
+      JSON.stringify({
+        success: false,
+        console: "",
+        error: "eval runtime generation was retired by a planned lifecycle transition",
+        failureKind: "infrastructure",
+        failureCode: evalLifecycleFailureCodes.runtimeGenerationLost,
+      }),
+      runId
+    );
   }
 
   override async resumeAfterRestart(_input: LifecycleResumeInput): Promise<void> {
@@ -878,11 +1011,15 @@ export class EvalDO extends DurableObjectBase {
       if (!prior.runDigest || !prior.scopeInputRevision) {
         throw new Error(`eval: run ${runId} has incompatible pre-provenance metadata`);
       }
-      if (status === "pending") {
+      if (status === "pending" || status === "cancelling") {
         // Host credentials prove the current live admission; they are not part
         // of the user's idempotent program. A deferred-effect redrive after a
         // host restart may legitimately remint them before the durable pending
-        // run is attached to execution.
+        // run is attached to execution. A CANCELLING run is refreshed too: its
+        // terminal `cancelled` state event has not been appended yet, so
+        // routing the tail of its lifecycle to the freshly prepared event sink
+        // lets the new admission observe a terminal instead of leaking open
+        // against a dead nonce.
         const refreshed = {
           ...prior,
           gatewayToken: args.gatewayToken,
@@ -897,7 +1034,7 @@ export class EvalDO extends DurableObjectBase {
             runId
           );
         }
-        if (schedule) this.scheduleRun(runId);
+        if (schedule && status === "pending") this.scheduleRun(runId);
       }
       return {
         runId,
@@ -975,21 +1112,114 @@ export class EvalDO extends DurableObjectBase {
     const result = await this.executeRun(runId);
     if (!args.resultReceiverRef || !args.channelId) return;
     try {
-      await this.rpc.call(args.resultReceiverRef, "onEvalComplete", [
-        {
-          runId,
-          agentInvocationId: args.agentInvocationId,
-          result,
-          channelId: args.channelId,
-        },
-      ]);
+      await this.deliverTerminalResult(runId, args, result);
     } catch (error) {
-      // The terminal row is canonical. A hibernated/restarted agent re-observes it through getRun.
+      // The terminal row is canonical. A hibernated/restarted agent re-observes
+      // it through getRun; the vessel keeps its own durable redrive. Between
+      // those, retry the push a few bounded times from here — receivers dedupe.
       console.warn(
         `[EvalDO] completion delivery for ${runId} failed (durable getRun recovery remains available):`,
         error instanceof Error ? error.message : String(error)
       );
+      this.scheduleResultRedelivery(runId, 1);
     }
+  }
+
+  private async deliverTerminalResult(
+    runId: string,
+    args: RunArgs,
+    result: RunResult
+  ): Promise<void> {
+    await this.rpc.call(args.resultReceiverRef!, "onEvalComplete", [
+      {
+        runId,
+        agentInvocationId: args.agentInvocationId,
+        result,
+        channelId: args.channelId,
+      },
+    ]);
+  }
+
+  private scheduleResultRedelivery(runId: string, attempt: number): void {
+    this.sql.exec(
+      `INSERT INTO eval_result_redeliveries (run_id, attempt) VALUES (?, ?)
+       ON CONFLICT (run_id) DO NOTHING`,
+      runId,
+      attempt
+    );
+    this.setAlarm(RESULT_REDELIVERY_BASE_DELAY_MS * 2 ** (attempt - 1));
+  }
+
+  override async alarm(): Promise<{ wakeAt: number } | null> {
+    this.ensureReady();
+    return this.redeliverTerminalResults();
+  }
+
+  /**
+   * Bounded, idempotent redelivery of failed terminal pushes. The durable run
+   * row stays canonical; this only shortens the window before the receiver's
+   * own durable redrive. After the attempt budget the entry is dropped.
+   */
+  private async redeliverTerminalResults(): Promise<{ wakeAt: number } | null> {
+    const pending = this.sql
+      .exec(`SELECT run_id, attempt FROM eval_result_redeliveries ORDER BY run_id`)
+      .toArray();
+    for (const pendingRow of pending) {
+      const runId = String(pendingRow["run_id"]);
+      const attempt = Number(pendingRow["attempt"]);
+      const row = this.sql
+        .exec(`SELECT args, status, result FROM runs WHERE run_id = ?`, runId)
+        .toArray()[0];
+      const status = row ? String(row["status"]) : null;
+      const terminal =
+        status === "done" || status === "cancelled" || status === "approval-route-lost";
+      if (!row || !terminal || row["result"] == null) {
+        this.deleteResultRedelivery(runId, attempt);
+        continue;
+      }
+      const args = JSON.parse(String(row["args"])) as RunArgs;
+      if (!args.resultReceiverRef || !args.channelId) {
+        this.deleteResultRedelivery(runId, attempt);
+        continue;
+      }
+      try {
+        await this.deliverTerminalResult(
+          runId,
+          args,
+          JSON.parse(String(row["result"])) as RunResult
+        );
+        this.deleteResultRedelivery(runId, attempt);
+      } catch (error) {
+        if (attempt >= RESULT_REDELIVERY_MAX_ATTEMPTS) {
+          console.warn(
+            `[EvalDO] completion redelivery for ${runId} exhausted after ${attempt} attempts:`,
+            error instanceof Error ? error.message : String(error)
+          );
+          this.deleteResultRedelivery(runId, attempt);
+          continue;
+        }
+        this.sql.exec(
+          `UPDATE eval_result_redeliveries SET attempt = ? WHERE run_id = ? AND attempt = ?`,
+          attempt + 1,
+          runId,
+          attempt
+        );
+      }
+    }
+    const next = this.sql
+      .exec(`SELECT attempt FROM eval_result_redeliveries ORDER BY attempt ASC LIMIT 1`)
+      .toArray()[0];
+    if (!next) return null;
+    const delayMs = RESULT_REDELIVERY_BASE_DELAY_MS * 2 ** (Number(next["attempt"]) - 1);
+    return { wakeAt: Date.now() + delayMs };
+  }
+
+  private deleteResultRedelivery(runId: string, attempt: number): void {
+    this.sql.exec(
+      `DELETE FROM eval_result_redeliveries WHERE run_id = ? AND attempt = ?`,
+      runId,
+      attempt
+    );
   }
 
   /**
@@ -1014,11 +1244,15 @@ export class EvalDO extends DurableObjectBase {
    * a CAS so a concurrent `reset` cancel is never resurrected.
    */
   private async runEval(runId: string): Promise<RunResult> {
-    this.sql.exec(
-      `UPDATE runs SET status = 'running' WHERE run_id = ? AND status = 'pending'`,
-      runId
-    );
-    this.appendRunEvent(runId, "state", { status: "running" });
+    const claimedRow = this.sql
+      .exec(
+        `UPDATE runs
+            SET status = 'running'
+          WHERE run_id = ? AND status = 'pending'
+        RETURNING status`,
+        runId
+      )
+      .toArray()[0];
     const row = this.sql
       .exec(`SELECT status, args, deadline_at, result FROM runs WHERE run_id = ?`, runId)
       .toArray()[0];
@@ -1031,24 +1265,28 @@ export class EvalDO extends DurableObjectBase {
         failureCode: "eval_run_missing",
       };
     }
-    const claimed = String(row["status"]) as EvalRunStatusValue;
-    if (claimed !== "running") {
+    const status = String(row["status"]) as EvalRunStatusValue;
+    if (!claimedRow) {
       // Already terminal (idempotent re-dispatch, or cancelled before we claimed it).
-      if ((claimed === "done" || claimed === "approval-route-lost") && row["result"] != null) {
+      if (
+        (status === "done" || status === "cancelled" || status === "approval-route-lost") &&
+        row["result"] != null
+      ) {
         return JSON.parse(String(row["result"])) as RunResult;
       }
       return {
         success: false,
         console: "",
-        error: `eval: run ${runId} is ${claimed}`,
+        error: `eval: run ${runId} is ${status}`,
         failureKind:
-          claimed === "cancelling" || claimed === "cancelled" ? "cancelled" : "infrastructure",
+          status === "cancelling" || status === "cancelled" ? "cancelled" : "infrastructure",
         failureCode:
-          claimed === "cancelling" || claimed === "cancelled"
+          status === "cancelling" || status === "cancelled"
             ? "eval_cancelled"
             : "eval_invalid_run_state",
       };
     }
+    this.appendRunEvent(runId, "state", { status: "running" });
 
     const args = JSON.parse(String(row["args"])) as RunArgs;
     const deadlineAt = row["deadline_at"] != null ? Number(row["deadline_at"]) : null;
@@ -1065,12 +1303,12 @@ export class EvalDO extends DurableObjectBase {
       if (deadlineAt != null) {
         const remaining = deadlineAt - Date.now();
         if (remaining <= 0) {
-          controller.abort();
+          controller.abort(evalDeadlineAbortReason(args.timeoutMs));
           cleanupPhase.active = true;
           await this.executeRunCancelHandlers(runId);
         } else {
           timer = setTimeout(() => {
-            controller.abort();
+            controller.abort(evalDeadlineAbortReason(args.timeoutMs));
           }, remaining);
           timer.unref?.();
         }
@@ -1122,47 +1360,89 @@ export class EvalDO extends DurableObjectBase {
       }
       result = { ...result, kernel };
     } catch (err) {
-      console.error(
-        `[EvalDO] run ${runId} failed`,
-        err instanceof Error ? (err.stack ?? err.message) : String(err)
+      const currentStatus = String(
+        this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0]?.["status"] ??
+          ""
       );
-      result = {
-        success: false,
-        console: "",
-        error:
-          errorCodeInChain(err) === "EAPPROVALROUTELOST"
-            ? "Attached-host approval route was lost; restart this eval on a live attached run"
-            : err instanceof Error
-              ? err.message
-              : String(err),
-        failureKind: "infrastructure",
-        failureCode:
-          errorCodeInChain(err) === "EAPPROVALROUTELOST"
-            ? "approval-route-lost"
-            : "eval_host_failed",
-        kernel: kernel ?? this.kernelStatusForRun(),
-      };
+      const deadlineFired = deadlineAt !== null && controller.signal.aborted;
+      // A fired deadline is not carte blanche: only an error DERIVED from the
+      // abort (the reason itself, an AbortError, or an abort-caused transport
+      // rejection in the cause chain) is the timeout. Anything else is a real
+      // failure that must keep its own classification and stay visible.
+      const deadlineExceeded =
+        deadlineFired &&
+        currentStatus !== "cancelling" &&
+        currentStatus !== "cancelled" &&
+        isAbortDerivedError(err, controller.signal.reason);
+      const cancelled = currentStatus === "cancelling" || currentStatus === "cancelled";
+      const approvalRouteLost = errorCodeInChain(err) === "EAPPROVALROUTELOST";
+      if (approvalRouteLost) {
+        console.warn(`[EvalDO] approval route lost for run ${runId}`);
+      } else if (!deadlineExceeded && !cancelled) {
+        const log = deadlineFired ? console.warn : console.error;
+        log(
+          `[EvalDO] run ${runId} failed`,
+          err instanceof Error ? (err.stack ?? err.message) : String(err)
+        );
+      }
+      result = deadlineExceeded
+        ? {
+            success: false,
+            console: "",
+            error: `eval timed out after ${args.timeoutMs}ms${
+              /cancellation cleanup failed/iu.test(err instanceof Error ? err.message : String(err))
+                ? `; ${err instanceof Error ? err.message : String(err)}`
+                : ""
+            }`,
+            failureKind: "cancelled",
+            failureCode: "eval_deadline_exceeded",
+            kernel: kernel ?? this.kernelStatusForRun(),
+          }
+        : {
+            success: false,
+            console: "",
+            error: approvalRouteLost
+              ? "Attached-host approval route was lost; restart this eval on a live attached run"
+              : err instanceof Error
+                ? err.message
+                : String(err),
+            failureKind: "infrastructure",
+            failureCode: approvalRouteLost ? "approval-route-lost" : "eval_host_failed",
+            kernel: kernel ?? this.kernelStatusForRun(),
+          };
     } finally {
       if (timer) clearTimeout(timer);
       this.runAborts.delete(runId);
       this.runCleanupPhases.delete(runId);
       if (!controller.signal.aborted) this.runCancelHandlers.delete(runId);
+      this.releaseUnloadedExecutionRoots(runId);
     }
 
     const terminalResult = this.compactRunResult(result);
     // CAS persist: write `done` only if still `running`, so a concurrent `reset` → `cancelled` wins.
     const terminalStatus =
       terminalResult.failureCode === "approval-route-lost" ? "approval-route-lost" : "done";
-    this.sql.exec(
-      `UPDATE runs SET status = ?, result = ? WHERE run_id = ? AND status = 'running'`,
-      terminalStatus,
-      JSON.stringify(terminalResult),
-      runId
-    );
+    const terminalClaim = this.sql
+      .exec(
+        `UPDATE runs
+            SET status = ?, result = ?
+          WHERE run_id = ? AND status = 'running'
+        RETURNING status`,
+        terminalStatus,
+        JSON.stringify(terminalResult),
+        runId
+      )
+      .toArray()[0];
     const finalStatus = this.sql
-      .exec(`SELECT status FROM runs WHERE run_id = ?`, runId)
-      .toArray()[0]?.["status"];
-    if (String(finalStatus) === "cancelling" || String(finalStatus) === "cancelled") {
+      .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
+      .toArray()[0];
+    if (
+      String(finalStatus?.["status"]) === "cancelling" ||
+      String(finalStatus?.["status"]) === "cancelled"
+    ) {
+      if (finalStatus?.["result"] != null) {
+        return JSON.parse(String(finalStatus["result"])) as RunResult;
+      }
       return this.compactRunResult({
         success: false,
         console: result.console,
@@ -1170,6 +1450,19 @@ export class EvalDO extends DurableObjectBase {
         failureKind: "cancelled",
         failureCode: "eval_cancelled",
         kernel: result.kernel,
+      });
+    }
+    if (!terminalClaim) {
+      if (finalStatus?.["result"] != null) {
+        return JSON.parse(String(finalStatus["result"])) as RunResult;
+      }
+      return this.compactRunResult({
+        success: false,
+        console: terminalResult.console,
+        error: `eval: run ${runId} lost terminal ownership in state ${String(finalStatus?.["status"] ?? "unknown")}`,
+        failureKind: "infrastructure",
+        failureCode: "eval_invalid_run_state",
+        kernel: terminalResult.kernel,
       });
     }
     const hasConsoleEvents =
@@ -1192,6 +1485,7 @@ export class EvalDO extends DurableObjectBase {
       failureKind: terminalResult.failureKind,
       failureCode: terminalResult.failureCode,
     });
+    await this.settleLiveEventDelivery(runId);
     return terminalResult;
   }
 
@@ -1202,6 +1496,10 @@ export class EvalDO extends DurableObjectBase {
     status: EvalRunStatusValue | "unknown";
     result?: RunResult;
     progress?: unknown;
+    activity?:
+      | { kind: "executing" }
+      | { kind: "authority-pending"; request: unknown }
+      | { kind: "cancelling" };
   } {
     const row = this.sql
       .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
@@ -1213,10 +1511,39 @@ export class EvalDO extends DurableObjectBase {
       .toArray()[0];
     const progress =
       progressRow?.["progress"] != null ? JSON.parse(String(progressRow["progress"])) : undefined;
+    // Activity is a LIVE-lifecycle observation; a terminal run has none. Gate
+    // on status before deriving from authority events, so a terminal run whose
+    // last authority event happens to be `authority-requested` can never report
+    // a permanently pending authority ask.
+    const authorityEvent =
+      status === "running"
+        ? this.sql
+            .exec(
+              `SELECT kind, payload
+                 FROM run_events
+                WHERE run_id = ? AND kind IN ('authority-requested', 'authority-decided')
+                ORDER BY sequence DESC
+                LIMIT 1`,
+              runId
+            )
+            .toArray()[0]
+        : undefined;
+    const activity =
+      status === "cancelling"
+        ? ({ kind: "cancelling" } as const)
+        : status === "running"
+          ? String(authorityEvent?.["kind"] ?? "") === "authority-requested"
+            ? ({
+                kind: "authority-pending" as const,
+                request: JSON.parse(String(authorityEvent!["payload"])),
+              } as const)
+            : ({ kind: "executing" } as const)
+          : undefined;
     return {
       status,
       ...(row["result"] != null ? { result: JSON.parse(String(row["result"])) as RunResult } : {}),
       ...(progress !== undefined ? { progress } : {}),
+      ...(activity ? { activity } : {}),
     };
   }
 
@@ -1289,11 +1616,60 @@ export class EvalDO extends DurableObjectBase {
     kind: "authority-requested" | "authority-decided",
     payload: unknown
   ): void {
-    const exists = this.sql
-      .exec(`SELECT 1 AS present FROM runs WHERE run_id = ?`, runId)
-      .toArray()[0];
-    if (!exists) return;
-    this.appendRunEvent(runId, kind, payload);
+    const row = this.sql.exec(`SELECT args FROM runs WHERE run_id = ?`, runId).toArray()[0];
+    if (!row || !this.appendRunEvent(runId, kind, payload)) return;
+    const args = JSON.parse(String(row["args"])) as RunArgs;
+    const activity = this.deliverEvalProgress(runId, args, {
+      activity: { kind, detail: payload },
+    })
+      .then(() => undefined)
+      .catch((error) => {
+        // The durable run event and eval.get activity are canonical. This push
+        // only makes the lifecycle visible immediately in the trajectory.
+        console.warn(
+          `[EvalDO] activity progress delivery for ${runId} failed:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      });
+    this.ctx.waitUntil?.(activity);
+  }
+
+  /**
+   * Best-effort progress is still part of the admitted eval execution. Bind it
+   * to that durable execution session so connectionless RPC does not inherit
+   * the transient authority parent of whichever callback happened to emit it.
+   * That callback may return before a waitUntil delivery reaches the server.
+   */
+  private async deliverEvalProgress(
+    runId: string | undefined,
+    args: RunArgs,
+    progress: { output?: string; activity?: { kind: string; detail?: unknown } },
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (
+      !runId ||
+      !args.agentRef ||
+      !args.channelId ||
+      !args.agentInvocationId ||
+      !args.executionSessionNonce
+    ) {
+      return;
+    }
+    const options: RpcCallOptions = signal ? { signal } : {};
+    bindExecutionSession(options, args.executionSessionNonce);
+    await this.rpc.call(
+      args.agentRef,
+      "onEvalProgress",
+      [
+        {
+          runId,
+          agentInvocationId: args.agentInvocationId,
+          channelId: args.channelId,
+          ...progress,
+        },
+      ],
+      options
+    );
   }
 
   /**
@@ -1412,7 +1788,7 @@ export class EvalDO extends DurableObjectBase {
     this.appendRunEvent(runId, "progress", progress);
   }
 
-  private appendRunEvent(runId: string, kind: EvalRunEventKind, payload: unknown): void {
+  private appendRunEvent(runId: string, kind: EvalRunEventKind, payload: unknown): boolean {
     let encoded: string;
     try {
       encoded = JSON.stringify(payload) ?? "null";
@@ -1431,8 +1807,35 @@ export class EvalDO extends DurableObjectBase {
       kind = "diagnostic";
     }
     const prior = this.sql
-      .exec(`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM run_events WHERE run_id = ?`, runId)
+      .exec(
+        `SELECT sequence, kind, payload
+           FROM run_events
+          WHERE run_id = ?
+          ORDER BY sequence DESC
+          LIMIT 1`,
+        runId
+      )
       .toArray()[0];
+    // Only the LATEST state event can be terminal: this very gate absorbs any
+    // state event appended after a terminal one, so "terminal state is the last
+    // state event" is an invariant, not a property to re-scan every append.
+    const lastStateEvent = this.sql
+      .exec(
+        `SELECT payload
+           FROM run_events
+          WHERE run_id = ? AND kind = 'state'
+          ORDER BY sequence DESC
+          LIMIT 1`,
+        runId
+      )
+      .toArray()[0];
+    const terminalEventExists = isTerminalRunStatus(parseJsonRecord(lastStateEvent?.["payload"]));
+    // The audit tail after terminal: settlement bookkeeping (cleanup),
+    // diagnostics, and late authority decisions — an `authority-decided` for a
+    // request raised while the run was live is audit that must not be lost.
+    const postTerminalTail =
+      kind === "cleanup" || kind === "diagnostic" || kind === "authority-decided";
+    if (terminalEventExists && !postTerminalTail) return false;
     const sequence = Number(prior?.["sequence"] ?? 0) + 1;
     const at = Date.now();
     this.sql.exec(
@@ -1453,9 +1856,12 @@ export class EvalDO extends DurableObjectBase {
       runId
     );
     const argsRow = this.sql.exec(`SELECT args FROM runs WHERE run_id = ?`, runId).toArray()[0];
-    if (!argsRow) return;
+    // The durable event remains canonical, but no event after a terminal state
+    // may re-enter a route whose authenticated execution session has already
+    // been closed. This also covers late waitUntil work from an aborted run.
+    if (!argsRow || terminalEventExists) return true;
     const args = JSON.parse(String(argsRow["args"])) as RunArgs;
-    if (!args.executionSessionNonce || !args.eventSinkNonce) return;
+    if (!args.executionSessionNonce || !args.eventSinkNonce) return true;
     const event = {
       sequence,
       at,
@@ -1471,15 +1877,54 @@ export class EvalDO extends DurableObjectBase {
       (service, method, callArgs) =>
         this.rpc.call("main", `${service}.${method}`, callArgs, options)
     );
-    const publish = eventIngress.publish(args.eventSinkNonce, runId, event).catch((error) => {
-      // The durable page is canonical. A dropped live observer recovers by
-      // cursor without affecting execution or terminal settlement.
-      console.warn(
-        `[EvalDO] live event delivery failed for ${runId}@${sequence}:`,
-        error instanceof Error ? error.message : String(error)
-      );
-    });
+    const previous = this.liveEventDeliveries.get(runId) ?? Promise.resolve();
+    let publish: Promise<void>;
+    publish = previous
+      .catch(() => undefined)
+      .then(() => eventIngress.publish(args.eventSinkNonce!, runId, event))
+      .then(() => undefined)
+      .catch((error) => {
+        // The durable page is canonical. A dropped live observer recovers by
+        // cursor without affecting execution or terminal settlement.
+        console.warn(
+          `[EvalDO] live event delivery failed for ${runId}@${sequence}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      })
+      .finally(() => {
+        if (this.liveEventDeliveries.get(runId) === publish) {
+          this.liveEventDeliveries.delete(runId);
+        }
+      });
+    this.liveEventDeliveries.set(runId, publish);
     this.ctx.waitUntil?.(publish);
+    return true;
+  }
+
+  private async drainLiveEventDelivery(runId: string): Promise<void> {
+    for (;;) {
+      const pending = this.liveEventDeliveries.get(runId);
+      if (!pending) return;
+      await pending;
+      if (this.liveEventDeliveries.get(runId) === pending) return;
+    }
+  }
+
+  /**
+   * The single place durable terminal settlement meets live delivery: hand the
+   * ordered per-run delivery chain to the DO lifetime immediately. INVARIANT:
+   * terminal settlement
+   * (run()/executeRun/cancel) never blocks on a wedged live publisher — the
+   * durable page is canonical and observers recover by cursor.
+   */
+  private settleLiveEventDelivery(runId: string): Promise<void> {
+    const drained = this.drainLiveEventDelivery(runId);
+    // Durable settlement never waits on the lossy live observer. The DO event
+    // owns the ordered delivery tail; cursor recovery remains canonical if the
+    // receiver or transport never answers.
+    if (this.ctx.waitUntil) this.ctx.waitUntil(drained);
+    else void drained.catch(() => undefined);
+    return Promise.resolve();
   }
 
   /** Reset the eval context, including recovery from non-cooperative in-flight work. */
@@ -1586,6 +2031,39 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
+   * Import acquisition is rooted before bundle evaluation so execution GC
+   * cannot race the load. Once a run settles, only modules that actually
+   * reached one of this kernel's persistent maps still own that root. This
+   * removes acquisitions discarded by package initialization failure,
+   * deadline cancellation, or forced recovery.
+   */
+  private releaseUnloadedExecutionRoots(runId: string): void {
+    const rows = this.sql
+      .exec(
+        `SELECT module_specifier
+           FROM eval_execution_roots
+          WHERE run_id = ?`,
+        runId
+      )
+      .toArray();
+    for (const row of rows) {
+      const specifier = String(row["module_specifier"]);
+      if (
+        this.moduleMap[specifier] !== undefined ||
+        this.isolateModuleMap[specifier] !== undefined
+      ) {
+        continue;
+      }
+      this.sql.exec(
+        `DELETE FROM eval_execution_roots
+          WHERE run_id = ? AND module_specifier = ?`,
+        runId,
+        specifier
+      );
+    }
+  }
+
+  /**
    * Cancel ONE run without touching scope or other runs. `cancelling` is a
    * durable non-terminal state: it defeats `runEval`'s `status='running'`
    * completion CAS while retaining the evaluated-execution admission needed by
@@ -1607,19 +2085,17 @@ export class EvalDO extends DurableObjectBase {
   }
 
   private async cancelRun(runId: string): Promise<EvalCancelResult> {
-    this.sql.exec(
-      `UPDATE runs SET status = 'cancelling'
-       WHERE run_id = ? AND status IN ('pending', 'running')`,
-      runId
-    );
+    const claimed = this.sql
+      .exec(
+        `UPDATE runs SET status = 'cancelling'
+         WHERE run_id = ? AND status IN ('pending', 'running')
+         RETURNING status`,
+        runId
+      )
+      .toArray()[0];
+    if (!claimed) return { ok: true, forcedReset: false };
     this.appendRunEvent(runId, "state", { status: "cancellation-requested" });
     this.appendRunEvent(runId, "cleanup", { status: "started" });
-    const status = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0]?.[
-      "status"
-    ];
-    if (String(status) !== "cancelling") {
-      return { ok: true, forcedReset: false };
-    }
     const inFlight = this.inFlightRuns.get(runId);
     const hasOwnedCleanup = (this.runCancelHandlers.get(runId)?.size ?? 0) > 0;
     const cleanupPhase = this.runCleanupPhases.get(runId);
@@ -1638,10 +2114,7 @@ export class EvalDO extends DurableObjectBase {
     // eval with no cleanup contract can await a non-cooperative promise forever,
     // so there is nobody whose valid teardown a force reset could interrupt.
     const settlement: TimedSettlement<
-      [
-        PromiseSettledResult<RunResult | undefined>,
-        PromiseSettledResult<void>,
-      ]
+      [PromiseSettledResult<RunResult | undefined>, PromiseSettledResult<void>]
     > = hasOwnedCleanup
       ? { settled: true, value: await terminal }
       : await settleWithin(terminal, this.cancellationGraceMs);
@@ -1685,6 +2158,7 @@ export class EvalDO extends DurableObjectBase {
       );
       this.appendRunEvent(runId, "cleanup", { status: "settled" });
       this.appendRunEvent(runId, "state", { status: "cancelled" });
+      await this.settleLiveEventDelivery(runId);
     }
   }
 
@@ -1757,6 +2231,7 @@ export class EvalDO extends DurableObjectBase {
     }
     const cleanup = Promise.allSettled([...runIds].map((id) => this.executeRunCancelHandlers(id)));
     for (const controller of this.runAborts.values()) controller.abort();
+    for (const runId of runIds) this.releaseUnloadedExecutionRoots(runId);
     const cleanupSettlement = await settleWithin(cleanup, this.cancellationGraceMs);
     for (const phase of this.runCleanupPhases.values()) {
       phase.active = false;
@@ -2098,17 +2573,16 @@ export class EvalDO extends DurableObjectBase {
     const agentRef = args.agentRef;
     const channelId = args.channelId;
     const agentInvocationId = args.agentInvocationId;
+    const executionSessionNonce = args.executionSessionNonce;
     const streamer =
-      agentRef && channelId && agentInvocationId
+      agentRef && channelId && agentInvocationId && executionSessionNonce
         ? new ConsoleStreamer((chunk, progressSignal) =>
-            this.rpc
-              .call(
-                agentRef,
-                "onEvalProgress",
-                [{ runId, agentInvocationId, channelId, output: chunk }],
-                { signal: progressSignal }
-              )
-              .then(() => undefined)
+            this.deliverEvalProgress(
+              runId,
+              { ...args, executionSessionNonce },
+              { output: chunk },
+              progressSignal
+            )
           )
         : null;
 
@@ -2127,43 +2601,46 @@ export class EvalDO extends DurableObjectBase {
     };
     scopeManager.enterEval();
     try {
-      const result = await engine.executeSandbox(entryCode, {
-        syntax: args.syntax ?? "tsx",
-        imports: args.imports,
-        sourcePath,
-        loadImport: this.makeLoadImport(execution),
-        loadSourceFile: sourcePath
-          ? (path: string) => this.readSourceFile(path, execution)
-          : undefined,
-        bindings,
-        // Per-object map/require so this owner's loaded imports never leak to other owners
-        // sharing the isolate (the engine's global module map is the multi-tenant leak).
-        moduleMap: runModuleMap,
-        require: (id: string): unknown => {
-          const value = runModuleMap[id];
-          if (value !== undefined) return value;
-          throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
-        },
-        compileFunction: this.compileInIsolate,
-        confinement: "private-global",
-        freezeModuleNamespace,
-        publishLazyLoaderToGlobal: false,
-        // Opt-in deadline (timeoutMs) → AbortSignal. Best-effort: the engine may not honor it
-        // inside native code; authored loops/functions also receive cooperative
-        // checkpoints so ordinary synchronous code settles inside this EvalDO.
-        signal,
-        ...(deadlineAt !== null && deadlineAt !== undefined && args.timeoutMs !== undefined
-          ? { deadline: { atMs: deadlineAt, timeoutMs: args.timeoutMs } }
-          : {}),
-        onConsole: (formatted: string) => {
-          const chunk = `${consoleOutput ? "\n" : ""}${formatted}`;
-          consoleOutput += chunk;
-          liveConsoleBuffer += chunk;
-          if (liveConsoleBuffer.length >= 4_096) flushLiveConsole();
-          else if (runId && !liveConsoleTimer) liveConsoleTimer = setTimeout(flushLiveConsole, 25);
-          streamer?.push(formatted);
-        },
-      });
+      const result = await this.activeEvalExecution.run(execution, () =>
+        engine.executeSandbox(entryCode, {
+          syntax: args.syntax ?? "tsx",
+          imports: args.imports,
+          sourcePath,
+          loadImport: this.makeLoadImport(execution),
+          loadSourceFile: sourcePath
+            ? (path: string) => this.readSourceFile(path, execution)
+            : undefined,
+          bindings,
+          // Per-object map/require so this owner's loaded imports never leak to other owners
+          // sharing the isolate (the engine's global module map is the multi-tenant leak).
+          moduleMap: runModuleMap,
+          require: (id: string): unknown => {
+            const value = runModuleMap[id];
+            if (value !== undefined) return value;
+            throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
+          },
+          compileFunction: this.compileInIsolate,
+          confinement: "private-global",
+          freezeModuleNamespace,
+          publishLazyLoaderToGlobal: false,
+          // Opt-in deadline (timeoutMs) → AbortSignal. Best-effort: the engine may not honor it
+          // inside native code; authored loops/functions also receive cooperative
+          // checkpoints so ordinary synchronous code settles inside this EvalDO.
+          signal,
+          ...(deadlineAt !== null && deadlineAt !== undefined && args.timeoutMs !== undefined
+            ? { deadline: { atMs: deadlineAt, timeoutMs: args.timeoutMs } }
+            : {}),
+          onConsole: (formatted: string) => {
+            const chunk = `${consoleOutput ? "\n" : ""}${formatted}`;
+            consoleOutput += chunk;
+            liveConsoleBuffer += chunk;
+            if (liveConsoleBuffer.length >= 4_096) flushLiveConsole();
+            else if (runId && !liveConsoleTimer)
+              liveConsoleTimer = setTimeout(flushLiveConsole, 25);
+            streamer?.push(formatted);
+          },
+        })
+      );
       // Live progress is incidental. The terminal result below is canonical and
       // includes the complete console, so a stalled progress receiver must not
       // hold this durable run open.
@@ -2615,7 +3092,13 @@ export class EvalDO extends DurableObjectBase {
         if (existing !== undefined) return existing;
         const cdpSource = this.declaredProviderSource("EVAL_CDP_CLIENT_SOURCE");
         if (cdpSource && id === cdpSource) {
-          return this.loadLibraryModule(cdpSource, execution, {
+          const activeExecution = this.activeEvalExecution.getStore();
+          if (!activeExecution) {
+            throw new Error(
+              `eval: ${cdpSource} can only be loaded while an eval cell is actively executing`
+            );
+          }
+          return this.loadLibraryModule(cdpSource, activeExecution, {
             externals: Object.keys(this.isolateModuleMap),
             endowments: { fetch: globalThis.fetch.bind(globalThis) },
           });
@@ -2676,6 +3159,57 @@ export class EvalDO extends DurableObjectBase {
       },
     };
   }
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isTerminalRunStatus(value: Record<string, unknown> | null): boolean {
+  const status = value?.["status"];
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+/** Tagged reason for the deadline abort so downstream errors stay attributable. */
+function evalDeadlineAbortReason(timeoutMs: number | undefined): Error {
+  const reason = new Error(`eval deadline of ${timeoutMs}ms elapsed`);
+  reason.name = "AbortError";
+  return Object.assign(reason, { code: "EEVALDEADLINE" });
+}
+
+/**
+ * Is `error` derived from the run's abort — the abort reason itself, an
+ * AbortError, or an abort-caused transport rejection (the rpc client rejects
+ * pending calls with an "aborted" message)? Walks the cause chain, mirroring
+ * errorCodeInChain.
+ */
+function isAbortDerivedError(error: unknown, abortReason: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 8 && current != null && !seen.has(current); depth += 1) {
+    seen.add(current);
+    if (current === abortReason) return true;
+    if (typeof current !== "object") return false;
+    const candidate = current as {
+      name?: unknown;
+      code?: unknown;
+      message?: unknown;
+      cause?: unknown;
+    };
+    if (candidate.name === "AbortError") return true;
+    if (candidate.code === "ABORT_ERR" || candidate.code === "EEVALDEADLINE") return true;
+    if (typeof candidate.message === "string" && /\babort/iu.test(candidate.message)) return true;
+    current = candidate.cause;
+  }
+  return false;
 }
 
 function errorCodeInChain(error: unknown): string | null {

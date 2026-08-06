@@ -18,10 +18,12 @@ function execution(): AgentExecutionSessionFact {
     contextId: "context:one",
     agentBinding: null,
     taskRef: "task:one",
+    taskAuthority: "task:one",
     harness: {
-      principal: `code:vibestudio/internal@${"a".repeat(64)}`,
+      principal: `code:vibestudio/internal@one`,
       repoPath: "vibestudio/internal",
       effectiveVersion: "one",
+      executionDigest: "a".repeat(64),
     },
     eval: {
       runtimeId,
@@ -83,7 +85,7 @@ function setup(input: { owner: string; initiator: string }) {
       },
     } as never,
   });
-  return { service, emitToWatchesOfCaller };
+  return { service, sinks, emitToWatchesOfCaller };
 }
 
 const event = {
@@ -137,6 +139,19 @@ describe("eval event ingress", () => {
         { ...event, kind: "authority-decided" },
       ])
     ).rejects.toThrow(/does not belong to the authenticated execution session/);
+    expect(emitToWatchesOfCaller).not.toHaveBeenCalled();
+  });
+
+  it("treats a delivery queued before sink closure as a benign durable-only event", async () => {
+    const { service, sinks, emitToWatchesOfCaller } = setup({
+      owner: "panel:owner",
+      initiator: "panel:owner",
+    });
+    sinks.close(sinkNonce);
+
+    await expect(service.handler(context(), "publish", [sinkNonce, runId, event])).resolves.toEqual(
+      { delivered: false }
+    );
     expect(emitToWatchesOfCaller).not.toHaveBeenCalled();
   });
 });

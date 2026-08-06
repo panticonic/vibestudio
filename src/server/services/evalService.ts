@@ -17,15 +17,25 @@ import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
+import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
 import { resourceScopeContains } from "@vibestudio/shared/authorization";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
+import { taskAuthorityPrincipal, type TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
 import { EvalKernelLeaseCoordinator, type EvalKernelLease } from "./evalKernelLease.js";
 
-const DEFAULT_EVAL_WATCHDOG_GRACE_MS = 1_000;
+/**
+ * A deadline is not evidence that workerd is unhealthy. This is only the
+ * irreducible external bound on a side-effect-free liveness probe after the
+ * EvalDO has had its own opportunity to abort and settle the run.
+ */
+const DEFAULT_EVAL_LIVENESS_PROBE_MS = 5_000;
+
+/** One quick retry absorbs a transient transport blip before recovery. */
+const PROBE_REJECTION_RETRY_MS = 250;
 
 interface EvalSandboxRecoveryInput {
   runId: string;
@@ -33,50 +43,124 @@ interface EvalSandboxRecoveryInput {
   evalDoRef: { source: string; className: string; objectKey: string };
 }
 
+export type EvalShutdown = (deadlineMs?: number) => Promise<void>;
+
+interface ActiveEvalRun {
+  evalDoRef: { source: string; className: string; objectKey: string };
+  runId: string;
+  closeAdmission: () => void;
+}
+
+type LivenessObservation =
+  | { kind: "live"; terminal: boolean }
+  | { kind: "unresponsive" }
+  | { kind: "rejected"; error: unknown };
+
+function supervisorDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    timer.unref?.();
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /**
- * Only an explicitly timed run needs a host-held observer: a synchronous CPU loop can prevent the
- * EvalDO's own AbortSignal timer from firing. This observer is therefore an external process
- * watchdog, not the execution or completion channel. Untimed runs never hold a host request.
+ * One side-effect-free probe of the canonical run record, bounded by
+ * `probeBoundMs`. Any response proves the isolate can still execute host work;
+ * a response that cannot arrive (hang past the bound, or transport rejection)
+ * is the only evidence this supervisor acts on.
  */
-async function watchTimedRun(
+async function observeRunLiveness(
   doDispatch: HeldDoDispatcher,
   evalDoRef: { source: string; className: string; objectKey: string },
   runId: string,
-  timeoutMs: number,
-  recoverUnresponsiveSandbox: (input: EvalSandboxRecoveryInput) => Promise<void>,
-  watchdogGraceMs: number
-): Promise<void> {
-  const held = doDispatch.dispatchHeld(evalDoRef, "executeRun", runId);
-  const timeoutError = new Error(
-    `eval run ${runId} exceeded its ${timeoutMs}ms sandbox deadline and required runtime recovery`
-  );
-  let recovery: Promise<void> | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const waitForRecovery = async (): Promise<never> => {
-    if (recovery) await recovery;
-    throw timeoutError;
-  };
-  const guardedHeld = held.then(
-    async (result) => (recovery ? waitForRecovery() : result),
-    async (error) => {
-      if (recovery) await recovery;
-      throw error;
-    }
-  );
-  const watchdog = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      recovery = recoverUnresponsiveSandbox({ runId, timeoutMs, evalDoRef });
-      void recovery.then(
-        () => reject(timeoutError),
-        (error) => reject(error)
-      );
-    }, timeoutMs + watchdogGraceMs);
-    timer.unref?.();
-  });
+  probeBoundMs: number
+): Promise<LivenessObservation> {
+  const unresponsive = Symbol("eval-liveness-probe-unresponsive");
+  let probeTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([guardedHeld, watchdog]);
+    const outcome = await Promise.race([
+      doDispatch.dispatch(evalDoRef, "getRun", runId).then(
+        (snapshot) => ({ kind: "live" as const, snapshot }),
+        (error: unknown) => ({ kind: "rejected" as const, error })
+      ),
+      new Promise<typeof unresponsive>((resolve) => {
+        probeTimer = setTimeout(() => resolve(unresponsive), probeBoundMs);
+        probeTimer.unref?.();
+      }),
+    ]);
+    if (outcome === unresponsive) return { kind: "unresponsive" };
+    if (outcome.kind === "rejected") return outcome;
+    const status = (outcome.snapshot as { status?: string } | null)?.status;
+    return {
+      kind: "live",
+      terminal:
+        status === "done" ||
+        status === "cancelled" ||
+        status === "approval-route-lost" ||
+        status === "unknown",
+    };
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    if (probeTimer !== undefined) clearTimeout(probeTimer);
+  }
+}
+
+/**
+ * Isolate liveness supervisor for one explicitly timed run.
+ *
+ * A synchronous CPU loop can prevent the EvalDO's own AbortSignal timer from
+ * firing, so after the run's OWN user-operation deadline elapses (the EvalDO
+ * gets first opportunity to abort and settle) this loop probes the canonical
+ * run record every `livenessProbeMs` until the run is terminal. Each probe is
+ * side-effect-free. A probe that hangs past its bound OR is rejected by the
+ * transport (after one quick retry for transient blips) is treated identically:
+ * the isolate cannot execute host work, so process recovery runs.
+ *
+ * The supervisor is explicitly independent of the run deadline — a live
+ * response never disarms it (an isolate can wedge AFTER answering once, e.g.
+ * during post-abort cleanup or after an authority grant resumes it). Disposal
+ * is event-driven: terminal `getRun` status, or the admission closing
+ * (`signal` aborts when the run's terminal event releases its admission).
+ */
+async function superviseIsolateLiveness(input: {
+  doDispatch: HeldDoDispatcher;
+  evalDoRef: { source: string; className: string; objectKey: string };
+  runId: string;
+  timeoutMs: number;
+  livenessProbeMs: number;
+  recoverUnresponsiveSandbox: (input: EvalSandboxRecoveryInput) => Promise<void>;
+  signal: AbortSignal;
+}): Promise<void> {
+  const { doDispatch, evalDoRef, runId, timeoutMs, livenessProbeMs, signal } = input;
+  await supervisorDelay(timeoutMs, signal);
+  let retriedRejection = false;
+  while (!signal.aborted) {
+    const observation = await observeRunLiveness(doDispatch, evalDoRef, runId, livenessProbeMs);
+    if (signal.aborted) return;
+    if (observation.kind === "live") {
+      if (observation.terminal) return;
+      retriedRejection = false;
+      await supervisorDelay(livenessProbeMs, signal);
+      continue;
+    }
+    if (observation.kind === "rejected" && !retriedRejection) {
+      retriedRejection = true;
+      await supervisorDelay(Math.min(PROBE_REJECTION_RETRY_MS, livenessProbeMs), signal);
+      continue;
+    }
+    await input.recoverUnresponsiveSandbox({ runId, timeoutMs, evalDoRef });
+    return;
   }
 }
 
@@ -162,6 +246,7 @@ export function createEvalService(deps: {
   tokenManager: TokenManager;
   workspaceId: string;
   executionSessions: AgentExecutionSessionRegistry;
+  taskAuthorities: TaskAuthorityRegistry;
   reviewedClosureFactForSession?: (
     sessionId: string
   ) => import("@vibestudio/rpc").SessionReviewedClosureFact | null;
@@ -174,10 +259,14 @@ export function createEvalService(deps: {
   activity?: import("./activityRegistry.js").ActivityRegistry;
   /** Host-process safety boundary for synchronous sandbox CPU starvation. */
   recoverUnresponsiveSandbox?: (input: EvalSandboxRecoveryInput) => Promise<void>;
-  /** Test seam for the host watchdog's post-deadline scheduling grace. */
-  watchdogGraceMs?: number;
+  /** Bound on one side-effect-free liveness probe (and the interval between probes). */
+  livenessProbeMs?: number;
   /** Test seam; production uses one held inter-cell lease per EvalDO. */
   kernelLeases?: EvalKernelLease;
+  /** Receives the production coordinator so ordered server shutdown can close its held requests. */
+  onKernelLeaseCoordinator?: (coordinator: EvalKernelLeaseCoordinator) => void;
+  /** Receives the shared eval admission drain used by ordered server shutdown. */
+  onShutdown?: (shutdown: EvalShutdown) => void;
   /** Canonical dispatcher authorization-only path for exact prospective calls. */
   preauthorize?: (
     ctx: ServiceContext,
@@ -213,6 +302,18 @@ export function createEvalService(deps: {
       onError: (message, error) =>
         console.warn(message, error instanceof Error ? error.message : error),
     });
+  if (!deps.kernelLeases && kernelLeases instanceof EvalKernelLeaseCoordinator) {
+    deps.onKernelLeaseCoordinator?.(kernelLeases);
+  }
+  const activeRuns = new Map<string, ActiveEvalRun>();
+  /**
+   * One liveness supervisor per admitted timed run. Replayed starts for the
+   * same runId join the existing supervision instead of arming another loop
+   * (which would also restart the deadline wait against a shifted clock).
+   */
+  const runSupervisions = new Map<string, { dispose: () => void }>();
+  let shutdownRequested = false;
+  let shutdownPromise: Promise<void> | null = null;
   const evalExecutionIdentity = internalDOExecutionIdentity(getInternalDOBundle(), EVAL_DO_CLASS);
 
   const evalDoKey = (ownerId: string, subKey: string): string =>
@@ -228,6 +329,45 @@ export function createEvalService(deps: {
    */
   const evalDoEntityId = (objectKey: string): string =>
     `do:${INTERNAL_DO_SOURCE}:${EVAL_DO_CLASS}:${objectKey}`;
+
+  const activeRunKey = (evalRuntimeId: string, runId: string): string =>
+    `${evalRuntimeId}\0${runId}`;
+
+  const shutdown = (deadlineMs = 4_000): Promise<void> => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownRequested = true;
+    shutdownPromise = (async () => {
+      const entries = [...activeRuns.values()];
+      if (entries.length === 0) return;
+
+      const cancellations = Promise.allSettled(
+        entries.map(async (entry) => {
+          try {
+            await deps.doDispatch.dispatch(entry.evalDoRef, "cancel", entry.runId);
+          } finally {
+            // The durable EvalDO owns terminal truth. Once cancellation has
+            // either completed or failed, remove the host admission so a
+            // disappearing workerd cannot leave authority/activity state live.
+            entry.closeAdmission();
+          }
+        })
+      );
+      const result = await settlePromiseWithin(cancellations, deadlineMs);
+      if (!result.settled) {
+        throw new Error(
+          `eval shutdown cancellation exceeded its ${Math.max(0, deadlineMs)}ms drain budget`
+        );
+      }
+      const failures = result.value
+        .filter((item): item is PromiseRejectedResult => item.status === "rejected")
+        .map((item) => item.reason);
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "eval shutdown cancellation failed");
+      }
+    })();
+    return shutdownPromise;
+  };
+  deps.onShutdown?.(shutdown);
 
   /**
    * Owner-scoped gateway token for THIS EvalDO. Pinned to the concrete
@@ -569,10 +709,15 @@ export function createEvalService(deps: {
           ? deps.executionSessions.createTestPolicy(runId)
           : null));
     const eventSinkNonce = randomUUID();
+    const taskRef = agentBinding?.channelId ?? `eval:${ownerId}:${runId}`;
+    const ownerUser = `user:${ctx.caller.subject.userId}` as const;
+    const taskAuthority =
+      deps.taskAuthorities.resolveCaller(ctx.caller, store.cache) ??
+      taskAuthorityPrincipal({ workspaceId: deps.workspaceId, ownerUser, taskRef });
     const executionSession = await deps.executionSessions.admitWhenAvailable(
       {
         mode: mission ? "mission" : testPolicy ? "test" : "interactive",
-        ownerUser: `user:${ctx.caller.subject.userId}`,
+        ownerUser,
         workspaceId: deps.workspaceId,
         contextId: owner.contextId,
         agentBinding: agentBinding
@@ -582,11 +727,13 @@ export function createEvalService(deps: {
               bindingId: `${agentBinding.entityId}@${agentBinding.contextId}`,
             }
           : null,
-        taskRef: agentBinding?.channelId ?? `eval:${ownerId}:${runId}`,
+        taskRef,
+        taskAuthority,
         harness: {
-          principal: `code:${harness.repoPath}@${harness.executionDigest}`,
+          principal: codePrincipal(harness),
           repoPath: harness.repoPath,
           effectiveVersion: harness.effectiveVersion,
+          executionDigest: harness.executionDigest,
         },
         eval: {
           runtimeId: evalRuntimeId,
@@ -607,6 +754,7 @@ export function createEvalService(deps: {
       },
       ctx.signal
     );
+    deps.taskAuthorities.bindExecution(executionSession);
     if (!executionSession.eval.eventSinkNonce) {
       deps.executionSessions.discard(evalRuntimeId, runId);
       throw new Error("Evaluated execution admission has no live event sink");
@@ -624,9 +772,15 @@ export function createEvalService(deps: {
       onTerminal: () => {
         deps.executionSessions.close(evalRuntimeId, runId);
         if (activityId) deps.activity?.end(activityId);
+        activeRuns.get(activeRunKey(evalRuntimeId, runId))?.closeAdmission();
       },
     });
     if (activityId) deps.activity?.begin(activityId);
+    const discardPreparedAdmission = () => {
+      deps.executionSessions.discard(evalRuntimeId, runId);
+      deps.eventSinks?.close(eventSinkNonce);
+      if (activityId) deps.activity?.end(activityId);
+    };
     const authorityManifestDigest = executionSession.eval.authorityManifest.digest;
     const runDigest = sha256Canonical({
       runId,
@@ -668,14 +822,12 @@ export function createEvalService(deps: {
       initiatorChain: [
         ctx.caller.subject ? `user:${ctx.caller.subject.userId}` : null,
         ctx.caller.runtime.id,
-        ctx.caller.code?.executionDigest
-          ? `code:${ctx.caller.code.repoPath}@${ctx.caller.code.executionDigest}`
-          : null,
+        ctx.caller.code?.executionDigest ? codePrincipal(ctx.caller.code) : null,
       ].filter((value): value is string => value !== null),
     });
     if (normalizeEvalAuthorityIntent(runArgs.authority).preauthorize?.length) {
       if (!deps.preauthorize) {
-        deps.executionSessions.discard(evalRuntimeId, runId);
+        discardPreparedAdmission();
         throw new ServiceError(
           "eval",
           "start",
@@ -685,7 +837,7 @@ export function createEvalService(deps: {
           "service"
         );
       }
-      const principalDigest = executionSession.harness.principal.split("@").at(-1)!;
+      const principalDigest = executionSession.harness.executionDigest;
       const prospectiveCtx: ServiceContext = {
         caller: {
           runtime: { id: evalRuntimeId, kind: "do" },
@@ -712,7 +864,7 @@ export function createEvalService(deps: {
           await deps.preauthorize(prospectiveCtx, operation);
         }
       } catch (error) {
-        deps.executionSessions.discard(evalRuntimeId, runId);
+        discardPreparedAdmission();
         throw error;
       }
     }
@@ -723,7 +875,7 @@ export function createEvalService(deps: {
       // Admission and kernel residency are one preparation transaction. If the
       // lease cannot be established, no run can start and nothing downstream
       // will reach the normal completion cleanup.
-      deps.executionSessions.discard(evalRuntimeId, runId);
+      discardPreparedAdmission();
       throw error;
     }
     return {
@@ -770,6 +922,16 @@ export function createEvalService(deps: {
     methods: evalMethods,
     handler: defineServiceHandler("eval", evalMethods, {
       start: async (ctx, [runArgs]) => {
+        if (shutdownRequested) {
+          throw new ServiceError(
+            "eval",
+            "start",
+            "Eval admission is closed because the server is shutting down",
+            "ESHUTDOWN",
+            undefined,
+            "service"
+          );
+        }
         // Every caller uses the same durable lifecycle. The caller-owned run id
         // is known before transport, so an ambiguous response or process loss
         // never makes the accepted run unaddressable.
@@ -781,11 +943,31 @@ export function createEvalService(deps: {
           runId,
         };
         const evalRuntimeId = evalDoEntityId(evalDoRef.objectKey);
+        const activeKey = activeRunKey(evalRuntimeId, runId);
+        let admissionClosed = false;
         const closeAdmission = () => {
+          if (admissionClosed) return;
+          admissionClosed = true;
+          if (activeRuns.get(activeKey)?.runId === runId) activeRuns.delete(activeKey);
+          // Supervision must not outlive the admitted run: the terminal event
+          // (or shutdown/cancel) is the lifecycle fact that disposes it.
+          runSupervisions.get(activeKey)?.dispose();
           deps.executionSessions.close(evalRuntimeId, runId);
           deps.eventSinks?.close(eventSinkNonce);
           if (activityId) deps.activity?.end(activityId);
         };
+        activeRuns.set(activeKey, { evalDoRef, runId, closeAdmission });
+        if (shutdownRequested) {
+          closeAdmission();
+          throw new ServiceError(
+            "eval",
+            "start",
+            "Eval admission closed while this run was being prepared",
+            "ESHUTDOWN",
+            undefined,
+            "service"
+          );
+        }
         let accepted: {
           status: string;
           existing?: boolean;
@@ -818,28 +1000,6 @@ export function createEvalService(deps: {
           throw error;
         }
         const acceptedRunDigest = accepted.runDigest;
-        const timeoutMs = assembledArgs["timeoutMs"];
-        if (typeof timeoutMs === "number" && deps.recoverUnresponsiveSandbox) {
-          const watchdogActivityId = `eval-watchdog:${runId}`;
-          deps.activity?.begin(watchdogActivityId);
-          void watchTimedRun(
-            deps.doDispatch,
-            evalDoRef,
-            runId,
-            timeoutMs,
-            deps.recoverUnresponsiveSandbox,
-            deps.watchdogGraceMs ?? DEFAULT_EVAL_WATCHDOG_GRACE_MS
-          )
-            .catch((error) => {
-              console.warn(
-                `[eval] timed run watchdog ${runId} completed through recovery:`,
-                error instanceof Error ? error.message : error
-              );
-            })
-            .finally(() => {
-              deps.activity?.end(watchdogActivityId);
-            });
-        }
         if (
           accepted.status === "done" ||
           accepted.status === "cancelled" ||
@@ -855,25 +1015,39 @@ export function createEvalService(deps: {
             snapshot,
           };
         }
-        // Preserve the one-round-trip fast path without reintroducing a
-        // second public execution method. Non-agent callers give the same
-        // accepted run a short completion window; agent DOs return
-        // immediately so their existing terminal push remains primary.
-        if (!assembledArgs["resultReceiverRef"]) {
-          const quick = await terminalWithin(
-            deps.doDispatch.dispatchHeld(evalDoRef, "executeRun", runId),
-            25
-          );
-          if (quick) {
-            closeAdmission();
-            return {
-              runId,
-              runDigest: acceptedRunDigest,
-              authorityManifestDigest,
-              status: "terminal" as const,
-              snapshot: { status: "done" as const, result: quick },
-            };
-          }
+        const timeoutMs = assembledArgs["timeoutMs"];
+        if (
+          typeof timeoutMs === "number" &&
+          deps.recoverUnresponsiveSandbox &&
+          !runSupervisions.has(activeKey)
+        ) {
+          const recoverUnresponsiveSandbox = deps.recoverUnresponsiveSandbox;
+          const controller = new AbortController();
+          const supervision = { dispose: () => controller.abort() };
+          runSupervisions.set(activeKey, supervision);
+          const watchdogActivityId = `eval-watchdog:${runId}`;
+          deps.activity?.begin(watchdogActivityId);
+          void superviseIsolateLiveness({
+            doDispatch: deps.doDispatch,
+            evalDoRef,
+            runId,
+            timeoutMs,
+            livenessProbeMs: deps.livenessProbeMs ?? DEFAULT_EVAL_LIVENESS_PROBE_MS,
+            recoverUnresponsiveSandbox,
+            signal: controller.signal,
+          })
+            .catch((error) => {
+              console.warn(
+                `[eval] liveness supervision for timed run ${runId} failed:`,
+                error instanceof Error ? error.message : error
+              );
+            })
+            .finally(() => {
+              deps.activity?.end(watchdogActivityId);
+              if (runSupervisions.get(activeKey) === supervision) {
+                runSupervisions.delete(activeKey);
+              }
+            });
         }
         return {
           runId,
@@ -937,8 +1111,14 @@ export function createEvalService(deps: {
         await deps.retireEntity(entityId);
         return { ok: true };
       },
-      cancel: async (ctx, [cancelArgs]) =>
-        deps.doDispatch.dispatch(await evalDoRefFor(ctx, cancelArgs), "cancel", cancelArgs.runId),
+      cancel: async (ctx, [cancelArgs]) => {
+        const ref = await evalDoRefFor(ctx, cancelArgs);
+        const result = await deps.doDispatch.dispatch(ref, "cancel", cancelArgs.runId);
+        activeRuns
+          .get(activeRunKey(evalDoEntityId(ref.objectKey), cancelArgs.runId))
+          ?.closeAdmission();
+        return result;
+      },
     }),
   };
 }
@@ -967,14 +1147,21 @@ function admissionRetryDelay(): Promise<void> {
   });
 }
 
-async function terminalWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+async function settlePromiseWithin<T>(
+  promise: Promise<T>,
+  timeoutMs: number
+): Promise<{ settled: true; value: T } | { settled: false }> {
+  if (timeoutMs <= 0) return { settled: false };
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const elapsed = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), timeoutMs);
+  const timeout = new Promise<{ settled: false }>((resolve) => {
+    timer = setTimeout(() => resolve({ settled: false }), timeoutMs);
     timer.unref?.();
   });
   try {
-    return await Promise.race([promise, elapsed]);
+    return await Promise.race([
+      promise.then((value) => ({ settled: true as const, value })),
+      timeout,
+    ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }

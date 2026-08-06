@@ -844,7 +844,7 @@ RPC-completion subsystem exists.
    ([authority-surfaces.md](authority/authority-surfaces.md)): the
    `authorityRows`/`authorityRowDiff` projection modules; the
    `unit-version-review` and `mission-review` queue subjects (with
-   `unit-batch` reduced to a grouping of the former, and the mission
+   `unit-batch` replaced by `unit-install-review`, and the mission
    registry's approve/edit callable only via the queue resolver); the
    subject-parameterized card shell shared by desktop and mobile; the
    unified decision/provenance record across capability, version, and

@@ -62,9 +62,10 @@ const executionSession = {
   contextId: activeEntity.contextId,
   mode: "test",
   harness: {
-    principal: "code:workers/system-test-runner@digest",
+    principal: "code:workers/system-test-runner@runner-ev",
     repoPath: "workers/system-test-runner",
     effectiveVersion: "runner-ev",
+    executionDigest: "digest",
   },
   eval: {
     runtimeId: registered.runtime.id,
@@ -84,6 +85,7 @@ const executionSession = {
   },
   ownerUser: "user:test-user",
   taskRef: "approval",
+  taskAuthority: "task:approval",
   causalParent: null,
   testPolicy: casePolicy,
   issuedAt: 1,
@@ -99,6 +101,7 @@ describe("live execution caller resolution", () => {
         activeEntity,
         executionSession,
         contextTestPolicy: orchestratorPolicy,
+        taskAuthority: executionSession.taskAuthority,
       })
     ).toMatchObject({
       runtime: registered.runtime,
@@ -122,11 +125,11 @@ describe("live execution caller resolution", () => {
         runtime: registered.runtime,
         executionSession: {
           ...executionSession,
-          harness: { ...executionSession.harness, principal: "code:workers/other@digest" },
+          harness: { ...executionSession.harness, principal: "code:workers/other@runner-ev" },
         },
         residentCode: registered.code,
       })
-    ).toThrow(/does not match its repository/);
+    ).toThrow(/does not match its source identity/);
   });
 
   it("projects current exact-version approval onto a long-lived egress caller", () => {
@@ -137,6 +140,7 @@ describe("live execution caller resolution", () => {
         activeEntity,
         executionSession: null,
         contextTestPolicy: null,
+        taskAuthority: null,
         isCodeApproved,
       })
     ).toMatchObject({ codeApproved: true });
@@ -150,6 +154,7 @@ describe("live execution caller resolution", () => {
         activeEntity,
         executionSession: null,
         contextTestPolicy: null,
+        taskAuthority: null,
         isCodeApproved: () => false,
       })
     ).not.toHaveProperty("codeApproved");
@@ -162,6 +167,7 @@ describe("live execution caller resolution", () => {
         activeEntity: { ...activeEntity, contextId: "ctx-replaced" },
         executionSession,
         contextTestPolicy: casePolicy,
+        taskAuthority: executionSession.taskAuthority,
       })
     ).toBeNull();
   });

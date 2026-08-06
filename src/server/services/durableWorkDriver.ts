@@ -11,6 +11,7 @@ import {
   type SettleRequest,
   type WorkClaim,
 } from "@vibestudio/shared/durableWork";
+import { isPermanentRuntimeReadinessError } from "../runtimeReadinessError.js";
 
 const log = createDevLogger("DurableWorkDriver");
 const DEFAULT_CONCURRENCY = 8;
@@ -93,12 +94,15 @@ export function createDurableWorkOwnerScanner(
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
     throw new Error("Durable-work recovery scan concurrency must be a positive integer");
   }
+  const reportedPermanentFailures = new Map<string, string>();
   return async () => {
     const registered = (await doDispatch.dispatch(
       workspaceOwner,
       "durableWorkOwnerList"
     )) as DurableWorkReadyHint[];
     const ready: DurableWorkReadyHint[] = [];
+    const failures: Array<{ owner: string; error: string }> = [];
+    const newlyBlocked: Array<{ owner: string; error: string }> = [];
     let next = 0;
     const worker = async (): Promise<void> => {
       while (next < registered.length) {
@@ -115,18 +119,38 @@ export function createDurableWorkOwnerScanner(
                   typeof queue === "string" && declared.has(queue as DurableWorkQueue)
               )
             : [];
+          reportedPermanentFailures.delete(`${owner.source}:${owner.className}:${owner.objectKey}`);
           if (readyQueues.length > 0) ready.push({ owner, queues: readyQueues });
         } catch (error) {
-          log.warn(
-            `readiness scan failed for ${owner.source}:${owner.className}:${owner.objectKey}`,
-            error
-          );
+          const failure = {
+            owner: `${owner.source}:${owner.className}:${owner.objectKey}`,
+            error: error instanceof Error ? error.message : String(error),
+          };
+          if (isPermanentRuntimeReadinessError(error)) {
+            if (reportedPermanentFailures.get(failure.owner) !== failure.error) {
+              reportedPermanentFailures.set(failure.owner, failure.error);
+              newlyBlocked.push(failure);
+            }
+          } else {
+            failures.push(failure);
+          }
         }
       }
     };
     await Promise.all(
       Array.from({ length: Math.min(concurrency, registered.length) }, () => worker())
     );
+    if (failures.length > 0) {
+      log.warn(
+        `readiness scan failed for ${failures.length}/${registered.length} durable-work owner(s); sample=${JSON.stringify(failures.slice(0, 5))}`
+      );
+    }
+    if (newlyBlocked.length > 0) {
+      log.warn(
+        `readiness blocked for ${newlyBlocked.length}/${registered.length} durable-work owner(s); ` +
+          `sealed execution repair is required; sample=${JSON.stringify(newlyBlocked.slice(0, 5))}`
+      );
+    }
     return ready;
   };
 }
@@ -160,10 +184,25 @@ export function createDurableWorkHandlers(
 ): Record<DurableWorkQueue, DurableWorkHandler> {
   const common = (queue: DurableWorkQueue): Omit<DurableWorkHandler, "execute"> => ({
     claim: async (owner, request) => {
-      // Adoption is the activation-recovery boundary, not merely a startup
-      // scan optimization. A facet may have died after journaling an outcome
-      // but before deriving its next row, while this host driver stays alive.
-      await doDispatch.dispatch(owner, "adoptDurableWorkWorker", request.workerId);
+      // The recovery scanner adopts every registered owner before it asks for
+      // readiness. Normal hints and continuations already name a durable row,
+      // so adopting again here only adds a serialized host→DO round trip to
+      // every claim. Keep the adoption boundary on recovery, where it repairs
+      // the crash window in which an outcome was journaled before its next row
+      // was derived.
+      //
+      // OWNER CONTRACT: because the driver no longer adopts per-claim, every
+      // durable-work owner MUST self-adopt the claiming worker inside its own
+      // `claimReadyWork` (call `adoptDurableWorkWorkerGeneration(input.workerId)`
+      // before selecting rows) so stale leases from a dead host generation are
+      // released before the claim. Current owners — pubsub
+      // `workspace/workers/pubsub-channel/channel-do.ts` and the agent vessel
+      // `workspace/packages/agentic-do/src/agent-vessel.ts` — both do. Any new
+      // owner that skips this reintroduces the stuck-lease-after-host-restart
+      // failure on non-recovery claims.
+      if (request.trigger === "recovery") {
+        await doDispatch.dispatch(owner, "adoptDurableWorkWorker", request.workerId);
+      }
       return doDispatch.dispatch(owner, "claimReadyWork", queue, request) as Promise<WorkClaim[]>;
     },
     laneKey: (owner, claim) => {
@@ -496,6 +535,10 @@ export class DurableWorkDriver {
           durationMs: Date.now() - executionStartedAt,
         });
         if (!controller.signal.aborted) {
+          log.warn(
+            `execution failed for ${queue}:${this.ownerKey(owner)}:${claim.itemId}@${claim.generation}`,
+            error
+          );
           try {
             await handler.fail(owner, {
               workerId: this.workerId,
@@ -536,6 +579,13 @@ export class DurableWorkDriver {
     const record = { at: Date.now(), ...event };
     this.recentTrace.push(record);
     if (this.recentTrace.length > 500) this.recentTrace.splice(0, this.recentTrace.length - 500);
-    log.info(`[trace] ${JSON.stringify(record)}`);
+    // Per-transition queue telemetry is retained for durableWork.inspect().
+    // Mirroring every hint/claim/settlement at the normal operational level
+    // produces dozens of terminal lines per agent turn and obscures actual
+    // failures. Operators can opt into the same stream with
+    // VIBESTUDIO_LOG_LEVEL=verbose.
+    if (log.isVerbose()) {
+      log.verbose(`[trace] ${JSON.stringify(record)}`);
+    }
   }
 }

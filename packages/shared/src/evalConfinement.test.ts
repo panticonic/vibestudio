@@ -62,11 +62,10 @@ describe("tameRealmCodegen", () => {
 
 describe("createPrivateGuestGlobal", () => {
   it("refuses a realm whose values still lead back to a compiler", () => {
-    expect(() => createPrivateGuestGlobal(globalThis as unknown as Record<string, unknown>)).toThrow(
-      /compile code/
-    );
+    expect(() =>
+      createPrivateGuestGlobal(globalThis as unknown as Record<string, unknown>)
+    ).toThrow(/compile code/);
   });
-
 
   it("preserves the receiver required by allowlisted host functions", () => {
     const realm = {
@@ -93,6 +92,37 @@ describe("createPrivateGuestGlobal", () => {
     expect(guest["globalThis"]).toBe(guest);
     expect(guest["self"]).toBe(guest);
     expect(guest["global"]).toBe(guest);
+  });
+
+  it("preserves authority-free Object prototype globals on the null-prototype facade", () => {
+    const realm = tamedRealm();
+    const guest = createPrivateGuestGlobal(realm);
+    const hasOwnProperty = guest["hasOwnProperty"] as {
+      call(receiver: object, property: PropertyKey): boolean;
+    };
+
+    expect(Object.getPrototypeOf(guest)).toBeNull();
+    expect(hasOwnProperty.call({ ready: true }, "ready")).toBe(true);
+    expect(hasOwnProperty.call({ ready: true }, "missing")).toBe(false);
+  });
+
+  it("defaults a missing receiver on Object.prototype helpers to the guest global", () => {
+    const realm = tamedRealm();
+    const guest = createPrivateGuestGlobal(realm);
+    const valueOf = guest["valueOf"] as (this: unknown) => unknown;
+    const toString = guest["toString"] as (this: unknown) => string;
+
+    // A strict-mode bare/extracted call sees no receiver; on a real global these
+    // inherited helpers would observe the global itself instead of throwing.
+    expect(valueOf.call(undefined)).toBe(guest);
+    expect(toString.call(undefined)).toBe("[object Object]");
+    // The documented `hasOwnProperty.call(value, key)` form keeps its explicit
+    // receiver — the helpers are wrapped, not hard-bound.
+    const hasOwnProperty = guest["hasOwnProperty"] as {
+      call(receiver: unknown, property: PropertyKey): boolean;
+    };
+    expect(hasOwnProperty.call({ ready: true }, "ready")).toBe(true);
+    expect(hasOwnProperty.call({}, "ready")).toBe(false);
   });
 
   it("publishes reviewed endowments through every private global alias", () => {

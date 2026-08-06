@@ -7,6 +7,8 @@ export const EVAL_KERNEL_IDLE_LEASE_MS = 30 * 60 * 1_000;
 interface LiveLease {
   id: string;
   holding: boolean;
+  abortController: AbortController;
+  hold?: Promise<unknown>;
 }
 
 interface KernelLeaseStatus {
@@ -17,6 +19,8 @@ interface KernelLeaseStatus {
 
 export interface EvalKernelLease {
   touch(ref: DORef): Promise<void>;
+  /** Stop host-held residency requests during an ordered server shutdown. */
+  close?(): Promise<void>;
 }
 
 /**
@@ -31,9 +35,11 @@ export interface EvalKernelLease {
 export class EvalKernelLeaseCoordinator implements EvalKernelLease {
   private readonly leases = new Map<string, LiveLease>();
   private readonly operations = new Map<string, Promise<void>>();
+  private closed = false;
 
   constructor(
-    private readonly doDispatch: Pick<HeldDoDispatcher, "dispatch" | "dispatchHeld">,
+    private readonly doDispatch: Pick<HeldDoDispatcher, "dispatch" | "dispatchHeld"> &
+      Partial<Pick<HeldDoDispatcher, "dispatchHeldWithSignal">>,
     private readonly options: {
       idleMs?: number;
       onError?: (message: string, error: unknown) => void;
@@ -41,6 +47,7 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
   ) {}
 
   async touch(ref: DORef): Promise<void> {
+    if (this.closed) throw new Error("eval kernel lease coordinator is closed");
     const key = refKey(ref);
     const previous = this.operations.get(key) ?? Promise.resolve();
     const operation = previous.catch(() => undefined).then(() => this.touchLocked(key, ref));
@@ -53,9 +60,10 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
   }
 
   private async touchLocked(key: string, ref: DORef): Promise<void> {
+    if (this.closed) throw new Error("eval kernel lease coordinator is closed");
     let lease = this.leases.get(key);
     if (!lease) {
-      lease = { id: randomUUID(), holding: false };
+      lease = { id: randomUUID(), holding: false, abortController: new AbortController() };
       this.leases.set(key, lease);
     }
 
@@ -70,13 +78,22 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
       throw error;
     }
 
+    // Shutdown may have started while the receiver was processing the
+    // admission. Do not claim a holder after quiescence; the close loop is
+    // waiting for this operation and lifecycle release will settle any
+    // receiver-side lease that the admission already created.
+    if (this.closed) {
+      if (this.leases.get(key) === lease) this.leases.delete(key);
+      return;
+    }
+
     // A holder attached in the EvalDO is the authoritative warm-kernel fact.
     if (status.holderAttached) return;
 
     // A locally tracked hold with no receiver-side holder belongs to an
     // expired/reconstructed activation whose response has not reached us yet.
     if (lease.holding) {
-      lease = { id: randomUUID(), holding: false };
+      lease = { id: randomUUID(), holding: false, abortController: new AbortController() };
       this.leases.set(key, lease);
       status = (await this.doDispatch.dispatch(ref, "acquireKernelLease", {
         leaseId: lease.id,
@@ -90,10 +107,23 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
     // Claim the single holder before opening the long request. This is not an
     // alarm activation or durable-work execution lane; it owns only residency.
     await this.doDispatch.dispatch(ref, "attachKernelLeaseHolder", lease.id);
+    if (this.closed) {
+      if (this.leases.get(key) === lease) this.leases.delete(key);
+      return;
+    }
     lease.holding = true;
-    void this.doDispatch
-      .dispatchHeld(ref, "holdKernelLease", lease.id)
+    const hold = this.doDispatch.dispatchHeldWithSignal
+      ? this.doDispatch.dispatchHeldWithSignal(
+          ref,
+          lease.abortController.signal,
+          "holdKernelLease",
+          lease.id
+        )
+      : this.doDispatch.dispatchHeld(ref, "holdKernelLease", lease.id);
+    lease.hold = hold;
+    void hold
       .catch((error) => {
+        if (this.closed || lease.abortController.signal.aborted) return;
         (this.options.onError ?? defaultErrorReporter)(
           `Eval kernel lease ${lease.id} for ${key} ended unexpectedly`,
           error
@@ -102,6 +132,28 @@ export class EvalKernelLeaseCoordinator implements EvalKernelLease {
       .finally(() => {
         if (this.leases.get(key) === lease) this.leases.delete(key);
       });
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    // The DO lifecycle release remains the durable cleanup path. Aborting the
+    // host leg as soon as shutdown begins is the transport cleanup path: it
+    // prevents a 30-minute residency request from keeping workerd alive while
+    // lifecycle preparation is releasing the corresponding DO holder.
+    // Drain in rounds instead of taking one snapshot. A touch that was already
+    // admitted when close() began can finish its acquire/attach sequence after
+    // the first snapshot; that late hold is still owned by this coordinator and
+    // must be aborted and awaited before close returns.
+    for (;;) {
+      const operations = [...this.operations.values()];
+      const leases = [...this.leases.values()];
+      const holds = leases
+        .map((lease) => lease.hold)
+        .filter((hold): hold is Promise<unknown> => hold !== undefined);
+      for (const lease of leases) lease.abortController.abort();
+      await Promise.allSettled([...operations, ...holds]);
+      if (this.operations.size === 0 && this.leases.size === 0) return;
+    }
   }
 }
 

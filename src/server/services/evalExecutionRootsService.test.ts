@@ -52,10 +52,12 @@ function execution(): AgentExecutionSessionFact {
     contextId: "context:one",
     agentBinding: null,
     taskRef: "task:one",
+    taskAuthority: "task:one",
     harness: {
-      principal: `code:vibestudio/internal@${"d".repeat(64)}`,
+      principal: `code:vibestudio/internal@one`,
       repoPath: "vibestudio/internal",
       effectiveVersion: "one",
+      executionDigest: "d".repeat(64),
     },
     eval: {
       runtimeId,

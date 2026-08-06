@@ -5,8 +5,8 @@ import type {
   WorkspaceHeartbeatDecl,
   WorkspaceRecurringDecl,
 } from "@vibestudio/workspace-contracts/types";
-import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
-import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
+import type { InstallReviewCharter, ReviewedUnit } from "@vibestudio/shared/approvals";
+import type { UnitChangeApprovalProvider, UnitChangeReview } from "@vibestudio/unit-host";
 import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { RecurringJobRow } from "@panticonic/builtin/workspace-state";
@@ -588,11 +588,9 @@ function scheduleLabel(decl: WorkspaceRecurringDecl): string {
  */
 export function createRecurringMetaChangeProvider(
   deps: RecurringMetaChangeProviderDeps
-): UnitChangeApprovalProvider<UnitBatchEntry> {
+): UnitChangeApprovalProvider<ReviewedUnit> {
   return {
-    async unitChangeApprovalForCommit(
-      commit: string
-    ): Promise<{ units: UnitBatchEntry[]; identityKeys: string[] }> {
+    async unitChangeApprovalForCommit(commit: string): Promise<UnitChangeReview<ReviewedUnit>> {
       const proposed = await readRecurringAtState(deps, commit);
       const proposedHeartbeats = await readHeartbeatsAtState(deps, commit);
       const current = new Map(
@@ -601,7 +599,11 @@ export function createRecurringMetaChangeProvider(
       const currentHeartbeats = new Map(
         (deps.getCurrentHeartbeats?.() ?? []).map((decl) => [decl.name, heartbeatSpecHash(decl)])
       );
-      const units: UnitBatchEntry[] = [];
+      // Charters, not units: a scheduled job has no source path, no effective
+      // version, and no manifest. What matters about it is that it acts on its
+      // own, on a schedule, without anyone opening anything.
+      const charters: InstallReviewCharter[] = [];
+      const units: ReviewedUnit[] = [];
       const identityKeys: string[] = [];
       for (const decl of proposed) {
         let hash: string;
@@ -613,12 +615,12 @@ export function createRecurringMetaChangeProvider(
         }
         if (current.get(decl.name) === hash) continue;
         const target = `${decl.target.source}:${decl.target.className}/${decl.target.objectKey ?? decl.name}`;
-        units.push({
-          unitKind: "scheduled-job",
-          unitName: decl.name,
-          displayName: `${decl.name} (${scheduleLabel(decl)})`,
-          source: { kind: "workspace-repo", repo: "meta", ref: commit },
-          capabilities: [`invokes ${target}.${decl.method} on schedule, unattended`],
+        charters.push({
+          kind: "scheduled-job",
+          name: decl.name,
+          schedule: scheduleLabel(decl),
+          purpose: `Runs ${target}.${decl.method} on its own, without you opening anything.`,
+          change: current.has(decl.name) ? "changed" : "added",
         });
         identityKeys.push(`scheduled-job:${decl.name}:${hash}`);
       }
@@ -636,21 +638,21 @@ export function createRecurringMetaChangeProvider(
         const label = decl.schedule.at
           ? `every ${decl.schedule.every} at ${decl.schedule.at}`
           : `every ${decl.schedule.every}`;
-        units.push({
-          unitKind: "agent-heartbeat",
-          unitName: decl.name,
-          displayName: `${decl.name} (${label})`,
-          source: { kind: "workspace-repo", repo: "meta", ref: commit },
-          capabilities: [
-            `unattended agent wake ${label}, may invoke tools through ${target}, delivery ${delivery}, tokenBudget ${tokenBudget}`,
-          ],
+        charters.push({
+          kind: "agent-heartbeat",
+          name: decl.name,
+          schedule: label,
+          purpose:
+            `Wakes an agent ${label} to work through ${target} on its own. ` +
+            `Sends ${delivery === "none" ? "nothing" : delivery} when it finishes, and spends up to ${tokenBudget.toLocaleString()} tokens each time.`,
+          change: currentHeartbeats.has(decl.name) ? "changed" : "added",
         });
         identityKeys.push(`agent-heartbeat:${decl.name}:${hash}`);
       }
-      return { units, identityKeys };
+      return { units, identityKeys, charters };
     },
     acceptPreapprovedTrust() {
-      // Scheduled jobs carry no build trust; durable state is the yml itself.
+      // Charters carry no build trust; their durable state is the yml itself.
     },
   };
 }

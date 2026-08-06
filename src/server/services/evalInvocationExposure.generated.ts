@@ -1878,6 +1878,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityAdvanceExecutions",
+    rpcPlane: "workspace-do",
+    capability: "workspace.runtime-state.manage",
+    authorityPrincipals: ["host"],
+    owner: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    source: "vibestudio/internal",
+    method: "entityAdvanceExecutions",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    },
+  },
+  {
     id: "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityCleanupComplete",
     rpcPlane: "workspace-do",
     capability: "workspace.runtime-state.manage",
@@ -1983,6 +1997,34 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     owner: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
     source: "vibestudio/internal",
     method: "entityListExecutionRoots",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    },
+  },
+  {
+    id: "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListPreparing",
+    rpcPlane: "workspace-do",
+    capability: "workspace.runtime-state.manage",
+    authorityPrincipals: ["host"],
+    owner: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    source: "vibestudio/internal",
+    method: "entityListPreparing",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    },
+  },
+  {
+    id: "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListPreparingByKind",
+    rpcPlane: "workspace-do",
+    capability: "workspace.runtime-state.manage",
+    authorityPrincipals: ["host"],
+    owner: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    source: "vibestudio/internal",
+    method: "entityListPreparingByKind",
     sensitivity: "read",
     resourceDerivation: {
       kind: "direct-target",
@@ -9203,19 +9245,6 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelRuntime.handoffSlot",
-    rpcPlane: "host-service",
-    capability: "service:panelRuntime.handoffSlot",
-    authorityPrincipals: ["host", "user", "code"],
-    owner: "panelRuntime",
-    method: "handoffSlot",
-    sensitivity: "write",
-    resourceDerivation: {
-      kind: "literal",
-      key: "service:panelRuntime.handoffSlot",
-    },
-  },
-  {
     id: "host:panelRuntime.observeSlot",
     rpcPlane: "host-service",
     capability: "service:panelRuntime.observeSlot",
@@ -9868,6 +9897,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:runtime.recoverExecution",
+    rpcPlane: "host-service",
+    capability: "service:runtime.recoverExecution",
+    authorityPrincipals: ["user", "host"],
+    owner: "runtime",
+    method: "recoverExecution",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:runtime.recoverExecution",
+    },
+  },
+  {
     id: "host:runtime.reserveEntity",
     rpcPlane: "host-service",
     capability: "service:runtime.reserveEntity",
@@ -10154,6 +10196,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:shellApproval.getWorkspaceCreationReviewState",
+    rpcPlane: "host-service",
+    capability: "service:shellApproval.getWorkspaceCreationReviewState",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "shellApproval",
+    method: "getWorkspaceCreationReviewState",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:shellApproval.getWorkspaceCreationReviewState",
+    },
+  },
+  {
     id: "host:shellApproval.listPending",
     rpcPlane: "host-service",
     capability: "service:shellApproval.listPending",
@@ -10190,6 +10245,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:shellApproval.resolveBootstrap",
+    },
+  },
+  {
+    id: "host:shellApproval.resolveInstallReview",
+    rpcPlane: "host-service",
+    capability: "service:shellApproval.resolveInstallReview",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "shellApproval",
+    method: "resolveInstallReview",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:shellApproval.resolveInstallReview",
     },
   },
   {
@@ -10674,6 +10742,32 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:view.createPanel",
+    rpcPlane: "host-service",
+    capability: "service:view.createPanel",
+    authorityPrincipals: ["user", "code"],
+    owner: "view",
+    method: "createPanel",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:view.createPanel",
+    },
+  },
+  {
+    id: "host:view.ensurePanelLoaded",
+    rpcPlane: "host-service",
+    capability: "service:view.ensurePanelLoaded",
+    authorityPrincipals: ["user", "code"],
+    owner: "view",
+    method: "ensurePanelLoaded",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:view.ensurePanelLoaded",
+    },
+  },
+  {
     id: "host:view.expandPanelIds",
     rpcPlane: "host-service",
     capability: "service:view.expandPanelIds",
@@ -10944,6 +11038,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:view.setBrowserZoom",
+    },
+  },
+  {
+    id: "host:view.setFocusedPanelId",
+    rpcPlane: "host-service",
+    capability: "service:view.setFocusedPanelId",
+    authorityPrincipals: ["user", "code"],
+    owner: "view",
+    method: "setFocusedPanelId",
+    sensitivity: "write",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:view.setFocusedPanelId",
     },
   },
   {
@@ -12800,10 +12907,6 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "panelRuntime",
-    method: "handoffSlot",
-  },
-  {
-    service: "panelRuntime",
     method: "observeSlot",
   },
   {
@@ -12960,6 +13063,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "runtime",
+    method: "recoverExecution",
+  },
+  {
+    service: "runtime",
     method: "reserveEntity",
   },
   {
@@ -13040,6 +13147,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "shellApproval",
+    method: "getWorkspaceCreationReviewState",
+  },
+  {
+    service: "shellApproval",
     method: "listPending",
   },
   {
@@ -13049,6 +13160,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   {
     service: "shellApproval",
     method: "resolveBootstrap",
+  },
+  {
+    service: "shellApproval",
+    method: "resolveInstallReview",
   },
   {
     service: "shellApproval",
@@ -14118,7 +14233,6 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:panelCdp.stop",
   "service:panelRuntime.ensureSlot",
   "service:panelRuntime.getSnapshot",
-  "service:panelRuntime.handoffSlot",
   "service:panelRuntime.observeSlot",
   "service:panelRuntime.takeOverSlot",
   "service:panelRuntime.unloadSlot",
@@ -14173,9 +14287,11 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:serverLog.query",
   "service:serverLog.stats",
   "service:serverLog.tail",
+  "service:shellApproval.getWorkspaceCreationReviewState",
   "service:shellApproval.listPending",
   "service:shellApproval.resolve",
   "service:shellApproval.resolveBootstrap",
+  "service:shellApproval.resolveInstallReview",
   "service:shellApproval.resolveMissionReview",
   "service:shellApproval.submitClientConfig",
   "service:shellApproval.submitCredentialInput",
@@ -14213,6 +14329,8 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:view.browserStop",
   "service:view.clearBrowserSiteData",
   "service:view.clearNativePanelSlot",
+  "service:view.createPanel",
+  "service:view.ensurePanelLoaded",
   "service:view.expandPanelIds",
   "service:view.findInPage",
   "service:view.focusPanel",
@@ -14234,6 +14352,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:view.savePanelLayout",
   "service:view.setBounds",
   "service:view.setBrowserZoom",
+  "service:view.setFocusedPanelId",
   "service:view.setHostedShellReady",
   "service:view.setPanelCollapsed",
   "service:view.setShellOverlay",

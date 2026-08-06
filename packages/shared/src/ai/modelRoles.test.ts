@@ -1,8 +1,4 @@
-import {
-  ModelRoleResolver,
-  isStandardRole,
-  createModelRoleResolver,
-} from "./modelRoles.js";
+import { ModelRoleResolver, isStandardRole, createModelRoleResolver } from "./modelRoles.js";
 
 describe("isStandardRole", () => {
   it("returns true for standard roles", () => {
@@ -73,9 +69,7 @@ describe("ModelRoleResolver", () => {
       provider: "anthropic",
       model: "some-model-name",
     });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("without provider prefix")
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("without provider prefix"));
     warnSpy.mockRestore();
   });
 

@@ -18,6 +18,36 @@ import { CapabilityScopeSchema } from "./build.js";
  */
 export const EVAL_RESULT_RETURN_PREVIEW_CHARS = 12_000;
 
+/**
+ * Host-emitted eval lifecycle failure codes (the EvalDO's `RunResult.failureCode`
+ * values for terminations the runtime itself decides). The wire field stays an
+ * open string — engine/user code may surface its own codes — but every host
+ * lifecycle termination uses exactly one of these, so drivers can branch on
+ * them without string drift.
+ *
+ * The two infrastructure codes are deliberately distinct rather than unified:
+ * - `eval_runtime_restarted` — an UNPLANNED process loss (crash/kill) orphaned a
+ *   `running` row; stamped by the EvalDO's boot orphan-reconcile. Nothing had a
+ *   chance to cancel cleanly.
+ * - `runtime_generation_lost` — a PLANNED lifecycle transition (workerd
+ *   suspend/replace) cancelled the run through the normal cooperative path.
+ *   Infrastructure-typed so it can never be mistaken for user cancellation
+ *   (`eval_cancelled`), and distinct from the crash code because the driver may
+ *   trust that owned cleanup ran.
+ */
+export const evalLifecycleFailureCodes = {
+  /** infrastructure: unplanned process loss orphaned a running row (boot orphan-reconcile). */
+  runtimeRestarted: "eval_runtime_restarted",
+  /** infrastructure: a planned runtime lifecycle transition retired the generation executing this run. */
+  runtimeGenerationLost: "runtime_generation_lost",
+  /** cancelled: the caller's own opt-in deadline elapsed. */
+  deadlineExceeded: "eval_deadline_exceeded",
+  /** cancelled: explicit owner/user cancellation. */
+  cancelled: "eval_cancelled",
+} as const;
+export type EvalLifecycleFailureCode =
+  (typeof evalLifecycleFailureCodes)[keyof typeof evalLifecycleFailureCodes];
+
 export const evalTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("caller") }).strict(),
   z.object({ kind: z.literal("owner-session"), sessionId: z.string().min(1) }).strict(),
@@ -91,7 +121,14 @@ function refineEvalAuthorityIntent(
   },
   ctx: z.RefinementCtx
 ): void {
-  if (value.preauthorize !== undefined && value.approvals !== "prompt") {
+  // An empty collection carries no preauthorization intent. Treat it as the
+  // neutral value so JSON-schema clients that materialize optional arrays do
+  // not turn absence into an authority-mode conflict.
+  if (
+    Array.isArray(value.preauthorize) &&
+    value.preauthorize.length > 0 &&
+    value.approvals !== "prompt"
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "preauthorize is valid only when authority.approvals is prompt",
@@ -239,6 +276,14 @@ export const evalRunStatusSchema = z
     result: evalRunResultSchema.optional(),
     /** Latest durable heartbeat published by the running sandbox. */
     progress: z.unknown().optional(),
+    /** Observable lifecycle state, distinct from execution/result status. */
+    activity: z
+      .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("executing") }).strict(),
+        z.object({ kind: z.literal("authority-pending"), request: z.unknown() }).strict(),
+        z.object({ kind: z.literal("cancelling") }).strict(),
+      ])
+      .optional(),
   })
   .strict();
 
@@ -634,13 +679,18 @@ function settledResult(
     return snapshot.result;
   }
   if (snapshot?.status === "cancelled") {
-    return {
-      success: false,
-      console: "",
-      error: "eval: run cancelled",
-      failureKind: "cancelled",
-      failureCode: "eval_cancelled",
-    };
+    // A cancelled row normally carries no stored result (user cancellation);
+    // lifecycle-driven termination stamps one so its infrastructure-typed
+    // `runtime_generation_lost` code survives to the driver.
+    return (
+      snapshot.result ?? {
+        success: false,
+        console: "",
+        error: "eval: run cancelled",
+        failureKind: "cancelled",
+        failureCode: evalLifecycleFailureCodes.cancelled,
+      }
+    );
   }
   return undefined;
 }

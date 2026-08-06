@@ -40,6 +40,7 @@ function fakeHost(): RuntimeHost {
     gatewayConfig: { serverUrl: "http://gw.test", token: "T" },
     gatewayFetch: async () => new Response(),
     panelRuntime: {
+      createPanelSlot: async () => ({}) as never,
       openPanel: async () => ({}) as never,
       getPanelHandle: () => ({}) as never,
       panelTree: {} as never,

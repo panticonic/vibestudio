@@ -4,7 +4,7 @@ import type { AgentExecutionSessionFact, AgentExecutionTestPolicySpec } from "@v
 type AdmissionInput = Omit<
   AgentExecutionSessionFact,
   "v" | "authoritySessionId" | "authoritySessionVersion" | "issuedAt" | "expiresAt" | "nonce"
-> & { expiresAt?: number };
+> & { taskAuthority: import("@vibestudio/rpc").TaskGrantPrincipal; expiresAt?: number };
 
 interface AdmissionWaiter {
   input: AdmissionInput;
@@ -392,6 +392,7 @@ function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): 
     fact.workspaceId === input.workspaceId &&
     fact.contextId === input.contextId &&
     fact.taskRef === input.taskRef &&
+    fact.taskAuthority === input.taskAuthority &&
     JSON.stringify(fact.agentBinding) === JSON.stringify(input.agentBinding) &&
     JSON.stringify(fact.harness) === JSON.stringify(input.harness) &&
     JSON.stringify(factEval) === JSON.stringify(inputEval) &&

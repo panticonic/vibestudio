@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-  defineServiceMethods,
-  type MethodSchema,
-} from "@vibestudio/shared/typedServiceClient";
+import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { executionArtifactRefSchema } from "./build.js";
 import { evalEventsPageSchema, evalRunResultSchema, evalRunStatusSchema } from "./eval.js";
@@ -60,7 +57,10 @@ export const evalEngineRunArgsSchema = z
     runId: z.string().min(1).optional(),
     timeoutMs: z.number().int().positive().optional(),
     readOnly: z.boolean().optional(),
-    authorityManifestDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    authorityManifestDigest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
     intentDigest: z.string().min(1).optional(),
     scopeInputRevision: z.string().min(1).optional(),
     runDigest: z.string().min(1).optional(),

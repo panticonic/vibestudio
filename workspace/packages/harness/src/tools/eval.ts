@@ -68,7 +68,7 @@ const evalCommonSchema = {
     Type.Integer({
       minimum: 1,
       description:
-        "Optional wall-clock deadline in milliseconds for this run. Omit it for no deadline; set it when work may stall or must finish within a known bound.",
+        "Exceptional whole-cell wall-clock deadline. Omit by default: eval has no implicit deadline. Do not add a generic 120000/300000 safety timeout to ordinary work or lifecycle calls; it cancels the entire cell and obscures the operation that stalled. When one wait needs a bound, pass an AbortSignal/timeout to that operation and keep the eval itself unbounded. Set timeoutMs only for deliberately non-settling code or an explicit end-to-end deadline.",
     })
   ),
   reset: Type.Optional(
@@ -99,12 +99,11 @@ const evalCommonSchema = {
   ),
 };
 
-const evalSchema = Type.Object(
+export const evalToolParameters = Type.Object(
   {
     code: Type.Optional(
       Type.String({
-        description:
-          "TypeScript/JavaScript to execute. Provide this or path at the top level.",
+        description: "TypeScript/JavaScript to execute. Provide this or path at the top level.",
       })
     ),
     path: Type.Optional(
@@ -128,7 +127,7 @@ const evalSchema = Type.Object(
   }
 );
 
-export type EvalToolInput = Static<typeof evalSchema>;
+export type EvalToolInput = Static<typeof evalToolParameters>;
 
 export interface EvalRunResult {
   success: boolean;
@@ -253,14 +252,14 @@ export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRun
 export function createEvalTool(
   callMain: <T>(method: string, args: unknown[]) => Promise<T>,
   opts: { subKey?: string } = {}
-): AgentTool<typeof evalSchema> {
+): AgentTool<typeof evalToolParameters> {
   const executeEval = createEvalExecutor(callMain);
   return {
     name: "eval",
     label: "eval",
     description:
-      'Execute TypeScript/JS in your persistent notebook sandbox (a per-agent EvalDO, not the visible panel). The live heap—including objects with methods, module singletons, and client handles—is retained for 30 minutes after the latest cell. Calls have no implicit wall deadline; pass a positive integer timeoutMs when work may stall or must finish within a known bound. Split intentionally bounded workflows when useful and keep live working objects in `scope`; store stable IDs and exact serializable data there for recovery, or durable records in `db`. An unavoidable process restart is reported explicitly as `[kernel] Restarted` with exact restored/lost scope keys—reacquire lost handles from stable IDs before continuing. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
-    parameters: evalSchema,
+      'Execute TypeScript/JS in your persistent notebook sandbox (a per-agent EvalDO, not the visible panel). The live heap—including objects with methods, module singletons, and client handles—is retained for 30 minutes after the latest cell. Calls have no implicit wall deadline. Omit timeoutMs for ordinary work and lifecycle calls; never add a generic 120000/300000 safety timeout. A whole-cell deadline cancels the notebook operation and hides which nested wait stalled. Bound a specific wait with that API’s AbortSignal/timeout instead, and reserve eval timeoutMs for deliberately non-settling code or an explicit end-to-end deadline. Split intentionally bounded workflows when useful and keep live working objects in `scope`; store stable IDs and exact serializable data there for recovery, or durable records in `db`. An unavoidable process restart is reported explicitly as `[kernel] Restarted` with exact restored/lost scope keys—reacquire lost handles from stable IDs before continuing. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
+    parameters: evalToolParameters,
     execute: async (toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
       // Some model transports materialize an optional string as "". Treat an
       // empty path as omitted when inline code is present; it is never a valid
