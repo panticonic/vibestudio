@@ -87,9 +87,10 @@ import {
   loadBroadcastParticipants,
   type BroadcastDeps,
   type BroadcastParticipant,
-  type StructuredDeliveryEnvelope,
+  type StructuredDelivery,
 } from "./broadcast.js";
-import { ChannelLog, type ChannelReplayContext, type MessageTypeDefinition } from "./log-store.js";
+import { ChannelLog, type ChannelReplayContext } from "./log-store.js";
+import type { MessageTypeDefinition } from "@workspace/pubsub";
 import { PolicyHost, policyViewFromLogEnvelope } from "./policy-host.js";
 import { CallTransport, type PendingCallRow } from "./calls.js";
 import type { PolicyEnvelopeView } from "@workspace/channel-policies";
@@ -608,8 +609,7 @@ export class PubSubChannel extends DurableObjectBase {
       },
       deliverParticipant: (participantId, payload) =>
         this.deliverParticipantPayload(participantId, payload),
-      enqueueDoEnvelope: (participantId, envelope) =>
-        this.enqueueStructuredDelivery(participantId, envelope),
+      enqueueDoEnvelopes: (deliveries) => this.enqueueStructuredDeliveries(deliveries),
     };
   }
 
@@ -640,43 +640,36 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
-  private enqueueStructuredDelivery(
-    participantId: string,
-    envelope: StructuredDeliveryEnvelope
-  ): void {
-    const incarnation = this.sql
-      .exec(
-        `SELECT participant_incarnation
-           FROM participants
-          WHERE id = ? AND transport = 'do'`,
-        participantId
-      )
-      .toArray()[0]?.["participant_incarnation"];
-    if (typeof incarnation !== "string" || incarnation.length === 0) {
-      throw new Error(`Structured participant ${participantId} has no active incarnation`);
-    }
-    const identity =
-      envelope.kind === "log"
-        ? `${envelope.phase}:${envelope.event.id}:${envelope.event.messageId}`
-        : `signal:${envelope.messageId}`;
+  private enqueueStructuredDeliveries(deliveries: readonly StructuredDelivery[]): void {
+    if (deliveries.length === 0) return;
     const now = Date.now();
     this.ctx.storage.transactionSync(() => {
-      const channelSeq = Number(this.getStateValue("channelDeliverySequence") ?? 0) + 1;
-      this.setStateValue("channelDeliverySequence", String(channelSeq));
-      this.sql.exec(
-        `INSERT OR IGNORE INTO channel_delivery_queue (
-           target_participant_id, target_incarnation, channel_seq, delivery_key,
-           envelope_json, idempotency_key, attempts, next_attempt_at,
-           lease_generation, created_at, disposition
-         ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, 'ready')`,
-        participantId,
-        incarnation,
-        channelSeq,
-        identity,
-        JSON.stringify(envelope),
-        `channel-delivery:${this.objectKey}:${participantId}:${incarnation}:${identity}`,
-        now,
-        now
+      const firstChannelSeq = Number(this.getStateValue("channelDeliverySequence") ?? 0) + 1;
+      for (const [index, delivery] of deliveries.entries()) {
+        const { participantId, targetIncarnation, envelope } = delivery;
+        const identity =
+          envelope.kind === "log"
+            ? `${envelope.phase}:${envelope.event.id}:${envelope.event.messageId}`
+            : `signal:${envelope.messageId}`;
+        this.sql.exec(
+          `INSERT OR IGNORE INTO channel_delivery_queue (
+             target_participant_id, target_incarnation, channel_seq, delivery_key,
+             envelope_json, idempotency_key, attempts, next_attempt_at,
+             lease_generation, created_at, disposition
+           ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, 'ready')`,
+          participantId,
+          targetIncarnation,
+          firstChannelSeq + index,
+          identity,
+          JSON.stringify(envelope),
+          `channel-delivery:${this.objectKey}:${participantId}:${targetIncarnation}:${identity}`,
+          now,
+          now
+        );
+      }
+      this.setStateValue(
+        "channelDeliverySequence",
+        String(firstChannelSeq + deliveries.length - 1)
       );
     });
     this.markWorkReady("channel-delivery");
@@ -842,9 +835,7 @@ export class PubSubChannel extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  adoptDurableWorkWorker(
-    workerId: string
-  ): { adopted: boolean; previousWorkerId: string | null } {
+  adoptDurableWorkWorker(workerId: string): { adopted: boolean; previousWorkerId: string | null } {
     return this.adoptDurableWorkWorkerGeneration(workerId);
   }
 
@@ -2155,7 +2146,11 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.admin",
+      resource: { kind: "receiver-object" },
+    },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -2557,7 +2552,11 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.admin",
+      resource: { kind: "receiver-object" },
+    },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -2600,7 +2599,11 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.admin",
+      resource: { kind: "receiver-object" },
+    },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -2800,7 +2803,11 @@ export class PubSubChannel extends DurableObjectBase {
    *  themselves; mutual trust means anyone may, no ACL). History stays visible. */
   @rpc({
     principals: ["host", "user", "code"],
-    effect: { kind: "userland-capability", capability: "channel.members.remove", resource: { kind: "receiver-object" } },
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.members.remove",
+      resource: { kind: "receiver-object" },
+    },
     tier: "critical",
     sensitivity: "destructive",
   })
@@ -3236,7 +3243,11 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.admin",
+      resource: { kind: "receiver-object" },
+    },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -3349,7 +3360,11 @@ export class PubSubChannel extends DurableObjectBase {
 
   @rpc({
     principals: ["host", "user"],
-    effect: { kind: "userland-capability", capability: "channel.admin", resource: { kind: "receiver-object" } },
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.admin",
+      resource: { kind: "receiver-object" },
+    },
     tier: "gated",
     sensitivity: "admin",
   })
@@ -4154,7 +4169,11 @@ export class PubSubChannel extends DurableObjectBase {
   /** Archive a direct child fork (durable `channel.fork_archived` latch). */
   @rpc({
     principals: ["host", "code"],
-    effect: { kind: "userland-capability", capability: "channel.archive", resource: { kind: "receiver-object" } },
+    effect: {
+      kind: "userland-capability",
+      capability: "channel.archive",
+      resource: { kind: "receiver-object" },
+    },
     tier: "critical",
     sensitivity: "destructive",
   })

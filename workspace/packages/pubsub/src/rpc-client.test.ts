@@ -16,6 +16,7 @@ import {
   invocationFailedPayload,
 } from "@workspace/agentic-protocol";
 import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import { encodeEventWatchRecord } from "@vibestudio/shared/events";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { z } from "zod";
 
@@ -94,6 +95,9 @@ interface MockRpc {
 function createMockRpc() {
   const removeListener = vi.fn();
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let approvalController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let pendingApprovalIds: string[] = [];
+  let approvalSequence = 0;
   const pendingPayloads: unknown[] = [];
   const streamSignals: AbortSignal[] = [];
   const priorSignalStatesAtOpen: boolean[][] = [];
@@ -113,6 +117,43 @@ function createMockRpc() {
         args: unknown[],
         options?: { signal?: AbortSignal }
       ) => {
+        if (target === "main" && method === "events.watch") {
+          const requested = args[0] as Array<"shell-approval:pending-changed">;
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              approvalController = controller;
+              controller.enqueue(
+                encodeEventWatchRecord({
+                  kind: "watching",
+                  events: requested,
+                  epoch: "test-approval-epoch",
+                })
+              );
+              controller.enqueue(
+                encodeEventWatchRecord({
+                  kind: "snapshot",
+                  event: "shell-approval:pending-changed",
+                  payload: {
+                    pending: pendingApprovalIds.map((approvalId) => ({ approvalId })),
+                  },
+                  sequence: approvalSequence,
+                })
+              );
+              options?.signal?.addEventListener(
+                "abort",
+                () => {
+                  if (approvalController === controller) approvalController = null;
+                  controller.close();
+                },
+                { once: true }
+              );
+            },
+            cancel() {
+              approvalController = null;
+            },
+          });
+          return new Response(body);
+        }
         priorSignalStatesAtOpen.push(streamSignals.map((signal) => signal.aborted));
         if (options?.signal) streamSignals.push(options.signal);
         const result = await rpc.call(target, method, args);
@@ -212,7 +253,28 @@ function createMockRpc() {
     writePayload({ channelId: CHANNEL, message: msg });
   }
 
-  return { rpc, emit, removeListener, streamSignals, priorSignalStatesAtOpen };
+  function setPendingApprovals(approvalIds: string[]): void {
+    pendingApprovalIds = approvalIds;
+    if (!approvalController) return;
+    approvalSequence += 1;
+    approvalController.enqueue(
+      encodeEventWatchRecord({
+        kind: "event",
+        event: "shell-approval:pending-changed",
+        payload: { pending: approvalIds.map((approvalId) => ({ approvalId })) },
+        sequence: approvalSequence,
+      })
+    );
+  }
+
+  return {
+    rpc,
+    emit,
+    setPendingApprovals,
+    removeListener,
+    streamSignals,
+    priorSignalStatesAtOpen,
+  };
 }
 
 /**
@@ -268,12 +330,14 @@ async function emitReplayAndReady(
 describe("connectViaRpc", () => {
   let mockRpc: MockRpc;
   let emit: (msg: Record<string, unknown>) => void;
+  let setPendingApprovals: (approvalIds: string[]) => void;
   let removeListener: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     const mock = createMockRpc();
     mockRpc = mock.rpc;
     emit = mock.emit;
+    setPendingApprovals = mock.setPendingApprovals;
     removeListener = mock.removeListener;
   });
 
@@ -300,6 +364,98 @@ describe("connectViaRpc", () => {
 
       await emitReplayAndReady(emit, []);
       await client.ready();
+      await client.close();
+    });
+
+    it("preserves non-recoverable structured RPC errors through the subscription boundary", async () => {
+      const errorData = {
+        authorityFailure: {
+          remediation: {
+            review: {
+              approvalId: "review-123",
+              title: "Welcome — here's what's in your workspace",
+            },
+          },
+        },
+      };
+      const accessError = Object.assign(
+        new Error("[workers.resolveService] Service resolution is not allowed"),
+        { errorCode: "EACCES", errorData }
+      );
+      const rpc = {
+        selfId: SELF_ID,
+        call: vi.fn(async () => {
+          throw accessError;
+        }),
+        stream: vi.fn(),
+      };
+      const errors: Error[] = [];
+      const client = connectViaRpc({ rpc: rpc as any, channel: CHANNEL });
+      client.onError((error) => errors.push(error));
+
+      await expect(client.ready()).rejects.toMatchObject({
+        code: "connection",
+        errorCode: "EACCES",
+        errorData,
+      });
+      expect(errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ errorCode: "EACCES", errorData })])
+      );
+      await client.close();
+    });
+
+    it("resumes the initial connection from the exact workspace review event", async () => {
+      const errorData = {
+        authorityFailure: {
+          remediation: {
+            review: {
+              approvalId: "review-123",
+              title: "Welcome — here's what's in your workspace",
+            },
+          },
+        },
+      };
+      const pendingReview = Object.assign(
+        new Error("[workers.resolveService] Waiting for you to finish reviewing Welcome"),
+        { errorCode: "EREVIEWPENDING", errorData }
+      );
+      setPendingApprovals(["review-123"]);
+      let attempts = 0;
+      mockRpc.call.mockImplementation(async (target: string, method: string) => {
+        if (target === "main" && method === "workers.resolveService") {
+          attempts += 1;
+          if (attempts < 2) throw pendingReview;
+          return { kind: "durable-object", targetId: DO_TARGET };
+        }
+        return undefined;
+      });
+      const errors: Error[] = [];
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      client.onError((error) => errors.push(error));
+      let ready = false;
+      void client.ready().then(() => {
+        ready = true;
+      });
+
+      await vi.waitFor(() => expect(attempts).toBe(1));
+      expect(ready).toBe(false);
+      expect(errors).toEqual([]);
+      await vi.waitFor(() =>
+        expect(mockRpc.stream).toHaveBeenCalledWith(
+          "main",
+          "events.watch",
+          [["shell-approval:pending-changed"], expect.any(String)],
+          { signal: expect.any(AbortSignal), bodyIdleTimeoutMs: null }
+        )
+      );
+
+      setPendingApprovals([]);
+      await vi.waitFor(() => expect(attempts).toBe(2));
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+
+      expect(ready).toBe(true);
+      expect(errors).toEqual([]);
       await client.close();
     });
 

@@ -27,6 +27,8 @@ import {
   type ChannelReplayAfterRequest,
   type ChannelReplayEnvelope,
   type ServerLogEvent,
+  MessageTypeDefinitionSchema,
+  type MessageTypeDefinition,
 } from "@workspace/pubsub";
 import {
   encodeChannelPayloadStoredValues,
@@ -60,18 +62,6 @@ export interface ChannelAppendInput {
   /** Derived only from the host-sealed caller attestation by PubSubChannel. */
   contentClass: "internal" | "external";
   externalKeys: string[];
-}
-
-export interface MessageTypeDefinition {
-  typeId: string;
-  displayMode: "inline" | "row";
-  source: { type: "code"; code: string } | { type: "file"; path: string };
-  imports?: Record<string, string>;
-  stateSchema?: Record<string, unknown>;
-  updateSchema?: Record<string, unknown>;
-  registeredBy?: Record<string, unknown>;
-  updatedAtSeq: number;
-  clearedAtSeq?: number;
 }
 
 export interface ChannelReplayContext {
@@ -212,18 +202,20 @@ export class ChannelLog {
   }
 
   async listMessageTypes(): Promise<MessageTypeDefinition[]> {
-    const rows = await this.gad.call<MessageTypeDefinition[]>("listMessageTypes", {
+    const rows = await this.gad.call<unknown[]>("listMessageTypes", {
       channelId: this.channelId,
     });
-    return Promise.all(rows.map((row) => this.hydrate(row)));
+    return Promise.all(
+      rows.map(async (row) => MessageTypeDefinitionSchema.parse(await this.hydrate(row)))
+    );
   }
 
   async getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
-    const row = await this.gad.call<MessageTypeDefinition | null>("getMessageType", {
+    const row = await this.gad.call<unknown | null>("getMessageType", {
       channelId: this.channelId,
       typeId,
     });
-    return row ? this.hydrate(row) : null;
+    return row ? MessageTypeDefinitionSchema.parse(await this.hydrate(row)) : null;
   }
 
   async hasEnvelope(envelopeId: string): Promise<boolean> {

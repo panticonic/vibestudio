@@ -169,6 +169,15 @@ export interface RegisterMessageTypeInput {
  */
 export type PubSubErrorCode = "auth" | "validation" | "connection" | "server";
 
+export interface PubSubErrorOptions {
+  /** The error from the lower transport/RPC layer, when one exists. */
+  cause?: unknown;
+  /** A machine-readable code carried by the lower layer. */
+  errorCode?: string;
+  /** Structured details carried by the lower layer. */
+  errorData?: unknown;
+}
+
 /**
  * Typed error for PubSub operations.
  * Allows programmatic distinction between different error types.
@@ -176,11 +185,25 @@ export type PubSubErrorCode = "auth" | "validation" | "connection" | "server";
 export class PubSubError extends Error {
   constructor(
     message: string,
-    public readonly code: PubSubErrorCode
+    public readonly code: PubSubErrorCode,
+    options?: PubSubErrorOptions
   ) {
     super(message);
     this.name = "PubSubError";
+    if (options?.cause !== undefined) {
+      Object.defineProperty(this, "cause", {
+        configurable: true,
+        enumerable: false,
+        value: options.cause,
+        writable: true,
+      });
+    }
+    if (options?.errorCode !== undefined) this.errorCode = options.errorCode;
+    if (options?.errorData !== undefined) this.errorData = options.errorData;
   }
+
+  readonly errorCode?: string;
+  readonly errorData?: unknown;
 }
 
 /**

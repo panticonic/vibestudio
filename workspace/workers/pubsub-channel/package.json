@@ -25,6 +25,7 @@
             "domain": "sharing",
             "verb": "manage"
           },
+          "notability": "headline",
           "grantScopes": [
             "once",
             "task",
@@ -43,6 +44,7 @@
             "domain": "sharing",
             "verb": "manage"
           },
+          "notability": "headline",
           "grantScopes": [
             "once"
           ]
@@ -58,6 +60,7 @@
             "domain": "sharing",
             "verb": "manage"
           },
+          "notability": "headline",
           "grantScopes": [
             "once"
           ]

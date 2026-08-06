@@ -64,12 +64,14 @@ import { createFanout } from "./async-queue.js";
 import { base64ToUint8Array } from "./image-utils.js";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
+import { pendingReviewNotice } from "@vibestudio/shared/authority/reviewPending";
 import type { PubSubClient } from "./client.js";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { iterateChannelReplayAfterPages } from "./channel-replay.js";
 import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
 import { Validator } from "@cfworker/json-schema";
 import { draft7MetaSchema } from "./json-schema-draft-07.js";
+import { waitForApprovalResolution } from "./review-readiness.js";
 
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 const METHOD_START_REDRIVE_BASE_DELAY_MS = 100;
@@ -116,6 +118,32 @@ function assertValidMethodSchema(
 function isAmbiguousMethodStartFailure(error: unknown): boolean {
   const kind = (error as { errorKind?: unknown } | null)?.errorKind;
   return kind !== "access" && kind !== "application";
+}
+
+/**
+ * Keep the PubSub category separate from an RPC/service error code. The former
+ * drives PubSub recovery; the latter is what lets consumers explain a typed
+ * server outcome such as a review that is waiting on the user.
+ */
+function toPubSubError(error: unknown, fallbackCode: "connection" | "server"): PubSubError {
+  if (error instanceof PubSubError) return error;
+  const source = (typeof error === "object" && error !== null ? error : {}) as {
+    cause?: unknown;
+    code?: unknown;
+    errorCode?: unknown;
+    errorData?: unknown;
+  };
+  const errorCode =
+    typeof source.errorCode === "string"
+      ? source.errorCode
+      : typeof source.code === "string"
+        ? source.code
+        : undefined;
+  return new PubSubError(error instanceof Error ? error.message : String(error), fallbackCode, {
+    cause: error instanceof Error ? error : source.cause,
+    ...(errorCode !== undefined ? { errorCode } : {}),
+    ...(source.errorData !== undefined ? { errorData: source.errorData } : {}),
+  });
 }
 
 /** Wire attachment shape — base64 data string, not Uint8Array. */
@@ -210,7 +238,7 @@ export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMe
       targetId: string,
       method: string,
       args: unknown[],
-      options?: { signal?: AbortSignal }
+      options?: { signal?: AbortSignal; bodyIdleTimeoutMs?: number | null }
     ): Promise<Response>;
     selfId: string;
   };
@@ -249,16 +277,39 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   // (`user:<verifiedUserId>` for humans). Delivery still targets deliveryId.
   let pid = deliveryId;
   let doTargetPromise: Promise<string> | null = null;
-  const getDoTarget = () => {
-    doTargetPromise ??= rpc
-      .call<ResolvedService>("main", "workers.resolveService", [protocol, channel])
-      .then((service) => {
+  const resolveDoTarget = async (signal?: AbortSignal): Promise<string> => {
+    while (true) {
+      try {
+        const service = await rpc.call<ResolvedService>("main", "workers.resolveService", [
+          protocol,
+          channel,
+        ]);
         if (service.kind !== "durable-object" || !service.targetId) {
           throw new Error("Channel service must resolve to a Durable Object service");
         }
         return service.targetId;
-      });
-    return doTargetPromise;
+      } catch (error) {
+        // Workspace creation deliberately exposes services before their units
+        // may run, so an initial panel can arrive while the one adoption review
+        // is still open. That is readiness, not a failed connection: keep this
+        // exact subscription attempt pending and resolve it as soon as the
+        // review is answered. Other failures retain their normal error path.
+        const review = pendingReviewNotice(error);
+        if (!review) throw error;
+        await waitForApprovalResolution(rpc, review.approvalId, signal);
+      }
+    }
+  };
+  const getDoTarget = (signal?: AbortSignal): Promise<string> => {
+    if (doTargetPromise) return doTargetPromise;
+    const request = resolveDoTarget(signal);
+    doTargetPromise = request;
+    void request.catch(() => {
+      // A transport failure or an aborted initial subscription must not poison
+      // every later operation. Successful resolution remains sticky.
+      if (doTargetPromise === request) doTargetPromise = null;
+    });
+    return request;
   };
   const callChannel = async <R = unknown>(method: string, ...args: unknown[]): Promise<R> =>
     rpc.call<R>(await getDoTarget(), method, args);
@@ -336,7 +387,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 
   // State
   let closed = false;
-  let lastSeenId: number | undefined = opts.sinceId;
   let serverContextId: string | undefined;
   let serverChannelConfig: ChannelConfig | undefined;
   let serverTotalCount: number | undefined;
@@ -350,7 +400,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   // Ready promise
   let readyResolve: (() => void) | null = null;
   let readyReject: ((err: Error) => void) | null = null;
-  let readyPromise = new Promise<void>((resolve, reject) => {
+  const readyPromise = new Promise<void>((resolve, reject) => {
     readyResolve = resolve;
     readyReject = reject;
   });
@@ -673,10 +723,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 
       case "log":
       case "signal": {
-        if (msg.id !== undefined) {
-          lastSeenId = msg.id;
-          if (msg.id > 0) lastSeenSeq = msg.id;
-        }
+        if (msg.id !== undefined && msg.id > 0) lastSeenSeq = msg.id;
 
         // Method lifecycle (caller settle / provider abort) runs first, before
         // the replayMode:skip short-circuit — a cold reconnect must still settle
@@ -1374,10 +1421,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
             },
             "stream"
           ).catch((error) => {
-            const failure =
-              error instanceof PubSubError
-                ? error
-                : new PubSubError(error instanceof Error ? error.message : String(error), "server");
+            const failure = toPubSubError(error, "server");
             rejectReady(failure);
             handleError(failure);
           });
@@ -1520,11 +1564,16 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     });
     let acknowledged = false;
 
-    let subscription!: ActiveSubscription;
+    const subscription: ActiveSubscription = {
+      generation,
+      controller,
+      terminal: Promise.resolve(),
+      acknowledged: false,
+    };
     const terminal = (async () => {
       try {
         const response = await rpc.stream(
-          await getDoTarget(),
+          await getDoTarget(controller.signal),
           "subscribe",
           [deliveryId, metadata],
           { signal: controller.signal }
@@ -1558,7 +1607,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           throw new Error("Channel subscription closed unexpectedly");
         }
       } catch (error) {
-        const failure = error instanceof Error ? error : new Error(String(error));
+        const failure = toPubSubError(error, "connection");
         if (!acknowledged) rejectAck(failure);
         if (
           !closed &&
@@ -1566,16 +1615,15 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           generation === activeSubscription?.generation
         ) {
           replayComplete = false;
-          const pubsubError = new PubSubError(failure.message, "connection");
-          rejectReady(pubsubError);
-          handleError(pubsubError);
+          rejectReady(failure);
+          handleError(failure);
           for (const handler of disconnectHandlers) handler();
         }
         throw failure;
       }
     })();
     terminal.catch(() => {});
-    subscription = { generation, controller, terminal, acknowledged: false };
+    subscription.terminal = terminal;
     activeSubscription = subscription;
     try {
       // The channel replaces the response resource atomically under this
@@ -1640,8 +1688,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       subscribeAckReject = null;
     })
     .catch((err: unknown) => {
-      const error = err instanceof Error ? err : new Error(String(err));
-      const pubsubError = new PubSubError(error.message, "connection");
+      const pubsubError = toPubSubError(err, "connection");
       subscribeAckReject?.(pubsubError);
       subscribeAckResolve = null;
       subscribeAckReject = null;
@@ -1692,7 +1739,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
 
   async function updateMetadata(
     newMetadata: Partial<T>,
-    updateOptions: UpdateMetadataOptions = {}
+    _updateOptions: UpdateMetadataOptions = {}
   ): Promise<void> {
     await callChannel("updateMetadata", pid, newMetadata);
   }

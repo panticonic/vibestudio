@@ -141,7 +141,8 @@ function agenticEvent(kind = "message.completed") {
 
 function messageTypeRegisteredEvent(
   typeId: string,
-  code = "export default function App() { return null; }"
+  code = "export default function App() { return null; }",
+  imports?: Record<string, string>
 ) {
   return {
     kind: "messageType.registered",
@@ -151,6 +152,7 @@ function messageTypeRegisteredEvent(
       typeId,
       displayMode: "row",
       source: { type: "code", code },
+      ...(imports ? { imports } : {}),
     },
     createdAt: new Date().toISOString(),
   };
@@ -171,9 +173,7 @@ async function createGadBackedChannel(
     ) => Promise<unknown> | unknown;
   } = {}
 ) {
-  const gad =
-    options.gad ??
-    (await createTestDO(GadWorkspaceDO, { __objectKey: "workspace" }));
+  const gad = options.gad ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "workspace" }));
   const channel = await createTestDO(PubSubChannel, {
     __objectKey: options.channelKey ?? "channel-1",
   });
@@ -3608,7 +3608,10 @@ describe("PubSubChannel", () => {
     await instance.publish(
       "panel:user",
       AGENTIC_EVENT_PAYLOAD_KIND,
-      messageTypeRegisteredEvent("weather", "export default function Weather() { return null; }")
+      messageTypeRegisteredEvent("weather", "export default function Weather() { return null; }", {
+        react: "latest",
+        "react/jsx-runtime": "latest",
+      })
     );
     await instance.publish(
       "panel:user",
@@ -3616,9 +3619,22 @@ describe("PubSubChannel", () => {
       messageTypeRegisteredEvent("calendar", "export default function Calendar() { return null; }")
     );
 
+    const storedWeather = await gad.call("getMessageType", {
+      channelId: "channel-1",
+      typeId: "weather",
+    });
+    expect(storedWeather).toMatchObject({
+      source: { protocol: "vibestudio.blob-ref.v1", encoding: "json" },
+      imports: { protocol: "vibestudio.blob-ref.v1", encoding: "json" },
+    });
+
     await expect(instance.getMessageTypes()).resolves.toEqual([
       expect.objectContaining({ typeId: "calendar" }),
-      expect.objectContaining({ typeId: "weather" }),
+      expect.objectContaining({
+        typeId: "weather",
+        source: { type: "code", code: "export default function Weather() { return null; }" },
+        imports: { react: "latest", "react/jsx-runtime": "latest" },
+      }),
     ]);
   });
 
@@ -4146,19 +4162,24 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
     };
     for (const kind of ["panel", "worker", "server", "do", "shell"]) {
       expect(
-        gate.inboundCallerDenial("appendSeed", [], {
-          callerId: `${kind}:x`,
-          callerKind: kind,
-          authorization: createTestDirectAuthority({
-            callerKind: kind as "panel" | "worker" | "server" | "do" | "shell",
-            method: "appendSeed",
-            effect: { kind: "open" },
-            capability: "workspace-service:channel",
-            targetCapability: "workspace-service:channel",
-            targetPrincipals: ["host", "user", "code"],
-            objectKey: "channel-1",
-          }),
-        }, Date.now()),
+        gate.inboundCallerDenial(
+          "appendSeed",
+          [],
+          {
+            callerId: `${kind}:x`,
+            callerKind: kind,
+            authorization: createTestDirectAuthority({
+              callerKind: kind as "panel" | "worker" | "server" | "do" | "shell",
+              method: "appendSeed",
+              effect: { kind: "open" },
+              capability: "workspace-service:channel",
+              targetCapability: "workspace-service:channel",
+              targetPrincipals: ["host", "user", "code"],
+              objectKey: "channel-1",
+            }),
+          },
+          Date.now()
+        ),
         kind
       ).toBeNull();
     }

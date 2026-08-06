@@ -17,13 +17,20 @@ export type StructuredDeliveryEnvelope = Extract<RpcChannelMessage, { kind: "log
 export interface BroadcastParticipant {
   id: string;
   structured: boolean;
+  incarnation: string | null;
+}
+
+export interface StructuredDelivery {
+  participantId: string;
+  targetIncarnation: string;
+  envelope: StructuredDeliveryEnvelope;
 }
 
 export interface BroadcastDeps {
   objectKey: string;
   participants(): readonly BroadcastParticipant[];
   deliverParticipant(participantId: string, payload: unknown): Promise<void> | void;
-  enqueueDoEnvelope(participantId: string, envelope: StructuredDeliveryEnvelope): void;
+  enqueueDoEnvelopes(deliveries: readonly StructuredDelivery[]): void;
 }
 
 /**
@@ -49,11 +56,16 @@ function participantReceivesChannelEnvelopes(metadataJson: unknown): boolean {
  */
 export function loadBroadcastParticipants(sql: SqlStorage): BroadcastParticipant[] {
   return sql
-    .exec(`SELECT id, transport, metadata FROM participants`)
+    .exec(`SELECT id, transport, metadata, participant_incarnation FROM participants`)
     .toArray()
     .map((row) => ({
       id: row["id"] as string,
       structured: row["transport"] === "do" && participantReceivesChannelEnvelopes(row["metadata"]),
+      incarnation:
+        typeof row["participant_incarnation"] === "string" &&
+        row["participant_incarnation"].length > 0
+          ? row["participant_incarnation"]
+          : null,
     }));
 }
 
@@ -74,6 +86,7 @@ export function broadcast(
     envelope.kind === "log"
       ? channelEventToRpcLog(event, envelope.phase ?? "live", envelope.ref)
       : channelEventToRpcSignal(event, envelope.ref);
+  const structuredDeliveries: StructuredDelivery[] = [];
 
   for (const participant of deps.participants()) {
     const pid = participant.id;
@@ -92,16 +105,22 @@ export function broadcast(
       // completed. Other participants still receive the durable broadcast;
       // stream transports retain their sender echo for UI acknowledgement.
       if (pid === structuredPublisherId) continue;
-      deps.enqueueDoEnvelope(
-        pid,
-        envelope.kind === "log"
-          ? { kind: "log", phase: envelope.phase ?? "live", event }
-          : channelEventToRpcSignal(event)
-      );
+      if (!participant.incarnation) {
+        throw new Error(`Structured participant ${pid} has no active incarnation`);
+      }
+      structuredDeliveries.push({
+        participantId: pid,
+        targetIncarnation: participant.incarnation,
+        envelope:
+          envelope.kind === "log"
+            ? { kind: "log", phase: envelope.phase ?? "live", event }
+            : channelEventToRpcSignal(event),
+      });
     } else {
       void deps.deliverParticipant(pid, data);
     }
   }
+  if (structuredDeliveries.length > 0) deps.enqueueDoEnvelopes(structuredDeliveries);
 }
 
 // ── ChannelEvent builders ────────────────────────────────────────────────────

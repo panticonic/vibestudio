@@ -19,47 +19,83 @@ describe("broadcast routing", () => {
     const recipientId = "do:workers/agent-worker:AiChatWorker:recipient";
     const streamSenderId = "panel:sender";
     const deliverParticipant = vi.fn(async () => undefined);
-    const enqueueDoEnvelope = vi.fn();
+    const enqueueDoEnvelopes = vi.fn();
     const deps = {
       objectKey: "channel-broadcast",
       participants: () => [
-        { id: senderId, structured: true },
-        { id: recipientId, structured: true },
-        { id: streamSenderId, structured: false },
+        { id: senderId, structured: true, incarnation: "sender-incarnation" },
+        { id: recipientId, structured: true, incarnation: "recipient-incarnation" },
+        { id: streamSenderId, structured: false, incarnation: null },
       ],
       deliverParticipant,
-      enqueueDoEnvelope,
+      enqueueDoEnvelopes,
     } as unknown as BroadcastDeps;
 
     broadcast(deps, channelEvent(senderId), { kind: "log", phase: "live" }, senderId);
 
-    expect(enqueueDoEnvelope).toHaveBeenCalledTimes(1);
-    expect(enqueueDoEnvelope).toHaveBeenCalledWith(
-      recipientId,
-      expect.objectContaining({ kind: "log" })
-    );
-    expect(enqueueDoEnvelope).not.toHaveBeenCalledWith(senderId, expect.any(Object));
+    expect(enqueueDoEnvelopes).toHaveBeenCalledOnce();
+    expect(enqueueDoEnvelopes).toHaveBeenCalledWith([
+      {
+        participantId: recipientId,
+        targetIncarnation: "recipient-incarnation",
+        envelope: expect.objectContaining({ kind: "log" }),
+      },
+    ]);
     expect(deliverParticipant).toHaveBeenCalledWith(streamSenderId, expect.any(Object));
   });
 
   it("delivers a logical caller's terminal while excluding the actual publisher", () => {
     const callerId = "do:workers/agent-worker:AiChatWorker:caller";
     const publisherId = "do:vibestudio/internal:EvalDO:publisher";
-    const enqueueDoEnvelope = vi.fn();
+    const enqueueDoEnvelopes = vi.fn();
     const deps = {
       objectKey: "channel-terminal",
-      participants: () => [callerId, publisherId].map((id) => ({ id, structured: true })),
+      participants: () =>
+        [callerId, publisherId].map((id) => ({
+          id,
+          structured: true,
+          incarnation: `${id}:incarnation`,
+        })),
       deliverParticipant: vi.fn(),
-      enqueueDoEnvelope,
+      enqueueDoEnvelopes,
     } as unknown as BroadcastDeps;
 
     broadcast(deps, channelEvent(callerId), { kind: "log", phase: "live" }, callerId, publisherId);
 
-    expect(enqueueDoEnvelope).toHaveBeenCalledWith(
-      callerId,
-      expect.objectContaining({ kind: "log" })
-    );
-    expect(enqueueDoEnvelope).not.toHaveBeenCalledWith(publisherId, expect.any(Object));
+    expect(enqueueDoEnvelopes).toHaveBeenCalledWith([
+      {
+        participantId: callerId,
+        targetIncarnation: `${callerId}:incarnation`,
+        envelope: expect.objectContaining({ kind: "log" }),
+      },
+    ]);
+  });
+
+  it("enqueues every structured recipient as one ordered batch", () => {
+    const enqueueDoEnvelopes = vi.fn();
+    const deps = {
+      objectKey: "channel-batch",
+      participants: () => [
+        { id: "agent:first", structured: true, incarnation: "incarnation:first" },
+        { id: "agent:second", structured: true, incarnation: "incarnation:second" },
+      ],
+      deliverParticipant: vi.fn(),
+      enqueueDoEnvelopes,
+    } satisfies BroadcastDeps;
+
+    broadcast(deps, channelEvent("panel:user"), { kind: "log", phase: "live" }, "panel:user");
+
+    expect(enqueueDoEnvelopes).toHaveBeenCalledOnce();
+    expect(enqueueDoEnvelopes.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({
+        participantId: "agent:first",
+        targetIncarnation: "incarnation:first",
+      }),
+      expect.objectContaining({
+        participantId: "agent:second",
+        targetIncarnation: "incarnation:second",
+      }),
+    ]);
   });
 
   it("projects transport routing once from participant rows", () => {
@@ -68,20 +104,27 @@ describe("broadcast routing", () => {
         id: "do:agent",
         transport: "do",
         metadata: JSON.stringify({ type: "agent", receivesChannelEnvelopes: true }),
+        participant_incarnation: "agent-incarnation",
       },
       {
         id: "do:ordinary",
         transport: "do",
         metadata: JSON.stringify({ type: "agent" }),
+        participant_incarnation: "ordinary-incarnation",
       },
-      { id: "panel:one", transport: "rpc", metadata: "not parsed for rpc" },
+      {
+        id: "panel:one",
+        transport: "rpc",
+        metadata: "not parsed for rpc",
+        participant_incarnation: null,
+      },
     ];
     const exec = vi.fn(() => ({ toArray: () => rows }));
 
     expect(loadBroadcastParticipants({ exec } as never)).toEqual([
-      { id: "do:agent", structured: true },
-      { id: "do:ordinary", structured: false },
-      { id: "panel:one", structured: false },
+      { id: "do:agent", structured: true, incarnation: "agent-incarnation" },
+      { id: "do:ordinary", structured: false, incarnation: "ordinary-incarnation" },
+      { id: "panel:one", structured: false, incarnation: null },
     ]);
     expect(exec).toHaveBeenCalledTimes(1);
   });

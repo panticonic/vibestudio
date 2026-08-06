@@ -13,33 +13,57 @@ import {
   type FieldDefinition,
   type FieldValue,
 } from "@vibestudio/types";
+import type { MessageTypeDefinition } from "./types.js";
 
 const SandboxSourceSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("code"), code: z.string() }).strict(),
   z.object({ type: z.literal("file"), path: z.string().min(1) }).strict(),
 ]);
 
-export const RegisterMessageTypeArgsSchema = z.object({
-  typeId: z.string().min(1),
-  displayMode: z.enum(["inline", "row"]),
-  source: SandboxSourceSchema,
-  imports: z.record(z.string(), z.string()).optional(),
-  // JSON Schema documents (data, not code) — validated at agent emission time
-  // and at the panel render boundary against the same registered document.
-  stateSchema: z.record(z.unknown()).optional(),
-  updateSchema: z.record(z.unknown()).optional(),
-}).strict();
+export const RegisterMessageTypeArgsSchema = z
+  .object({
+    typeId: z.string().min(1),
+    displayMode: z.enum(["inline", "row"]),
+    source: SandboxSourceSchema,
+    imports: z.record(z.string(), z.string()).optional(),
+    // JSON Schema documents (data, not code) — validated at agent emission time
+    // and at the panel render boundary against the same registered document.
+    stateSchema: z.record(z.unknown()).optional(),
+    updateSchema: z.record(z.unknown()).optional(),
+  })
+  .strict();
 
-export const PublishCustomMessageArgsSchema = z.object({
-  typeId: z.string().min(1),
-  initialState: z.unknown().optional(),
-  displayMode: z.enum(["inline", "row"]).optional(),
-}).strict();
+/** Semantic message-type definition. Stored-value refs are not admitted here:
+ * the channel storage adapter must hydrate them before returning this type. */
+export const MessageTypeDefinitionSchema: z.ZodType<MessageTypeDefinition> =
+  RegisterMessageTypeArgsSchema.extend({
+    registeredBy: z
+      .object({
+        kind: z.string(),
+        id: z.string(),
+        displayName: z.string().optional(),
+        metadata: z.record(z.unknown()).optional(),
+      })
+      .passthrough()
+      .optional(),
+    updatedAtSeq: z.number().int().nonnegative(),
+    clearedAtSeq: z.number().int().nonnegative().optional(),
+  }).strict();
 
-export const UpdateCustomMessageArgsSchema = z.object({
-  messageId: z.string().min(1),
-  update: z.unknown(),
-}).strict();
+export const PublishCustomMessageArgsSchema = z
+  .object({
+    typeId: z.string().min(1),
+    initialState: z.unknown().optional(),
+    displayMode: z.enum(["inline", "row"]).optional(),
+  })
+  .strict();
+
+export const UpdateCustomMessageArgsSchema = z
+  .object({
+    messageId: z.string().min(1),
+    update: z.unknown(),
+  })
+  .strict();
 
 export type RegisterMessageTypeArgs = z.infer<typeof RegisterMessageTypeArgsSchema>;
 export type PublishCustomMessageArgs = z.infer<typeof PublishCustomMessageArgsSchema>;
@@ -83,14 +107,21 @@ export const FieldDefinitionSchema = z.object({
   description: z.string().optional(),
   type: z.enum([
     // Existing types
-    "string", "textarea", "number", "boolean", "select", "slider", "segmented", "toggle",
+    "string",
+    "textarea",
+    "number",
+    "boolean",
+    "select",
+    "slider",
+    "segmented",
+    "toggle",
     // New types for feedback UI
-    "readonly",       // Display-only text (non-editable)
-    "code",           // Syntax-highlighted code/JSON block
-    "buttonGroup",    // Horizontal action buttons (Allow/Deny style)
-    "multiSelect",    // Multiple selection checkboxes
-    "diff",           // Unified or side-by-side diff view
-    "toolPreview",    // Rich tool argument preview (Monaco diff, git previews)
+    "readonly", // Display-only text (non-editable)
+    "code", // Syntax-highlighted code/JSON block
+    "buttonGroup", // Horizontal action buttons (Allow/Deny style)
+    "multiSelect", // Multiple selection checkboxes
+    "diff", // Unified or side-by-side diff view
+    "toolPreview", // Rich tool argument preview (Monaco diff, git previews)
     "approvalHeader", // Tool approval header (first-time grant or per-call)
   ]),
   required: z.boolean().optional(),
@@ -127,30 +158,34 @@ export const FieldDefinitionSchema = z.object({
   // New properties for feedback UI field types
 
   // For code/readonly/diff fields
-  language: z.string().optional(),      // "typescript", "json", "bash", "diff"
-  maxHeight: z.number().optional(),     // Max scrollable height in px
+  language: z.string().optional(), // "typescript", "json", "bash", "diff"
+  maxHeight: z.number().optional(), // Max scrollable height in px
 
   // For buttonGroup fields
   buttonStyle: z.enum(["outline", "solid", "soft"]).optional(),
-  buttons: z.array(z.object({
-    value: z.string(),
-    label: z.string(),
-    color: z.enum(["gray", "green", "red", "amber"]).optional(),
-    description: z.string().optional(),
-  })).optional(),
+  buttons: z
+    .array(
+      z.object({
+        value: z.string(),
+        label: z.string(),
+        color: z.enum(["gray", "green", "red", "amber"]).optional(),
+        description: z.string().optional(),
+      })
+    )
+    .optional(),
 
   // For select/multiSelect/buttonGroup - auto-submit when selected
   submitOnSelect: z.boolean().optional(),
 
   // For toolPreview fields
-  toolName: z.string().optional(),   // Name of the tool (e.g., "file_edit", "git_commit")
-  toolArgs: z.unknown().optional(),  // Tool input arguments to preview
+  toolName: z.string().optional(), // Name of the tool (e.g., "file_edit", "git_commit")
+  toolArgs: z.unknown().optional(), // Tool input arguments to preview
 
   // For approvalHeader fields
-  agentName: z.string().optional(),        // Name of the agent requesting permission
-  displayName: z.string().optional(),      // Human-readable tool name
+  agentName: z.string().optional(), // Name of the agent requesting permission
+  displayName: z.string().optional(), // Human-readable tool name
   isFirstTimeGrant: z.boolean().optional(), // Whether this is a first-time grant
-  floorLevel: z.number().optional(),       // Current approval level (0=Ask, 1=Auto-Safe, 2=Full Auto)
+  floorLevel: z.number().optional(), // Current approval level (0=Ask, 1=Auto-Safe, 2=Full Auto)
 });
 
 /**
@@ -182,9 +217,9 @@ export interface FeedbackFormArgs {
   values?: Record<string, FieldValue>;
   submitLabel?: string;
   cancelLabel?: string;
-  severity?: "info" | "warning" | "danger";     // Affects styling/icon
-  hideSubmit?: boolean;                         // Hide submit button (for buttonGroup with submitOnSelect)
-  hideCancel?: boolean;                         // Hide cancel button
+  severity?: "info" | "warning" | "danger"; // Affects styling/icon
+  hideSubmit?: boolean; // Hide submit button (for buttonGroup with submitOnSelect)
+  hideCancel?: boolean; // Hide cancel button
 }
 
 /**
@@ -204,23 +239,27 @@ export interface FeedbackCustomArgs {
 /**
  * Zod schema for feedback_form method arguments.
  */
-export const FeedbackFormArgsSchema = z.object({
-  title: z.string(),
-  fields: z.array(FieldDefinitionSchema),
-  values: z.record(FieldValueSchema).optional(),
-  submitLabel: z.string().optional(),
-  cancelLabel: z.string().optional(),
-  severity: z.enum(["info", "warning", "danger"]).optional(), // Affects styling/icon
-  hideSubmit: z.boolean().optional(),                       // Hide submit button (for buttonGroup with submitOnSelect)
-  hideCancel: z.boolean().optional(),                       // Hide cancel button
-}).strict();
+export const FeedbackFormArgsSchema = z
+  .object({
+    title: z.string(),
+    fields: z.array(FieldDefinitionSchema),
+    values: z.record(FieldValueSchema).optional(),
+    submitLabel: z.string().optional(),
+    cancelLabel: z.string().optional(),
+    severity: z.enum(["info", "warning", "danger"]).optional(), // Affects styling/icon
+    hideSubmit: z.boolean().optional(), // Hide submit button (for buttonGroup with submitOnSelect)
+    hideCancel: z.boolean().optional(), // Hide cancel button
+  })
+  .strict();
 
 /**
  * Zod schema for feedback_custom method arguments.
  */
-export const FeedbackCustomArgsSchema = z.object({
-  code: z.string().optional(),
-  path: z.string().optional(),
-  imports: z.record(z.string(), z.string()).optional(),
-  title: z.string().optional(),
-}).strict();
+export const FeedbackCustomArgsSchema = z
+  .object({
+    code: z.string().optional(),
+    path: z.string().optional(),
+    imports: z.record(z.string(), z.string()).optional(),
+    title: z.string().optional(),
+  })
+  .strict();
