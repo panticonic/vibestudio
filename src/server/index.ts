@@ -17,7 +17,11 @@ import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
 import { createHash, randomBytes, randomUUID } from "crypto";
-import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import {
+  canonicalEntityId,
+  type EntityActivationInput as EntityActivateInput,
+  type EntityRecord,
+} from "@vibestudio/shared/runtime/entitySpec";
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import {
@@ -50,7 +54,15 @@ import {
   workspaceUnitDeclarationFingerprint,
 } from "./workspaceUnitDeclarationFingerprint.js";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
+import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
+import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
+import { hostBuildOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
+import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
+import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
+import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
 import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinates";
+import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
+import { callerControlsLifecycleContext } from "./services/lifecycleContextControl.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -483,33 +495,48 @@ async function main() {
     await import("@vibestudio/shared/productBuiltinCatalog.generated");
   const { discoverPackageGraph: discoverAuthorityPackageGraph } =
     await import("./buildV2/packageGraph.js");
+  const capabilityServiceCatalog = [
+    ...PRODUCT_BUILTIN_CATALOG.flatMap((entry) =>
+      entry.kind === "service"
+        ? [
+            {
+              name: entry.name,
+              title: entry.title,
+              action: entry.action,
+              description: entry.description,
+              presentation: entry.presentation,
+              source: "vibestudio/internal",
+            },
+          ]
+        : []
+    ),
+    ...(workspaceConfig.services ?? []),
+  ];
+  // Authority presentation is used while projecting every build-unit catalog
+  // row. Discovering the whole workspace graph for every individual
+  // userland capability turns one catalog read into hundreds of synchronous
+  // filesystem scans and can starve the RPC loop during startup. The graph
+  // only changes when the protected workspace view advances; invalidate this
+  // snapshot from the refs listener below.
+  let cachedAuthorityCapabilities: Array<{
+    provider: string;
+    definition: UserlandCapabilityDefinition;
+  }> | null = null;
+  const authorityCapabilities = () => {
+    if (cachedAuthorityCapabilities) return cachedAuthorityCapabilities;
+    cachedAuthorityCapabilities = discoverAuthorityPackageGraph(workspacePath)
+      .allNodes()
+      .flatMap((node) =>
+        (node.manifest.authority?.provides ?? []).map((definition) => ({
+          provider: node.relativePath,
+          definition,
+        }))
+      );
+    return cachedAuthorityCapabilities;
+  };
   const describeCapability = createCapabilityPresentationResolver(
-    () => [
-      ...PRODUCT_BUILTIN_CATALOG.flatMap((entry) =>
-        entry.kind === "service"
-          ? [
-              {
-                name: entry.name,
-                title: entry.title,
-                action: entry.action,
-                description: entry.description,
-                presentation: entry.presentation,
-                source: "vibestudio/internal",
-              },
-            ]
-          : []
-      ),
-      ...(workspaceConfig.services ?? []),
-    ],
-    () =>
-      discoverAuthorityPackageGraph(workspacePath)
-        .allNodes()
-        .flatMap((node) =>
-          (node.manifest.authority?.provides ?? []).map((definition) => ({
-            provider: node.relativePath,
-            definition,
-          }))
-        )
+    () => capabilityServiceCatalog,
+    authorityCapabilities
   );
 
   // Parse workspace declarations (singletonObjects + services + routes).
@@ -641,7 +668,10 @@ async function main() {
   const tokenManager = new TokenManager();
   const { EntityCache } = await import("@vibestudio/shared/runtime/entityCache");
   const { ConnectionGrantService } = await import("@vibestudio/shared/connectionGrants");
+  const { RuntimeDiagnosticsStore } = await import("./runtimeDiagnosticsStore.js");
+  const runtimeDiagnostics = new RuntimeDiagnosticsStore({ statePath });
   const entityCache = new EntityCache();
+  let workerdManagerForGateway: import("./workerdManager.js").WorkerdManager | null = null;
   let primePanelRuntimeImage: (source: string, ref?: string) => Promise<void> = async () => {};
   entityCache.registerBootstrap({ id: "server", kind: "server" });
   entityCache.registerBootstrap({ id: "electron-main", kind: "shell" });
@@ -651,6 +681,92 @@ async function main() {
   // dispatch. Lazily built once doDispatch is resolvable (registered later).
   const { WorkspaceEntityStore } = await import("./workspaceEntityStore.js");
   let entityStoreInstance: import("./workspaceEntityStore.js").WorkspaceEntityStore | null = null;
+  const { DurableObjectExecutionReadiness } = await import("./durableObjectExecutionReadiness.js");
+  const durableObjectExecutionReadiness = new DurableObjectExecutionReadiness({
+    resolveActiveEntity: (id) =>
+      ensureEntityStore(
+        container.get<import("./doDispatch.js").DODispatch>("doDispatch")
+      ).resolveActiveRecord(id),
+    restoreExactExecution: async (record) => {
+      const manager = workerdManagerForGateway;
+      if (!manager) {
+        throw new Error(`Cannot materialize ${record.id} before WorkerdManager starts`);
+      }
+      await manager.restoreDurableObjectEntity(record);
+    },
+    onPermanentFailure: (incident) => {
+      runtimeDiagnostics.record({
+        workspaceId,
+        entityId: incident.entityId,
+        kind: "do",
+        level: "error",
+        message: "Sealed runtime execution is unavailable",
+        source: "lifecycle",
+        fields: {
+          event: "runtime-execution-blocked",
+          alarmState: "blocked",
+          buildKey: incident.buildKey,
+          executionDigest: incident.executionDigest,
+          permanentIncidentCount: incident.incidentCount,
+          failure: incident.message,
+        },
+      });
+      eventService.emit("notification:show", {
+        id: `runtime-execution-unavailable:${incident.entityId}:${incident.executionDigest}`,
+        type: "error",
+        title: "Runtime execution unavailable",
+        message:
+          "Background work is paused because its exact retained execution could not be restored.",
+        ttl: 0,
+        details: [
+          { label: "Entity", value: incident.entityId, mono: true },
+          { label: "Build", value: incident.buildKey, mono: true },
+          { label: "Execution", value: incident.executionDigest, mono: true },
+          { label: "Failure", value: incident.message },
+        ],
+        actions: [
+          {
+            id: "restore-exact-execution",
+            label: "Restore exact execution",
+            command: {
+              type: "runtime.execution.recover",
+              entityId: incident.entityId,
+              expectedExecutionDigest: incident.executionDigest,
+              strategy: "restore-exact",
+            },
+          },
+          {
+            id: "replace-execution-incarnation",
+            label: "Start new incarnation",
+            variant: "soft",
+            command: {
+              type: "runtime.execution.recover",
+              entityId: incident.entityId,
+              expectedExecutionDigest: incident.executionDigest,
+              strategy: "replace-incarnation",
+            },
+          },
+        ],
+      });
+    },
+    onRecovered: (incident) => {
+      runtimeDiagnostics.record({
+        workspaceId,
+        entityId: incident.entityId,
+        kind: "do",
+        level: "info",
+        message: "Sealed runtime execution recovered",
+        source: "lifecycle",
+        fields: {
+          event: "runtime-execution-recovered",
+          alarmState: "recoverable",
+          buildKey: incident.buildKey,
+          executionDigest: incident.executionDigest,
+          permanentIncidentCount: incident.incidentCount,
+        },
+      });
+    },
+  });
   const ensureEntityStore = (
     doDispatch: import("./doDispatch.js").DODispatch
   ): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
@@ -659,6 +775,7 @@ async function main() {
       workspaceId,
       entityCache,
       executionPublicationPort: executionPublicationJournal,
+      materializeExecution: (record) => durableObjectExecutionReadiness.materialize(record),
     }));
   const connectionGrants = new ConnectionGrantService({ entityCache });
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
@@ -781,6 +898,11 @@ async function main() {
   const { AgentExecutionSessionRegistry } =
     await import("./services/agentExecutionSessionRegistry.js");
   const agentExecutionSessions = new AgentExecutionSessionRegistry();
+  const { TaskAuthorityRegistry } = await import("./services/taskAuthorityRegistry.js");
+  const taskAuthorities = new TaskAuthorityRegistry({
+    executionIsActive: (runtimeId, authority) =>
+      agentExecutionSessions.resolve(runtimeId)?.taskAuthority === authority,
+  });
   const {
     ContextIntegrityStore,
     createContextIngestionBatchRecorder,
@@ -836,8 +958,8 @@ async function main() {
         caller.code?.executionDigest &&
         conduitBlessingStore.isBlessed(caller.code) &&
         caller.executionSession &&
-        caller.executionSession.harness.principal ===
-          `code:${caller.code.repoPath}@${caller.code.executionDigest}` &&
+        caller.executionSession.harness.executionDigest === caller.code.executionDigest &&
+        caller.executionSession.harness.principal === codePrincipal(caller.code) &&
         (!reviewedClosure || callerMatchesReviewedClosureHarness(caller, reviewedClosure))
       );
       return {
@@ -859,7 +981,6 @@ async function main() {
                   conduitBlessed,
                 })
               : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
-          grantCode: caller.codeApproved === true,
           grantStore: capabilityGrantStore,
         }),
         ...(reviewedClosureChangeRequired ? { reviewedClosureChangeRequired: true } : {}),
@@ -908,13 +1029,22 @@ async function main() {
     entityCache,
     getTitle: (id: string) => entityTitleService.getTitle(id),
   };
+  const { InstallReviewSelectionStore } = await import("./services/installReviewSelections.js");
+  const installReviewSelections = new InstallReviewSelectionStore();
   const approvalQueue = createApprovalQueue({
     eventService,
+    installReviewSelections,
     recordProvenance: async (record) => {
       await workspaceChildHub.appendApproval(record);
     },
     resolveTitle: (entityId) => resolveApprovalCallerTitle(approvalRequesterDeps, entityId),
     resolveRequester: (input) => resolveApprovalRequester(approvalRequesterDeps, input),
+    // One resolver answers this for every surface, so a part's history reads the
+    // same on the install card, in its details, and in a grant explanation. It
+    // is null while no resolver is up yet — a review that cannot prove where a
+    // part came from says nothing rather than naming the wrong source.
+    originallyInstalledFrom: (repoPath) =>
+      unitOriginResolver?.originallyInstalledFrom(repoPath) ?? null,
   });
   const { AcquisitionCoordinator } = await import("./services/acquisitionCoordinator.js");
   const acquisitionCoordinator = new AcquisitionCoordinator({
@@ -927,23 +1057,197 @@ async function main() {
       await doDispatch.dispatch(ref, "onAuthorityChanged", acquisitionId);
     },
   });
-  const { UnitVersionApprovalStore } = await import("./services/unitVersionApprovalStore.js");
-  const unitVersionApprovalStore = new UnitVersionApprovalStore({ statePath });
+  const { UnitAdmissionStore } = await import("./services/unitAdmissionStore.js");
+  // Where each unit's bytes came from. Constructed further down, once the
+  // workspace VCS can be read; the admission store asks through this holder so
+  // that every admission records its source without any caller having to
+  // remember to pass one (§7.6.3).
+  let unitOriginResolver: import("./services/unitOriginResolver.js").UnitOriginResolver | null =
+    null;
+  const unitAdmissionStore = new UnitAdmissionStore({
+    statePath,
+    resolveSourceOrigin: (repoPath) => unitOriginResolver?.recordedOriginFor(repoPath) ?? null,
+  });
+  const { WorkspaceCreationReviewStore } = await import("./services/workspaceCreationReview.js");
+  const workspaceCreationReview = new WorkspaceCreationReviewStore({ statePath });
+  const { prepareUnitInstallReview } = await import("./services/unitInstallAcceptance.js");
+  type ReviewedUnit = import("@vibestudio/shared/approvals").ReviewedUnit;
+  /**
+   * Record what the launch gate decided (§7.6).
+   *
+   * Client apps and extensions get exactly one review, and it happens before the
+   * workspace UI exists — `apps/shell` cannot render its own approval. That
+   * decision has to land in the same admission ledger as everything else, or the
+   * unit stays un-admitted forever: the launch gate would keep confirming it
+   * while the authority gate keeps demanding a review it can never be given.
+   *
+   * The gate deliberately offers no per-permission choice — it asks whose code
+   * this is, not what it may reach — so a first arrival carries the full slate
+   * and an update carries whatever the version it replaces held. The selection
+   * is still read rather than assumed: it is keyed by the same identity the
+   * review used, so it is consumed here instead of being left behind for
+   * something else to pick up.
+   */
+  const prepareDecidedUnits = (
+    units: readonly ReviewedUnit[],
+    origin: "launch-gate" | "host-build",
+    sourceOrigins?: ReadonlyMap<string, InstallReviewOrigin | null>
+  ) => {
+    if (units.length === 0) {
+      return { committed: () => undefined, failed: () => undefined };
+    }
+    const identityKeyOf = (unit: ReviewedUnit): string => `${unit.source.repo}@${unit.ev ?? ""}`;
+    for (const unit of units) {
+      if (!unit.ev) {
+        throw new Error(
+          `Cannot prepare ${origin} admission for ${unit.source.repo} without an effective version`
+        );
+      }
+    }
+    const selectionLease = installReviewSelections.leaseMany(units.map(identityKeyOf));
+    const admissible = units.map((unit) => {
+      const effectiveVersion = unit.ev;
+      if (!effectiveVersion) {
+        throw new Error(`Unit ${unit.source.repo} lost its effective version during admission`);
+      }
+      const clearedRowKeys = selectionLease.selections.get(identityKeyOf(unit));
+      // The version this one replaces, read before anything is admitted. Without
+      // it an update leaves the outgoing version's grants standing — so reverting
+      // a unit silently regains the authority it used to hold — and, because the
+      // gate asks nothing about permissions, acceptance has nothing to carry the
+      // user's earlier decision forward from (§7.3).
+      const outgoing = unitAdmissionStore.latestAdmittedVersion(unit.source.repo);
+      const sourceOrigin = sourceOrigins?.get(unit.source.repo);
+      return {
+        identity: {
+          repoPath: unit.source.repo,
+          effectiveVersion,
+          authority: {
+            requests: unit.authority?.requests ?? [],
+            provides: unit.authority?.provides ?? [],
+          },
+        },
+        ...(outgoing && outgoing !== effectiveVersion
+          ? { previous: { repoPath: unit.source.repo, effectiveVersion: outgoing } }
+          : {}),
+        ...(clearedRowKeys ? { clearedRowKeys } : {}),
+        ...(sourceOrigins?.has(unit.source.repo)
+          ? {
+              sourceOrigin:
+                sourceOrigin && sourceOrigin.originStatus !== "unresolved"
+                  ? {
+                      originKey: sourceOrigin.originKey,
+                      url: sourceOrigin.url,
+                      version: sourceOrigin.version,
+                      selfName: sourceOrigin.selfName ?? null,
+                      isWorkspaceRoot: sourceOrigin.isWorkspaceRoot === true,
+                    }
+                  : null,
+            }
+          : {}),
+      };
+    });
+    let transaction: ReturnType<typeof prepareUnitInstallReview>;
+    try {
+      transaction = prepareUnitInstallReview(
+        { admissionStore: unitAdmissionStore, grantStore: capabilityGrantStore },
+        { units: admissible, origin }
+      );
+    } catch (error) {
+      selectionLease.failed();
+      throw error;
+    }
+    let settled = false;
+    return {
+      committed: () => {
+        if (settled) return;
+        transaction.committed();
+        selectionLease.committed();
+        settled = true;
+      },
+      failed: (error: unknown) => {
+        if (settled) return;
+        try {
+          transaction.failed(error);
+        } finally {
+          selectionLease.failed();
+          settled = true;
+        }
+      },
+    };
+  };
+  const acceptLaunchGateUnits = (
+    prepareTrust: () => { committed(): void; failed(error: unknown): void } | undefined,
+    units: readonly ReviewedUnit[],
+    sourceOrigins?: ReadonlyMap<string, InstallReviewOrigin | null>
+  ): void => {
+    const trust = prepareTrust();
+    let admission: ReturnType<typeof prepareDecidedUnits> | undefined;
+    try {
+      admission = prepareDecidedUnits(units, "launch-gate", sourceOrigins);
+      trust?.committed();
+      admission.committed();
+    } catch (error) {
+      try {
+        admission?.failed(error);
+      } finally {
+        trust?.failed(error);
+      }
+      throw error;
+    }
+  };
+  /**
+   * Admit the units that ship in the host build, before anything runs.
+   *
+   * These are never offered at the launch gate — the user decided about them by
+   * installing Vibestudio — so nothing else would ever record their admission,
+   * and `apps/shell` in particular would be unable to render the review it is
+   * meant to host. Idempotent by construction: admission is keyed by exact
+   * version and manifest digest, so a boot that changes neither is a no-op.
+   */
+  const admitSeedTrustedUnits = (units: readonly ReviewedUnit[]): void => {
+    if (units.length === 0) {
+      // Loud, because the shell depends on this: with no seeded unit admitted,
+      // `apps/shell` is gated on a review only `apps/shell` can present.
+      console.warn(
+        "[Units] No host-build units verified a seed record; their admission will not be recorded"
+      );
+      return;
+    }
+    const unadmitted = units.filter(
+      (unit) => !unit.ev || !unitAdmissionStore.hasVersion(unit.source.repo, unit.ev)
+    );
+    if (unadmitted.length === 0) return;
+    console.info(
+      `[Units] Admitting ${unadmitted.length} host-build unit(s): ${unadmitted
+        .map((unit) => unit.source.repo)
+        .join(", ")}`
+    );
+    const hostOrigin = hostBuildOrigin(serverVersion);
+    const admission = prepareDecidedUnits(
+      unadmitted,
+      "host-build",
+      new Map(unadmitted.map((unit) => [unit.source.repo, hostOrigin]))
+    );
+    admission.committed();
+  };
   const isCodeApproved = (code: VerifiedCodeIdentity): boolean => {
     if (code.repoPath === "vibestudio/internal") return true;
-    if (code.callerKind === "app" || code.callerKind === "extension") return true;
+    // Client apps and extensions are admitted by the publication that
+    // introduced them and confirmed at the launch gate, exactly like every
+    // other unit — there is no kind that is trusted for being its own kind
+    // (docs/template-install-unit-approval-ux-plan.md §5.5).
     const evalOwner = code.evalOrigin ? entityCache.resolveActive(code.evalOrigin.ownerId) : null;
-    if (evalOwner?.kind === "app") return true;
     const approvedEntity = evalOwner ?? entityCache.resolveActive(code.callerId);
     if (!approvedEntity?.activeAuthority) return false;
-    return unitVersionApprovalStore.has({
+    return unitAdmissionStore.has({
       repoPath: code.repoPath,
       effectiveVersion: code.effectiveVersion,
       authority: approvedEntity.activeAuthority,
     });
   };
-  const { ServerUnitApprovalCoordinator } = await import("./unitApprovalCoordinator.js");
-  const unitApprovalCoordinator = new ServerUnitApprovalCoordinator({
+  const { UnitInstallReviewCoordinator } = await import("./unitInstallReviewCoordinator.js");
+  const unitInstallReviewCoordinator = new UnitInstallReviewCoordinator({
     approvalQueue,
     delayMs: 250,
     autoPublishStartup: false,
@@ -1111,7 +1415,6 @@ async function main() {
     bindHost: args.bindHost,
   });
   let appHostForGateway: import("./appHost.js").AppHost | null = null;
-  let workerdManagerForGateway: import("./workerdManager.js").WorkerdManager | null = null;
   type TrustedUnitHostInstance =
     | import("@vibestudio/extension-host").ExtensionHost
     | import("./appHost.js").AppHost;
@@ -1134,7 +1437,7 @@ async function main() {
       if (!mainRefGate) {
         throw new Error("Protected-ref gate not initialized yet (server still starting)");
       }
-      await mainRefGate(batch);
+      return mainRefGate(batch);
     },
     // Validity check BEFORE approval (§2.1): every candidate `main` state must
     // be a well-formed tree fully present in the content store — userland can
@@ -1234,6 +1537,7 @@ async function main() {
   // Set only by the trusted one-time import from the host-shipped workspace
   // template. Protected main is mutable and must never be substituted here.
   let productSeedStateHash: string | null = null;
+  let trustedBootstrapStateHash: string | null = null;
   const readWorkspaceFileAtState = async (
     stateHash: string,
     filePath: string
@@ -1244,6 +1548,110 @@ async function main() {
     const file = await workspaceVcs.readFile(stateHash, filePath);
     if (!file || file.content.kind !== "text") return null;
     return file.content.text;
+  };
+  {
+    // Origin is the axis every unit review is organized on, and it is the one
+    // fact nothing under review may assert about itself — so it is derived here,
+    // from the template lock and the creation descriptor the server reads
+    // itself, and handed to every review request site.
+    const { UnitOriginResolver } = await import("./services/unitOriginResolver.js");
+    unitOriginResolver = new UnitOriginResolver({
+      readWorkspaceFile: async (filePath) => {
+        const { stateHash } = await workspaceVcs.ensureFresh();
+        return readWorkspaceFileAtState(stateHash, filePath);
+      },
+      // What was true when a part was admitted, for a repository the live lock
+      // no longer claims. Removing a template severs a relationship and deletes
+      // nothing (§U2): without this the lock's disappearance would silently
+      // re-attribute every one of that template's parts to whatever answers
+      // next — for most workspaces, to the host's own build.
+      recordedSourceFor: (repoPath) => unitAdmissionStore.recordedSourceFor(repoPath),
+      rootTemplatePin: () => workspaceCreationReview.rootTemplate() ?? null,
+      isBootstrapRepository: async (repoPath) => {
+        const stateHash = trustedBootstrapStateHash;
+        if (!stateHash) return false;
+        return (await readWorkspaceFileAtState(stateHash, `${repoPath}/package.json`)) !== null;
+      },
+      hostBuildVersion: () => serverVersion,
+      admittedOriginKeys: () => unitAdmissionStore.admittedOriginKeys(),
+    });
+  }
+  /**
+   * Origins for one review, never fatal.
+   *
+   * A gate that cannot resolve provenance still has to render, and the honest
+   * failure is to say nothing about a source rather than to name the wrong one —
+   * so a resolver that is not up yet contributes no origins and the review falls
+   * back to what it can prove.
+   */
+  const resolveUnitOrigins = async (
+    repoPaths: readonly string[]
+  ): Promise<ReadonlyMap<string, InstallReviewOrigin>> => {
+    if (!unitOriginResolver) return new Map();
+    try {
+      return await unitOriginResolver.originsFor(repoPaths);
+    } catch (err) {
+      console.warn(
+        "[Units] Could not resolve where these units came from:",
+        err instanceof Error ? err.message : String(err)
+      );
+      return new Map();
+    }
+  };
+  const launchGateBatchKeyFor = (
+    config: typeof workspaceConfig,
+    unit: ReviewedUnit
+  ): string | undefined => {
+    if (unit.unitKind === "app") return unit.target ?? "shared";
+    if (unit.unitKind !== "extension") return "shared";
+    const targets = (["electron", "react-native", "terminal"] as const).filter((target) =>
+      resolveHostTargetDecl(config, target)?.requiresExtensions.includes(unit.source.repo)
+    );
+    return targets.length === 1 ? targets[0] : "shared";
+  };
+  const enqueueLaunchGateReview = async (input: {
+    review: { units: ReviewedUnit[]; identityKeys: string[] };
+    config: typeof workspaceConfig;
+    applyApproved(
+      units: ReviewedUnit[],
+      identityKeys: string[],
+      sourceOrigins: ReadonlyMap<string, InstallReviewOrigin>
+    ): Promise<void> | void;
+    label: string;
+  }): Promise<void> => {
+    const groups = new Map<string, { units: ReviewedUnit[]; identityKeys: string[] }>();
+    input.review.units.forEach((unit, index) => {
+      const key = launchGateBatchKeyFor(input.config, unit) ?? "shared";
+      const group = groups.get(key) ?? { units: [], identityKeys: [] };
+      group.units.push(unit);
+      group.identityKeys.push(input.review.identityKeys[index] ?? "");
+      groups.set(key, group);
+    });
+
+    // Staging must complete before the startup barrier publishes, otherwise a
+    // late launch-gate request can be split away from the app/extension review
+    // that is meant to approve it. The returned enqueue promises settle only
+    // after a human decision and are intentionally not awaited here: startup
+    // must remain responsive while the gate is visible.
+    await Promise.all(
+      [...groups.entries()].map(async ([batchKey, group]) => {
+        const origins = await resolveUnitOrigins(group.units.map((unit) => unit.source.repo));
+        void unitInstallReviewCoordinator
+          .enqueue({
+            entries: group.units,
+            trigger: "startup",
+            batchKey,
+            origins,
+            applyApproved: async () => {
+              await input.applyApproved(group.units, group.identityKeys, origins);
+            },
+            applyDenied: () => undefined,
+          })
+          .catch((err: unknown) =>
+            console.warn(`[Units] Failed to apply reviewed ${input.label} trust:`, err)
+          );
+      })
+    );
   };
   const { createRecurringMetaChangeProvider } = await import("./services/recurringRegistry.js");
   const recurringMetaChangeProvider = createRecurringMetaChangeProvider({
@@ -1295,6 +1703,13 @@ async function main() {
   };
   const appliedExtensionDeclarations = new AppliedWorkspaceUnitDeclarations();
   const appliedAppDeclarations = new AppliedWorkspaceUnitDeclarations();
+  /**
+   * Startup extension reconciliation, which runs in the background and stages
+   * approvals of its own. The startup gate cannot be published until it has
+   * settled AND the app branch has staged, or whichever staged last is left in
+   * a batch nothing will ever publish.
+   */
+  let startupExtensionStaging: Promise<void> | null = null;
   const reconcileDeclaredWorkspaceUnits = async (
     nextConfig: typeof workspaceConfig,
     trigger: "startup" | "meta-change"
@@ -1319,44 +1734,53 @@ async function main() {
           console.info("[Extensions] Declarations unchanged after meta change; reconcile skipped");
         } else {
           if (trigger === "startup") {
+            // Host-build units first: they are never offered at the gate, so
+            // this is the only thing that records their admission — and the
+            // shell needs it before it can render any review at all.
+            admitSeedTrustedUnits(extensionHost.seedTrustedDeclared(declared));
             const review = extensionHost.reviewDeclared(declared);
             if (review.units.length > 0) {
-              void unitApprovalCoordinator
-                .enqueue({
-                  entries: review.units,
-                  trigger,
-                  applyApproved: async () => {
-                    extensionHost.acceptPreapprovedTrust(review.identityKeys);
+              tasks.push(
+                enqueueLaunchGateReview({
+                  review,
+                  config: nextConfig,
+                  label: "extension",
+                  applyApproved: (units, identityKeys, sourceOrigins) => {
+                    // Activation trust says this build may run; admission says
+                    // its declared authority was reviewed. Both, or the unit
+                    // runs with no record of the decision that let it.
+                    acceptLaunchGateUnits(
+                      () => extensionHost.preparePreapprovedTrust(identityKeys),
+                      units,
+                      sourceOrigins
+                    );
                   },
-                  applyDenied: () => undefined,
                 })
-                .catch((err: unknown) =>
-                  console.warn("[Units] Failed to apply reviewed extension trust:", err)
-                );
+              );
             }
           }
           const reconcileAll = () =>
             appliedExtensionDeclarations.apply(declarationFingerprint, () =>
-              extensionHost
-                .reconcileDeclared(declared, {
-                  trigger,
-                  // Startup reconciliation is opportunistic background work.
-                  // Keep one compiler busy without saturating the machine while
-                  // the focused panel is building and booting.
-                  ...(trigger === "startup" ? { maxConcurrentApplies: 1 } : {}),
-                })
-                .then(() => extensionHost.whenReconciled())
+              extensionHost.reconcileDeclared(declared, {
+                trigger,
+                // Startup reconciliation is opportunistic background work.
+                // Keep one compiler busy without saturating the machine while
+                // the focused panel is building and booting.
+                ...(trigger === "startup"
+                  ? { maxConcurrentApplies: 1, waitFor: "staged" as const }
+                  : {}),
+              })
             );
           if (trigger === "startup") {
-            void Promise.resolve()
+            // Reconciling stages further approvals of its own, so the gate is
+            // released once this settles — but releasing it HERE published a
+            // batch the app branch had not joined yet. Publication is owned by
+            // the one place that can see both branches finish; this only
+            // records what that place has to wait for.
+            startupExtensionStaging = Promise.resolve()
               .then(() => {
                 const backgroundStartedAt = Date.now();
                 return reconcileAll().then(() => {
-                  void unitApprovalCoordinator
-                    .publishPending("startup")
-                    .catch((err: unknown) =>
-                      console.warn("[Units] Failed to publish startup approvals:", err)
-                    );
                   console.info(
                     `[StartupBackground] Remaining extensions reconciled in ${Date.now() - backgroundStartedAt}ms`
                   );
@@ -1382,24 +1806,37 @@ async function main() {
           if (trigger === "meta-change" && appliedAppDeclarations.matches(declarationFingerprint)) {
             console.info("[Apps] Declarations unchanged after meta change; reconcile skipped");
           } else {
+            // Before reconcile, not after: reconcile is where trust is resolved,
+            // and admission is one of its inputs. Recording it afterwards would
+            // leave every host-build app resolved as un-admitted for the pass
+            // that decides whether to run it — it would build and then never
+            // activate, with nothing on screen to explain why.
+            if (trigger === "startup") {
+              admitSeedTrustedUnits(appHost.seedTrustedDeclared(declared));
+            }
             await appliedAppDeclarations.apply(declarationFingerprint, () =>
               appHost.setDeclared(declared, { trigger })
             );
             if (trigger === "startup") {
               const review = appHost.reviewDeclared(declared);
               if (review.units.length > 0) {
-                void unitApprovalCoordinator
-                  .enqueue({
-                    entries: review.units,
-                    trigger,
-                    applyApproved: async () => {
-                      appHost.acceptPreapprovedTrust(review.identityKeys);
+                tasks.push(
+                  enqueueLaunchGateReview({
+                    review,
+                    config: nextConfig,
+                    label: "app",
+                    applyApproved: (units, identityKeys, sourceOrigins) => {
+                      // Activation trust says this build may run; admission says
+                      // its declared authority was reviewed. Both, or the unit
+                      // runs with no record of the decision that let it.
+                      acceptLaunchGateUnits(
+                        () => appHost.preparePreapprovedTrust(identityKeys),
+                        units,
+                        sourceOrigins
+                      );
                     },
-                    applyDenied: () => undefined,
                   })
-                  .catch((err: unknown) =>
-                    console.warn("[Units] Failed to apply reviewed app trust:", err)
-                  );
+                );
               }
             }
             if (trigger === "startup") {
@@ -1724,9 +2161,85 @@ async function main() {
         )
       : ordinaryAuthorityAcquirer
   );
+  /**
+   * The exact `repoPath@effectiveVersion` set the creation review is asking
+   * about, once it is known. Null while startup reconcile is still running.
+   */
+  let creationReviewUnits: ReadonlySet<string> | null = null;
+  /** False once the review has resolved, or been found to owe nothing. */
+  let creationReviewOwed = true;
+  /**
+   * Host-owned semantic startup state. `preparing` means startup can still
+   * publish the creation review; every other state proves that preparation has
+   * completed without inferring that fact from an empty queue or elapsed time.
+   */
+  let workspaceCreationReviewState: WorkspaceCreationReviewState = { status: "preparing" };
+  const codeIdentityKey = (code: { repoPath: string; effectiveVersion: string }): string =>
+    `${code.repoPath}@${code.effectiveVersion}`;
+  /**
+   * Client apps and the extensions a host target requires are decided at the
+   * launch gate, in a host-owned window, before the workspace UI exists (§7.6).
+   * The creation review never covers one, whatever its admission state.
+   */
+  const isLaunchGateRepoPath = (repoPath: string): boolean => {
+    for (const decl of resolveDeclaredApps(workspaceConfig)) {
+      if (decl.source === repoPath) return true;
+    }
+    for (const decl of resolveDeclaredExtensions(workspaceConfig)) {
+      if (decl.source === repoPath) return true;
+    }
+    for (const decl of resolveHostTargetRequiredExtensions(workspaceConfig)) {
+      if (decl.source === repoPath) return true;
+    }
+    return false;
+  };
+  // U6 — while a review covering a unit is unresolved, that unit's calls get one
+  // recoverable `review-pending` error instead of one acquisition entry per
+  // method. Two things count as an open review: a review sitting in the queue
+  // that names this exact version, and the creation review a fresh workspace
+  // owes for the parts its ungated publication landed.
+  dispatcher.setOpenReviewLookup((code) => {
+    // A launch-gate unit is never told to wait, by any review, ever.
+    //
+    // The gate is answered in a host-owned window before the workspace UI
+    // exists (§7.6), and `apps/shell` is the surface every OTHER review renders
+    // in. If it is running at all, the gate that admitted it was already
+    // answered — so a later review naming it can only be one it cannot reach,
+    // and reporting that produced `Waiting for you to finish reviewing Start
+    // this workspace?` in the shell's own notification bar, with the workspace
+    // wedged behind it. Whatever a second gate is waiting for, the answer is
+    // never "make the shell stop working".
+    if (isLaunchGateRepoPath(code.repoPath)) return null;
+    for (const pending of approvalQueue.listPending()) {
+      if (pending.kind !== "unit-install-review") continue;
+      const covered = pending.parts.some(
+        (part) => part.repoPath === code.repoPath && part.effectiveVersion === code.effectiveVersion
+      );
+      if (covered) return { approvalId: pending.approvalId, title: pending.title };
+    }
+    // The creation review covers exactly the units it is going to ask about,
+    // and never one more. Deriving the answer from "is anything unadmitted"
+    // instead is the other half of the same deadlock.
+    if (!creationReviewOwed) return null;
+    if (creationReviewUnits) {
+      return creationReviewUnits.has(codeIdentityKey(code))
+        ? { approvalId: "workspace-creation-review", title: "what's in your workspace" }
+        : null;
+    }
+    // The owed set is not computed until startup reconcile has finished.
+    if (!unitAdmissionStore.hasVersion(code.repoPath, code.effectiveVersion)) {
+      return { approvalId: "workspace-creation-review", title: "what's in your workspace" };
+    }
+    return null;
+  });
   const container = new ServiceContainer(dispatcher);
   const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
     ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"));
+  const lifecycleContextStore: import("./services/lifecycleContextControl.js").LifecycleContextControlStore =
+    {
+      listContextEdgesByOwner: (input) => getEntityStore().listContextEdgesByOwner(input),
+      resolveRecord: (id) => getEntityStore().resolveRecord(id),
+    };
 
   // Route registry — shared across workerdManager (registers manifest-declared
   // worker routes) and the gateway (dispatches `/_r/` requests). Constructed
@@ -1780,6 +2293,11 @@ async function main() {
 
   const { BootstrapWorkspaceSource } = await import("./buildV2/bootstrapWorkspaceSource.js");
   const bootstrapWorkspaceSource = new BootstrapWorkspaceSource(workspaceId, workspacePath);
+  // Capture the source identity before any semantic service can publish into
+  // the live workspace projection. All later bootstrap references use this
+  // immutable value; they must not rediscover the mutable source directory.
+  const bootstrapSnapshot = await bootstrapWorkspaceSource.seal();
+  trustedBootstrapStateHash = bootstrapSnapshot.stateHash;
   container.registerManaged({
     name: "bootstrapBuildSystem",
     async start() {
@@ -1811,6 +2329,15 @@ async function main() {
         {
           appRoot,
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+          workspaceAuthorityEnvironmentAt: async (stateHash) => {
+            const { exactWorkspaceServiceBindings } =
+              await import("./buildV2/userlandAuthority.js");
+            return {
+              services: exactWorkspaceServiceBindings(
+                await loadWorkspaceConfigFromState(stateHash)
+              ),
+            };
+          },
           executionRootProviders: [
             buildKeyRootProvider({
               id: "app-generation",
@@ -2174,6 +2701,7 @@ async function main() {
   const replaceLiveWorkspaceConfig = (next: typeof workspaceConfig): void =>
     replaceWorkspaceConfig(workspaceConfig, { ...next, id: workspaceId });
   protectedRefStore.onRefsChanged((publication) => {
+    cachedAuthorityCapabilities = null;
     const repos = publication.changes
       .filter((change) => change.nextContentRoot !== null)
       .map((change) => change.repoPath);
@@ -2186,12 +2714,15 @@ async function main() {
     getBuildSystem: () => assertPresent(buildSystemInstance),
     readWorkspaceFileAtState,
     describeCapability,
-    approvalStore: unitVersionApprovalStore,
+    admissionStore: unitAdmissionStore,
+    grantStore: capabilityGrantStore,
+    selections: installReviewSelections,
   });
   {
     const { createVcsService } = await import("./services/vcsService.js");
     const { createMainAdvanceApprovalGate, createMainRefAdvanceGate } =
       await import("./services/mainAdvanceApproval.js");
+    const { heldClearanceRowKeys } = await import("./services/unitClearanceGrants.js");
     const mainAdvanceGate = createMainAdvanceApprovalGate({
       authorizeEffect: (ctx, effect) => dispatcher.authorizeHostEffect(ctx, effect),
       hasAppCapability: (callerId, capability) =>
@@ -2201,6 +2732,27 @@ async function main() {
         buildUnitChangeApprovalProvider,
         recurringMetaChangeProvider,
       ],
+      resolveUnitOrigins,
+      // The one input that lets the gate tell a template install from an edit,
+      // and it is read here rather than asserted anywhere: the committed lock
+      // the workspace has, and the one the publication would leave behind
+      // (§5.3, §13.9). The gate verifies both fingerprints itself.
+      readTemplateLock: async (stateHash) => {
+        const at = stateHash ?? (await workspaceVcs.ensureFresh()).stateHash;
+        return readWorkspaceFileAtState(at, "meta/templates.lock.yml");
+      },
+      admittedOriginKeys: () => unitAdmissionStore.admittedOriginKeys(),
+      reportInstallLandingByToken: (landingToken, report) =>
+        approvalQueue.reportInstallLandingByToken?.(landingToken, report),
+      heldClearanceFor: (repoPath) => {
+        const active = entityCache.resolveActiveBySource(repoPath);
+        if (!active?.source.effectiveVersion) return null;
+        return heldClearanceRowKeys({
+          grantStore: capabilityGrantStore,
+          repoPath,
+          effectiveVersion: active.source.effectiveVersion,
+        });
+      },
     });
     // The ONE approval path for protected main-ref advances: the server
     // computes the authoritative diff (content-store diffTrees over the CAS'd
@@ -2213,30 +2765,45 @@ async function main() {
         workspaceVcs.contentProjection.ensureStateMirrored(stateHash),
       workspaceViewWithReposAt: (overrides) =>
         workspaceVcs.repositories.workspaceViewWithReposAt(overrides),
+      onWorkspaceInitialized: () => {
+        // The one ungated publication owes a review. Record the root template
+        // it landed so the review can head with where the code came from —
+        // URL and human ref only, never a commit id (§7.1, §7.6.3).
+        const pin = rootTemplateBootstrap.readDescriptor()?.rootTemplate ?? null;
+        workspaceCreationReview.markPending(
+          pin ? { url: pin.url, ref: pin.ref, version: pin.ref } : undefined
+        );
+      },
       validateCandidateWorkspaceState: async (stateHash, changedPaths) => {
         await loadWorkspaceConfigFromState(stateHash);
         const buildSystem = assertPresent(buildSystemInstance);
-        const unitNames = await buildSystem.listAffectedBuildUnits(stateHash, changedPaths);
-        const reports = await Promise.all(
-          unitNames.map((unitName) => buildSystem.getBuildReport(unitName, stateHash))
-        );
-        const failures = reports.flatMap((report) =>
-          report.diagnostics
-            .filter((diagnostic) => diagnostic.severity === "error")
-            .map(
-              (diagnostic) =>
-                `${report.repoPath}${diagnostic.line ? `:${diagnostic.line}` : ""}: ${diagnostic.message}`
-            )
-        );
-        if (failures.length > 0) {
-          const { BuildGateFailedError } = await import("./buildV2/diagnostics.js");
-          throw new BuildGateFailedError(
-            reports.flatMap((report) =>
-              report.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
-            ),
-            unitNames,
-            stateHash
+        try {
+          const unitNames = await buildSystem.listAffectedBuildUnits(stateHash, changedPaths);
+          const reports = await Promise.all(
+            unitNames.map((unitName) => buildSystem.getBuildReport(unitName, stateHash))
           );
+          const failures = reports.flatMap((report) =>
+            report.diagnostics
+              .filter((diagnostic) => diagnostic.severity === "error")
+              .map(
+                (diagnostic) =>
+                  `${report.repoPath}${diagnostic.line ? `:${diagnostic.line}` : ""}: ${diagnostic.message}`
+              )
+          );
+          if (failures.length > 0) {
+            const { BuildGateFailedError } = await import("./buildV2/diagnostics.js");
+            throw new BuildGateFailedError(
+              reports.flatMap((report) =>
+                report.diagnostics.filter((diagnostic) => diagnostic.severity === "error")
+              ),
+              unitNames,
+              stateHash
+            );
+          }
+          await buildSystem.stageAuthorityIndex(stateHash);
+        } catch (error) {
+          buildSystem.discardAuthorityIndex(stateHash);
+          throw error;
         }
       },
       computeDeleteDependents: (repoPath) => workspaceVcs.repositories.deletionDependents(repoPath),
@@ -2288,11 +2855,12 @@ async function main() {
     });
   }
   const { wireRuntimeObservability } = await import("./bootstrap/runtimeObservability.js");
-  const runtimeDiagnostics = wireRuntimeObservability({
+  wireRuntimeObservability({
     container,
     statePath,
     workspaceId,
     eventService,
+    diagnostics: runtimeDiagnostics,
   });
   container.registerRpc(
     createWorkspaceEventsService({
@@ -2397,6 +2965,7 @@ async function main() {
     createShellApprovalService({
       approvalQueue,
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
+      workspaceCreationReviewState: () => workspaceCreationReviewState,
     })
   );
   const { BrowserPermissionGrantProjection, createBrowserPermissionsService } =
@@ -2521,6 +3090,11 @@ async function main() {
         credentialUseGrants: credentialUseGrantStore,
         browserPermissions: browserPermissionGrantStore,
         workspaceId,
+        // §7.7's origin line reads from the same admission record the review
+        // wrote, so "where did this come from" is answered by the decision
+        // itself rather than re-derived from the grant's shape.
+        admissionProvenance: (repoPath, effectiveVersion) =>
+          unitAdmissionStore.provenanceForVersion(repoPath, effectiveVersion),
         pendingAcquisitionCount: () => acquisitionCoordinator.pending().length,
         activeAgentBindingCount: () => new Set(activeAgentBindings()).size,
         activeAgentBindings: () => [...new Set(activeAgentBindings())],
@@ -2600,6 +3174,8 @@ async function main() {
   }
 
   // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
+  let closeEvalKernelLeases: (() => Promise<void>) | null = null;
+  let closeActiveEvalRuns: ((deadlineMs?: number) => Promise<void>) | null = null;
   {
     const { createEvalService } = await import("./services/evalService.js");
     let evalDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition | null =
@@ -2697,6 +3273,7 @@ async function main() {
           tokenManager,
           workspaceId,
           executionSessions: agentExecutionSessions,
+          taskAuthorities,
           reviewedClosureFactForSession: (sessionId) =>
             reviewedClosureRegistry.factForSession(sessionId),
           isSystemTestHarness: (caller, runId) =>
@@ -2709,6 +3286,12 @@ async function main() {
             workerdManager.recoverUnresponsiveSandbox(
               `eval ${runId} remained unresponsive after ${timeoutMs}ms`
             ),
+          onKernelLeaseCoordinator: (coordinator) => {
+            closeEvalKernelLeases = () => coordinator.close();
+          },
+          onShutdown: (shutdown) => {
+            closeActiveEvalRuns = shutdown;
+          },
           preauthorize: (ctx, operation) =>
             dispatcher.preauthorizeAuthority(
               ctx,
@@ -2755,11 +3338,12 @@ async function main() {
   // mutating slot.* method; the panel-tree bridge subscribes (registerSlotStateListener)
   // to self-heal its mirror + re-broadcast. Decoupled via a Set so the bridge
   // (created later in registerPanelServices) can register lazily.
-  const slotStateListeners = new Set<() => void>();
-  const notifySlotStateListeners = () => {
+  type SlotStateChange = import("./services/workspaceStateService.js").SlotStateChange;
+  const slotStateListeners = new Set<(change?: SlotStateChange) => void>();
+  const notifySlotStateListeners = (change?: SlotStateChange) => {
     for (const listener of slotStateListeners) {
       try {
-        listener();
+        listener(change);
       } catch (error) {
         console.warn(
           `[server] slot-state listener failed: ${error instanceof Error ? error.message : String(error)}`
@@ -2808,6 +3392,7 @@ async function main() {
           ).createPanelAccessPermissionDeps({
             contextBoundary: contextBoundaryDeps,
             entityCache,
+            lifecycleContextStore,
             getAppHost: () => appHostForGateway,
           }),
           // The DO already writes display_title in the same transaction as
@@ -2816,6 +3401,7 @@ async function main() {
           onPanelTitleChanged: (entityId, title, explicit) => {
             entityTitleService.mirrorCachedTitle(entityId, title, { explicit });
           },
+          isEntityTitleExplicit: (entityId) => entityTitleService.isExplicit(entityId),
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
           onHeartbeatRegistryChanged: () => {
             setTimeout(() => heartbeatDeclarationRegistryInstance?.notifyChanged(), 0);
@@ -2894,6 +3480,7 @@ async function main() {
           };
         };
         runtimeResult = createRuntimeService({
+          taskAuthorities,
           unitSupervisor,
           entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
@@ -2909,6 +3496,9 @@ async function main() {
           },
           onContextRemoved: ({ contextId }) => {
             agentExecutionSessions.removeTestContext(contextId);
+          },
+          onPanelExecutionActivated: (activation) => {
+            eventService.emit("panel:executionActivated", activation);
           },
           // GAD-owned semantic context lifecycle for runtime entities.
           semanticContexts: {
@@ -2967,14 +3557,36 @@ async function main() {
                 targetId?: string;
               };
               if (spec.kind === "do") {
-                prepared = await workerdManager.ensureDurableObjectEntity({
-                  source,
-                  ref,
-                  className: spec.className,
-                  key,
-                  contextId,
-                  stateArgs: spec.stateArgs,
-                });
+                const active = existingBuildKey ? entityCache.resolveActive(targetId) : null;
+                if (existingBuildKey) {
+                  if (
+                    !active?.activeBuildKey ||
+                    !active.activeExecutionDigest ||
+                    !active.activeAuthority ||
+                    active.activeBuildKey !== existingBuildKey
+                  ) {
+                    throw new Error(
+                      `Durable Object ${targetId} cannot reattach build ${existingBuildKey} without its matching active entity record`
+                    );
+                  }
+                  await durableObjectExecutionReadiness.materialize(active);
+                  prepared = {
+                    targetId,
+                    effectiveVersion: active.source.effectiveVersion,
+                    buildKey: active.activeBuildKey,
+                    executionDigest: active.activeExecutionDigest,
+                    authority: active.activeAuthority,
+                  };
+                } else {
+                  prepared = await workerdManager.ensureDurableObjectEntity({
+                    source,
+                    ref,
+                    className: spec.className,
+                    key,
+                    contextId,
+                    stateArgs: spec.stateArgs,
+                  });
+                }
               } else if (spec.kind === "worker") {
                 prepared = await workerdManager.startWorker({
                   source,
@@ -3039,6 +3651,19 @@ async function main() {
               };
               return result;
             }) as RuntimeEntityHooks["prepare"],
+            recoverExactExecution: async (record) => {
+              await workerdManager.restoreDurableObjectEntity(record);
+            },
+            restartDurableObjectIncarnation: async (record) => {
+              if (!record.className) {
+                throw new Error(`Durable Object ${record.id} has no class name`);
+              }
+              await workerdManager.restartUserlandDOFacet({
+                source: record.source.repoPath,
+                className: record.className,
+                objectKey: record.key,
+              });
+            },
             onDurableObjectActivated: async (record) => {
               if (!record.className) return;
               const owner = {
@@ -3102,6 +3727,37 @@ async function main() {
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           setEntityTitle: (entityId, title, options) =>
             entityTitleService.setTitle(entityId, title, options),
+          onExecutionRecovery: (event) => {
+            const active = entityCache.resolveActive(event.entityId);
+            runtimeDiagnostics.record({
+              workspaceId,
+              entityId: event.entityId,
+              kind: "do",
+              level: event.state === "failed" ? "error" : "info",
+              message: `Runtime execution recovery ${event.state}`,
+              source: "lifecycle",
+              fields: {
+                event: "runtime-execution-recovery",
+                recoveryState: event.state,
+                recoveryStrategy: event.strategy,
+                recoveryAttemptCount: event.attemptCount,
+                expectedExecutionDigest: event.expectedExecutionDigest,
+                ...(event.result
+                  ? {
+                      buildKey: event.result.buildKey,
+                      executionDigest: event.result.executionDigest,
+                      previousExecutionDigest: event.result.previousExecutionDigest,
+                    }
+                  : {
+                      ...(active?.activeBuildKey ? { buildKey: active.activeBuildKey } : {}),
+                      ...(active?.activeExecutionDigest
+                        ? { executionDigest: active.activeExecutionDigest }
+                        : {}),
+                    }),
+                ...(event.error ? { error: event.error } : {}),
+              },
+            });
+          },
           // Agent credentials follow the entity (§3.2): on retire, revoke all
           // outstanding agent credentials and the live `agent:<entityId>` token.
           revokeAgentCredentials: async (entityId) => {
@@ -3316,7 +3972,66 @@ async function main() {
     return getExternalGatewayUrl(context);
   }
   const { PanelRuntimeCoordinator } = await import("./panelRuntimeCoordinator.js");
-  const panelRuntimeCoordinator = new PanelRuntimeCoordinator({ eventService });
+  const panelRuntimeCoordinator = new PanelRuntimeCoordinator({
+    eventService,
+    onError: (error, operation) => {
+      console.warn(
+        `[PanelRuntimeCoordinator] Failed to ${operation}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    },
+  });
+  const { reconcilePanelPresentationChange } = await import("./panelPresentationReconciler.js");
+  const { PanelExecutionReconciler } = await import("./panelExecutionReconciler.js");
+  const panelExecutionReconciler = new PanelExecutionReconciler({
+    getDetail: (slotId) =>
+      dispatcher.dispatch(
+        { caller: createHostCaller("server") },
+        "workspace-state",
+        "panelTree.detail",
+        [slotId]
+      ) as Promise<
+        import("@vibestudio/shared/panel/workspaceStateSnapshot").WorkspacePanelDetail | null
+      >,
+    resolveSlotByEntity: (entityId) =>
+      dispatcher.dispatch(
+        { caller: createHostCaller("server") },
+        "workspace-state",
+        "slot.resolveByEntity",
+        [entityId]
+      ) as Promise<string | null>,
+    listPreparingPanels: () => {
+      if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
+      return runtimeServiceInternal.listPreparingPanels();
+    },
+    activate: (spec) => {
+      if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
+      return runtimeServiceInternal.activateReservedEntity(spec);
+    },
+    onError: (error, slotId, entityId) => {
+      console.warn(
+        `[PanelExecutionReconciler] Failed to activate ${entityId} for ${slotId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    },
+  });
+  const convergePanelPresentation = (change?: SlotStateChange) => {
+    try {
+      reconcilePanelPresentationChange(panelRuntimeCoordinator, change);
+    } catch (error) {
+      console.warn(
+        `[PanelPresentationReconciler] Failed to converge presentation: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  };
+  slotStateListeners.add((change) => {
+    panelExecutionReconciler.observe(change);
+    convergePanelPresentation(change);
+  });
   panelRuntimeCoordinatorForCleanup = panelRuntimeCoordinator;
   const { wireDevelopmentNative } = await import("./bootstrap/developmentNative.js");
   await wireDevelopmentNative({
@@ -3350,6 +4065,15 @@ async function main() {
         tokenManager,
         dispatcher,
         workspaceId: entryWorkspaceId,
+        onClientDisconnect: (callerId) => {
+          // A shell/debug client is not a runtime entity, so the entity reaper
+          // cannot perform its normal caller-scoped cleanup.  The reconnect
+          // grace in RpcServer is the lifecycle boundary for these callers;
+          // once it expires, pending approvals and open fs handles must not
+          // survive an abandoned client.
+          approvalQueue.cancelForCaller(callerId);
+          fsService.closeHandlesForCaller(callerId);
+        },
         capabilityGrantStore,
         userlandResourceHandles,
         directAuthorityAcquirer: {
@@ -3364,9 +4088,14 @@ async function main() {
         egressProxy,
         fsService,
         entityCache,
+        ensureUserlandDoReady: async (ref) => {
+          await durableObjectExecutionReadiness.ensureReady(ref);
+        },
         executionSessionForRuntime: (runtimeId, nonce) =>
           agentExecutionSessions.resolveInvocation(runtimeId, nonce),
         testPolicyForContext: (contextId) => agentExecutionSessions.testPolicyForContext(contextId),
+        taskAuthorityForRuntime: (runtimeId) =>
+          taskAuthorities.resolveRuntime(runtimeId, entityCache),
         connectionGrants,
         // Resolves each authenticated caller's account subject (WP0 §5.2/§5.5).
         userSubjectSource,
@@ -3477,6 +4206,13 @@ async function main() {
               resolveCallerContext: async (callerId) => entityCache.resolveContext(callerId),
               resolveEntityContext: (entityId) => entityCache.resolveContext(entityId),
               isEntityControlledBy,
+              controlsLifecycleContext: (callerId, originContextId, targetContextId) =>
+                callerControlsLifecycleContext(
+                  lifecycleContextStore,
+                  callerId,
+                  originContextId,
+                  targetContextId
+                ),
               resolveSubjectCaller: (entityId) => {
                 const entity = entityCache.resolveActive(entityId);
                 if (
@@ -3528,7 +4264,14 @@ async function main() {
               (service) =>
                 service.source === source && service.durableObject?.className === className
             );
-            if (matches.length === 0) return [];
+            if (matches.length === 0) {
+              const productAuthority = productBuiltinDirectAuthority({
+                source,
+                className,
+                method,
+              });
+              return productAuthority ? [productAuthority] : [];
+            }
             const targetId = `do:${source}:${className}:${objectKey}`;
             const active = entityCache.resolveActive(targetId);
             const buildSystem =
@@ -4028,11 +4771,23 @@ async function main() {
           coordinator: panelRuntimeCoordinator,
           observeHostSlot: async (slotId) => {
             if (!cdpBridge.isTargetRegistered(slotId)) return null;
-            const { panelHostViewReportSchema } =
-              await import("@vibestudio/service-schemas/panelRuntime");
-            return panelHostViewReportSchema
-              .nullable()
-              .parse(await cdpBridge.sendHostCommand(slotId, "panelObservation"));
+            const { PanelHostObservationSchema } =
+              await import("@vibestudio/shared/panelContracts");
+            const hostObservation = PanelHostObservationSchema.parse(
+              await cdpBridge.sendHostCommand(slotId, "panelObservation")
+            );
+            if (
+              !hostObservation.view.exists ||
+              typeof hostObservation.view.url !== "string" ||
+              typeof hostObservation.view.loading !== "boolean"
+            ) {
+              return null;
+            }
+            return {
+              url: hostObservation.view.url,
+              loading: hostObservation.view.loading,
+              boot: hostObservation.boot,
+            };
           },
           currentEntityForSlot: async (slotId) => {
             const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
@@ -4047,6 +4802,13 @@ async function main() {
               slotId
             )) as { entity?: { id?: string } } | null;
             return detail?.entity?.id ?? null;
+          },
+          isRuntimeRouteReachable: (runtimeEntityId, connectionId) =>
+            rpcServerForGateway?.isRuntimeRouteReachable(runtimeEntityId, connectionId) ?? false,
+          ensureDefaultHeadlessHost: async () => {
+            const manager = getHeadlessHostManager();
+            if (!manager) return false;
+            return Boolean(await manager.ensureDefaultHost());
           },
         });
         return panelRuntimeDefinition;
@@ -4079,7 +4841,15 @@ async function main() {
         tokenManager: tokenManagerInst,
         eventService,
         approvalQueue,
-        approvalCoordinator: unitApprovalCoordinator,
+        approvalCoordinator: unitInstallReviewCoordinator,
+        approvalBatchKeyFor: (entry) => launchGateBatchKeyFor(workspaceConfig, entry),
+        // The gate asks whose code this is, so it is answered from workspace
+        // state the server reads rather than from anything under review.
+        resolveUnitOrigins,
+        // Trust from before admission was recorded is not a review: an
+        // un-admitted version is offered at the launch gate once more.
+        isAdmitted: (repoPath, effectiveVersion) =>
+          unitAdmissionStore.hasVersion(repoPath, effectiveVersion),
         notificationService: notificationResult.internal,
         recordUnitLog: (record) => {
           runtimeDiagnostics.record({
@@ -4155,7 +4925,14 @@ async function main() {
         executionPublicationPort: executionPublicationJournal,
         eventService,
         approvalQueue,
-        approvalCoordinator: unitApprovalCoordinator,
+        approvalCoordinator: unitInstallReviewCoordinator,
+        // The gate asks whose code this is, so it is answered from workspace
+        // state the server reads rather than from anything under review.
+        resolveUnitOrigins,
+        // Trust from before admission was recorded is not a review: an
+        // un-admitted version is offered at the launch gate once more.
+        isAdmitted: (repoPath, effectiveVersion) =>
+          unitAdmissionStore.hasVersion(repoPath, effectiveVersion),
         notificationService: notificationResult.internal,
         entityCache,
         connectionGrants,
@@ -4224,7 +5001,7 @@ async function main() {
           `Durable Object ${targetId} is already active in context ${active.contextId}; cannot resolve it from context ${ref.contextId}`
         );
       }
-      await workerdManagerInst.restoreDurableObjectEntity(active);
+      await durableObjectExecutionReadiness.materialize(active);
       await registerDurableWorkOwner();
       return;
     }
@@ -4241,6 +5018,7 @@ async function main() {
       }
       if (existing.activeBuildKey && existing.activeExecutionDigest && existing.activeAuthority) {
         entityCache._onActivate(existing);
+        await durableObjectExecutionReadiness.materialize(existing);
         await registerDurableWorkOwner();
         return;
       }
@@ -4258,17 +5036,15 @@ async function main() {
       contextId,
       ref: buildRef,
     });
-    const record = (await doDispatch.dispatch(
-      workspaceDORef,
-      "entityActivate",
-      declaredWorkspaceServiceActivationInput(
-        { source, className, key: objectKey, contextId },
-        prepared,
-        existing,
-        SYSTEM_SUBJECT.userId
-      )
-    )) as EntityRecord;
-    entityCache._onActivate(record);
+    const activation = declaredWorkspaceServiceActivationInput(
+      { source, className, key: objectKey, contextId },
+      prepared,
+      existing,
+      SYSTEM_SUBJECT.userId
+    );
+    const store = ensureEntityStore(doDispatch);
+    if (existing) await store.advanceExecution(activation);
+    else await store.activate(activation);
     await registerDurableWorkOwner();
   };
 
@@ -4385,7 +5161,7 @@ async function main() {
     workspaceId,
     workspaceDeclarations: workspaceDecls,
     userlandResourceHandles,
-    assertBootstrapSourceUnchanged: () => bootstrapWorkspaceSource.assertUnchanged(),
+    assertBootstrapSnapshotUnchanged: () => bootstrapSnapshot.assertUnchanged(),
     routeRegistry,
     egressProxy,
     gatewayToken: workerdGatewayToken,
@@ -4408,11 +5184,67 @@ async function main() {
         contextTestPolicy: activeEntity
           ? agentExecutionSessions.testPolicyForContext(activeEntity.contextId)
           : null,
+        taskAuthority: taskAuthorities.resolveRuntime(registered.runtime.id, entityCache),
         isCodeApproved,
       });
     },
+    ensureUserlandDoReady: async (ref) => {
+      await durableObjectExecutionReadiness.ensureReady(ref);
+    },
     onManagerStarted: (manager) => {
       workerdManagerForGateway = manager;
+    },
+    publishSourceBuild: async (manager, source, doClasses, trigger, buildKey) => {
+      const build = buildKey ? assertPresent(buildSystemInstance).getBuildByKey(buildKey) : null;
+      if (!build || build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
+        await manager.reconcileMutableSourceBuild(source, doClasses, trigger, buildKey);
+        return;
+      }
+      const artifact = executionArtifactRefFromBuild(workspaceId, build);
+      const mainSingletons = workspaceDecls.singletons
+        .all()
+        .filter((decl) => decl.source === source && !decl.contextId);
+      const unchanged: EntityRecord[] = [];
+      const advances: EntityActivateInput[] = [];
+      for (const decl of mainSingletons) {
+        const targetId = canonicalEntityId({
+          kind: "do",
+          source,
+          className: decl.className,
+          key: decl.key,
+        });
+        const current = entityCache.resolveActive(targetId);
+        if (!current || !current.className) continue;
+        if (
+          current.activeBuildKey === artifact.buildKey &&
+          current.activeExecutionDigest === artifact.executionDigest
+        ) {
+          unchanged.push(current);
+          continue;
+        }
+        advances.push({
+          kind: "do",
+          source: {
+            repoPath: source,
+            effectiveVersion: artifact.sourceState.effectiveVersion,
+          },
+          activeBuildKey: artifact.buildKey,
+          activeExecutionDigest: artifact.executionDigest,
+          activeAuthority: assertPresent(build.metadata.authority),
+          contextId: current.contextId,
+          className: current.className,
+          key: current.key,
+          stateArgs: current.stateArgs,
+          agentBinding: current.agentBinding,
+          parentId: current.parentId,
+          ownerUserId: current.ownerUserId,
+        });
+      }
+      await getEntityStore().advanceExecutions(advances);
+      for (const record of unchanged) {
+        await durableObjectExecutionReadiness.materialize(record);
+      }
+      await manager.reconcileMutableSourceBuild(source, doClasses, trigger, buildKey);
     },
   });
 
@@ -4421,32 +5253,44 @@ async function main() {
     container,
     workspaceVcs,
     executionPublicationJournal,
+    workspaceId,
     workspaceSourceProvider: {
       source: semanticWorkspaceService.source,
       className: semanticWorkspaceService.className,
       objectKey: semanticWorkspaceService.objectKey,
     },
-    bootstrapSourceState: async () => (await bootstrapWorkspaceSource.ensureFresh()).stateHash,
-    registerBootstrapEntity: ({
-      targetId,
-      source,
-      className,
-      objectKey,
-      effectiveVersion,
-      buildKey,
-      executionDigest,
-      authority,
-    }) => {
-      entityCache.registerBootstrapEntity({
-        id: targetId,
+    bootstrapStateHash: bootstrapSnapshot.stateHash,
+    publishBootstrapEntity: async (
+      manager,
+      {
+        targetId,
+        source,
+        className,
+        objectKey,
+        effectiveVersion,
+        buildKey,
+        executionDigest,
+        authority,
+        contextId,
+      }
+    ) => {
+      const store = ensureEntityStore(
+        container.get<import("./doDispatch.js").DODispatch>("doDispatch")
+      );
+      const activation: EntityActivateInput = {
+        kind: "do",
         source: { repoPath: source, effectiveVersion },
         activeBuildKey: buildKey,
         activeExecutionDigest: executionDigest,
         activeAuthority: authority,
-        contextId: `workspace-source:${workspaceId}`,
+        contextId,
         className,
         key: objectKey,
-      });
+        ownerUserId: SYSTEM_SUBJECT.userId,
+      };
+      const existing = await store.resolveRecord(targetId);
+      if (existing) await store.advanceExecution(activation);
+      else await store.activate(activation);
     },
     activateSemanticWorkspace: async (vcs) => {
       const activationStartedAt = performance.now();
@@ -4549,6 +5393,33 @@ async function main() {
         const driver = new AlarmDriver({
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
           workspaceId,
+          onStateChange: (event) => {
+            const entityId = canonicalEntityId({
+              kind: "do",
+              source: event.ref.source,
+              className: event.ref.className,
+              key: event.ref.objectKey,
+            });
+            const entity = entityCache.resolveActive(entityId);
+            runtimeDiagnostics.record({
+              workspaceId,
+              entityId,
+              kind: "do",
+              level: event.state === "blocked" ? "error" : "info",
+              message: `Alarm ${event.state}`,
+              source: "lifecycle",
+              fields: {
+                event: "alarm-state",
+                alarmState: event.state,
+                ...(event.wakeAt === undefined ? {} : { wakeAt: event.wakeAt }),
+                ...(event.reason ? { reason: event.reason } : {}),
+                ...(entity?.activeBuildKey ? { buildKey: entity.activeBuildKey } : {}),
+                ...(entity?.activeExecutionDigest
+                  ? { executionDigest: entity.activeExecutionDigest }
+                  : {}),
+              },
+            });
+          },
           isAuthorityPaused: (ref) => {
             const unit = buildSystemInstance
               ?.getGraph()
@@ -4680,6 +5551,7 @@ async function main() {
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     contextExists: contextBoundaryDeps.contextExists,
     resolveContextOwnerLabel: contextBoundaryDeps.resolveContextOwnerLabel,
+    lifecycleContextStore,
     panelRuntimeCoordinator,
     ensureDefaultHeadlessHost: async () => {
       const manager = getHeadlessHostManager();
@@ -4826,17 +5698,17 @@ async function main() {
       ) as Promise<{ ok: true }>;
     },
     approvalQueue,
-    registerEntityTitleListener: (
+    registerEntityTitlePersistedListener: (
       listener: (
         entityId: string,
         title: string | undefined,
         origin: "set" | "set-explicit" | "mirror" | "clear"
       ) => void | Promise<void>
     ) =>
-      entityTitleService.onChanged((entityId, title, origin) => {
+      entityTitleService.onPersisted((entityId, title, origin) => {
         void Promise.resolve(listener(entityId, title, origin)).catch((error: unknown) => {
           console.warn(
-            `[entityTitleService] panel title listener failed: ${
+            `[entityTitleService] persisted panel title listener failed: ${
               error instanceof Error ? error.message : String(error)
             }`
           );
@@ -5109,12 +5981,11 @@ async function main() {
     getAppArtifactHandler: () => appHostForGateway,
     getWorkerdPort: () => workerdManagerForGateway?.getPort() ?? null,
     getWorkerHost: () => workerdManagerForGateway,
-    ensureDORoute: (source, className, objectKey) => {
-      const workerdManager = assertPresent(workerdManagerForGateway);
-      const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
-      const record = entityCache.resolveActive(targetId);
-      return workerdManager.ensureDO(source, className, objectKey, {
-        contextId: record?.contextId,
+    ensureDORoute: async (source, className, objectKey) => {
+      await durableObjectExecutionReadiness.ensureReady({
+        source,
+        className,
+        objectKey,
       });
     },
     externalHost: hostConfig.externalHost,
@@ -5193,7 +6064,9 @@ async function main() {
         server.setWorkerdInspectorBridge(bridge);
         // Inspector sessions cannot survive a workerd restart — close them
         // eagerly so clients fail fast instead of hanging on a dead socket.
-        workerdManager.onRestartBegin(() => bridge.closeAll());
+        // Generation-closing (not restart-begin): purely in-process, and it
+        // must run for crash transitions too, which skip graceful prepare.
+        workerdManager.onGenerationClosing(() => bridge.closeAll());
         const { createWorkerdInspectorService } =
           await import("./services/workerdInspectorService.js");
         workerdInspectorDefinition = createWorkerdInspectorService({
@@ -5263,6 +6136,7 @@ async function main() {
 
   // ── Start all services in dependency order ──
   await container.startAll();
+  await panelExecutionReconciler.recoverPreparingPanels();
 
   // The webhook + credential services are built now, so their refs are set:
   // start the backhaul (no-op when no relay is configured) and re-announce any
@@ -5339,13 +6213,22 @@ async function main() {
   // Relay routing follows the workerd process generation. Never leave the
   // prior loopback port looking authoritative during replacement, and publish
   // the new port only after WorkerdManager declares that generation ready.
-  workerdManager.onRestartBegin(() => rpcServerInstance.setWorkerdUrl(null));
+  // Generation-closing (not restart-begin): crash transitions skip graceful
+  // prepare entirely, and the relay URL must still stop pointing at the dead
+  // generation all through recovery. Purely in-process by contract.
+  workerdManager.onGenerationClosing(() => {
+    rpcServerInstance.setWorkerdUrl(null);
+    // Lifecycle signal for shell-side consumers (e.g. the browser cookie
+    // projection pauses its reconcile loop while the runtime is offline).
+    eventService.emit("server-health", { workerd: "restarting", sampledAt: Date.now() });
+  });
   workerdManager.onRestartReady(() => {
     const restartedPort = workerdManager.getPort();
     if (!restartedPort) {
       throw new Error("workerd restart reported ready without a relay port");
     }
     rpcServerInstance.setWorkerdUrl(`http://127.0.0.1:${restartedPort}`);
+    eventService.emit("server-health", { workerd: "running", sampledAt: Date.now() });
   });
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);
   rpcServerInstance.setWorkerdDispatchSecret(workerdManager.getDispatchSecret());
@@ -5377,7 +6260,6 @@ async function main() {
     dispatchWorkspaceDO,
     entityCache,
     restoreRuntimes: async (records) => {
-      const manager = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
       type RuntimeTarget = { source: string; className: string; objectKey: string };
       const [lifecycle, alarms, recurring, heartbeats, durableWorkOwners] = await Promise.all([
         dispatchWorkspaceDO<RuntimeTarget[]>("lifecycleListResumeTargets"),
@@ -5414,7 +6296,9 @@ async function main() {
           record.className &&
           required.has(`${record.source.repoPath}\0${record.className}\0${record.key}`)
       );
-      await Promise.all(durable.map((record) => manager.restoreDurableObjectEntity(record)));
+      await Promise.all(
+        durable.map((record) => durableObjectExecutionReadiness.materialize(record))
+      );
     },
     recoverLifecycle: () => lifecycleDriver.recoverStartup("server_restart"),
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
@@ -5459,15 +6343,11 @@ async function main() {
   // 4. Singleton reconciliation against vibestudio.yml.singletonObjects.
   // Preparing an image may restart workerd, so all preparations complete
   // before any activation request is admitted.
-  const { reconcileSingletons, singletonEntityActivationInput } =
+  const { canonicalSingletonContextId, reconcileSingletons, singletonEntityActivationInput } =
     await import("./bootstrap/singletonReconciliation.js");
   const singletonPlans = workspaceDecls.singletons.all().map((decl) => ({
     decl,
-    contextId:
-      decl.contextId ??
-      createHash("sha256")
-        .update(`${workspaceId}\x00${decl.source}\x00${decl.className}\x00${decl.key}`)
-        .digest("hex"),
+    contextId: decl.contextId ?? canonicalSingletonContextId(workspaceId, decl),
   }));
   await reconcileSingletons({
     items: singletonPlans,
@@ -5490,17 +6370,32 @@ async function main() {
         prepared,
         SYSTEM_SUBJECT.userId
       );
-      const existing = await dispatchWorkspaceDO<EntityRecord | null>(
-        "entityResolve",
-        prepared.targetId
-      );
-      return dispatchWorkspaceDO<EntityRecord>(
-        existing ? "entityAdvanceExecution" : "entityActivate",
-        activation
-      );
+      const store = getEntityStore();
+      const existing = await store.resolveRecord(prepared.targetId);
+      return existing ? store.advanceExecution(activation) : store.activate(activation);
     },
-    onActivated: (record) => entityCache._onActivate(record),
+    onActivated: () => undefined,
   });
+
+  // The bootstrap build system compiled from the filesystem snapshot only to
+  // start the semantic source provider. After singleton reconciliation, every
+  // active entity has a semantic-main execution identity; discard leftover
+  // snapshot builds so their non-CAS roots cannot poison the first GC epoch.
+  const protectedBuildKeys = new Set(
+    entityCache
+      .listActive()
+      .map((record) => record.activeBuildKey)
+      .filter((key): key is string => typeof key === "string")
+  );
+  const discardedBootstrapBuilds = buildStoreForPublication.discardBootstrapBuilds(
+    bootstrapSnapshot.stateHash,
+    protectedBuildKeys
+  );
+  if (discardedBootstrapBuilds > 0) {
+    console.log(
+      `[BuildV2] Discarded ${discardedBootstrapBuilds} transitional bootstrap build${discardedBootstrapBuilds === 1 ? "" : "s"}`
+    );
+  }
 
   // 5. Start cleanup reaper to retry partial-failed hooks.
   const { createCleanupReaper } = await import("./services/cleanupReaper.js");
@@ -5514,6 +6409,166 @@ async function main() {
   });
   cleanupReaper.start();
 
+  /**
+   * The creation review (§7.1), held in the new workspace immediately after it
+   * opens.
+   *
+   * Preparation is awaited by the startup readiness barrier, but the human
+   * decision is not. The old startup card blocked the workspace behind a
+   * decision nobody could evaluate; this opens the workspace and holds the
+   * review inside it. Until it resolves, U6 answers every one of
+   * these parts with one recoverable `review-pending` rather than a prompt per
+   * method, so the question is asked exactly once, on one surface.
+   *
+   * The obligation is read from the parts themselves, never from a marker. A
+   * marker only describes the workspace it was written in: the first boot after
+   * a cutover that discarded the admission file has none, and the emptiness of
+   * the admission store cannot stand in for it, because host-build units are
+   * admitted from their seed records before this runs. Both together still
+   * answered "no" for every workspace created before this change set, which left
+   * every panel and worker unadmitted, holding no clearance, and prompting at
+   * each use with no review anywhere to answer. On a workspace that owes
+   * nothing the set is empty and this does nothing at all, which is what
+   * deletes the startup card for good.
+   */
+  const prepareWorkspaceCreationReview = async (): Promise<void> => {
+    try {
+      const creationReview = await buildUnitChangeApprovalProvider.creationReview();
+      if (creationReview.units.length === 0) {
+        creationReviewUnits = new Set();
+        creationReviewOwed = false;
+        workspaceCreationReview.resolve();
+        workspaceCreationReviewState = { status: "not-required" };
+      } else {
+        // From here on U6 answers from the exact set under review, so no unit
+        // outside it can be told to wait on a question nobody asked about it.
+        creationReviewUnits = new Set(
+          creationReview.units.map((unit) =>
+            codeIdentityKey({ repoPath: unit.source.repo, effectiveVersion: unit.ev ?? "" })
+          )
+        );
+        // The workspace opens on the collection surface, headed by the
+        // template being adopted (§7.1). Placement is deliberate: before
+        // creation there is no workspace and, on first run, no shell to
+        // render in; after creation every primitive the install surface
+        // uses is available.
+        //
+        // Until this resolves, U6 makes every one of these parts answer
+        // `review-pending` rather than raising a prompt of its own, so the
+        // question is asked exactly once, on one surface.
+        // One resolver answers for every surface, so the creation review and
+        // the launch gate can never disagree about where the same unit came
+        // from. It reads the template lock and the creation descriptor rather
+        // than assuming this workspace's root owns everything in it.
+        const origins = await resolveUnitOrigins(
+          creationReview.units.map((unit) => unit.source.repo)
+        );
+        const rootOrigin =
+          [...origins.values()].find((origin) => origin.isWorkspaceRoot === true) ?? null;
+        const decisionPromise = approvalQueue.request({
+          kind: "unit-install-review",
+          callerId: "system:workspace-creation",
+          callerKind: "system",
+          repoPath: "meta",
+          effectiveVersion: "",
+          dedupKey: "workspace-creation-review",
+          mode: "adopt-root",
+          title: HOST_APPROVAL_COPY.installReview.heading["adopt-root"],
+          description:
+            !rootOrigin || rootOrigin.isHostBuild
+              ? "These are the parts your workspace starts with."
+              : `This workspace is built from code at ${rootOrigin.url}.`,
+          units: creationReview.units,
+          origins,
+          reportsLanding: true,
+          ...(creationReview.identityKeysByRepo
+            ? { identityKeys: creationReview.identityKeysByRepo }
+            : {}),
+        });
+        // Capture the approval id while the review is still pending. An
+        // install review that reports landing deliberately keeps its resolver
+        // open until this startup reconciliation publishes the outcome; the
+        // entry is removed before `request()` resolves, so looking it up after
+        // the await would deadlock the resolver and leave every dependent
+        // panel stuck behind the creation review.
+        const creationApproval = approvalQueue
+          .listPending()
+          .find(
+            (approval) =>
+              approval.kind === "unit-install-review" &&
+              approval.callerId === "system:workspace-creation"
+          );
+        if (creationApproval?.kind !== "unit-install-review") {
+          throw new Error("Workspace creation review was not published to the approval queue");
+        }
+        workspaceCreationReviewState = {
+          status: "pending",
+          approvalId: creationApproval.approvalId,
+          partCount: creationApproval.parts.length,
+        };
+
+        // Publication is the startup barrier. Settlement remains interactive
+        // and continues independently after the host has exposed the exact
+        // pending approval id.
+        void decisionPromise
+          .then((decision) => {
+            if (decision === "deny" || decision === "dismiss") {
+              // Nothing was accepted, so nothing is admitted and the marker
+              // stays: the question is re-offered rather than silently dropped.
+              workspaceCreationReviewState = { status: "unresolved" };
+              console.info("[Units] Creation review left unresolved; it will be offered again.");
+              return;
+            }
+
+            // Accepting admits every part the creation publication landed —
+            // selected or not — and mints clearance only for what the user
+            // allowed now. The selection rides the store keyed by exact
+            // identity, so it can only apply to the versions it was made about.
+            try {
+              buildUnitChangeApprovalProvider.acceptPreapprovedTrust(
+                creationReview.identityKeys,
+                "workspace-creation",
+                undefined,
+                origins
+              );
+              creationReviewUnits = new Set();
+              creationReviewOwed = false;
+              workspaceCreationReview.resolve();
+              workspaceCreationReviewState = { status: "resolved" };
+              approvalQueue.reportInstallLanding?.(creationApproval.approvalId, {
+                landed: creationApproval.parts.map((part) => part.identityKey),
+              });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              workspaceCreationReviewState = { status: "failed", error: message };
+              approvalQueue.reportInstallLanding?.(creationApproval.approvalId, {
+                landed: [],
+                failed: creationApproval.parts.map((part) => ({
+                  identityKey: part.identityKey,
+                  reason: message,
+                })),
+                workspaceUnchanged: false,
+              });
+              console.warn("[Units] Failed to resolve the workspace creation review:", error);
+            }
+          })
+          .catch((err: unknown) => {
+            const error = err instanceof Error ? err.message : String(err);
+            workspaceCreationReviewState = { status: "failed", error };
+            console.warn("[Units] Failed to resolve the workspace creation review:", err);
+          });
+      }
+    } catch (err: unknown) {
+      // Leave the obligation standing: an unanswered creation review is
+      // re-offered on the next boot rather than silently forgotten.
+      workspaceCreationReviewState = {
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      };
+      console.warn("[Units] Failed to resolve the workspace creation review:", err);
+    }
+  };
+
   const runStartupWorkspaceUnitReconcile = async (): Promise<void> => {
     let syncDeclaredRemotesAfterStartupReload = false;
     try {
@@ -5524,24 +6579,6 @@ async function main() {
         }
         await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
       } while (pendingStartupMetaConfigReload);
-      const runtimeApproval = await buildUnitChangeApprovalProvider.startupApproval();
-      if (runtimeApproval.units.length > 0) {
-        void unitApprovalCoordinator
-          .enqueue({
-            entries: runtimeApproval.units,
-            trigger: "startup",
-            applyApproved: async () => {
-              buildUnitChangeApprovalProvider.acceptPreapprovedTrust(runtimeApproval.identityKeys);
-            },
-            applyDenied: () => undefined,
-          })
-          .catch((err: unknown) =>
-            console.warn("[Units] Failed to apply runtime unit approval:", err)
-          );
-      }
-      void unitApprovalCoordinator
-        .publishPending("startup")
-        .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
     } finally {
       initialWorkspaceUnitReconcileComplete = true;
       if (syncDeclaredRemotesAfterStartupReload) {
@@ -5554,7 +6591,16 @@ async function main() {
       }
     }
   };
-  startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile();
+  startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile().then(async () => {
+    // Wait only until both declaration branches have staged their requests.
+    // publishPending starts the queue entries synchronously; its promise is the
+    // later human decision/application and therefore remains detached.
+    await Promise.resolve(startupExtensionStaging);
+    void unitInstallReviewCoordinator
+      .publishPending("startup")
+      .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
+    await prepareWorkspaceCreationReview();
+  });
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(
@@ -5669,6 +6715,11 @@ async function main() {
     }
   }
 
+  // Readiness is a host lifecycle fact, not a timer heuristic. Begin the
+  // expensive authority snapshot only after the ready record is visible so
+  // synchronous TypeScript parsing cannot delay instance discovery/pairing.
+  container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem").prewarmAuthorityIndex();
+
   // Eval libraries are the only intentional warmup. Panels, apps, extensions,
   // and workers activate their own dependency graph on demand.
   if (!workspaceIsEphemeral) {
@@ -5720,6 +6771,23 @@ async function main() {
       webrtcIngress = null;
     }
 
+    // Close the shared eval admission before tearing down its host-held
+    // transports. Every EvalDO run is a durable trust unit with its own
+    // cancellation cleanup; cancelling it here lets model/tool work, child
+    // runtimes, and system-test drivers unwind while the relay is still alive.
+    // Reserve the final two seconds for lifecycle release instead of allowing
+    // an unbounded cleanup to consume the entire process shutdown budget.
+    const evalDrainBudgetMs = Math.max(
+      0,
+      Math.min(4_000, 8_000 - (Date.now() - shutdownStartedAt) - 2_000)
+    );
+    await closeActiveEvalRuns?.(evalDrainBudgetMs).catch((err) =>
+      console.warn("[Server] active eval shutdown drain failed:", err)
+    );
+
+    await closeEvalKernelLeases?.().catch((err) =>
+      console.warn("[Server] eval kernel lease shutdown failed:", err)
+    );
     const prepareBudgetMs = Math.max(0, Math.min(2000, 8000 - (Date.now() - shutdownStartedAt)));
     if (prepareBudgetMs > 0) {
       await lifecycleDriver
@@ -5727,10 +6795,24 @@ async function main() {
         .catch((err) => console.warn("[Server] lifecycle shutdown prepare failed:", err));
     }
 
+    // At this point the owned eval/lifecycle work has had its chance to
+    // release normally. Abort any remaining inbound RPC/stream work before
+    // stopping workerd so a DO callback cannot keep a workerd handler alive
+    // while its host-side owner is already being dismantled. RpcServer remains
+    // available as an object for the ordered service stop below; it simply no
+    // longer admits or retains transport-owned work.
+    rpcServerForGateway?.quiesce("Server shutting down");
+
     await container
       .stopAll()
       .then(() => console.log("[Server] All services stopped"))
       .catch((e) => console.error("[Server] Service shutdown error:", e));
+
+    // Gateway is deliberately outside the service container because it is the
+    // socket owner for several services. It still needs an explicit terminal
+    // close after those services are down; otherwise keep-alive and upgraded
+    // sockets survive the service graph and can hold a shutdown hostage.
+    await gateway.stop().catch((err) => console.warn("[Server] gateway shutdown failed:", err));
     try {
       userlandResourceHandles.close();
     } catch (error) {

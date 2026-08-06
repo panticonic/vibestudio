@@ -374,9 +374,7 @@ describe("service schema contracts", () => {
     const schemaFiles = readdirSync(schemaDir)
       .filter(
         (file) =>
-          file.endsWith(".ts") &&
-          !file.endsWith(".test.ts") &&
-          file !== "productBuiltinServices.ts"
+          file.endsWith(".ts") && !file.endsWith(".test.ts") && file !== "productBuiltinServices.ts"
       )
       .sort();
 

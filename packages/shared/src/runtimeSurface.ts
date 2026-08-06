@@ -63,10 +63,7 @@ export interface RuntimeSurface {
   exports: Record<string, RuntimeSurfaceEntry>;
 }
 
-export function valueEntry(
-  description?: string,
-  signature?: string
-): RuntimeSurfaceValueEntry {
+export function valueEntry(description?: string, signature?: string): RuntimeSurfaceValueEntry {
   return {
     kind: "value",
     ...(description ? { description } : {}),

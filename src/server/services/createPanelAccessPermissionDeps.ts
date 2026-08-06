@@ -3,10 +3,15 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AppHost } from "../appHost.js";
 import type { ContextBoundaryDeps } from "./contextBoundary.js";
 import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
+import {
+  callerControlsLifecycleContext,
+  type LifecycleContextControlStore,
+} from "./lifecycleContextControl.js";
 
 export function createPanelAccessPermissionDeps(input: {
   contextBoundary: ContextBoundaryDeps;
   entityCache: EntityCache;
+  lifecycleContextStore: LifecycleContextControlStore;
   getAppHost(): AppHost | null;
 }): PanelAccessPermissionDeps {
   const { contextBoundary, entityCache } = input;
@@ -24,6 +29,17 @@ export function createPanelAccessPermissionDeps(input: {
       }
       return false;
     },
+    controlsLifecycleContext: (
+      callerId: string,
+      originContextId: string | null,
+      targetContextId: string
+    ) =>
+      callerControlsLifecycleContext(
+        input.lifecycleContextStore,
+        callerId,
+        originContextId,
+        targetContextId
+      ),
     resolveSubjectCaller: (entityId) => {
       const record = entityCache.resolveActive(entityId);
       const kind = record?.kind;

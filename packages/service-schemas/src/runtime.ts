@@ -116,6 +116,12 @@ export const RuntimeEntityHandleSchema = z
       .describe(
         "Runtime target handle: the workerd target for do/worker; the canonical id otherwise."
       ),
+    created: z
+      .boolean()
+      .optional()
+      .describe(
+        "reserveEntity only: true when this call inserted the durable reservation, false when it deduplicated onto a pre-existing record. Never retire an entity another attempt created."
+      ),
   })
   .strict();
 
@@ -145,6 +151,29 @@ export const RuntimeSupervisionEntityKeySchema = z
   })
   .strict();
 export type RuntimeSupervisionEntityKey = z.infer<typeof RuntimeSupervisionEntityKeySchema>;
+
+export const RuntimeExecutionRecoveryRequestSchema = z
+  .object({
+    entityId: z.string().min(1),
+    expectedExecutionDigest: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .describe("Sealed incarnation observed by the recovery prompt; rejects stale actions."),
+    strategy: z.enum(["restore-exact", "replace-incarnation"]),
+  })
+  .strict();
+export type RuntimeExecutionRecoveryRequest = z.infer<typeof RuntimeExecutionRecoveryRequestSchema>;
+
+export const RuntimeExecutionRecoveryResultSchema = z
+  .object({
+    entityId: z.string(),
+    strategy: z.enum(["restore-exact", "replace-incarnation"]),
+    previousExecutionDigest: z.string(),
+    buildKey: z.string().regex(/^[0-9a-f]{64}$/u),
+    executionDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .strict();
+export type RuntimeExecutionRecoveryResult = z.infer<typeof RuntimeExecutionRecoveryResultSchema>;
 
 export const RuntimeSupervisionDescriptionSchema = z
   .object({
@@ -681,6 +710,32 @@ export const runtimeMethods = defineServiceMethods({
     access: RETIRE_ACCESS,
     examples: [{ args: [{ id: "do:workers/agent:AgentDO:agent-1", removeContext: true }] }],
   },
+  recoverExecution: {
+    capability: "runtime.execution.recover",
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "runtime.recovery",
+      rationale:
+        "Explicit user recovery of one exact unavailable Durable Object incarnation; expected-digest matching prevents stale actions",
+    },
+    presentation: {
+      title: "Recover a runtime execution",
+      action: "recover a runtime execution",
+      description:
+        "Allows {requesterKind} to restore an exact retained execution or explicitly replace one unavailable incarnation.",
+      group: "runtime",
+      authorityCategory: { domain: "automation", verb: "manage" },
+    },
+    description:
+      "Recover one unavailable Durable Object execution. restore-exact never changes its sealed identity; replace-incarnation atomically selects code from the entity's current semantic context while preserving its durable storage.",
+    args: z.tuple([RuntimeExecutionRecoveryRequestSchema]),
+    returns: RuntimeExecutionRecoveryResultSchema,
+    authority: { principals: ["user", "host"] },
+    agentFacing: false,
+    access: { sensitivity: "write" },
+  },
   listEntities: {
     tier: {
       tier: "open",
@@ -933,14 +988,11 @@ export const runtimeMethods = defineServiceMethods({
     presentation: {
       title: "Fork a semantic workspace",
       action: "fork a semantic workspace",
-      description:
-        "Allows {requesterKind} to create one exact owned semantic child workspace.",
+      description: "Allows {requesterKind} to create one exact owned semantic child workspace.",
       group: "runtime",
       authorityCategory: { domain: "files", verb: "act" },
     },
-    args: z.tuple([
-      z.object({ targetContextId: z.string().min(1) }).strict(),
-    ]),
+    args: z.tuple([z.object({ targetContextId: z.string().min(1) }).strict()]),
     returns: z
       .object({
         contextId: z.string().min(1),

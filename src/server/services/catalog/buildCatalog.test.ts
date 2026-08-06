@@ -7,6 +7,7 @@ import { buildCatalog, isCatalogEntryVisible } from "./buildCatalog.js";
 import { workerRuntimeSurface } from "@vibestudio/service-schemas/runtime/runtimeSurface.worker";
 import { callableEntry } from "@vibestudio/shared/runtimeSurface";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
+import { workspaceStateMethods } from "@vibestudio/service-schemas/workspaceState";
 
 const TEST_OPEN_TIER = {
   tier: "open" as const,
@@ -124,6 +125,21 @@ describe("buildCatalog", () => {
       handler: async () => undefined,
     };
     const transportEntries = buildCatalog({ definitions: [transportOnly] });
+    expect(transportEntries).toEqual([]);
+  });
+
+  it("does not advertise workspace-state transport methods beside runtime handles", () => {
+    const transportEntries = buildCatalog({
+      definitions: [
+        {
+          name: "workspace-state",
+          description: "Workspace slot/entity state (WorkspaceDO).",
+          authority: { principals: ["user", "code", "host"] },
+          methods: workspaceStateMethods,
+          handler: async () => undefined,
+        },
+      ],
+    });
     expect(transportEntries).toEqual([]);
   });
 

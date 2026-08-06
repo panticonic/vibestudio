@@ -249,8 +249,7 @@ export class IpcDispatcher {
 
   /**
    * One §1.6 upload relay per panel principal. The relay opens the panel's
-   * session stream (`streamReadable` — WebRTC only; the loopback WS session has
-   * none and uploads fail LOUDLY) and ships the response back over
+   * session stream (`streamReadable`) and ships the response back over
    * `vibestudio:rpc:stream-message` with ack-gated chunks.
    */
   private ensurePanelStreamRelay(sender: WebContents, callerId: string): BridgeStreamRelay {
@@ -262,10 +261,7 @@ export class IpcDispatcher {
         const session = await this.ensurePanelSession(sender, callerId);
         const conn = this.requirePanelRuntimeConnection(callerId);
         if (typeof session.streamReadable !== "function") {
-          throw new Error(
-            "Streaming request bodies (uploads) require the WebRTC transport; " +
-              "this panel's host session cannot stream a request body"
-          );
+          throw new Error("Streaming request bodies are unavailable on this panel's host session");
         }
         return session.streamReadable(
           stampEnvelopeCaller(envelope, { callerId: conn.runtimeEntityId, callerKind: "panel" }),
@@ -418,6 +414,7 @@ export class IpcDispatcher {
           error,
           errorKind: rpcErrorKindOf(err, "internal"),
           ...(errorCode ? { errorCode } : {}),
+          ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
         });
       }
     }
@@ -664,6 +661,22 @@ export class IpcDispatcher {
    * the panel's pending request rejects rather than hanging.
    */
   private relayPanelEnvelope(sender: WebContents, callerId: string, envelope: RpcEnvelope): void {
+    // The desktop shell is an Electron-local target, not a WebRTC/server
+    // runtime. Panel events addressed to it (currently command-palette
+    // contributions) must use the local renderer bridge. Sending them through
+    // the panel's remote session races shell startup and produces a real,
+    // silently lost event because the server quite correctly has no `shell`
+    // WebSocket target for this host.
+    if (envelope.target === "shell" && envelope.message.type === "event") {
+      const shell = this.deps.getShellWebContents();
+      if (shell && !shell.isDestroyed()) {
+        shell.send(
+          "vibestudio:rpc:message",
+          stampEnvelopeCaller(envelope, { callerId, callerKind: "panel" })
+        );
+        return;
+      }
+    }
     void this.ensurePanelSession(sender, callerId)
       .then((session) => {
         const conn = this.requirePanelRuntimeConnection(callerId);

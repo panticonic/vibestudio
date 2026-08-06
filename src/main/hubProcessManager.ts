@@ -47,6 +47,7 @@ const HEALTHZ_TIMEOUT_MS = 1_500;
 const HEALTH_RETRY_ATTEMPTS = 3;
 const HEALTH_RETRY_INTERVAL_MS = 250;
 const STOP_SIGTERM_TIMEOUT_MS = 12_000;
+const STOP_RETRY_INTERVAL_MS = 1_000;
 
 /** The detached machine hub owns every local workspace child's captured output. */
 export function getLocalHubLogPath(): string {
@@ -235,6 +236,7 @@ export class HubProcessManager {
         if (attached) {
           await this.terminateVerifiedHub(existing.pid);
           this.config.centralData.releaseHubProcessLease(existing.ownerBootId);
+          this.verifiedHubPids.delete(existing.pid);
         }
       } else {
         processTarget = await this.tryAttach(existing);
@@ -606,13 +608,18 @@ export class HubProcessManager {
 
   private async ensureAlive(): Promise<void> {
     const current = this.current;
-    if (!current) return;
+    if (!current || this.isStopping) return;
     const lease = this.liveLease();
     const attached = lease ? await this.tryAttach(lease) : null;
     if (attached?.record.serverBootId === current.hubServerBootId) return;
     if (attached) {
       const credential = await this.ensureDeviceCredential(attached);
-      this.current = await this.routeWorkspace(attached, credential);
+      const routed = await this.routeWorkspace(attached, credential);
+      if (this.isStopping) {
+        await this.discardReplacementHub(attached);
+        return;
+      }
+      this.current = routed;
       this.currentHubPid = attached.record.pid;
       return;
     }
@@ -623,52 +630,121 @@ export class HubProcessManager {
       return;
     }
     this.restartTimestamps.push(now);
+    let target: HubProcessTarget | null = null;
     try {
       // The desktop session exposes the gateway port to panel and asset
       // consumers. Rebind the replacement hub to that same port so a successful
       // supervised restart is atomic for every consumer, not only RPC reconnects.
-      const target = await this.spawnDetached(current.gatewayPort);
+      target = await this.spawnDetached(current.gatewayPort);
       const credential = await this.ensureDeviceCredential(target);
-      this.current = await this.routeWorkspace(target, credential);
+      const routed = await this.routeWorkspace(target, credential);
+      if (this.isStopping) {
+        await this.discardReplacementHub(target);
+        return;
+      }
+      this.current = routed;
       this.currentHubPid = target.record.pid;
     } catch (error) {
+      if (this.isStopping && target) await this.discardReplacementHub(target);
       log.warn(`[supervise] hub restart failed: ${error instanceof Error ? error.message : error}`);
-      this.config.onCrash(null);
+      if (!this.isStopping) this.config.onCrash(null);
+    }
+  }
+
+  private async discardReplacementHub(target: HubProcessTarget): Promise<void> {
+    this.currentHubPid = target.record.pid;
+    try {
+      await this.terminateVerifiedHub(target.record.pid);
+      this.verifiedHubPids.delete(target.record.pid);
+      if (this.currentHubPid === target.record.pid) this.currentHubPid = null;
+      const lease = this.config.centralData.getHubProcessLease();
+      if (lease?.pid === target.record.pid) {
+        this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
+      }
+    } catch (error) {
+      log.error(
+        `[supervise] replacement hub termination deferred: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 
   async stop(): Promise<void> {
-    this.isStopping = true;
-    this.current = null;
-    const lease = this.liveLease();
-    const pid = this.currentHubPid ?? this.liveLease()?.pid ?? null;
-    this.currentHubPid = null;
-    if (pid === null) return;
-    await this.terminateVerifiedHub(pid);
-    if (lease) this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
+    await this.stopUntilGone();
   }
 
   /**
-   * Update-only stop: the verified detached hub is a process-group owner, so
-   * package replacement requires its complete tree to be gone.
+   * Stop the verified detached hub once and return only after its complete
+   * owned process tree is gone. User-facing shutdown uses stopUntilGone when
+   * it must remain fail-closed across transient termination failures.
    */
   async stopTree(): Promise<ProcessTreeTerminationResult> {
     this.isStopping = true;
     this.current = null;
-    const lease = this.liveLease();
-    const pid = this.currentHubPid ?? lease?.pid ?? null;
+    const recovery = this.ensureAlivePromise;
+    if (recovery) {
+      await recovery.catch((error) => {
+        log.error(
+          `[stop] hub recovery ended during shutdown: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
+    }
+    // Keep the PID until termination is proven. A failed SIGKILL must be
+    // retryable even after the lease expires; clearing it here would turn a
+    // live owned hub into an untracked process.
+    const lease = this.config.centralData.getHubProcessLease();
+    const pids = new Set(this.verifiedHubPids);
+    if (this.currentHubPid !== null) pids.add(this.currentHubPid);
+    if (lease) pids.add(lease.pid);
+    if (pids.size === 0) return { gone: true, escalated: false };
+
+    let escalated = false;
+    for (const pid of pids) {
+      if (!this.verifiedHubPids.has(pid)) {
+        throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
+      }
+      if (recordedPidIsHub(pid) === false) {
+        if (!pidAlive(pid)) {
+          this.verifiedHubPids.delete(pid);
+          if (this.currentHubPid === pid) this.currentHubPid = null;
+          continue;
+        }
+        throw new Error(`Refusing to terminate PID ${pid}; it is no longer the verified hub`);
+      }
+      const result = await this.terminateVerifiedHub(pid);
+      escalated ||= result.escalated;
+      this.verifiedHubPids.delete(pid);
+      if (this.currentHubPid === pid) this.currentHubPid = null;
+    }
     this.currentHubPid = null;
-    if (pid === null) return { gone: true, escalated: false };
-    if (!this.verifiedHubPids.has(pid)) {
-      throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
-    }
-    if (recordedPidIsHub(pid) === false) {
-      throw new Error(`Refusing to terminate PID ${pid}; it is no longer the verified hub`);
-    }
-    const result = await this.terminateVerifiedHub(pid);
     if (lease) this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
-    this.verifiedHubPids.delete(pid);
-    return result;
+    return { gone: true, escalated };
+  }
+
+  /**
+   * Stop requested by the user. This deliberately has no failure exit: the
+   * caller must not be allowed to quit while an owned hub process tree is
+   * still alive. A transient signal/identity race is retried until the
+   * termination proof succeeds.
+   */
+  async stopUntilGone(): Promise<ProcessTreeTerminationResult> {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await this.stopTree();
+      } catch (error) {
+        attempt += 1;
+        log.error(
+          `[stop] local hub termination attempt ${attempt} failed; refusing to release it: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        await new Promise((resolve) => setTimeout(resolve, STOP_RETRY_INTERVAL_MS));
+      }
+    }
   }
 
   private async terminateVerifiedHub(pid: number): Promise<ProcessTreeTerminationResult> {

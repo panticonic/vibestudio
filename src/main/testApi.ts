@@ -84,6 +84,13 @@ export interface TestApi {
     }
   ): Promise<{ id: string; title: string }>;
 
+  /** Create an external browser panel through its dedicated lifecycle. */
+  createBrowserPanel(
+    parentId: string,
+    url: string,
+    options?: { focus?: boolean }
+  ): Promise<{ id: string; title: string }>;
+
   /** Close a panel and all its children */
   closePanel(id: string): Promise<PanelLifecycleResult>;
 
@@ -263,6 +270,15 @@ export function setupTestApi(
       );
     },
 
+    async createBrowserPanel(parentId, url, options) {
+      return panelOrchestrator.createBrowserUrlPanel(
+        parentId,
+        url,
+        { focus: options?.focus !== false },
+        hostedShellCaller()
+      );
+    },
+
     async closePanel(id) {
       return panelOrchestrator.closePanel(id);
     },
@@ -290,8 +306,15 @@ export function setupTestApi(
       return panelReadinessSnapshot({
         panelId,
         source: panel ? getPanelSource(panel) : null,
+        runtimeEntityId: panel?.runtimeEntityId ?? null,
         view: { exists: viewExists, url, isLoading },
-        artifacts: { buildState, htmlPath, error, viewFailure },
+        artifacts: {
+          buildState,
+          htmlPath,
+          hostedRuntimeEntityId: artifacts?.hostedRuntimeEntityId ?? null,
+          error,
+          viewFailure,
+        },
         runtime: panel?.state?.runtime ?? null,
         nativeSlotBound,
       });

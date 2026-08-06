@@ -54,7 +54,13 @@ const vibestudioShell = {
   getPanelInit: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getBootstrapConfig: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getInfo: () => ipcRenderer.invoke("vibestudio:bridge.getInfo"),
-  focusPanel: (panelId: string) => ipcRenderer.invoke("vibestudio:focusPanel", panelId),
+  focusPanel: (
+    panelId: string,
+    options?: {
+      anchorPanelId?: string;
+      placement?: import("@vibestudio/shared/types").PanelPlacementHint;
+    }
+  ) => ipcRenderer.invoke("vibestudio:focusPanel", panelId, options),
 
   // Electron-native
   openDevtools: () => ipcRenderer.invoke("vibestudio:openDevtools"),

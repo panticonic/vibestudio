@@ -15,6 +15,7 @@ import {
   type AuthorityVerb,
 } from "@vibestudio/shared/authority/authorityDomains";
 import { resourcePhrase } from "@vibestudio/shared/authority/authorityRows";
+import { parseCodePrincipal, type CodeIdentity } from "@vibestudio/shared/authority/codePrincipal";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   credentialUseGrantId,
@@ -30,6 +31,12 @@ export function createPermissionsService(deps: {
   credentialUseGrants: CredentialUseGrantStoreLike;
   browserPermissions: BrowserPermissionGrantProjection;
   workspaceId: string;
+  /**
+   * Which decision admitted a code grant's part, for §7.7's origin line.
+   * Absent in tests that never assert on provenance; every row then falls back
+   * to the general "came with the part" wording rather than inventing a source.
+   */
+  admissionProvenance?: UnitAdmissionProvenanceLookup;
   pendingAcquisitionCount?: () => number;
   activeAgentBindingCount?: () => number;
   activeAgentBindings?: () => readonly string[];
@@ -55,7 +62,7 @@ export function createPermissionsService(deps: {
         const reviewingUserId = ctx.caller.subject?.userId;
         const capability: SavedPermissionGrant[] = deps.capabilityGrants
           .listActiveAuthorityGrants()
-          .map((grant) => savedAuthorityGrant(grant, reviewingUserId));
+          .map((grant) => savedAuthorityGrant(grant, reviewingUserId, deps.admissionProvenance));
         const credentialUse: SavedPermissionGrant[] = deps.credentialUseGrants
           .listAll()
           .map((grant) => ({
@@ -346,10 +353,12 @@ function agentBindingLabel(bindingId: string): string {
 
 function savedAuthorityGrant(
   grant: AuthorityGrant,
-  reviewingUserId?: string
+  reviewingUserId?: string,
+  admissionProvenance?: UnitAdmissionProvenanceLookup
 ): SavedPermissionGrant {
   if (!grant.id) throw new Error("Persisted authority grant has no id");
   const code = codeSubject(grant.subject);
+  const origin = authorityGrantOrigin(grant, code, admissionProvenance);
   const sessionScoped = Boolean(grant.constraints?.sessionId);
   return {
     id: grant.id,
@@ -365,11 +374,12 @@ function savedAuthorityGrant(
           : "Trusted for this code version",
     capability: describeCapability(grant.capability).title,
     resource: authorityResourceLabel(grant.resource),
-    ...(code ? { repoPath: code.repoPath, effectiveVersion: code.executionDigest } : {}),
+    ...(code ? { repoPath: code.repoPath, effectiveVersion: code.effectiveVersion } : {}),
     grantedAt: grant.createdAt,
     ...(grant.lastUsedAt ? { lastUsedAt: grant.lastUsedAt } : {}),
     ...(grant.expiresAt ? { expiresAt: grant.expiresAt } : {}),
     why: authorityGrantReason(grant),
+    ...(origin ? { origin } : {}),
     approvedBy: humanizeDecisionPrincipal(grant.decidedBy ?? grant.issuedBy, reviewingUserId),
     duration: authorityGrantDuration(grant),
     revokeEffect:
@@ -377,6 +387,61 @@ function savedAuthorityGrant(
         ? "The next matching action asks again, and this agent's active protected work is stopped."
         : "The next matching action asks again; work using this permission can no longer continue.",
   };
+}
+
+/** What the admission store can tell Permissions about a code grant's part. */
+export type UnitAdmissionProvenanceLookup = (
+  repoPath: string,
+  effectiveVersion: string
+) => {
+  origin: string;
+  sourceUrl: string | null;
+  sourceSelfName?: string | null;
+  sourceVersion?: string | null;
+} | null;
+
+/**
+ * §7.7's origin line: which decision this permission arrived with.
+ *
+ * This is the half that makes Permissions the place an install-time choice is
+ * revisited *in both directions*. `why` says what the permission does; it says
+ * nothing about whether the person picked it or a part came holding it, and
+ * without that a row minted by a review reads exactly like one they answered a
+ * prompt for.
+ */
+function authorityGrantOrigin(
+  grant: AuthorityGrant,
+  code: { repoPath: string; effectiveVersion: string } | null,
+  lookup?: UnitAdmissionProvenanceLookup
+): string | undefined {
+  if (grant.effect === "deny") return "You chose not to allow this";
+  if (grant.provenance !== "install") return "You allowed this when it was needed";
+  const provenance = code ? lookup?.(code.repoPath, code.effectiveVersion) : null;
+  // The template's own name when the admission recorded one — `Added with News
+  // 1.2.0` names the thing the person actually added, which no description of
+  // our own machinery can. The name is self-asserted and appears only here,
+  // attributed to the template, never in a position that reads as a verified
+  // publisher (§7.6.3).
+  const template = provenance?.sourceSelfName
+    ? `${provenance.sourceSelfName}${provenance.sourceVersion ? ` ${provenance.sourceVersion}` : ""}`
+    : null;
+  switch (provenance?.origin) {
+    case "host-build":
+    case "chrome":
+      return "Part of Vibestudio";
+    case "workspace-creation":
+      return template ? `Added with ${template}` : "Added with your workspace's base";
+    case "template-install":
+      return template ? `Added with ${template}` : "Added with a template";
+    case "launch-gate":
+      return "Allowed when you started this workspace";
+    default:
+      // `publication`, and any record written before the source fields existed.
+      // Both mean the same thing to a reader: it came with the part rather than
+      // from a prompt — and naming a specific source we do not hold would be
+      // worse than naming the general one we do.
+      return template ? `Added with ${template}` : "Added when this part arrived";
+  }
 }
 
 function authorityGrantReason(grant: AuthorityGrant): string {
@@ -418,20 +483,15 @@ function humanizeDecisionPrincipal(principal: string, reviewingUserId?: string):
   return principal || "A workspace member";
 }
 
-function codeSubject(
-  subject: AuthorityGrantSubject
-): { repoPath: string; executionDigest: string } | null {
-  if (!subject.startsWith("code:")) return null;
-  const code = subject.slice("code:".length);
-  const separator = code.lastIndexOf("@");
-  if (separator <= 0 || separator === code.length - 1) return null;
-  return { repoPath: code.slice(0, separator), executionDigest: code.slice(separator + 1) };
+function codeSubject(subject: AuthorityGrantSubject): CodeIdentity | null {
+  return parseCodePrincipal(subject);
 }
 
 function authoritySubjectLabel(subject: AuthorityGrantSubject): string {
   const code = codeSubject(subject);
   if (code) return code.repoPath;
   if (subject.startsWith("session:")) return "This session";
+  if (subject.startsWith("task:")) return "This task";
   if (subject.startsWith("mission:")) return "This agent mission";
   if (subject.startsWith("agent:")) return "This agent";
   if (subject.startsWith("user:")) return "Your account";

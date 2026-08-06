@@ -29,6 +29,12 @@ export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
   resolveEntityContext(entityId: string): string | null;
   /** True when the target entity's durable parent lineage reaches the caller. */
   isEntityControlledBy?(entityId: string, callerId: string): boolean;
+  /** True when the caller owns the exact direct lifecycle child context. */
+  controlsLifecycleContext(
+    callerId: string,
+    originContextId: string | null,
+    targetContextId: string
+  ): Promise<boolean>;
   /**
    * Build a code-identity subject caller from an anchor entity id (for
    * host-mediated `server`/`shell` calls whose true initiator is that entity).
@@ -132,6 +138,11 @@ export async function preparePanelAccessAuthority(
   const originContextId = isAgentCaller
     ? (ctx.caller.agentBinding?.contextId ?? null)
     : await deps.resolveCallerContext(subjectCaller.runtime.id);
+  if (
+    await deps.controlsLifecycleContext(subjectCaller.runtime.id, originContextId, targetContextId)
+  ) {
+    return [];
+  }
   const severity = panelAccessSeverityForTarget(target);
   const selection = prepareContextBoundarySelection(deps, {
     subjectCaller,

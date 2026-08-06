@@ -102,6 +102,7 @@ function makeDispatcher(opts: {
   const serverClient = {
     exposeHostMethod: vi.fn(),
     call: opts.call ?? vi.fn(async () => ({ ok: "shell" })),
+    callTarget: vi.fn(async () => ({ ok: "target" })),
     callAs: opts.callAs ?? vi.fn(async () => ({ ok: "app" })),
     stream: opts.stream ?? vi.fn(async () => new Response()),
     streamAs: opts.streamAs ?? vi.fn(async () => new Response()),
@@ -257,6 +258,54 @@ describe("IpcDispatcher", () => {
         type: "response",
         requestId: "req-1",
         result: { workspace: "ok" },
+      });
+    });
+  });
+
+  it("preserves structured server errors across the app IPC boundary", async () => {
+    const appWc = makeWebContents(18);
+    const errorData = {
+      authorityFailure: {
+        reasonCode: "review-pending",
+        remediation: {
+          review: {
+            approvalId: "workspace-install-review",
+            title: "Welcome — here's what's in your workspace",
+          },
+        },
+      },
+    };
+    const callAs = vi.fn(async () => {
+      throw Object.assign(new Error("Waiting for you to finish reviewing"), {
+        code: "EREVIEWPENDING",
+        errorData,
+      });
+    });
+    makeDispatcher({
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      getWebContentsForCaller: () => appWc,
+      callAs,
+    });
+
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: appWc } as never,
+      rpcEnvelope("@workspace-apps/shell", "app", {
+        type: "request",
+        requestId: "req-review-pending",
+        fromId: "@workspace-apps/shell",
+        method: "workers.resolveService",
+        args: ["@workspace-apps/shell", null],
+      } satisfies RpcMessage) as never
+    );
+
+    await vi.waitFor(() => {
+      expectSentRpcMessage(appWc, "@workspace-apps/shell", {
+        type: "response",
+        requestId: "req-review-pending",
+        error: "Waiting for you to finish reviewing",
+        errorKind: "internal",
+        errorCode: "EREVIEWPENDING",
+        errorData,
       });
     });
   });
@@ -666,6 +715,41 @@ describe("IpcDispatcher", () => {
     expect(appWc.send).toHaveBeenCalledWith("vibestudio:rpc:message", eventEnvelope);
   });
 
+  it("routes panel-to-shell events through the local shell bridge", async () => {
+    const panelWc = makeWebContents(13);
+    const shellWc = makeWebContents(14);
+    const openPanelSession = vi.fn();
+    makeDispatcher({
+      resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+      getShellWebContents: () => shellWc,
+      getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+      openPanelSession,
+    });
+
+    const message: RpcMessage = {
+      type: "event",
+      fromId: "panel-1",
+      event: "runtime:palette-contribution",
+      payload: { commands: [{ id: "open", label: "Open" }] },
+    };
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: panelWc } as never,
+      rpcEnvelope("panel-1", "panel", message, undefined, "shell") as never
+    );
+
+    expect(openPanelSession).not.toHaveBeenCalled();
+    expect(shellWc.send).toHaveBeenCalledWith(
+      "vibestudio:rpc:message",
+      expect.objectContaining({
+        from: "panel-1",
+        target: "shell",
+        delivery: { caller: { callerId: "panel-1", callerKind: "panel" } },
+        provenance: [{ callerId: "panel-1", callerKind: "panel" }],
+        message,
+      })
+    );
+  });
+
   // §3.3: the ONLY recycle signal is a terminal isClosed(); transport status is
   // transient (the transport auto-reopens sessions across pipe reconnects).
   describe("panel session recycling", () => {
@@ -937,13 +1021,13 @@ describe("IpcDispatcher", () => {
       );
     });
 
-    it("fails LOUDLY when the panel session has no streamReadable (loopback WS)", async () => {
+    it("fails LOUDLY when a panel host session has no streamReadable", async () => {
       const panelWc = makeStreamingPanelWc(41);
       makeDispatcher({
         resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
         getWebContentsForCaller: () => panelWc,
         getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
-        // Default session shape: no streamReadable — like the WS PanelSession.
+        // Default session shape: no streamReadable.
       });
 
       await ipcInvokeHandlers.get("vibestudio:rpc:stream-open")?.(
@@ -957,7 +1041,7 @@ describe("IpcDispatcher", () => {
           expect.objectContaining({
             kind: "error",
             opId: "op-1",
-            message: expect.stringContaining("require the WebRTC transport"),
+            message: expect.stringContaining("unavailable on this panel's host session"),
           })
         );
       });

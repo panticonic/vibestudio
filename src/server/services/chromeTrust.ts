@@ -87,3 +87,29 @@ export function isAuthorizedChrome(
 ): boolean {
   return callerHasCapability(caller, "panel-hosting", deps);
 }
+
+/**
+ * Chrome with a human in front of it.
+ *
+ * Publications from trusted first-party UI — setup, settings, layout — record
+ * admission silently, because the click IS the consent and gating would confirm
+ * a dialog the user just confirmed
+ * (docs/template-install-unit-approval-ux-plan.md §5.2).
+ *
+ * That justification reaches only the interactive principals. `server` and
+ * `headless-host` also hold `panel-hosting`, but a headless host has no user and
+ * no click, so their publications take the ordinary gate — or, in a headless
+ * run, the explicit decision of §7.9. This is a narrowing of an existing check,
+ * not a new mechanism: no publication token is introduced.
+ */
+export function isInteractiveChrome(
+  caller: VerifiedCaller,
+  deps: CapabilityTrustDeps = {}
+): boolean {
+  // Workspace apps listed in `trust.chromeApps` are opened by the user and
+  // render host chrome, so they carry the same click-is-consent property.
+  if (callerHasAppCapability(caller, "panel-hosting", deps)) return true;
+  if (caller.runtime.kind !== "shell") return false;
+  const { id } = caller.runtime;
+  return id === "shell" || id === "electron-main" || id.startsWith("shell:");
+}

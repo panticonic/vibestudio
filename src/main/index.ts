@@ -383,6 +383,9 @@ let currentHostDevelopmentExecutor:
   | import("./currentHostDevelopmentClientExecutor.js").CurrentHostDevelopmentClientExecutor
   | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
+let shutdownRequiresLocalHubStop = false;
+let localHubStopConfirmed = false;
+let localHubStopPromise: Promise<void> | null = null;
 type QuitIntent =
   | { kind: "ordinary"; serverDecision: "stop" | "keep" | null }
   | { kind: "relaunch"; exitCode: number }
@@ -1293,6 +1296,7 @@ async function syncElectronHostTarget(
     }
     return "waiting-for-change";
   } catch (error) {
+    if (isCleaningUp) return "waiting-for-change";
     log.warn(
       `[apps] Failed to synchronize Electron host target: ${
         error instanceof Error ? error.message : String(error)
@@ -1526,6 +1530,12 @@ function installBootstrapConnectionHandlers(): void {
     if (parsed.kind === "error") {
       return { ok: false, error: "invalid-url", message: parsed.reason };
     }
+    // The bootstrap chooser is the owner of a launch-time deep link.  It peeks
+    // at that link while rendering the confirmation card, so accepting the
+    // card must consume the buffered intent before the hosted shell mounts.
+    // Otherwise the hosted shell drains the same one-shot link and opens a
+    // second Connections dialog over the already-connected workspace.
+    getPendingConnectLink();
     // Hand the parsed pairing to the pending path; establishServerSession dials it
     // over WebRTC and KEEPS the pipe as the session (the one-time code authenticates
     // it; the issued device credential is persisted for the next launch).
@@ -1919,7 +1929,6 @@ app.on("ready", async () => {
       capability,
       resourceKey,
       tier,
-      grantCode: Boolean(caller.code),
     })
   );
 
@@ -2513,16 +2522,15 @@ app.on("ready", async () => {
         if (action === "panelObservation") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           if (!panelOrchestrator) throw new Error("Panel orchestrator not initialized");
-          const boot = await cdpHostProvider.getBootObservation(panelId);
-          const host = panelOrchestrator.getPanelHostObservation(panelId, boot);
-          if (
-            !host.view.exists ||
-            typeof host.view.url !== "string" ||
-            typeof host.view.loading !== "boolean"
-          ) {
-            return null;
-          }
-          return { url: host.view.url, loading: host.view.loading, boot: host.boot };
+          const { observeDesktopPanelHost } = await import("./panelHostObservation.js");
+          return observeDesktopPanelHost(
+            {
+              getBootObservation: (id) => cdpHostProvider!.getBootObservation(id),
+              getPanelHostObservation: (id, boot) =>
+                panelOrchestrator!.getPanelHostObservation(id, boot),
+            },
+            panelId
+          );
         }
         if (action === "consoleHistory") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
@@ -2575,7 +2583,45 @@ app.on("ready", async () => {
     const electronContainer = new ServiceContainer(dispatcher);
 
     const { serverClient: sc } = conn;
-    const browserDataClient = createBrowserDataClient(sc);
+    const browserDataClient = createBrowserDataClient({
+      callService: (service, method, args) => sc.call(service, method, args),
+      callTarget: (targetId, method, args) => sc.callTarget(targetId, method, args),
+    });
+    const { BrowserPermissionController } =
+      await import("./services/browserPermissionController.js");
+    const workspacePermissionController = new BrowserPermissionController({
+      serverClient: sc,
+      eventService,
+      getViewManager: () => applicationWindow.viewManager,
+      isTargetUnderAutomation: (targetId) =>
+        cdpHostProvider?.isTargetUnderAutomation(targetId) ?? false,
+    });
+    browserPermissionController?.stop();
+    browserPermissionController = workspacePermissionController;
+    electronContainer.registerManaged({
+      name: "browser-permissions-host",
+      async start() {
+        try {
+          const partition = await workspacePermissionController.attachBrowserEnvironment();
+          activeBrowserSessionPartition = partition;
+          browserEnvironmentReadiness.ready(partition);
+        } catch (error) {
+          browserEnvironmentReadiness.unavailable(error);
+          throw error;
+        }
+        return workspacePermissionController;
+      },
+      async stop() {
+        browserEnvironmentReadiness.stopped(
+          new Error("Browser environment stopped with the workspace")
+        );
+        activeBrowserSessionPartition = null;
+        workspacePermissionController.stop();
+        if (browserPermissionController === workspacePermissionController) {
+          browserPermissionController = null;
+        }
+      },
+    });
 
     // Shell-only services
     electronContainer.registerRpc(
@@ -2705,16 +2751,10 @@ app.on("ready", async () => {
           serverClient: sc,
           hostId: `desktop:${conn.workspaceId}`,
           outboxRoot: app.getPath("userData"),
-          onInitializing() {
-            browserEnvironmentReadiness.begin();
-          },
-          setActivePartition(partition) {
-            activeBrowserSessionPartition = partition;
-          },
-          onUnavailable(error) {
-            browserEnvironmentReadiness.unavailable(error);
-          },
           async onReady(api) {
+            if (api.partition !== activeBrowserSessionPartition) {
+              throw new Error("Browser cookie projection resolved a different environment");
+            }
             browserCookieProjection = api;
             const browserSession = session.fromPartition(api.partition);
             releaseBrowserAdBlocking?.();
@@ -2739,25 +2779,12 @@ app.on("ready", async () => {
             };
 
             await attach("site permissions", async () => {
-              const { BrowserPermissionController } =
-                await import("./services/browserPermissionController.js");
-              const permissionController = new BrowserPermissionController({
-                partition: api.partition,
-                serverClient: sc,
-                eventService,
-                getViewManager: () => applicationWindow.viewManager,
-                isTargetUnderAutomation: (targetId) =>
-                  cdpHostProvider?.isTargetUnderAutomation(targetId) ?? false,
-              });
-              await permissionController.start();
-              browserPermissionController = permissionController;
-
               // The notification bridge routes through permission decisions, so
               // it only exists when those are available.
               const { WebsiteNotificationBridge } =
                 await import("./services/websiteNotificationBridge.js");
               websiteNotificationBridge = new WebsiteNotificationBridge({
-                permissions: permissionController,
+                permissions: workspacePermissionController,
                 eventService,
                 getViewManager: () => applicationWindow.viewManager,
               });
@@ -2782,23 +2809,15 @@ app.on("ready", async () => {
               await manager.start();
               browserDownloadManager = manager;
             });
-
-            browserEnvironmentReadiness.ready(api.partition);
           },
           async onStopped() {
-            browserEnvironmentReadiness.stopped(
-              new Error("Browser environment stopped with the workspace")
-            );
             websiteNotificationBridge?.stop();
             websiteNotificationBridge = null;
-            browserPermissionController?.stop();
-            browserPermissionController = null;
             await browserDownloadManager?.stop();
             browserDownloadManager = null;
             releaseBrowserAdBlocking?.();
             releaseBrowserAdBlocking = null;
             browserCookieProjection = null;
-            activeBrowserSessionPartition = null;
           },
         })
       );
@@ -2941,10 +2960,29 @@ app.on("ready", async () => {
       return panelOrchestrator?.getBootstrapConfig(callerId);
     });
 
-    ipcMain.handle("vibestudio:focusPanel", async (event, panelId: string) => {
-      requireAppCapabilityForIpc(event, "panel-hosting", "vibestudio:focusPanel");
-      assertPresent(panelOrchestrator).focusPanel(panelId);
-    });
+    ipcMain.handle(
+      "vibestudio:focusPanel",
+      async (
+        event,
+        panelId: string,
+        options?: {
+          anchorPanelId?: string;
+          placement?: import("@vibestudio/shared/types").PanelPlacementHint;
+        }
+      ) => {
+        requireAppCapabilityForIpc(event, "panel-hosting", "vibestudio:focusPanel");
+        const result = await assertPresent(panelOrchestrator).focusPanel(panelId, {
+          loadIfNeeded: true,
+          ...options,
+        });
+        // `preparing`, `leased_elsewhere`, and build failures are part of the
+        // typed panel-focus protocol. In particular, callers such as
+        // PanelHandle.focus() continue observing a preparing panel until its
+        // execution becomes ready. Turning that state into an IPC rejection
+        // tears down the native slot and strands the late readiness update.
+        return result;
+      }
+    );
     ipcMain.handle("vibestudio:bridge.getInfo", async (event) => {
       const callerId = resolveCallerId(event);
       return shellCore?.panelManager.getInfo(asPanelSlotId(callerId));
@@ -3197,8 +3235,13 @@ app.on("before-quit", (event) => {
 
 // Use will-quit with preventDefault to properly await async shutdown
 app.on("will-quit", (event) => {
-  // Prevent re-entry - if we're already cleaning up, let the app exit
+  // Prevent re-entry. An explicit server stop is fail-closed: a second quit
+  // request must not bypass the still-running hub termination proof.
   if (isCleaningUp) {
+    if (shutdownRequiresLocalHubStop && !localHubStopConfirmed) {
+      event.preventDefault();
+      console.warn("[App] Shutdown is still waiting for the local hub to terminate");
+    }
     return;
   }
 
@@ -3214,15 +3257,20 @@ app.on("will-quit", (event) => {
   isCleaningUp = true;
   event.preventDefault();
   npmUpdateController?.stop();
+  stopElectronHostTargetLaunchLoop();
+  approvalAttention?.dispose();
+  approvalAttention = null;
 
   console.log("[App] Shutting down...");
 
   const stopPromises: Promise<void>[] = [];
+  let developmentExecutorClose: Promise<void> | null = null;
 
   if (currentHostDevelopmentExecutor) {
     const executor = currentHostDevelopmentExecutor;
     currentHostDevelopmentExecutor = null;
-    stopPromises.push(executor.close());
+    developmentExecutorClose = executor.close();
+    stopPromises.push(developmentExecutorClose);
   }
 
   // Server client (device-paired WS connection) + the detached hub process
@@ -3235,39 +3283,65 @@ app.on("will-quit", (event) => {
       session.serverOwnership === "desktop-local" &&
       session.hubProcessManager !== null &&
       (updateQuit || (quitIntent.kind === "ordinary" && quitIntent.serverDecision !== "keep"));
+    if (stopServer) {
+      shutdownRequiresLocalHubStop = true;
+      localHubStopConfirmed = false;
+    }
 
     const cleanupThenClose = (async () => {
+      // Exit receipts are server RPCs too. Let the executor finish them before
+      // the session is closed, otherwise an in-flight heartbeat/receipt races
+      // teardown and reports a misleading connection failure.
+      await developmentExecutorClose;
+
       const unregister = panelOrchestrator?.unregisterRuntimeClient();
-      if (updateQuit) {
+
+      let unregisterFailure: unknown = null;
+      try {
         await unregister;
-      } else {
-        await unregister?.catch((e: unknown) =>
-          console.error("[App] Failed to unregister runtime client:", e)
-        );
-      }
-      if (stopServer) {
-        if (updateQuit) {
-          const result = await assertPresent(session.hubProcessManager).stopTree();
-          if (!result.gone) throw new Error("The local hub process tree is still running");
-          console.log("[App] Hub process tree stopped");
-        } else {
-          await assertPresent(session.hubProcessManager)
-            .stop()
-            .then(() => console.log("[App] Hub stopped"))
-            .catch((e) => console.error("[App] Hub stop error:", e));
+      } catch (error) {
+        unregisterFailure = error;
+        if (!updateQuit) {
+          console.error("[App] Failed to unregister runtime client:", error);
         }
+      }
+
+      // All server-side cleanup is complete. Close the transports before
+      // stopping or detaching the hub; the producers that could issue new RPCs
+      // were stopped above, so this no longer races any required cleanup.
+      const close = session.close();
+      let closeFailure: unknown = null;
+      try {
+        await close;
+      } catch (error) {
+        closeFailure = error;
+        if (!updateQuit) console.error("[App] Session close error:", error);
+      }
+
+      if (stopServer) {
+        // No more server RPCs are needed. Stop the owned hub only after the
+        // desktop session is closed, while still ensuring a close failure cannot
+        // leave the user-requested server alive.
+        localHubStopPromise = (async () => {
+          const result = await assertPresent(session.hubProcessManager).stopUntilGone();
+          if (!result.gone) throw new Error("The local hub process tree is still running");
+          localHubStopConfirmed = true;
+          console.log(
+            result.escalated
+              ? "[App] Hub process tree stopped after escalation"
+              : "[App] Hub stopped"
+          );
+        })();
+        await assertPresent(localHubStopPromise);
       } else {
         // Keep: leave the detached process running; the attachment record stays
         // so the next launch reattaches instantly.
         session.hubProcessManager?.detach();
         if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
       }
-      const close = session.close();
-      if (updateQuit) {
-        await close;
-      } else {
-        await close.catch((e) => console.error("[App] Session close error:", e));
-      }
+
+      if (updateQuit && unregisterFailure) throw unregisterFailure;
+      if (updateQuit && closeFailure) throw closeFailure;
     })();
     stopPromises.push(cleanupThenClose);
   }
@@ -3279,6 +3353,15 @@ app.on("will-quit", (event) => {
 
   // Add a timeout to ensure we exit even if cleanup hangs
   const shutdownTimeout = setTimeout(() => {
+    if (shutdownRequiresLocalHubStop && !localHubStopConfirmed) {
+      // Never force-exit after an explicit stop request until the owned hub
+      // tree has been proven gone. stopUntilGone continues retrying; this
+      // warning is intentionally non-terminal.
+      console.error(
+        "[App] Shutdown still waiting for local hub termination; refusing to force exit"
+      );
+      return;
+    }
     console.warn("[App] Shutdown timeout - forcing exit");
     app.exit(1);
   }, APP_SHUTDOWN_TIMEOUT_MS);
@@ -3300,6 +3383,28 @@ app.on("will-quit", (event) => {
       );
     })
     .catch((error: unknown) => {
+      if (shutdownRequiresLocalHubStop && !localHubStopConfirmed) {
+        // A different cleanup failure must not turn into an app exit while
+        // the explicit server-stop proof is still pending.
+        void (async () => {
+          try {
+            await localHubStopPromise;
+          } catch (stopError) {
+            console.error("[App] Local hub termination failed:", formatUnknownError(stopError));
+          }
+          if (!localHubStopConfirmed) {
+            console.error(
+              "[App] Shutdown blocked: refusing to exit while the local hub may still be running"
+            );
+            return;
+          }
+          console.error(
+            `[App] Shutdown failed after the local hub stopped: ${formatUnknownError(error)}`
+          );
+          app.exit(1);
+        })();
+        return;
+      }
       const core = shellCore;
       shellCore = null;
       try {

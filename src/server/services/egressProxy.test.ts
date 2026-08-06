@@ -256,7 +256,7 @@ function createApprovalQueueMock(
   decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
 ): ApprovalQueue {
   return {
-    request: vi.fn(async () => decision),
+    request: vi.fn(async () => decision) as unknown as ApprovalQueue["request"],
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -271,6 +271,7 @@ function createApprovalQueueMock(
     })),
     resolve: vi.fn(),
     resolveMissionReview: vi.fn(),
+    resolveInstallReview: vi.fn(),
     submitClientConfig: vi.fn(),
     submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
@@ -298,7 +299,6 @@ function rawEgressAuthority(approvalQueue: ApprovalQueue) {
       capability,
       resourceKey,
       tier,
-      grantCode: false,
       grantStore,
     })
   );

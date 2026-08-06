@@ -70,6 +70,19 @@ describe("createEntityTitleService", () => {
     });
   });
 
+  it("notifies persisted listeners only after the title write completes", async () => {
+    const { svc } = svcWithDispatch();
+    const persisted = vi.fn();
+    svc.onPersisted(persisted);
+
+    const pending = svc.setTitle("panel:abc", "Committed title");
+    expect(persisted).not.toHaveBeenCalled();
+
+    await pending;
+
+    expect(persisted).toHaveBeenCalledWith("panel:abc", "Committed title", "set");
+  });
+
   it("collapses whitespace and strips control chars on write", async () => {
     const { svc, dispatch } = svcWithDispatch();
     await svc.setTitle("worker:1", "   Hello   world   ");
@@ -96,11 +109,25 @@ describe("createEntityTitleService", () => {
   it("mirrorCachedTitle updates the cache but does NOT call the DO", async () => {
     const { svc, dispatch } = svcWithDispatch();
     const listener = vi.fn();
+    const persisted = vi.fn();
     svc.onChanged(listener);
+    svc.onPersisted(persisted);
     svc.mirrorCachedTitle("panel:zzz", "Mirrored");
     expect(svc.getTitle("panel:zzz")).toBe("Mirrored");
     expect(dispatch.calls).toEqual([]);
     expect(listener).toHaveBeenCalledWith("panel:zzz", "Mirrored", "mirror");
+    expect(persisted).toHaveBeenCalledWith("panel:zzz", "Mirrored", "mirror");
+  });
+
+  it("does not rebroadcast an unchanged mirrored title", () => {
+    const { svc } = svcWithDispatch();
+    const persisted = vi.fn();
+    svc.onPersisted(persisted);
+
+    svc.mirrorCachedTitle("panel:stable", "Stable");
+    svc.mirrorCachedTitle("panel:stable", " Stable ");
+
+    expect(persisted).toHaveBeenCalledTimes(1);
   });
 
   it("clear() drops the cache row and writes null to the DO", async () => {
@@ -130,6 +157,21 @@ describe("createEntityTitleService", () => {
     svc.onChanged(listener);
     await svc.setTitle("panel:explicit", "Pinned", { explicit: true });
     expect(listener).toHaveBeenCalledWith("panel:explicit", "Pinned", "set-explicit");
+    expect(svc.isExplicit("panel:explicit")).toBe(true);
+  });
+
+  it("protects explicit titles from inferred writes until explicitly cleared", async () => {
+    const { svc, dispatch } = svcWithDispatch();
+    await svc.setTitle("panel:protected", "Pinned", { explicit: true });
+    await svc.setTitle("panel:protected", "Document title");
+
+    expect(svc.getTitle("panel:protected")).toBe("Pinned");
+    expect(dispatch.storedTitles.get("panel:protected")).toBe("Pinned");
+
+    await svc.setTitle("panel:protected", "", { explicit: true });
+    expect(svc.isExplicit("panel:protected")).toBe(false);
+    await svc.setTitle("panel:protected", "Document title");
+    expect(svc.getTitle("panel:protected")).toBe("Document title");
   });
 
   it("marks explicit clears distinctly", async () => {

@@ -4,6 +4,11 @@ import { randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import {
+  userlandHandleResourceKey,
+  userlandHandleBindingMatches,
+  type UserlandHandleBinding,
+} from "@vibestudio/shared/authority/userlandResources";
 import { stateLayout } from "../stateLayout.js";
 import { USERLAND_RESOURCE_HANDLE_SCHEMA } from "./userlandResourceHandleSchema.js";
 
@@ -112,7 +117,7 @@ export class UserlandResourceHandleStore {
       );
     return {
       handle,
-      resourceKey: `${input.resourceType}:handle:${handle}`,
+      resourceKey: userlandHandleResourceKey(input.resourceType, handle),
       selector: input.selector,
       presentation: { ...input.presentation },
     };
@@ -170,22 +175,42 @@ export class UserlandResourceHandleStore {
       .get(handle) as Record<string, unknown> | undefined;
     if (!row || row["revoked_at"] !== null)
       throw new Error("Unknown or revoked opaque resource handle");
-    const comparisons: Array<[keyof UserlandResourceHandleBinding, string]> = [
-      ["workspaceId", "workspace_id"],
-      ["capability", "capability"],
-      ["capabilityDefinitionDigest", "capability_definition_digest"],
-      ["provider", "provider"],
-      ["receiverSource", "receiver_source"],
-      ["receiverClass", "receiver_class"],
-      ["receiverObjectKey", "receiver_object_key"],
-      ["resourceType", "resource_type"],
-    ];
-    if (comparisons.some(([field, column]) => row[column] !== expected[field])) {
+    const actual: UserlandResourceHandleHandleRow = {
+      workspaceId: String(row["workspace_id"]),
+      capability: String(row["capability"]),
+      capabilityDefinitionDigest: String(row["capability_definition_digest"]),
+      provider: String(row["provider"]),
+      receiverSource: String(row["receiver_source"]),
+      receiverClass: String(row["receiver_class"]),
+      receiverObjectKey: String(row["receiver_object_key"]),
+      resourceType: String(row["resource_type"]),
+    };
+    const expectedBinding: UserlandHandleBinding = {
+      workspaceId: expected.workspaceId,
+      canonicalCapability: expected.capability,
+      definitionDigest: expected.capabilityDefinitionDigest,
+      provider: expected.provider,
+      receiverSource: expected.receiverSource,
+      receiverClass: expected.receiverClass,
+      receiverObjectKey: expected.receiverObjectKey,
+      resourceType: expected.resourceType,
+    };
+    const actualBinding: UserlandHandleBinding = {
+      workspaceId: actual.workspaceId,
+      canonicalCapability: actual.capability,
+      definitionDigest: actual.capabilityDefinitionDigest,
+      provider: actual.provider,
+      receiverSource: actual.receiverSource,
+      receiverClass: actual.receiverClass,
+      receiverObjectKey: actual.receiverObjectKey,
+      resourceType: actual.resourceType,
+    };
+    if (!userlandHandleBindingMatches(actualBinding, expectedBinding)) {
       throw new Error("Opaque resource handle is not valid for this receiver capability");
     }
     return {
       handle,
-      resourceKey: `${expected.resourceType}:handle:${handle}`,
+      resourceKey: userlandHandleResourceKey(expected.resourceType, handle),
       selector: String(row["selector"]),
       presentation: JSON.parse(String(row["presentation_json"])) as {
         title: string;
@@ -297,4 +322,15 @@ export class UserlandResourceHandleStore {
       .run(Date.now(), reason, ...values);
     return Number(result.changes);
   }
+}
+
+interface UserlandResourceHandleHandleRow {
+  workspaceId: string;
+  capability: string;
+  capabilityDefinitionDigest: string;
+  provider: string;
+  receiverSource: string;
+  receiverClass: string;
+  receiverObjectKey: string;
+  resourceType: string;
 }

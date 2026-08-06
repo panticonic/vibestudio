@@ -193,7 +193,8 @@ const bootstrapTier = {
   ...transportTier,
   residency: "identity" as const,
   family: "attachedHosts.identity",
-  rationale: "Mutually signed exact-generation bootstrap establishes an authenticated host identity.",
+  rationale:
+    "Mutually signed exact-generation bootstrap establishes an authenticated host identity.",
 };
 const auditTier = {
   ...transportTier,

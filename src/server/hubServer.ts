@@ -1783,6 +1783,9 @@ async function startHubControlTransport(
   const rpcServer = new RpcServer({
     tokenManager: state.tokenManager,
     dispatcher,
+    ensureUserlandDoReady: async () => {
+      throw new Error("Hub control transport cannot invoke workspace Durable Objects");
+    },
     relayAuthorization: ({ targetId }) => ({
       ok: false,
       reason: `Hub control transport cannot relay to runtime target ${targetId}`,

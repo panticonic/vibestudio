@@ -17,6 +17,7 @@ const deps = (overrides: Partial<PanelAccessPermissionDeps> = {}): PanelAccessPe
   contextExists: () => true,
   resolveCallerContext: async () => "ctx-caller",
   resolveEntityContext: () => "ctx-target",
+  controlsLifecycleContext: async () => false,
   resolveSubjectCaller: () => null,
   ...overrides,
 });
@@ -70,6 +71,21 @@ describe("preparePanelAccessAuthority", () => {
       })
     ).resolves.toEqual([]);
     expect(isEntityControlledBy).toHaveBeenCalledWith("panel:created-runtime", "panel:requester");
+  });
+
+  it("keeps lifecycle-child panel operations inside the supervising caller's authority", async () => {
+    const controlsLifecycleContext = vi.fn(async () => true);
+    await expect(
+      preparePanelAccessAuthority(deps({ controlsLifecycleContext }), ctx, "openPanel", {
+        id: "parent-panel",
+        requestedContextId: "ctx-subagent",
+      })
+    ).resolves.toEqual([]);
+    expect(controlsLifecycleContext).toHaveBeenCalledWith(
+      "panel:requester",
+      "ctx-caller",
+      "ctx-subagent"
+    );
   });
 
   it("keeps a collection agent's same-context subtree operations prompt-free", async () => {

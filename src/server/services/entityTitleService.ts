@@ -19,6 +19,7 @@
  */
 
 import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
+import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 
 export type EntityTitleChangeOrigin = "set" | "set-explicit" | "mirror" | "clear";
 
@@ -31,6 +32,8 @@ export interface EntityTitleService {
   ): Promise<void>;
   /** Synchronous read against the in-memory cache. */
   getTitle(entityId: string): string | undefined;
+  /** Whether the current title was set explicitly by the owning runtime. */
+  isExplicit(entityId: string): boolean;
   /**
    * Local cache refresh for writes that already landed in the DO via another
    * path (e.g. `workspace-state.panel.updateTitle`). Does NOT re-dispatch.
@@ -44,6 +47,10 @@ export interface EntityTitleService {
   onChanged(
     listener: (entityId: string, title: string | undefined, origin: EntityTitleChangeOrigin) => void
   ): () => void;
+  /** Subscribe to title changes after their durable WorkspaceDO write lands. */
+  onPersisted(
+    listener: (entityId: string, title: string | undefined, origin: EntityTitleChangeOrigin) => void
+  ): () => void;
   /** Drop a title — called when an entity retires. Writes through to the DO. */
   clear(entityId: string): Promise<void>;
   /**
@@ -51,24 +58,6 @@ export interface EntityTitleService {
    * boot and after a workspace switch.
    */
   hydrate(): Promise<void>;
-}
-
-const MAX_TITLE_LENGTH = 120;
-
-function sanitizeTitle(input: string | undefined | null): string | undefined {
-  if (input === undefined || input === null) return undefined;
-  // Strip C0/C1 control bytes by codepoint and collapse whitespace.
-  const cleaned = input
-    .split("")
-    .filter((ch) => {
-      const code = ch.charCodeAt(0);
-      return code >= 0x20 && code !== 0x7f;
-    })
-    .join("")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) return undefined;
-  return cleaned.length > MAX_TITLE_LENGTH ? cleaned.slice(0, MAX_TITLE_LENGTH) : cleaned;
 }
 
 export interface EntityTitleServiceOptions {
@@ -90,6 +79,10 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
   const listeners = new Set<
     (entityId: string, title: string | undefined, origin: EntityTitleChangeOrigin) => void
   >();
+  const persistedListeners = new Set<
+    (entityId: string, title: string | undefined, origin: EntityTitleChangeOrigin) => void
+  >();
+  const explicitTitles = new Set<string>();
 
   function notify(
     entityId: string,
@@ -101,6 +94,20 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
         listener(entityId, title, origin);
       } catch (error) {
         console.warn("[entityTitleService] listener failed:", error);
+      }
+    }
+  }
+
+  function notifyPersisted(
+    entityId: string,
+    title: string | undefined,
+    origin: EntityTitleChangeOrigin
+  ): void {
+    for (const listener of persistedListeners) {
+      try {
+        listener(entityId, title, origin);
+      } catch (error) {
+        console.warn("[entityTitleService] persisted listener failed:", error);
       }
     }
   }
@@ -121,36 +128,61 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
     return true;
   }
 
-  async function writeThrough(entityId: string, title: string | null): Promise<void> {
+  async function writeThrough(entityId: string, title: string | null): Promise<boolean> {
     const dispatch = getDoDispatch();
     if (!dispatch) {
       // Bootstrap hasn't wired the workspace dispatcher yet. The cache is
       // still updated by the caller, so an early-boot setter just delays
       // persistence — a subsequent setter for the same entity will land in
       // the DO once dispatch is online.
-      return;
+      return false;
     }
     try {
       await dispatch.dispatch(workspaceRef, "entitySetDisplayTitle", entityId, title);
+      return true;
     } catch (error) {
       console.warn("[entityTitleService] DO write failed:", error);
+      return false;
     }
   }
 
   return {
     async setTitle(entityId, title, options) {
-      const next = sanitizeTitle(title);
-      applyToCache(entityId, next, options?.explicit ? "set-explicit" : "set");
-      await writeThrough(entityId, next ?? null);
+      const next = normalizePanelTitle(title);
+      const origin = options?.explicit ? "set-explicit" : "set";
+      if (options?.explicit) {
+        if (next === undefined) explicitTitles.delete(entityId);
+        else explicitTitles.add(entityId);
+      } else if (explicitTitles.has(entityId)) {
+        return;
+      }
+      applyToCache(entityId, next, origin);
+      if (await writeThrough(entityId, next ?? null)) {
+        notifyPersisted(entityId, next, origin);
+      }
     },
 
     getTitle(entityId) {
       return titles.get(entityId);
     },
 
+    isExplicit(entityId) {
+      return explicitTitles.has(entityId);
+    },
+
     mirrorCachedTitle(entityId, title, options) {
-      const next = sanitizeTitle(title);
-      applyToCache(entityId, next, options?.explicit ? "set-explicit" : "mirror");
+      const next = normalizePanelTitle(title);
+      const origin = options?.explicit ? "set-explicit" : "mirror";
+      if (options?.explicit) {
+        if (next === undefined) explicitTitles.delete(entityId);
+        else explicitTitles.add(entityId);
+      } else if (explicitTitles.has(entityId)) {
+        return;
+      }
+      const changed = applyToCache(entityId, next, origin);
+      // This path is called only after another caller has already committed
+      // the same value to the WorkspaceDO.
+      if (changed) notifyPersisted(entityId, next, origin);
     },
 
     onChanged(listener) {
@@ -158,11 +190,19 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
       return () => listeners.delete(listener);
     },
 
+    onPersisted(listener) {
+      persistedListeners.add(listener);
+      return () => persistedListeners.delete(listener);
+    },
+
     async clear(entityId) {
+      explicitTitles.delete(entityId);
       if (titles.delete(entityId)) {
         notify(entityId, undefined, "clear");
       }
-      await writeThrough(entityId, null);
+      if (await writeThrough(entityId, null)) {
+        notifyPersisted(entityId, undefined, "clear");
+      }
     },
 
     async hydrate() {

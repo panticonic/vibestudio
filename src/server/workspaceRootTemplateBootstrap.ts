@@ -228,7 +228,14 @@ export class WorkspaceRootTemplateBootstrap {
     }
   }
 
-  private readDescriptor(): WorkspaceCreationDescriptor | null {
+  /**
+   * The exact root this workspace was created from, when it came from one.
+   *
+   * The creation review heads with where the code came from, so it needs the
+   * pin — and only the parts of it a person can read: the URL and the human
+   * ref. The commit stays here, in the descriptor, for audit.
+   */
+  readDescriptor(): WorkspaceCreationDescriptor | null {
     if (!fs.existsSync(this.descriptorPath)) return null;
     const descriptor = WorkspaceCreationDescriptorSchema.parse(
       JSON.parse(fs.readFileSync(this.descriptorPath, "utf8"))

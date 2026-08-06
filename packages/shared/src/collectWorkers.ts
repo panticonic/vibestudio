@@ -3,6 +3,7 @@
  * Re-exports from collectWorkers.mjs for TypeScript consumers.
  */
 
+// prettier-ignore
 // @ts-expect-error - Importing .mjs file which TypeScript allows but warns about
 import { collectWorkersFromDependencies as collect, workersToArray as toArray } from "./collectWorkers.mjs";
 
