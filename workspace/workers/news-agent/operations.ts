@@ -1,4 +1,5 @@
 import { record } from "./types.js";
+import { NEWS_METHODS } from "@workspace/feeds";
 
 /**
  * Single source of truth for the news agent's surface: model tools,
@@ -50,7 +51,7 @@ const NO_ARGS = { type: "object", properties: {}, additionalProperties: false } 
 
 export const NEWS_OPERATIONS: NewsOperation[] = [
   {
-    name: "news_add_feed",
+    name: NEWS_METHODS.addFeed,
     description:
       "Subscribe this channel to an RSS/Atom/JSON feed. The URL is validated by fetching and parsing it once; returns { feedId, title, itemCount }. weight (default 1.0) scales the feed's stories in ranking.",
     schema: {
@@ -66,7 +67,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.addFeed(channelId, args),
   },
   {
-    name: "news_import_opml",
+    name: NEWS_METHODS.importOpml,
     description:
       "Bulk-import feed subscriptions from an OPML document (e.g. an export from another reader). Validates and adds each feed; returns { imported, failed, total }.",
     schema: {
@@ -79,7 +80,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.importOpml(channelId, args),
   },
   {
-    name: "news_remove_feed",
+    name: NEWS_METHODS.removeFeed,
     description: "Unsubscribe a feed by feedId or url. Already-ingested articles are kept.",
     schema: {
       type: "object",
@@ -90,7 +91,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.removeFeed(channelId, args),
   },
   {
-    name: "setFeedEnabled",
+    name: NEWS_METHODS.setFeedEnabled,
     description: "Pause or resume polling a feed without forgetting its configuration.",
     schema: {
       type: "object",
@@ -102,7 +103,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.setFeedEnabled(channelId, args),
   },
   {
-    name: "news_follow_topic",
+    name: NEWS_METHODS.followTopic,
     description:
       "Follow a topic: each briefing run web-searches it for fresh stories. Use the user's phrasing ('Rust async runtimes', not just 'Rust').",
     schema: {
@@ -118,7 +119,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.followTopic(channelId, args),
   },
   {
-    name: "news_unfollow_topic",
+    name: NEWS_METHODS.unfollowTopic,
     description: "Stop following a topic.",
     schema: {
       type: "object",
@@ -130,7 +131,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.unfollowTopic(channelId, args),
   },
   {
-    name: "news_set_preferences",
+    name: NEWS_METHODS.setPreferences,
     description:
       "Persist the user's standing curation preferences as natural language in their own words. Replaces the previous text; fold prior preferences in rather than dropping them.",
     schema: {
@@ -143,7 +144,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.setPreferences(channelId, args),
   },
   {
-    name: "news_list_articles",
+    name: NEWS_METHODS.listArticles,
     description:
       "List ingested articles, newest first. Returns { count, articles: [{ articleId, title, url, source, blurb, publishedAt, briefedIn, read }] }. Filters: unbriefedOnly, sinceMs (epoch), limit (default 30).",
     schema: {
@@ -162,7 +163,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.listArticles(channelId, args),
   },
   {
-    name: "news_publish_briefing",
+    name: NEWS_METHODS.publishBriefing,
     description:
       "Finalize the current briefing run: writes the TLDR and per-story blurbs to the briefing card, marks kept stories as briefed, and records the briefing for day-over-day continuity. Call exactly once per briefing run. Search stories must be canonical http(s) URLs; duplicates and entries beyond the first 10 are ignored. Pass sourcesRead = how many concrete sources you actually fetched/read, for the reader's trust signal.",
     schema: {
@@ -206,7 +207,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.publishBriefing(channelId, args),
   },
   {
-    name: "news_get_briefing_history",
+    name: NEWS_METHODS.getBriefingHistory,
     description: "Previous briefings with their TLDRs, newest first. limit defaults to 5.",
     schema: {
       type: "object",
@@ -217,7 +218,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.briefingHistory(channelId, args),
   },
   {
-    name: "setSchedule",
+    name: NEWS_METHODS.setSchedule,
     description:
       "Reconfigure cadence: pollIntervalMs, briefingIntervalMs, and/or briefingAt ('HH:MM' local anchor for daily briefings; pass null to unanchor).",
     schema: {
@@ -233,7 +234,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.setSchedule(channelId, args),
   },
   {
-    name: "setBriefingPaused",
+    name: NEWS_METHODS.setBriefingPaused,
     description:
       "Pause or resume scheduled briefings ('vacation mode'). While paused, feed polling continues and manual 'Brief me now' still works.",
     schema: {
@@ -246,7 +247,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.setBriefingPaused(channelId, args),
   },
   {
-    name: "markRead",
+    name: NEWS_METHODS.markRead,
     description: "Mark articles read so ranking skips them.",
     schema: {
       type: "object",
@@ -260,7 +261,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.markRead(channelId, args),
   },
   {
-    name: "setSaved",
+    name: NEWS_METHODS.setSaved,
     description: "Bookmark (or un-bookmark) an article for the reader's Saved view.",
     schema: {
       type: "object",
@@ -272,7 +273,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.setSaved(channelId, args),
   },
   {
-    name: "searchArchive",
+    name: NEWS_METHODS.searchArchive,
     description:
       "Search ingested articles and past briefing TLDRs by keyword. Returns { query, articles, briefings }.",
     schema: {
@@ -288,7 +289,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.searchArchive(channelId, args),
   },
   {
-    name: "news_triage",
+    name: NEWS_METHODS.triage,
     description:
       "Triage a batch of newly-fetched stories for the reader feed: categorize, cluster same-event coverage, one-line summarize, and drop noise. Call once per triage turn with one item per story. The reader shows a story only after it's triaged.",
     schema: {
@@ -317,7 +318,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.triageStories(channelId, args),
   },
   {
-    name: "triageNow",
+    name: NEWS_METHODS.triageNow,
     description:
       "Trigger an on-demand triage pass over any un-triaged stories (the reader calls this when it opens with a backlog).",
     schema: NO_ARGS,
@@ -325,7 +326,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.triageNow(channelId, args),
   },
   {
-    name: "reactToStory",
+    name: NEWS_METHODS.reactToStory,
     description:
       "Record a reader's tap on a story so curation learns. reaction: 'more' (surface more like it), 'less' (fewer like it; marks it read), or 'mute_source' (avoid this source and disable its feed). Signals are folded into every future briefing.",
     schema: {
@@ -342,7 +343,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.reactToStory(channelId, args),
   },
   {
-    name: "refreshNow",
+    name: NEWS_METHODS.refreshNow,
     description:
       "Force an immediate feed poll; pass briefing: true to also run a briefing right after.",
     schema: {
@@ -354,7 +355,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.refreshNow(channelId, args),
   },
   {
-    name: "requestDeepDive",
+    name: NEWS_METHODS.requestDeepDive,
     description:
       "Request a deep-dive on a story: emits a news.deepdive.requested signal the panel turns into a forked analysis channel.",
     schema: {
@@ -368,7 +369,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.requestDeepDive(channelId, args),
   },
   {
-    name: "startDeepDive",
+    name: NEWS_METHODS.startDeepDive,
     description:
       "Initialize a freshly-forked news channel as an analyst thread and seed its opening analysis turn.",
     schema: {
@@ -388,7 +389,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     run: (ctx, channelId, args) => ctx.handlers.startDeepDive(channelId, args),
   },
   {
-    name: "getOverview",
+    name: NEWS_METHODS.getOverview,
     description: "Snapshot of feeds, topics, schedule, article counts, and last briefing.",
     schema: NO_ARGS,
     exposure: ["method"],

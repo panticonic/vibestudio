@@ -80,15 +80,6 @@ export function buildDeepDivePrompt(input: DeepDivePromptInput): string {
   return lines.join("\n");
 }
 
-export const NEWS_SETUP_ONBOARDING_PROMPT = [
-  "You've just been added to a fresh personal news channel — no sources configured yet.",
-  "Send ONE short, warm greeting that gets the user started. In it:",
-  "- Say what you do in a sentence: gather their feeds and followed topics into a digest, then brief them.",
-  "- Ask what they're into (topics, beats, or specific sites). Follow what they name with news_follow_topic and add any feed URLs with news_add_feed.",
-  "- Mention they can also tap the one-click suggestions in the reader on the left, or paste any RSS/Atom URL.",
-  "Keep it to one friendly question — don't interrogate. As they answer, follow topics, add feeds, and save standing preferences (tone, what to skip) with news_set_preferences. The setup card reflects every change you make.",
-].join("\n");
-
 export interface TriageStoryInput {
   articleId: string;
   title: string;

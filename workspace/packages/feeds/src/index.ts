@@ -16,3 +16,4 @@ export {
   type RankableArticle,
   type RankTopKOptions,
 } from "./score.js";
+export { NEWS_METHODS, type NewsMethodName } from "./news-methods.js";

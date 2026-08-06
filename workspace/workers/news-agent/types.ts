@@ -39,7 +39,6 @@ export interface NewsChannelState {
   briefingAtMinutes?: number;
   topK: number;
   setupStatus: "needs-user-preferences" | "configured";
-  setupPromptedAt?: number;
   preferencesText?: string;
   lastBriefingId?: string;
   lastRunAt?: number;

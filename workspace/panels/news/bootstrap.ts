@@ -34,6 +34,20 @@ export function newsAgentKey(contextId: string): string {
   return `news-agent-${hashContext(contextId)}`;
 }
 
+/**
+ * Reader data changes are represented by custom card events. Invocation
+ * lifecycle events are deliberately excluded: a refresh triggered by the
+ * reader's own RPC calls would otherwise create a self-sustaining refresh
+ * storm.
+ */
+export function isNewsReaderDataEvent(event: { type?: string; payload?: unknown }): boolean {
+  if (event.type !== "agentic.trajectory.v1/event") return false;
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const kind = (payload as { kind?: unknown }).kind;
+  return kind === "custom.started" || kind === "custom.updated";
+}
+
 /** Curated one-click feeds for the empty-state quick start. */
 export interface SuggestedFeed {
   label: string;

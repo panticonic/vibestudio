@@ -86,11 +86,13 @@ import {
   type NewsDeepDiveRequested,
   type NewsSetupCardState,
 } from "@workspace/feeds/card-types";
+import { NEWS_METHODS } from "@workspace/feeds";
 import {
   newsAgentKey,
   newsChannelName,
   relativeAge,
   requireNewsContextId,
+  isNewsReaderDataEvent,
   SUGGESTED_FEEDS,
   SUGGESTED_TOPICS,
 } from "./bootstrap.js";
@@ -629,12 +631,12 @@ export default function NewsPanel() {
     if (!agentParticipantId || !channelName) return;
     try {
       const [nextOverview, articleList, history] = await Promise.all([
-        callAgentParticipant("getOverview", {}) as Promise<Overview>,
-        callAgentParticipant("listArticles", {
+        callAgentParticipant(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
+        callAgentParticipant(NEWS_METHODS.listArticles, {
           limit: 60,
           triagedOnly: true,
         }) as Promise<{ articles: ArticleRow[] }>,
-        callAgentParticipant("briefingHistory", {
+        callAgentParticipant(NEWS_METHODS.getBriefingHistory, {
           limit: 12,
         }) as Promise<{ briefings: BriefingRow[] }>,
       ]);
@@ -710,7 +712,7 @@ export default function NewsPanel() {
           (article) => article.articleId === articleId
         )?.read ?? false;
       patchArticle(articleId, { read: true });
-      quietAgentCall("markRead", { articleIds: [articleId] }, () =>
+      quietAgentCall(NEWS_METHODS.markRead, { articleIds: [articleId] }, () =>
         patchArticle(articleId, { read: previous })
       );
     },
@@ -721,7 +723,7 @@ export default function NewsPanel() {
     (articleId: string, saved: boolean) => {
       patchArticle(articleId, { saved });
       if (!saved) setSavedArticles((prev) => prev.filter((a) => a.articleId !== articleId));
-      quietAgentCall("setSaved", { articleId, saved }, () => {
+      quietAgentCall(NEWS_METHODS.setSaved, { articleId, saved }, () => {
         patchArticle(articleId, { saved: !saved });
         void refresh();
       });
@@ -748,7 +750,7 @@ export default function NewsPanel() {
           (article) => article.articleId === articleId
         )?.read ?? false;
       if (reaction !== "more") patchArticle(articleId, { read: true });
-      quietAgentCall("reactToStory", { articleId, reaction }, () =>
+      quietAgentCall(NEWS_METHODS.reactToStory, { articleId, reaction }, () =>
         patchArticle(articleId, { read: previousRead })
       );
     },
@@ -798,13 +800,18 @@ export default function NewsPanel() {
             replayMode: "skip",
           });
           try {
-            await callChannelParticipant(forkClient, agent.participantId, "startDeepDive", {
-              articleId: story.articleId,
-              url: story.url,
-              title: story.title,
-              source: story.source,
-              briefingTldr: latestTldrRef.current,
-            });
+            await callChannelParticipant(
+              forkClient,
+              agent.participantId,
+              NEWS_METHODS.startDeepDive,
+              {
+                articleId: story.articleId,
+                url: story.url,
+                title: story.title,
+                source: story.source,
+                briefingTldr: latestTldrRef.current,
+              }
+            );
           } catch (err) {
             console.warn("[NewsPanel] startDeepDive failed:", err);
           } finally {
@@ -885,7 +892,7 @@ export default function NewsPanel() {
               continue;
             }
           }
-          scheduleRefresh();
+          if (isNewsReaderDataEvent(event)) scheduleRefresh();
         }
       } catch (err) {
         if (!cancelled) console.warn("[NewsPanel] channel listener stopped:", err);
@@ -937,7 +944,7 @@ export default function NewsPanel() {
     }
     if (triageInFlightRef.current || !agentParticipantId || !channelName) return;
     triageInFlightRef.current = true;
-    void callAgentParticipant("triageNow", {}).catch((err) =>
+    void callAgentParticipant(NEWS_METHODS.triageNow, {}).catch((err) =>
       console.warn("[NewsPanel] triageNow failed:", err)
     );
   }, [overview?.untriagedCount, agentParticipantId, callAgentParticipant, channelName]);
@@ -955,7 +962,7 @@ export default function NewsPanel() {
     setPendingError(null);
     let cancelled = false;
     void (
-      callAgentParticipant("listArticles", {
+      callAgentParticipant(NEWS_METHODS.listArticles, {
         untriagedOnly: true,
         limit: 50,
       }) as Promise<{ articles: ArticleRow[] }>
@@ -987,7 +994,7 @@ export default function NewsPanel() {
     if (view !== "saved" || !agentParticipantId || !channelName) return;
     let cancelled = false;
     void (
-      callAgentParticipant("listArticles", {
+      callAgentParticipant(NEWS_METHODS.listArticles, {
         savedOnly: true,
         limit: 200,
       }) as Promise<{ articles: ArticleRow[] }>
@@ -1015,7 +1022,12 @@ export default function NewsPanel() {
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      void (callAgentParticipant("searchArchive", { query, limit: 60 }) as Promise<SearchResults>)
+      void (
+        callAgentParticipant(NEWS_METHODS.searchArchive, {
+          query,
+          limit: 60,
+        }) as Promise<SearchResults>
+      )
         .then((res) => {
           if (!cancelled) setSearchResults(res);
         })
@@ -1160,9 +1172,9 @@ export default function NewsPanel() {
   );
   usePaletteCommands(paletteCommands, (id) => {
     if (id === "news-refresh") void refresh();
-    else if (id === "news-brief-now") void callAgent("refreshNow", { briefing: true });
+    else if (id === "news-brief-now") void callAgent(NEWS_METHODS.refreshNow, { briefing: true });
     else if (id === "news-mark-all-read")
-      void callAgent("markRead", { articleIds: unreadIds.slice(0, 200) });
+      void callAgent(NEWS_METHODS.markRead, { articleIds: unreadIds.slice(0, 200) });
     else if (id === "news-view-unread") setView("unread");
   });
 
@@ -1229,14 +1241,14 @@ export default function NewsPanel() {
                     size="1"
                     variant="soft"
                     disabled={busy || !agentParticipantId}
-                    onClick={() => void callAgent("refreshNow", {})}
+                    onClick={() => void callAgent(NEWS_METHODS.refreshNow, {})}
                   >
                     <ReloadIcon /> Refresh
                   </Button>
                   <Button
                     size="1"
                     disabled={busy || !agentParticipantId}
-                    onClick={() => void callAgent("refreshNow", { briefing: true })}
+                    onClick={() => void callAgent(NEWS_METHODS.refreshNow, { briefing: true })}
                   >
                     <LightningBoltIcon /> Brief me now
                   </Button>
@@ -1536,7 +1548,9 @@ export default function NewsPanel() {
                               variant="ghost"
                               disabled={busy}
                               onClick={() =>
-                                void callAgent("markRead", { articleIds: unreadIds.slice(0, 200) })
+                                void callAgent(NEWS_METHODS.markRead, {
+                                  articleIds: unreadIds.slice(0, 200),
+                                })
                               }
                             >
                               Mark all read
@@ -1647,9 +1661,11 @@ export default function NewsPanel() {
                         existingTopics={existingTopics}
                         feedDraft={feedDraft}
                         onFeedDraft={setFeedDraft}
-                        onAddFeed={(url) => void callAgent("news_add_feed", { url })}
-                        onFollowTopic={(topic) => void callAgent("news_follow_topic", { topic })}
-                        onImportOpml={(opml) => void callAgent("news_import_opml", { opml })}
+                        onAddFeed={(url) => void callAgent(NEWS_METHODS.addFeed, { url })}
+                        onFollowTopic={(topic) =>
+                          void callAgent(NEWS_METHODS.followTopic, { topic })
+                        }
+                        onImportOpml={(opml) => void callAgent(NEWS_METHODS.importOpml, { opml })}
                       />
                     ) : null}
                   </Flex>
@@ -1727,7 +1743,7 @@ function ReaderSettings({
                   size="1"
                   disabled={busy}
                   onClick={() => {
-                    callAgent("news_set_preferences", { text: prefsDraft ?? "" });
+                    callAgent(NEWS_METHODS.setPreferences, { text: prefsDraft ?? "" });
                     setPrefsDraft(null);
                   }}
                 >
@@ -1748,7 +1764,7 @@ function ReaderSettings({
                   checked={feed.enabled}
                   disabled={busy}
                   onCheckedChange={(enabled) =>
-                    callAgent("setFeedEnabled", { feedId: feed.feedId, enabled })
+                    callAgent(NEWS_METHODS.setFeedEnabled, { feedId: feed.feedId, enabled })
                   }
                 />
                 <Text size="1" truncate style={{ flex: 1, minWidth: 0 }}>
@@ -1771,7 +1787,7 @@ function ReaderSettings({
                   disabled={busy}
                   title="Remove feed"
                   aria-label="Remove feed"
-                  onClick={() => callAgent("news_remove_feed", { feedId: feed.feedId })}
+                  onClick={() => callAgent(NEWS_METHODS.removeFeed, { feedId: feed.feedId })}
                 >
                   <Cross2Icon />
                 </IconButton>
@@ -1789,7 +1805,7 @@ function ReaderSettings({
                 size="1"
                 disabled={busy || newFeedUrl.trim().length === 0}
                 onClick={() => {
-                  callAgent("news_add_feed", { url: newFeedUrl.trim() });
+                  callAgent(NEWS_METHODS.addFeed, { url: newFeedUrl.trim() });
                   setNewFeedUrl("");
                 }}
               >
@@ -1814,7 +1830,7 @@ function ReaderSettings({
                       disabled={busy}
                       title="Unfollow topic"
                       aria-label="Unfollow topic"
-                      onClick={() => callAgent("news_unfollow_topic", { topic: topic.topic })}
+                      onClick={() => callAgent(NEWS_METHODS.unfollowTopic, { topic: topic.topic })}
                     >
                       <Cross2Icon />
                     </IconButton>
@@ -1834,7 +1850,7 @@ function ReaderSettings({
                 size="1"
                 disabled={busy || newTopic.trim().length === 0}
                 onClick={() => {
-                  callAgent("news_follow_topic", { topic: newTopic.trim() });
+                  callAgent(NEWS_METHODS.followTopic, { topic: newTopic.trim() });
                   setNewTopic("");
                 }}
               >
@@ -1857,7 +1873,7 @@ function ReaderSettings({
                 disabled={busy}
                 onChange={(event) => {
                   if (event.target.value)
-                    callAgent("setSchedule", { briefingAt: event.target.value });
+                    callAgent(NEWS_METHODS.setSchedule, { briefingAt: event.target.value });
                 }}
                 style={{
                   fontSize: "var(--font-size-1)",
@@ -1876,7 +1892,9 @@ function ReaderSettings({
                 size="1"
                 checked={!setup.briefingPaused}
                 disabled={busy}
-                onCheckedChange={(active) => callAgent("setBriefingPaused", { paused: !active })}
+                onCheckedChange={(active) =>
+                  callAgent(NEWS_METHODS.setBriefingPaused, { paused: !active })
+                }
               />
             </Flex>
             {setup.scheduleSummary ? (

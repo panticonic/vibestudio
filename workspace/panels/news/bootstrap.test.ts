@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   newsAgentKey,
   newsChannelName,
+  isNewsReaderDataEvent,
   relativeAge,
   requireNewsContextId,
   SUGGESTED_FEEDS,
@@ -53,5 +54,25 @@ describe("quick-start suggestions", () => {
     }
     expect(SUGGESTED_TOPICS.length).toBeGreaterThan(0);
     expect(new Set(SUGGESTED_TOPICS).size).toBe(SUGGESTED_TOPICS.length);
+  });
+});
+
+describe("reader event refresh boundary", () => {
+  it("refreshes only for durable card state changes", () => {
+    expect(
+      isNewsReaderDataEvent({
+        type: "agentic.trajectory.v1/event",
+        payload: { kind: "custom.updated" },
+      })
+    ).toBe(true);
+    expect(
+      isNewsReaderDataEvent({
+        type: "agentic.trajectory.v1/event",
+        payload: { kind: "invocation.completed" },
+      })
+    ).toBe(false);
+    expect(isNewsReaderDataEvent({ type: "presence", payload: { kind: "custom.updated" } })).toBe(
+      false
+    );
   });
 });

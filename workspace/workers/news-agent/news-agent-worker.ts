@@ -67,7 +67,6 @@ import {
 } from "./operations.js";
 import {
   NEWS_ANALYST_PROMPT,
-  NEWS_SETUP_ONBOARDING_PROMPT,
   NEWS_SYSTEM_PROMPT,
   buildBriefingPrompt,
   buildDeepDivePrompt,
@@ -188,7 +187,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         row["briefing_at_minutes"] === null ? undefined : Number(row["briefing_at_minutes"]),
       topK: Number(row["top_k"]) || DEFAULT_TOP_K,
       setupStatus: row["setup_status"] === "configured" ? "configured" : "needs-user-preferences",
-      setupPromptedAt: (row["setup_prompted_at"] as number | null) ?? undefined,
       preferencesText: (row["preferences_text"] as string | null) ?? undefined,
       lastBriefingId: (row["last_briefing_id"] as string | null) ?? undefined,
       lastRunAt: (row["last_run_at"] as number | null) ?? undefined,
@@ -223,15 +221,14 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   private saveChannelState(state: NewsChannelState): void {
     this.sql.exec(
       `INSERT OR REPLACE INTO news_channel_state
-       (channel_id, poll_interval_ms, briefing_interval_ms, briefing_at_minutes, top_k, setup_status, setup_prompted_at, preferences_text, last_briefing_id, last_run_at, last_error, last_setup_json, mode, feedback_json, briefing_paused)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (channel_id, poll_interval_ms, briefing_interval_ms, briefing_at_minutes, top_k, setup_status, preferences_text, last_briefing_id, last_run_at, last_error, last_setup_json, mode, feedback_json, briefing_paused)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       state.channelId,
       state.pollIntervalMs,
       state.briefingIntervalMs,
       state.briefingAtMinutes ?? null,
       state.topK,
       state.setupStatus,
-      state.setupPromptedAt ?? null,
       state.preferencesText ?? null,
       state.lastBriefingId ?? null,
       state.lastRunAt ?? null,
@@ -354,12 +351,11 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     this.ensureChannelState(opts.channelId);
     // Register card types on the (new) channel so inherited/own cards render.
     await this.installChannelUi(opts.channelId);
-    // Deep-dive analyst forks are focused analysis threads: no feed polling,
-    // no setup card, no onboarding. startDeepDive seeds their opening turn.
+    // Deep-dive analyst forks are focused analysis threads: no feed polling or
+    // setup card. startDeepDive seeds their opening turn explicitly.
     if (this.getMode(opts.channelId) === "analyst") return result;
     await this.publishSetupCard(opts.channelId);
     this.seedJobs(opts.channelId);
-    await this.startSetupTurnIfNeeded(opts.channelId);
     return result;
   }
 
@@ -386,7 +382,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   /** A clone copies the parent DO's SQLite wholesale. Strip the parent
    *  channel's curator state/jobs (the clone never holds its subscription) and
    *  pre-mark the forked channel as an analyst thread, so the subscribe the
-   *  base runs next skips feed polling, the setup card, and onboarding. */
+   *  base runs next skips feed polling and the setup card. */
   protected override async onChannelForked(ctx: ClonedChannelContext): Promise<void> {
     this.scheduler.removeChannel(ctx.oldChannelId);
     this.dropChannelData(ctx.oldChannelId);
@@ -833,7 +829,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       }));
   }
 
-  // ── channel UI install & onboarding ───────────────────────────────────────
+  // ── channel UI installation ───────────────────────────────────────────────
 
   private localActor(channelId: string): ActorRef & { participantId?: string } {
     const participantId = this.subscriptions.getParticipantId(channelId);
@@ -870,18 +866,6 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         }
       },
     });
-  }
-
-  private async startSetupTurnIfNeeded(channelId: string): Promise<void> {
-    const state = this.getChannelState(channelId);
-    if (state.setupStatus === "configured" || state.setupPromptedAt) return;
-    await this.submitAgentInitiatedTurn(
-      channelId,
-      { content: NEWS_SETUP_ONBOARDING_PROMPT },
-      { mode: "sequential", steeringId: `news-setup:${channelId}` }
-    );
-    state.setupPromptedAt = this.now();
-    this.saveChannelState(state);
   }
 
   private async ensureRecovered(channelId: string): Promise<void> {

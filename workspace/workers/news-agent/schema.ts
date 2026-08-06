@@ -15,14 +15,13 @@ export function createNewsTables(sql: SqlStorage): void {
       briefing_at_minutes INTEGER,
       top_k INTEGER NOT NULL DEFAULT 12,
       setup_status TEXT NOT NULL DEFAULT 'needs-user-preferences',
-      setup_prompted_at INTEGER,
       preferences_text TEXT,
       last_briefing_id TEXT,
       last_run_at INTEGER,
       last_error TEXT,
       last_setup_json TEXT,
       -- 'curator' (normal personal channel) or 'analyst' (deep-dive fork):
-      -- analyst channels skip feed polling, the setup card, and onboarding.
+      -- analyst channels skip feed polling and the setup card.
       mode TEXT NOT NULL DEFAULT 'curator',
       -- JSON array of capped reader feedback signals (👍/👎/mute) folded into
       -- each briefing prompt so curation visibly learns from taps.

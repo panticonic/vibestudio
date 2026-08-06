@@ -337,7 +337,7 @@ describe("NewsAgentWorker", () => {
     expect(String(recovered["last_status"])).toBe("ok");
   });
 
-  it("subscribeChannel installs UI, publishes the setup card, seeds jobs, and starts onboarding", async () => {
+  it("subscribeChannel installs UI, publishes the setup card, and seeds jobs without starting a model turn", async () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1" } as never);
 
@@ -351,11 +351,10 @@ describe("NewsAgentWorker", () => {
     expect(recurringWakeAt).toBeDefined();
     expect(worker.nextAlarmForTest()?.wakeAt).toBeLessThanOrEqual(recurringWakeAt!);
 
-    expect(worker.agentInitiatedTurns).toHaveLength(1);
-    expect(worker.agentInitiatedTurns[0]!.content).toContain("fresh personal news channel");
+    expect(worker.agentInitiatedTurns).toHaveLength(0);
     // Re-subscribe does not re-prompt.
     await worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1" } as never);
-    expect(worker.agentInitiatedTurns).toHaveLength(1);
+    expect(worker.agentInitiatedTurns).toHaveLength(0);
   });
 
   it("briefing run creates a summarizing card and a self-contained turn prompt", async () => {
