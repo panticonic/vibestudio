@@ -237,6 +237,8 @@ export interface UseAgenticChatOptions {
     props?: Record<string, unknown>;
     maxHeight?: number;
   }) => void | Promise<void>;
+  /** Changes when the host resolves a workspace review that blocked connection. */
+  connectionRetrySignal?: number;
 }
 export function useAgenticChat({
   config,
@@ -260,6 +262,7 @@ export function useAgenticChat({
   initialActionBarProps,
   initialActionBarMaxHeight,
   onActionBarFileChange,
+  connectionRetrySignal,
 }: UseAgenticChatOptions): {
   contextValue: ChatContextValue;
   inputContextValue: ChatInputContextValue;
@@ -1342,6 +1345,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
     metadata,
     publishTypedAgenticEvent,
     connectionAttempt,
+    connectionRetrySignal,
   ]);
   // --- Wrap platform actions ---
   const handleAddAgent = useCallback(
@@ -1519,6 +1523,9 @@ Use package imports available to inline_ui plus relative imports for local helpe
       toolApproval: chatTools.toolApprovalValue,
       // Fork UI is enabled only when the panel wired navigation handlers.
       forkState: forkNav ? forkState : undefined,
+      // Lets subagent cards open an observer connection on a child's task
+      // channel; reuses this panel's own transport config.
+      childTranscript: { config, metadata },
     }),
     [
       core.connected,
@@ -1594,6 +1601,8 @@ Use package imports available to inline_ui plus relative imports for local helpe
       chatTools.toolApprovalValue,
       forkNav,
       forkState,
+      config,
+      metadata,
     ]
   );
   return { contextValue, inputContextValue };

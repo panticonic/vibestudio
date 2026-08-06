@@ -4,7 +4,9 @@
  * rpc (the panel-rpc harness), independent of the React/UI surface.
  */
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { pendingReviewNotice } from "@vibestudio/shared/authority/reviewPending";
 import { rpc } from "@workspace/runtime";
+import { waitForApprovalResolution } from "@workspace/pubsub";
 import {
   createAgentEntity,
   launchAgentIntoChannel,
@@ -14,6 +16,30 @@ import {
   type AgentLaunchRpc,
   type AgentSubscriptionResult,
 } from "@workspace/agentic-core";
+
+type ReviewWaiter = (approvalId: string) => Promise<void>;
+
+/**
+ * Keep one exact, idempotent lifecycle operation pending while its workspace
+ * review is open. The approval snapshot closes the race where the review is
+ * answered after the RPC is rejected but before this waiter subscribes.
+ */
+async function afterWorkspaceReview<T>(
+  operation: () => Promise<T>,
+  waitForReview: ReviewWaiter
+): Promise<T> {
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      const review = pendingReviewNotice(error);
+      if (!review) throw error;
+      await waitForReview(review.approvalId);
+    }
+  }
+}
+
+const waitForPanelReview: ReviewWaiter = (approvalId) => waitForApprovalResolution(rpc, approvalId);
 
 /**
  * Create the agent DO entity (or reactivate it), then subscribe it to the channel.
@@ -37,15 +63,19 @@ export async function createAndSubscribeAgent(args: {
   if (!args.channelContextId) {
     throw new Error("Cannot subscribe an agent DO without a context ID");
   }
-  const { subscription } = await launchAgentIntoChannel(rpc, {
-    source: args.source,
-    className: args.className,
-    key: args.key,
-    channelId: args.channelId,
-    contextId: args.channelContextId,
-    config: args.config,
-    replay: args.replay,
-  });
+  const { subscription } = await afterWorkspaceReview(
+    () =>
+      launchAgentIntoChannel(rpc, {
+        source: args.source,
+        className: args.className,
+        key: args.key,
+        channelId: args.channelId,
+        contextId: args.channelContextId,
+        config: args.config,
+        replay: args.replay,
+      }),
+    waitForPanelReview
+  );
   return subscription;
 }
 
@@ -117,7 +147,8 @@ export class ProvisionalAgentLifecycle {
 
   constructor(
     private readonly launchRpc: AgentLaunchRpc,
-    private readonly randomUuid: () => string = () => crypto.randomUUID()
+    private readonly randomUuid: () => string = () => crypto.randomUUID(),
+    private readonly waitForReview: ReviewWaiter = waitForPanelReview
   ) {}
 
   get hasStarted(): boolean {
@@ -156,12 +187,16 @@ export class ProvisionalAgentLifecycle {
       this.current = null;
       this.desired = null;
       this.claimLease = lease;
-      const subscription = await subscribeAgentToChannel(this.launchRpc, lease.entity, {
-        channelId: intent.channelId,
-        contextId: intent.channelContextId,
-        config: lease.config,
-        replay: intent.replay,
-      });
+      const subscription = await afterWorkspaceReview(
+        () =>
+          subscribeAgentToChannel(this.launchRpc, lease.entity, {
+            channelId: intent.channelId,
+            contextId: intent.channelContextId,
+            config: lease.config,
+            replay: intent.replay,
+          }),
+        this.waitForReview
+      );
       if (this.disposed) {
         await this.retireLease(lease);
         throw new Error("The chat panel closed while its provisional agent was being claimed");
@@ -251,14 +286,18 @@ export class ProvisionalAgentLifecycle {
       const handle = `${desired.intent.handleBase}-${this.randomUuid().slice(0, 4)}`;
       const key = `${handle}-${this.randomUuid().slice(0, 8)}`;
       const config = { ...desired.intent.config, handle };
-      const entity = await createAgentEntity(this.launchRpc, {
-        source: desired.intent.source,
-        className: desired.intent.className,
-        key,
-        contextId: desired.intent.channelContextId,
-        config,
-        agentChannelId: desired.intent.channelId,
-      });
+      const entity = await afterWorkspaceReview(
+        () =>
+          createAgentEntity(this.launchRpc, {
+            source: desired.intent.source,
+            className: desired.intent.className,
+            key,
+            contextId: desired.intent.channelContextId,
+            config,
+            agentChannelId: desired.intent.channelId,
+          }),
+        this.waitForReview
+      );
       const lease: ProvisionalAgentLease = {
         fingerprint: desired.fingerprint,
         intent: desired.intent,

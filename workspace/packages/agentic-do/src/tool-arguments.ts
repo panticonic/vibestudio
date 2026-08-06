@@ -9,15 +9,22 @@ export function prepareAgentToolArguments(tool: AgentTool, raw: unknown): unknow
   if (!isRecord(tool.parameters) || !(Kind in tool.parameters)) return raw;
   const mismatch = findDiscriminatorMismatch(tool.parameters, raw);
   if (mismatch) {
-    throw new Error(
-      `Invalid arguments for tool ${tool.name}: ${mismatch.path}: Expected one of ${mismatch.expected.map((value) => JSON.stringify(value)).join(", ")}; received ${JSON.stringify(mismatch.actual)}`
+    throw invalidToolArguments(
+      tool.name,
+      `${mismatch.path}: Expected one of ${mismatch.expected.map((value) => JSON.stringify(value)).join(", ")}; received ${JSON.stringify(mismatch.actual)}`
     );
   }
   const schema = specializeDiscriminatedUnions(tool.parameters, raw);
   const errors = [...Value.Errors(schema as never, raw)].slice(0, 3);
   if (errors.length === 0) return raw;
   const detail = errors.map((error) => `${error.path || "/"}: ${error.message}`).join("; ");
-  throw new Error(`Invalid arguments for tool ${tool.name}: ${detail}`);
+  throw invalidToolArguments(tool.name, detail);
+}
+
+function invalidToolArguments(toolName: string, detail: string): Error & { code: string } {
+  return Object.assign(new Error(`Invalid arguments for tool ${toolName}: ${detail}`), {
+    code: "invalid_tool_arguments",
+  });
 }
 
 function findDiscriminatorMismatch(

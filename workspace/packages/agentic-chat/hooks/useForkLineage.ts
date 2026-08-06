@@ -292,6 +292,13 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
       setSiblings([]);
       return;
     }
+    // Channel resolution belongs to the PubSub connection. During workspace
+    // adoption that connection can legitimately be waiting on the open review;
+    // probing provenance in parallel only repeats the same gated lookup and
+    // reports a recoverable readiness state as an unrelated lineage failure.
+    // Once the client exists, the service is resolved and provenance can use
+    // the normal exact target without racing startup.
+    if (!client) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -306,7 +313,7 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
     return () => {
       cancelled = true;
     };
-  }, [rpc, channelId, loadSiblings]);
+  }, [rpc, channelId, client, loadSiblings]);
 
   const lineageSubscriptionChannelId = useMemo(() => {
     if (!channelId || !provenance) return null;

@@ -64,6 +64,8 @@ export interface AgenticChatProps {
     props?: Record<string, unknown>;
     maxHeight?: number;
   }) => void | Promise<void>;
+  /** Host approval changes can unblock the initial channel connection. */
+  connectionRetrySignal?: number;
 }
 
 /**
@@ -92,6 +94,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     initialActionBarProps,
     initialActionBarMaxHeight,
     onActionBarFileChange,
+    connectionRetrySignal,
   },
   ref
 ) {
@@ -113,6 +116,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     initialActionBarProps,
     initialActionBarMaxHeight,
     onActionBarFileChange,
+    connectionRetrySignal,
   });
   useImperativeHandle(
     ref,

@@ -61,7 +61,7 @@ class TestableAiChatWorker extends AiChatWorker {
     }
     if (target === "main" && method === "blobstore.putText") {
       const value = String(args[0] ?? "");
-      const digest = `blob-${this.blobs.size + 1}`;
+      const digest = (this.blobs.size + 1).toString(16).padStart(64, "0");
       this.blobs.set(digest, value);
       return { digest, size: value.length };
     }

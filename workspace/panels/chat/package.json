@@ -46,6 +46,24 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "devices.read",
+          "resource": {
+            "kind": "exact",
+            "key": "devices.read"
+          },
+          "tier": "gated",
+          "evidence": "exact"
+        },
+        {
+          "capability": "workspaces.read",
+          "resource": {
+            "kind": "exact",
+            "key": "workspaces.read"
+          },
+          "tier": "gated",
+          "evidence": "exact"
+        },
+        {
           "capability": "approvals.decide",
           "resource": {
             "kind": "prefix",
@@ -175,6 +193,8 @@
     }
   },
   "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shell-core": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",

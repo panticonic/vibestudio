@@ -25,7 +25,10 @@ const CHAT_STATE_ARGS = {
   },
 };
 
-export const chatTranscript = suite("chat-transcript", { timeoutMs: 120_000 }).test(
+export const chatTranscript = suite("chat-transcript", {
+  timeoutMs: 120_000,
+  usesPanelAutomation: true,
+}).test(
   "renders prompt, eval bead pending→complete, and agent reply",
   async () =>
     withPanel(

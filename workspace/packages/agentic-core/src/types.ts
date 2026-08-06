@@ -50,7 +50,12 @@ export interface ConnectionConfig {
   /** Stable participant id. Panel callers should pass runtime `slotId`, not `rpc.selfId`. */
   clientId: string;
   rpc: {
-    call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;
+    call<R = unknown>(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: { timeoutMs?: number; signal?: AbortSignal }
+    ): Promise<R>;
     stream(
       targetId: string,
       method: string,

@@ -416,6 +416,18 @@ export interface SubagentProgressUpdate {
   kind: SubagentProgressKind;
   /** Child tool name, for the `tool-*` kinds. */
   tool?: string;
+  /**
+   * The child-side invocation this update belongs to (`causality.invocationId`
+   * on the folded event), present on every `tool-*` kind. Terminal updates
+   * carry no tool name of their own, so the parent pairs them back to their
+   * `tool-started` through this id and renders ONE consolidated call rather
+   * than two unrelated log lines.
+   */
+  callId?: string;
+  /** Bounded preview of the child call's arguments, on `tool-started`. */
+  args?: Record<string, unknown>;
+  /** Bounded preview of the child call's result, on `tool-completed`. */
+  result?: unknown;
   /** Bounded human-readable body: say text, progress message, failure reason. */
   text?: string;
   /** Child task-channel envelope seq this update was folded from. */

@@ -531,8 +531,17 @@
   border-color: var(--gray-a6);
 }
 
+/* A run card holds transcript-shaped content (pills, prose, an embedded
+   transcript), not a chat bubble, so it claims the full column rather than
+   sizing to its longest line — nested content gets real room to wrap. */
+.message-row:has(> .message-card-subagent) {
+  inline-size: 100%;
+}
+
 .message-card-subagent {
   position: relative;
+  inline-size: 100%;
+  min-inline-size: 0;
   border: 1px solid var(--gray-a5);
   border-inline-start: 3px solid var(--gray-a7);
   border-radius: 8px;
@@ -631,7 +640,7 @@
   opacity: 1;
 }
 
-.subagent-update-count {
+.subagent-stat {
   color: var(--gray-a10);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -648,17 +657,11 @@
   transform: rotate(180deg);
 }
 
-.subagent-timeline-time {
+.subagent-time {
   margin-inline-start: auto;
   flex: 0 0 auto;
   color: var(--gray-a9);
   font-variant-numeric: tabular-nums;
-}
-
-.subagent-say-badge {
-  flex: 0 0 auto;
-  border-radius: 4px;
-  text-transform: none;
 }
 
 .subagent-status-dot {
@@ -811,7 +814,7 @@
 /* ----- expanded details ----- */
 
 .subagent-details {
-  padding: 8px 10px 9px 12px;
+  padding: 10px 12px 12px 14px;
   border-block-start: 1px solid var(--gray-a4);
   background: var(--gray-a2);
   cursor: default;
@@ -842,215 +845,129 @@
   display: block;
 }
 
-/* Timeline: a continuous rail with tone-colored nodes per entry. */
-.subagent-timeline {
-  position: relative;
-  max-block-size: 260px;
-  overflow-y: auto;
-  padding-inline-start: 2px;
-}
-
-.subagent-timeline-item {
-  position: relative;
+/* ----- consolidated activity -----
+   No inner scroller: the run flows at full column width and the transcript
+   scrolls once. The old card nested a 260px overflow region inside the
+   already-scrolling chat, which is what made it feel cramped. */
+.subagent-activity {
   display: flex;
-  gap: 9px;
-  padding-block: 3px;
-  inline-size: 100%;
-  border: none;
-  background: none;
+  flex-direction: column;
+  gap: 6px;
+  min-inline-size: 0;
+}
+
+.subagent-activity-calls {
+  min-inline-size: 0;
+}
+
+/* Child calls reuse the parent chat's pill metrics verbatim so a nested call
+   is visibly the same object as a top-level one, just one level in. */
+.subagent-activity .inline-group {
   margin: 0;
-  padding-inline: 0;
-  font: inherit;
-  color: inherit;
-  text-align: start;
 }
 
-.subagent-timeline-item::before {
-  content: "";
-  position: absolute;
-  inset-inline-start: 3px;
-  inset-block-start: 14px;
-  inset-block-end: -8px;
-  inline-size: 1px;
-  background: var(--gray-a5);
+/* A turn boundary is structure, not an event — a hairline, not a row. */
+.subagent-turn-rule {
+  block-size: 1px;
+  margin-block: 3px;
+  background: linear-gradient(90deg, var(--gray-a5), var(--gray-a3) 40%, transparent);
 }
 
-.subagent-timeline-item-last::before {
-  display: none;
-}
+/* ----- child messages ----- */
 
-.subagent-timeline-node {
-  flex: 0 0 auto;
-  margin-block-start: 6px;
-  inline-size: 7px;
-  block-size: 7px;
-  border-radius: 999px;
-  background: var(--gray-8);
-  box-shadow: 0 0 0 2px var(--gray-2);
-}
-
-.subagent-timeline-node-live {
-  animation: subagent-pulse 1.4s ease-in-out infinite;
-}
-
-.subagent-tone-blue .subagent-timeline-node {
-  background: var(--blue-9);
-}
-
-.subagent-tone-green .subagent-timeline-node {
-  background: var(--green-9);
-}
-
-.subagent-tone-red .subagent-timeline-node {
-  background: var(--red-9);
-}
-
-.subagent-tone-amber .subagent-timeline-node {
-  background: var(--amber-9);
-}
-
-.subagent-timeline-content {
-  min-inline-size: 0;
-  flex: 1 1 auto;
-  border-radius: 5px;
-  padding: 2px 6px 3px;
-  margin-inline-start: -4px;
-}
-
-.subagent-timeline-item:has(.subagent-timeline-title-button:hover) .subagent-timeline-content,
-.subagent-timeline-item:has(.subagent-timeline-title-button:focus-visible)
-  .subagent-timeline-content,
-.subagent-timeline-item:has(.subagent-timeline-body-clamped:hover) .subagent-timeline-content {
-  background: var(--gray-a3);
-}
-
-.subagent-timeline-item:has(.subagent-timeline-title-button:focus-visible)
-  .subagent-timeline-content {
-  box-shadow: inset 0 0 0 1px var(--accent-a8);
-}
-
-.subagent-timeline-title-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-inline-size: 0;
-}
-
-.subagent-timeline-title-button {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-inline-size: 0;
-  max-inline-size: 100%;
-  border: none;
-  background: none;
-  padding: 0;
-  margin: 0;
-  border-radius: 4px;
-  font: inherit;
-  color: inherit;
-  text-align: start;
-}
-
-.subagent-timeline-title-button:focus-visible {
-  outline: none;
-}
-
-.subagent-timeline-title {
-  color: var(--gray-12);
-  overflow-wrap: anywhere;
-}
-
-.subagent-tone-red .subagent-timeline-title {
-  color: var(--red-11);
-}
-
-.subagent-timeline-chevron {
-  flex: 0 0 auto;
-  inline-size: 11px;
-  block-size: 11px;
-  color: var(--gray-a8);
-  opacity: 0;
-  transition:
-    opacity 120ms ease,
-    transform 160ms ease;
-}
-
-.subagent-timeline-title-button:hover .subagent-timeline-chevron,
-.subagent-timeline-title-button:focus-visible .subagent-timeline-chevron,
-.subagent-timeline-item-open .subagent-timeline-chevron {
-  opacity: 1;
-}
-
-.subagent-timeline-item-open .subagent-timeline-chevron {
-  transform: rotate(180deg);
-}
-
-.subagent-timeline-body {
-  display: block;
+.subagent-say {
+  position: relative;
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid var(--gray-a5);
   color: var(--gray-11);
-  white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.subagent-timeline-body .message-prose,
-.subagent-timeline-body .message-prose :where(p, li, blockquote) {
-  font-size: var(--font-size-1);
-  line-height: var(--line-height-1);
+/* Something the child chose to surface reads louder than routine turn chatter. */
+.subagent-say-salient {
+  border-inline-start-color: var(--accent-a7);
 }
 
-.subagent-timeline-body .message-prose > :first-child {
+.subagent-say-meta {
+  min-block-size: 16px;
+}
+
+.subagent-say-label {
+  color: var(--gray-a9);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 9.5px;
+}
+
+.subagent-say-salient .subagent-say-label {
+  color: var(--accent-a11);
+}
+
+.subagent-say-body .message-prose,
+.subagent-say-body .message-prose :where(p, li, blockquote) {
+  font-size: var(--font-size-1);
+  line-height: var(--line-height-2);
+}
+
+.subagent-say-body .message-prose > :first-child {
   margin-block-start: 0;
 }
 
-.subagent-timeline-body .message-prose > :last-child {
+.subagent-say-body .message-prose > :last-child {
   margin-block-end: 0;
 }
 
-.subagent-timeline-body-clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  cursor: pointer;
+/* ----- activity / transcript switch ----- */
+
+.subagent-view-switch {
+  margin-block-end: 8px;
 }
 
-/* ----- identifiers disclosure ----- */
-
-.subagent-ids-section {
-  margin-block-start: 8px;
-  padding-block-start: 6px;
-  border-block-start: 1px dashed var(--gray-a4);
-}
-
-.subagent-ids-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: none;
+.subagent-view-tab {
+  border: 1px solid transparent;
   background: none;
-  padding: 2px 4px;
-  margin-inline-start: -4px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
   font: inherit;
   font-size: var(--font-size-1);
   color: var(--gray-a10);
   cursor: pointer;
 }
 
-.subagent-ids-toggle:hover {
+.subagent-view-tab:hover {
   color: var(--gray-12);
   background: var(--gray-a3);
 }
 
-.subagent-ids-chevron {
-  inline-size: 11px;
-  block-size: 11px;
-  transition: transform 160ms ease;
+.subagent-view-tab-active {
+  color: var(--gray-12);
+  border-color: var(--gray-a6);
+  background: var(--gray-a4);
 }
 
-.subagent-ids-chevron-open {
-  transform: rotate(180deg);
+/* ----- embedded child transcript ----- */
+
+.subagent-transcript {
+  min-inline-size: 0;
+  margin-inline-start: -4px;
+}
+
+.subagent-transcript-loading,
+.subagent-transcript-empty,
+.subagent-transcript-error {
+  padding-block: 4px;
+}
+
+/* ----- identifiers popover ----- */
+
+.subagent-ids-popover {
+  max-inline-size: 320px;
+}
+
+.subagent-ids-heading {
+  display: block;
+  margin-block-end: 6px;
+  color: var(--gray-a11);
 }
 
 .subagent-detail-grid {

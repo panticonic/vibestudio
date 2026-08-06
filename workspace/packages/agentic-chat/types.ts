@@ -48,6 +48,7 @@ import type { ScopeManager, ScopesApi } from "@workspace/eval";
 import type { MessageTier } from "@workspace/agentic-protocol";
 import type { DefaultAgentConfig } from "@workspace/model-catalog/catalog";
 import type { AgentConfigDraft } from "./components/AgentConfigForm";
+import type { ChildTranscriptConnection } from "./hooks/useChildTranscript";
 import type {
   ChatParticipantMetadata,
   ChatSandboxValue,
@@ -349,7 +350,7 @@ export interface ChatContextValue {
    * reconnect. Rendered inline at the top of the chat by `ChatLayout`
    * so silent stalls become visibly broken.
    */
-  connectionError: { message: string; at: number } | null;
+  connectionError: { message: string; at: number; cause?: unknown } | null;
   /** Clear the current connectionError (e.g., after a retry). */
   dismissConnectionError?: () => void;
   /** Re-run the initial channel connection after a terminal failure. */
@@ -485,6 +486,14 @@ export interface ChatContextValue {
   /** Fork lineage state + actions (switcher, tree, inline rows, subagent
    *  review). Absent on hosts that don't wire fork navigation. */
   forkState?: ForkUiState;
+
+  /**
+   * Connection material letting a subagent run card lazily observe the child's
+   * own task channel and render its real transcript inline. Absent on hosts
+   * without a live connection (tests, static transcript views), where cards
+   * fall back to the relayed progress feed.
+   */
+  childTranscript?: ChildTranscriptConnection;
 }
 
 /** Which await a loading message type is currently parked on. */

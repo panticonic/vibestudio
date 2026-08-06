@@ -194,6 +194,18 @@ export class EffectOutbox {
     );
   }
 
+  /** Rewrite the durable descriptor of an unresolved row (used to record
+   * monotonic lifecycle facts such as the deferred-eval `started` ack). The
+   * row identity, kind, and scheduling columns are untouched. */
+  updateDescriptor(branchId: string, effectId: string, descriptor: EffectDescriptor): void {
+    this.sql.exec(
+      `UPDATE effect_outbox SET descriptor_json = ? WHERE branch_id = ? AND effect_id = ?`,
+      JSON.stringify(descriptor),
+      branchId,
+      effectId
+    );
+  }
+
   delete(branchId: string, effectId: string): void {
     this.sql.exec(
       `DELETE FROM effect_outbox WHERE branch_id = ? AND effect_id = ?`,

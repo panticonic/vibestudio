@@ -19,6 +19,7 @@ import {
   type AgentState,
   type AppendItem,
   type EffectDescriptor,
+  type EffectKind,
   type EffectOutcome,
   type Incoming,
   type StepContext,
@@ -29,6 +30,8 @@ import {
 } from "@workspace/agent-loop";
 import {
   AGENTIC_PROTOCOL_VERSION,
+  agentToolFailureFromUnknown,
+  renderAgentToolFailure,
   classifyGadAppendError,
   encodeAgenticEventStoredValues,
   hydrateStoredValueRefs,
@@ -52,6 +55,7 @@ import {
 import { ensureFoldCacheSchema, FoldCache, type GadPort } from "./fold-cache.js";
 import {
   executorFor,
+  type EffectDeferral,
   type EffectExecutor,
   type EphemeralEmit,
   type ExecutorDeps,
@@ -65,6 +69,73 @@ export interface LoopInstance {
   head: string;
   state: AgentState;
   step: StepFn;
+}
+
+function assertDeferralMatchesEffect(kind: EffectKind, reason: EffectDeferral["reason"]): void {
+  switch (kind) {
+    case "model_call":
+    case "http_call":
+      if (reason === "authority") return;
+      break;
+    case "local_tool":
+    case "channel_call":
+    case "credential_wait":
+      if (reason === "external-result") return;
+      break;
+    case "prompt_artifacts":
+    case "publish_envelope":
+      break;
+  }
+  throw new Error(`Effect ${kind} cannot defer for ${reason}`);
+}
+
+/** Typed failure code for a deferred eval whose durable run is irrecoverably
+ * gone (EvalDO run row lost after an acknowledged start, or a persistent
+ * infrastructure failure exhausted the retry budget). Mirrors the eval
+ * schema's `runtime_generation_lost` failure code (failureKind
+ * "infrastructure"). */
+export const RUNTIME_GENERATION_LOST_CODE = "runtime_generation_lost";
+
+/** Durable started-ack marker persisted inside the outbox row's descriptor. */
+type DeferredEvalDescriptorMarker = { deferredEvalStarted?: boolean };
+
+function isDeferredEvalRow(row: OutboxRow): boolean {
+  return row.descriptor.kind === "local_tool" && row.descriptor.tool === "eval";
+}
+
+/** Typed terminal for an irrecoverably lost deferred eval run. Carries
+ * `terminalReasonCode`/`terminalOutcome` so the trajectory invocation.failed
+ * event is UI-distinguishable from an ordinary tool failure. */
+function deferredEvalRuntimeLostOutcome(row: OutboxRow, message: string): EffectOutcome {
+  const invocationId = row.descriptor.kind === "local_tool" ? row.descriptor.invocationId : "";
+  const failure = agentToolFailureFromUnknown(
+    { message, code: RUNTIME_GENERATION_LOST_CODE },
+    {
+      operation: "tool.eval",
+      stage: "execute",
+      causal: { invocationId },
+      kind: "infrastructure",
+    }
+  );
+  return {
+    kind: "tool",
+    result: {
+      protocolContent: [{ type: "text", text: renderAgentToolFailure(failure) }],
+      details: {
+        success: false,
+        console: "",
+        error: message,
+        failureKind: "infrastructure",
+        failureCode: RUNTIME_GENERATION_LOST_CODE,
+        failure,
+      },
+    },
+    isError: true,
+    reason: message,
+    terminalOutcome: "infrastructure_error",
+    terminalReasonCode: RUNTIME_GENERATION_LOST_CODE,
+    failure,
+  };
 }
 
 interface ActiveEffectDispatch {
@@ -1178,6 +1249,19 @@ export class AgentLoopDriver {
     this.scheduleEarliest();
   }
 
+  /** A channel method can complete from the live invocation stream before the
+   * model outcome that derives its channel_call row has finished committing.
+   * Keep that terminal retryable while its consumer can still materialize;
+   * once the model is settled and no matching effect is expected, a replay is
+   * an ordinary already-consumed duplicate. */
+  async channelCallMayMaterialize(channelId: string, effectId: string): Promise<boolean> {
+    const loop = await this.loop(channelId);
+    if (loop.state.inFlightModelCall) return true;
+    return derivePendingEffects(loop.state).some(
+      (effect) => effect.effectId === effectId && effect.kind === "channel_call"
+    );
+  }
+
   scheduleEarliest(): void {
     const earliest = this.nextWakeAt();
     if (earliest != null) {
@@ -1317,7 +1401,7 @@ export class AgentLoopDriver {
       })) as EffectDescriptor
     );
     dispatchProgress.phase = "execute";
-    let outcome: EffectOutcome | { deferred: true };
+    let outcome: EffectOutcome | EffectDeferral;
     try {
       const execution = executor.execute({
         descriptor,
@@ -1429,7 +1513,7 @@ export class AgentLoopDriver {
       }
       const updated = this.outbox.recordFailure(row.branchId, row.effectId, this.deps.now());
       if (updated && updated.attempts >= maxAttempts(updated.kind)) {
-        await this.failEffect(updated, { message });
+        await this.settleExhaustedEffect(updated, message);
       } else {
         this.scheduleEarliest();
       }
@@ -1448,7 +1532,8 @@ export class AgentLoopDriver {
     ) {
       return;
     }
-    if ((outcome as { deferred?: boolean }).deferred) {
+    if ("deferred" in outcome && outcome.deferred) {
+      assertDeferralMatchesEffect(row.kind, outcome.reason);
       // Result arrives out-of-band. Keep an earlier wake if the result raced
       // this deferred ack; otherwise redrive later as a backstop.
       this.deferRedrive(row, 60_000);
@@ -1668,7 +1753,7 @@ export class AgentLoopDriver {
       outcome.retryAfterMs
     );
     if (updated && updated.attempts >= maxAttempts(updated.kind)) {
-      await this.failEffect(updated, { message: outcome.reason });
+      await this.settleExhaustedEffect(updated, outcome.reason);
       return;
     }
     this.scheduleEarliest();
@@ -1830,24 +1915,121 @@ export class AgentLoopDriver {
   }
 
   /**
-   * A host wake hint says at least one authority acquisition owned by this
-   * vessel changed state. The outbox remains the continuation: make parked
-   * HTTP effects immediately eligible for exact redrive, while
-   * generation-fenced claims still prevent duplicate execution.
+   * A host wake hint says authority owned by this vessel changed state.
+   * `model_call` and `http_call` are the only effect kinds whose typed
+   * deferral reason may be `authority`; every other parked kind awaits an
+   * external result and must remain parked. Recording the wake on a leased
+   * row is safe (leased rows are not dispatchable) and closes the race where
+   * approval resolves just before the executor acknowledges its deferral.
    */
   nudgeAuthorityRedrive(): void {
     const now = this.deps.now();
     this.deps.sql.exec(
       `UPDATE effect_outbox
        SET next_attempt_at = ?
-       WHERE kind = 'http_call'
-         AND disposition != 'leased'
+       WHERE kind IN ('model_call', 'http_call')
+         AND disposition IN ('parked', 'leased')
          AND (next_attempt_at IS NULL OR next_attempt_at > ?)`,
       now,
       now
     );
     this.requestPump();
     this.scheduleEarliest();
+  }
+
+  // ── Deferred-eval durable lifecycle ────────────────────────────────────────
+  //
+  // The outbox row IS the deferred-eval run record — one durable source of
+  // truth. `effectId` is the EvalDO runId, `disposition` is the scheduling
+  // state, and the descriptor carries the monotonic `deferredEvalStarted`
+  // fact once `eval.start` was acknowledged. Transitions:
+  //
+  //   inserted → (dispatch, eval.start acked) started+parked
+  //           → settled (terminal push / eval.get backstop / redrive)
+  //           |  cancel-intent (vessel table) → cancelled by EvalDO.
+  //
+  // "Never re-execute a started run" is structural: once `deferredEvalStarted`
+  // is durably recorded, every later dispatch of the row takes the read-only
+  // eval.get recovery path (agent-vessel runDeferredEval) and a missing run
+  // row settles as the typed `runtime_generation_lost` infrastructure failure
+  // instead of a second eval.start. All redrive triggers are lifecycle events
+  // (resume, terminal delivery, authority nudge); the ~60s parked-row alarm
+  // remains only as the delivery-loss backstop.
+
+  /** Durable enumeration of unresolved deferred-eval runs. The vessel's
+   * in-memory per-channel run map is only a cache of this. */
+  deferredEvalRows(channelId?: string): OutboxRow[] {
+    return this.outbox
+      .all()
+      .filter(
+        (row) => isDeferredEvalRow(row) && (channelId === undefined || row.channelId === channelId)
+      );
+  }
+
+  /** Durably record that EvalDO acknowledged eval.start for this run. A
+   * missing row (row already settled, or a direct gate probe without an
+   * outbox row) is a no-op. Monotonic: never cleared while the row lives. */
+  markDeferredEvalStarted(channelId: string, effectId: string): void {
+    const row = this.outbox.getForChannel(channelId, effectId);
+    if (!row || !isDeferredEvalRow(row)) return;
+    if ((row.descriptor as DeferredEvalDescriptorMarker).deferredEvalStarted === true) return;
+    this.outbox.updateDescriptor(row.branchId, row.effectId, {
+      ...row.descriptor,
+      deferredEvalStarted: true,
+    } as unknown as EffectDescriptor);
+  }
+
+  /** True when a previous activation durably recorded a successful
+   * eval.start for this run — the run identity is settled and it must never
+   * be started again. */
+  hasDeferredEvalStarted(channelId: string, effectId: string): boolean {
+    const row = this.outbox.getForChannel(channelId, effectId);
+    if (!row || !isDeferredEvalRow(row)) return false;
+    return (row.descriptor as DeferredEvalDescriptorMarker).deferredEvalStarted === true;
+  }
+
+  /** A workerd generation change invalidates every in-memory eval completion
+   * bridge. Redrive parked eval effects so their durable started-flag +
+   * eval.get pair reconciles the canonical terminal immediately. Leased rows
+   * stay leased — "leased rows are not dispatchable" is the invariant the
+   * authority nudge relies on — we only re-arm their wake time so the normal
+   * lease-release/recovery path redrives them promptly. */
+  reconcileDeferredEvalRuns(): void {
+    let changed = false;
+    for (const row of this.outbox.all()) {
+      if (!isDeferredEvalRow(row)) continue;
+      if (row.disposition === "parked") {
+        this.nudgeRedrive(row);
+        changed = true;
+      } else if (row.disposition === "leased") {
+        // Data-safe: keep the disposition (the claim still owns the row) and
+        // only advance the wake, exactly like nudgeAuthorityRedrive.
+        this.deps.sql.exec(
+          `UPDATE effect_outbox
+           SET next_attempt_at = ?
+           WHERE branch_id = ? AND effect_id = ? AND disposition = 'leased'`,
+          this.deps.now(),
+          row.branchId,
+          row.effectId
+        );
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    this.requestPump();
+    this.scheduleEarliest();
+  }
+
+  /** Retry budget exhausted. A deferred eval that exhausts its budget against
+   * a persistent infrastructure failure settles as the TYPED
+   * `runtime_generation_lost` infrastructure terminal (UI-distinguishable),
+   * not a generic effect-failed message. */
+  private async settleExhaustedEffect(row: OutboxRow, message: string): Promise<void> {
+    if (isDeferredEvalRow(row)) {
+      await this.applyOutcome(row, deferredEvalRuntimeLostOutcome(row, message));
+      return;
+    }
+    await this.failEffect(row, { message });
   }
 
   async failEffect(row: OutboxRow, error: { message: string }): Promise<void> {

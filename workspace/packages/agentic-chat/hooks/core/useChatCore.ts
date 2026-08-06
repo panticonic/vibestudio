@@ -157,7 +157,7 @@ export interface ChatCoreState {
   status: string;
   /** Last connection-layer error (subscribe failure, event-stream rejection).
    *  Surfaced via `ConnectionManager.onError`. Cleared by `dismissConnectionError`. */
-  connectionError: { message: string; at: number } | null;
+  connectionError: { message: string; at: number; cause?: unknown } | null;
   dismissConnectionError: () => void;
   client: PubSubClient<ChatParticipantMetadata> | null;
   clientRef: React.RefObject<PubSubClient<ChatParticipantMetadata> | null>;
@@ -309,7 +309,7 @@ export function useChatCore({
         },
         onError: (err) => {
           console.error("[useChatCore] connection error:", err);
-          setConnectionError({ message: err.message, at: Date.now() });
+          setConnectionError({ message: err.message, at: Date.now(), cause: err });
         },
         onEvent: (event: IncomingEvent) => {
           // --- Agent debug signal events ---
@@ -381,9 +381,11 @@ export function useChatCore({
   const [client, setClient] = useState<PubSubClient<ChatParticipantMetadata> | null>(null);
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState("Connecting...");
-  const [connectionError, setConnectionError] = useState<{ message: string; at: number } | null>(
-    null
-  );
+  const [connectionError, setConnectionError] = useState<{
+    message: string;
+    at: number;
+    cause?: unknown;
+  } | null>(null);
   const dismissConnectionError = useCallback(() => setConnectionError(null), []);
   const [selfId, setSelfId] = useState<string | null>(null);
   const [participants, setParticipants] = useState<
@@ -881,6 +883,7 @@ export function useChatCore({
               ? `Couldn't stop the agent: ${err.message}`
               : "Couldn't stop the agent. Try again.",
           at: Date.now(),
+          cause: err,
         });
       }
     },
@@ -1073,6 +1076,7 @@ export function useChatCore({
                 ? `Couldn't cancel the tool call: ${err.message}`
                 : "Couldn't cancel the tool call. Try again.",
             at: Date.now(),
+            cause: err,
           });
         }
         return;
@@ -1101,6 +1105,7 @@ export function useChatCore({
                 ? `Couldn't cancel the tool call: ${err.message}`
                 : "Couldn't cancel the tool call. Try again.",
             at: Date.now(),
+            cause: err,
           });
         }
       }

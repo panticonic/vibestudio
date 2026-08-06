@@ -234,6 +234,23 @@ describe("HeadlessSession", () => {
     expect((session as any)._client.callMethod).not.toHaveBeenCalled();
   });
 
+  it("propagates direct interruption cancellation options to the RPC boundary", async () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    const rpcCall = vi.fn(async () => ({ interrupted: true }));
+    const signal = new AbortController().signal;
+    (session as any)._agentRpcCall = rpcCall;
+    (session as any)._channelId = "ch-direct";
+
+    await session.interrupt("agent-direct", { timeoutMs: 2_000, signal });
+
+    expect(rpcCall).toHaveBeenCalledWith(
+      "agent-direct",
+      "interruptChannel",
+      ["ch-direct"],
+      { timeoutMs: 2_000, signal }
+    );
+  });
+
   it("finishes shared-context unsubscribe before retiring the agent entity", async () => {
     const session = HeadlessSession.create({
       config: createConfig(),

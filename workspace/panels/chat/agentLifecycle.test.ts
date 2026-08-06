@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentLaunchRpc } from "@workspace/agentic-core";
 
 const mocks = vi.hoisted(() => ({
+  waitForApprovalResolution: vi.fn(async () => undefined),
   call: vi.fn(async (_target: string, method: string, args: unknown[]) => {
     if (method === "runtime.createEntity") {
       const spec = args[0] as { key: string; contextId?: string };
@@ -18,6 +19,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@workspace/runtime", () => ({ rpc: { call: mocks.call } }));
+vi.mock("@workspace/pubsub", () => ({
+  waitForApprovalResolution: mocks.waitForApprovalResolution,
+}));
 
 import {
   ProvisionalAgentLifecycle,
@@ -30,7 +34,10 @@ function callsFor(method: string): unknown[][] {
 }
 
 describe("createAndSubscribeAgent (panel-rpc harness)", () => {
-  beforeEach(() => mocks.call.mockClear());
+  beforeEach(() => {
+    mocks.call.mockClear();
+    mocks.waitForApprovalResolution.mockClear();
+  });
 
   it("seeds per-agent settings into creation stateArgs; subscription is presentation-only", async () => {
     const result = await createAndSubscribeAgent({
@@ -115,6 +122,50 @@ describe("createAndSubscribeAgent (panel-rpc harness)", () => {
     expect(createSpec.contextId).toBe("ctx-1");
   });
 
+  it("keeps activation pending across the exact workspace review", async () => {
+    let subscriptionAttempts = 0;
+    mocks.call.mockImplementation(async (_target: string, method: string, args: unknown[]) => {
+      if (method === "runtime.createEntity") {
+        const spec = args[0] as { key: string; contextId?: string };
+        const id = `do:workers/agent-worker:AiChatWorker:${spec.key}`;
+        return { id, targetId: id, contextId: spec.contextId };
+      }
+      subscriptionAttempts += 1;
+      if (subscriptionAttempts === 1) {
+        throw Object.assign(new Error("Waiting for workspace review"), {
+          code: "EREVIEWPENDING",
+          errorData: {
+            authorityFailure: {
+              remediation: {
+                review: {
+                  approvalId: "review-welcome",
+                  title: "Welcome — here's what's in your workspace",
+                },
+              },
+            },
+          },
+        });
+      }
+      return { ok: true, participantId: "p-1" };
+    });
+
+    await expect(
+      createAndSubscribeAgent({
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "k",
+        channelId: "ch-1",
+        channelContextId: "ctx-1",
+      })
+    ).resolves.toEqual({ ok: true, participantId: "p-1" });
+
+    expect(mocks.waitForApprovalResolution).toHaveBeenCalledWith(
+      expect.objectContaining({ call: mocks.call }),
+      "review-welcome"
+    );
+    expect(subscriptionAttempts).toBe(2);
+  });
+
   it("refuses to subscribe without a context id", async () => {
     await expect(
       createAndSubscribeAgent({
@@ -188,6 +239,43 @@ describe("ProvisionalAgentLifecycle", () => {
         }),
       ]
     );
+  });
+
+  it("waits for an open review instead of failing the provisional claim", async () => {
+    const rpc = lifecycleRpc();
+    let attempts = 0;
+    rpc.call.mockImplementation(async (_target, method, args) => {
+      if (method === "runtime.createEntity") {
+        const spec = args[0] as { key: string; contextId: string };
+        const id = `do:workers/agent-worker:AiChatWorker:${spec.key}`;
+        return { id, targetId: id, contextId: spec.contextId };
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        throw Object.assign(new Error("Waiting for workspace review"), {
+          code: "EREVIEWPENDING",
+          errorData: {
+            authorityFailure: {
+              remediation: {
+                review: { approvalId: "review-welcome", title: "Welcome" },
+              },
+            },
+          },
+        });
+      }
+      return { ok: true, participantId: "participant-1" };
+    });
+    const waitForReview = vi.fn(async () => undefined);
+    const lifecycle = new ProvisionalAgentLifecycle(rpc, () => "aaaaaaaa", waitForReview);
+    const intent = provisionalIntent("openai:gpt-5.3");
+
+    await lifecycle.prepare(intent);
+    await expect(lifecycle.claim(intent)).resolves.toMatchObject({
+      subscription: { ok: true, participantId: "participant-1" },
+    });
+
+    expect(waitForReview).toHaveBeenCalledWith("review-welcome");
+    expect(attempts).toBe(2);
   });
 
   it("retires a mismatched provisional entity before warming the new draft", async () => {

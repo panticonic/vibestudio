@@ -652,9 +652,11 @@ function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotic
             ? "Context window exceeded"
             : metadata.failureCode === "request_invalid_terminal"
               ? "Invalid model request"
-              : metadata.severity === "error"
-                ? "Message failed"
-                : "No assistant response",
+              : metadata.failureCode === "infrastructure_terminal"
+                ? "Vibestudio service failed"
+                : metadata.severity === "error"
+                  ? "Message failed"
+                  : "No assistant response",
     detail: content,
     reason: metadata.reason,
     recoverable: metadata.recoverable,

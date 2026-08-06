@@ -383,6 +383,10 @@ export type SessionEntry =
       name: string;
       result: unknown;
       isError: boolean;
+      /** Retained so a terminal infrastructure failure cannot be forgotten
+       * while parallel sibling invocations are still settling. */
+      terminalOutcome?: "tool_error" | "infrastructure_error";
+      terminalReasonCode?: string;
     }
   | { kind: "note"; seq: number; text: string };
 

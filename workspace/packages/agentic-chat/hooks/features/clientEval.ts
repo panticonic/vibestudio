@@ -80,9 +80,22 @@ function runtimeHelp(topic?: string): unknown {
       | Record<string, unknown>
       | undefined) ?? {};
   if (topic) {
-    const value = moduleMap[topic];
+    const runtimeModule = moduleMap["@workspace/runtime"] as Record<string, unknown> | undefined;
+    const segments = topic.split(".");
+    let value: unknown = moduleMap[topic] ?? runtimeModule?.[segments[0]!];
+    for (const segment of segments.slice(1)) {
+      value =
+        value && (typeof value === "object" || typeof value === "function")
+          ? (value as Record<string, unknown>)[segment]
+          : undefined;
+    }
     return value && (typeof value === "object" || typeof value === "function")
-      ? { module: topic, exports: Object.keys(value) }
+      ? {
+          module: topic,
+          surface: moduleMap[topic] === value ? "loaded-module" : "runtime-export",
+          kind: typeof value,
+          exports: Object.keys(value),
+        }
       : { module: topic, available: false };
   }
   return {

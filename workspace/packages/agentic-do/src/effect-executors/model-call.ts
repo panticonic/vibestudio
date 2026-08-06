@@ -32,6 +32,7 @@ import { buildRawThinkingOptions, type RawThinkingModel } from "./pi-raw-thinkin
 import {
   CredentialApprovalDeferredError,
   CredentialPendingError,
+  type EffectDeferral,
   type EffectExecutor,
   type EphemeralEmit,
 } from "./types.js";
@@ -351,7 +352,7 @@ function stableShortHash(input: string): string {
   return `${(h2 >>> 0).toString(36).padStart(7, "0")}${(h1 >>> 0).toString(36).padStart(7, "0")}`;
 }
 
-function toPiMessages(messages: ModelMessage[]): Message[] {
+export function toPiMessages(messages: ModelMessage[]): Message[] {
   assertToolResultsHaveAssistantCalls(messages);
   const out: Message[] = [];
   for (const message of messages) {
@@ -377,13 +378,48 @@ function toPiMessages(messages: ModelMessage[]): Message[] {
         role: "toolResult",
         toolCallId: message.toolCallId ?? "",
         toolName: message.toolName ?? "",
-        content: [{ type: "text", text: safeText(message.content) }],
+        content: modelFacingToolResultContent(message.content),
         isError: message.isError ?? false,
         timestamp: 0,
       } as unknown as Message);
     }
   }
   return out;
+}
+
+type ModelFacingToolBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+/** Keep tool protocol content separate from diagnostic/UI details and preserve
+ * screenshots as native multimodal blocks instead of base64 language text. */
+export function modelFacingToolResultContent(value: unknown): ModelFacingToolBlock[] {
+  const record = isRecord(value) ? value : null;
+  const rawBlocks = Array.isArray(value)
+    ? value
+    : Array.isArray(record?.["protocolContent"])
+      ? record!["protocolContent"]
+      : Array.isArray(record?.["content"])
+        ? record!["content"]
+        : null;
+  if (!rawBlocks) return [{ type: "text", text: safeText(value) }];
+
+  const blocks: ModelFacingToolBlock[] = [];
+  for (const raw of rawBlocks) {
+    if (!isRecord(raw)) continue;
+    if (raw["type"] === "text" && typeof raw["text"] === "string") {
+      blocks.push({ type: "text", text: raw["text"] });
+      continue;
+    }
+    if (
+      raw["type"] === "image" &&
+      typeof raw["data"] === "string" &&
+      typeof raw["mimeType"] === "string"
+    ) {
+      blocks.push({ type: "image", data: raw["data"], mimeType: raw["mimeType"] });
+    }
+  }
+  return blocks.length > 0 ? blocks : [{ type: "text", text: safeText(value) }];
 }
 
 function assertToolResultsHaveAssistantCalls(messages: ModelMessage[]): void {
@@ -670,8 +706,7 @@ function deterministicTestModeModelOutcome(
     descriptor.request.activeToolNames.includes("eval")
   ) {
     const evalCompleted = state.entries.some(
-      (entry) =>
-        entry.kind === "tool-result" && entry.seq >= turnOpenedAt && entry.name === "eval"
+      (entry) => entry.kind === "tool-result" && entry.seq >= turnOpenedAt && entry.name === "eval"
     );
     if (!evalCompleted) {
       const urlLiteral = JSON.stringify(requestedWebUrl);
@@ -699,9 +734,7 @@ function deterministicTestModeModelOutcome(
   } else if (requestedWebUrl && descriptor.request.activeToolNames.includes("web_fetch")) {
     const webFetchCompleted = state.entries.some(
       (entry) =>
-        entry.kind === "tool-result" &&
-        entry.seq >= turnOpenedAt &&
-        entry.name === "web_fetch"
+        entry.kind === "tool-result" && entry.seq >= turnOpenedAt && entry.name === "web_fetch"
     );
     if (!webFetchCompleted) {
       return {
@@ -882,7 +915,7 @@ async function executeModelCall(
     onModelExecutionAttempt,
   }: Parameters<EffectExecutor<ModelCallEffect>["execute"]>[0],
   progress: ModelCallProgress
-): Promise<EffectOutcome | { deferred: true }> {
+): Promise<EffectOutcome | EffectDeferral> {
   const request = descriptor.request;
   const throwIfAborted = () => {
     if (!signal.aborted) return;
@@ -905,6 +938,13 @@ async function executeModelCall(
   const modelSpec = request.modelSpec;
   const modelBaseUrl = request.modelBaseUrl ?? modelSpec.baseUrl;
 
+  if (!request.systemPromptHash) {
+    const error = new Error(
+      "Vibestudio model setup invariant failed: the system prompt artifact is not ready"
+    );
+    error.name = "PromptArtifactInvariantError";
+    throw error;
+  }
   const systemPromptPromise = deps.blobstore.getText(request.systemPromptHash);
   const toolsJsonPromise = request.toolSchemasHash
     ? deps.blobstore.getText(request.toolSchemasHash)
@@ -921,7 +961,12 @@ async function executeModelCall(
       "VIBESTUDIO_TEST_MODE"
     ] === "1";
   const testModeOutcome = testModeEnabled
-    ? deterministicTestModeModelOutcome(descriptor, state, (await systemPromptPromise) ?? "", deps.env)
+    ? deterministicTestModeModelOutcome(
+        descriptor,
+        state,
+        (await systemPromptPromise) ?? "",
+        deps.env
+      )
     : null;
   if (testModeOutcome) {
     trace("test-mode.completed");
@@ -1001,7 +1046,7 @@ async function executeModelCall(
     } catch (err) {
       throwIfAborted();
       if (err instanceof CredentialApprovalDeferredError) {
-        return { deferred: true };
+        return { deferred: true, reason: "authority" };
       }
       if (err instanceof CredentialPendingError) {
         trace("credential.pending", {
@@ -1041,11 +1086,16 @@ async function executeModelCall(
     modelContextForPolicy(state, request.contextThroughSeq, request.turnMetadata?.contextPolicy),
     { getText: (digest) => deps.blobstore.getText(digest) }
   )) as ModelMessage[];
+  const modelFacingMessages = hydratedMessages.map((message) =>
+    message.role === "toolResult"
+      ? { ...message, content: modelFacingToolResultContent(message.content) }
+      : message
+  );
   throwIfAborted();
   const immediatePrompt = request.immediatePrompt?.trim();
   const unboundedMessages = immediatePrompt
-    ? [...hydratedMessages, { role: "user" as const, content: immediatePrompt }]
-    : hydratedMessages;
+    ? [...modelFacingMessages, { role: "user" as const, content: immediatePrompt }]
+    : modelFacingMessages;
   const boundedInput = boundModelInput({
     messages: unboundedMessages,
     systemPrompt,
@@ -1142,11 +1192,7 @@ async function executeModelCall(
       // options for us, so carry the journaled model output limit across this
       // boundary explicitly. Omitting it lets a malformed tool call stream
       // without the model catalog's terminal token bound.
-      maxTokens: clampMaxTokensToContext(
-        effectiveSpec as never,
-        context,
-        effectiveSpec.maxTokens
-      ),
+      maxTokens: clampMaxTokensToContext(effectiveSpec as never, context, effectiveSpec.maxTokens),
       ...(credentials.headers ? { headers: credentials.headers } : {}),
       signal: streamAbort.signal,
       sessionId: providerSessionId,
@@ -1527,6 +1573,7 @@ function boundModelInput(input: {
   let messages = [...input.messages];
   let removedMessages = 0;
   let windowedToolResults = 0;
+  const omittedInteractionSummaries: string[] = [];
 
   // Prior turns are the cheapest context to discard. Preserve the newest user
   // request and everything after it. Steering can arrive while tools from an
@@ -1538,6 +1585,10 @@ function boundModelInput(input: {
       messages,
       new Set(messages.map((_message, index) => index).filter((index) => index >= lastUser))
     );
+    const removed = new Set(
+      messages.map((_message, index) => index).filter((index) => !retained.has(index))
+    );
+    omittedInteractionSummaries.push(...summarizeRemovedToolInteractions(messages, removed));
     removedMessages += messages.length - retained.size;
     messages = messages.filter((_message, index) => retained.has(index));
   }
@@ -1552,6 +1603,7 @@ function boundModelInput(input: {
       .filter((index) => index >= 0);
     if (assistantIndexes.length <= 1) break;
     const remove = toolInteractionIndexes(messages, assistantIndexes[0]!);
+    omittedInteractionSummaries.push(...summarizeRemovedToolInteractions(messages, remove));
     removedMessages += remove.size;
     messages = messages.filter((_message, index) => !remove.has(index));
   }
@@ -1563,13 +1615,25 @@ function boundModelInput(input: {
     if (serializedMessageChars(messages) <= messageCharBudget) break;
     const message = messages[index]!;
     if (message.role !== "toolResult") continue;
-    const text = safeText(message.content);
+    const blocks = modelFacingToolResultContent(message.content);
+    const text = blocks
+      .filter(
+        (block): block is Extract<ModelFacingToolBlock, { type: "text" }> => block.type === "text"
+      )
+      .map((block) => block.text)
+      .join("\n");
     if (text.length <= 8_000) continue;
     const excess = serializedMessageChars(messages) - messageCharBudget;
     const target = Math.max(4_000, Math.min(32_000, text.length - excess - 1_000));
     messages[index] = {
       ...message,
-      content: windowModelInputText(text, target, "tool result"),
+      content: [
+        { type: "text", text: windowModelInputText(text, target, "tool result") },
+        ...blocks.filter(
+          (block): block is Extract<ModelFacingToolBlock, { type: "image" }> =>
+            block.type === "image"
+        ),
+      ],
     };
     windowedToolResults += 1;
   }
@@ -1581,16 +1645,25 @@ function boundModelInput(input: {
     const assistant = messages.findIndex((message) => message.role === "assistant");
     if (assistant < 0) break;
     const remove = toolInteractionIndexes(messages, assistant);
+    omittedInteractionSummaries.push(...summarizeRemovedToolInteractions(messages, remove));
     removedMessages += remove.size;
     messages = messages.filter((_message, index) => !remove.has(index));
   }
 
   if (removedMessages > 0 && messages.length > 0) {
+    const receiptLedger = windowModelInputText(
+      omittedInteractionSummaries.slice(-12).join("\n"),
+      6_000,
+      "completed-call receipt ledger"
+    );
     const notice: ModelMessage = {
       role: "user",
       content:
         `[Context safety: ${removedMessages} older completed transcript message(s) were omitted ` +
-        "to fit this model's context window. Re-run any narrower inspection you still need.]",
+        "to fit this model's context window. Completed mutations remain durable: do not repeat " +
+        "a create, fork, write, edit, commit, publish, or other side effect merely because its " +
+        "original call is absent. Inspect scope and current workspace state, then resume only the " +
+        `unfinished phase.${receiptLedger ? `\nRecent completed-call receipts:\n${receiptLedger}` : ""}]`,
     };
     const insertAt = messages[0]?.role === "user" ? 1 : 0;
     messages.splice(insertAt, 0, notice);
@@ -1621,9 +1694,55 @@ function boundModelInput(input: {
   };
 }
 
-function serializedMessageChars(messages: ModelMessage[]): number {
-  return JSON.stringify(messages).length;
+function summarizeRemovedToolInteractions(
+  messages: readonly ModelMessage[],
+  removed: ReadonlySet<number>
+): string[] {
+  const results = new Map(
+    messages
+      .filter((message) => message.role === "toolResult" && message.toolCallId)
+      .map((message) => [message.toolCallId!, message] as const)
+  );
+  const summaries: string[] = [];
+  for (const index of removed) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    for (const raw of message.blocks ?? []) {
+      if (!isRecord(raw) || (raw["type"] !== "toolCall" && raw["type"] !== "tool_call")) continue;
+      const id = toolCallIdFromBlock(raw);
+      const name = typeof raw["name"] === "string" ? raw["name"] : "tool";
+      const args = windowModelInputText(safeText(raw["arguments"] ?? {}), 360, "arguments");
+      const result = id ? results.get(id) : undefined;
+      const blocks = modelFacingToolResultContent(result?.content);
+      const text = blocks
+        .map((block) =>
+          block.type === "text"
+            ? block.text
+            : `[image ${block.mimeType}, ${block.data.length} chars]`
+        )
+        .join("\n");
+      const outcome = result?.isError ? "failed" : result ? "completed" : "result unavailable";
+      summaries.push(
+        `- ${name} ${args} → ${outcome}: ${windowModelInputText(text, 700, "result")}`
+      );
+    }
+  }
+  return summaries;
 }
+
+function serializedMessageChars(messages: ModelMessage[]): number {
+  return JSON.stringify(messages, function (key, value) {
+    if (key === "data" && isRecord(this) && this["type"] === "image") {
+      // Native images consume vision tokens, not one language token per few
+      // base64 characters. Reserve a conservative fixed allowance while
+      // keeping encoded pixels out of the text budget.
+      return IMAGE_CONTEXT_BUDGET_PLACEHOLDER;
+    }
+    return value;
+  }).length;
+}
+
+const IMAGE_CONTEXT_BUDGET_PLACEHOLDER = "x".repeat(4_800);
 
 function findLastUserMessageIndex(messages: ModelMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

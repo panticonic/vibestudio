@@ -1,58 +1,18 @@
-import React, { useCallback, useMemo, useState } from "react";
-import { Badge, Box, Button, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
-import { CheckIcon, CopyIcon, StopIcon } from "@radix-ui/react-icons";
+import React, { useMemo } from "react";
+import { Badge, Box, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import { StopIcon } from "@radix-ui/react-icons";
 import { prettifyToolName } from "@workspace/pubsub";
 import type { InvocationCardPayload } from "@workspace/agentic-core";
 import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { ExpandableChevron } from "./shared/Chevron";
 import { CollapsibleSection } from "./shared/CollapsibleSection";
+import { CopyButton } from "./shared/CopyButton";
+import { getStatusColor, getStatusKey, StatusDot } from "./shared/invocationStatus";
 import { ToolArgumentsView, ToolDataView } from "./shared/ToolDataView";
 import { renderDocsToolResult } from "./tool-result-renderers/DocsResult";
-import { formatArgsSummary, formatInvocationPreview } from "./action-format";
+import { formatInvocationPreview } from "./action-format";
 
-// ── Status helpers ─────────────────────────────────────────────────────────
-
-const STATUS_DOT_COLOR = {
-  pending: "var(--gray-8)",
-  complete: "var(--green-9)",
-  error: "var(--red-9)",
-  cancelled: "var(--amber-9)",
-  abandoned: "var(--amber-9)",
-} as const;
-
-type StatusKey = "pending" | "complete" | "error" | "cancelled" | "abandoned";
-
-function getStatusKey(payload: InvocationCardPayload): StatusKey {
-  const status = payload.execution.status;
-  if (status === "pending" || status === "running") return "pending";
-  if (status === "cancelled") return "cancelled";
-  if (status === "abandoned") return "abandoned";
-  return payload.execution.isError || status === "error" ? "error" : "complete";
-}
-
-function getStatusColor(sk: StatusKey): "red" | "amber" | "green" {
-  return sk === "error"
-    ? "red"
-    : sk === "pending" || sk === "cancelled" || sk === "abandoned"
-      ? "amber"
-      : "green";
-}
-
-function StatusDot({ statusKey }: { statusKey: StatusKey }) {
-  return (
-    <Box
-      style={{
-        width: 6,
-        height: 6,
-        borderRadius: "50%",
-        backgroundColor: STATUS_DOT_COLOR[statusKey],
-        flexShrink: 0,
-      }}
-    />
-  );
-}
-
-function formatDisplayName(toolName: string): string {
+export function formatDisplayName(toolName: string): string {
   return prettifyToolName(toolName)
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
@@ -96,7 +56,12 @@ function messageCountLabel(count: number): string {
   return `${count} ${count === 1 ? "message" : "messages"}`;
 }
 
-function toolPresentation(payload: InvocationCardPayload): {
+/**
+ * Label + one-line preview for an invocation. Exported so the subagent run
+ * card renders a child's tool calls with exactly the naming the parent chat
+ * uses — "Read path: index.ts" means the same thing at both depths.
+ */
+export function toolPresentation(payload: InvocationCardPayload): {
   displayName: string;
   preview: string;
   color?: "red" | "amber" | "green";
@@ -445,22 +410,12 @@ export const ExpandedAction = React.memo(function ExpandedAction({
   const isError = statusKey === "error";
   const presentation = useMemo(() => toolPresentation(payload), [payload]);
   const color = presentation.color ?? getStatusColor(statusKey);
-  const [copiedDetails, setCopiedDetails] = useState(false);
 
   const displayName = presentation.displayName;
 
   const exec = payload.execution;
   const hasArgs = Object.keys(payload.arguments).length > 0;
   const detailsJson = useMemo(() => JSON.stringify(payload, null, 2), [payload]);
-  const copyDetails = useCallback(
-    async (event: React.MouseEvent) => {
-      event.stopPropagation();
-      await navigator.clipboard.writeText(detailsJson);
-      setCopiedDetails(true);
-      window.setTimeout(() => setCopiedDetails(false), 1200);
-    },
-    [detailsJson]
-  );
 
   return (
     <Box
@@ -496,18 +451,12 @@ export const ExpandedAction = React.memo(function ExpandedAction({
         <Badge color={color} size="1" variant="soft">
           {exec.status}
         </Badge>
-        <Button
-          size="1"
-          color="gray"
-          variant="ghost"
-          onClick={copyDetails}
-          aria-label="Copy invocation details"
-          title="Copy invocation details"
+        <CopyButton
+          value={detailsJson}
+          label="Copy details"
+          ariaLabel="Copy invocation details"
           style={{ marginLeft: "auto" }}
-        >
-          {copiedDetails ? <CheckIcon /> : <CopyIcon />}
-          {copiedDetails ? "Copied" : "Copy details"}
-        </Button>
+        />
         {isPending && onCancel && (
           <IconButton
             size="1"

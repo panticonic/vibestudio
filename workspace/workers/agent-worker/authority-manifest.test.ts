@@ -26,4 +26,18 @@ describe("agent-worker authority manifest", () => {
       });
     }
   });
+
+  it("declares the internal workspace-state transport used by public panel helpers", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("./package.json", import.meta.url), "utf8")
+    ) as {
+      vibestudio: { authority: { requests: AuthorityRequest[] } };
+    };
+    expect(manifest.vibestudio.authority.requests).toContainEqual({
+      capability: "workspace-service:workspace.state",
+      resource: { kind: "prefix", prefix: "" },
+      tier: "gated",
+      evidence: "intentional-broad",
+    });
+  });
 });

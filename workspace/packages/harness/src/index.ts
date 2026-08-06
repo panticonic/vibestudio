@@ -49,6 +49,7 @@ export {
   createLsTool,
   createSuspendTurnTool,
   createEvalTool,
+  evalToolParameters,
   formatEvalResult,
   normalizeEvalToolSource,
   type EvalRunResult,

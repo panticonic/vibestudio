@@ -1,53 +1,42 @@
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
-import { Badge, Box, Flex, IconButton, Text } from "@radix-ui/themes";
-import { CheckIcon, ChevronDownIcon, CopyIcon, ExternalLinkIcon } from "@radix-ui/react-icons";
-import type {
-  ChatMessage,
-  SubagentProgressEntry,
-  SubagentRunState,
-  ToolExecutionState,
-} from "@workspace/agentic-core";
+import { useMemo, useState } from "react";
+import { Badge, Box, Flex, IconButton, Popover, Text } from "@radix-ui/themes";
+import { ChevronDownIcon, ExternalLinkIcon, InfoCircledIcon } from "@radix-ui/react-icons";
+import type { ChatMessage, SubagentRunState } from "@workspace/agentic-core";
 import { useOptionalChatMessageActions } from "../context/ChatContext";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { MessageContent } from "./MessageContent";
+import { SubagentActivity } from "./SubagentActivity";
+import { SubagentTranscript } from "./SubagentTranscript";
+import { toolPresentation } from "./ActionMessage";
+import { CopyIconButton } from "./shared/CopyButton";
+import { executionStatusLabel, executionStatusTone, isLiveStatus } from "./shared/invocationStatus";
+import { formatDuration, formatRelativeTime, useNow } from "./shared/relativeTime";
+import {
+  consolidateSubagentActivity,
+  countToolCalls,
+  latestActivity,
+  type SubagentActivityItem,
+} from "./subagent-activity";
 
 /**
- * SubagentRunCard — a standalone, richer render for an invocation that spawned a
- * subagent (its `invocation.subagent` payload is populated). Unlike the inline
- * tool pill, it presents the run's label, status, and integration state, plus
- * "Open" (child chat panel on the task channel).
- * Routed here from `MessageList.renderItem`.
+ * SubagentRunCard — how a spawned child run appears in its parent's transcript.
+ * Routed here from `MessageList.renderItem` for any invocation carrying an
+ * `invocation.subagent` payload.
  *
- * The child's activity arrives as structured `execution.progress` entries
- * (SubagentProgressEntry: kind + tool + text + timestamp), relayed from the
- * task channel via `invocation.progress` events and folded by the chat
- * projection — no string parsing happens here.
+ * The card has two sources of truth, in order of availability:
  *
- * Everything is collapsed by default: the card shows a one-line summary plus
- * the latest activity ticker. Expanding reveals the timestamped timeline (each
- * entry individually expandable) and a further-collapsed "Run identifiers"
- * disclosure with copy-to-clipboard.
+ *  1. The relayed progress feed (`execution.progress`), folded by
+ *     `consolidateSubagentActivity` into whole tool calls and child messages.
+ *     Always present — it lives in the parent's own log, so it survives replay
+ *     and works with no connection.
+ *  2. The child's real transcript, observed live on its task channel and drawn
+ *     by the same `MessageList` as the parent chat. Opt-in and lazily
+ *     connected, because each observer costs a subscription.
+ *
+ * Both render through the main chat's components rather than card-local
+ * lookalikes: a child's `Read` call is the same pill, with the same name and
+ * the same argument/result inspection, as a `Read` in the parent conversation.
  */
-
-type CardStatus = ToolExecutionState["status"];
-
-const STATUS_COLOR: Record<CardStatus, "gray" | "green" | "red" | "amber" | "blue"> = {
-  pending: "gray",
-  running: "blue",
-  complete: "green",
-  error: "red",
-  cancelled: "amber",
-  abandoned: "gray",
-};
-
-const STATUS_LABEL: Record<CardStatus, string> = {
-  pending: "Pending",
-  running: "Running",
-  complete: "Complete",
-  error: "Error",
-  cancelled: "Cancelled",
-  abandoned: "Abandoned",
-};
 
 const INTEGRATION_LABEL: Record<
   NonNullable<SubagentRunState["integration"]>,
@@ -58,242 +47,128 @@ const INTEGRATION_LABEL: Record<
   discarded: { label: "Discarded", color: "gray" },
 };
 
-type ProgressTone = "blue" | "green" | "red" | "amber" | "gray";
-
-function markdownPlainText(value: string): string {
-  return value
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]*)`/g, "$1")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
-    .replace(/^[ \t]*[-*+][ \t]+/gm, "")
-    .replace(/^[ \t]*\d+\.[ \t]+/gm, "")
-    .replace(/^[ \t]*>[ \t]?/gm, "")
-    .replace(/[*_~]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function shorten(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value;
-  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-}
-
-function agentMessageTitle(text: string | undefined): string {
-  if (!text) return "Message";
-  const trimmed = text.trim();
-  const firstLine = trimmed.split(/\r?\n/, 1)[0] ?? trimmed;
-  const heading = firstLine.match(/^[ \t]{0,3}#{1,6}[ \t]+(.+)$/)?.[1];
-  const bold = firstLine.match(/^\*\*([^*\n]+)\*\*/)?.[1] ?? firstLine.match(/^__([^_\n]+)__/)?.[1];
-  const source = heading ?? bold ?? firstLine;
-  const plain = markdownPlainText(source) || markdownPlainText(trimmed);
-  return plain ? shorten(plain, 72) : "Message";
-}
-
-const PROGRESS_PRESENTATION: Record<
-  SubagentProgressEntry["kind"],
-  { title: (entry: SubagentProgressEntry) => string; tone: ProgressTone }
-> = {
-  "turn-started": { title: () => "Started working", tone: "blue" },
-  "turn-finished": { title: () => "Turn finished", tone: "green" },
-  "tool-started": { title: (e) => `Started ${e.tool ?? "tool"}`, tone: "blue" },
-  "tool-progress": { title: (e) => (e.tool ? `${e.tool} progress` : "Progress"), tone: "gray" },
-  "tool-completed": { title: (e) => `Finished ${e.tool ?? "tool"}`, tone: "green" },
-  "tool-failed": { title: (e) => `${e.tool ?? "Tool"} failed`, tone: "red" },
-  "tool-cancelled": { title: (e) => `${e.tool ?? "Tool"} cancelled`, tone: "amber" },
-  "tool-abandoned": { title: (e) => `${e.tool ?? "Tool"} abandoned`, tone: "amber" },
-  said: { title: (e) => agentMessageTitle(e.text), tone: "blue" },
-};
-
-function progressTitle(entry: SubagentProgressEntry): string {
-  return PROGRESS_PRESENTATION[entry.kind].title(entry);
-}
-
-function progressPreview(entry: SubagentProgressEntry): { prefix?: string; content: string } {
-  if (!entry.text) return { content: progressTitle(entry) };
-  if (entry.kind === "said") return { content: entry.text };
-  return { prefix: `${progressTitle(entry)}:`, content: entry.text };
-}
-
-/** Compact relative time: "now", "42s", "5m", "3h", "2d". */
-function formatRelativeTime(at: string, now: number): string | null {
-  const then = Date.parse(at);
-  if (!Number.isFinite(then)) return null;
-  const seconds = Math.max(0, Math.round((now - then) / 1000));
-  if (seconds < 10) return "now";
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.round(hours / 24)}d`;
-}
-
-/** Ticking clock so relative timestamps stay honest while the run is live. */
-function useNow(live: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!live) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, [live]);
-  return now;
-}
+type BodyView = "activity" | "transcript";
 
 function compactId(value: string): string {
   if (value.length <= 36) return value;
   return `${value.slice(0, 18)}…${value.slice(-12)}`;
 }
 
-/** One identifier row with the full value on hover and one-click copy. */
-function DetailRow({ name, value }: { name: string; value: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = (event: MouseEvent) => {
-    event.stopPropagation();
-    void navigator.clipboard?.writeText(value).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
-  };
+/** One-line description of the newest activity, for the collapsed card. */
+function previewOf(item: SubagentActivityItem | null): { prefix?: string; content: string } | null {
+  if (!item) return null;
+  if (item.kind === "say") return { content: item.text };
+  if (item.kind === "tool") {
+    const presentation = toolPresentation(item.payload);
+    return presentation.preview
+      ? { prefix: `${presentation.displayName}:`, content: presentation.preview }
+      : { content: presentation.displayName };
+  }
+  return null;
+}
+
+/** When the newest activity happened — the stamp the collapsed line shows. */
+function activityAt(item: SubagentActivityItem | null): string | null {
+  if (!item) return null;
+  if (item.kind === "say") return item.at;
+  if (item.kind === "tool") return item.endedAt ?? item.startedAt;
+  return null;
+}
+
+function IdentifiersPopover({ rows }: { rows: Array<[string, string]> }) {
   return (
-    <div className="subagent-detail-row">
-      <Text size="1" className="subagent-detail-name">
-        {name}
-      </Text>
-      <Flex align="center" gap="1" className="subagent-detail-value-wrap">
-        <Text size="1" className="subagent-detail-value" title={value}>
-          {compactId(value)}
-        </Text>
+    <Popover.Root>
+      <Popover.Trigger>
         <IconButton
           size="1"
           variant="ghost"
-          color={copied ? "green" : "gray"}
-          className="subagent-copy-button"
-          onClick={copy}
-          title={copied ? "Copied" : `Copy ${name.toLowerCase()} id`}
-          aria-label={copied ? "Copied" : `Copy ${name.toLowerCase()} id`}
+          color="gray"
+          title="Run identifiers"
+          aria-label="Run identifiers"
         >
-          {copied ? <CheckIcon /> : <CopyIcon />}
+          <InfoCircledIcon />
         </IconButton>
-      </Flex>
-    </div>
-  );
-}
-
-/** A single timeline entry; long bodies are clamped and expand on click.
- *  Expandable entries are native buttons — no nested interactive content. */
-function TimelineItem({
-  entry,
-  isLast,
-  live,
-  now,
-}: {
-  entry: SubagentProgressEntry;
-  isLast: boolean;
-  live: boolean;
-  now: number;
-}) {
-  const [open, setOpen] = useState(entry.kind === "said");
-  const expandable = Boolean(entry.text);
-  const tone = PROGRESS_PRESENTATION[entry.kind].tone;
-  const time = formatRelativeTime(entry.at, now);
-  const toggleOpen = () => {
-    if (expandable) setOpen((o) => !o);
-  };
-  const openFromBody = () => {
-    if (!open) setOpen(true);
-  };
-  const className = [
-    "subagent-timeline-item",
-    `subagent-tone-${tone}`,
-    isLast ? "subagent-timeline-item-last" : "",
-    open ? "subagent-timeline-item-open" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return (
-    <div className={className}>
-      <span
-        className={`subagent-timeline-node${live && isLast ? " subagent-timeline-node-live" : ""}`}
-        aria-hidden="true"
-      />
-      <div className="subagent-timeline-content">
-        <div className="subagent-timeline-title-row">
-          {expandable ? (
-            <button
-              type="button"
-              className="subagent-timeline-title-button"
-              aria-expanded={open}
-              onClick={toggleOpen}
-            >
-              <Text as="span" size="1" weight="medium" className="subagent-timeline-title">
-                {progressTitle(entry)}
+      </Popover.Trigger>
+      <Popover.Content size="1" className="subagent-ids-popover">
+        <Text size="1" weight="medium" className="subagent-ids-heading">
+          Run identifiers
+        </Text>
+        <Box className="subagent-detail-grid">
+          {rows.map(([name, value]) => (
+            <div className="subagent-detail-row" key={name}>
+              <Text size="1" className="subagent-detail-name">
+                {name}
               </Text>
-              <ChevronDownIcon className="subagent-timeline-chevron" aria-hidden="true" />
-            </button>
-          ) : (
-            <Text as="span" size="1" weight="medium" className="subagent-timeline-title">
-              {progressTitle(entry)}
-            </Text>
-          )}
-          {time && (
-            <Text size="1" className="subagent-timeline-time" title={entry.at}>
-              {time}
-            </Text>
-          )}
-        </div>
-        {entry.text && (
-          <div
-            className={`subagent-timeline-body${open ? "" : " subagent-timeline-body-clamped"}`}
-            onClick={open ? undefined : openFromBody}
-          >
-            <MessageContent content={entry.text} isStreaming={false} />
-          </div>
-        )}
-      </div>
-    </div>
+              <Flex align="center" gap="1" className="subagent-detail-value-wrap">
+                <Text size="1" className="subagent-detail-value" title={value}>
+                  {compactId(value)}
+                </Text>
+                <CopyIconButton
+                  value={value}
+                  label={`Copy ${name.toLowerCase()} id`}
+                  className="subagent-copy-button"
+                />
+              </Flex>
+            </div>
+          ))}
+        </Box>
+      </Popover.Content>
+    </Popover.Root>
   );
 }
 
 export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
-  const forkState = useOptionalChatMessageActions()?.forkState;
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [idsOpen, setIdsOpen] = useState(false);
+  const actions = useOptionalChatMessageActions();
+  const forkState = actions?.forkState;
+  const childTranscript = actions?.childTranscript;
+  const [open, setOpen] = useState(false);
+  const [view, setView] = useState<BodyView>("activity");
+
   const invocation = msg.invocation;
   const progressFeed = useMemo(
     () => invocation?.execution.progress ?? [],
     [invocation?.execution.progress]
   );
+  const activity = useMemo(() => consolidateSubagentActivity(progressFeed), [progressFeed]);
+
   const subagent = invocation?.subagent;
   const status = invocation?.execution.status ?? "pending";
-  const isLive = status === "pending" || status === "running";
+  const isLive = isLiveStatus(status);
   const now = useNow(Boolean(invocation && subagent) && isLive);
   if (!invocation || !subagent) return null;
 
   const label = subagent.label || invocation.name || "Subagent";
   const integration = subagent.integration ? INTEGRATION_LABEL[subagent.integration] : undefined;
-  const canOpen = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
-  const latestEntry = progressFeed.length > 0 ? progressFeed[progressFeed.length - 1] : null;
-  const latestPreview = latestEntry
-    ? progressPreview(latestEntry)
-    : {
-        content:
-          invocation.execution.description.trim() ||
-          (isLive ? "Waiting for the child agent to start" : "No child updates yet"),
-      };
-  const latestTime = latestEntry ? formatRelativeTime(latestEntry.at, now) : null;
-  const detailsLabel = detailsOpen ? "Collapse run details" : "Expand run details";
-  const detailRows = [
-    ["Run", subagent.runId],
-    ["Task", subagent.taskChannelId],
-    ["Context", subagent.contextId],
-    ["Parent", subagent.parentContextId ?? undefined],
-    ["Child", subagent.childEntityId],
-  ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
+  const canOpenPanel = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
+  const canObserve = Boolean(childTranscript && subagent.taskChannelId);
 
-  const handleOpen = () => {
+  const callCount = countToolCalls(activity);
+  const latest = latestActivity(activity);
+  const preview = previewOf(latest) ??
+    (invocation.execution.description.trim()
+      ? { content: invocation.execution.description.trim() }
+      : {
+          content: isLive ? "Waiting for the child agent to start" : "No child updates yet",
+        });
+  const latestAt = activityAt(latest);
+  const latestTime = latestAt ? formatRelativeTime(latestAt, now) : null;
+
+  // Wall time across the whole run, from the first relayed update to the last.
+  const first = activity[0];
+  const firstAt = first ? (first.kind === "tool" ? first.startedAt : first.at) : null;
+  const elapsed = firstAt && latestAt ? formatDuration(firstAt, latestAt) : null;
+
+  const detailRows = (
+    [
+      ["Run", subagent.runId],
+      ["Task", subagent.taskChannelId],
+      ["Context", subagent.contextId],
+      ["Parent", subagent.parentContextId ?? undefined],
+      ["Child", subagent.childEntityId],
+    ] as Array<[string, string | undefined]>
+  ).filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
+
+  const handleOpenPanel = () => {
     if (subagent.taskChannelId && subagent.contextId) {
       forkState?.actions.openInNewPanel(subagent.taskChannelId, subagent.contextId);
     }
@@ -302,7 +177,7 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   return (
     <Box className="message-row message-row-agent">
       <Box
-        className={`message-card-subagent subagent-status-${status}${detailsOpen ? " subagent-card-open" : ""}`}
+        className={`message-card-subagent subagent-status-${status}${open ? " subagent-card-open" : ""}`}
         data-testid="subagent-run-card"
       >
         <div className="subagent-summary">
@@ -310,14 +185,20 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
             <button
               type="button"
               className="subagent-summary-toggle"
-              aria-expanded={detailsOpen}
-              aria-label={detailsLabel}
-              onClick={() => setDetailsOpen((open) => !open)}
+              aria-expanded={open}
+              aria-label={open ? "Collapse run details" : "Expand run details"}
+              onClick={() => setOpen((value) => !value)}
             >
               <span
                 className={`subagent-status-dot subagent-status-dot-${status}`}
                 aria-hidden="true"
               />
+              <span
+                className={`subagent-expand-chevron${open ? " subagent-expand-chevron-open" : ""}`}
+                aria-hidden="true"
+              >
+                <ChevronDownIcon />
+              </span>
               <Text className="subagent-title" size="2" weight="medium" truncate>
                 {label}
               </Text>
@@ -347,108 +228,105 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                   {integration.label}
                 </Badge>
               )}
-              <span
-                className={`subagent-expand-chevron${detailsOpen ? " subagent-expand-chevron-open" : ""}`}
-                aria-hidden="true"
-              >
-                <ChevronDownIcon />
-              </span>
             </button>
             <Flex align="center" gap="2" className="subagent-card-actions">
-              {progressFeed.length > 0 && (
-                <Text size="1" className="subagent-update-count">
-                  {progressFeed.length} {progressFeed.length === 1 ? "update" : "updates"}
+              {/* Calls, not raw update count: the old "76 updates" counted each
+                  call at least twice and told the reader nothing. */}
+              {callCount > 0 && (
+                <Text size="1" className="subagent-stat">
+                  {callCount} {callCount === 1 ? "call" : "calls"}
+                  {elapsed ? ` · ${elapsed}` : ""}
                 </Text>
               )}
               <Badge
                 className="subagent-status-badge"
                 size="1"
                 variant="soft"
-                color={STATUS_COLOR[status]}
+                color={executionStatusTone(status)}
               >
-                {STATUS_LABEL[status]}
+                {executionStatusLabel(status)}
               </Badge>
+              {detailRows.length > 0 && <IdentifiersPopover rows={detailRows} />}
               <IconButton
                 size="1"
                 variant="ghost"
                 color="gray"
-                disabled={!canOpen}
-                onClick={handleOpen}
-                title="Open subagent chat"
-                aria-label="Open subagent chat"
+                disabled={!canOpenPanel}
+                onClick={handleOpenPanel}
+                title="Open subagent chat in a new panel"
+                aria-label="Open subagent chat in a new panel"
               >
                 <ExternalLinkIcon />
               </IconButton>
             </Flex>
           </Flex>
-          {!detailsOpen && latestPreview.content && (
+          {!open && preview.content && (
             <button
               type="button"
               className="subagent-update-preview"
               aria-label="Expand run details from latest update"
-              onClick={() => setDetailsOpen(true)}
+              onClick={() => setOpen(true)}
             >
               <span className="subagent-activity-text">
-                {latestPreview.prefix && (
-                  <span className="subagent-activity-prefix">{latestPreview.prefix}</span>
+                {preview.prefix && (
+                  <span className="subagent-activity-prefix">{preview.prefix}</span>
                 )}
-                <MarkdownPreview content={latestPreview.content} />
+                <MarkdownPreview content={preview.content} />
               </span>
               {latestTime && (
-                <Text size="1" className="subagent-timeline-time" title={latestEntry?.at}>
+                <Text size="1" className="subagent-time" title={latestAt ?? undefined}>
                   {latestTime}
                 </Text>
               )}
             </button>
           )}
         </div>
-        {detailsOpen && (
+
+        {open && (
           <Box className="subagent-details">
             {invocation.execution.description && (
               <div className="subagent-description">
                 <MessageContent content={invocation.execution.description} isStreaming={false} />
               </div>
             )}
-            {progressFeed.length > 0 ? (
-              <div className="subagent-timeline">
-                {progressFeed.map((entry, i) => (
-                  <TimelineItem
-                    key={`${entry.messageSeq}-${i}`}
-                    entry={entry}
-                    isLast={i === progressFeed.length - 1}
-                    live={isLive}
-                    now={now}
-                  />
-                ))}
-              </div>
-            ) : (
-              <Text size="1" color="gray" className="subagent-empty-feed">
-                The child has not published progress yet. Open the task chat to inspect the live
-                transcript.
-              </Text>
-            )}
-            {detailRows.length > 0 && (
-              <div className="subagent-ids-section">
+
+            {canObserve && (
+              <Flex className="subagent-view-switch" gap="1" align="center" role="tablist">
                 <button
                   type="button"
-                  className="subagent-ids-toggle"
-                  aria-expanded={idsOpen}
-                  onClick={() => setIdsOpen((open) => !open)}
+                  role="tab"
+                  aria-selected={view === "activity"}
+                  className={`subagent-view-tab${view === "activity" ? " subagent-view-tab-active" : ""}`}
+                  onClick={() => setView("activity")}
                 >
-                  <ChevronDownIcon
-                    className={`subagent-ids-chevron${idsOpen ? " subagent-ids-chevron-open" : ""}`}
-                    aria-hidden="true"
-                  />
-                  Run identifiers
+                  Activity
                 </button>
-                {idsOpen && (
-                  <Box className="subagent-detail-grid">
-                    {detailRows.map(([name, value]) => (
-                      <DetailRow key={name} name={name} value={value} />
-                    ))}
-                  </Box>
-                )}
-              </div>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={view === "transcript"}
+                  className={`subagent-view-tab${view === "transcript" ? " subagent-view-tab-active" : ""}`}
+                  onClick={() => setView("transcript")}
+                >
+                  Full transcript
+                </button>
+              </Flex>
+            )}
+
+            {view === "transcript" && canObserve && childTranscript && subagent.taskChannelId ? (
+              <SubagentTranscript
+                connection={childTranscript}
+                channelId={subagent.taskChannelId}
+                contextId={subagent.contextId ?? null}
+              />
+            ) : activity.length > 0 ? (
+              <SubagentActivity items={activity} now={now} />
+            ) : (
+              <Text size="1" color="gray" className="subagent-empty-feed">
+                {canObserve
+                  ? "No relayed activity yet — open the full transcript to watch the child live."
+                  : "The child has not published progress yet."}
+              </Text>
             )}
           </Box>
         )}

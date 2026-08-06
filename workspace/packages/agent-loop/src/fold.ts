@@ -430,6 +430,13 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
                   ? `abandoned: ${String(payload["reason"] ?? "abandoned")}`
                   : (payload["error"] ?? payload["reason"] ?? "failed"),
               isError: true,
+              ...(payload["terminalOutcome"] === "tool_error" ||
+              payload["terminalOutcome"] === "infrastructure_error"
+                ? { terminalOutcome: payload["terminalOutcome"] }
+                : {}),
+              ...(typeof payload["terminalReasonCode"] === "string"
+                ? { terminalReasonCode: payload["terminalReasonCode"] }
+                : {}),
             };
       return {
         ...state,

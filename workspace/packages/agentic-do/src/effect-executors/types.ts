@@ -15,6 +15,10 @@ import type {
 import type { AgenticEvent, ParticipantRef } from "@workspace/agentic-protocol";
 import type { AgentToolFailure } from "@workspace/agentic-protocol";
 
+export type EffectDeferral =
+  | { deferred: true; reason: "authority" }
+  | { deferred: true; reason: "external-result" };
+
 export type EphemeralEmit =
   | {
       /** AgenticEvent shape broadcast as a channel `signal` (never durable). */
@@ -128,7 +132,7 @@ export interface LocalToolPort {
     // A long-running local tool (the agent's `eval`) defers: it kicks off the work (eval.start)
     // and the result arrives out-of-band via `deliverEffectOutcome` (onEvalComplete). The driver
     // parks the leased row (deferRedrive backstop), exactly like channel_call/http_call.
-    | { deferred: true }
+    | { deferred: true; reason: "external-result" }
   >;
   /** Mutation-replay guard (§1.4.2): true when the fold already recorded an
    *  applied worktree mutation for this invocation. */
@@ -145,7 +149,9 @@ export interface HttpCallPort {
      * redrive the exact request after authority changes. */
     effectId: string;
     callback: { source: string; className: string; objectKey: string; method: string };
-  }): Promise<{ deferred: true } | { deferred: false; result: unknown; isError: boolean }>;
+  }): Promise<
+    { deferred: true; reason: "authority" } | { deferred: false; result: unknown; isError: boolean }
+  >;
 }
 
 export interface ExecutorDeps {
@@ -206,5 +212,5 @@ export interface EffectExecutor<D extends EffectDescriptor = EffectDescriptor> {
     /** Synchronous local durability hook. A thrown `started` write prevents
      * the provider call; a thrown terminal write surfaces as a system error. */
     onModelExecutionAttempt?(event: ModelExecutionAttemptEvent): void;
-  }): Promise<EffectOutcome | { deferred: true }>;
+  }): Promise<EffectOutcome | EffectDeferral>;
 }

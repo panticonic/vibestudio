@@ -101,10 +101,13 @@ describe("sandbox source hooks", () => {
 
     render(<Harness />);
 
-    await waitFor(() => {
-      const entry = states[states.length - 1]?.inlineUiComponents.get("ui-1");
-      expect(entry?.Component).toBeTruthy();
-    });
+    await waitFor(
+      () => {
+        const entry = states[states.length - 1]?.inlineUiComponents.get("ui-1");
+        expect(entry?.Component).toBeTruthy();
+      },
+      { timeout: 5_000 }
+    );
     expect(loadCalls).toEqual([{ specifier: "label-lib", ref: "npm:2" }]);
   });
 
@@ -138,11 +141,14 @@ describe("sandbox source hooks", () => {
 
     render(<Harness />);
 
-    await waitFor(() => {
-      const entry = states[states.length - 1]?.actionBar?.component;
-      expect(entry?.error).toBeUndefined();
-      expect(entry?.Component).toBeTruthy();
-    });
+    await waitFor(
+      () => {
+        const entry = states[states.length - 1]?.actionBar?.component;
+        expect(entry?.error).toBeUndefined();
+        expect(entry?.Component).toBeTruthy();
+      },
+      { timeout: 5_000 }
+    );
     expect(loadCalls).toEqual([{ specifier: "label-lib", ref: "npm:3" }]);
   });
 

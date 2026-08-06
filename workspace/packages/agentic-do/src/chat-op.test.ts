@@ -159,6 +159,25 @@ class TestVessel extends AgentVesselBase {
     }));
   }
 
+  writeHotPathTracesForTest(count: number, channelId = CHANNEL): void {
+    for (let index = 0; index < count; index += 1) {
+      this.traceHotPath(channelId, "test.trace", { details: { index } });
+    }
+  }
+
+  hotPathTraceCountForTest(channelId = CHANNEL): number {
+    return Number(
+      this.sql
+        .exec(
+          `SELECT COUNT(*) AS count
+             FROM agent_hot_path_trace
+            WHERE channel_id = ?`,
+          channelId
+        )
+        .toArray()[0]?.["count"] ?? 0
+    );
+  }
+
   nextAlarmScheduleForTest(): { wakeAt: number } | null {
     return this.nextAgentAlarmSchedule();
   }
@@ -417,7 +436,8 @@ class TestVessel extends AgentVesselBase {
 
   acceptBatchForTest(
     rows: Array<{ deliveryKey: string; channelSeq: number; envelope: RpcChannelMessage }>,
-    targetIncarnation?: string
+    targetIncarnation?: string,
+    sourceIncarnation = "channel-test-session"
   ) {
     this.ensureIdentity();
     return this.acceptChannelBatch({
@@ -427,7 +447,7 @@ class TestVessel extends AgentVesselBase {
         className: "PubSubChannel",
         objectKey: CHANNEL,
       },
-      sourceIncarnation: "channel-test-session",
+      sourceIncarnation,
       targetIncarnation: targetIncarnation ?? this.identity.sessionId!,
       rows,
     });
@@ -483,6 +503,8 @@ class TestVessel extends AgentVesselBase {
       dropLoop: vi.fn(),
       activateChannel: vi.fn(),
       wake: vi.fn(async () => {}),
+      reconcileDeferredEvalRuns: vi.fn(),
+      deferredEvalRows: vi.fn(() => []),
     };
     (this as unknown as { _driver: unknown })._driver = driver;
     return driver;
@@ -619,7 +641,7 @@ describe("AgentVesselBase structured batch admission", () => {
     ready: { totalCount: count, envelopeCount: count },
   });
 
-  it("accepts exact duplicates and rolls back the whole batch on a mismatched duplicate", async () => {
+  it("accepts content-identical redelivery across requeue and channel restart", async () => {
     const { instance } = await createTestDO(TestVessel, TEST_AGENT_ENV);
     await instance.registerSubscriptionForTest(CHANNEL);
     const first = [
@@ -635,6 +657,13 @@ describe("AgentVesselBase structured batch admission", () => {
       { deliveryKey: "delivery-1", disposition: "duplicate-match" },
       { deliveryKey: "delivery-2", disposition: "duplicate-match" },
     ]);
+    expect(
+      instance.acceptBatchForTest(
+        [{ deliveryKey: "delivery-2", channelSeq: 99, envelope: ready(2) }],
+        undefined,
+        "restarted-channel-session"
+      ).perRow
+    ).toEqual([{ deliveryKey: "delivery-2", disposition: "duplicate-match" }]);
 
     expect(() =>
       instance.acceptBatchForTest([
@@ -656,6 +685,18 @@ describe("AgentVesselBase structured batch admission", () => {
       )
     ).toThrow("target incarnation retired");
     expect(instance.queuedEnvelopeCountForTest()).toBe(0);
+  });
+});
+
+describe("AgentVesselBase hot-path trace retention", () => {
+  it("amortizes retention sweeps while keeping the durable trace bounded", async () => {
+    const { instance } = await createTestDO(TestVessel, TEST_AGENT_ENV);
+
+    instance.writeHotPathTracesForTest(576);
+    expect(instance.hotPathTraceCountForTest()).toBe(563);
+
+    instance.writeHotPathTracesForTest(1);
+    expect(instance.hotPathTraceCountForTest()).toBe(500);
   });
 });
 
@@ -827,6 +868,7 @@ describe("AgentVesselBase lifecycle release", () => {
     expect(instance.subscriptionIdsForTest()).toEqual([CHANNEL]);
     expect(instance.lifecycleRegistrations).toBe(1);
     expect(instance.operationLog.at(-1)).toBe(`channel:${CHANNEL}:subscribe`);
+    expect(driver.reconcileDeferredEvalRuns).toHaveBeenCalledOnce();
 
     await expect(
       instance.releaseForLifecycle({ ...suspendInput, mode: "retire", reason: "entity_retire" })
@@ -1166,6 +1208,16 @@ describe("AgentVesselBase.chatOp", () => {
     await vessel.deliverTerminal(call.callId, "invocation.failed", { error: "kaboom" });
     await expect(promise).rejects.toThrow(/kaboom/);
   });
+
+  it("resolves the agent's own read-only inspection call without a channel deadlock", async () => {
+    const vessel = await makeVessel();
+    vessel.callerIdForTest = await expectedEvalCaller();
+
+    await expect(
+      vessel.chatOp(CHANNEL, "callMethod", [AGENT_ID, "getDebugState", {}])
+    ).resolves.toMatchObject({ participantId: AGENT_ID });
+    expect(vessel.channelStub.calls).toHaveLength(0);
+  });
 });
 
 describe("AgentVesselBase.processChannelEvent", () => {
@@ -1441,11 +1493,12 @@ class SubagentSpawnProbe extends TestVessel {
   failDestroyContextCount = 0;
   ownerRuntimeContextId = "ctx-1";
   readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {});
+  readonly wakeSpy = vi.fn(async (_channelId: string) => {});
   protected override async ensurePromptArtifacts(): Promise<void> {}
   protected override get driver(): AgentLoopDriver {
     return {
       activateChannel: vi.fn(),
-      wake: vi.fn(async () => {}),
+      wake: this.wakeSpy,
       deliverEffectOutcome: vi.fn(async () => true),
       handleIncoming: this.handleIncomingSpy,
       dropLoop: vi.fn(),
@@ -1756,7 +1809,7 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
 
     const out = await probe.callGate(CHANNEL, "inv-1", { code: "1+1" });
 
-    expect(out).toEqual({ deferred: true });
+    expect(out).toEqual({ deferred: true, reason: "external-result" });
     const start = probe.rpcCalls.find((c) => c.method === "eval.start");
     expect(start?.args[0]).toMatchObject({
       runId: ids.invocationEffect("inv-1"),
@@ -1766,6 +1819,98 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     });
     // The poll backstop check happened even on the first dispatch.
     expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(true);
+  });
+
+  it("cancels a parked eval when its owning channel is being retired", async () => {
+    const probe = await makeGateProbe();
+    probe.getRunStatus = { status: "running" };
+
+    await expect(probe.callGate(CHANNEL, "inv-retire", { code: "await wait()" })).resolves.toEqual({
+      deferred: true,
+      reason: "external-result",
+    });
+    expect((probe as any).deferredEvalRuns.get(CHANNEL)).toEqual(
+      new Set([ids.invocationEffect("inv-retire")])
+    );
+
+    await (probe as any).cancelDeferredEvalRuns(CHANNEL);
+
+    expect(probe.rpcCalls).toContainEqual({
+      method: "eval.cancel",
+      args: [
+        {
+          scopeKey: CHANNEL,
+          runId: ids.invocationEffect("inv-retire"),
+        },
+      ],
+    });
+    expect((probe as any).deferredEvalRuns.has(CHANNEL)).toBe(false);
+  });
+
+  it("records a durable cancel intent and PROCEEDS when EvalDO is unavailable (unsubscribe must not deadlock)", async () => {
+    const probe = await makeGateProbe();
+    probe.getRunStatus = { status: "running" };
+    await probe.callGate(CHANNEL, "inv-retry", { code: "await wait()" });
+    probe.cancelError = new Error("eval cancellation unavailable");
+
+    // NEVER throws: the outage class this hardens against must not block
+    // channel retirement. The cancel obligation survives as a durable intent.
+    await expect((probe as any).cancelDeferredEvalRuns(CHANNEL)).resolves.toBeUndefined();
+    const intents = (probe as any).sql
+      .exec(`SELECT channel_id, run_id FROM deferred_eval_cancel_intents`)
+      .toArray();
+    expect(intents).toEqual([{ channel_id: CHANNEL, run_id: ids.invocationEffect("inv-retry") }]);
+
+    // A later lifecycle drain (resume / backstop alarm) redrives the cancel;
+    // the intent is deleted only on an acknowledged eval.cancel. Idempotent.
+    probe.cancelError = null;
+    await (probe as any).drainEvalCancelIntents();
+    expect(
+      (probe as any).sql.exec(`SELECT count(*) AS n FROM deferred_eval_cancel_intents`).toArray()
+    ).toEqual([{ n: 0 }]);
+    expect(probe.rpcCalls.filter((call) => call.method === "eval.cancel")).toEqual([
+      {
+        method: "eval.cancel",
+        args: [{ scopeKey: CHANNEL, runId: ids.invocationEffect("inv-retry") }],
+      },
+      {
+        method: "eval.cancel",
+        args: [{ scopeKey: CHANNEL, runId: ids.invocationEffect("inv-retry") }],
+      },
+    ]);
+  });
+
+  it("enumerates the cancel set from durable outbox rows, not the heap cache (generation change window)", async () => {
+    const probe = await makeGateProbe();
+    probe.getRunStatus = { status: "running" };
+    await probe.callGate(CHANNEL, "inv-durable", { code: "await wait()" });
+    // Simulate the post-generation-change window: the in-memory run map is
+    // empty, but the parked local_tool:eval outbox row still names the run.
+    (probe as any).deferredEvalRuns.clear();
+    const runId = ids.invocationEffect("inv-durable");
+    probe.driverForTest().outbox.insert(
+      logIdForChannel(CHANNEL),
+      {
+        kind: "local_tool",
+        effectId: runId,
+        channelId: CHANNEL,
+        idempotencyKey: "inv-durable",
+        invocationId: "inv-durable",
+        turnId: "turn:durable",
+        invocationSeq: 1,
+        executionMode: "parallel",
+        tool: "eval",
+        args: {},
+      } as never,
+      null
+    );
+
+    await (probe as any).cancelDeferredEvalRuns(CHANNEL);
+
+    expect(probe.rpcCalls).toContainEqual({
+      method: "eval.cancel",
+      args: [{ scopeKey: CHANNEL, runId }],
+    });
   });
 
   it("completes INLINE when getRun already reports done (the lost-push poll backstop)", async () => {
@@ -1835,7 +1980,7 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     probe.getRunStatus = { status: "pending" };
     await expect(
       probe.callGate(CHANNEL, "inv-4", { code: "x", path: "meta", sourcePath: "src/probe.ts" })
-    ).resolves.toEqual({ deferred: true });
+    ).resolves.toEqual({ deferred: true, reason: "external-result" });
     expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
       source: { kind: "inline", code: "x", pathHint: "src/probe.ts" },
     });
@@ -1849,9 +1994,7 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     probe.getRunStatus = { status: "pending" };
     await expect(
       probe.callGate(CHANNEL, "inv-empty-path", { code: "1+1", path: "" })
-    ).resolves.toEqual({
-      deferred: true,
-    });
+    ).resolves.toEqual({ deferred: true, reason: "external-result" });
     expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
       source: { kind: "inline", code: "1+1", pathHint: undefined },
     });
@@ -1863,7 +2006,7 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
 
     await expect(
       probe.callGate(CHANNEL, "inv-reset", { reset: true, code: "return Object.keys(scope)" })
-    ).resolves.toEqual({ deferred: true });
+    ).resolves.toEqual({ deferred: true, reason: "external-result" });
 
     expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
       runId: ids.invocationEffect("inv-reset"),
@@ -1881,12 +2024,27 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
         code: "await new Promise(() => {})",
         timeoutMs: 250,
       })
-    ).resolves.toEqual({ deferred: true });
+    ).resolves.toEqual({ deferred: true, reason: "external-result" });
 
     expect(probe.rpcCalls.find((call) => call.method === "eval.start")?.args[0]).toMatchObject({
       runId: ids.invocationEffect("inv-timeout"),
       timeoutMs: 250,
     });
+  });
+
+  it("rejects misplaced eval options before starting a deferred run", async () => {
+    const probe = await makeGateProbe();
+
+    await expect(
+      probe.callGate(CHANNEL, "inv-bad-timeout", {
+        code: "return 1",
+        authority: { effects: "read-write", timeoutMs: 250 },
+      })
+    ).rejects.toMatchObject({
+      code: "invalid_tool_arguments",
+      message: expect.stringContaining("/authority/timeoutMs"),
+    });
+    expect(probe.rpcCalls.some((call) => call.method === "eval.start")).toBe(false);
   });
 
   it("F4: PARKS (deferred) when the getRun poll throws AFTER startRun succeeded — never a spurious error", async () => {
@@ -1899,7 +2057,7 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     const out = await probe.callGate(CHANNEL, "inv-park", { code: "1+1" });
 
     // Parked, not errored.
-    expect(out).toEqual({ deferred: true });
+    expect(out).toEqual({ deferred: true, reason: "external-result" });
     expect((out as { isError?: boolean }).isError).toBeUndefined();
     // startRun still kicked off the run (so the result can arrive out-of-band).
     expect(probe.rpcCalls.find((c) => c.method === "eval.start")?.args[0]).toMatchObject({
@@ -2071,6 +2229,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       toHead: childLogId,
       atSeq: 7,
     });
+    expect(probe.wakeSpy).toHaveBeenCalledWith(taskChannelId);
   });
 
   it("creates the task trajectory fork before initializing the child or subscribing the supervisor", async () => {
@@ -2357,6 +2516,20 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         to: [{ kind: "participant", participantId: "participant-child" }],
       },
     });
+  });
+
+  it("retries a task seed with an identical durable event", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.insertSubagentRunForTest({ runId: "inv-1", status: "running" });
+
+    await probe.spawnForTest(CHANNEL, "inv-1", { mode: "fresh", task: "seed retry" });
+    await probe.spawnForTest(CHANNEL, "inv-1", { mode: "fresh", task: "seed retry" });
+
+    const seeds = probe.channelStub.published.filter(
+      (entry) => entry.idempotencyKey === "subagent-seed:inv-1"
+    );
+    expect(seeds).toHaveLength(2);
+    expect(seeds[1]?.event).toEqual(seeds[0]?.event);
   });
 
   it("recovers a missing subagent row from the parent invocation card for inspect", async () => {
@@ -2984,10 +3157,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         content: expect.stringContaining("This is not a new request"),
       },
     });
-    expect(probe.handleIncomingSpy).not.toHaveBeenCalledWith(
-      "task-inv-1",
-      expect.anything()
-    );
+    expect(probe.handleIncomingSpy).not.toHaveBeenCalledWith("task-inv-1", expect.anything());
   });
 
   it("durably retries child progress in order after a publication failure", async () => {
@@ -3367,8 +3537,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(
       probe.rpcCalls.some(
         (call) =>
-          (call.method === "extensions.invoke" ||
-            call.method === "extensions.invokeProvider") &&
+          (call.method === "extensions.invoke" || call.method === "extensions.invokeProvider") &&
           call.args[1] === "inspectLaunch"
       )
     ).toBe(false);
@@ -3501,5 +3670,39 @@ describe("AgentVesselBase.onEvalProgress (live eval console streaming)", () => {
     expect(vessel.channelStub.published.some((p) => p.event.kind === "invocation.output")).toBe(
       false
     );
+  });
+});
+
+describe("AgentVesselBase.onEvalProgress authority lifecycle", () => {
+  it("publishes authority suspension as structured parent-invocation progress", async () => {
+    const vessel = await makeVessel();
+    vessel.callerIdForTest = await expectedEvalCaller();
+
+    await vessel.onEvalProgress({
+      runId: "inv:inv-authority",
+      agentInvocationId: "inv-authority",
+      channelId: CHANNEL,
+      activity: {
+        kind: "authority-requested",
+        detail: { capability: "vcs.edit", resourceKey: "repo:panels/taskflow" },
+      },
+    });
+
+    expect(
+      vessel.channelStub.published.find((entry) => entry.event.kind === "invocation.progress")
+        ?.event
+    ).toMatchObject({
+      kind: "invocation.progress",
+      causality: { invocationId: "inv-authority" },
+      payload: {
+        message: "Waiting for approval to use vcs.edit on repo:panels/taskflow",
+        data: {
+          eval: {
+            runId: "inv:inv-authority",
+            activity: "authority-pending",
+          },
+        },
+      },
+    });
   });
 });

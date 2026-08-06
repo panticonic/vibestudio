@@ -73,8 +73,6 @@ type StandardAgentMethodOptions = {
   exclude?: readonly StandardAgentMethodName[];
 };
 
-const PROMPT_RESOURCE_CACHE_TTL_MS = 5_000;
-
 export function hasAskableUser(roster: readonly { ref: { kind: string } }[]): boolean {
   return roster.some((participant) => participant.ref.kind === "user");
 }
@@ -84,7 +82,7 @@ function requireBoundMutationInvocation(): never {
 }
 
 export abstract class AgentWorkerBase extends AgentVesselBase {
-  private promptResourceCache: { value: AgentPromptResources; expiresAt: number } | null = null;
+  private promptResourceCache: AgentPromptResources | null = null;
   private promptResourceLoad: Promise<AgentPromptResources> | null = null;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -116,10 +114,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
   }
 
   protected override async loadPromptResources(_channelId: string): Promise<AgentPromptResources> {
-    const now = Date.now();
-    if (this.promptResourceCache && this.promptResourceCache.expiresAt > now) {
-      return this.promptResourceCache.value;
-    }
+    if (this.promptResourceCache) return this.promptResourceCache;
     if (this.promptResourceLoad) return this.promptResourceLoad;
 
     const load = loadVibestudioResources({ rpc: this.rpc })
@@ -130,10 +125,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         })
       )
       .then((value) => {
-        this.promptResourceCache = {
-          value,
-          expiresAt: Date.now() + PROMPT_RESOURCE_CACHE_TTL_MS,
-        };
+        this.promptResourceCache = value;
         return value;
       })
       .finally(() => {

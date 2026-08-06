@@ -46,6 +46,20 @@ describe("classifyModelFailure", () => {
     });
   });
 
+  it("classifies prompt artifact contract failures as Vibestudio infrastructure", () => {
+    expect(
+      classifyModelFailure({
+        provider: "openai-codex",
+        rawReason:
+          "[blobstore.getText] Invalid args: invalid argument [0] — Invalid — Full UTF-8 text of a blob, or null if absent.",
+        now,
+      })
+    ).toMatchObject({
+      code: "infrastructure_terminal",
+      recoverable: false,
+    });
+  });
+
   it("treats Codex usage limits as terminal and readable", () => {
     const failure = classifyModelFailure({
       provider: "openai-codex",

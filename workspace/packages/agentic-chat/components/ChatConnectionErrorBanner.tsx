@@ -1,6 +1,7 @@
 import { Box, Button, Callout, Flex, IconButton, Text } from "@radix-ui/themes";
-import { Cross1Icon, ExclamationTriangleIcon, ReloadIcon } from "@radix-ui/react-icons";
+import { Cross1Icon, ExclamationTriangleIcon, InfoCircledIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { useChatContext } from "../context/ChatContext";
+import { pendingReviewNotice } from "@vibestudio/shared/authority/reviewPending";
 
 /**
  * Renders a dismissible banner at the top of the chat whenever the
@@ -15,22 +16,28 @@ import { useChatContext } from "../context/ChatContext";
 export function ChatConnectionErrorBanner() {
   const { connectionError, status, dismissConnectionError, retryConnection } = useChatContext();
   if (!connectionError) return null;
+  const pending = pendingReviewNotice(connectionError.cause ?? connectionError);
+  const color: "amber" | "red" = pending ? "amber" : "red";
 
   return (
     <Box px="1" flexShrink="0" style={{ maxWidth: "100%", overflow: "hidden" }}>
       <Callout.Root
-        color="red"
+        color={color}
         size="1"
         variant="surface"
         style={{ maxWidth: "100%", boxSizing: "border-box" }}
       >
         <Callout.Icon>
-          <ExclamationTriangleIcon />
+          {pending ? <InfoCircledIcon /> : <ExclamationTriangleIcon />}
         </Callout.Icon>
         <Flex align="center" justify="between" gap="2" width="100%" style={{ minWidth: 0 }}>
           <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>
             <Text size="1" weight="medium">
-              {status.toLowerCase().includes("connect") || status.toLowerCase() === "error" ? "Connection error" : "Action failed"}
+              {pending
+                ? "Workspace setup is waiting for your review"
+                : status.toLowerCase().includes("connect") || status.toLowerCase() === "error"
+                  ? "Connection error"
+                  : "Action failed"}
             </Text>
             <Text
               size="1"
@@ -42,11 +49,11 @@ export function ChatConnectionErrorBanner() {
                 textOverflow: "ellipsis",
               }}
             >
-              {connectionError.message}
+              {pending ? pending.message : connectionError.message}
             </Text>
           </Flex>
-          {!connectedStatus(status) && retryConnection ? (
-            <Button size="1" variant="soft" color="red" onClick={retryConnection}>
+          {!pending && !connectedStatus(status) && retryConnection ? (
+            <Button size="1" variant="soft" color={color} onClick={retryConnection}>
               <ReloadIcon /> Retry
             </Button>
           ) : null}
@@ -54,9 +61,9 @@ export function ChatConnectionErrorBanner() {
             <IconButton
               size="1"
               variant="ghost"
-              color="red"
+              color={color}
               onClick={dismissConnectionError}
-              aria-label="Dismiss connection error"
+              aria-label={pending ? "Dismiss workspace review notice" : "Dismiss connection error"}
               style={{ flexShrink: 0 }}
             >
               <Cross1Icon />

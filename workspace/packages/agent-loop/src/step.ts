@@ -525,6 +525,40 @@ function turnClosedItem(
   };
 }
 
+function infrastructureFailureDiagnostic(
+  turn: OpenTurn,
+  invocationId: string,
+  code: string
+): AppendItem {
+  const messageId = `diag:${turn.turnId}:infrastructure:${invocationId}`;
+  return {
+    envelopeId: messageId,
+    payloadKind: "message.completed",
+    payload: {
+      protocol: AGENTIC_PROTOCOL_VERSION,
+      role: "assistant",
+      blocks: [
+        {
+          type: "diagnostic",
+          content:
+            "I stopped because the tool infrastructure failed while completing this task. " +
+            "Earlier workspace changes may have been partially applied. Send “continue” to let " +
+            "me inspect the current workspace state and resume safely.",
+          metadata: {
+            code,
+            severity: "error",
+            invocationId,
+            recoverableByNewTurn: true,
+          },
+        },
+      ],
+      outcome: "completed",
+    },
+    causality: { messageId: messageId as never, turnId: turn.turnId },
+    publish: true,
+  };
+}
+
 function turnWaitingItem(
   turnId: string,
   waitingCount: number,
@@ -742,7 +776,7 @@ export function projectAppend(state: AgentState, append: AppendItem[], now: stri
 /** The C-wake duplicate-dispatch guard (plan WS1.4): never start a new model
  *  call while any invocation from a FAILED attempt is non-terminal. */
 function wakeGuardSatisfied(state: AgentState): boolean {
-  if (Object.keys(state.pendingPromptPreparations).length > 0) return false;
+  if (hasCurrentTurnPromptPreparation(state)) return false;
   if (state.inFlightModelCall) return false;
   const currentAttempts = new Set<string>();
   // every pending invocation belongs to some attempt; with no in-flight call
@@ -751,6 +785,22 @@ function wakeGuardSatisfied(state: AgentState): boolean {
     currentAttempts.add(invocation.attemptId ?? "");
   }
   return currentAttempts.size === 0;
+}
+
+/**
+ * Prompt artifacts for a send-after-turn message belong to its future turn.
+ * Preparing them eagerly is useful, but that preparation must not become a
+ * dependency of the currently open turn. Steering messages are different:
+ * they enter the current context, so their artifacts must be ready before the
+ * next model call is composed.
+ */
+function hasCurrentTurnPromptPreparation(state: AgentState): boolean {
+  const deferredEnvelopeIds = new Set(
+    state.deferredPostTurnQueue.map((prompt) => prompt.envelopeId)
+  );
+  return Object.keys(state.pendingPromptPreparations).some(
+    (triggerEnvelopeId) => !deferredEnvelopeIds.has(triggerEnvelopeId)
+  );
 }
 
 function suspendTurnFromInvocationPayload(
@@ -836,7 +886,7 @@ function nextModelCall(
   ctx: StepContext,
   freshSourceMessageIds: string[] = []
 ): StepOutput {
-  if (Object.keys(state.pendingPromptPreparations).length > 0) return EMPTY;
+  if (hasCurrentTurnPromptPreparation(state)) return EMPTY;
   const turn = state.openTurn!;
   if (modelRetryLimitExceeded(turn)) {
     return {
@@ -1502,12 +1552,46 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
       }
     }
     // Infrastructure cannot be repaired by another model continuation inside
-    // this turn. Continuing here makes the agent wander after the invocation
-    // has already reached a terminal failure and can create an unbounded loop
-    // of unrelated tool attempts. The failed invocation remains in the log as
-    // the concrete diagnostic; closing the turn is the durable settlement.
-    if (kind === "invocation.failed" && payload["terminalOutcome"] === "infrastructure_error") {
-      return { append: [turnClosedItem(turn.turnId, { reason: "work_failed" })], effects: [] };
+    // this turn. Wait for every sibling invocation above, then publish one
+    // deterministic, non-model diagnostic before durably closing the turn.
+    // Folded tool-result entries retain this classification so an earlier
+    // infrastructure failure is not forgotten when a sibling settles last.
+    const currentInvocationId = String(causality["invocationId"] ?? "");
+    const priorInfrastructureFailure = [...state.entries]
+      .reverse()
+      .find(
+        (entry) =>
+          entry.seq >= turn.openedAtSeq &&
+          entry.kind === "tool-result" &&
+          entry.terminalOutcome === "infrastructure_error"
+      );
+    const infrastructureFailure =
+      kind === "invocation.failed" && payload["terminalOutcome"] === "infrastructure_error"
+        ? {
+            invocationId: currentInvocationId,
+            code:
+              typeof payload["terminalReasonCode"] === "string"
+                ? payload["terminalReasonCode"]
+                : "infrastructure_error",
+          }
+        : priorInfrastructureFailure?.kind === "tool-result"
+          ? {
+              invocationId: priorInfrastructureFailure.invocationId,
+              code: priorInfrastructureFailure.terminalReasonCode ?? "infrastructure_error",
+            }
+          : null;
+    if (infrastructureFailure) {
+      return {
+        append: [
+          infrastructureFailureDiagnostic(
+            turn,
+            infrastructureFailure.invocationId,
+            infrastructureFailure.code
+          ),
+          turnClosedItem(turn.turnId, { reason: "work_failed" }),
+        ],
+        effects: [],
+      };
     }
     return nextModelCall(state, 0, ctx);
   }

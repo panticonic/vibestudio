@@ -363,7 +363,7 @@ describe("agent-loop core lifecycle", () => {
     expect(pendingEffectIds(s)).toEqual([]);
   });
 
-  it("settles an infrastructure-failed invocation and closes the owning turn", () => {
+  it("publishes a deterministic diagnostic before closing an infrastructure-failed turn", () => {
     const s = scenario();
     prompt(s);
     resolveEffect(s, ids.modelEffect(msg0), {
@@ -378,6 +378,7 @@ describe("agent-loop core lifecycle", () => {
       isError: true,
       reason: "package linker unavailable",
       terminalOutcome: "infrastructure_error",
+      terminalReasonCode: "package_load_failed",
     });
 
     const terminal = s.log.find((row) => row.envelopeId === ids.invocationTerminal("tc-infra"))!;
@@ -388,8 +389,77 @@ describe("agent-loop core lifecycle", () => {
         reason: "package linker unavailable",
       },
     });
-    expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(1);
+    const diagnostics = s.log.filter(
+      (row) =>
+        row.payloadKind === "message.completed" &&
+        (row.payload as { blocks?: Array<{ type?: string }> }).blocks?.[0]?.type === "diagnostic"
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      publish: true,
+      payload: {
+        outcome: "completed",
+        blocks: [
+          {
+            type: "diagnostic",
+            metadata: {
+              code: "package_load_failed",
+              severity: "error",
+              invocationId: "tc-infra",
+              recoverableByNewTurn: true,
+            },
+          },
+        ],
+      },
+    });
+    expect(s.log.slice(-2).map((row) => row.payloadKind)).toEqual([
+      "message.completed",
+      "turn.closed",
+    ]);
     expect(s.state.openTurn).toBeNull();
+    expect(pendingEffectIds(s)).toEqual([]);
+
+    dispatch(s, {
+      type: "event-appended",
+      envelope: terminal as never,
+    });
+    expect(s.log.filter((row) => row.envelopeId.includes(":infrastructure:tc-infra"))).toHaveLength(
+      1
+    );
+  });
+
+  it("waits for parallel siblings before publishing an infrastructure diagnostic", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        { type: "toolCall", id: "tc-infra", name: "read", arguments: { path: "a.ts" } },
+        { type: "toolCall", id: "tc-sibling", name: "read", arguments: { path: "b.ts" } },
+      ],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("tc-infra"), {
+      kind: "tool",
+      result: { error: "package linker unavailable" },
+      isError: true,
+      reason: "package linker unavailable",
+      terminalOutcome: "infrastructure_error",
+      terminalReasonCode: "package_load_failed",
+    });
+    expect(s.state.openTurn).not.toBeNull();
+    expect(s.log.some((row) => row.envelopeId.includes(":infrastructure:"))).toBe(false);
+
+    resolveEffect(s, ids.invocationEffect("tc-sibling"), {
+      kind: "tool",
+      result: { ok: true },
+      isError: false,
+    });
+    expect(s.log.slice(-2).map((row) => row.payloadKind)).toEqual([
+      "message.completed",
+      "turn.closed",
+    ]);
     expect(pendingEffectIds(s)).toEqual([]);
   });
 
@@ -2218,6 +2288,48 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
       .flatMap((o) => o.effects)
       .filter((e) => e.kind === "model_call");
     expect(newModelCalls).toHaveLength(0);
+  });
+
+  it("does not let future-turn artifact preparation deadlock the current tool continuation", () => {
+    const s = scenario();
+    promptWith(s, { envelopeId: "env-1", sourceMessageId: "u1" });
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [{ type: "toolCall", id: "tc-slow", name: "read", arguments: { path: "a.ts" } }],
+      stopReason: "completed",
+    });
+
+    dispatch(s, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId: "chan-1",
+        source: { envelopeId: "env-2" },
+        sourceMessageId: "d1",
+        content: "after this turn",
+        senderRef: userRef,
+        metadata: { deliverAfterTurn: true },
+      },
+    });
+
+    const deferredPreparation = ids.promptArtifactsEffect(ids.recvUserMessage("chan-1", "env-2"));
+    expect(pendingEffectIds(s)).toEqual(
+      expect.arrayContaining([ids.invocationEffect("tc-slow"), deferredPreparation])
+    );
+
+    resolveEffect(s, ids.invocationEffect("tc-slow"), {
+      kind: "tool",
+      result: "timed out",
+      isError: true,
+    });
+
+    expect(pendingEffectIds(s)).toEqual(
+      expect.arrayContaining([ids.modelEffect(ids.messageId(turn1, 1)), deferredPreparation])
+    );
+    expect(s.state.deferredPostTurnQueue.map((item) => item.sourceMessageId)).toEqual(["d1"]);
+    expect(
+      s.state.entries.some((entry) => entry.kind === "user" && entry.sourceMessageId === "d1")
+    ).toBe(false);
   });
 
   it("promotes deferred messages one-per-turn after each close, with fresh envelope ids", () => {

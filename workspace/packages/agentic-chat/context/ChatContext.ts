@@ -5,7 +5,7 @@ export const ChatContext = createContext<ChatContextValue | null>(null);
 
 export type ChatMessageActionsValue = Pick<
   ChatContextValue,
-  "editPendingMessage" | "forkState" | "onNewConversation"
+  "editPendingMessage" | "forkState" | "onNewConversation" | "childTranscript"
 >;
 
 export type ChatComposerRuntimeValue = Pick<

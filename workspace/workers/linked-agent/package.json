@@ -36,6 +36,7 @@
             "domain": "automation",
             "verb": "act"
           },
+          "notability": "headline",
           "grantScopes": [
             "once",
             "task",

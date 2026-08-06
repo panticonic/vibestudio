@@ -58,6 +58,7 @@ export type { SuspendTurnInput, SuspendTurnDetails } from "./suspend-turn.js";
 
 export {
   createEvalTool,
+  evalToolParameters,
   formatEvalResult,
   normalizeEvalToolSource,
   type EvalRunResult,

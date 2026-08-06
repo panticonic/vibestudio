@@ -19,9 +19,15 @@ describe("prepareAgentToolArguments", () => {
   });
 
   it("rejects malformed model arguments before tool execution", () => {
-    expect(() =>
-      prepareAgentToolArguments(tool(), { operation: "listFiles", sourceEventId: "event:1" })
-    ).toThrow(/Invalid arguments for tool vcs/u);
+    try {
+      prepareAgentToolArguments(tool(), { operation: "listFiles", sourceEventId: "event:1" });
+      throw new Error("expected validation to fail");
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: "invalid_tool_arguments",
+        message: expect.stringMatching(/Invalid arguments for tool vcs/u),
+      });
+    }
   });
 
   it("names the allowed operations when a union discriminator is unknown", () => {

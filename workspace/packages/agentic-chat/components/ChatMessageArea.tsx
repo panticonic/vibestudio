@@ -8,6 +8,7 @@ import { FirstRunCard } from "./FirstRunCard";
 import { MessageList } from "./MessageList";
 import { deriveActiveOutbox } from "./Outbox";
 import { SignalPills } from "./SignalPills";
+import { pendingReviewNotice } from "@vibestudio/shared/authority/reviewPending";
 
 export interface ChatMessageAreaProps {
   /** Override default message card rendering */
@@ -40,6 +41,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     browserHandoffCaller,
     clientRef,
     deferredAgent,
+    connectionError,
   } = useChatContext();
   const { setReplyTo } = useChatInputActions();
 
@@ -73,6 +75,15 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
   // existing conversation. MessageList only mounts this when there are zero
   // items, so it self-hides the moment the first message lands.
   const emptyState = useMemo<ReactNode>(() => {
+    const pending = pendingReviewNotice(connectionError?.cause ?? connectionError);
+    if (pending) {
+      return (
+        <Flex role="status" aria-live="polite" align="center" justify="center" gap="2" direction="column" style={{ height: "100%", padding: 16, textAlign: "center" }}>
+          <Text size="2" weight="medium">Waiting for workspace review</Text>
+          <Text color="gray" size="2">{pending.message}</Text>
+        </Flex>
+      );
+    }
     if (deferredAgent?.launching) {
       return (
         <Flex role="status" aria-live="polite" align="center" justify="center" style={{ height: "100%" }}>
@@ -88,7 +99,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
         <Text color="gray" size="2">Loading conversation…</Text>
       </Flex>
     );
-  }, [deferredAgent?.launching, connected]);
+  }, [connectionError, deferredAgent?.launching, connected]);
 
   // Before the first agent exists, the message canvas hosts the inline setup
   // (armed config) instead of an empty transcript.

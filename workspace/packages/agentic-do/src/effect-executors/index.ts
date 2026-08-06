@@ -3,8 +3,8 @@ import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
  * Effect executors (WS1 §2.4) — the impure edge of the event-sourced harness.
  *
  * Each executor consumes a pure EffectDescriptor and produces an
- * EffectOutcome (or `{deferred: true}` when the result arrives later via
- * `deliverEffectOutcome`). Terminal mapping back to events is the pure
+ * EffectOutcome (or a typed deferral naming the durable wake path that will
+ * make the effect runnable again). Terminal mapping back to events is the pure
  * `outcomeEvents` in @workspace/agent-loop.
  */
 
@@ -94,7 +94,7 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
       // A deferred local tool (eval) parks: the driver keeps the leased row (deferRedrive backstop)
       // and the result arrives via deliverEffectOutcome (onEvalComplete) — NOT wrapped in kind:"tool".
       if ("deferred" in outcome && outcome.deferred) {
-        return { deferred: true };
+        return { deferred: true, reason: "external-result" };
       }
       const toolOutcome = outcome as {
         result: unknown;
@@ -158,7 +158,7 @@ export const channelCallExecutor: EffectExecutor<ChannelCallEffect> = {
     });
     // The channel DO settles the call durably (terminal:{transportCallId});
     // the driver maps that delivery to this effect's outcome.
-    return { deferred: true };
+    return { deferred: true, reason: "external-result" };
   },
 };
 
@@ -175,7 +175,7 @@ export const httpCallExecutor: EffectExecutor<HttpCallEffect> = {
       effectId: descriptor.effectId,
       callback: { ...deps.callbackAddress, method: "deliverEffectOutcome" },
     });
-    if (response.deferred) return { deferred: true };
+    if (response.deferred) return response;
     return {
       kind: "tool",
       result: response.result,
@@ -214,7 +214,7 @@ export const credentialWaitExecutor: EffectExecutor<CredentialWaitEffect> = {
       effectId: descriptor.effectId,
       expiresAt: descriptor.expiresAt,
     });
-    return { deferred: true };
+    return { deferred: true, reason: "external-result" };
   },
 };
 

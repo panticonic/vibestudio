@@ -895,6 +895,37 @@ describe("chatMessagesFromChannelView", () => {
     expect(messages.some((message) => message.contentType === "typing")).toBe(false);
   });
 
+  it("distinguishes internal infrastructure failures from invalid model requests", () => {
+    const turnId = brandId<TurnId>("turn-internal-setup");
+    const messageId = brandId<MessageId>("msg-internal-setup");
+    const failed: AgenticEvent<"message.failed"> = {
+      kind: "message.failed",
+      actor: agent,
+      turnId,
+      causality: { messageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "Vibestudio model setup invariant failed",
+        recoverable: false,
+        code: "infrastructure_terminal",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const state = [failed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)).toEqual([
+      expect.objectContaining({
+        id: "diagnostic:msg-internal-setup",
+        diagnostic: expect.objectContaining({
+          title: "Vibestudio service failed",
+          failureCode: "infrastructure_terminal",
+        }),
+      }),
+    ]);
+  });
+
   it("projects exhausted model retries with a specific title and code", () => {
     const messageId = brandId<MessageId>("diag-model-retries");
     const detail =

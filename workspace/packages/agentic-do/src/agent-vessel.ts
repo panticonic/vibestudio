@@ -34,6 +34,7 @@ import type {
 import { iterateChannelReplayAfterPages } from "@workspace/pubsub";
 import {
   composeSystemPrompt,
+  evalToolParameters,
   formatEvalResult,
   normalizeEvalToolSource,
   type ChannelEvent,
@@ -192,6 +193,10 @@ const DELTA_BATCH_MS = 100;
 const MAX_BUFFERED_DELTA_EVENTS = 256;
 const MAX_PENDING_SIGNAL_BATCHES = 4;
 const CHANNEL_STATE_CACHE_MS = 5_000;
+/** Final backstop cadence for undelivered deferred-eval cancel intents. The
+ * primary triggers are lifecycle events (resume, retire); this alarm only
+ * covers an EvalDO outage that outlives them. */
+const EVAL_CANCEL_INTENT_RETRY_MS = 60_000;
 const BLOB_TEXT_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 /** ~256KB of serialized session entries before compaction — comfortably
  *  under modern model context windows while keeping plenty of recent
@@ -519,6 +524,21 @@ interface ChannelDeliveryBatchOutcome {
   highestContiguousCommittedSeq: number;
 }
 
+const HOT_PATH_TRACE_RETENTION_LIMIT = 500;
+const HOT_PATH_TRACE_SWEEP_INTERVAL = 64;
+
+/** Result of the deferred-eval gate: parked, or a settled tool result whose
+ * typed terminal fields flow unchanged into the trajectory invocation event. */
+type DeferredEvalGateResult =
+  | { deferred: true; reason: "external-result" }
+  | {
+      result: unknown;
+      isError: boolean;
+      terminalOutcome?: "infrastructure_error";
+      terminalReasonCode?: string;
+      failure?: ReturnType<typeof agentToolFailureFromUnknown>;
+    };
+
 export abstract class AgentVesselBase extends DurableObjectBase {
   static override schemaVersion = 3;
 
@@ -529,6 +549,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   protected readonly subagentRuns: SubagentRunStore;
   private _driver: AgentLoopDriver | null = null;
   private readonly localTools = new Map<string, Map<string, AgentTool>>();
+  /** Deferred evals are child resources of the channel that started them. */
+  private readonly deferredEvalRuns = new Map<string, Set<string>>();
   private readonly deltaBuffers = new Map<string, { events: AgenticEvent[]; timer: unknown }>();
   private readonly channelClients = new Map<string, ChannelClient>();
   private readonly channelConfigCache = new Map<
@@ -551,6 +573,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   private blobTextCacheBytes = 0;
   private readonly alarmSources = new Map<string, AgentAlarmSource>();
   private readonly alarmDeadlines = new Map<string, number>();
+  /** Derived scheduling state only; the durable trace rows remain authoritative. */
+  private readonly hotPathTraceInsertsSinceSweep = new Map<string, number>();
   /**
    * In-flight `chat.callMethod` relays initiated on behalf of an EvalDO sandbox
    * (keyed by transportCallId). The agent issues the call via ChannelClient,
@@ -607,6 +631,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       fire: async () => {
         const queues = this.readyDurableWorkQueues();
         if (queues.length > 0) this.markWorkReady(...queues);
+      },
+    });
+    this.registerAgentAlarmSource({
+      id: "deferred-eval-cancel",
+      nextWakeAt: () => this.nextEvalCancelIntentWakeAt(),
+      fire: async () => {
+        await this.drainEvalCancelIntents();
       },
     });
   }
@@ -679,6 +710,30 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     FeedbackIngest.createTables(this.sql);
     CardManager.createTables(this.sql);
     ensureAgentLoopDriverSchema(this.sql);
+    // Durable cancel intents for deferred eval runs: recorded before
+    // unsubscribe/retire proceeds, deleted only on an acknowledged
+    // eval.cancel, redriven by lifecycle events + the backstop alarm.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS deferred_eval_cancel_intents (
+        channel_id       TEXT NOT NULL,
+        run_id           TEXT NOT NULL,
+        created_at       INTEGER NOT NULL,
+        attempts         INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at  INTEGER NOT NULL,
+        PRIMARY KEY (channel_id, run_id)
+      )
+    `);
+    assertExactSqlTableSchema(this.sql, {
+      table: "deferred_eval_cancel_intents",
+      columns: [
+        ["channel_id", "TEXT", true],
+        ["run_id", "TEXT", true],
+        ["created_at", "INTEGER", true],
+        ["attempts", "INTEGER", true, "0"],
+        ["next_attempt_at", "INTEGER", true],
+      ],
+      primaryKey: ["channel_id", "run_id"],
+    });
   }
 
   protected override durableWorkQueues(): readonly DurableWorkQueue[] {
@@ -742,6 +797,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       input.startedAt === undefined ? null : Math.max(0, now - startedAt),
       JSON.stringify(input.details ?? {})
     );
+    const insertsSinceSweep =
+      (this.hotPathTraceInsertsSinceSweep.get(channelId) ?? HOT_PATH_TRACE_SWEEP_INTERVAL - 1) + 1;
+    if (insertsSinceSweep < HOT_PATH_TRACE_SWEEP_INTERVAL) {
+      this.hotPathTraceInsertsSinceSweep.set(channelId, insertsSinceSweep);
+      return;
+    }
     this.sql.exec(
       `DELETE FROM agent_hot_path_trace
         WHERE channel_id = ?
@@ -749,11 +810,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             SELECT sequence FROM agent_hot_path_trace
              WHERE channel_id = ?
              ORDER BY sequence DESC
-             LIMIT 500
+             LIMIT ${HOT_PATH_TRACE_RETENTION_LIMIT}
           )`,
       channelId,
       channelId
     );
+    this.hotPathTraceInsertsSinceSweep.set(channelId, 0);
   }
 
   private hotPathTrace(channelId: string): Array<Record<string, unknown>> {
@@ -816,6 +878,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         replay: true,
       });
     }
+    // Eval terminal delivery was activation-local. Re-observe every parked
+    // eval through its deterministic run id now, instead of waiting for the
+    // periodic lost-push reconciliation cadence.
+    this.driver.reconcileDeferredEvalRuns();
+    // Cancel intents recorded while EvalDO was unavailable redrive on this
+    // lifecycle event (the alarm remains only as the final backstop).
+    await this.drainEvalCancelIntents();
   }
 
   // ── Subclass surface (WS1 §3.2 — names preserved where semantics survive) ─
@@ -1485,7 +1554,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             );
             return { deferred: false, result, isError: false };
           } catch (error) {
-            if (authorityAcquisitionRequired(error)) return { deferred: true };
+            if (authorityAcquisitionRequired(error)) {
+              return { deferred: true, reason: "authority" };
+            }
             throw error;
           }
         },
@@ -1986,6 +2057,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       throwIfAborted();
       const promptHash = typeof prompt?.digest === "string" ? prompt.digest : "";
       const toolsHash = typeof tools?.digest === "string" ? tools.digest : "";
+      if (!/^[0-9a-f]{64}$/u.test(promptHash) || !/^[0-9a-f]{64}$/u.test(toolsHash)) {
+        throw new Error("prompt artifact storage returned an invalid content digest");
+      }
       this.setStateValue(promptHashKey, promptHash);
       this.setStateValue(toolsHashKey, toolsHash);
       this.setStateValue(toolNamesKey, names);
@@ -2292,6 +2366,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     sensitivity: "write",
   })
   async unsubscribeChannel(channelId: string): Promise<{ ok: boolean }> {
+    // A deferred eval is no longer an active agent-loop dispatch after
+    // `eval.start` acknowledges it, so interrupting the loop cannot cancel it.
+    // Retire the child run before ending channel membership; otherwise the
+    // EvalDO keeps its kernel lease and any open host resource after the agent
+    // has disappeared. Never blocks: an unreachable EvalDO leaves a durable
+    // cancel intent behind and unsubscribe proceeds.
+    await this.cancelDeferredEvalRuns(channelId);
     try {
       await this.driver.abortChannel(channelId, "channel_unsubscribe");
       // End durable membership before closing the response resource. Closing
@@ -2355,17 +2436,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         const envelopeJson = JSON.stringify(row.envelope);
         const existing = this.sql
           .exec(
-            `SELECT channel_id, source_incarnation, channel_seq, envelope_json
+            `SELECT channel_id, envelope_json
                FROM agent_inbox_queue
               WHERE delivery_key = ?`,
             row.deliveryKey
           )
           .toArray()[0];
         if (existing) {
+          // deliveryKey identifies the durable channel envelope. channelSeq is
+          // only this channel runtime's queue order, and sourceIncarnation
+          // changes when that runtime restarts. A terminal may be re-enqueued
+          // after its first delivery raced effect derivation, so neither is
+          // part of duplicate identity; the durable envelope bytes are.
           if (
             existing["channel_id"] !== batch.channelId ||
-            existing["source_incarnation"] !== batch.sourceIncarnation ||
-            Number(existing["channel_seq"]) !== row.channelSeq ||
             existing["envelope_json"] !== envelopeJson
           ) {
             throw new Error(`acceptChannelBatch: mismatched duplicate ${row.deliveryKey}`);
@@ -3146,7 +3230,21 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!invocationId) return true;
     const effectId = ids.invocationEffect(invocationId);
     const row = this.driver.outbox.getForChannel(channelId, effectId);
-    if (!row || row.kind !== "channel_call") return true; // not ours or already settled
+    if (!row || row.kind !== "channel_call") {
+      // Live invocation execution is intentionally concurrent with model
+      // streaming. A fast channel method may therefore publish its terminal
+      // before the model outcome has derived the channel_call effect that
+      // consumes it. Failing this inbox claim retains the canonical terminal
+      // for the short durable retry path instead of losing it and waiting for
+      // the channel_call's minute-scale redrive backstop.
+      if (
+        event.senderId === this.participantId() &&
+        (await this.driver.channelCallMayMaterialize(channelId, effectId))
+      ) {
+        throw new Error(`channel invocation terminal arrived before effect ${effectId}`);
+      }
+      return true; // not ours or already settled
+    }
     const descriptor = row.descriptor as import("@workspace/agent-loop").ChannelCallEffect;
     const payload = ((agentic as { payload?: Record<string, unknown> }).payload ?? {}) as Record<
       string,
@@ -3492,7 +3590,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       logKind: "trajectory",
       events: [
         {
-          envelopeId: ids.systemEvent(channelId, "roster", state.lastSeq),
+          // Roster refreshes are emitted independently by every resident
+          // agent. They can observe the same presence change at the same
+          // trajectory sequence, but their snapshots intentionally exclude
+          // themselves and therefore have different actors/payloads. Scope
+          // the id by both emitter and snapshot content so concurrent refresh
+          // cannot turn a harmless presence update into a log id collision —
+          // AND by the fold's monotonic lastSeq, so a roster flap back to an
+          // earlier content (A→B→A) mints a fresh id instead of replaying the
+          // first A's envelope (which observers that saw B would dedupe,
+          // never converging back to A).
+          envelopeId: ids.systemEvent(
+            `${channelId}:${this.participantId()}:${state.lastSeq}:${stableSha256Hex(roster)}`,
+            "roster"
+          ),
           actor: { kind: "agent", id: this.participantId() },
           payloadKind: "system.event",
           payload: {
@@ -4141,6 +4252,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     options?: { timeoutMs?: number }
   ): Promise<{ content: unknown }> {
     await this.assertOwnEvalCaller(channelId); // direct-call gate — see publishMessageTypeRegistered
+    // An eval running inside this agent can inspect the agent itself, but a
+    // channel relay to our own participant would wait for a result from the
+    // turn that is currently waiting on that relay. Resolve the documented
+    // read-only inspection methods locally; all other self-calls retain the
+    // normal channel semantics.
+    if (targetPid === this.participantId() && isAgentInspectionMethod(method)) {
+      const inspection = this.readStandardAgentInspection(channelId, method);
+      return { content: inspection.result };
+    }
     const callId = crypto.randomUUID();
     const timeoutMs = options?.timeoutMs;
     const settled = new Promise<{ content: unknown }>((resolve, reject) => {
@@ -4287,9 +4407,25 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     invocationId: string,
     args: unknown,
     scopedRpc: RpcClient
-  ): Promise<{ deferred: true } | { result: unknown; isError: boolean }> {
+  ): Promise<DeferredEvalGateResult> {
     const runId = ids.invocationEffect(invocationId);
-    const p = (args ?? {}) as {
+    // Durable state FIRST (single source of truth: the outbox row). Once a
+    // previous dispatch durably recorded a successful eval.start, the run
+    // identity is settled server-side: never re-validate the arguments (a
+    // later deploy may have tightened the schema after EvalDO already holds a
+    // durable terminal) and never call eval.start again (EvalDO.dispose()
+    // deletes runs; a fresh start would re-INSERT and RE-EXECUTE a
+    // side-effectful eval). eval.get is the only permitted operation.
+    if (this.driver.hasDeferredEvalStarted(channelId, runId)) {
+      return await this.recoverStartedDeferredEval(channelId, invocationId, runId, scopedRpc);
+    }
+    const p = prepareAgentToolArguments(
+      {
+        name: "eval",
+        parameters: evalToolParameters,
+      } as unknown as import("@workspace/pi-core").AgentTool,
+      args ?? {}
+    ) as {
       code?: string;
       path?: string;
       sourcePath?: string;
@@ -4308,6 +4444,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         isError: true,
       };
     }
+    this.trackDeferredEval(channelId, runId);
     const executeDeferred = createDeferredEvalExecutor(
       <T>(method: string, callArgs: unknown[]) => scopedRpc.call<T>("main", method, callArgs),
       {
@@ -4318,52 +4455,229 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           ),
       }
     );
-    const settlement = await executeDeferred({
-      scope: { key: channelId },
-      reset: p.reset === true,
-      source,
-      imports: p.imports,
-      timeoutMs: p.timeoutMs,
-      authority:
-        p.authority === undefined ? undefined : evalAuthorityInputSchema.parse(p.authority),
-      runId,
-    });
-    if (!settlement.deferred) {
-      const statusResult = settlement.result;
-      const formatted = formatEvalResult(statusResult);
-      const failure =
-        statusResult.success === true
-          ? undefined
-          : agentToolFailureFromUnknown(
-              {
-                message: statusResult.error ?? "eval failed",
-                code: statusResult.failureCode,
-                errorData: statusResult.errorData,
-              },
-              {
-                operation: "tool.eval",
-                stage: "execute",
-                causal: { invocationId },
-                ...(statusResult.failureKind === "infrastructure"
-                  ? { kind: "infrastructure" as const }
-                  : {}),
-              }
-            );
-      return {
-        result: { protocolContent: formatted.content, details: formatted.details },
-        // Preserve the structured diagnostic, but do not lie about its
-        // terminal outcome. A user-code exception is still a failed eval tool
-        // invocation; callers (and the system-test harness) must be able to
-        // distinguish it from a successful execution and explicitly classify
-        // deliberate failures when appropriate.
-        isError: statusResult.success !== true,
-        ...(statusResult.failureKind === "infrastructure"
-          ? { terminalOutcome: "infrastructure_error" as const }
-          : {}),
-        ...(failure ? { terminalReasonCode: failure.code, failure } : {}),
-      };
+    let settlement;
+    try {
+      settlement = await executeDeferred({
+        scope: { key: channelId },
+        reset: p.reset === true,
+        source,
+        imports: p.imports,
+        timeoutMs: p.timeoutMs,
+        authority:
+          p.authority === undefined ? undefined : evalAuthorityInputSchema.parse(p.authority),
+        runId,
+      });
+    } catch (error) {
+      this.forgetDeferredEval(channelId, runId);
+      throw error;
     }
-    return { deferred: true };
+    // `executeDeferred` only resolves after `eval.start` was acknowledged
+    // (its own throw path propagated above). Record that ack durably on the
+    // outbox row so a redrive after any generation change can never start —
+    // and thus never re-execute — this run again.
+    this.driver.markDeferredEvalStarted(channelId, runId);
+    if (!settlement.deferred) {
+      this.forgetDeferredEval(channelId, runId);
+      return this.deferredEvalSettlement(invocationId, settlement.result);
+    }
+    return { deferred: true, reason: "external-result" };
+  }
+
+  /**
+   * Redrive path for a run whose eval.start ack is durably recorded: the ONLY
+   * consultation is the read-only durable run state (`eval.get`). A terminal
+   * settles inline; a live run stays parked; a MISSING run row after a
+   * recorded start means the EvalDO runtime generation that owned the run is
+   * gone (dispose/reset) — we never auto-re-run, so it settles as the typed
+   * `runtime_generation_lost` infrastructure failure.
+   */
+  private async recoverStartedDeferredEval(
+    channelId: string,
+    invocationId: string,
+    runId: string,
+    scopedRpc: RpcClient
+  ): Promise<DeferredEvalGateResult> {
+    this.trackDeferredEval(channelId, runId);
+    let snapshot: { status: string; result?: EvalRunResult };
+    try {
+      snapshot = await scopedRpc.call("main", "eval.get", [{ scopeKey: channelId, runId }]);
+    } catch (error) {
+      // EvalDO unreachable: leave the run parked; the terminal push or the
+      // next redrive recovers it. An outage must never settle the invocation.
+      console.warn(
+        `[AgentVessel] eval.get recovery for started run ${runId} failed (run stays parked):`,
+        error instanceof Error ? error.message : error
+      );
+      return { deferred: true, reason: "external-result" };
+    }
+    if (snapshot.status === "unknown") {
+      this.forgetDeferredEval(channelId, runId);
+      return this.deferredEvalSettlement(invocationId, {
+        success: false,
+        console: "",
+        error:
+          "eval runtime generation lost: the durable run record no longer exists after a " +
+          "previously acknowledged start; the eval is not re-executed automatically",
+        failureKind: "infrastructure",
+        failureCode: "runtime_generation_lost",
+      });
+    }
+    if (snapshot.status === "done" || snapshot.status === "approval-route-lost") {
+      if (!snapshot.result) throw new Error(`eval: terminal run ${runId} has no result`);
+      this.forgetDeferredEval(channelId, runId);
+      return this.deferredEvalSettlement(invocationId, snapshot.result);
+    }
+    if (snapshot.status === "cancelled") {
+      this.forgetDeferredEval(channelId, runId);
+      if (snapshot.result) {
+        return this.deferredEvalSettlement(invocationId, snapshot.result);
+      }
+      return this.deferredEvalSettlement(invocationId, {
+        success: false,
+        console: "",
+        error: "eval: run cancelled",
+        failureKind: "cancelled",
+        failureCode: "eval_cancelled",
+      });
+    }
+    return { deferred: true, reason: "external-result" };
+  }
+
+  /** Shared terminal formatting for both the first-dispatch settlement and the
+   * durable-recovery settlement, so both produce identical tool results. */
+  private deferredEvalSettlement(
+    invocationId: string,
+    statusResult: EvalRunResult
+  ): DeferredEvalGateResult {
+    const formatted = formatEvalResult(statusResult);
+    const failure =
+      statusResult.success === true
+        ? undefined
+        : agentToolFailureFromUnknown(
+            {
+              message: statusResult.error ?? "eval failed",
+              code: statusResult.failureCode,
+              errorData: statusResult.errorData,
+            },
+            {
+              operation: "tool.eval",
+              stage: "execute",
+              causal: { invocationId },
+              ...(statusResult.failureKind === "infrastructure"
+                ? { kind: "infrastructure" as const }
+                : {}),
+            }
+          );
+    return {
+      result: { protocolContent: formatted.content, details: formatted.details },
+      // Preserve the structured diagnostic, but do not lie about its
+      // terminal outcome. A user-code exception is still a failed eval tool
+      // invocation; callers (and the system-test harness) must be able to
+      // distinguish it from a successful execution and explicitly classify
+      // deliberate failures when appropriate.
+      isError: statusResult.success !== true,
+      ...(statusResult.failureKind === "infrastructure"
+        ? { terminalOutcome: "infrastructure_error" as const }
+        : {}),
+      ...(failure ? { terminalReasonCode: failure.code, failure } : {}),
+    };
+  }
+
+  private trackDeferredEval(channelId: string, runId: string): void {
+    const runs = this.deferredEvalRuns.get(channelId) ?? new Set<string>();
+    runs.add(runId);
+    this.deferredEvalRuns.set(channelId, runs);
+  }
+
+  private forgetDeferredEval(channelId: string, runId: string): void {
+    const runs = this.deferredEvalRuns.get(channelId);
+    if (!runs) return;
+    runs.delete(runId);
+    if (runs.size === 0) this.deferredEvalRuns.delete(channelId);
+  }
+
+  /**
+   * Retire every deferred eval owned by a channel. NEVER throws: an EvalDO
+   * outage is exactly the failure class this hardens against, and it must not
+   * block unsubscribe/retire. Each run's cancellation is first recorded as a
+   * durable, idempotent cancel intent; the intent is deleted only after
+   * EvalDO acknowledges `eval.cancel`, and surviving intents are redriven by
+   * lifecycle events (resume) with the cancel-intent alarm as the final
+   * backstop. EvalDO's own cancelRunsForLifecycle + reconcileOrphanedRuns
+   * bound any residual leak.
+   *
+   * The run set is enumerated from DURABLE state (the parked local_tool:eval
+   * outbox rows) — the in-memory map is only a cache and is empty right after
+   * a generation change.
+   */
+  private async cancelDeferredEvalRuns(channelId: string): Promise<void> {
+    const runIds = new Set<string>(this.deferredEvalRuns.get(channelId) ?? []);
+    for (const row of this.driver.deferredEvalRows(channelId)) runIds.add(row.effectId);
+    if (runIds.size === 0) return;
+    const now = Date.now();
+    for (const runId of runIds) {
+      this.sql.exec(
+        `INSERT OR IGNORE INTO deferred_eval_cancel_intents
+           (channel_id, run_id, created_at, attempts, next_attempt_at)
+         VALUES (?, ?, ?, 0, ?)`,
+        channelId,
+        runId,
+        now,
+        now
+      );
+    }
+    this.deferredEvalRuns.delete(channelId);
+    await this.drainEvalCancelIntents();
+  }
+
+  /**
+   * Attempt every due cancel intent once; delete an intent only on an
+   * acknowledged `eval.cancel` (idempotent on EvalDO). A failed attempt keeps
+   * the intent durable and re-arms the backstop alarm. Never throws.
+   */
+  protected async drainEvalCancelIntents(): Promise<void> {
+    // Every drain trigger is a lifecycle event (retire, resume, backstop
+    // alarm) — attempt ALL surviving intents each time. `next_attempt_at`
+    // only schedules the backstop alarm; it is not an attempt gate.
+    const intents = (
+      this.sql
+        .exec(`SELECT channel_id, run_id FROM deferred_eval_cancel_intents ORDER BY created_at`)
+        .toArray() as Array<Record<string, unknown>>
+    ).map((row) => ({ channelId: String(row["channel_id"]), runId: String(row["run_id"]) }));
+    for (const intent of intents) {
+      try {
+        await this.rpc.call("main", "eval.cancel", [
+          { scopeKey: intent.channelId, runId: intent.runId },
+        ]);
+        this.sql.exec(
+          `DELETE FROM deferred_eval_cancel_intents WHERE channel_id = ? AND run_id = ?`,
+          intent.channelId,
+          intent.runId
+        );
+      } catch (error) {
+        console.warn(
+          `[AgentVessel] deferred-eval cancel intent for ${intent.runId} not yet delivered (kept durable):`,
+          error instanceof Error ? error.message : error
+        );
+        this.sql.exec(
+          `UPDATE deferred_eval_cancel_intents
+              SET attempts = attempts + 1,
+                  next_attempt_at = ?
+            WHERE channel_id = ? AND run_id = ?`,
+          Date.now() + EVAL_CANCEL_INTENT_RETRY_MS,
+          intent.channelId,
+          intent.runId
+        );
+      }
+    }
+  }
+
+  private nextEvalCancelIntentWakeAt(): number | null {
+    const row = this.sql
+      .exec(`SELECT MIN(next_attempt_at) AS due FROM deferred_eval_cancel_intents`)
+      .toArray()[0];
+    const value = row?.["due"];
+    return typeof value === "number" ? value : null;
   }
 
   /**
@@ -4388,9 +4702,51 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     runId: string;
     agentInvocationId: string;
     channelId: string;
-    output: string;
+    output?: string;
+    activity?: {
+      kind: "authority-requested" | "authority-decided";
+      detail?: unknown;
+    };
   }): Promise<void> {
     await this.assertOwnEvalCaller(payload.channelId);
+    if (payload.activity) {
+      const detail =
+        payload.activity.detail && typeof payload.activity.detail === "object"
+          ? (payload.activity.detail as Record<string, unknown>)
+          : {};
+      const capability =
+        typeof detail["capability"] === "string" ? detail["capability"] : undefined;
+      const resourceKey =
+        typeof detail["resourceKey"] === "string" ? detail["resourceKey"] : undefined;
+      const waiting = payload.activity.kind === "authority-requested";
+      const message = waiting
+        ? `Waiting for approval${capability ? ` to use ${capability}` : ""}${resourceKey ? ` on ${resourceKey}` : ""}`
+        : "Approval decision received; resuming eval";
+      const participantId =
+        this.subscriptions.getParticipantId(payload.channelId) ?? this.participantId();
+      const actor = this.cardActor(payload.channelId, participantId);
+      const event: AgenticEvent<"invocation.progress"> = {
+        kind: "invocation.progress",
+        actor,
+        causality: { invocationId: payload.agentInvocationId as never },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          message,
+          data: {
+            eval: {
+              runId: payload.runId,
+              activity: waiting ? "authority-pending" : "executing",
+              detail: payload.activity.detail,
+            },
+          },
+        },
+        createdAt: new Date().toISOString(),
+      };
+      await this.createChannelClient(payload.channelId).publishAgenticEvent(participantId, event, {
+        senderMetadata: actor.metadata,
+      });
+      return;
+    }
     if (!payload.output) return;
     const participantId =
       this.subscriptions.getParticipantId(payload.channelId) ?? this.participantId();
@@ -4426,6 +4782,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }): Promise<void> {
     if (!payload.channelId || !payload.result) return;
     await this.assertOwnEvalCaller(payload.channelId);
+    this.forgetDeferredEval(payload.channelId, payload.runId);
     const formatted = formatEvalResult(payload.result);
     const failure =
       payload.result.success === true
@@ -4838,14 +5195,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       parentSeq: opts.seq,
       taskChannelId: opts.taskChannelId,
     });
-    // Subscribe to the task channel; the first task message drives the first turn
-    // via the normal intake path (no explicit driver.wake here).
-    return this.subscribeChannel({
+    const subscription = await this.subscribeChannel({
       channelId: opts.taskChannelId,
       contextId: opts.contextId,
       config: opts.config,
       replay: false,
     });
+    // A trajectory fork can inherit the parent's open turn and pending
+    // spawn_subagent invocation. Settle that pre-cut control state before the
+    // parent is allowed to publish the child seed. Otherwise the seed races an
+    // inherited continuation and the child can execute a ghost parent model
+    // call with its not-yet-prepared prompt config.
+    await this.driver.wake(opts.taskChannelId);
+    return subscription;
   }
 
   // ── Subagents ──────────────────────────────────────────────────────────────
@@ -5640,6 +6002,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       messageId,
       childParticipantId: run.childParticipantId,
       senderMetadata,
+      // A retry reuses messageId as its idempotency key, so the complete event
+      // must be byte-stable too. The run timestamp is durable across retries.
+      createdAt: new Date(run.startedAt).toISOString(),
     });
   }
 
@@ -6547,6 +6912,52 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return compact.length > 360 ? `${compact.slice(0, 357)}...` : compact;
   }
 
+  /**
+   * Bound an arbitrary child-call value for inline relay onto the parent card.
+   * Progress updates are fold-readable and must stay small, so strings are
+   * clipped, containers are shallow-capped, and anything past the budget is
+   * replaced by a marker the renderer shows as "truncated" — the parent panel
+   * can always open the child's own transcript for the unbounded version.
+   */
+  private boundedProgressValue(value: unknown, depth = 0): unknown {
+    const MAX_STRING = 240;
+    const MAX_ENTRIES = 12;
+    const MAX_DEPTH = 3;
+    if (value === null || value === undefined) return value;
+    if (typeof value === "string") {
+      return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING - 1)}…` : value;
+    }
+    if (typeof value === "number" || typeof value === "boolean") return value;
+    if (depth >= MAX_DEPTH) return { __truncated: "depth" };
+    if (Array.isArray(value)) {
+      const kept = value
+        .slice(0, MAX_ENTRIES)
+        .map((item) => this.boundedProgressValue(item, depth + 1));
+      return value.length > MAX_ENTRIES
+        ? [...kept, { __truncated: value.length - MAX_ENTRIES }]
+        : kept;
+    }
+    if (typeof value === "object") {
+      const entries = Object.entries(value as Record<string, unknown>);
+      const out: Record<string, unknown> = {};
+      for (const [key, entryValue] of entries.slice(0, MAX_ENTRIES)) {
+        out[key] = this.boundedProgressValue(entryValue, depth + 1);
+      }
+      if (entries.length > MAX_ENTRIES) out["__truncated"] = entries.length - MAX_ENTRIES;
+      return out;
+    }
+    return undefined;
+  }
+
+  /** Bounded argument record for a child `tool-started` update. */
+  private boundedProgressArgs(request: unknown): Record<string, unknown> | undefined {
+    if (!request || typeof request !== "object" || Array.isArray(request)) return undefined;
+    const bounded = this.boundedProgressValue(request);
+    if (!bounded || typeof bounded !== "object" || Array.isArray(bounded)) return undefined;
+    const record = bounded as Record<string, unknown>;
+    return Object.keys(record).length > 0 ? record : undefined;
+  }
+
   /** Fold a child task-channel event into a structured, bounded progress
    *  update for the parent card. Returns null for kinds we don't surface. */
   private subagentProgressUpdate(
@@ -6557,28 +6968,58 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const payload = ((agentic as { payload?: Record<string, unknown> } | null)?.payload ??
       {}) as Record<string, unknown>;
     const tool = typeof payload["name"] === "string" ? payload["name"] : undefined;
+    // Terminal invocation payloads carry no tool name; the parent re-attaches
+    // one by pairing on this id, so it must ride along on every `tool-*` kind.
+    const causalityInvocationId = (
+      agentic as { causality?: { invocationId?: unknown } } | null
+    )?.causality?.invocationId;
+    const callId = typeof causalityInvocationId === "string" ? causalityInvocationId : undefined;
     if (kind === "turn.opened") return { kind: "turn-started", messageSeq };
     if (kind === "turn.closed") return { kind: "turn-finished", messageSeq };
-    if (kind === "invocation.started") return { kind: "tool-started", tool, messageSeq };
+    if (kind === "invocation.started") {
+      const args = this.boundedProgressArgs(payload["request"]);
+      return {
+        kind: "tool-started",
+        tool,
+        ...(callId ? { callId } : {}),
+        ...(args ? { args } : {}),
+        messageSeq,
+      };
+    }
     if (kind === "invocation.progress") {
       const message = typeof payload["message"] === "string" ? payload["message"] : undefined;
       return {
         kind: "tool-progress",
         tool,
+        ...(callId ? { callId } : {}),
         ...(message ? { text: this.trimSubagentProgress(message) } : {}),
         messageSeq,
       };
     }
-    if (kind === "invocation.completed") return { kind: "tool-completed", tool, messageSeq };
+    if (kind === "invocation.completed") {
+      const result = this.boundedProgressValue(payload["result"]);
+      const summary = typeof payload["summary"] === "string" ? payload["summary"] : undefined;
+      return {
+        kind: "tool-completed",
+        tool,
+        ...(callId ? { callId } : {}),
+        ...(result !== undefined ? { result } : {}),
+        ...(summary ? { text: this.trimSubagentProgress(summary) } : {}),
+        messageSeq,
+      };
+    }
     if (
       kind === "invocation.failed" ||
       kind === "invocation.cancelled" ||
       kind === "invocation.abandoned"
     ) {
       const reason = typeof payload["reason"] === "string" ? payload["reason"] : undefined;
+      const error = this.boundedProgressValue(payload["failure"] ?? payload["error"]);
       return {
         kind: kind.replace("invocation.", "tool-") as SubagentProgressUpdate["kind"],
         tool,
+        ...(callId ? { callId } : {}),
+        ...(error !== undefined ? { result: error } : {}),
         ...(reason ? { text: this.trimSubagentProgress(reason) } : {}),
         messageSeq,
       };
@@ -6720,8 +7161,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!update) return;
     this.subagentRuns.touch(run.runId, Date.now());
     const label = run.label ? `"${run.label}"` : subagentRunHandle(run.runId);
-    const sourceMessageId =
-      (agentic.causality?.messageId as string | undefined) ?? event.messageId;
+    const sourceMessageId = (agentic.causality?.messageId as string | undefined) ?? event.messageId;
     const content =
       `Subagent ${label} sent an explicit progress update for the existing user request. ` +
       `This is not a new request and does not mean the run is complete. Continue supervising ` +

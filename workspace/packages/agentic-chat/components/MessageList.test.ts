@@ -871,7 +871,7 @@ describe("SubagentRunCard", () => {
     };
   }
 
-  it("is compact by default and expands the structured timeline on demand", () => {
+  it("is compact by default and expands into consolidated child tool calls", () => {
     const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString();
     render(
       React.createElement(SubagentRunCard, {
@@ -883,11 +883,27 @@ describe("SubagentRunCard", () => {
               "**Pilot-process one Google Drive PDF** into a normalized poetry archive repo.",
             progress: [
               { kind: "turn-started", messageSeq: 1, at: at(300) },
-              { kind: "tool-started", tool: "Read", messageSeq: 2, at: at(120) },
+              {
+                kind: "tool-started",
+                tool: "Read",
+                callId: "child-call-1",
+                args: { path: "index.ts" },
+                messageSeq: 2,
+                at: at(120),
+              },
+              // The terminal update names no tool — pairing by callId is what
+              // restores "Read" instead of the old anonymous "Finished tool".
+              {
+                kind: "tool-completed",
+                callId: "child-call-1",
+                result: { bytes: 4096 },
+                messageSeq: 3,
+                at: at(90),
+              },
               {
                 kind: "said",
                 text: "**Writing normalized catalog**\n\n- normalized index\n- poem records",
-                messageSeq: 3,
+                messageSeq: 4,
                 say: true,
                 at: at(30),
               },
@@ -909,7 +925,8 @@ describe("SubagentRunCard", () => {
     expect(screen.getByTestId("subagent-run-card")).toBeTruthy();
     expect(screen.getByText("PDF poem extraction pilot")).toBeTruthy();
     expect(screen.getByText("Running")).toBeTruthy();
-    expect(screen.getByText("3 updates")).toBeTruthy();
+    // One consolidated call, not one row per lifecycle event.
+    expect(screen.getByText(/^1 call/)).toBeTruthy();
     // Collapsed: only the latest update, as a preview line.
     const preview = document.body.querySelector(".subagent-update-preview");
     expect(preview).toBeTruthy();
@@ -917,7 +934,6 @@ describe("SubagentRunCard", () => {
     expect(preview?.textContent).toContain("normalized index");
     expect(preview?.querySelector(".markdown-preview-strong")).toBeTruthy();
     expect(preview?.querySelector("a, button, input")).toBeNull();
-    expect(screen.queryByText("Said")).toBeNull();
     expect(screen.queryByText("Started working")).toBeNull();
     expect(
       screen.queryByText(
@@ -927,15 +943,26 @@ describe("SubagentRunCard", () => {
 
     fireEvent.click(preview as HTMLElement);
 
-    expect(screen.getByText("Started working")).toBeTruthy();
-    expect(screen.getByText("Started Read")).toBeTruthy();
+    // The child's call renders through the parent chat's own invocation pill,
+    // named and previewed exactly as a top-level call would be.
+    const pill = document.body.querySelector('[data-testid="invocation-pill"]');
+    expect(pill).toBeTruthy();
+    expect(pill?.getAttribute("data-invocation-name")).toBe("Read");
+    expect(pill?.getAttribute("data-invocation-status")).toBe("complete");
+    expect(pill?.textContent).toContain("index.ts");
+    // Lifecycle noise is gone: no "Started …"/"Finished tool" rows survive.
+    expect(screen.queryByText("Started working")).toBeNull();
+    expect(screen.queryByText(/^Finished/)).toBeNull();
+
+    // Expanding the child call exposes its arguments and result, same as the
+    // main chat's expanded tool view.
+    fireEvent.click(pill as HTMLElement);
+    expect(screen.getByText("Arguments")).toBeTruthy();
+    expect(screen.getAllByText("Result").length).toBeGreaterThan(0);
+
+    // What the child said is prose, not a log row.
     expect(screen.getAllByText("Writing normalized catalog").length).toBeGreaterThan(0);
-    expect(document.body.querySelector(".subagent-timeline-body .message-prose ul")).toBeTruthy();
-    expect(document.body.querySelector(".subagent-timeline-body-clamped")).toBeNull();
-    expect(screen.queryByText("Said")).toBeNull();
-    // Per-entry relative timestamps from the structured feed.
-    expect(screen.getByText("5m")).toBeTruthy();
-    expect(screen.getByText("2m")).toBeTruthy();
+    expect(document.body.querySelector(".subagent-say-body .message-prose ul")).toBeTruthy();
     expect(screen.getByText("Pilot-process one Google Drive PDF")).toBeTruthy();
     expect(
       document.body.querySelector(".subagent-description .message-prose .rt-r-weight-bold")
@@ -943,7 +970,7 @@ describe("SubagentRunCard", () => {
 
     // Identifiers stay behind their own disclosure until asked for.
     expect(screen.queryByText("task-run-1")).toBeNull();
-    fireEvent.click(screen.getByText("Run identifiers"));
+    fireEvent.click(screen.getByLabelText("Run identifiers"));
     expect(screen.getByText("task-run-1")).toBeTruthy();
     expect(screen.getByText("ctx-run-1")).toBeTruthy();
   });
@@ -1003,7 +1030,7 @@ describe("SubagentRunCard", () => {
     fireEvent.click(screen.getByLabelText("Expand run details"));
 
     expect(screen.getByText(/The child has not published progress yet/)).toBeTruthy();
-    fireEvent.click(screen.getByText("Run identifiers"));
+    fireEvent.click(screen.getByLabelText("Run identifiers"));
     expect(screen.getByText("run-2")).toBeTruthy();
     expect(screen.getByText("task-run-2")).toBeTruthy();
     expect(screen.getByText("ctx-run-2")).toBeTruthy();

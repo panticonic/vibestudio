@@ -34,8 +34,44 @@ vi.mock("@earendil-works/pi-ai/api/openai-codex-responses", () => ({
   releaseOpenAICodexWebSocketSession: mocks.releaseOpenAICodexWebSocketSession,
 }));
 
-const { modelCallExecutor, toPiAssistantBlocks, toProtocolBlocks } =
-  await import("./model-call.js");
+const {
+  modelCallExecutor,
+  modelFacingToolResultContent,
+  toPiAssistantBlocks,
+  toPiMessages,
+  toProtocolBlocks,
+} = await import("./model-call.js");
+
+describe("model-facing tool results", () => {
+  it("preserves screenshots as native image blocks and excludes diagnostic details", () => {
+    const content = modelFacingToolResultContent({
+      protocolContent: [
+        { type: "text", text: "captured" },
+        { type: "image", mimeType: "image/png", data: "base64-pixels" },
+      ],
+      details: { internal: "must not enter model context" },
+    });
+
+    expect(content).toEqual([
+      { type: "text", text: "captured" },
+      { type: "image", mimeType: "image/png", data: "base64-pixels" },
+    ]);
+    expect(
+      toPiMessages([
+        {
+          role: "assistant",
+          blocks: [{ type: "toolCall", id: "capture-1", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "capture-1",
+          toolName: "read",
+          content: { protocolContent: content, details: { internal: "hidden" } },
+        },
+      ])[1]
+    ).toMatchObject({ role: "toolResult", content });
+  });
+});
 
 const modelSpec: AgentLoopConfig["modelSpec"] = {
   id: "model",
@@ -125,6 +161,27 @@ describe("modelCallExecutor", () => {
     vi.clearAllMocks();
   });
 
+  it("fails an unprepared system prompt before calling blobstore or a provider", async () => {
+    const inputDeps = deps();
+    const getText = vi.fn(inputDeps.blobstore.getText);
+    inputDeps.blobstore.getText = getText;
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: descriptor({ systemPromptHash: "" }),
+        state: initialAgentState({ channelId: "channel-1", config }),
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).rejects.toMatchObject({
+      name: "PromptArtifactInvariantError",
+      message: expect.stringContaining("system prompt artifact is not ready"),
+    });
+    expect(getText).not.toHaveBeenCalled();
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
   it("defers the model call when credential approval parks server-side", async () => {
     mocks.getModel.mockReturnValue({ baseUrl: "https://model.test" });
     const getApiKey = vi.fn(async () => {
@@ -142,7 +199,7 @@ describe("modelCallExecutor", () => {
         deps: inputDeps,
         onEphemeral: () => {},
       })
-    ).resolves.toEqual({ deferred: true });
+    ).resolves.toEqual({ deferred: true, reason: "authority" });
 
     expect(getApiKey).toHaveBeenCalledWith({
       providerId: "test",
@@ -881,6 +938,9 @@ describe("modelCallExecutor", () => {
     const messages = streamedContext?.messages ?? [];
     expect(JSON.stringify(messages).length).toBeLessThan(9_000);
     expect(JSON.stringify(messages)).toContain("older completed transcript message");
+    expect(JSON.stringify(messages)).toContain("Completed mutations remain durable");
+    expect(JSON.stringify(messages)).toContain("Recent completed-call receipts");
+    expect(JSON.stringify(messages)).toContain("old result");
     expect(JSON.stringify(messages)).toContain("tool result windowed for model context");
     expect(JSON.stringify(messages)).not.toContain("call-old");
     expect(JSON.stringify(messages)).toContain("call-new");
@@ -1112,9 +1172,7 @@ describe("modelCallExecutor", () => {
       });
       expect(continued).toMatchObject({
         kind: "model",
-        blocks: [
-          { type: "text", content: "E2E model response: initial agent turn completed." },
-        ],
+        blocks: [{ type: "text", content: "E2E model response: initial agent turn completed." }],
       });
     } finally {
       if (previous === undefined) {
@@ -1272,9 +1330,7 @@ describe("modelCallExecutor", () => {
         },
       ],
     });
-    expect(JSON.stringify(requested)).toContain(
-      'credentials.fetch(\\"https://example.com\\")'
-    );
+    expect(JSON.stringify(requested)).toContain('credentials.fetch(\\"https://example.com\\")');
     expect(JSON.stringify(requested)).not.toContain('"name":"web_fetch"');
 
     state.entries.push(

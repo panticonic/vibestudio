@@ -133,7 +133,12 @@ export interface HeadlessSessionConfig {
 }
 
 export interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
-  rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
+  rpcCall: (
+    target: string,
+    method: string,
+    args: unknown[],
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ) => Promise<unknown>;
   source: string;
   className: string;
   objectKey?: string;
@@ -774,7 +779,11 @@ export class HeadlessSession {
     options?: { timeoutMs?: number; signal?: AbortSignal }
   ): Promise<void> {
     if (this._agentRpcCall && this._channelId) {
-      await this._agentRpcCall(agentId, "interruptChannel", [this._channelId]);
+      if (options) {
+        await this._agentRpcCall(agentId, "interruptChannel", [this._channelId], options);
+      } else {
+        await this._agentRpcCall(agentId, "interruptChannel", [this._channelId]);
+      }
       return;
     }
     if (!this._client) return;

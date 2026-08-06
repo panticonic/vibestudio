@@ -168,11 +168,7 @@ export function classifyModelFailure(
   }
 
   if (isCircuitBreakerOpen(readable)) {
-    return retryable(
-      "circuit_breaker_open_retryable",
-      readable,
-      DEFAULT_CIRCUIT_BREAKER_RETRY_MS
-    );
+    return retryable("circuit_breaker_open_retryable", readable, DEFAULT_CIRCUIT_BREAKER_RETRY_MS);
   }
 
   if (isOverloadedError(codeKey, status, readable)) {
@@ -343,6 +339,13 @@ function httpStatusFromMessage(message: string | undefined): number | undefined 
 
 function isInfrastructureTerminal(codeKey: string, message: string): boolean {
   if (INFRASTRUCTURE_TERMINAL_CODES.has(codeKey)) return true;
+  if (
+    codeKey === "promptartifactinvarianterror" ||
+    message.includes("Vibestudio model setup invariant failed") ||
+    /^\[blobstore\.[^\]]+\] Invalid args:/u.test(message)
+  ) {
+    return true;
+  }
   return /\b(?:caller has no sealed execution authority|has no sealed execution authority for)\b/i.test(
     message
   );

@@ -16,6 +16,8 @@ import {
   notifications,
   extensions,
 } from "@workspace/runtime";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
+import { SHELL_APPROVAL_PENDING_CHANGED_EVENT } from "@vibestudio/shell-core/approvalState";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -47,6 +49,7 @@ import {
   type DefaultAgentConfig,
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
+import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 import type { LocalModelsCapabilities, ServerKind } from "@workspace/model-catalog/localModels";
 import type { DurableObjectServiceClient } from "@workspace/runtime";
 import {
@@ -317,22 +320,63 @@ export default function ChatPanel() {
   // activate an uncommitted first-agent lease while the user composes; only the
   // first send subscribes and persists it.
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
-  const bootstrapAttempted = useRef(false);
+  const [connectionRetrySignal, setConnectionRetrySignal] = useState(0);
+  const [modelSettingsRetrySignal, setModelSettingsRetrySignal] = useState(0);
+  const [bootstrapPersistenceRetrySignal, setBootstrapPersistenceRetrySignal] = useState(0);
+  const approvalChangeNeedsConnectionRetryRef = useRef(false);
+  const modelSettingsRecoveryRef = useRef(false);
+  const approvalEvents = useMemo(() => new EventsClient(rpc), []);
+  const bootstrapChannelRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (stateArgs.channelName || bootstrapAttempted.current || !resolvedContextId) return;
-    bootstrapAttempted.current = true;
+    const off = approvalEvents.on(SHELL_APPROVAL_PENDING_CHANGED_EVENT, () => {
+      // A review transition can unblock the model-settings service as well as
+      // the chat channel. Refresh that source of truth first; the chat
+      // connection is retried only after the catalog is usable again.
+      approvalChangeNeedsConnectionRetryRef.current = true;
+      setModelSettingsRetrySignal((signal) => signal + 1);
+      setBootstrapPersistenceRetrySignal((signal) => signal + 1);
+    });
+    void approvalEvents.subscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT);
+    return () => {
+      off();
+      void approvalEvents.unsubscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT);
+    };
+  }, [approvalEvents]);
 
-    void (async () => {
-      // Creating the channel lets the composer connect and gives a provisional
-      // agent its final channel binding. The first message is still held in the
-      // pre-send queue until that lease is claimed and joins, so it lands as a
-      // normal live turn rather than backlog replay.
-      const channelName = `chat-${crypto.randomUUID().slice(0, 8)}`;
-      void panel.stateArgs.set({ channelName });
-      setBootstrapChannel(channelName);
-    })();
-  }, [resolvedContextId, stateArgs.channelName]);
+  useEffect(() => {
+    if (stateArgs.channelName || !resolvedContextId) return;
+    let disposed = false;
+    let retryTimer: number | null = null;
+
+    // Allocate once, then keep persisting that exact identity until the
+    // creation review releases workspace-state. Generating a new channel on
+    // every retry would split the live subscription from the durable panel
+    // state; dropping the rejected promise would leave it provisional forever.
+    const channelName = (bootstrapChannelRef.current ??= `chat-${crypto.randomUUID().slice(0, 8)}`);
+    setBootstrapChannel(channelName);
+    void panel.stateArgs.set({ channelName }).catch((error) => {
+      if (disposed) return;
+      if (isReviewPending(error)) {
+        // The approval event is the fast path. This quiet retry covers a panel
+        // that mounted after the event or briefly lost its event subscription.
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null;
+          if (!disposed) setBootstrapPersistenceRetrySignal((signal) => signal + 1);
+        }, 5_000);
+        return;
+      }
+      console.warn(
+        "[ChatPanel] Failed to persist the bootstrap channel:",
+        error instanceof Error ? error.message : String(error)
+      );
+    });
+
+    return () => {
+      disposed = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [resolvedContextId, stateArgs.channelName, bootstrapPersistenceRetrySignal]);
 
   // Resolve this before constructing action callbacks that include the
   // channel in durable notification ids.
@@ -617,14 +661,43 @@ export default function ChatPanel() {
   // consumers (design §7.1). The old panel-scoped credential heuristic and
   // its deliberate scoping boundary are gone with it.
   useEffect(() => {
-    void (async () => {
-      try {
-        await loadModelSettings();
-      } catch (err) {
+    let disposed = false;
+    let retryTimer: number | null = null;
+
+    void loadModelSettings(modelSettingsRetrySignal > 0)
+      .then(() => {
+        if (retryTimer !== null) window.clearTimeout(retryTimer);
+        if (
+          disposed ||
+          (!modelSettingsRecoveryRef.current && !approvalChangeNeedsConnectionRetryRef.current)
+        ) {
+          return;
+        }
+        modelSettingsRecoveryRef.current = false;
+        approvalChangeNeedsConnectionRetryRef.current = false;
+        setConnectionRetrySignal((signal) => signal + 1);
+      })
+      .catch((err) => {
+        if (disposed) return;
+        if (isReviewPending(err)) {
+          // The review event is the fast path. This quiet reconciliation retry
+          // covers a panel that mounted after the event or briefly lost its
+          // event watch, without producing a retry/log storm.
+          modelSettingsRecoveryRef.current = true;
+          retryTimer = window.setTimeout(() => {
+            retryTimer = null;
+            if (!disposed) setModelSettingsRetrySignal((signal) => signal + 1);
+          }, 5_000);
+          return;
+        }
         console.warn("[ChatPanel] Failed to load model settings:", err);
-      }
-    })();
-  }, [loadModelSettings]);
+      });
+
+    return () => {
+      disposed = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [loadModelSettings, modelSettingsRetrySignal]);
 
   useEffect(() => {
     let disposed = false;
@@ -1226,6 +1299,7 @@ export default function ChatPanel() {
           initialActionBarProps={stateArgs.actionBarProps ?? undefined}
           initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}
           onActionBarFileChange={handleActionBarFileChange}
+          connectionRetrySignal={connectionRetrySignal}
         />
       </Suspense>
     </>

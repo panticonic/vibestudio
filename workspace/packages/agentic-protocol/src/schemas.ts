@@ -287,6 +287,11 @@ const subagentProgressUpdateSchema = z
       "said",
     ]),
     tool: z.string().optional(),
+    // Pairs `tool-started` with its terminal update on the parent card.
+    callId: z.string().min(1).optional(),
+    // Bounded by the emitter (see boundedProgressValue) — never the full payload.
+    args: z.record(z.string(), z.unknown()).optional(),
+    result: z.unknown().optional(),
     text: z.string().optional(),
     messageSeq: z.number().int().nonnegative(),
     say: z.boolean().optional(),
