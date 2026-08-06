@@ -584,6 +584,20 @@ export class CdpBridge {
           }
           break;
         }
+        const existing = this.targetRegistry.get(targetId);
+        // Electron registers once when a view is created and once again at
+        // dom-ready. Remote providers can also replay registrations after a
+        // reconnect. If the authenticated provider and tab are unchanged,
+        // this is already the same live target; replacing the record would
+        // produce misleading registration churn and needlessly re-send CDP
+        // control state to active clients.
+        if (
+          existing &&
+          existing.hostConnectionId === hostConnectionId &&
+          existing.tabId === msg.tabId
+        ) {
+          break;
+        }
         const registration: RegisteredTarget = {
           tabId: msg.tabId,
           hostConnectionId,

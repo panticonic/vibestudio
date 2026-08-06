@@ -108,6 +108,7 @@ export interface CdpLocator {
   isEditable(opts?: ActionOptions): Promise<boolean>;
   getAttribute(name: string, opts?: ActionOptions): Promise<string | null>;
   inputValue(opts?: ActionOptions): Promise<string>;
+  /** Read rendered text once the element is attached; empty/zero-sized elements are valid. */
   innerText(opts?: ActionOptions): Promise<string>;
   textContent(): Promise<string | null>;
   allInnerTexts(): Promise<string[]>;
@@ -188,7 +189,12 @@ export interface CdpPage {
 
 /** Low-level raw CDP connection. Use for protocol-level work beyond the Page API. */
 export class CdpConnection {
-  static connect(wsEndpoint: string, authToken?: string): Promise<CdpConnection>;
+  static connect(
+    wsEndpoint: string,
+    authToken?: string,
+    preferFetchUpgrade?: boolean,
+    options?: { commandTimeoutMs?: number }
+  ): Promise<CdpConnection>;
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
   on(method: string, listener: (params: unknown) => void): () => void;
   close(): void;
@@ -208,7 +214,13 @@ export interface Browser {
 export const BrowserImpl: {
   connect(
     wsEndpoint: string,
-    options?: { transportOptions?: { authToken?: string } }
+    options?: {
+      transportOptions?: { authToken?: string };
+      /** Hosted EvalDO runtimes must use the egress-aware fetch upgrade. */
+      preferFetchUpgrade?: boolean;
+      /** Override the protocol safety deadline for diagnostics/tests. */
+      commandTimeoutMs?: number;
+    }
   ): Promise<Browser>;
 };
 

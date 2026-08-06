@@ -97,9 +97,11 @@ const browserTargets = firstPage.entries
   .filter((handle) => handle.kind === "browser");
 ```
 
-Restart affected groups from the first page after tree mutations. Imported browser targets may be
-deferred; acquiring CDP materializes them, so automate mass imports with
-bounded concurrency rather than an unbounded `Promise.all`.
+Restart affected groups from the first page after tree mutations. Imported
+browser targets may be deferred; `createPanelSlot(url)` is the receipt-oriented
+creation primitive for bulk imports, and acquiring CDP materializes a deferred
+target. Automate mass imports with bounded concurrency rather than an unbounded
+`Promise.all`.
 
 When the root is an `about/collection` panel, read its co-located
 [collection conductor skill](../../about/collection/SKILL.md) for recursive

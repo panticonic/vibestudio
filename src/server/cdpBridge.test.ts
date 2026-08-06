@@ -836,6 +836,27 @@ describe("CdpBridge authentication", () => {
     resolveTargetInfo({ kind: "workspace", source: "panels/test" });
   });
 
+  it("treats repeated registration from the same provider tab as idempotent", async () => {
+    const harness = await createHarness();
+    const provider = await connectHostProviderOnly(harness, "desktop-host");
+    const registration = {
+      type: "cdp:register",
+      targetId: "panel:tree/panel-1",
+      tabId: 123,
+      kind: "workspace",
+      source: "panels/test",
+    };
+
+    provider.send(JSON.stringify(registration));
+    await waitForTargetRegistered(harness, "panel:tree/panel-1");
+    provider.send(JSON.stringify(registration));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(harness.bridge.isTargetRegisteredForHost("panel:tree/panel-1", "desktop-host")).toBe(
+      true
+    );
+  });
+
   it("does not register targets after the provider closes during panel-known checks", async () => {
     let resolveKnown: (known: boolean) => void = () => {};
     const known = new Promise<boolean>((resolve) => {

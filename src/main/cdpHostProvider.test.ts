@@ -118,6 +118,33 @@ describe("CdpHostProvider", () => {
     ]);
   });
 
+  it("does not resend an unchanged target registration during navigation", () => {
+    const { provider, socket } = createHarness();
+
+    provider.start();
+    socket.emit("open");
+    provider.registerTarget("panel-1", 42);
+    provider.registerTarget("panel-1", 42);
+
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
+      { type: "cdp:register", targetId: "panel-1", tabId: 42 },
+    ]);
+  });
+
+  it("re-registers a target when Electron replaces its webContents", () => {
+    const { provider, socket } = createHarness();
+
+    provider.start();
+    socket.emit("open");
+    provider.registerTarget("panel-1", 42);
+    provider.registerTarget("panel-1", 43);
+
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
+      { type: "cdp:register", targetId: "panel-1", tabId: 42 },
+      { type: "cdp:register", targetId: "panel-1", tabId: 43 },
+    ]);
+  });
+
   it("connects to the WebSocket form of the gateway URL", () => {
     const { provider, socket, getSocketUrl } = createHarness();
 

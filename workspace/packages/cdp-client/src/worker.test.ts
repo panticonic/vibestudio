@@ -14,6 +14,8 @@ import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthPro
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   static sent: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  static dropMethods = new Set<string>();
+  static emitNavigationEventBeforeResponse = false;
 
   private listeners = new Map<string, Set<(event: { data?: string }) => void>>();
   private nextTitle = "Example";
@@ -50,6 +52,7 @@ class FakeWebSocket {
     };
     if (typeof message.id !== "number") return;
     if (message.method) FakeWebSocket.sent.push({ method: message.method, params: message.params });
+    if (message.method && FakeWebSocket.dropMethods.has(message.method)) return;
     if (
       message.method === "Input.dispatchMouseEvent" &&
       message.params?.["type"] === "mouseReleased" &&
@@ -71,6 +74,11 @@ class FakeWebSocket {
       );
     }
     const result = this.resultFor(message.method, message.params);
+    if (message.method === "Page.navigate" && FakeWebSocket.emitNavigationEventBeforeResponse) {
+      this.dispatch("message", {
+        data: JSON.stringify({ method: "Page.loadEventFired", params: { timestamp: 0 } }),
+      });
+    }
     setTimeout(
       () => this.dispatch("message", { data: JSON.stringify({ id: message.id, result }) }),
       0
@@ -79,13 +87,15 @@ class FakeWebSocket {
       // Real Chrome fires the load lifecycle event AFTER the navigate response. Emit it after the
       // response (queued later) so the client's navigation-settled wait — which goto() only registers
       // once it has awaited the navigate response — actually catches it instead of hanging to timeout.
-      setTimeout(
-        () =>
-          this.dispatch("message", {
-            data: JSON.stringify({ method: "Page.loadEventFired", params: { timestamp: 0 } }),
-          }),
-        0
-      );
+      if (!FakeWebSocket.emitNavigationEventBeforeResponse) {
+        setTimeout(
+          () =>
+            this.dispatch("message", {
+              data: JSON.stringify({ method: "Page.loadEventFired", params: { timestamp: 0 } }),
+            }),
+          0
+        );
+      }
     }
   }
 
@@ -275,10 +285,14 @@ function installFakeWebSocket(): void {
 describe("worker CDP client", () => {
   const originalWebSocket = globalThis.WebSocket;
   const originalFetch = globalThis.fetch;
+  const originalWebSocketPair = (globalThis as Record<string, unknown>)["WebSocketPair"];
 
   afterEach(() => {
+    vi.useRealTimers();
     FakeWebSocket.instances = [];
     FakeWebSocket.sent = [];
+    FakeWebSocket.dropMethods.clear();
+    FakeWebSocket.emitNavigationEventBeforeResponse = false;
     vi.restoreAllMocks();
     Object.defineProperty(globalThis, "WebSocket", {
       configurable: true,
@@ -289,6 +303,11 @@ describe("worker CDP client", () => {
       configurable: true,
       writable: true,
       value: originalFetch,
+    });
+    Object.defineProperty(globalThis, "WebSocketPair", {
+      configurable: true,
+      writable: true,
+      value: originalWebSocketPair,
     });
   });
 
@@ -320,7 +339,8 @@ describe("worker CDP client", () => {
     });
 
     const [upgradeUrl, init] = fetchMock.mock.calls[0]!;
-    expect(init).toEqual({ headers: { Upgrade: "websocket" } });
+    expect(init).toMatchObject({ headers: { Upgrade: "websocket" } });
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     const parsedUpgradeUrl = new URL(String(upgradeUrl));
     const encodedHeaders = parsedUpgradeUrl.searchParams.get("__vibestudio_ws_headers");
     expect(encodedHeaders).toBeTruthy();
@@ -330,6 +350,63 @@ describe("worker CDP client", () => {
     parsedUpgradeUrl.searchParams.delete("__vibestudio_ws_headers");
     expect(parsedUpgradeUrl).toEqual(new URL("http://cdp/"));
     expect(accept).toHaveBeenCalledOnce();
+  });
+
+  it("uses fetch upgrades in workerd even when a global WebSocket exists", async () => {
+    installFakeWebSocket();
+    Object.defineProperty(globalThis, "WebSocketPair", {
+      configurable: true,
+      writable: true,
+      value: class WebSocketPair {},
+    });
+    const socket = new FakeWebSocket("ws://cdp");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        ({
+          status: 101,
+          webSocket: socket,
+        }) as unknown as Response
+    );
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+
+    const connection = await CdpConnection.connect("ws://cdp", "token");
+    await expect(connection.send("Runtime.evaluate", {})).resolves.toEqual({
+      result: { value: undefined },
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]).toBe(socket);
+  });
+
+  it("bounds a fetch upgrade that never resolves", async () => {
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+    const fetchMock = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) => new Promise<Response>(() => {})
+    );
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: fetchMock,
+    });
+    vi.useFakeTimers();
+
+    const connection = CdpConnection.connect("ws://cdp", "token");
+    const rejection = expect(connection).rejects.toThrow(
+      "CDP WebSocket upgrade timed out after 15000ms"
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await rejection;
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
 
   it("authenticates and exposes page navigation + console capture", async () => {
@@ -357,6 +434,29 @@ describe("worker CDP client", () => {
     expect(page.consoleEvents()).toEqual([]);
   });
 
+  it("subscribes to navigation lifecycle before sending Page.navigate", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+    FakeWebSocket.emitNavigationEventBeforeResponse = true;
+
+    await expect(page.goto("https://example.com/fast")).resolves.toBeDefined();
+    expect(page.url()).toBe("https://example.com/fast");
+  });
+
+  it("bounds a command that the relay never answers and closes the page connection", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp", { commandTimeoutMs: 10 });
+    const page = browser.contexts()[0]!.pages()[0]!;
+    const socket = FakeWebSocket.instances[0]!;
+    FakeWebSocket.dropMethods.add("Runtime.evaluate");
+
+    await expect(page.title()).rejects.toThrow(
+      "CDP command timed out after 10ms: Runtime.evaluate"
+    );
+    expect(socket.closed).toBe(true);
+  });
+
   it("compiles CSS, text selectors, and getBy locators into one descriptor model", async () => {
     installFakeWebSocket();
     const browser = await BrowserImpl.connect("ws://cdp");
@@ -380,6 +480,12 @@ describe("worker CDP client", () => {
       .map((entry) => String(entry.params?.["expression"] ?? ""))
       .find((expression) => expression.includes('"op":"innerText"'));
     expect(textEvaluation).toContain("nsHasTextMatchingDescendant");
+    expect(textEvaluation).toContain(
+      'case "innerText": { var e=await nsWaitForState(d,"attached",t)'
+    );
+    expect(textEvaluation).not.toContain(
+      'case "innerText": { var e=await nsWaitForState(d,"visible",t)'
+    );
     await expect(page.getByRole("button", { name: "Sign in" }).isVisible()).resolves.toBe(true);
     await expect(page.getByTestId("widget").isEnabled()).resolves.toBe(true);
     await expect(page.getByLabel("Email").getAttribute("id")).resolves.toBe("main");

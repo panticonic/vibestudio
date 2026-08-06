@@ -115,6 +115,8 @@ interface ProviderMessage {
 
 export class CdpHostProvider {
   private readonly targets = new Map<string, number>();
+  /** Registrations already sent on the current provider socket. */
+  private readonly sentRegistrations = new Map<string, number>();
   private readonly debuggerAttached = new Map<string, boolean>();
   private readonly debuggerAttaching = new Map<string, Promise<void>>();
   private readonly debuggerCommandQueues = new Map<string, Promise<unknown>>();
@@ -176,6 +178,7 @@ export class CdpHostProvider {
 
     socket.on("open", () => {
       this.authenticated = true;
+      this.sentRegistrations.clear();
       this.registerAllTargets();
     });
     socket.on("message", (data: Buffer | string) => {
@@ -189,6 +192,7 @@ export class CdpHostProvider {
       if (this.socket !== socket) return;
       this.socket = null;
       this.authenticated = false;
+      this.sentRegistrations.clear();
       this.detachAll();
       this.scheduleReconnect();
     });
@@ -210,13 +214,18 @@ export class CdpHostProvider {
   }
 
   registerTarget(targetId: string, webContentsId: number): void {
+    const previousWebContentsId = this.targets.get(targetId);
     this.targets.set(targetId, webContentsId);
+    if (previousWebContentsId !== webContentsId) {
+      this.sentRegistrations.delete(targetId);
+    }
     this.attachConsoleHistory(targetId);
     this.sendRegistration(targetId, webContentsId);
   }
 
   unregisterTarget(targetId: string): void {
     this.targets.delete(targetId);
+    this.sentRegistrations.delete(targetId);
     this.activeCdpTargets.delete(targetId);
     this.detachConsoleHistory(targetId);
     this.send({ type: "cdp:unregister", targetId: targetId });
@@ -405,6 +414,11 @@ export class CdpHostProvider {
       case "cdp:register-rejected":
         if (typeof message.targetId === "string") {
           log.warn(`Broker rejected CDP target registration: ${message.targetId}`);
+          // A rejected registration must be eligible for retry after a lease
+          // or connection-state change. The provider has already sent this
+          // target on the current socket, so forget that send marker while
+          // retaining the live target mapping.
+          this.sentRegistrations.delete(message.targetId);
           if (message.reason === "unknown_panel") {
             const contents = this.getTargetContents(message.targetId);
             this.targets.delete(message.targetId);
@@ -742,6 +756,8 @@ export class CdpHostProvider {
 
   private sendRegistration(targetId: string, webContentsId: number): void {
     if (!this.authenticated) return;
+    if (this.sentRegistrations.get(targetId) === webContentsId) return;
+    this.sentRegistrations.set(targetId, webContentsId);
     this.send({ type: "cdp:register", targetId: targetId, tabId: webContentsId });
   }
 

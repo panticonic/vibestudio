@@ -35,7 +35,7 @@ function approvalQueueMock(
   decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
 ): ApprovalQueue {
   return {
-    request: vi.fn(async () => decision),
+    request: vi.fn(async () => decision) as unknown as ApprovalQueue["request"],
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -50,6 +50,7 @@ function approvalQueueMock(
     })),
     resolve: vi.fn(),
     resolveMissionReview: vi.fn(),
+    resolveInstallReview: vi.fn(),
     submitClientConfig: vi.fn(),
     submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
@@ -112,6 +113,7 @@ function accessFields(overrides: Partial<PanelAccessTestDeps> = {}): PanelAccess
         })
     ),
     ...overrides,
+    controlsLifecycleContext: overrides.controlsLifecycleContext ?? vi.fn(async () => false),
   };
 }
 

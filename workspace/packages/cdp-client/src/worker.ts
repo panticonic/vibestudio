@@ -20,6 +20,7 @@ type CdpResponse = {
 type PendingCommand = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 type CdpEvent = {
@@ -131,12 +132,29 @@ type WebSocketCtor = new (url: string, protocols?: string | string[]) => WebSock
 
 type WorkerClientWebSocket = WebSocket & { accept?: () => void };
 
+const CDP_WEBSOCKET_OPEN_TIMEOUT_MS = 15_000;
+// A browser-side evaluate/locator operation has its own action timeout, but a
+// broken relay/provider must not leave the EvalDO waiting forever. Once this
+// deadline fires the connection is no longer trustworthy: close it so the
+// bridge detaches the relay session and the caller can acquire a fresh page.
+const CDP_COMMAND_TIMEOUT_MS = 60_000;
+
+function runsInFetchUpgradeWorker(): boolean {
+  // workerd exposes both WebSocket and WebSocketPair. The former is the
+  // server-side WebSocket surface and does not reliably route an outbound
+  // connection through Vibestudio's egress boundary. Fetch upgrades carry the
+  // internal grant through the boundary explicitly, so prefer that transport
+  // whenever the worker runtime is identifiable.
+  return typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair === "function";
+}
+
 async function openWebSocket(
   wsEndpoint: string,
-  authToken?: string
+  authToken?: string,
+  preferFetchUpgrade = false
 ): Promise<{ socket: WorkerClientWebSocket; waitForOpen: boolean }> {
   const ctor = (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
-  if (ctor) {
+  if (ctor && !preferFetchUpgrade && !runsInFetchUpgradeWorker()) {
     return {
       socket: new ctor(
         wsEndpoint,
@@ -167,17 +185,37 @@ async function openWebSocket(
     upgradeUrl.searchParams.set("__vibestudio_ws_headers", encoded);
   }
 
-  const response = (await fetch(upgradeUrl, {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const responsePromise = fetch(upgradeUrl, {
     headers: { Upgrade: "websocket" },
-  })) as Response & { webSocket?: WorkerClientWebSocket | null };
-  const socket = response.webSocket;
-  if (!socket) {
-    throw new Error(
-      `CDP WebSocket upgrade failed with HTTP ${response.status}: response contained no WebSocket`
-    );
+    signal: controller.signal,
+  }) as Promise<Response & { webSocket?: WorkerClientWebSocket | null }>;
+  try {
+    const deadline = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort();
+        reject(
+          new Error(`CDP WebSocket upgrade timed out after ${CDP_WEBSOCKET_OPEN_TIMEOUT_MS}ms`)
+        );
+      }, CDP_WEBSOCKET_OPEN_TIMEOUT_MS);
+    });
+    const response = await Promise.race([responsePromise, deadline]);
+    const socket = response.webSocket;
+    if (!socket) {
+      throw new Error(
+        `CDP WebSocket upgrade failed with HTTP ${response.status}: response contained no WebSocket`
+      );
+    }
+    socket.accept?.();
+    return { socket, waitForOpen: false };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    // Some Worker fetch implementations do not reject promptly when an
+    // Upgrade request is aborted. Keep that eventual rejection handled after
+    // the bounded race has already released the caller.
+    void responsePromise.catch(() => undefined);
   }
-  socket.accept?.();
-  return { socket, waitForOpen: false };
 }
 
 function once(
@@ -185,7 +223,9 @@ function once(
   event: "open" | "message" | "error" | "close"
 ): Promise<Event | MessageEvent> {
   return new Promise((resolve, reject) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
       ws.removeEventListener(event, handle);
       ws.removeEventListener("error", handleError);
       ws.removeEventListener("close", handleClose);
@@ -202,6 +242,17 @@ function once(
       cleanup();
       reject(new Error(`CDP WebSocket closed before ${event}`));
     };
+    if (event === "open") {
+      timeout = setTimeout(() => {
+        cleanup();
+        try {
+          ws.close();
+        } catch {
+          // The socket may already have failed while the timeout fired.
+        }
+        reject(new Error(`CDP WebSocket open timed out after ${CDP_WEBSOCKET_OPEN_TIMEOUT_MS}ms`));
+      }, CDP_WEBSOCKET_OPEN_TIMEOUT_MS);
+    }
     ws.addEventListener(event, handle);
     if (event !== "error") ws.addEventListener("error", handleError);
     if (event !== "close") ws.addEventListener("close", handleClose);
@@ -240,7 +291,10 @@ export class CdpConnection {
   private closed = false;
   private closeError: Error | null = null;
 
-  private constructor(private readonly ws: WebSocket) {
+  private constructor(
+    private readonly ws: WebSocket,
+    private readonly commandTimeoutMs = CDP_COMMAND_TIMEOUT_MS
+  ) {
     ws.addEventListener("message", (event) => {
       void this.handleMessage((event as MessageEvent).data);
     });
@@ -260,10 +314,19 @@ export class CdpConnection {
     });
   }
 
-  static async connect(wsEndpoint: string, authToken?: string): Promise<CdpConnection> {
-    const { socket: ws, waitForOpen } = await openWebSocket(wsEndpoint, authToken);
+  static async connect(
+    wsEndpoint: string,
+    authToken?: string,
+    preferFetchUpgrade = false,
+    options: { commandTimeoutMs?: number } = {}
+  ): Promise<CdpConnection> {
+    const { socket: ws, waitForOpen } = await openWebSocket(
+      wsEndpoint,
+      authToken,
+      preferFetchUpgrade
+    );
     if (waitForOpen) await once(ws, "open");
-    return new CdpConnection(ws);
+    return new CdpConnection(ws, options.commandTimeoutMs ?? CDP_COMMAND_TIMEOUT_MS);
   }
 
   send(method: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -276,10 +339,23 @@ export class CdpConnection {
     const id = this.nextId++;
     const message = params ? { id, method, params } : { id, method };
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        const error = new Error(
+          `CDP command timed out after ${this.commandTimeoutMs}ms: ${method}. ` +
+            "The target connection was closed; acquire a fresh page and inspect panel diagnostics."
+        );
+        this.disconnect(error);
+        try {
+          this.ws.close();
+        } catch {
+          // The transport may already be closed.
+        }
+      }, this.commandTimeoutMs);
+      this.pending.set(id, { resolve, reject, timeout });
       try {
         this.ws.send(JSON.stringify(message));
       } catch (error) {
+        clearTimeout(timeout);
         this.pending.delete(id);
         reject(error);
       }
@@ -300,7 +376,10 @@ export class CdpConnection {
     if (this.closed) return;
     this.closed = true;
     this.closeError = error;
-    for (const pending of this.pending.values()) pending.reject(error);
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
     this.pending.clear();
     this.eventListeners.clear();
   }
@@ -337,6 +416,7 @@ export class CdpConnection {
     const pending = this.pending.get(parsed.id);
     if (!pending) return;
     this.pending.delete(parsed.id);
+    clearTimeout(pending.timeout);
     if (parsed.error) {
       pending.reject(new Error(parsed.error.message ?? parsed.error.data ?? "CDP command failed"));
       return;
@@ -504,7 +584,7 @@ async function __nsRun(P){
     case "isDisabled": { var e=await nsWaitForState(d,"attached",t); return !nsEnabled(e); }
     case "isEditable": { var e=await nsWaitForState(d,"attached",t); return nsEditable(e); }
     case "textContent": { var e=nsFirst(d); return e?e.textContent:null; }
-    case "innerText": { var e=await nsWaitForState(d,"visible",t); return e.innerText!=null?e.innerText:(e.textContent||""); }
+    case "innerText": { var e=await nsWaitForState(d,"attached",t); return e.innerText!=null?e.innerText:(e.textContent||""); }
     case "inputValue": { var e=await nsWaitForState(d,"attached",t); return "value" in e ? e.value : ""; }
     case "getAttribute": { var e=await nsWaitForState(d,"attached",t); return e.getAttribute(a.name); }
     case "boundingBox": { var e=nsFirst(d); return e?nsBox(e):null; }
@@ -781,40 +861,76 @@ class WorkerCdpPage {
 
   // ---- Navigation -------------------------------------------------------
   async goto(url: string): Promise<unknown> {
-    const result = (await this.connection.send("Page.navigate", { url })) as {
-      frameId?: string;
-      errorText?: string;
-    };
+    const settled = this.waitForNavigationSettled(this.defaultTimeout);
+    let result: { frameId?: string; errorText?: string };
+    try {
+      result = (await this.connection.send("Page.navigate", { url })) as {
+        frameId?: string;
+        errorText?: string;
+      };
+    } catch (error) {
+      settled.cancel();
+      throw error;
+    }
     // Await the navigation settling (main frame stops loading / load event fires) before returning.
     // Without this, `goto` returns the instant Page.navigate is acknowledged, so a follow-up
     // screenshot/evaluate races the in-flight navigation — during a cross-origin swap the page is
     // momentarily detached and the command fails with "Not attached to an active page". Best-effort:
     // resolve on timeout rather than throw, so a slow page doesn't hard-fail the call.
     if (!result.errorText) {
-      await this.waitForNavigationSettled(result.frameId, this.defaultTimeout);
+      settled.setFrameId(result.frameId);
+      await settled.promise;
+    } else {
+      settled.cancel();
     }
     this.currentUrl = url;
     return result;
   }
 
   /** Resolve once the page finishes (re)loading after a navigation, or after `timeout` ms. */
-  private waitForNavigationSettled(frameId: string | undefined, timeout: number): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const cleanups: Array<() => void> = [];
-      const finish = (): void => {
-        for (const cleanup of cleanups.splice(0)) cleanup();
-        resolve();
-      };
-      cleanups.push(this.connection.on("Page.loadEventFired", () => finish()));
-      cleanups.push(
-        this.connection.on("Page.frameStoppedLoading", (params) => {
-          const fid = (params as { frameId?: string }).frameId;
-          if (!frameId || fid === frameId) finish();
-        })
-      );
-      const timer = setTimeout(finish, timeout);
-      cleanups.push(() => clearTimeout(timer));
+  private waitForNavigationSettled(timeout: number): {
+    promise: Promise<void>;
+    setFrameId(frameId: string | undefined): void;
+    cancel(): void;
+  } {
+    let frameId: string | undefined;
+    const stoppedFrames = new Set<string>();
+    let resolvePromise!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      resolvePromise = resolve;
     });
+    const cleanups: Array<() => void> = [];
+    let finished = false;
+    const finish = (): void => {
+      if (finished) return;
+      finished = true;
+      for (const cleanup of cleanups.splice(0)) cleanup();
+      resolvePromise();
+    };
+    // Install listeners before Page.navigate. Fast navigations can emit their
+    // lifecycle event before the navigate response reaches the client.
+    cleanups.push(this.connection.on("Page.loadEventFired", () => finish()));
+    cleanups.push(
+      this.connection.on("Page.frameStoppedLoading", (params) => {
+        const fid = (params as { frameId?: string }).frameId;
+        if (!fid) return;
+        if (frameId) {
+          if (fid === frameId) finish();
+        } else {
+          stoppedFrames.add(fid);
+        }
+      })
+    );
+    const timer = setTimeout(finish, timeout);
+    cleanups.push(() => clearTimeout(timer));
+    return {
+      promise,
+      setFrameId: (nextFrameId) => {
+        frameId = nextFrameId;
+        if (frameId && stoppedFrames.has(frameId)) finish();
+      },
+      cancel: finish,
+    };
   }
 
   async reload(): Promise<void> {
@@ -1563,9 +1679,20 @@ class WorkerBrowser {
 export const BrowserImpl = {
   async connect(
     wsEndpoint: string,
-    options: { transportOptions?: { authToken?: string } } = {}
+    options: {
+      transportOptions?: { authToken?: string };
+      /** Hosted EvalDO runtimes must use the egress-aware fetch upgrade. */
+      preferFetchUpgrade?: boolean;
+      /** Override the protocol safety deadline for diagnostics/tests. */
+      commandTimeoutMs?: number;
+    } = {}
   ): Promise<WorkerBrowser> {
-    const connection = await CdpConnection.connect(wsEndpoint, options.transportOptions?.authToken);
+    const connection = await CdpConnection.connect(
+      wsEndpoint,
+      options.transportOptions?.authToken,
+      options.preferFetchUpgrade,
+      { commandTimeoutMs: options.commandTimeoutMs }
+    );
     const page = new WorkerCdpPage(connection);
     await page.initialize();
     return new WorkerBrowser(page, connection);
