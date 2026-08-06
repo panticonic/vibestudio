@@ -73,7 +73,7 @@ export function hasElectronUtilityProcess(): boolean {
 export function createNodeProcessAdapter(
   bundlePath: string,
   env: Record<string, string | undefined>,
-  options: ProcessAdapterOptions = {},
+  options: ProcessAdapterOptions = {}
 ): ProcessAdapter {
   const childEnv = {
     ...env,
@@ -131,7 +131,7 @@ export function createNodeProcessAdapter(
 export function createProcessAdapter(
   bundlePath: string,
   env: Record<string, string | undefined>,
-  options: ProcessAdapterOptions = {},
+  options: ProcessAdapterOptions = {}
 ): ProcessAdapter {
   if (options.preferNode || !hasElectronUtilityProcess()) {
     return createNodeProcessAdapter(bundlePath, env, options);
@@ -145,7 +145,7 @@ export function createProcessAdapter(
           env?: NodeJS.ProcessEnv;
           execArgv?: string[];
           stdio?: "pipe" | "inherit" | "ignore";
-        },
+        }
       ): any;
     };
   };

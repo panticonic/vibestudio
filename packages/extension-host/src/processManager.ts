@@ -11,7 +11,14 @@ interface RunningExtension {
   ready: boolean;
   methods: string[];
   hasFetch: boolean;
-  pending: Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>;
+  pending: Map<
+    string,
+    {
+      resolve: (value: unknown) => void;
+      reject: (err: Error) => void;
+      timeout: ReturnType<typeof setTimeout>;
+    }
+  >;
   lastStartedAt: number;
   stopping: boolean;
   health: ExtensionHealth | null;
@@ -46,7 +53,7 @@ export interface ExtensionProcessManagerDeps {
     level: "debug" | "info" | "warn" | "error",
     message: string,
     fields?: Record<string, unknown>,
-    source?: "stdout" | "stderr" | "ctx.log" | "console",
+    source?: "stdout" | "stderr" | "ctx.log" | "console"
   ): void;
   onCrashLimit?(name: string, error: string, attempts: number): void;
   onInspectorUrl?(name: string, inspectorUrl: string | null): void;
@@ -81,7 +88,7 @@ export class ExtensionProcessManager {
       {
         execArgv: extensionRuntimeExecArgv(),
         preferNode: true,
-      },
+      }
     );
     let running!: RunningExtension;
     const exitHandler = (code: number | null) => this.handleExit(running, code);
@@ -267,7 +274,7 @@ export class ExtensionProcessManager {
       state,
       running.ready
         ? `Exited with code ${code ?? "signal"}`
-        : this.exitBeforeReadyMessage(state.name, code, running.stderrTail),
+        : this.exitBeforeReadyMessage(state.name, code, running.stderrTail)
     );
   }
 
@@ -312,9 +319,10 @@ export class ExtensionProcessManager {
   private scheduleCrashRestart(state: ExtensionProcessState, error: string): void {
     const now = Date.now();
     const current = this.crashes.get(state.name);
-    const crashState: CrashState = current && now - current.windowStart <= CRASH_WINDOW_MS
-      ? current
-      : { attempts: 0, windowStart: now, timer: null, nextAttemptAt: null };
+    const crashState: CrashState =
+      current && now - current.windowStart <= CRASH_WINDOW_MS
+        ? current
+        : { attempts: 0, windowStart: now, timer: null, nextAttemptAt: null };
     crashState.attempts += 1;
     if (crashState.timer) {
       clearTimeout(crashState.timer);
@@ -339,10 +347,7 @@ export class ExtensionProcessManager {
       crashState.nextAttemptAt = null;
       this.spawn(state).catch((err) => {
         if (this.running.has(state.name)) return;
-        this.scheduleCrashRestart(
-          state,
-          err instanceof Error ? err.message : String(err),
-        );
+        this.scheduleCrashRestart(state, err instanceof Error ? err.message : String(err));
       });
     }, delay);
   }

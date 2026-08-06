@@ -277,10 +277,7 @@ export class DevelopmentStore {
       const existing = this.getRun(value.runId);
       if (existing) {
         const row = this.sql
-          .exec(
-            "SELECT start_intent_digest FROM development_runs WHERE run_id=?",
-            value.runId
-          )
+          .exec("SELECT start_intent_digest FROM development_runs WHERE run_id=?", value.runId)
           .toArray()[0]!;
         if (String(row["start_intent_digest"]) !== startIntentDigest) {
           throw coded("EIDEMPOTENCYDRIFT", "Run id was reused with different intent");
@@ -404,7 +401,11 @@ export class DevelopmentStore {
     return this.transaction(() => this.insertEvent(runId, at, kind, payload));
   }
 
-  listEvents(runId: string, after = 0, limit = 100): {
+  listEvents(
+    runId: string,
+    after = 0,
+    limit = 100
+  ): {
     events: DevelopmentRunEvent[];
     nextAfter: number | null;
   } {
@@ -464,10 +465,12 @@ export class DevelopmentStore {
     );
   }
 
-  armSnapshotFault(input: {
+  armSnapshotFault(input: { runId: string; sessionId: string }): {
+    faultId: string;
     runId: string;
-    sessionId: string;
-  }): { faultId: string; runId: string; phase: "after-snapshot-retained"; armedAt: number } {
+    phase: "after-snapshot-retained";
+    armedAt: number;
+  } {
     const existing = this.sql
       .exec(
         "SELECT fault_id,armed_at,session_id FROM development_test_faults WHERE run_id=?",

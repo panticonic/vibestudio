@@ -14,10 +14,7 @@ import {
 } from "@vibestudio/rpc";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
-import {
-  createExtensionProxy,
-  type ExtensionsClient,
-} from "@vibestudio/extension";
+import { createExtensionProxy, type ExtensionsClient } from "@vibestudio/extension";
 import { createCredentialClient } from "@vibestudio/credential-client";
 import { gitInteropMethods } from "@vibestudio/service-schemas/gitInterop";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
@@ -474,19 +471,25 @@ function createContext() {
         });
       },
       healthy: (detail?: HealthDetail) => {
-        void rpcCall("runtime.supervision.reportHealth", [{ state: "healthy", detail }]).catch((err) => {
-          console.error("[ExtensionRuntime] Failed to report health:", err);
-        });
+        void rpcCall("runtime.supervision.reportHealth", [{ state: "healthy", detail }]).catch(
+          (err) => {
+            console.error("[ExtensionRuntime] Failed to report health:", err);
+          }
+        );
       },
       degraded: (detail: HealthDetail) => {
-        void rpcCall("runtime.supervision.reportHealth", [{ state: "degraded", detail }]).catch((err) => {
-          console.error("[ExtensionRuntime] Failed to report health:", err);
-        });
+        void rpcCall("runtime.supervision.reportHealth", [{ state: "degraded", detail }]).catch(
+          (err) => {
+            console.error("[ExtensionRuntime] Failed to report health:", err);
+          }
+        );
       },
       unhealthy: (detail: HealthDetail) => {
-        void rpcCall("runtime.supervision.reportHealth", [{ state: "unhealthy", detail }]).catch((err) => {
-          console.error("[ExtensionRuntime] Failed to report health:", err);
-        });
+        void rpcCall("runtime.supervision.reportHealth", [{ state: "unhealthy", detail }]).catch(
+          (err) => {
+            console.error("[ExtensionRuntime] Failed to report health:", err);
+          }
+        );
       },
     },
     emit: (event: string, payload: unknown) => {

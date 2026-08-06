@@ -3,11 +3,22 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createLocalClaudeCodeDevelopmentDriver } from "./localClaudeCodeDevelopmentDriver.js";
+import type { NativeDevelopmentToolHandle } from "./nativeDevelopmentExecutor.js";
 
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+  await Promise.all(
+    roots.splice(0).map(async (root) => {
+      // A live or failed launch deliberately makes the toolchain projection
+      // non-writable. Restore only this fixture's private projection before
+      // removing it so a failed assertion cannot leak the test process.
+      await fs
+        .chmod(path.join(root, "home", ".vibestudio-toolchain"), 0o700)
+        .catch(() => undefined);
+      await fs.rm(root, { recursive: true, force: true });
+    })
+  );
 });
 
 async function createClaudeFixture(version = "2.1.81") {
@@ -51,12 +62,28 @@ async function waitForFile(filePath: string): Promise<string> {
   throw new Error(`Timed out waiting for ${filePath}`);
 }
 
+async function waitForTerminalText(
+  terminal: { read(input: { terminalSessionId: string }): { text: string } },
+  terminalSessionId: string,
+  expected: string
+): Promise<string> {
+  const deadline = Date.now() + 5_000;
+  do {
+    const text = terminal.read({ terminalSessionId }).text;
+    if (text.includes(expected)) return text;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  } while (Date.now() < deadline);
+  return terminal.read({ terminalSessionId }).text;
+}
+
 describe("createLocalClaudeCodeDevelopmentDriver", () => {
   it.skipIf(process.platform !== "linux")(
     "launches an exact stripped-environment process group and freezes/resumes/retire it",
     async () => {
       const fixture = await createClaudeFixture();
       process.env["VIBESTUDIO_NATIVE_DRIVER_SECRET_TEST"] = "must-not-cross";
+      let handle: NativeDevelopmentToolHandle | null = null;
+      let retired = false;
       try {
         const driver = await createLocalClaudeCodeDevelopmentDriver({
           executorId: "executor:local",
@@ -64,7 +91,7 @@ describe("createLocalClaudeCodeDevelopmentDriver", () => {
           hostClaudeConfigDirectory: fixture.hostConfig,
         });
         await expect(driver.availability()).resolves.toEqual({ available: true });
-        const handle = await driver.launch({
+        handle = await driver.launch({
           sessionId: "session-1",
           ownedRootId: "owned-root-1",
           repositoryRoot: fixture.repositoryRoot,
@@ -112,11 +139,15 @@ describe("createLocalClaudeCodeDevelopmentDriver", () => {
             data: "different\\n",
           })
         ).toThrow("writeId was reused");
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        expect(driver.terminalSurface!.read({ terminalSessionId }).text).toContain(
+        const terminalText = await waitForTerminalText(
+          driver.terminalSurface!,
+          terminalSessionId,
           "native-development-ready"
         );
-        expect(driver.terminalSurface!.read({ terminalSessionId }).text).toContain("hello");
+        expect(terminalText).toContain("native-development-ready");
+        expect(
+          await waitForTerminalText(driver.terminalSurface!, terminalSessionId, "hello")
+        ).toContain("hello");
 
         await handle.freezeForCheckpoint();
         await handle.resumeCheckpoint();
@@ -124,10 +155,12 @@ describe("createLocalClaudeCodeDevelopmentDriver", () => {
         await expect(handle.stop()).resolves.toBeUndefined();
         expect(driver.terminalSurface!.read({ terminalSessionId }).alive).toBe(false);
         await handle.retire();
+        retired = true;
         expect(() => driver.terminalSurface!.read({ terminalSessionId })).toThrow(
           "Unknown development terminal"
         );
       } finally {
+        if (handle && !retired) await handle.retire().catch(() => undefined);
         delete process.env["VIBESTUDIO_NATIVE_DRIVER_SECRET_TEST"];
       }
     }

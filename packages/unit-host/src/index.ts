@@ -8,6 +8,10 @@ import {
   type CapabilityRequesterKind,
 } from "@vibestudio/shared/authorityPresentation";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import type {
+  InstallReviewOrigin,
+  UnitInstallSourceOrigin,
+} from "@vibestudio/shared/authority/unitInstallReview";
 import {
   publishExecutionOwner,
   type ExecutionPublication,
@@ -170,6 +174,7 @@ export interface UnitGraphNode {
   relativePath: string;
   manifest?: {
     displayName?: string;
+    title?: string;
   };
 }
 
@@ -298,7 +303,7 @@ export function createUnitBuildIdentity<Kind extends UnitKind>(
   };
 }
 
-export interface UnitBatchEntryBase<Kind extends UnitKind = UnitKind> {
+export interface ReviewedUnitBase<Kind extends UnitKind = UnitKind> {
   unitKind: Kind;
   unitName: string;
   displayName: string;
@@ -309,7 +314,7 @@ export interface UnitBatchEntryBase<Kind extends UnitKind = UnitKind> {
   externalDeps: Record<string, string>;
 }
 
-export interface UnitBatchEntryBaseOptions<Kind extends UnitKind> {
+export interface ReviewedUnitBaseOptions<Kind extends UnitKind> {
   unitKind: Kind;
   name: string;
   displayName?: string;
@@ -355,6 +360,32 @@ export interface UnitHostOptions<
   /** Durable decisions for exact canonical identities, independent of whether
    * a target has ever been built or activated. */
   approvalStore?: UnitIdentityApprovalStore;
+  /**
+   * Whether this exact version's declared authority has been admitted.
+   *
+   * Activation trust answers "may this build run"; admission answers "was its
+   * declaration reviewed". They are different questions with different keys, and
+   * the second is a precondition for the first — a unit with trust but no
+   * admission is one the launch gate approved before admission was recorded, and
+   * it owes the review once. Absent in hosts with no authority ledger in reach,
+   * where activation trust stands alone as it always did.
+   */
+  isAdmitted?(identity: UnitBuildIdentity<Entry["unitKind"]>): boolean;
+  /**
+   * This unit ships in the host build, proven by a signed record over its own
+   * source (`productSeedTrust`).
+   *
+   * This deliberately does NOT decide activation. The launch gate asks whether
+   * the user wants this code running on their computer, and a seeded unit is
+   * still asked — shipping in the build is not consent to run (§7.6).
+   *
+   * What it settles is the other question: whose declaration this is. The host
+   * build vouches for its own units' manifests, so they are admitted without a
+   * workspace review — which is what lets `apps/shell` render a review at all.
+   * Without it the shell would be gated on a decision only the shell can
+   * present, and nothing could ever resolve it.
+   */
+  isSeedTrusted?(node: Node, identity: UnitBuildIdentity<Entry["unitKind"]>): boolean;
   makePendingEntry(node: Node, decl: Decl, building?: boolean): Entry;
   applyTrusted(node: Node, decl: Decl): Promise<void>;
   /** Lower groups settle before higher groups; units within one group run concurrently. */
@@ -365,6 +396,12 @@ export interface UnitHostOptions<
   validateBeforeApproval?: (node: Node, decl: Decl) => void;
   onApprovalCandidateError?: (node: Node, decl: Decl, message: string) => void;
   approvalEntry(node: Node, decl: Decl): ApprovalEntry;
+  /** Resolve the server-owned origin facts before a centralized review opens. */
+  approvalOrigins?(
+    entries: readonly ApprovalEntry[]
+  ): Promise<ReadonlyMap<string, InstallReviewOrigin> | undefined>;
+  /** Partition centralized reviews when the same workspace declares multiple host targets. */
+  approvalBatchKey?(entry: ApprovalEntry): string | undefined;
   requestApproval(
     entries: ApprovalEntry[],
     trigger: UnitReconcileTrigger
@@ -375,7 +412,8 @@ export interface UnitHostOptions<
 }
 
 export type UnitReconcileTrigger = "startup" | "meta-change";
-export type UnitApprovalDecision = "once" | "session" | "version" | "deny" | "dismiss";
+/** A unit review reports whether its exact parts were accepted, not a grant scope. */
+export type UnitApprovalDecision = "accepted" | "deny" | "dismiss";
 
 export interface UnitReconcileOptions {
   trigger?: UnitReconcileTrigger;
@@ -394,73 +432,143 @@ export interface UnitApprovalCoordinator<ApprovalEntry> {
   enqueue(request: {
     entries: ApprovalEntry[];
     trigger: UnitReconcileTrigger;
+    batchKey?: string;
+    origins?: ReadonlyMap<string, InstallReviewOrigin>;
     applyApproved(): Promise<void>;
     applyDenied(): void;
   }): Promise<void>;
 }
 
-export interface UnitBatchApprovalQueue<ApprovalEntry, ConfigWrite = unknown> {
+export interface UnitInstallReviewQueue<ApprovalEntry, Origin = unknown, ConfigWrite = unknown> {
   request(req: {
-    kind: "unit-batch";
+    kind: "unit-install-review";
     callerId: string;
     callerKind: "system";
     repoPath: string;
     effectiveVersion: string;
-    trigger: UnitReconcileTrigger;
+    mode: "adopt-root" | "install" | "update" | "remove" | "part-changed";
     title: string;
     description: string;
     units: ApprovalEntry[];
+    /** Where each unit's bytes came from, keyed by repo path. */
+    origins?: ReadonlyMap<string, Origin>;
     configWrite?: ConfigWrite | null;
   }): Promise<UnitApprovalDecision>;
 }
 
-export function requestUnitBatchApproval<
+export function requestUnitInstallReview<
   Kind extends UnitKind,
   ApprovalEntry,
+  Origin = unknown,
   ConfigWrite = unknown,
 >(opts: {
   descriptor: UnitDescriptor<Kind>;
-  approvalQueue: UnitBatchApprovalQueue<ApprovalEntry, ConfigWrite>;
+  approvalQueue: UnitInstallReviewQueue<ApprovalEntry, Origin, ConfigWrite>;
   entries: ApprovalEntry[];
   trigger: UnitReconcileTrigger;
+  /**
+   * Where these units came from, keyed by repo path.
+   *
+   * The gate asks whose code this is, so a request without origins is not a
+   * thinner review but a wrong one: every part would fall back to the host's
+   * own build and a third-party extension would be indistinguishable from ours.
+   */
+  origins?: ReadonlyMap<string, Origin>;
   configWrite?: ConfigWrite | null;
 }): Promise<UnitApprovalDecision> {
   return opts.approvalQueue.request({
-    kind: "unit-batch",
+    kind: "unit-install-review",
     callerId: `system:${opts.descriptor.sourceRoot}`,
     callerKind: "system",
     repoPath: "meta",
     effectiveVersion: "",
-    trigger: opts.trigger,
-    title: `Approve workspace ${opts.descriptor.approvalFraming.unitLabelPlural}`,
-    description: unitBatchApprovalDescription(opts.descriptor, opts.entries.length),
+    // Reconciling declared client apps and extensions is the launch gate: the
+    // question is whose code this is and whether it may run on this computer.
+    mode: opts.trigger === "startup" ? "adopt-root" : "install",
+    title: "Start this workspace?",
+    description: `Vibestudio needs to run ${opts.entries.length} program${
+      opts.entries.length === 1 ? "" : "s"
+    } on this computer.`,
     units: opts.entries,
+    ...(opts.origins ? { origins: opts.origins } : {}),
     configWrite: opts.configWrite ?? null,
   });
 }
 
-function unitBatchApprovalDescription(descriptor: UnitDescriptor, count: number): string {
-  const label =
-    count === 1 ? descriptor.approvalFraming.unitLabel : descriptor.approvalFraming.unitLabelPlural;
-  const privilege =
-    descriptor.kind === "app"
-      ? "privileged"
-      : descriptor.approvalFraming.nativeCode
-        ? "native-code"
-        : "trusted";
-  const runtime = descriptor.kind === "app" ? "in the app host" : "as native code";
-  const verb = count === 1 ? "needs" : "need";
-  return `This workspace uses ${count} ${privilege} ${label} that ${verb} approval to run ${runtime}.`;
+export interface UnitChangeReview<ApprovalEntry> {
+  /** Units whose DECLARED AUTHORITY changed. These produce rows. */
+  units: ApprovalEntry[];
+  /**
+   * Every unit the accepting decision admits, including the ones that produce
+   * no row.
+   *
+   * Effective version includes dependency EVs, so bumping one shared package
+   * cascades new EVs across the workspace. Presenting every EV change as a
+   * decision would replay the 37-unit card on every upgrade, forever. The user
+   * still consents to the exact bytes — the publication they accept covers
+   * them — but they are asked about what changed in what the code can DO, not
+   * about digest churn they cannot evaluate (U7).
+   */
+  identityKeys: string[];
+  /** How many units were admitted with no row of their own, for the one-line summary. */
+  unchangedCount?: number;
+  /** The previously admitted declaration, keyed by repo path, for the row diff. */
+  previousRequests?: ReadonlyMap<
+    string,
+    readonly import("@vibestudio/shared/authorityManifest").UnitAuthorityRequest[]
+  >;
+  /** Identity key per repo path, so acceptance can name exact versions. */
+  identityKeysByRepo?: ReadonlyMap<string, string>;
+  /**
+   * Unattended charters this publication adds or changes — scheduled jobs and
+   * agent heartbeats. They have no source identity and no manifest, so they are
+   * not units; they do act without anyone opening anything, so they ride the
+   * same review rather than vanishing into a config-file summary
+   * (docs/template-install-unit-approval-ux-plan.md §8).
+   */
+  charters?: import("@vibestudio/shared/approvals").InstallReviewCharter[];
 }
 
 export interface UnitChangeApprovalProvider<ApprovalEntry = unknown> {
-  unitChangeApprovalForCommit(commit: string):
-    | Promise<{ units: ApprovalEntry[]; identityKeys: string[] }>
-    | {
-        units: ApprovalEntry[];
-        identityKeys: string[];
-      };
-  acceptPreapprovedTrust(keys: Iterable<string>): void;
+  unitChangeApprovalForCommit(
+    commit: string,
+    scope?: { changedPaths: readonly string[] }
+  ): Promise<UnitChangeReview<ApprovalEntry>> | UnitChangeReview<ApprovalEntry>;
+  /**
+   * Record admission for the exact unit versions an accepted operation landed.
+   *
+   * `origin` says which decision accepted them — a publication, the workspace
+   * creation review, a template install, or trusted chrome acting for the user
+   * in front of it. It is inventory and audit, never authority: admission alone
+   * grants nothing (docs/template-install-unit-approval-ux-plan.md U5, §6.4).
+   */
+  acceptPreapprovedTrust(
+    keys: Iterable<string>,
+    origin?: "workspace-creation" | "template-install" | "publication" | "chrome",
+    /**
+     * What the user allowed now, per identity key: the row keys whose standing
+     * clearance this acceptance mints. An absent entry means every
+     * install-clearable row for that unit — one click, everything allowed. An
+     * empty array means the user chose to be asked about everything, which is a
+     * real choice and not a missing one (U5).
+     */
+    allowNow?: ReadonlyMap<string, readonly string[]>,
+    sourceOrigins?: ReadonlyMap<string, UnitInstallSourceOrigin | null>
+  ): void;
+  /**
+   * Optional two-phase form used when the acceptance is coupled to protected
+   * ref publication. Providers that persist admission/clearance can prepare
+   * it before refs advance and restore it if the publication fails.
+   */
+  preparePreapprovedTrust?(
+    keys: Iterable<string>,
+    origin?: "workspace-creation" | "template-install" | "publication" | "chrome",
+    allowNow?: ReadonlyMap<string, readonly string[]>,
+    sourceOrigins?: ReadonlyMap<string, UnitInstallSourceOrigin | null>
+  ): {
+    committed(): void | Promise<void>;
+    failed(error: unknown): void | Promise<void>;
+  } | void;
 }
 
 export interface InstalledUnit<Entry extends UnitRegistryEntryBase, Node extends UnitGraphNode> {
@@ -502,6 +610,8 @@ export class UnitHost<
   });
   private lastReconciliationError: string | null = null;
   private preapprovedTrust = new Set<string>();
+  private preapprovedTrustRevision = 0;
+  private readonly preapprovedTrustRevisions = new Map<string, number>();
   private pendingApprovalIdentityKeys = new Set<string>();
   private readonly trustResolver: UnitTrustResolver<Entry>;
 
@@ -510,11 +620,48 @@ export class UnitHost<
   }
 
   acceptPreapprovedTrust(keys: Iterable<string>): void {
-    const accepted = [...keys];
-    this.opts.approvalStore?.approveMany(accepted);
-    for (const key of accepted) {
+    this.preparePreapprovedTrust(keys).committed();
+  }
+
+  preparePreapprovedTrust(keys: Iterable<string>): UnitIdentityApprovalTransaction {
+    const accepted = [...new Set(keys)];
+    const approval = this.opts.approvalStore?.prepareApproveMany(accepted);
+    const writes = accepted.map((key) => {
+      const before = this.preapprovedTrust.has(key);
+      const revision = ++this.preapprovedTrustRevision;
+      this.preapprovedTrustRevisions.set(key, revision);
       this.preapprovedTrust.add(key);
-    }
+      return { key, before, revision };
+    });
+    let settled = false;
+    return {
+      committed: () => {
+        if (settled) return;
+        approval?.committed();
+        settled = true;
+      },
+      failed: (error) => {
+        if (settled) return;
+        const rollbackErrors: unknown[] = [];
+        try {
+          approval?.failed(error);
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+        for (const write of writes) {
+          if (this.preapprovedTrustRevisions.get(write.key) !== write.revision) continue;
+          if (!write.before) this.preapprovedTrust.delete(write.key);
+          this.preapprovedTrustRevisions.set(write.key, ++this.preapprovedTrustRevision);
+        }
+        if (rollbackErrors.length > 0) {
+          throw new AggregateError(
+            [error, ...rollbackErrors],
+            "Unit activation trust could not be rolled back"
+          );
+        }
+        settled = true;
+      },
+    };
   }
 
   async reconcileDeclared(declared: Decl[], opts: UnitReconcileOptions = {}): Promise<void> {
@@ -589,6 +736,31 @@ export class UnitHost<
   async whenDeclarationsStaged(): Promise<void> {
     if (!this.reconciling) return;
     await this.declarationsStagedPromise;
+  }
+
+  /**
+   * The declared units that ship in the host build, for the server to admit.
+   *
+   * Unlike `approvalForDeclarations` this is not filtered by approval state.
+   * Admission and the launch gate answer different questions, so a unit appears
+   * here whether or not it is also about to be asked about: the host build
+   * vouches for its declaration now, and the user decides about running it
+   * separately.
+   */
+  seedTrustedDeclarations(declared: Decl[]): ApprovalEntry[] {
+    if (!this.opts.isSeedTrusted) return [];
+    const entries: ApprovalEntry[] = [];
+    for (const decl of declared) {
+      let node: Node;
+      try {
+        node = this.opts.resolveNode(decl.source);
+      } catch {
+        continue;
+      }
+      if (!this.opts.isSeedTrusted(node, this.opts.candidateIdentity(node, decl))) continue;
+      entries.push(this.opts.approvalEntry(node, decl));
+    }
+    return entries;
   }
 
   approvalForDeclarations(declared: Decl[]): { entries: ApprovalEntry[]; identityKeys: string[] } {
@@ -722,7 +894,7 @@ export class UnitHost<
       const node = this.tryResolveNode(entry.name);
       return unitWorkspaceStatus(this.opts.descriptor.kind, entry, {
         source: node?.relativePath ?? entry.source.repo,
-        displayName: node?.manifest?.displayName,
+        displayName: node?.manifest?.displayName ?? node?.manifest?.title,
       });
     });
   }
@@ -845,18 +1017,38 @@ export class UnitHost<
     trigger: UnitReconcileTrigger,
     maxConcurrentApplies?: number
   ): Promise<void> {
-    const entries = items.map(({ node, decl }) => this.opts.approvalEntry(node, decl));
+    const grouped = new Map<
+      string,
+      Array<{ item: ResolvedUnitDeclaration<Decl, Node>; entry: ApprovalEntry }>
+    >();
+    for (const item of items) {
+      const entry = this.opts.approvalEntry(item.node, item.decl);
+      const key = this.opts.approvalBatchKey?.(entry) ?? "";
+      const group = grouped.get(key) ?? [];
+      group.push({ item, entry });
+      grouped.set(key, group);
+    }
     if (this.opts.approvalCoordinator) {
-      await this.opts.approvalCoordinator.enqueue({
-        entries,
-        trigger,
-        applyApproved: async () => {
-          await this.applyTrustedInGroups(items, maxConcurrentApplies);
-        },
-        applyDenied: () => this.opts.onApprovalDenied(items),
-      });
+      await Promise.all(
+        [...grouped.entries()].map(async ([batchKey, group]) => {
+          const groupItems = group.map(({ item }) => item);
+          const entries = group.map(({ entry }) => entry);
+          const origins = await this.opts.approvalOrigins?.(entries);
+          await this.opts.approvalCoordinator!.enqueue({
+            entries,
+            trigger,
+            ...(batchKey ? { batchKey } : {}),
+            ...(origins ? { origins } : {}),
+            applyApproved: async () => {
+              await this.applyTrustedInGroups(groupItems, maxConcurrentApplies);
+            },
+            applyDenied: () => this.opts.onApprovalDenied(groupItems),
+          });
+        })
+      );
       return;
     }
+    const entries = items.map(({ node, decl }) => this.opts.approvalEntry(node, decl));
     const decision = await this.opts.requestApproval(entries, trigger);
     if (decision === "deny" || decision === "dismiss") {
       this.opts.onApprovalDenied(items);
@@ -903,6 +1095,14 @@ export class UnitHost<
       entry,
       preapprovedIdentityKeys,
     });
+    // Activation trust is downstream of admission: "this build may run" is only
+    // meaningful for a version whose declared authority was actually reviewed.
+    // A unit carrying trust from before admission was recorded has not had the
+    // review the authority model now requires, so it is offered once more rather
+    // than left running on a decision nobody can point at.
+    if (this.opts.isAdmitted && !this.opts.isAdmitted(identity)) {
+      return { decision: "needs-approval", identityKey: resolved.identityKey };
+    }
     if (resolved.decision !== "needs-approval") return resolved;
     return this.opts.approvalStore?.has(resolved.identityKey)
       ? { decision: "preapproved", identityKey: resolved.identityKey }
@@ -981,9 +1181,9 @@ export function createPendingUnitRegistryEntry<Kind extends UnitKind>(opts: {
   };
 }
 
-export function createUnitBatchEntryBase<Kind extends UnitKind>(
-  opts: UnitBatchEntryBaseOptions<Kind>
-): UnitBatchEntryBase<Kind> {
+export function createReviewedUnitBase<Kind extends UnitKind>(
+  opts: ReviewedUnitBaseOptions<Kind>
+): ReviewedUnitBase<Kind> {
   return {
     unitKind: opts.unitKind,
     unitName: opts.name,
@@ -1015,6 +1215,12 @@ export interface UnitRegistryOptions<Entry extends UnitRegistryEntryBase> {
 export interface UnitIdentityApprovalStore {
   has(identityKey: string): boolean;
   approveMany(identityKeys: Iterable<string>): void;
+  prepareApproveMany(identityKeys: Iterable<string>): UnitIdentityApprovalTransaction;
+}
+
+export interface UnitIdentityApprovalTransaction {
+  committed(): void;
+  failed(error: unknown): void;
 }
 
 interface UnitIdentityApprovalFile {
@@ -1031,7 +1237,9 @@ interface UnitIdentityApprovalFile {
 export class FileUnitIdentityApprovalStore implements UnitIdentityApprovalStore {
   private readonly filePath: string;
   private readonly unitKind: UnitKind;
-  private readonly identityKeys = new Set<string>();
+  private identityKeys = new Set<string>();
+  private revision = 0;
+  private readonly revisions = new Map<string, number>();
 
   constructor(opts: { statePath: string; unitKind: UnitKind }) {
     this.unitKind = opts.unitKind;
@@ -1059,20 +1267,64 @@ export class FileUnitIdentityApprovalStore implements UnitIdentityApprovalStore 
   }
 
   approveMany(identityKeys: Iterable<string>): void {
+    this.prepareApproveMany(identityKeys).committed();
+  }
+
+  prepareApproveMany(identityKeys: Iterable<string>): UnitIdentityApprovalTransaction {
+    const accepted = [...new Set(identityKeys)];
+    const before = new Map(accepted.map((key) => [key, this.identityKeys.has(key)] as const));
+    const next = new Set(this.identityKeys);
     let changed = false;
-    for (const key of identityKeys) {
-      if (!this.identityKeys.has(key)) {
-        this.identityKeys.add(key);
+    for (const key of accepted) {
+      if (!next.has(key)) {
+        next.add(key);
         changed = true;
       }
     }
-    if (!changed) return;
+    if (changed) {
+      this.save(next);
+      this.identityKeys = next;
+    }
+    const appliedRevisions = new Map<string, number>();
+    for (const key of accepted) {
+      const revision = ++this.revision;
+      this.revisions.set(key, revision);
+      appliedRevisions.set(key, revision);
+    }
+    let settled = false;
+    return {
+      committed: () => {
+        settled = true;
+      },
+      failed: () => {
+        if (settled) return;
+        const restored = new Set(this.identityKeys);
+        let restoredAny = false;
+        for (const key of accepted) {
+          if (this.revisions.get(key) !== appliedRevisions.get(key)) continue;
+          if (before.get(key) === false && restored.delete(key)) restoredAny = true;
+        }
+        if (restoredAny) {
+          this.save(restored);
+          this.identityKeys = restored;
+        }
+        for (const key of accepted) {
+          if (this.revisions.get(key) === appliedRevisions.get(key)) {
+            this.revisions.set(key, ++this.revision);
+          }
+        }
+        settled = true;
+      },
+    };
+  }
+
+  private save(identityKeys: ReadonlySet<string>): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp.${process.pid}.${Date.now()}`;
     const payload: UnitIdentityApprovalFile = {
       schemaVersion: 1,
       unitKind: this.unitKind,
-      identityKeys: [...this.identityKeys].sort(),
+      identityKeys: [...identityKeys].sort(),
     };
     fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`);
     fs.renameSync(tmp, this.filePath);

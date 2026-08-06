@@ -29,6 +29,8 @@ export class CurrentHostDevelopmentClientExecutor {
     }
   >();
   private heartbeat: NodeJS.Timeout | null = null;
+  private readonly heartbeatRegistrations = new Set<Promise<void>>();
+  private closed = false;
   private readonly executorDigest: string;
   private readonly providerId: string;
 
@@ -49,18 +51,27 @@ export class CurrentHostDevelopmentClientExecutor {
   }
 
   async start(): Promise<void> {
+    this.closed = false;
     await this.register();
+    if (this.closed) return;
     this.heartbeat = setInterval(() => {
-      void this.register().catch((error) => {
+      const registration = this.register().catch((error) => {
+        if (this.closed) return;
         this.deps.log?.(`Development client executor heartbeat failed: ${message(error)}`);
+      });
+      this.heartbeatRegistrations.add(registration);
+      void registration.then(() => {
+        this.heartbeatRegistrations.delete(registration);
       });
     }, 20_000);
     this.heartbeat.unref();
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = null;
+    await Promise.all(this.heartbeatRegistrations);
     await Promise.allSettled(
       [...this.children.entries()].map(async ([requestId, owned]) => {
         await stopChildGroup(owned.child);

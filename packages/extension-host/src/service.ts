@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isProductSeedTrusted } from "@vibestudio/shared/productSeedTrust";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -27,14 +28,17 @@ import type { NotificationPayload } from "@vibestudio/shared/events";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
+import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 import type {
   BuildProvider,
   BuildProviderOutput,
   BuildProviderTarget,
 } from "@vibestudio/shared/buildProvider";
-import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type { PendingUnitInstallReviewApproval, ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
+import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { readWorkspaceConfig, resolveDeclaredExtensions } from "@vibestudio/workspace/configParser";
 import {
   UnitManifestError,
@@ -49,12 +53,12 @@ import {
   collectTransitiveUnitDependencyEvs,
   createPendingUnitRegistryEntry,
   createUnitBuildIdentity,
-  createUnitBatchEntryBase,
+  createReviewedUnitBase,
   canonicalUnitBuildIdentity,
   findUnitGraphNode,
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
-  requestUnitBatchApproval,
+  requestUnitInstallReview,
   readUnitAuthorityReview,
   authorityReviewFromPackageJson,
   unitBuildIdentityFromRegistryEntry,
@@ -97,6 +101,10 @@ const EXTENSION_UNIT_DESCRIPTOR: UnitDescriptor<"extension"> = {
   seedTrustEligible: true,
 };
 
+function canonicalAuthority(value: unknown): string {
+  return sha256Canonical(value);
+}
+
 /**
  * Host-only state for an extension invocation. The public invocation is sent
  * to the extension process; its causal parent is deliberately retained here
@@ -129,12 +137,14 @@ interface BuildSystemLike {
     artifacts: ExtensionBuildArtifactLike[];
   } | null;
   getEffectiveVersion(unitName: string): string | null;
+  listAffectedBuildUnits?(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
   resolveBuildUnitIdentity?(
     unitPath: string,
     ref?: string
   ): Promise<{
     unitPath: string;
     unitName: string;
+    stateHash: string;
     effectiveVersion: string;
     dependencyEvs: Record<string, string>;
     externalDeps: Record<string, string>;
@@ -150,6 +160,7 @@ interface BuildSystemLike {
       internalDeps: string[];
       manifest: {
         displayName?: string;
+        title?: string;
         extension?: {
           activationEvents?: string[];
           streamingMethods?: string[];
@@ -234,39 +245,38 @@ interface ExtensionTransportLike {
 }
 
 interface ApprovalQueueLike {
-  request(
-    req:
-      | {
-          kind: "capability";
-          callerId: string;
-          callerKind: "panel" | "app" | "worker" | "do" | "extension";
-          requestedByUserId?: string;
-          repoPath: string;
-          effectiveVersion: string;
-          capability: string;
-          dedupKey?: string | null;
-          title: string;
-          description?: string;
-          resource?: { type: string; label: string; value: string };
-          details?: Array<{ label: string; value: string }>;
-        }
-      | {
-          kind: "unit-batch";
-          callerId: string;
-          callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
-          requestedByUserId?: string;
-          repoPath: string;
-          effectiveVersion: string;
-          dedupKey?: string | null;
-          trigger: PendingUnitBatchApproval["trigger"];
-          title: string;
-          description: string;
-          units: PendingUnitBatchApproval["units"];
-          configWrite?: PendingUnitBatchApproval["configWrite"];
-        }
-  ): Promise<
+  request(req: {
+    kind: "capability";
+    callerId: string;
+    callerKind: "panel" | "app" | "worker" | "do" | "extension";
+    requestedByUserId?: string;
+    repoPath: string;
+    effectiveVersion: string;
+    capability: string;
+    dedupKey?: string | null;
+    title: string;
+    description?: string;
+    resource?: { type: string; label: string; value: string };
+    details?: Array<{ label: string; value: string }>;
+  }): Promise<
     "once" | "task" | "mission" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss"
   >;
+  request(req: {
+    kind: "unit-install-review";
+    callerId: string;
+    callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
+    requestedByUserId?: string;
+    repoPath: string;
+    effectiveVersion: string;
+    dedupKey?: string | null;
+    mode: PendingUnitInstallReviewApproval["mode"];
+    title: string;
+    description: string;
+    units: ReviewedUnit[];
+    /** Where each unit's bytes came from, keyed by repo path (§7.6.3). */
+    origins?: ReadonlyMap<string, InstallReviewOrigin>;
+    configWrite?: PendingUnitInstallReviewApproval["configWrite"];
+  }): Promise<"accepted" | "deny" | "dismiss">;
 }
 
 interface NotificationServiceLike {
@@ -284,7 +294,27 @@ export interface ExtensionHostDeps {
   tokenManager: TokenManager;
   eventService: EventService;
   approvalQueue: ApprovalQueueLike;
-  approvalCoordinator?: UnitApprovalCoordinator<UnitBatchEntry>;
+  approvalCoordinator?: UnitApprovalCoordinator<ReviewedUnit>;
+  /** Stable launch-gate group for an extension (shared or one host target). */
+  approvalBatchKeyFor?: (entry: ReviewedUnit) => string | undefined;
+  /**
+   * Where these units' bytes came from, derived by the server from workspace
+   * state it reads itself.
+   *
+   * Extensions are the units this matters most for: they are native code
+   * running outside our protections, and the only question the launch gate asks
+   * about them is whose code it is. Absent in tests, where nothing has an origin
+   * to derive and every unit reads as the host's own build.
+   */
+  resolveUnitOrigins?(
+    repoPaths: readonly string[]
+  ): Promise<ReadonlyMap<string, InstallReviewOrigin>>;
+  /**
+   * Whether this exact extension version's declared authority has been admitted.
+   * Absent in tests and hosts with no authority ledger, where activation trust
+   * stands alone.
+   */
+  isAdmitted?(repoPath: string, effectiveVersion: string): boolean;
   notificationService?: NotificationServiceLike;
   recordUnitLog?: (record: UnitLogRecord) => void;
   getContextIdForCaller?: (callerId: string) => string | null;
@@ -310,7 +340,7 @@ export interface ExtensionHostDeps {
   privateProviderMethods?: Readonly<Record<string, readonly string[]>>;
 }
 
-export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
+export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   readonly registry: UnitRegistry<RegistryEntry>;
   readonly processes: ExtensionProcessManager;
   private readonly extensionTrustResolver: UnitTrustResolver<RegistryEntry>;
@@ -318,7 +348,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     RegistryEntry,
     UnitDeclaration,
     ReturnType<ExtensionHost["findExtensionNode"]>,
-    UnitBatchEntry
+    ReviewedUnit
   >;
   private health = new Map<string, unknown>();
   private inspectorUrls = new Map<string, string | null>();
@@ -328,6 +358,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
   private activeInvocations = new Map<string, ActiveExtensionInvocation>();
   private registeredBuildProviderTargets = new Map<string, Set<BuildProviderTarget>>();
   private activationTails = new Map<string, Promise<void>>();
+  private lastDeclared: UnitDeclaration[] = [];
 
   constructor(private readonly deps: ExtensionHostDeps) {
     this.registry = new UnitRegistry<RegistryEntry>({
@@ -429,6 +460,27 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
         statePath: deps.statePath,
         unitKind: "extension",
       }),
+      ...(deps.isAdmitted
+        ? {
+            isAdmitted: (identity) =>
+              identity.effectiveVersion !== null &&
+              deps.isAdmitted!(identity.source.repo, identity.effectiveVersion),
+          }
+        : {}),
+      // Extensions that ship in the host build (the React Native provider and
+      // its kin) carry a signed record over their own source. Native code from
+      // a third party still faces the launch gate; ours is the build the user
+      // already chose to run (§7.6).
+      isSeedTrusted: (node, identity) =>
+        isProductSeedTrusted({
+          unitDir: path.join(deps.workspacePath, node.relativePath),
+          identity: {
+            unitKind: "extension",
+            name: identity.name,
+            source: identity.source,
+            effectiveVersion: identity.effectiveVersion,
+          },
+        }),
       makePendingEntry: (node, decl, building) => this.pendingEntryFor(node, decl, building),
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
       applyGroup: (node) => (this.activatesEagerly(node) ? 0 : 1),
@@ -466,11 +518,17 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl.ref),
-      requestApproval: (entries, trigger) =>
-        requestUnitBatchApproval<
+      approvalOrigins: (entries) =>
+        this.resolveOriginsFor(entries.map((entry) => entry.source.repo)),
+      approvalBatchKey: (entry) => deps.approvalBatchKeyFor?.(entry),
+      requestApproval: async (entries, trigger) => {
+        // Whose code this is, resolved before the question is asked.
+        const origins = await this.resolveOriginsFor(entries.map((entry) => entry.source.repo));
+        return requestUnitInstallReview<
           "extension",
-          UnitBatchEntry,
-          NonNullable<PendingUnitBatchApproval["configWrite"]>
+          ReviewedUnit,
+          InstallReviewOrigin,
+          NonNullable<PendingUnitInstallReviewApproval["configWrite"]>
         >({
           descriptor: EXTENSION_UNIT_DESCRIPTOR,
           approvalQueue: {
@@ -479,7 +537,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
           },
           entries,
           trigger,
-        }),
+          ...(origins ? { origins } : {}),
+        });
+      },
       approvalCoordinator: deps.approvalCoordinator,
       onApprovalDenied: (items) => {
         const names = items.map((item) => item.node.name);
@@ -539,6 +599,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       waitFor?: "staged" | "applied";
     } = {}
   ): Promise<void> {
+    this.lastDeclared = declared.map((entry) => ({ ...entry }));
     await this.unitHost.reconcileDeclared(declared, opts);
   }
 
@@ -547,9 +608,14 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
    * without building or activating it. Startup uses this planning phase to put
    * deferred extensions in the same review as apps, panels, and workers.
    */
-  reviewDeclared(declared: UnitDeclaration[]): { units: UnitBatchEntry[]; identityKeys: string[] } {
+  reviewDeclared(declared: UnitDeclaration[]): { units: ReviewedUnit[]; identityKeys: string[] } {
     const review = this.unitHost.approvalForDeclarations(declared);
     return { units: review.entries, identityKeys: review.identityKeys };
+  }
+
+  /** Declared extensions that ship in the host build, for the server to admit. */
+  seedTrustedDeclared(declared: UnitDeclaration[]): ReviewedUnit[] {
+    return this.unitHost.seedTrustedDeclarations(declared);
   }
 
   /**
@@ -662,10 +728,27 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
   }
 
   async unitChangeApprovalForCommit(
-    commit: string
-  ): Promise<{ units: UnitBatchEntry[]; identityKeys: string[] }> {
-    const units: UnitBatchEntry[] = [];
+    commit: string,
+    scope?: { changedPaths: readonly string[] }
+  ): Promise<{
+    units: ReviewedUnit[];
+    identityKeys: string[];
+    unchangedCount: number;
+    previousRequests: Map<string, readonly UnitAuthorityRequest[]>;
+    identityKeysByRepo: Map<string, string>;
+  }> {
+    const units: ReviewedUnit[] = [];
     const identityKeys: string[] = [];
+    const previousRequests = new Map<string, readonly UnitAuthorityRequest[]>();
+    const identityKeysByRepo = new Map<string, string>();
+    let unchangedCount = 0;
+    const configChanged = scope?.changedPaths.some(
+      (changedPath) => normalizeRepoPath(changedPath) === "meta/vibestudio.yml"
+    );
+    const affected =
+      scope && !configChanged && this.deps.buildSystem.listAffectedBuildUnits
+        ? new Set(await this.deps.buildSystem.listAffectedBuildUnits(commit, scope.changedPaths))
+        : null;
     for (const declaration of await this.readDeclaredExtensionsFromCommit(commit)) {
       const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity?.(
         declaration.source,
@@ -674,6 +757,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       if (!candidate) {
         throw new Error(`Cannot resolve extension ${declaration.source} at ${commit}`);
       }
+      if (affected && !affected.has(candidate.unitName)) continue;
       const packageJsonSource = await this.deps.readWorkspaceFileAtState(
         commit,
         `${candidate.unitPath}/package.json`
@@ -686,7 +770,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       const packageJson = JSON.parse(packageJsonSource) as {
         name?: unknown;
         version?: unknown;
-        vibestudio?: { displayName?: unknown; authority?: unknown; extension?: unknown };
+        vibestudio?: {
+          displayName?: unknown;
+          title?: unknown;
+          authority?: unknown;
+          extension?: unknown;
+        };
       };
       if (packageJson.name !== candidate.unitName || !packageJson.vibestudio?.extension) {
         throw new Error(`Candidate extension package does not match ${candidate.unitName}`);
@@ -703,27 +792,67 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
         capabilities,
       });
       const identityKey = canonicalUnitBuildIdentity(identity);
-      const active = this.registry.get(candidate.unitName);
+      const currentDeclaration = this.lastDeclared.find(
+        (entry) => normalizeRepoPath(entry.source) === normalizeRepoPath(declaration.source)
+      );
+      const current = currentDeclaration
+        ? await this.deps.buildSystem.resolveBuildUnitIdentity?.(
+            currentDeclaration.source,
+            currentDeclaration.ref
+          )
+        : null;
+      const currentIdentity = current
+        ? createUnitBuildIdentity({
+            unitKind: "extension" as const,
+            name: current.unitName,
+            sourceRepo: current.unitPath,
+            ref: currentDeclaration?.ref ?? "main",
+            effectiveVersion: current.effectiveVersion,
+            dependencyEvs: current.dependencyEvs,
+            externalDeps: current.externalDeps,
+            capabilities,
+          })
+        : null;
+      if (currentIdentity && canonicalUnitBuildIdentity(currentIdentity) === identityKey) continue;
+      const previousPackageJson = current
+        ? await this.deps.readWorkspaceFileAtState(
+            current.stateHash,
+            `${current.unitPath}/package.json`
+          )
+        : null;
+      const previousAuthority = previousPackageJson
+        ? authorityReviewFromPackageJson(
+            previousPackageJson,
+            current?.unitName ?? candidate.unitName
+          )
+        : { requests: [], provides: [] };
+      const authority = authorityReviewFromPackageJson(
+        packageJsonSource,
+        candidate.unitName,
+        previousAuthority,
+        this.deps.describeCapability,
+        "extension"
+      );
+      identityKeys.push(identityKey);
+      identityKeysByRepo.set(candidate.unitPath, identityKey);
       if (
-        active?.activeBundleKey &&
-        canonicalUnitBuildIdentity(this.registryEntryBuildIdentity(active)) === identityKey
+        current &&
+        canonicalAuthority(previousAuthority) ===
+          canonicalAuthority({ requests: authority.requests, provides: authority.provides })
       ) {
+        unchangedCount += 1;
         continue;
       }
-      const previousAuthority = active?.activeBundleKey
-        ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
-            requests: [],
-            provides: [],
-          })
-        : { requests: [], provides: [] };
       units.push({
-        ...createUnitBatchEntryBase({
+        ...createReviewedUnitBase({
           unitKind: "extension",
           name: candidate.unitName,
           displayName:
             typeof packageJson.vibestudio.displayName === "string"
               ? packageJson.vibestudio.displayName
-              : candidate.unitName,
+              : typeof packageJson.vibestudio.title === "string"
+                ? packageJson.vibestudio.title
+                : candidate.unitName,
           version: typeof packageJson.version === "string" ? packageJson.version : "unknown",
           sourceRepo: candidate.unitPath,
           ref: declaration.ref,
@@ -733,21 +862,19 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
         }),
         target: null,
         capabilities,
-        authority: authorityReviewFromPackageJson(
-          packageJsonSource,
-          candidate.unitName,
-          previousAuthority,
-          this.deps.describeCapability,
-          "extension"
-        ),
+        authority,
       });
-      identityKeys.push(identityKey);
+      if (current) previousRequests.set(candidate.unitPath, previousAuthority.requests);
     }
-    return { units, identityKeys };
+    return { units, identityKeys, unchangedCount, previousRequests, identityKeysByRepo };
   }
 
   acceptPreapprovedTrust(keys: Iterable<string>): void {
     this.unitHost.acceptPreapprovedTrust(keys);
+  }
+
+  preparePreapprovedTrust(keys: Iterable<string>) {
+    return this.unitHost.preparePreapprovedTrust(keys);
   }
 
   createServiceDefinition(): ServiceDefinition {
@@ -1640,11 +1767,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     });
   }
 
-  reportHealth(
-    ctx: ServiceContext,
-    state: ExtensionHealth["state"],
-    detail: unknown
-  ): void {
+  reportHealth(ctx: ServiceContext, state: ExtensionHealth["state"], detail: unknown): void {
     if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError(
         "runtime",
@@ -1797,7 +1920,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
   private buildBatchEntry(
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
     ref: string
-  ): UnitBatchEntry {
+  ): ReviewedUnit {
     const active = this.registry.get(node.name);
     const previousAuthority = active?.activeBundleKey
       ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
@@ -1806,10 +1929,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
         })
       : { requests: [], provides: [] };
     return {
-      ...createUnitBatchEntryBase({
+      ...createReviewedUnitBase({
         unitKind: "extension",
         name: node.name,
-        displayName: node.manifest.displayName,
+        displayName: node.manifest.displayName ?? node.manifest.title,
         version: this.readNodeVersion(node.path),
         sourceRepo: node.relativePath,
         ref,
@@ -2180,6 +2303,19 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
     return (node.manifest.extension?.activationEvents ?? ["*"]).includes("*");
   }
 
+  /**
+   * Where these units came from, or nothing at all.
+   *
+   * A host with no resolver (tests, embeddings without a workspace to read)
+   * says nothing rather than claiming provenance it cannot derive.
+   */
+  private async resolveOriginsFor(
+    repoPaths: readonly string[]
+  ): Promise<ReadonlyMap<string, InstallReviewOrigin> | undefined> {
+    if (!this.deps.resolveUnitOrigins) return undefined;
+    return this.deps.resolveUnitOrigins(repoPaths);
+  }
+
   private storageDirFor(name: string): string {
     return path.join(
       this.deps.statePath,
@@ -2232,22 +2368,25 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
       ref: "main",
     };
     const requesterUserId = verifiedInitiatingUserId(ctx);
+    // A reload re-presents the same unit, so it answers the same origin
+    // question the launch gate asked about it.
+    const origins = await this.resolveOriginsFor([source.repo]);
     const decision = await this.deps.approvalQueue.request({
-      kind: "unit-batch",
+      kind: "unit-install-review",
       callerId: ctx.caller.runtime.id,
       callerKind: ctx.caller.runtime.kind,
       ...(requesterUserId ? { requestedByUserId: requesterUserId } : {}),
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       dedupKey: `unit-management:extension:reload:${node.name}`,
-      trigger: "management",
+      mode: "part-changed",
       title: "Reload extension",
       description: `Allow ${ctx.caller.runtime.kind} ${ctx.caller.runtime.id} to reload ${name}.`,
       units: [
         {
           unitKind: "extension",
           unitName: node.name,
-          displayName: node.manifest.displayName ?? node.name,
+          displayName: node.manifest.displayName ?? node.manifest.title ?? node.name,
           version: entry?.version ?? this.readNodeVersion(node.path),
           target: null,
           source,
@@ -2257,12 +2396,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
           externalDeps: entry?.activeExternalDeps ?? this.currentExternalDeps(node),
         },
       ],
+      ...(origins ? { origins } : {}),
       configWrite: null,
     });
     if (decision === "deny" || decision === "dismiss") {
       throw new ServiceError("extensions", "reload", "Extension reload approval denied", "EACCES");
     }
-    if (decision !== "once" && decision !== "session" && decision !== "version") {
+    if (decision !== "accepted") {
       throw new ServiceError(
         "extensions",
         "reload",
@@ -2319,13 +2459,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<UnitBatchEntry>
 function requireUnitApprovalDecision(
   decision: Awaited<ReturnType<ApprovalQueueLike["request"]>>
 ): import("@vibestudio/unit-host").UnitApprovalDecision {
-  if (
-    decision === "once" ||
-    decision === "session" ||
-    decision === "version" ||
-    decision === "deny" ||
-    decision === "dismiss"
-  ) {
+  if (decision === "accepted" || decision === "deny" || decision === "dismiss") {
     return decision;
   }
   throw new Error(`Invalid ${decision} decision for a workspace-unit approval`);
@@ -2546,7 +2680,7 @@ function extensionWorkspaceStatusFallback(
     name: entry.name,
     kind: "extension",
     source: node.relativePath,
-    displayName: node.manifest.displayName ?? entry.name,
+    displayName: node.manifest.displayName ?? node.manifest.title ?? entry.name,
     status: entry.status,
     version: entry.version,
     ev: entry.activeEv,

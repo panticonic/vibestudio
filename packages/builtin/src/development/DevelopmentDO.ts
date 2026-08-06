@@ -112,7 +112,10 @@ export class DevelopmentDO extends DurableObjectBase {
       await this.rpc.call("main", "runtime.dropSemanticContext", [
         { contextId: context.contextId },
       ]);
-      throw coded("EIDENTITYDRIFT", "Repository identity changed while forking development context");
+      throw coded(
+        "EIDENTITYDRIFT",
+        "Repository identity changed while forking development context"
+      );
     }
     const at = Date.now();
     let session = developmentSessionSchema.parse({
@@ -180,10 +183,7 @@ export class DevelopmentDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  listSessions(input?: {
-    cursor?: { createdAt: number; sessionId: string };
-    limit?: number;
-  }): {
+  listSessions(input?: { cursor?: { createdAt: number; sessionId: string }; limit?: number }): {
     sessions: DevelopmentSession[];
     nextCursor: { createdAt: number; sessionId: string } | null;
   } {
@@ -551,10 +551,7 @@ export class DevelopmentDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  async forceRetire(input: {
-    runId: string;
-    idempotencyKey: string;
-  }): Promise<DevelopmentRun> {
+  async forceRetire(input: { runId: string; idempotencyKey: string }): Promise<DevelopmentRun> {
     const run = this.requireRun(input.runId);
     this.store.recordRunIntent({
       runId: run.runId,
@@ -778,11 +775,7 @@ export class DevelopmentDO extends DurableObjectBase {
     }
     for (const log of status.logs) this.store.appendEvent(run.runId, "log", log);
     const phase = status.phases.at(-1);
-    if (
-      status.state === "running" &&
-      phase &&
-      run.state !== phase
-    ) {
+    if (status.state === "running" && phase && run.state !== phase) {
       run = this.store.transitionRun({
         runId: run.runId,
         expected: [run.state],
@@ -967,9 +960,7 @@ export class DevelopmentDO extends DurableObjectBase {
         pendingChanges: native.pendingChanges,
         repair: native.repair,
       },
-      primaryDiagnostic: native.repair
-        ? toDiagnostic(new Error(native.repair.primaryError))
-        : null,
+      primaryDiagnostic: native.repair ? toDiagnostic(new Error(native.repair.primaryError)) : null,
       cleanupDiagnostics:
         native.repair?.cleanupErrors.map((message) => toDiagnostic(new Error(message))) ?? [],
       repairAttention: native.repair?.attention ?? null,
@@ -1038,16 +1029,9 @@ export class DevelopmentDO extends DurableObjectBase {
 
   private runtimeKind(): DevelopmentRun["ownerRuntimeKind"] {
     const kind = this.caller?.callerKind;
-    return [
-      "panel",
-      "app",
-      "worker",
-      "do",
-      "extension",
-      "shell",
-      "server",
-      "agent",
-    ].includes(String(kind))
+    return ["panel", "app", "worker", "do", "extension", "shell", "server", "agent"].includes(
+      String(kind)
+    )
       ? (kind as DevelopmentRun["ownerRuntimeKind"])
       : "do";
   }

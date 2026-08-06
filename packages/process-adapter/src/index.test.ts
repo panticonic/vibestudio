@@ -23,11 +23,7 @@ describe("createNodeProcessAdapter", () => {
   it("spawns from the ESM package without relying on a global require", async () => {
     const dir = tempDir();
     const childPath = path.join(dir, "child.cjs");
-    fs.writeFileSync(
-      childPath,
-      "process.send?.({ ok: typeof require === 'function' });\n",
-      "utf8",
-    );
+    fs.writeFileSync(childPath, "process.send?.({ ok: typeof require === 'function' });\n", "utf8");
 
     const proc = createNodeProcessAdapter(childPath, process.env);
     const message = await new Promise<unknown>((resolve, reject) => {

@@ -11,7 +11,7 @@ import {
   canonicalUnitBuildIdentity,
   collectTransitiveUnitDependencyEvs,
   createPendingUnitRegistryEntry,
-  createUnitBatchEntryBase,
+  createReviewedUnitBase,
   createUnitBuildIdentity,
   findUnitGraphNode,
   unitBuildIdentityFromRegistryEntry,
@@ -141,7 +141,7 @@ describe("UnitRegistry", () => {
 
   it("builds shared batch approval entry bases with normalized source identity", () => {
     expect(
-      createUnitBatchEntryBase({
+      createReviewedUnitBase({
         unitKind: "app",
         name: "@workspace-apps/shell",
         displayName: "Workspace Shell",
@@ -261,6 +261,37 @@ describe("FileUnitIdentityApprovalStore", () => {
     expect(reloaded.has("identity:a")).toBe(true);
     expect(reloaded.has("identity:b")).toBe(true);
     expect(reloaded.has("identity:other")).toBe(false);
+  });
+
+  it("rolls back only prepared identities and preserves later approvals", () => {
+    const root = tempRoot();
+    const store = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "app" });
+    const transaction = store.prepareApproveMany(["identity:prepared"]);
+
+    store.approveMany(["identity:later"]);
+    transaction.failed(new Error("protected refs rejected the publication"));
+
+    expect(store.has("identity:prepared")).toBe(false);
+    expect(store.has("identity:later")).toBe(true);
+    const reloaded = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "app" });
+    expect(reloaded.has("identity:prepared")).toBe(false);
+    expect(reloaded.has("identity:later")).toBe(true);
+  });
+
+  it("preserves a later approval of the same identity when an older preparation fails", () => {
+    const root = tempRoot();
+    const store = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "extension" });
+    const transaction = store.prepareApproveMany(["identity:shared"]);
+
+    store.approveMany(["identity:shared"]);
+    transaction.failed(new Error("protected refs rejected the publication"));
+
+    expect(store.has("identity:shared")).toBe(true);
+    expect(
+      new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "extension" }).has(
+        "identity:shared"
+      )
+    ).toBe(true);
   });
 
   it("fails closed on unknown persisted schemas", () => {
@@ -472,6 +503,16 @@ describe("UnitHost", () => {
       active?: boolean;
       extraNode?: TestNode;
       applyTrusted?: (node: TestNode) => Promise<void>;
+      isAdmitted?: (repoPath: string, effectiveVersion: string) => boolean;
+      /** Stands in for the durable activation-trust file. */
+      approvalStore?: {
+        has(key: string): boolean;
+        approveMany(keys: Iterable<string>): void;
+        prepareApproveMany(keys: Iterable<string>): {
+          committed(): void;
+          failed(error: unknown): void;
+        };
+      };
     } = {}
   ) {
     const root = tempRoot();
@@ -512,6 +553,14 @@ describe("UnitHost", () => {
         seedTrustEligible: true,
       },
       registry,
+      ...(opts.approvalStore ? { approvalStore: opts.approvalStore } : {}),
+      ...(opts.isAdmitted
+        ? {
+            isAdmitted: (identity: { source: { repo: string }; effectiveVersion: string | null }) =>
+              identity.effectiveVersion !== null &&
+              opts.isAdmitted!(identity.source.repo, identity.effectiveVersion),
+          }
+        : {}),
       resolveNode: (source) => {
         const match = nodes.find(
           (candidate) => source === candidate.relativePath || source === candidate.name
@@ -546,7 +595,7 @@ describe("UnitHost", () => {
       approvalEntry: (n, decl) => ({ name: n.name, ref: decl.ref }),
       requestApproval: async (entries) => {
         prompted.push(entries);
-        return "once";
+        return "accepted";
       },
       onApprovalDenied: (items) => {
         denied.push(...items.map((item) => item.node.name));
@@ -596,6 +645,61 @@ describe("UnitHost", () => {
 
     expect(applied).toEqual([node.name]);
     expect(prompted).toEqual([]);
+  });
+
+  it("retracts prepared activation trust when the publication fails", async () => {
+    const { host, applied, prompted } = makeHarness();
+    const declarations = [{ source: "extensions/a", ref: "main" }];
+    const approval = host.approvalForDeclarations(declarations);
+    const transaction = host.preparePreapprovedTrust(approval.identityKeys);
+
+    transaction.failed(new Error("protected refs rejected the publication"));
+    await host.reconcileDeclared(declarations);
+    await host.whenSettled();
+
+    expect(prompted).toEqual([[{ name: "@workspace-extensions/a", ref: "main" }]]);
+    expect(applied).toEqual(["@workspace-extensions/a"]);
+  });
+
+  // Activation trust is downstream of admission. A unit carrying trust from
+  // before admission was recorded has not had the review the authority model now
+  // requires, and warm launches would otherwise never ask for it — the gate
+  // stays quiet forever while the authority gate treats the unit as unreviewed.
+  it("re-offers a trusted declaration whose version holds no admission", () => {
+    // Durable activation trust from an earlier launch says this build may run.
+    const trusted = new Set<string>();
+    const approvalStore = {
+      has: (key: string) => trusted.has(key),
+      approveMany: (keys: Iterable<string>) => {
+        for (const key of keys) trusted.add(key);
+      },
+      prepareApproveMany: (keys: Iterable<string>) => {
+        const added = [...keys].filter((key) => !trusted.has(key));
+        for (const key of added) trusted.add(key);
+        return {
+          committed: () => undefined,
+          failed: () => {
+            for (const key of added) trusted.delete(key);
+          },
+        };
+      },
+    };
+    const admitted = new Set<string>();
+    const { host } = makeHarness({
+      approvalStore,
+      isAdmitted: (repoPath, effectiveVersion) => admitted.has(`${repoPath}@${effectiveVersion}`),
+    });
+    const declarations = [{ source: "extensions/a", ref: "main" }];
+    host.acceptPreapprovedTrust(host.approvalForDeclarations(declarations).identityKeys);
+    expect(trusted.size).toBe(1);
+
+    // Trusted but un-admitted: still offered, because trust alone is not the
+    // review the authority model requires.
+    expect(host.approvalForDeclarations(declarations).identityKeys).toHaveLength(1);
+
+    // Once the version is admitted, trust stands and the gate goes quiet.
+    admitted.add("extensions/a@ev");
+    expect(host.approvalForDeclarations(declarations).identityKeys).toEqual([]);
   });
 
   it("retains exact preapproval for declarations not included in an earlier subset reconcile", async () => {

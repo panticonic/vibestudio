@@ -59,7 +59,7 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
 
 function makeHost(
   overrides: {
-    approvalDecision?: "once" | "session" | "version" | "deny";
+    approvalDecision?: "accepted" | "deny";
     activeEv?: string | null;
     depEv?: string | null;
     activeDepEv?: string | null;
@@ -85,6 +85,7 @@ function makeHost(
     activeBundleKey?: string | null;
     sealedBuildIdentity?: boolean;
     activationEvents?: string[];
+    affectedBuildUnits?: string[];
   } = {}
 ) {
   const statePath = tempDir();
@@ -149,7 +150,9 @@ function makeHost(
     );
   }
   const approvalQueue = {
-    request: vi.fn(async () => overrides.approvalDecision ?? "once"),
+    request: vi.fn(
+      async () => overrides.approvalDecision ?? "accepted"
+    ) as unknown as ExtensionHostDeps["approvalQueue"]["request"],
   };
   const eventService = { emit: vi.fn(), getOrCreateSubscriber: vi.fn(), subscribe: vi.fn() };
   const buildArtifacts = (key: string) => [
@@ -246,10 +249,12 @@ function makeHost(
     resolveBuildUnitIdentity: vi.fn(async () => ({
       unitPath: extensionNode.relativePath,
       unitName: extensionNode.name,
+      stateHash: "state:current",
       effectiveVersion: overrides.activeEv ?? "ev-current",
       dependencyEvs: { "@workspace/runtime": overrides.depEv ?? "ev-runtime" },
       externalDeps: overrides.candidateExternalDeps ?? {},
     })),
+    listAffectedBuildUnits: vi.fn(async () => overrides.affectedBuildUnits ?? [extensionNode.name]),
     getExternalDeps: vi.fn((name: string) => {
       if (name === extensionNode.name) return overrides.candidateExternalDeps ?? {};
       return {};
@@ -610,12 +615,12 @@ describe("ExtensionHost reload approval", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
+        kind: "unit-install-review",
         callerId: "panel-1",
         callerKind: "panel",
         repoPath: "panels/test",
         effectiveVersion: "ev-test",
-        trigger: "management",
+        mode: "part-changed",
         title: "Reload extension",
         units: [
           expect.objectContaining({
@@ -672,6 +677,22 @@ describe("ExtensionHost reconcileDeclared", () => {
     ]);
   });
 
+  it("does not review extensions for an unrelated repository publication", async () => {
+    const readWorkspaceFileAtState = vi.fn(async (_stateHash: string, filePath: string) =>
+      filePath === "meta/vibestudio.yml"
+        ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nextensions:\n  - source: extensions/git-tools\n`
+        : null
+    );
+    const { host } = makeHost({ readWorkspaceFileAtState, affectedBuildUnits: [] });
+    await host.reconcileDeclared(declare("extensions/git-tools"), { waitFor: "staged" });
+
+    const approval = await host.unitChangeApprovalForCommit("state:next", {
+      changedPaths: ["panels/notes/index.tsx"],
+    });
+
+    expect(approval).toMatchObject({ units: [], identityKeys: [], unchangedCount: 0 });
+  });
+
   it("builds and activates declared extensions after startup approval", async () => {
     const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
       installed: false,
@@ -683,9 +704,9 @@ describe("ExtensionHost reconcileDeclared", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
-        title: "Approve workspace extensions",
+        kind: "unit-install-review",
+        mode: "adopt-root",
+        title: "Start this workspace?",
         units: [
           expect.objectContaining({
             unitKind: "extension",
@@ -740,8 +761,8 @@ describe("ExtensionHost reconcileDeclared", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "extension",
@@ -769,7 +790,9 @@ describe("ExtensionHost reconcileDeclared", () => {
       activeDepEv: "ev-runtime-old",
       extensionTransport,
     });
-    approvalQueue.request.mockImplementation(() => new Promise(() => {}));
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(() => {})
+    );
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await host.reconcileDeclared(declare(extensionNode.name));
@@ -781,8 +804,8 @@ describe("ExtensionHost reconcileDeclared", () => {
     await expect(invoke).resolves.toBe("called:blame");
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "extension",
@@ -850,8 +873,8 @@ describe("ExtensionHost reconcileDeclared", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "extension",
@@ -914,8 +937,8 @@ describe("ExtensionHost reconcileDeclared", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "extension",
