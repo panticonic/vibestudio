@@ -150,27 +150,9 @@ describe("HeadlessSession", () => {
     expect(session.snapshot().invocations[0]?.error).toBe("boom");
   });
 
-  it("set_title records the report title without touching the channel config", async () => {
-    // A headless report has no user-facing runtime entity. Its transport DO is
-    // infrastructure and the channel config is panel/server-owned, so the
-    // title remains local report metadata.
-    const config = createConfig();
-    const session = HeadlessSession.create({ config });
-    const updateChannelConfig = vi.fn(async () => undefined);
-    (session as any)._client = { updateChannelConfig };
-
-    const methods = (session as any).buildDefaultMethods() as Record<
-      string,
-      { execute: (args: unknown) => Promise<unknown> }
-    >;
-    const result = await methods["set_title"]!.execute({ title: "Filesystem Report" });
-
-    expect(result).toEqual({ ok: true });
-    expect(session.title).toBe("Filesystem Report");
-    expect(session.snapshot().title).toBe("Filesystem Report");
-    // Neither the channel nor the transport DO is renamed.
-    expect(updateChannelConfig).not.toHaveBeenCalled();
-    expect(config.rpc.call).not.toHaveBeenCalled();
+  it("has no consumer-owned set_title method", () => {
+    const session = HeadlessSession.create({ config: createConfig() });
+    expect((session as any).buildDefaultMethods()).toEqual({});
   });
 
   it("provides a deterministic one-rejection validation recovery seam", async () => {
@@ -598,7 +580,7 @@ describe("HeadlessSession", () => {
 
     expect(order).toEqual([
       "rpc:main:runtime.createEntity",
-      "connect:headless-1:set_title",
+      "connect:headless-1:",
       "rpc:main:runtime.createEntity",
       "rpc:agent-target:subscribeChannel",
     ]);
@@ -651,11 +633,7 @@ describe("HeadlessSession", () => {
         includeSyntheticPanelUiMethods: true,
       });
 
-      expect(Object.keys(registeredMethods).sort()).toEqual([
-        "inline_ui",
-        "load_action_bar",
-        "set_title",
-      ]);
+      expect(Object.keys(registeredMethods).sort()).toEqual(["inline_ui", "load_action_bar"]);
 
       await registeredMethods["inline_ui"]!.execute(
         {

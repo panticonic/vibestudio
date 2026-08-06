@@ -405,6 +405,7 @@ export type SubagentProgressKind =
   | "tool-failed"
   | "tool-cancelled"
   | "tool-abandoned"
+  | "title-changed"
   | "said";
 
 /**

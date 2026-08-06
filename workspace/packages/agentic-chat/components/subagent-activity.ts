@@ -132,6 +132,8 @@ export function consolidateSubagentActivity(
   const items: SubagentActivityItem[] = [];
 
   feed.forEach((entry, index) => {
+    if (entry.kind === "title-changed") return;
+
     if (entry.kind === "turn-started" || entry.kind === "turn-finished") {
       items.push({
         kind: "turn",

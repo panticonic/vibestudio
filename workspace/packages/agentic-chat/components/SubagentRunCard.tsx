@@ -137,14 +137,18 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const now = useNow(Boolean(invocation && subagent) && isLive);
   if (!invocation || !subagent) return null;
 
-  const label = subagent.label || invocation.name || "Subagent";
+  const channelTitle = [...progressFeed]
+    .reverse()
+    .find((entry) => entry.kind === "title-changed" && entry.text?.trim())?.text;
+  const label = channelTitle || subagent.label || invocation.name || "Subagent";
   const integration = subagent.integration ? INTEGRATION_LABEL[subagent.integration] : undefined;
   const canOpenPanel = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
   const canObserve = Boolean(childTranscript && subagent.taskChannelId);
 
   const callCount = countToolCalls(activity);
   const latest = latestActivity(activity);
-  const preview = previewOf(latest) ??
+  const preview =
+    previewOf(latest) ??
     (invocation.execution.description.trim()
       ? { content: invocation.execution.description.trim() }
       : {

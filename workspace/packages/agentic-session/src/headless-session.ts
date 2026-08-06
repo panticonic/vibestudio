@@ -97,7 +97,7 @@ export interface SessionSnapshot {
   localMethodNames: readonly string[];
   connected: boolean;
   duration: number;
-  /** The report title set via the agent's `set_title` tool (null until set). */
+  /** The durable channel title (null until set). */
   title: string | null;
   /** Durable provider/model requests and aggregate usage captured from the agent journal. */
   modelExecutionEvidence?: unknown;
@@ -258,14 +258,7 @@ export class HeadlessSession {
   private readonly _hotPathTrace: SessionHotPathTrace[] = [];
   private _disposed = false;
   private _consumeAbort: AbortController | null = null;
-  /**
-   * The session/report title set by the agent's `set_title` tool. A headless
-   * session has no chat panel, so the title lives HERE (on the report wrapper),
-   * not on a runtime entity or the channel config. The headless transport DO is
-   * infrastructure, not the titled conversation, and must not borrow code
-   * authority merely to mirror report metadata. Surfaced via `title` +
-   * `snapshot()`.
-   */
+  /** Local projection of the durable channel title, surfaced in reports. */
   private _title: string | null = null;
 
   // Listeners
@@ -427,24 +420,7 @@ export class HeadlessSession {
   // ===========================================================================
 
   private buildDefaultMethods(): Record<string, MethodDefinition> {
-    const methods: Record<string, MethodDefinition> = {};
-
-    methods["set_title"] = {
-      description: "Set the conversation title",
-      parameters: z.object({ title: z.string().describe("The new title") }),
-      execute: async (args: unknown) => {
-        const { title } = args as { title: string };
-        if (!title) return { ok: false, error: "Missing title" };
-        // Headless context: there is no chat panel or user-facing runtime
-        // entity. The title is report metadata, so keep it on the report
-        // wrapper. Renaming the transport EvalDO would be the wrong identity;
-        // updating channel config would also require panel/server authority.
-        this._title = title;
-        return { ok: true };
-      },
-    };
-
-    return methods;
+    return {};
   }
 
   private actorKindFromMetadata(type: string | undefined): ActorKind {
@@ -658,6 +634,13 @@ export class HeadlessSession {
       ...(options?.contextId ? { contextId: options.contextId } : {}),
     });
     this._channelId = channelId;
+
+    const applyChannelTitle = (channelConfig: ChannelConfig): void => {
+      const title = channelConfig.title?.trim();
+      this._title = title || null;
+    };
+    if (this._client.channelConfig) applyChannelTitle(this._client.channelConfig);
+    this._client.onConfigChange(applyChannelTitle);
 
     // Roster subscription
     this._client.onRoster?.((update) => {
@@ -996,7 +979,7 @@ export class HeadlessSession {
     return this._ownsAgentContext;
   }
 
-  /** The report title set via the agent's `set_title` tool (null until set). */
+  /** The durable channel title projected into this report. */
   get title(): string | null {
     return this._title;
   }

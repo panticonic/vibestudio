@@ -354,9 +354,45 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     // ONLY when this agent is itself a subagent.
     return [
       ...base,
+      this.createSetTitleTool(channelId),
       this.createSayTool(channelId, fs),
       ...this.createSubagentTools(channelId, toolRpc),
     ];
+  }
+
+  /**
+   * Title the conversation itself, not whichever UI happens to be connected.
+   * The channel config is durable and observable, so headless/task channels
+   * and any later panel attachment see the same title.
+   */
+  protected createSetTitleTool(channelId: string): AgentTool<never> {
+    return {
+      name: "set_title",
+      label: "set_title",
+      description: "Set the conversation title",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "The new title" },
+        },
+        required: ["title"],
+      } as never,
+      execute: async (_toolCallId, params) => {
+        const title = (params as { title?: unknown }).title;
+        if (typeof title !== "string" || title.trim().length === 0) {
+          throw new Error("set_title requires a non-empty title");
+        }
+        const normalized = title.trim();
+        await this.createChannelClient(channelId).updateConfig({
+          title: normalized,
+          titleExplicit: true,
+        });
+        return {
+          content: [{ type: "text", text: `set conversation title to ${normalized}` }],
+          details: { title: normalized },
+        };
+      },
+    };
   }
 
   /** The generalized `say` tool: an explicit, deliberate channel utterance

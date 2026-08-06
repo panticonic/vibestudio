@@ -907,6 +907,12 @@ describe("SubagentRunCard", () => {
                 say: true,
                 at: at(30),
               },
+              {
+                kind: "title-changed",
+                text: "Normalized poetry archive",
+                messageSeq: 5,
+                at: at(20),
+              },
             ],
           },
           subagent: {
@@ -923,7 +929,7 @@ describe("SubagentRunCard", () => {
     );
 
     expect(screen.getByTestId("subagent-run-card")).toBeTruthy();
-    expect(screen.getByText("PDF poem extraction pilot")).toBeTruthy();
+    expect(screen.getByText("Normalized poetry archive")).toBeTruthy();
     expect(screen.getByText("Running")).toBeTruthy();
     // One consolidated call, not one row per lifecycle event.
     expect(screen.getByText(/^1 call/)).toBeTruthy();

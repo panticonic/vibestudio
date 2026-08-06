@@ -3064,6 +3064,40 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     });
   });
 
+  it("relays a task-channel title onto the parent subagent card", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    await probe.processChannelEvent("task-inv-1", {
+      id: 43,
+      messageId: "task-title-43",
+      type: "config-update",
+      payload: { title: "Persistent task store", titleExplicit: true },
+      senderId: "system",
+      ts: Date.now(),
+    });
+    await probe.dispatchSubagentProgressForTest();
+
+    const progress = probe.channelStub.published.find(
+      (entry) =>
+        entry.event.kind === "invocation.progress" &&
+        entry.event.causality?.invocationId === "inv-1"
+    );
+    expect(progress?.event).toMatchObject({
+      payload: {
+        subagent: {
+          kind: "title-changed",
+          text: "Persistent task store",
+          messageSeq: 43,
+        },
+      },
+    });
+  });
+
   it("keeps ordinary child turn output as progress without replacing the supervisor goal", async () => {
     const probe = await makeSubagentSpawnProbe();
     await probe.spawnForTest(CHANNEL, "inv-1", {

@@ -8,8 +8,8 @@ through the same typed reducer/selectors the panel UI uses.
 
 The session is a channel client only. The agent's own tools — including `eval`
 (server-side in the agent's per-channel `EvalDO`), file tools, and web tools —
-come from the agent worker, not from this session. The session registers only a
-`set_title` method by default.
+come from the agent worker, not from this session. The session registers no
+default tool methods; it observes the durable channel title for reports.
 
 ### Static Constructors
 
@@ -57,7 +57,7 @@ interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
   contextId: string;
   channelId?: string; // auto-generated if omitted
   channelConfig?: ChannelConfig;
-  methods?: Record<string, MethodDefinition>; // merged with the default set_title method
+  methods?: Record<string, MethodDefinition>; // optional consumer-provided methods
   /**
    * Agent creation + channel presentation config. Common behavior keys:
    * model, thinkingLevel, fallbackModel, fallbackThinkingLevel, fallbackOn,
@@ -152,7 +152,7 @@ completed result back to its durable channel and agent trajectory.
 
 The lower-level PubSub connection primitive that `HeadlessSession` is built on.
 Use it directly only when you need to connect to a channel without the headless
-conveniences (auto agent subscription, `set_title`, the wait helpers, the
+conveniences (auto agent subscription, channel-title observation, the wait helpers, the
 transcript projection). Constructed with `{ config, metadata, callbacks }`; its
 `connect({ channelId, methods, channelConfig?, contextId? })` returns the
 underlying `PubSubClient`.

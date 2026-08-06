@@ -14,7 +14,6 @@
 import { useCallback, useMemo, useReducer, useRef, useEffect, useState } from "react";
 import { z } from "zod";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 import type {
   ChannelConfig,
@@ -907,42 +906,6 @@ export function useAgenticChat({
                   },
                 });
               });
-            },
-          },
-          set_title: {
-            description: "Set the conversation title",
-            parameters: z.object({ title: z.string().describe("The new title") }),
-            execute: async (args: unknown) => {
-              const { title } = args as {
-                title: string;
-              };
-              if (!title) return { ok: false, error: "Missing title" };
-              document.title = title;
-              const warnings: string[] = [];
-              try {
-                const runtimeClient = createTypedServiceClient(
-                  "runtime",
-                  runtimeMethods,
-                  (svc, method, callArgs) => config.rpc.call("main", `${svc}.${method}`, callArgs)
-                );
-                await runtimeClient.setTitle(title, { explicit: true });
-              } catch (err) {
-                warnings.push(err instanceof Error ? err.message : String(err));
-                console.warn("[useAgenticChat] runtime.setTitle failed:", err);
-              }
-              const client = core.clientRef.current;
-              if (client) {
-                try {
-                  // The explicit panel title is set through runtime.setTitle above. Keep the
-                  // channel title as shared metadata, but do not let the channel entity drive
-                  // the context-based panel-title mirror path.
-                  await client.updateChannelConfig({ title, titleExplicit: false });
-                } catch (err) {
-                  warnings.push(err instanceof Error ? err.message : String(err));
-                  console.warn("[useAgenticChat] channel title config update failed:", err);
-                }
-              }
-              return warnings.length > 0 ? { ok: true, warnings } : { ok: true };
             },
           },
           inspect_card: {

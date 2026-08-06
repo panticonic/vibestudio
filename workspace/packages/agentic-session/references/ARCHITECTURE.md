@@ -19,7 +19,7 @@
 @workspace/agentic-session       ← thin headless convenience
   HeadlessSession = PubSub connection (via ConnectionManager) + the same typed reducer/selector path
   - full-auto channel config (approval level 2)
-  - default set_title method registration on the client
+  - durable channel-title observation for reports
   - convenience: createWithAgent() connects the headless client, then subscribes the agent
   - Uses the same agent worker prompt and tool surface as panel sessions;
     UI tools naturally drop out because no panel is advertising them.

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MethodDefinition, PubSubClient } from "@workspace/pubsub";
 
@@ -30,12 +30,14 @@ vi.mock("@workspace/tool-ui", () => ({
 import { useAgenticChat } from "./useAgenticChat";
 import type { ChatContextValue, ConnectionConfig } from "../types";
 
-function createClient(): PubSubClient & {
+function createClient(
+  channelConfig: { title?: string; titleExplicit?: boolean } = {}
+): PubSubClient & {
   updateChannelConfig: ReturnType<typeof vi.fn>;
 } {
   return {
     clientId: "panel:chat",
-    channelConfig: {},
+    channelConfig,
     connected: false,
     ready: vi.fn(async () => undefined),
     onReady: vi.fn(() => () => undefined),
@@ -49,16 +51,13 @@ function createClient(): PubSubClient & {
   } as unknown as PubSubClient & { updateChannelConfig: ReturnType<typeof vi.fn> };
 }
 
-function createRpcCall(options?: { failTitleUpdate?: boolean }) {
+function createRpcCall() {
   return vi.fn(async (_target: string, method: string) => {
     if (method === "workers.resolveService") {
       return { targetId: "do:channel:chat-title-test" };
     }
     if (method === "getProvenance") {
       return { kind: "root" };
-    }
-    if (method === "runtime.setTitle" && options?.failTitleUpdate) {
-      throw new Error("runtime unavailable");
     }
     return undefined;
   }) as unknown as ConnectionConfig["rpc"]["call"];
@@ -131,7 +130,7 @@ describe("useAgenticChat set_title", () => {
     unmount();
   });
 
-  it("sets the calling panel title directly and preserves channel title metadata", async () => {
+  it("does not advertise a panel-owned set_title method", async () => {
     const client = createClient();
     let methods: Record<string, MethodDefinition> | undefined;
     pubsubMock.connectViaRpc.mockImplementation(
@@ -154,39 +153,24 @@ describe("useAgenticChat set_title", () => {
     const { unmount } = render(<Probe config={config} />);
 
     await waitFor(() => {
-      expect(methods?.["set_title"]).toBeDefined();
+      expect(methods).toBeDefined();
     });
-
-    const result = await methods!["set_title"]!.execute(
-      { title: "Welcome to Vibestudio" },
-      {} as never
-    );
-
-    expect(result).toEqual({ ok: true });
-    expect(document.title).toBe("Welcome to Vibestudio");
-    expect(config.rpc.call).toHaveBeenCalledWith("main", "runtime.setTitle", [
-      "Welcome to Vibestudio",
-      { explicit: true },
-    ]);
-    expect(client.updateChannelConfig).toHaveBeenCalledWith({
-      title: "Welcome to Vibestudio",
-      titleExplicit: false,
-    });
+    expect(methods?.["set_title"]).toBeUndefined();
 
     unmount();
   });
 
-  it("reports a warning if the direct runtime title update fails", async () => {
-    const client = createClient();
-    let methods: Record<string, MethodDefinition> | undefined;
-    pubsubMock.connectViaRpc.mockImplementation(
-      (options: { methods: Record<string, MethodDefinition> }) => {
-        methods = options.methods;
-        return client;
-      }
-    );
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const call = createRpcCall({ failTitleUpdate: true });
+  it("projects an explicit channel title onto an attached panel", async () => {
+    let onConfigChange: ((config: { title?: string; titleExplicit?: boolean }) => void) | undefined;
+    const client = {
+      ...createClient(),
+      onConfigChange: vi.fn((handler) => {
+        onConfigChange = handler;
+        return () => undefined;
+      }),
+    } as unknown as PubSubClient;
+    pubsubMock.connectViaRpc.mockReturnValue(client);
+    const call = createRpcCall();
     const config: ConnectionConfig = {
       clientId: "panel:chat",
       rpc: {
@@ -200,23 +184,45 @@ describe("useAgenticChat set_title", () => {
     const { unmount } = render(<Probe config={config} />);
 
     await waitFor(() => {
-      expect(methods?.["set_title"]).toBeDefined();
+      expect(onConfigChange).toBeDefined();
+    });
+    act(() => {
+      onConfigChange?.({ title: "Persistent task store", titleExplicit: true });
+    });
+    await waitFor(() => {
+      expect(document.title).toBe("Persistent task store");
+      expect(call).toHaveBeenCalledWith("main", "runtime.setTitle", [
+        "Persistent task store",
+        { explicit: true },
+      ]);
     });
 
-    const result = await methods!["set_title"]!.execute(
-      { title: "Welcome to Vibestudio" },
-      {} as never
-    );
+    unmount();
+  });
 
-    expect(result).toEqual({ ok: true, warnings: ["runtime unavailable"] });
-    expect(client.updateChannelConfig).toHaveBeenCalledWith({
-      title: "Welcome to Vibestudio",
-      titleExplicit: false,
+  it("projects a durable explicit title when the panel connects late", async () => {
+    const client = createClient({ title: "Existing task title", titleExplicit: true });
+    pubsubMock.connectViaRpc.mockReturnValue(client);
+    const call = createRpcCall();
+    const config: ConnectionConfig = {
+      clientId: "panel:chat",
+      rpc: {
+        selfId: "panel:runtime-entity",
+        call,
+        stream: vi.fn(async () => new Response()),
+        on: vi.fn(() => () => undefined),
+      },
+    };
+
+    const { unmount } = render(<Probe config={config} />);
+
+    await waitFor(() => {
+      expect(document.title).toBe("Existing task title");
+      expect(call).toHaveBeenCalledWith("main", "runtime.setTitle", [
+        "Existing task title",
+        { explicit: true },
+      ]);
     });
-    expect(warn).toHaveBeenCalledWith(
-      "[useAgenticChat] runtime.setTitle failed:",
-      expect.any(Error)
-    );
 
     unmount();
   });

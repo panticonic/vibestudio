@@ -28,7 +28,7 @@ await session.close();
 This automatically:
 - Creates a unique channel and subscribes the DO agent
 - Configures full-auto approval (no human in the loop)
-- Registers the default `set_title` method on the client
+- Projects the durable channel title into the session report
 - Uses the worker's normal Vibestudio prompt and tool surface — UI tools like
   inline_ui, load_action_bar, and feedback_form simply aren't advertised, so the agent naturally
   falls back to plain message replies
@@ -66,13 +66,13 @@ const sub = await subscribeHeadlessAgent({
   contextId,
 });
 
-// Connect (registers the default set_title method)
+// Connect (observes the durable channel title)
 await session.connect("my-channel", { contextId });
 ```
 
-## 3. ConnectionManager Directly (no headless defaults)
+## 3. ConnectionManager Directly
 
-For maximum control — no agent subscription, no `set_title`, no wait helpers:
+For maximum control — no agent subscription or wait helpers:
 
 ```typescript
 import { ConnectionManager } from "@workspace/agentic-core";
@@ -107,9 +107,10 @@ const session = await HeadlessSession.createWithAgent({
 });
 ```
 
-The headless client always advertises `set_title`. The agent still has its full
-worker tool surface — including server-side `eval` — because those tools come
-from the agent worker, not from the session's registered methods.
+`set_title` is part of the agent worker's tool surface and writes the durable
+channel title. The headless session observes that title for reports; it does not
+advertise a consumer-owned title method. Server-side `eval` likewise comes from
+the agent worker rather than the session's registered methods.
 
 ## 5. Worker/DO Context
 

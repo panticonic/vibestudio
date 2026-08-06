@@ -353,7 +353,7 @@ build-service stall in users' panels.
 - **Agent**: call the chat panel's `inspect_card` method with
   `{ messageId }` — it returns exactly what Copy details shows, plus a list of
   known cards when the id is wrong. Reach it like any participant method
-  (the panel advertises it alongside `eval`/`set_title`).
+  (the panel advertises it alongside other panel-rendered UI methods).
 
 ### Emission guarantees (CardManager)
 

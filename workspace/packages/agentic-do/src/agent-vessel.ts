@@ -3214,7 +3214,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  invocation terminals (the channel broadcasts them to all subscribers,
    *  including us, the caller). This IS the outcome-delivery leg of the
    *  channel_call at-least-once protocol — without it a turn that invokes a
-   *  panel method (eval, set_title, …) never advances. Duplicate delivery is
+   *  panel method (inline UI, feedback, …) never advances. Duplicate delivery is
    *  a no-op: the outbox row is gone after the first settle. */
   private async routeInvocationTerminal(channelId: string, event: ChannelEvent): Promise<boolean> {
     const agentic = event.payload as AgenticEvent;
@@ -6961,18 +6961,27 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Fold a child task-channel event into a structured, bounded progress
    *  update for the parent card. Returns null for kinds we don't surface. */
   private subagentProgressUpdate(
+    event: ChannelEvent,
     agentic: AgenticEvent | null,
     messageSeq: number
   ): SubagentProgressUpdate | null {
+    if (event.type === "config-update") {
+      const title = (event.payload as { title?: unknown } | null)?.title;
+      if (typeof title !== "string" || title.trim().length === 0) return null;
+      return {
+        kind: "title-changed",
+        text: this.trimSubagentProgress(title),
+        messageSeq,
+      };
+    }
     const kind = (agentic as { kind?: string } | null)?.kind ?? "";
     const payload = ((agentic as { payload?: Record<string, unknown> } | null)?.payload ??
       {}) as Record<string, unknown>;
     const tool = typeof payload["name"] === "string" ? payload["name"] : undefined;
     // Terminal invocation payloads carry no tool name; the parent re-attaches
     // one by pairing on this id, so it must ride along on every `tool-*` kind.
-    const causalityInvocationId = (
-      agentic as { causality?: { invocationId?: unknown } } | null
-    )?.causality?.invocationId;
+    const causalityInvocationId = (agentic as { causality?: { invocationId?: unknown } } | null)
+      ?.causality?.invocationId;
     const callId = typeof causalityInvocationId === "string" ? causalityInvocationId : undefined;
     if (kind === "turn.opened") return { kind: "turn-started", messageSeq };
     if (kind === "turn.closed") return { kind: "turn-finished", messageSeq };
@@ -7045,7 +7054,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const run = this.subagentRuns.getByTaskChannel(channelId);
     if (!run || event.senderId === this.participantId()) return;
     const messageSeq = Number.isFinite(event.id) ? (event.id as number) : 0;
-    const update = this.subagentProgressUpdate(agentic, messageSeq);
+    const update = this.subagentProgressUpdate(event, agentic, messageSeq);
     if (!update) return;
     const participantId =
       this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();

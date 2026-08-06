@@ -284,6 +284,7 @@ const subagentProgressUpdateSchema = z
       "tool-failed",
       "tool-cancelled",
       "tool-abandoned",
+      "title-changed",
       "said",
     ]),
     tool: z.string().optional(),

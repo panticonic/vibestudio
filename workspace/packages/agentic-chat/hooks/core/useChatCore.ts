@@ -287,6 +287,19 @@ export function useChatCore({
   const [channelTitle, setChannelTitle] = useState<string | null>(_channelConfig?.title ?? null);
   const hasTranscriptMessagesRef = useRef(false);
 
+  const mirrorExplicitTitleToAttachedPanel = useCallback(
+    (nextConfig: ChannelConfig): void => {
+      const title = nextConfig.title?.trim();
+      if (nextConfig.titleExplicit !== true || !title) return;
+      void config.rpc
+        .call("main", "runtime.setTitle", [title, { explicit: true }])
+        .catch((err) =>
+          console.warn("[useChatCore] Failed to mirror explicit channel title to panel:", err)
+        );
+    },
+    [config.rpc]
+  );
+
   // Suppress disconnect detection until we see ourselves in the roster
   // (avoids spurious disconnects during initial handshake).
   const suppressDisconnectRef = useRef(true);
@@ -510,12 +523,14 @@ export function useChatCore({
         document.title = initialTitle;
         setChannelTitle(initialTitle);
       }
+      if (newClient.channelConfig) mirrorExplicitTitleToAttachedPanel(newClient.channelConfig);
       newClient.onConfigChange((cfg: ChannelConfig) => {
         if (cfg.title) {
           defaultTitleSetRef.current = true;
           document.title = cfg.title;
           setChannelTitle(cfg.title);
         }
+        mirrorExplicitTitleToAttachedPanel(cfg);
       });
 
       // Roster subscription
@@ -632,7 +647,7 @@ export function useChatCore({
 
       return newClient;
     },
-    [connection, config.clientId]
+    [connection, config.clientId, mirrorExplicitTitleToAttachedPanel]
   );
 
   // --- Dispose connection on unmount ---
