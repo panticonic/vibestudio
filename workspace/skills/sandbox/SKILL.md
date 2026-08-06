@@ -252,7 +252,7 @@ namespaces such as `vcs`, `fs`, `workspace`, `credentials`, and `panelTree`:
 ```
 eval({ code: `
   import { contextId, vcs } from "@workspace/runtime";
-  import { createProject } from "@workspace-skills/workspace-dev";
+  import { createProjects } from "@workspace-skills/workspace-dev";
   const status = await vcs.status({ contextId });
   // workspace packages: just import, auto-resolved
 ` })
@@ -291,7 +291,7 @@ or `feedback_custom` rather than hand-written raw channel records.
 ## Critical Rules
 
 1. **Do NOT import eval-only ambient variables** — `ctx`, `scope`, `scopes`, `db`, `help`, `chat`, and `agent` are injected free variables in eval. `services`, `hosts`, `runtime`, `rpc`, and `fs` are portable bindings shared with panels/workers, so either use them directly in eval or import them from `@workspace/runtime`. For _packages_, both static `import` and dynamic `await import(...)` work in eval. File-loaded relative imports must be static/literal.
-2. **Workspace packages are auto-resolved** — just write `import { createProject } from "@workspace-skills/workspace-dev"` and it builds on first use; npm packages require `imports: { "lodash": "npm:^4.17.21" }`. (For raw services, use `rpc.call("main", "<svc>.<method>", [...])`.)
+2. **Workspace packages are auto-resolved** — just write `import { createProjects } from "@workspace-skills/workspace-dev"` and it builds on first use; npm packages require `imports: { "lodash": "npm:^4.17.21" }`. (For raw services, use `rpc.call("main", "<svc>.<method>", [...])`.)
 3. **Components must `export default`** — named exports alone won't work for inline_ui/load_action_bar/feedback_custom components
 4. **Inline UI / action-bar components receive `{ props, chat }`** (NOT `scope`/`scopes` — the eval REPL scope is server-side and is not shared into rendered components) — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
 5. **Feedback components receive `{ onSubmit, onCancel, onError, chat }`**

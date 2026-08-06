@@ -23,7 +23,10 @@ function normalize(value: unknown, stack: Set<object>): unknown {
       });
     }
     const source = value as Record<string, unknown>;
-    const keyed = Object.keys(source).map((key) => ({ original: key, normalized: key.normalize("NFC") }));
+    const keyed = Object.keys(source).map((key) => ({
+      original: key,
+      normalized: key.normalize("NFC"),
+    }));
     keyed.sort((left, right) => compareUtf8(left.normalized, right.normalized));
     const result: Record<string, unknown> = {};
     for (const key of keyed) {

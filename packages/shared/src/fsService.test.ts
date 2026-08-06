@@ -341,15 +341,12 @@ function makeCanonicalSemanticBridge(
       const prefix = directoryPath ? `${directoryPath}/` : "";
       const containingRepo = [...repositoryPaths]
         .filter(
-          (repoPath) =>
-            directoryPath === repoPath || directoryPath.startsWith(`${repoPath}/`)
+          (repoPath) => directoryPath === repoPath || directoryPath.startsWith(`${repoPath}/`)
         )
         .sort((left, right) => right.length - left.length)[0];
       if (containingRepo) {
         const repoRelative =
-          directoryPath === containingRepo
-            ? ""
-            : directoryPath.slice(containingRepo.length + 1);
+          directoryPath === containingRepo ? "" : directoryPath.slice(containingRepo.length + 1);
         const filePrefix = `${contextId}/${containingRepo}/${repoRelative ? `${repoRelative}/` : ""}`;
         const visible = new Map<string, { filePath: string; file: boolean }>();
         for (const key of files.keys()) {
@@ -372,9 +369,7 @@ function makeCanonicalSemanticBridge(
               : `directory:${prefix}${name}`,
             repositoryId: `repository:${containingRepo}`,
             repositoryRoot: false,
-            fileId: visibleEntry.file
-              ? `file:${containingRepo}/${visibleEntry.filePath}`
-              : null,
+            fileId: visibleEntry.file ? `file:${containingRepo}/${visibleEntry.filePath}` : null,
             lineage: {
               authoredChangeId: `change:${containingRepo}/${visibleEntry.filePath}`,
               authoredByWorkUnitId: `work:${containingRepo}/${visibleEntry.filePath}`,

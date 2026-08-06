@@ -23,5 +23,8 @@ export function validateToolDefinitions(tools: unknown): AIToolDefinition[] | un
   const firstError = result.error.errors[0];
   const path = firstError?.path.join(".") || "input";
   const message = firstError?.message || "unknown validation error";
-  throw createAIError("internal_error", `AI tool definitions validation failed (${path}: ${message})`);
+  throw createAIError(
+    "internal_error",
+    `AI tool definitions validation failed (${path}: ${message})`
+  );
 }

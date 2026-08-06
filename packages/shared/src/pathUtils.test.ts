@@ -31,26 +31,18 @@ describe("normalizeRelativePanelPath", () => {
   });
 
   it("throws for absolute paths", () => {
-    expect(() =>
-      normalizeRelativePanelPath("/etc/passwd", WORKSPACE)
-    ).toThrow("must be relative");
+    expect(() => normalizeRelativePanelPath("/etc/passwd", WORKSPACE)).toThrow("must be relative");
   });
 
   it("throws for empty path", () => {
-    expect(() => normalizeRelativePanelPath("", WORKSPACE)).toThrow(
-      "Invalid panel path"
-    );
+    expect(() => normalizeRelativePanelPath("", WORKSPACE)).toThrow("Invalid panel path");
   });
 
   it("throws for dot path", () => {
-    expect(() => normalizeRelativePanelPath(".", WORKSPACE)).toThrow(
-      "Invalid panel path"
-    );
+    expect(() => normalizeRelativePanelPath(".", WORKSPACE)).toThrow("Invalid panel path");
   });
 
   it("throws for paths that escape workspace with ..", () => {
-    expect(() =>
-      normalizeRelativePanelPath("../../etc/passwd", WORKSPACE)
-    ).toThrow();
+    expect(() => normalizeRelativePanelPath("../../etc/passwd", WORKSPACE)).toThrow();
   });
 });

@@ -116,11 +116,11 @@ async function waitForUnitBatchApproval(ready: ReadyPayload, shellToken: string)
       "shellApproval.listPending",
       []
     );
-    const batch = pending.find((p) => p.kind === "unit-batch");
+    const batch = pending.find((p) => p.kind === "unit-install-review");
     if (batch) return batch.approvalId;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error("unit-batch approval never appeared");
+  throw new Error("unit-install-review approval never appeared");
 }
 
 async function waitForExtensionRunning(

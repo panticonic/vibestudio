@@ -165,6 +165,7 @@ denials, and locks:
 ```ts
 eval({
   code: `return await fs.readFile("README.md", "utf8")`,
+  timeoutMs: 30_000, // top-level sibling of authority, never nested inside it
   authority: {
     effects: "read-only",
     approvals: "pregranted-only",
@@ -461,17 +462,20 @@ import them. Just write the import — no `imports` parameter needed:
 
 ```
 eval({ code: `
-  import { createProject } from "@workspace-skills/workspace-dev";
-  return await createProject({ projectType: "panel", name: "my-app", title: "My App" });
+  import { createProjects } from "@workspace-skills/workspace-dev";
+  return await createProjects([{ projectType: "panel", name: "my-app", title: "My App" }]);
 `
 })
 ```
 
 Guest/service exceptions with structured `errorData` retain that data in the
 eval result details and display a bounded failure-data preview. For
-`scaffold_publication_failed`, pass the error or its data to
-`recoverProjectPublication` from `@workspace-skills/workspace-dev`; do not infer
-recovery from the error string or rerun creation. Failed tool invocations also
+`scaffold_publication_failed`, do not rerun creation. Branch on the structured
+`retry.commandIdPolicy`: use `recoverProjectPublication` from
+`@workspace-skills/workspace-dev` for receipt/main-state recovery, repair and
+recommit the cited source for `repair-source-and-recommit`, and stop on
+`stop-integrity-investigation`. Do not infer recovery from the error string.
+Failed tool invocations also
 persist one `agent-tool-failure.v1` object in the terminal trajectory event.
 Branch on its code, kind, stage, retry policy, and ordered causes rather than
 the rendered eval text.
@@ -558,7 +562,7 @@ File-loaded code also supports package-local aliases declared through
 ```
 eval({
   code: `
-    import { createProject } from "@workspace-skills/workspace-dev";
+    import { createProjects } from "@workspace-skills/workspace-dev";
     import Ajv from "ajv";
     const ajv = new Ajv();
     console.log("Ajv loaded:", typeof ajv.compile);

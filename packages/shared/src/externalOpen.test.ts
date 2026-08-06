@@ -19,19 +19,19 @@ function authorizeUrl(overrides: Record<string, string> = {}): string {
 describe("assertAllowedOAuthExternalUrl", () => {
   it("accepts an OAuth authorize URL bound to the active loopback callback", () => {
     expect(() =>
-      assertAllowedOAuthExternalUrl(
-        authorizeUrl(),
-        "http://localhost:1455/auth/callback",
-      ),
+      assertAllowedOAuthExternalUrl(authorizeUrl(), "http://localhost:1455/auth/callback")
     ).not.toThrow();
   });
 
   it("does not hardcode a provider auth origin", () => {
     expect(() =>
       assertAllowedOAuthExternalUrl(
-        authorizeUrl({ redirect_uri: "http://localhost:1455/auth/callback" }).replace("auth.openai.com", "evil.example"),
-        "http://localhost:1455/auth/callback",
-      ),
+        authorizeUrl({ redirect_uri: "http://localhost:1455/auth/callback" }).replace(
+          "auth.openai.com",
+          "evil.example"
+        ),
+        "http://localhost:1455/auth/callback"
+      )
     ).not.toThrow();
   });
 
@@ -39,8 +39,8 @@ describe("assertAllowedOAuthExternalUrl", () => {
     expect(() =>
       assertAllowedOAuthExternalUrl(
         authorizeUrl({ redirect_uri: "http://localhost:1455/auth/callback" }),
-        "http://localhost:1456/auth/callback",
-      ),
+        "http://localhost:1456/auth/callback"
+      )
     ).toThrow(/redirect_uri does not match/);
   });
 
@@ -48,8 +48,8 @@ describe("assertAllowedOAuthExternalUrl", () => {
     expect(() =>
       assertAllowedOAuthExternalUrl(
         authorizeUrl({ code_challenge_method: "plain" }),
-        "http://localhost:1455/auth/callback",
-      ),
+        "http://localhost:1455/auth/callback"
+      )
     ).toThrow(/S256 PKCE/);
   });
 });

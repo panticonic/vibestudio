@@ -23,8 +23,7 @@ describe("redactTokenIn", () => {
     expect(redactTokenIn(line, tok)).toBe(`auth failed for token=abcd…7890 in handler`);
   });
   it("leaves text unchanged when token absent", () => {
-    expect(redactTokenIn("nothing to see here", "abcdef1234567890"))
-      .toBe("nothing to see here");
+    expect(redactTokenIn("nothing to see here", "abcdef1234567890")).toBe("nothing to see here");
   });
   it("is a no-op for short/empty tokens", () => {
     expect(redactTokenIn("abc", "xyz")).toBe("abc");

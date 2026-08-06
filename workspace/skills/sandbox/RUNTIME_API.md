@@ -60,9 +60,10 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `hosts` | value |  | Portable owner-scoped attached-host access for development sessions. |
 | `runtime` | value |  | Portable typed runtime lifecycle and supervision client for the current workspace context. |
 | `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `applyPreparedConfig`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `recurring`, `heartbeats`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
-| `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
+| `createPanelSlot` | value |  | Commit a panel under the caller and promptly return its durable handle without focusing while build and boot continue in the background. Pass operationId for retry-stable identity across exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. Use handle.observe() when readiness matters. |
+| `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready, with no fixed readiness deadline. Pass options.signal for caller-owned cancellation and operationId for retry-stable exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. It defaults under the caller and focused; use parentId:null for a root or focus:false to suppress presentation. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
 | `getPanelHandle` | value |  |  |
-| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
+| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate`, `navigateHistory` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'roots', ownerUserId } }) or page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
 | `Rpc` | value |  | RPC helpers namespace export. |
 | `z` | value |  | Zod export. |
 | `defineContract` | value |  |  |
@@ -398,6 +399,28 @@ await byKnownSlot.navigate("panels/spectrolite", {
 }); // only when intentionally building code from that context branch
 ```
 
+Panel state arguments live on the returned handle. They are validated and
+persisted by the host, so a change can be checked immediately without reading
+an internal workspace service:
+
+```ts
+const root = await openPanel("about/new", { parentId: null, focus: false });
+try {
+  const handle = await openPanel("panels/spectrolite", {
+    parentId: root.id,
+    stateArgs: { mode: "fixture" },
+    focus: false,
+  });
+  const before = await handle.stateArgs.get();
+  const afterSet = await handle.stateArgs.set({ mode: "live" });
+  const after = await handle.stateArgs.get();
+  await handle.close();
+  console.log({ before, afterSet, after });
+} finally {
+  await root.close();
+}
+```
+
 For recursive collection supervision, semantic grouping, shared orchestration
 contexts, notes, and bounded child-panel automation, read the co-located
 [collection conductor skill](../../about/collection/SKILL.md).
@@ -490,6 +513,17 @@ from `@workspace/runtime`; they work from server-side eval, panels, workers, and
 DOs. The `handle.cdp.*` automation is workerd-native and runs over a WebSocket
 to the panel's CDP endpoint, so eval can open or discover a panel and drive its
 browser target directly.
+
+Readiness-bearing operations use the canonical idempotent host-lease ensure
+transition before waiting. Programmatic runtimes prefer the headless CDP host
+and can fall back to a CDP-capable desktop host; a native desktop focus bridge
+loads on that desktop instead. `unload()` releases only the presentation
+resource, so a later focus, navigation, reload, rebuild, snapshot, or CDP
+operation can materialize the unchanged panel again. `observe()` remains a
+pure read and does not reacquire an evicted host. During reconnect grace a
+lease may remain for routing, but its old ready sample is suppressed; a
+mobile-held panel and a failed host materialization are reported immediately
+as structured host failures rather than waiting for the readiness deadline.
 
 CDP and structural operations are approval-gated on first use per requester
 runtime entity and target panel. Privileged shell/about targets use a severe

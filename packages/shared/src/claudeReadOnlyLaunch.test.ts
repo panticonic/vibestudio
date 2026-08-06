@@ -1,10 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";

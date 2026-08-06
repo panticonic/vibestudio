@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import {
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
+  approvePendingWorkspaceCreationReview,
   approvePendingStartupUnits,
   createManagedTestWorkspace,
   ensureHostedShellReady,
@@ -24,6 +25,7 @@ test.describe("agentic DX contracts", () => {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
       });
+      await approvePendingWorkspaceCreationReview(testApp.app);
       const panel = (await getPanelTree(testApp.app))[0];
       expect(panel).toBeTruthy();
 
@@ -112,6 +114,7 @@ test.describe("agentic DX contracts", () => {
         panelSource: "panels/chat",
         timeoutMs: 75_000,
       });
+      await approvePendingWorkspaceCreationReview(testApp.app);
       const panel = (await getPanelTree(testApp.app))[0];
       expect(panel).toBeTruthy();
 

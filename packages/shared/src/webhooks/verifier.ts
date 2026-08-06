@@ -3,7 +3,7 @@ import * as crypto from "node:crypto";
 export type WebhookVerifier = (
   payload: Buffer | string,
   headers: Record<string, string>,
-  secret: string,
+  secret: string
 ) => boolean;
 
 function getHeader(headers: Record<string, string>, name: string): string | undefined {
@@ -111,7 +111,10 @@ export const stripeSignature: WebhookVerifier = (payload, headers, secret) => {
   }
 
   const payloadStr = typeof payload === "string" ? payload : payload.toString("utf8");
-  const expected = crypto.createHmac("sha256", secret).update(`${timestamp}.${payloadStr}`).digest("hex");
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${timestamp}.${payloadStr}`)
+    .digest("hex");
 
   return signatures.some((sig) => {
     const sigBuf = Buffer.from(sig, "utf8");
