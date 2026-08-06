@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { DeviceCredentialEntry, StoredRemote } from "./deviceCredentialStore.js";
 
 const mocks = vi.hoisted(() => ({
@@ -66,6 +67,10 @@ function serverClient(call = vi.fn()) {
 }
 
 describe("remoteCredService", () => {
+  it("keeps secret-free connection status readable without an authority grant", () => {
+    expect(remoteCredMethods.getCurrent.tier.tier).toBe("open");
+  });
+
   beforeEach(() => {
     mocks.app.relaunch.mockClear();
     mocks.app.exit.mockClear();

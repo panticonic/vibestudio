@@ -47,11 +47,12 @@ export const remoteCredMethods = defineServiceMethods({
   getCurrent: {
     capability: "remote-client.read",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "remoteCred.read",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "Open bias: returns secret-free connection status to authorized chrome; no C1-C4 or G1-G5 rule applies",
     },
     presentation: {
       title: "View the current remote connection",

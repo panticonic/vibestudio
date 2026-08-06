@@ -94,6 +94,7 @@ describe("capability notability", () => {
       "notifications",
       "workspace-service:channel",
       "workspace-service:models",
+      "workspace-service:missions",
       "workspace-service:testkit-driver",
       "workspace-service:browser.data",
     ]) {

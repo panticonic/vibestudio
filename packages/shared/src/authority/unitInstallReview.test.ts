@@ -269,13 +269,14 @@ describe("building rows from a declaration", () => {
       requests: [
         request("workspace-service:channel"),
         request("workspace-service:models"),
+        request("workspace-service:missions"),
         request("workspace-service:testkit-driver"),
         request("workspace-service:browser.data"),
       ],
     });
 
     expect(notableRows).toEqual([]);
-    expect(everydayRows).toHaveLength(4);
+    expect(everydayRows).toHaveLength(5);
     expect(everydayRows.every((row) => row.timing === "on-add" && row.selectable)).toBe(true);
   });
 

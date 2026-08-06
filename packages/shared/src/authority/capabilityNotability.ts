@@ -153,6 +153,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // turning any protected provider method into an open effect.
   { key: "workspace-service:channel", notability: "everyday" },
   { key: "workspace-service:models", notability: "everyday" },
+  { key: "workspace-service:missions", notability: "everyday" },
   { key: "workspace-service:testkit-driver", notability: "everyday" },
   { key: "workspace-service:browser.data", notability: "everyday" },
   { key: "automations.register", notability: "headline" },

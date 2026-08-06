@@ -246,15 +246,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "remote-client.read",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "runtime.supervision.manage",
           "resource": {
             "kind": "prefix",
