@@ -40,13 +40,6 @@ import {
   type RuntimeSupervisionEntityKey,
 } from "@vibestudio/service-schemas/runtime";
 import { workspaceStateMethods } from "@vibestudio/service-schemas/workspaceState";
-import type {
-  TemplateExactPin,
-  TemplateInspection,
-  TemplateLocator,
-  TemplateOperation,
-  TemplateStatusRow,
-} from "@vibestudio/service-schemas/templates";
 import {
   vcsMethods,
   type VcsCompareResult,
@@ -84,7 +77,7 @@ import {
   type BrowserHistoryAddressRow,
 } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
-import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
+import { createTemplateManagementClient } from "@workspace/template-management";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -117,6 +110,23 @@ const rpc: RpcClient = createRpcClient({
   callerKind: "shell",
   transport,
 });
+
+const nativeSlotProtocolStateKey = "__vibestudioNativeSlotProtocolState";
+const nativeSlotProtocolGlobal = globalThis as typeof globalThis & {
+  [nativeSlotProtocolStateKey]?: { rendererInstanceId: string; nextBindingSequence: number };
+};
+const nativeSlotProtocolState = (nativeSlotProtocolGlobal[nativeSlotProtocolStateKey] ??= {
+  rendererInstanceId:
+    globalThis.crypto?.randomUUID?.() ??
+    `shell-renderer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`,
+  nextBindingSequence: 0,
+});
+
+/** Stable across component remounts/HMR and replaced by a full renderer document reload. */
+export const nativeSlotRendererInstanceId = nativeSlotProtocolState.rendererInstanceId;
+export function nextNativeSlotBindingSequence(): number {
+  return ++nativeSlotProtocolState.nextBindingSequence;
+}
 export const hostLaunch = new HostLaunchClient((service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
@@ -145,7 +155,8 @@ const extensionsClient = createTypedServiceClient(
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const browserDataClient = createBrowserDataClient({
-  call: (service, method, args) => rpc.call("main", `${service}.${method}`, args),
+  callService: (service, method, args) => rpc.call("main", `${service}.${method}`, args),
+  callTarget: (targetId, method, args) => rpc.call(targetId, method, args),
 });
 const browserEnvironmentClient = createTypedServiceClient(
   "browserEnvironment",
@@ -188,10 +199,8 @@ const workspaceClient = createTypedServiceClient(
   workspaceMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
-const runtimeClient = createTypedServiceClient(
-  "runtime",
-  runtimeMethods,
-  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+const runtimeClient = createTypedServiceClient("runtime", runtimeMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
 );
 const buildClient = createTypedServiceClient("build", buildMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
@@ -306,13 +315,13 @@ export const panel = {
   observe: (panelId: string) => productPanelRuntime.panelTree.get(panelId).observe(),
   getPresentation: (panelId: string) => viewClient.getPresentation(panelId),
   getFocusedPanelId: () => viewClient.getFocusedPanelId(),
-  setFocusedPanelId: focusPanel,
+  setFocusedPanelId: (panelId: string) => viewClient.setFocusedPanelId(panelId),
   focus: focusPanel,
   /** Per-device persisted PanelLayout (validated/pruned again shell-side on restore). */
   getPanelLayout: () => viewClient.getPanelLayout(),
   savePanelLayout: (layout: Parameters<typeof viewClient.savePanelLayout>[0]) =>
     viewClient.savePanelLayout(layout),
-  ensureLoaded: focusPanel,
+  ensureLoaded: (panelId: string) => viewClient.ensurePanelLoaded(panelId),
   updateTheme: (theme: ThemeAppearance) => viewClient.updateTheme(theme),
   updateThemeConfig: (config: ThemeConfig) => viewClient.updateThemeConfig(config),
   openDevTools: (panelId: string) => viewClient.openPanelDevTools(panelId),
@@ -365,12 +374,10 @@ export const panel = {
   unload: (panelId: string) => productPanelRuntime.panelTree.get(panelId).unload(),
   archive: (panelId: string) => workspaceStateClient.slot.close(panelId),
   createAboutPanel: async (page: string) => {
-    const handle = await productPanelRuntime.openPanel(`about/${page}`, {
-      parentId: null,
-      ...(page === "new" ? { slug: `new-${crypto.randomUUID().slice(0, 8)}` } : {}),
-      focus: true,
-    });
-    return { id: handle.id, title: handle.title, kind: handle.kind };
+    const createOptions =
+      page === "new" ? { slug: `new-${crypto.randomUUID().slice(0, 8)}`, focus: true } : undefined;
+    const result = await viewClient.createPanel(null, `about/${page}`, createOptions);
+    return { ...result, kind: "workspace" as const };
   },
   /** Create a panel from any source path (not prefixed with "about/"). */
   navigate: (
@@ -385,7 +392,8 @@ export const panel = {
     productPanelRuntime.panelTree
       .navigate(panelId, source, options)
       .then((observation) => ({ id: observation.panelId, title: observation.title })),
-  createPanel: (
+  /** Create a root panel; use createChild for an explicit parent relationship. */
+  createPanel: async (
     source: string,
     options?: {
       title?: string;
@@ -398,17 +406,21 @@ export const panel = {
       placement?: PanelPlacementHint;
       focus?: boolean;
     }
-  ) =>
-    productPanelRuntime.openPanel(source, {
+  ) => {
+    const parentIdPromise =
+      options?.isRoot === false ? panel.getFocusedPanelId() : Promise.resolve(null);
+    return parentIdPromise.then((parentId) =>
+      viewClient.createPanel(parentId, source, {
         title: options?.title,
         slug: options?.slug,
         contextId: options?.contextId,
-        parentId: options?.isRoot === false ? undefined : null,
         focus: options?.focus ?? true,
         stateArgs: options?.stateArgs,
         placement: options?.placement,
         ref: options?.ref,
-      }),
+      })
+    );
+  },
   createChild: (
     parentId: string,
     source: string,
@@ -423,16 +435,15 @@ export const panel = {
       placement?: PanelPlacementHint;
     }
   ) =>
-    productPanelRuntime.openPanel(source, {
-        parentId,
-        title: options?.title,
-        slug: options?.slug,
-        focus: options?.focus,
-        contextId: options?.contextId,
-        stateArgs: options?.stateArgs,
-        placement: options?.placement,
-        ref: options?.ref,
-      }),
+    viewClient.createPanel(parentId, source, {
+      title: options?.title,
+      slug: options?.slug,
+      focus: options?.focus,
+      contextId: options?.contextId,
+      stateArgs: options?.stateArgs,
+      placement: options?.placement,
+      ref: options?.ref,
+    }),
   createBrowser: (
     url: string,
     options?: {
@@ -443,11 +454,11 @@ export const panel = {
     }
   ) =>
     productPanelRuntime.openPanel(url, {
-        parentId: null,
-        title: options?.title,
-        slug: options?.slug,
-        focus: options?.focus,
-      }),
+      parentId: null,
+      title: options?.title,
+      slug: options?.slug,
+      focus: options?.focus,
+    }),
   createBrowserChild: (
     parentId: string,
     url: string,
@@ -459,11 +470,11 @@ export const panel = {
     }
   ) =>
     productPanelRuntime.openPanel(url, {
-        parentId,
-        title: options?.title,
-        slug: options?.slug,
-        focus: options?.focus,
-      }),
+      parentId,
+      title: options?.title,
+      slug: options?.slug,
+      focus: options?.focus,
+    }),
   movePanel: (request: MovePanelRequest) =>
     workspaceStateClient.slot.move(request.panelId, request.newParentId, {
       ...(request.beforePanelId !== undefined ? { beforeSlotId: request.beforePanelId } : {}),
@@ -509,9 +520,7 @@ export const palette = {
     const focusedPanelId = await viewClient.getFocusedPanelId().catch(() => null);
     return [...paletteContributions]
       .map(([panelId, commands]) => ({ panelId, commands }))
-      .sort((a, b) =>
-        a.panelId === focusedPanelId ? -1 : b.panelId === focusedPanelId ? 1 : 0
-      );
+      .sort((a, b) => (a.panelId === focusedPanelId ? -1 : b.panelId === focusedPanelId ? 1 : 0));
   },
   run: (panelId: string, commandId: string) =>
     rpc.emit(panelId, "runtime:palette-run", { commandId }),
@@ -566,6 +575,9 @@ export const view = {
   bindNativePanelSlot: (request: {
     nativeSlotId: string;
     bindingId: string;
+    rendererInstanceId: string;
+    bindingSequence: number;
+    operationSequence: number;
     panelId: string;
     bounds: NativePanelSlotBounds;
     focused?: boolean;
@@ -573,12 +585,21 @@ export const view = {
   updateNativePanelSlot: (request: {
     nativeSlotId: string;
     bindingId: string;
+    rendererInstanceId: string;
+    bindingSequence: number;
+    operationSequence: number;
     bounds?: NativePanelSlotBounds;
     focused?: boolean;
   }) => viewClient.updateNativePanelSlot(request),
-  clearNativePanelSlot: (request: { nativeSlotId: string; bindingId: string }) =>
-    viewClient.clearNativePanelSlot(request),
-  setHostedShellReady: (request: { ready: boolean }) => viewClient.setHostedShellReady(request),
+  clearNativePanelSlot: (request: {
+    nativeSlotId: string;
+    bindingId: string;
+    rendererInstanceId: string;
+    bindingSequence: number;
+    operationSequence: number;
+  }) => viewClient.clearNativePanelSlot(request),
+  setHostedShellReady: (request: { ready: boolean; rendererInstanceId: string }) =>
+    viewClient.setHostedShellReady(request),
   setShellOverlay: (active: boolean) => viewClient.setShellOverlay(active),
   showNativeShellOverlay: (options: NativeShellOverlayOptions) =>
     viewClient.showNativeShellOverlay(options),
@@ -712,77 +733,9 @@ export const workspace = {
 // Template mutations return immediately after asking through the normal
 // approval surface. The shell intentionally renders that state as a human
 // message rather than exposing the approval record identity.
-export const templates = {
-  status: () =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "status", []) as Promise<
-      TemplateStatusRow[]
-    >,
-  catalog: (input?: { refresh?: boolean }) =>
-    extensionsClient.invoke(
-      "@workspace-extensions/template-composer",
-      "catalog",
-      input ? [input] : []
-    ) as unknown as Promise<TemplateCatalogSnapshot>,
-  check: (input?: { alias?: string }) =>
-    extensionsClient.invoke(
-      "@workspace-extensions/template-composer",
-      "check",
-      input ? [input] : []
-    ) as Promise<Array<{ alias: string }>>,
-  inspect: (input: TemplateLocator) =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "inspect", [
-      input,
-    ]) as unknown as Promise<TemplateInspection>,
-  add: (input: {
-    commandId: string;
-    pin: TemplateExactPin;
-    choices?: Record<string, "keep" | "take" | "skip">;
-  }) =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "add", [
-      input,
-    ]) as Promise<TemplateOperation>,
-  pull: (input: { commandId: string; alias: string; toRef?: string }) =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "pull", [
-      input,
-    ]) as Promise<TemplateOperation>,
-  remove: (input: { commandId: string; alias: string }) =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "remove", [
-      input,
-    ]) as Promise<TemplateOperation>,
-  operations: () =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "operations", []) as Promise<
-      Array<{
-        operationId: string;
-        kind: "add" | "pull" | "remove" | "recompose" | "adopt-bootstrap";
-        contextId: string;
-        state: "pending" | "reviewing";
-        fingerprint: string;
-        review?: NonNullable<TemplateOperation["review"]>;
-      }>
-    >,
-  resume: (input: { operationId: string; onBuildFailure?: "discard-context" | "retain-context" }) =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "resume", [
-      input,
-    ]) as Promise<TemplateOperation>,
-  cancel: (input: { operationId: string }) =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "cancel", [
-      input,
-    ]) as Promise<{ operationId: string; state: "cancelled" }>,
-  decideSuggestion: (input: {
-    commandId: string;
-    alias: string;
-    section: "trust" | "providers";
-    decision: "accept" | "decline";
-  }) =>
-    extensionsClient.invoke("@workspace-extensions/template-composer", "decideSuggestion", [
-      input,
-    ]) as Promise<{
-      operationId: string;
-      state: "accepted" | "declined";
-      section: "trust" | "providers";
-      publicationEventId?: string;
-    }>,
-};
+export const templates = createTemplateManagementClient((extension, method, args) =>
+  extensionsClient.invoke(extension, method, args)
+);
 export const credentials = {
   requestCredentialInput: (input: Parameters<typeof credentialsClient.requestCredentialInput>[0]) =>
     credentialsClient.requestCredentialInput(input),
@@ -1078,12 +1031,15 @@ export const browserEnvironment = browserEnvironmentClient;
 // =============================================================================
 export const supervisedUnits = {
   list: () => runtimeClient.supervision.list(),
-  versions: (releaseId: string) =>
-    runtimeClient.supervision.versions({ kind: "app", releaseId }),
+  versions: (releaseId: string) => runtimeClient.supervision.versions({ kind: "app", releaseId }),
   rollback: (releaseId: string, opts?: { buildKey?: string }) =>
     runtimeClient.supervision.rollback({ kind: "app", releaseId }, opts),
-  restart: (identity: RuntimeSupervisionEntityKey) =>
-    runtimeClient.supervision.restart(identity),
+  restart: (identity: RuntimeSupervisionEntityKey) => runtimeClient.supervision.restart(identity),
+  recoverExecution: (
+    entityId: string,
+    expectedExecutionDigest: string,
+    strategy: "restore-exact" | "replace-incarnation"
+  ) => runtimeClient.recoverExecution({ entityId, expectedExecutionDigest, strategy }),
   activate: (kind: "app" | "extension", releaseId: string) =>
     runtimeClient.supervision.activate({ kind, releaseId }),
   prepare: (kind: "app" | "extension", releaseId: string, ref: string) =>
@@ -1115,7 +1071,11 @@ export const shellApproval = {
   resolve: (approvalId: string, decision: ApprovalDecision) =>
     shellApprovalClient.resolve(approvalId, decision),
   resolveBootstrap: (approvalId: string, decision: Extract<ApprovalDecision, "once" | "deny">) =>
-    shellApprovalClient.resolveBootstrap(approvalId, decision),
+    shellApprovalClient.resolveBootstrap([approvalId], decision),
+  resolveInstallReview: (
+    approvalId: string,
+    resolution: import("@vibestudio/shared/authority/unitInstallReview").TemplateInstallResolution
+  ) => shellApprovalClient.resolveInstallReview(approvalId, resolution),
   resolveMissionReview: (
     approvalId: string,
     resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }

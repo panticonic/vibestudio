@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Box, Button, Flex, Text } from "@radix-ui/themes";
 
-import { view, type NativePanelSlotBounds, type NativePanelSlotSyncResult } from "../shell/client";
-
-let nextBindingIncarnation = 0;
+import {
+  nativeSlotRendererInstanceId,
+  nextNativeSlotBindingSequence,
+  view,
+  type NativePanelSlotBounds,
+  type NativePanelSlotSyncResult,
+} from "../shell/client";
 
 interface PanelSurfaceProps {
   nativeSlotId: string;
@@ -45,10 +49,19 @@ export function PanelSurface({
   onPointerDown,
 }: PanelSurfaceProps) {
   const elementRef = useRef<HTMLDivElement | null>(null);
-  const [bindingId] = useState(
-    () => `panel-surface-${Date.now().toString(36)}-${++nextBindingIncarnation}`
-  );
+  const [{ bindingId, bindingSequence }] = useState(() => {
+    const sequence = nextNativeSlotBindingSequence();
+    return {
+      bindingId: `panel-surface-${Date.now().toString(36)}-${sequence}`,
+      bindingSequence: sequence,
+    };
+  });
+  const operationSequenceRef = useRef(0);
+  const mountedRef = useRef(true);
+  const desiredFocusedRef = useRef(focused);
+  desiredFocusedRef.current = focused;
   const boundRef = useRef(false);
+  const bindPendingRef = useRef(false);
   const bindingKeyRef = useRef<string | undefined>(bindingKey);
   const lastBoundsRef = useRef<NativePanelSlotBounds | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -67,6 +80,7 @@ export function PanelSurface({
 
   const scheduleRetry = useCallback(
     (reason: string) => {
+      if (!mountedRef.current) return;
       if (retryTimerRef.current !== null) return;
       const attempt = retryAttemptRef.current + 1;
       retryAttemptRef.current = attempt;
@@ -78,14 +92,15 @@ export function PanelSurface({
       const delayMs = Math.min(500, 50 * attempt);
       retryTimerRef.current = window.setTimeout(() => {
         retryTimerRef.current = null;
-        syncSlotRef.current?.();
+        if (mountedRef.current) syncSlotRef.current?.();
       }, delayMs);
     },
     [panelId]
   );
 
   const handleUpdateResult = useCallback(
-    (result: NativePanelSlotSyncResult | undefined) => {
+    (result: NativePanelSlotSyncResult | undefined, operationSequence: number) => {
+      if (!mountedRef.current || operationSequence !== operationSequenceRef.current) return;
       if (result?.status !== "missing") return;
       boundRef.current = false;
       lastBoundsRef.current = null;
@@ -97,11 +112,19 @@ export function PanelSurface({
   const clearSlot = useCallback(() => {
     if (!boundRef.current) return;
     boundRef.current = false;
+    bindPendingRef.current = false;
     lastBoundsRef.current = null;
+    const operationSequence = ++operationSequenceRef.current;
     void view
-      .clearNativePanelSlot({ nativeSlotId, bindingId })
+      .clearNativePanelSlot({
+        nativeSlotId,
+        bindingId,
+        rendererInstanceId: nativeSlotRendererInstanceId,
+        bindingSequence,
+        operationSequence,
+      })
       .catch((err: unknown) => console.warn("[PanelSurface] clear failed:", err));
-  }, [bindingId, nativeSlotId]);
+  }, [bindingId, bindingSequence, nativeSlotId]);
 
   const syncSlot = useCallback(() => {
     const bounds = readBounds(elementRef.current);
@@ -109,15 +132,44 @@ export function PanelSurface({
 
     if (!boundRef.current) {
       boundRef.current = true;
+      bindPendingRef.current = true;
       lastBoundsRef.current = bounds;
+      const operationSequence = ++operationSequenceRef.current;
       void view
-        .bindNativePanelSlot({ nativeSlotId, bindingId, panelId, bounds, focused })
-        .then(() => {
+        .bindNativePanelSlot({
+          nativeSlotId,
+          bindingId,
+          rendererInstanceId: nativeSlotRendererInstanceId,
+          bindingSequence,
+          operationSequence,
+          panelId,
+          bounds,
+          focused,
+        })
+        .then((result) => {
+          if (!mountedRef.current || operationSequence !== operationSequenceRef.current) return;
+          bindPendingRef.current = false;
+          if (result?.status === "missing") {
+            boundRef.current = false;
+            lastBoundsRef.current = null;
+            scheduleRetry(result.reason);
+            return;
+          }
           retryAttemptRef.current = 0;
           setAttachError(null);
+          const currentBounds = readBounds(elementRef.current);
+          if (
+            (currentBounds && !sameBounds(currentBounds, bounds)) ||
+            desiredFocusedRef.current !== focused
+          ) {
+            lastBoundsRef.current = null;
+            syncSlotRef.current?.();
+          }
         })
         .catch((err: unknown) => {
+          if (!mountedRef.current || operationSequence !== operationSequenceRef.current) return;
           boundRef.current = false;
+          bindPendingRef.current = false;
           const message = err instanceof Error ? err.message : String(err);
           if (/Hosted shell is not ready|target is not a panel view/i.test(message)) {
             scheduleRetry(message);
@@ -129,14 +181,33 @@ export function PanelSurface({
       return;
     }
 
+    if (bindPendingRef.current) return;
+
     retryAttemptRef.current = 0;
     if (sameBounds(lastBoundsRef.current, bounds)) return;
     lastBoundsRef.current = bounds;
+    const operationSequence = ++operationSequenceRef.current;
     void view
-      .updateNativePanelSlot({ nativeSlotId, bindingId, bounds })
-      .then(handleUpdateResult)
+      .updateNativePanelSlot({
+        nativeSlotId,
+        bindingId,
+        rendererInstanceId: nativeSlotRendererInstanceId,
+        bindingSequence,
+        operationSequence,
+        bounds,
+        focused,
+      })
+      .then((result) => handleUpdateResult(result, operationSequence))
       .catch((err: unknown) => console.warn("[PanelSurface] bounds update failed:", err));
-  }, [bindingId, focused, handleUpdateResult, nativeSlotId, panelId, scheduleRetry]);
+  }, [
+    bindingId,
+    bindingSequence,
+    focused,
+    handleUpdateResult,
+    nativeSlotId,
+    panelId,
+    scheduleRetry,
+  ]);
 
   syncSlotRef.current = syncSlot;
 
@@ -172,6 +243,10 @@ export function PanelSurface({
     if (bindingKeyRef.current === bindingKey) return;
     bindingKeyRef.current = bindingKey;
     boundRef.current = false;
+    bindPendingRef.current = false;
+    // Invalidate callbacks belonging to the old native-view identity before
+    // the replacement bind is issued on the next presentation frame.
+    operationSequenceRef.current += 1;
     lastBoundsRef.current = null;
     scheduleSync();
   }, [bindingKey, scheduleSync]);
@@ -200,23 +275,33 @@ export function PanelSurface({
       scheduleSync();
       return;
     }
+    if (bindPendingRef.current) return;
+    const operationSequence = ++operationSequenceRef.current;
     void view
-      .updateNativePanelSlot({ nativeSlotId, bindingId, focused })
-      .then(handleUpdateResult)
+      .updateNativePanelSlot({
+        nativeSlotId,
+        bindingId,
+        rendererInstanceId: nativeSlotRendererInstanceId,
+        bindingSequence,
+        operationSequence,
+        focused,
+      })
+      .then((result) => handleUpdateResult(result, operationSequence))
       .catch((err: unknown) => console.warn("[PanelSurface] focus update failed:", err));
-  }, [bindingId, focused, handleUpdateResult, nativeSlotId, scheduleSync]);
-
-  useEffect(() => clearSlot, [clearSlot]);
+  }, [bindingId, bindingSequence, focused, handleUpdateResult, nativeSlotId, scheduleSync]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      clearSlot();
       clearRetry();
       if (rafRef.current !== null) {
         window.cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
     };
-  }, [clearRetry]);
+  }, [clearRetry, clearSlot]);
 
   if (attachError) {
     return (

@@ -24,12 +24,12 @@ describe("useDirectShellEvent", () => {
   beforeEach(() => {
     listeners.clear();
     stopListening.mockReset();
-    onDirectEvent.mockReset().mockImplementation(
-      (event: string, listener: (payload: unknown) => void) => {
+    onDirectEvent
+      .mockReset()
+      .mockImplementation((event: string, listener: (payload: unknown) => void) => {
         listeners.set(event, listener);
         return stopListening;
-      }
-    );
+      });
   });
 
   it("owns one direct RPC listener and removes it on unmount", () => {

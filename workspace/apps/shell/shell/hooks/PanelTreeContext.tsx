@@ -53,6 +53,7 @@ export interface FullPanel {
   id: string;
   title: string;
   contextId: string;
+  runtimeEntityId?: string | null;
   buildKey?: string | null;
   parentId: string | null;
   position: number;
@@ -231,6 +232,7 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
   );
   const refreshingRef = useRef(false);
   const refreshSequenceRef = useRef(0);
+  const presentationRevisionRef = useRef(0);
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const pinMutationSeq = useAtomValue(pinMutationSeqAtom);
   const pinSeq = useRef(pinMutationSeq);
@@ -306,6 +308,9 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
   useDirectShellEvent(
     "panel-presentation-changed",
     useCallback((event) => {
+      if (event.revision <= presentationRevisionRef.current) return;
+      presentationRevisionRef.current = event.revision;
+      const revision = event.revision;
       void Promise.all(
         event.panelIds.map(async (panelId) => ({
           panelId,
@@ -313,12 +318,16 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
         }))
       )
         .then((updates) => {
+          if (presentationRevisionRef.current !== revision) return;
           setLocalSelectedChildren((current) => {
-            const next = new Map(current);
+            let next: Map<string, string | null> | null = null;
             for (const { panelId, presentation } of updates) {
-              next.set(panelId, presentation?.selectedChildId ?? null);
+              const selectedChildId = presentation?.selectedChildId ?? null;
+              if (current.has(panelId) && current.get(panelId) === selectedChildId) continue;
+              next ??= new Map(current);
+              next.set(panelId, selectedChildId);
             }
-            return next;
+            return next ?? current;
           });
         })
         .catch(() => {});
@@ -476,14 +485,22 @@ export function useFullPanel(panelId: string | null): {
 } {
   const [value, setValue] = useState<FullPanel | null>(null);
   const [loading, setLoading] = useState(Boolean(panelId));
+  const nextRequestRef = useRef(0);
+  const appliedRequestRef = useRef(0);
   const applyPresentation = useCallback(
-    (presentation: Awaited<ReturnType<typeof panel.getPresentation>>) => {
+    (presentation: Awaited<ReturnType<typeof panel.getPresentation>>, request: number) => {
       if (!presentation || presentation.id !== panelId) return;
+      // Event-driven and polling reads can overlap. Never let an older RPC
+      // response replace a newer materialization identity and strand the pane
+      // on its preparing surface after the native view is already ready.
+      if (request < appliedRequestRef.current) return;
+      appliedRequestRef.current = request;
       const source = presentation.snapshot.source;
       setValue({
         id: presentation.id,
         title: presentation.title,
         contextId: presentation.snapshot.contextId,
+        runtimeEntityId: presentation.runtimeEntityId,
         buildKey: presentation.buildKey,
         parentId: presentation.parentId,
         position: presentation.position,
@@ -506,9 +523,10 @@ export function useFullPanel(panelId: string | null): {
     useCallback(
       (event) => {
         if (!panelId || !event.panelIds.includes(panelId)) return;
+        const request = ++nextRequestRef.current;
         void panel
           .getPresentation(panelId)
-          .then(applyPresentation)
+          .then((presentation) => applyPresentation(presentation, request))
           .catch(() => {});
       },
       [applyPresentation, panelId]
@@ -525,15 +543,23 @@ export function useFullPanel(panelId: string | null): {
     setLoading(true);
     const refreshUntilTerminal = async () => {
       try {
+        const request = ++nextRequestRef.current;
         const presentation = await panel.getPresentation(panelId);
         if (cancelled) return;
         if (!presentation) {
           timer = window.setTimeout(refreshUntilTerminal, 250);
           return;
         }
-        applyPresentation(presentation);
-        const buildState = presentation.artifacts.buildState;
-        if (buildState !== "ready" && buildState !== "error") {
+        applyPresentation(presentation, request);
+        const artifacts = presentation.artifacts;
+        const presentsCurrentEntity =
+          Boolean(artifacts.htmlPath) &&
+          artifacts.hostedRuntimeEntityId === presentation.runtimeEntityId;
+        const terminal =
+          artifacts.buildState === "error" ||
+          Boolean(artifacts.viewFailure) ||
+          presentsCurrentEntity;
+        if (!terminal) {
           timer = window.setTimeout(refreshUntilTerminal, 250);
         }
       } catch {

@@ -12,6 +12,11 @@ const shellClient = vi.hoisted(() => ({
 }));
 
 vi.mock("../shell/client", () => ({
+  nativeSlotRendererInstanceId: "renderer-test",
+  nextNativeSlotBindingSequence: (() => {
+    let sequence = 0;
+    return () => ++sequence;
+  })(),
   view: {
     bindNativePanelSlot: shellClient.bindNativePanelSlot,
     updateNativePanelSlot: shellClient.updateNativePanelSlot,
@@ -65,7 +70,10 @@ describe("PanelSurface", () => {
 
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledWith({
       nativeSlotId: "slot-1",
+      rendererInstanceId: "renderer-test",
       bindingId: expect.any(String),
+      bindingSequence: expect.any(Number),
+      operationSequence: expect.any(Number),
       panelId: "panel-1",
       focused: true,
       bounds: { x: 20, y: 30, width: 400, height: 300 },
@@ -91,7 +99,10 @@ describe("PanelSurface", () => {
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
     expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
       nativeSlotId: "slot-1",
+      rendererInstanceId: "renderer-test",
       bindingId: expect.any(String),
+      bindingSequence: expect.any(Number),
+      operationSequence: expect.any(Number),
       panelId: "panel-1",
       focused: true,
       bounds: { x: 20, y: 30, width: 400, height: 300 },
@@ -120,7 +131,10 @@ describe("PanelSurface", () => {
     });
     expect(shellClient.updateNativePanelSlot).toHaveBeenCalledWith({
       nativeSlotId: "slot-1",
+      rendererInstanceId: "renderer-test",
       bindingId: expect.any(String),
+      bindingSequence: expect.any(Number),
+      operationSequence: expect.any(Number),
       focused: true,
     });
 
@@ -131,7 +145,10 @@ describe("PanelSurface", () => {
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
     expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
       nativeSlotId: "slot-1",
+      rendererInstanceId: "renderer-test",
       bindingId: expect.any(String),
+      bindingSequence: expect.any(Number),
+      operationSequence: expect.any(Number),
       panelId: "panel-1",
       focused: true,
       bounds: { x: 20, y: 30, width: 400, height: 300 },
@@ -157,10 +174,94 @@ describe("PanelSurface", () => {
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
     expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
       nativeSlotId: "slot-1",
+      rendererInstanceId: "renderer-test",
       bindingId: expect.any(String),
+      bindingSequence: expect.any(Number),
+      operationSequence: expect.any(Number),
       panelId: "panel-1",
       focused: true,
       bounds: { x: 20, y: 30, width: 400, height: 300 },
     });
+  });
+
+  it("releases a pending bind and ignores its late completion after unmount", async () => {
+    let resolveBind: ((result: { status: "bound" }) => void) | undefined;
+    shellClient.bindNativePanelSlot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveBind = resolve as (result: { status: "bound" }) => void;
+        })
+    );
+
+    const { unmount } = render(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />);
+    const bindRequest = shellClient.bindNativePanelSlot.mock.calls[0]?.[0] as {
+      bindingSequence: number;
+      operationSequence: number;
+    };
+
+    unmount();
+
+    const clearRequest = shellClient.clearNativePanelSlot.mock.calls[0]?.[0] as {
+      nativeSlotId: string;
+      bindingSequence: number;
+      operationSequence: number;
+    };
+    expect(clearRequest.nativeSlotId).toBe("slot-1");
+    expect(clearRequest.bindingSequence).toBe(bindRequest.bindingSequence);
+    expect(clearRequest.operationSequence).toBeGreaterThan(bindRequest.operationSequence);
+
+    await act(async () => {
+      resolveBind?.({ status: "bound" });
+      await vi.runAllTimersAsync();
+    });
+    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles focus that changes while the initial bind is pending", async () => {
+    let resolveBind: ((result: { status: "bound" }) => void) | undefined;
+    shellClient.bindNativePanelSlot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveBind = resolve as (result: { status: "bound" }) => void;
+        })
+    );
+    const { rerender } = render(
+      <PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused={false} />
+    );
+
+    rerender(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />);
+    expect(shellClient.updateNativePanelSlot).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveBind?.({ status: "bound" });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(shellClient.updateNativePanelSlot).toHaveBeenCalledWith(
+      expect.objectContaining({ focused: true })
+    );
+  });
+
+  it("orders StrictMode release and replay as one binding incarnation", async () => {
+    render(
+      <React.StrictMode>
+        <PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />
+      </React.StrictMode>
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const clearRequest = shellClient.clearNativePanelSlot.mock.calls[0]?.[0] as {
+      bindingSequence: number;
+      operationSequence: number;
+    };
+    const lastBindRequest = shellClient.bindNativePanelSlot.mock.calls.at(-1)?.[0] as {
+      bindingSequence: number;
+      operationSequence: number;
+    };
+    expect(lastBindRequest.bindingSequence).toBe(clearRequest.bindingSequence);
+    expect(lastBindRequest.operationSequence).toBeGreaterThan(clearRequest.operationSequence);
   });
 });

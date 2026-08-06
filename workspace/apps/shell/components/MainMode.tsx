@@ -7,7 +7,7 @@ import {
   workspaceChooserDialogOpenAtom,
   shellOverlayActiveAtom,
 } from "../state/appModeAtoms";
-import { view } from "../shell/client";
+import { nativeSlotRendererInstanceId, view } from "../shell/client";
 import { useShellEvent } from "../shell/useShellEvent";
 import { useShellOverlay } from "../shell/useShellOverlay";
 import { ConnectionSettingsDialog } from "./ConnectionSettingsDialog";
@@ -46,10 +46,12 @@ export default function MainMode() {
 
   useEffect(() => {
     void view
-      .setHostedShellReady({ ready: true })
+      .setHostedShellReady({ ready: true, rendererInstanceId: nativeSlotRendererInstanceId })
       .catch((err: unknown) => console.warn("[MainMode] Hosted shell ready failed:", err));
     const markNotReady = () => {
-      void view.setHostedShellReady({ ready: false }).catch(() => {});
+      void view
+        .setHostedShellReady({ ready: false, rendererInstanceId: nativeSlotRendererInstanceId })
+        .catch(() => {});
     };
     window.addEventListener("pagehide", markNotReady);
     window.addEventListener("beforeunload", markNotReady);

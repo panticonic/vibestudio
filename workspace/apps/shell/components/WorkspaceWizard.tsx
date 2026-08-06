@@ -84,9 +84,7 @@ export function WorkspaceWizard() {
           <Text size="2" weight="medium">
             Start with
           </Text>
-          <Card
-            style={{ outline: "2px solid var(--accent-8)" }}
-          >
+          <Card style={{ outline: "2px solid var(--accent-8)" }}>
             <Text as="div" weight="medium">
               Standard workspace
             </Text>
@@ -162,11 +160,7 @@ export function WorkspaceWizard() {
 
         <Button
           onClick={handleCreate}
-          disabled={
-            isCreating ||
-            !formData.workspaceName ||
-            !!nameError
-          }
+          disabled={isCreating || !formData.workspaceName || !!nameError}
           color="green"
         >
           {isCreating ? "Creating..." : "Create Workspace"}

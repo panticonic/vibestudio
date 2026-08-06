@@ -6,6 +6,7 @@
  * card be hosted in the overlay without dragging in `../shell/client`.
  */
 import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
+import type { TemplateInstallResolution } from "@vibestudio/shared/authority/unitInstallReview";
 import {
   getApprovalCallerPresentation,
   getApprovalRiskTone,
@@ -38,6 +39,15 @@ export type ApprovalCardIntentBody =
       resolution:
         | { decision: "approve"; selectedAuthorityKeys: string[] }
         | { decision: "dismiss" };
+    }
+  | {
+      /**
+       * Accept an install review with exactly what the user checked, or cancel
+       * it. Every part arrives either way — this decides only what is allowed
+       * now and what asks when it is needed.
+       */
+      type: "resolve-install-review";
+      resolution: TemplateInstallResolution;
     }
   | { type: "submit-client-config"; values: Record<string, string> }
   | { type: "submit-credential-input"; values: Record<string, string> }
@@ -87,6 +97,26 @@ export interface GadBrowserTarget {
  * a fetch error (both degrade non-blockingly in the viewer).
  */
 export type BlobResult = { text: string } | { missing: true } | { error: string };
+
+/**
+ * Which approvals open on the full surface rather than in the floating card
+ * (docs/template-install-unit-approval-ux-plan.md §7.2, §7.8).
+ *
+ * The content overlay is notification-shaped by construction: the host caps it
+ * far below the window and floats it in a corner of the panel region. That is
+ * the right shape for "may I open this URL" and the wrong one for a review whose
+ * list IS the decision — the creation review carries every part of a fresh
+ * workspace, and a two-pane review at 1100×720 is what §7.2 specifies. So the
+ * kind decides the host: a unit install review is shown in a window-sized dialog
+ * the chrome owns, and everything else keeps the floating card.
+ *
+ * This is a property of the approval, not of the window: a small window collapses
+ * the dialog to the list/detail model, it does not demote the review back into a
+ * notification.
+ */
+export function approvalOpensFullSurface(approval: PendingApproval): boolean {
+  return approval.kind === "unit-install-review";
+}
 
 /**
  * Feature-detect the diff-review payload on an approval. Absent (every approval

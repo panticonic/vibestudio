@@ -6,8 +6,14 @@ import {
   type ShellChannelInvite,
   type ShellUserNotification,
 } from "../shell/client";
+import { SHELL_APPROVAL_PENDING_CHANGED_EVENT } from "@vibestudio/shell-core/approvalState";
+import { events } from "../shell/client";
 import { useDirectShellEvent } from "../shell/useDirectShellEvent";
 import { useShellEvent } from "../shell/useShellEvent";
+import {
+  pendingReviewNotice,
+  type PendingReviewNotice,
+} from "@vibestudio/shared/authority/reviewPending";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -23,6 +29,13 @@ export function UserNotificationBar() {
   const [busyNotificationId, setBusyNotificationId] = useState<string | null>(null);
   const [openedNotificationId, setOpenedNotificationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Not an error (U6). While a review covering this workspace's parts is open,
+   * every gated call resolves to the same recoverable outcome naming it. Saying
+   * `Notifications could not be loaded` and offering a Retry described a failure
+   * that had not happened and an action that could not work.
+   */
+  const [awaitingReview, setAwaitingReview] = useState<PendingReviewNotice | null>(null);
   const requestVersion = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -32,8 +45,12 @@ export function UserNotificationBar() {
       if (requestVersion.current !== version) return;
       setNotifications(next);
       setError(null);
+      setAwaitingReview(null);
     } catch (cause) {
-      if (requestVersion.current === version) setError(errorMessage(cause));
+      if (requestVersion.current !== version) return;
+      const pending = pendingReviewNotice(cause);
+      setAwaitingReview(pending);
+      setError(pending ? null : errorMessage(cause));
     } finally {
       if (requestVersion.current === version) setLoading(false);
     }
@@ -50,6 +67,18 @@ export function UserNotificationBar() {
     "user-notifications-changed",
     useCallback(() => void refresh(), [refresh])
   );
+
+  // Finishing the review is what unblocks this, so the answer arrives on its
+  // own and the line clears itself. Nothing to retry, nothing to dismiss.
+  useEffect(() => {
+    if (!awaitingReview) return;
+    const off = events.on(SHELL_APPROVAL_PENDING_CHANGED_EVENT, () => void refresh());
+    void events.subscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT);
+    return () => {
+      off();
+      void events.unsubscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT);
+    };
+  }, [awaitingReview, refresh]);
   useShellEvent(
     "server-connection-changed",
     useCallback(
@@ -111,6 +140,23 @@ export function UserNotificationBar() {
   );
 
   if (notifications.length === 0) {
+    if (awaitingReview && !loading) {
+      return (
+        <Flex
+          role="status"
+          align="center"
+          gap="2"
+          px="3"
+          py="1"
+          style={{ minHeight: 30, borderBottom: "1px solid var(--gray-a5)" }}
+        >
+          <InfoCircledIcon />
+          <Text size="1" color="gray" style={{ flex: 1 }}>
+            {awaitingReview.message}
+          </Text>
+        </Flex>
+      );
+    }
     if (!error || loading) return null;
     return (
       <Flex

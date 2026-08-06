@@ -453,7 +453,7 @@
     "@workspace/ui": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/runtime": "workspace:*",
-    "@workspace/template-registry": "workspace:*",
+    "@workspace/template-management": "workspace:*",
     "jotai": "^2.14.0",
     "qrcode-terminal": "^0.12.0",
     "react": "^19.1.1",

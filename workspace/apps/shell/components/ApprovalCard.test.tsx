@@ -1,15 +1,20 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   PendingCapabilityApproval,
   PendingClientConfigApproval,
   PendingCredentialApproval,
-  PendingUnitBatchApproval,
+  PendingUnitInstallReviewApproval,
 } from "@vibestudio/shared/approvals";
+import type {
+  InstallReviewPart,
+  InstallReviewRow,
+} from "@vibestudio/shared/authority/unitInstallReview";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
+import { installRowHeadline } from "@vibestudio/shared/authority/unitInstallReview";
 import { ApprovalCard } from "./ApprovalCard";
 import { resolveCallerInfo, type ApprovalCardIntent } from "./approvalCardModel";
 import { ApprovalCardSurface } from "../overlay/ApprovalCardSurface";
@@ -41,35 +46,95 @@ function capabilityApproval(
   };
 }
 
-function unitBatchApproval(
-  partial: Partial<PendingUnitBatchApproval> & { approvalId: string }
-): PendingUnitBatchApproval {
+/**
+ * A review as the server derives it: parts with plain-language rows, each row
+ * already carrying its timing, its notability, and whether this decision can
+ * grant it at all.
+ */
+function reviewRow(
+  capability: string,
+  overrides: Partial<InstallReviewRow> = {}
+): InstallReviewRow {
   return {
-    kind: "unit-batch",
-    trigger: partial.trigger ?? "source-change",
+    kind: "permission",
+    key: `${capability}\u0000{}`,
+    row: authorityRow({
+      capability,
+      resource: { kind: "prefix", prefix: "" },
+      tier: "gated",
+      statement: "declared",
+      provenance: { source: "manifest" },
+    }),
+    timing: "on-add",
+    notability: "everyday",
+    selectable: true,
+    selectedByDefault: true,
+    ...overrides,
+  } as InstallReviewRow;
+}
+
+function installReviewPart(
+  overrides: Partial<InstallReviewPart> & { identityKey: string }
+): InstallReviewPart {
+  return {
+    kind: "extension",
+    label: "Extension",
+    surfaces: [],
+    name: "@workspace-extensions/ext",
+    title: "Extension 1",
+    purpose: "Adds an ability to the host.",
+    repoPath: "extensions/ext",
+    effectiveVersion: "ev-1",
+    version: "0.1.0",
+    requiredUnitKeys: [],
+    runsInBackground: false,
+    origin: {
+      url: null,
+      originKey: "vibestudio",
+      registrableDomain: null,
+      version: "1.4.0",
+      isHostBuild: true,
+      firstEncounter: false,
+    },
+    notableRows: [],
+    everydayRows: [],
+    change: "added",
+    section: "template",
+    ...overrides,
+  };
+}
+
+function installReviewApproval(
+  partial: Partial<PendingUnitInstallReviewApproval> & { approvalId: string }
+): PendingUnitInstallReviewApproval {
+  const parts = partial.parts ?? [
+    installReviewPart({ identityKey: "ext-1" }),
+    installReviewPart({
+      identityKey: "ext-2",
+      title: "Extension 2",
+      repoPath: "extensions/ext-2",
+    }),
+  ];
+  return {
+    kind: "unit-install-review",
+    mode: partial.mode ?? "install",
     callerId: partial.callerId ?? "system:units",
     callerKind: partial.callerKind ?? "system",
     repoPath: partial.repoPath ?? "meta",
-    effectiveVersion: partial.effectiveVersion ?? "ev",
+    effectiveVersion: partial.effectiveVersion ?? "",
     requestedAt: partial.requestedAt ?? Date.now(),
-    title: partial.title ?? "Approve workspace extensions",
-    description: partial.description ?? "This workspace declares extensions.",
+    title: partial.title ?? "Add News",
+    description: partial.description ?? "Read and discuss personalized news briefings.",
     approvalId: partial.approvalId,
-    units:
-      partial.units ??
-      Array.from({ length: 2 }, (_, index) => ({
-        unitKind: "extension" as const,
-        unitName: `@workspace-extensions/ext-${index + 1}`,
-        displayName: `Extension ${index + 1}`,
-        version: "0.1.0",
-        source: {
-          kind: "workspace-repo" as const,
-          repo: `extensions/ext-${index + 1}`,
-          ref: "main",
-        },
-        ev: `ev-${index + 1}`,
-        capabilities: ["node:fs", "node:process"],
-      })),
+    parts,
+    summary: partial.summary ?? {
+      panels: 0,
+      agents: 0,
+      services: 0,
+      clientApps: 0,
+      extensions: parts.length,
+    },
+    unchangedPartCount: partial.unchangedPartCount ?? 0,
   };
 }
 
@@ -95,28 +160,54 @@ function clientConfigApproval(
   };
 }
 
+/**
+ * jsdom lays nothing out, so the two-pane decision — which reads the window
+ * through `matchMedia` the way the panel chrome does — has to be stated by the
+ * test. `wide` is a window at or above the §7.2 threshold; anything else is the
+ * collapsed list/detail model.
+ */
+function stubWindowWidth(wide: boolean) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("min-width") ? wide : !wide,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
+
 function renderCard(
   approval: Parameters<typeof resolveCallerInfo>[0],
   opts: {
     queue?: Parameters<typeof ApprovalCard>[0]["queue"];
     decisionError?: string | null;
     fetchContent?: Parameters<typeof ApprovalCard>[0]["fetchContent"];
+    actionPending?: boolean;
+    layout?: Parameters<typeof ApprovalCard>[0]["layout"];
   } = {}
 ) {
   const emit = vi.fn<(intent: ApprovalCardIntent) => void>();
-  render(
+  const tree = (next: typeof approval) => (
     <Theme>
       <ApprovalCard
-        approval={approval}
-        caller={resolveCallerInfo(approval)}
+        approval={next}
+        caller={resolveCallerInfo(next)}
         queue={opts.queue ?? null}
         decisionError={opts.decisionError ?? null}
         fetchContent={opts.fetchContent}
+        actionPending={opts.actionPending ?? false}
+        layout={opts.layout ?? "card"}
         emit={emit}
       />
     </Theme>
   );
-  return { emit };
+  const { rerender } = render(tree(approval));
+  // A pending review can be re-derived by the server while the card is open, so
+  // tests need to hand the same card a fresh snapshot the way the shell does.
+  return { emit, refresh: (next: typeof approval) => rerender(tree(next)) };
 }
 
 describe("ApprovalCard", () => {
@@ -239,6 +330,26 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("Always for News")).toBeTruthy();
   });
 
+  it("makes task scope the primary and keyboard-default action when offered", () => {
+    const { emit } = renderCard(
+      capabilityApproval({
+        approvalId: "task-default",
+        title: "Manage running workspace services",
+        allowedDecisions: ["once", "session", "task", "deny"],
+      })
+    );
+
+    expect(
+      screen.getByText("Allow for this task").closest("button")?.getAttribute("data-accent-color")
+    ).toBe("sky");
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter" });
+    expect(emit).toHaveBeenCalledWith({
+      type: "decide",
+      decision: "task",
+      approvalId: "task-default",
+    });
+  });
+
   it("recommends the durable version grant and uses it for keyboard confirmation", () => {
     const credential = {
       ...capabilityApproval({ approvalId: "credential", title: "Use model credential" }),
@@ -349,86 +460,637 @@ describe("ApprovalCard", () => {
     expect(screen.getByText("Approval action failed: resolve blocked")).toBeTruthy();
   });
 
-  it("emits decide intents for a unit-batch and keeps its entries collapsed", () => {
-    const { emit } = renderCard(
-      unitBatchApproval({ approvalId: "extensions", title: "Approve workspace extensions" })
-    );
-    const firstUnit = screen
-      .getByText("Extension 1 · v0.1.0")
-      .closest("details") as HTMLDetailsElement;
-    expect(firstUnit.open).toBe(false);
+  it("accepts the complete slate in one click, and cancels without touching anything", () => {
+    const { emit } = renderCard(installReviewApproval({ approvalId: "news" }));
 
-    fireEvent.click(screen.getByText("Approve update"));
+    fireEvent.click(screen.getByText("Add template"));
     expect(emit).toHaveBeenCalledWith({
-      type: "decide",
-      decision: "once",
-      approvalId: "extensions",
+      type: "resolve-install-review",
+      approvalId: "news",
+      resolution: {
+        decision: "install",
+        allowNow: [
+          { identityKey: "ext-1", permissions: [] },
+          { identityKey: "ext-2", permissions: [] },
+        ],
+      },
     });
-    fireEvent.click(screen.getByText("Deny"));
+
+    fireEvent.click(screen.getByText("Not now"));
     expect(emit).toHaveBeenCalledWith({
-      type: "decide",
-      decision: "deny",
-      approvalId: "extensions",
+      type: "resolve-install-review",
+      approvalId: "news",
+      resolution: { decision: "cancel" },
     });
   });
 
-  it("puts added permissions on the unit summary and hides unchanged permissions", () => {
-    const approval = unitBatchApproval({ approvalId: "permission-diff" });
-    const notificationsRow = authorityRow({
-      capability: "push.send",
-      resource: { kind: "prefix", prefix: "" },
-      tier: "gated",
-      statement: "declared",
-      provenance: { source: "manifest" },
+  it("names a lone arriving part and its kind in the action footer", () => {
+    renderCard(
+      installReviewApproval({
+        approvalId: "one-part",
+        parts: [
+          installReviewPart({
+            identityKey: "worker-1",
+            kind: "worker",
+            label: "Agent",
+            title: "Task Board Store",
+            repoPath: "workers/task-board-store",
+          }),
+        ],
+      })
+    );
+
+    expect(screen.getByText(/Task Board Store · Agent · everything allowed now/u)).toBeTruthy();
+  });
+
+  it("offers a checkbox only for what this decision can actually grant", () => {
+    const cleared = reviewRow("workspace.files.write");
+    const asks = reviewRow("credential.use", {
+      timing: "asks-when-needed",
+      notability: "headline",
+      selectable: false,
+      selectedByDefault: false,
     });
-    const profileRow = authorityRow({
-      capability: "account.profile.read",
-      resource: { kind: "prefix", prefix: "" },
-      tier: "gated",
-      statement: "declared",
-      provenance: { source: "manifest" },
+    const { emit } = renderCard(
+      installReviewApproval({
+        approvalId: "selection",
+        parts: [
+          installReviewPart({
+            identityKey: "ext-1",
+            notableRows: [asks],
+            everydayRows: [cleared],
+          }),
+        ],
+      })
+    );
+
+    // Everything clearable is checked by default: one click adds the complete
+    // slate with everything allowed.
+    fireEvent.click(screen.getByText("Add template"));
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolution: {
+          decision: "install",
+          allowNow: [{ identityKey: "ext-1", permissions: [cleared.key] }],
+        },
+      })
+    );
+
+    // Unchecking the part withholds the grant — the part still arrives.
+    fireEvent.click(screen.getByLabelText("Allow Extension 1 now"));
+    fireEvent.click(screen.getByText("Add template"));
+    expect(emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        resolution: {
+          decision: "install",
+          allowNow: [{ identityKey: "ext-1", permissions: [] }],
+        },
+      })
+    );
+  });
+
+  it("accepts by keyboard exactly what is on screen, and declines by keyboard", () => {
+    const cleared = reviewRow("workspace.files.write");
+    const { emit } = renderCard(
+      installReviewApproval({
+        approvalId: "keys",
+        parts: [installReviewPart({ identityKey: "ext-1", everydayRows: [cleared] })],
+      })
+    );
+    const card = screen.getByRole("dialog");
+
+    // Enter reads the live selection, not the default slate: a permission the
+    // user unchecked stays unchecked.
+    fireEvent.click(screen.getByLabelText("Allow Extension 1 now"));
+    fireEvent.keyDown(card, { key: "Enter" });
+    expect(emit).toHaveBeenLastCalledWith({
+      type: "resolve-install-review",
+      approvalId: "keys",
+      resolution: { decision: "install", allowNow: [{ identityKey: "ext-1", permissions: [] }] },
     });
-    approval.units[0]!.authority = {
-      requests: [
-        {
-          capability: "push.send",
-          resource: { kind: "prefix", prefix: "" },
-          tier: "gated",
-          evidence: "intentional-broad",
+
+    // D is the decline key everywhere else and means the same here. It must
+    // never be a second way to install.
+    fireEvent.keyDown(card, { key: "d" });
+    expect(emit).toHaveBeenLastCalledWith({
+      type: "resolve-install-review",
+      approvalId: "keys",
+      resolution: { decision: "cancel" },
+    });
+  });
+
+  it("disables the install review's own actions while a decision is in flight", () => {
+    renderCard(installReviewApproval({ approvalId: "pending" }), { actionPending: true });
+    expect(screen.getByText("Add template").closest("button")?.disabled).toBe(true);
+    expect(screen.getByText("Not now").closest("button")?.disabled).toBe(true);
+  });
+
+  it("says an upgrade that changes nothing in one line, never as a list", () => {
+    renderCard(
+      installReviewApproval({
+        approvalId: "upgrade",
+        mode: "update",
+        parts: [],
+        unchangedPartCount: 12,
+      })
+    );
+    expect(screen.getByText("Updates 12 parts. No permission changes.")).toBeTruthy();
+    expect(screen.queryByText("Extension 1")).toBeNull();
+    expect(screen.getByText("Update")).toBeTruthy();
+  });
+
+  it("opens a part from the keyboard without swallowing its checkbox or accepting the review", () => {
+    const cleared = reviewRow("workspace.files.write");
+    const { emit } = renderCard(
+      installReviewApproval({
+        approvalId: "keyboard-expand",
+        parts: [installReviewPart({ identityKey: "ext-1", everydayRows: [cleared] })],
+      })
+    );
+
+    // The expander is a real button: focusable, Enter/Space activated by the
+    // browser itself, and it says what it controls.
+    const expander = screen.getByRole("button", { expanded: false });
+    expect(expander.tagName).toBe("BUTTON");
+    expect(expander.getAttribute("tabindex")).toBeNull();
+    const detailId = expander.getAttribute("aria-controls");
+    expect(detailId).toBeTruthy();
+
+    // The checkbox is its own control, outside the expander: looking at a part
+    // and allowing it are different decisions.
+    const checkbox = screen.getByLabelText("Allow Extension 1 now");
+    expect(expander.contains(checkbox)).toBe(false);
+
+    fireEvent.click(expander);
+    expect(expander.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(detailId as string)).toBeTruthy();
+
+    // Enter on the expander opens the row. It must not also accept the review.
+    fireEvent.keyDown(expander, { key: "Enter", bubbles: true });
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("shows a diff when the review carries changed rows, whatever the mode is called", () => {
+    const added = reviewRow("network.fetch", {
+      key: "added-{}",
+      notability: "headline",
+      change: "added",
+    });
+    const part = installReviewPart({
+      identityKey: "ext-1",
+      notableRows: [added],
+      change: "changed",
+    });
+    renderCard(
+      installReviewApproval({ approvalId: "part-changed", mode: "part-changed", parts: [part] })
+    );
+
+    // §7.4 shows a diff line, not a footprint — the change marks are the signal,
+    // not the mode string.
+    expect(screen.getByText(`+ ${installRowHeadline(added)}`)).toBeTruthy();
+  });
+
+  it("distinguishes new, updated, and removed parts in a change review", () => {
+    renderCard(
+      installReviewApproval({
+        approvalId: "mixed-change",
+        mode: "part-changed",
+        parts: [
+          installReviewPart({
+            identityKey: "panel-new",
+            kind: "panel",
+            label: "Panel",
+            title: "Task Board",
+            change: "added",
+          }),
+          installReviewPart({
+            identityKey: "extension-updated",
+            title: "Git Bridge",
+            change: "changed",
+          }),
+          installReviewPart({
+            identityKey: "extension-removed",
+            title: "Old Bridge",
+            change: "removed",
+          }),
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText("Adds 1 panel · Updates 1 extension · Removes 1 extension")
+    ).toBeTruthy();
+  });
+
+  it("counts the changes a differential line cannot fit instead of stopping at three", () => {
+    const changed = ["a", "b", "c", "d"].map((suffix) =>
+      reviewRow(`workspace.files.write`, {
+        key: `${suffix}-{}`,
+        notability: "headline",
+        change: "added",
+      })
+    );
+    renderCard(
+      installReviewApproval({
+        approvalId: "many-changes",
+        mode: "part-changed",
+        parts: [
+          installReviewPart({ identityKey: "ext-1", notableRows: changed, change: "changed" }),
+        ],
+      })
+    );
+    expect(screen.getByText(/·\s\+1 more$/u)).toBeTruthy();
+  });
+
+  it("states a part's own surfaces and its dependencies under their own labels", () => {
+    const dependency = installReviewPart({
+      identityKey: "ext-2",
+      name: "@workspace-workers/feeds",
+      title: "Feed Service",
+    });
+    const part = installReviewPart({
+      identityKey: "ext-1",
+      surfaces: [{ kind: "service", name: "News Feed" }],
+      requiredUnitKeys: ["@workspace-workers/feeds"],
+    });
+    renderCard(installReviewApproval({ approvalId: "shape", parts: [part, dependency] }));
+
+    fireEvent.click(screen.getAllByRole("button", { expanded: false })[0] as HTMLElement);
+
+    // What it hosts and what it needs are opposite facts. The hosted surface must
+    // never appear under the "needs" label again.
+    expect(
+      screen.getByText("What the rest of your workspace can use it for: News Feed")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("What it needs from the rest of your workspace: Feed Service")
+    ).toBeTruthy();
+  });
+
+  it("keeps the user's choices when the pending review is refreshed underneath the card", () => {
+    const cleared = reviewRow("workspace.files.write");
+    const kept = () =>
+      installReviewPart({
+        identityKey: "ext-1",
+        everydayRows: [reviewRow("workspace.files.write")],
+      });
+    const { emit, refresh } = renderCard(
+      installReviewApproval({
+        approvalId: "refresh",
+        parts: [kept(), installReviewPart({ identityKey: "ext-2", title: "Extension 2" })],
+      })
+    );
+
+    fireEvent.click(screen.getByLabelText("Allow Extension 1 now"));
+
+    // The server re-derives the snapshot: same part by identity, new objects, and
+    // one part swapped for another.
+    refresh(
+      installReviewApproval({
+        approvalId: "refresh",
+        parts: [kept(), installReviewPart({ identityKey: "ext-3", title: "Extension 3" })],
+      })
+    );
+
+    fireEvent.click(screen.getByText("Add template"));
+    expect(emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        resolution: {
+          decision: "install",
+          // The deselection survived, the vanished part is not named at all, and
+          // the newly arrived part takes the default slate.
+          allowNow: [
+            { identityKey: "ext-1", permissions: [] },
+            { identityKey: "ext-3", permissions: [] },
+          ],
         },
-        {
-          capability: "account.profile.read",
-          resource: { kind: "prefix", prefix: "" },
-          tier: "gated",
-          evidence: "intentional-broad",
+      })
+    );
+    expect(JSON.stringify(emit.mock.calls)).not.toContain("ext-2");
+    expect(cleared.key).toBeTruthy();
+  });
+
+  it("says how many parts a filter is hiding, and keeps hiding nothing from the decision", () => {
+    const parts = Array.from({ length: 13 }, (_, index) =>
+      installReviewPart({
+        identityKey: `ext-${index}`,
+        title: index === 0 ? "Feed Importer" : `Extension ${index}`,
+        kind: index === 0 ? "panel" : "extension",
+        label: index === 0 ? "Panel" : "Extension",
+        everydayRows: [reviewRow("workspace.files.write")],
+      })
+    );
+    const { emit } = renderCard(installReviewApproval({ approvalId: "filters", parts }));
+
+    fireEvent.change(screen.getByLabelText("Search parts"), { target: { value: "Feed" } });
+    expect(screen.getByText(/12 parts hidden by your search/u)).toBeTruthy();
+    expect(screen.getByText(/12 still allowed now/u)).toBeTruthy();
+
+    // The kind filter is the other half of §7.2, on the same threshold.
+    fireEvent.change(screen.getByLabelText("Search parts"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Filter by kind"), { target: { value: "Panel" } });
+    expect(screen.getByText("Feed Importer")).toBeTruthy();
+    expect(screen.queryByText("Extension 5")).toBeNull();
+    expect(screen.getByText(/12 parts hidden by your search/u)).toBeTruthy();
+
+    // Hiding is not withholding: every part is still in the acceptance.
+    fireEvent.click(screen.getByText("Add template"));
+    const intent = emit.mock.calls[0]?.[0] as {
+      resolution: { allowNow: Array<{ identityKey: string }> };
+    };
+    expect(intent.resolution.allowNow).toHaveLength(13);
+  });
+
+  it("groups the initial workspace by its useful directories and folds quiet groups", () => {
+    const notable = reviewRow("network.fetch", { notability: "headline" });
+    const parts = [
+      installReviewPart({
+        identityKey: "app-panel",
+        kind: "panel",
+        label: "Panel",
+        repoPath: "panels/chat",
+        title: "Chat",
+        notableRows: [notable],
+      }),
+      installReviewPart({
+        identityKey: "agent",
+        kind: "worker",
+        label: "Agent",
+        repoPath: "workers/researcher",
+        title: "Researcher",
+        notableRows: [notable],
+      }),
+      installReviewPart({
+        identityKey: "system-panel",
+        kind: "panel",
+        label: "Panel",
+        repoPath: "about/accounts",
+        title: "Accounts",
+        purpose: "Manage workspace accounts.",
+      }),
+      installReviewPart({
+        identityKey: "service",
+        kind: "worker",
+        label: "Service",
+        repoPath: "workers/pubsub",
+        title: "Pubsub",
+        purpose: "Connect workspace conversations.",
+      }),
+    ];
+    renderCard(
+      installReviewApproval({ approvalId: "grouped-workspace", mode: "adopt-root", parts })
+    );
+
+    const headings = [
+      screen.getByRole("button", { name: /^App panels/u }),
+      screen.getByRole("button", { name: /^Agents and background tasks/u }),
+      screen.getByRole("button", { name: /^System panels/u }),
+      screen.getByRole("button", { name: /^Services/u }),
+    ];
+    expect(
+      [...document.querySelectorAll(".install-review-group-toggle")].map((button) =>
+        button.textContent?.trim()
+      )
+    ).toEqual(headings.map((button) => button.textContent?.trim()));
+    expect(headings.map((heading) => heading.getAttribute("aria-expanded"))).toEqual([
+      "true",
+      "true",
+      "false",
+      "false",
+    ]);
+    expect(
+      [...document.querySelectorAll(".install-review-group-count")].every((count) =>
+        count.parentElement?.classList.contains("install-review-group-title")
+      )
+    ).toBe(true);
+
+    // A folded heading still tells the reviewer what is inside and why it was
+    // folded; opening it reveals the ordinary part without changing selection.
+    expect(headings[2]?.textContent).toContain("Accounts");
+    expect(headings[2]?.textContent).toContain("nothing unusual");
+    expect(screen.queryByText("Manage workspace accounts.")).toBeNull();
+    fireEvent.click(headings[2] as HTMLElement);
+    expect(screen.getByText("Manage workspace accounts.")).toBeTruthy();
+  });
+
+  it("leaves every category open when nothing in the workspace is notable", () => {
+    renderCard(
+      installReviewApproval({
+        approvalId: "routine-workspace",
+        mode: "adopt-root",
+        parts: [
+          installReviewPart({
+            identityKey: "panel",
+            kind: "panel",
+            label: "Panel",
+            repoPath: "panels/chat",
+            title: "Chat",
+          }),
+          installReviewPart({
+            identityKey: "about",
+            kind: "panel",
+            label: "Panel",
+            repoPath: "about/accounts",
+            title: "Accounts",
+          }),
+        ],
+      })
+    );
+
+    expect(
+      [...document.querySelectorAll(".install-review-group-toggle")].map((heading) =>
+        heading.getAttribute("aria-expanded")
+      )
+    ).toEqual(["true", "true"]);
+  });
+
+  it("restores the rows a user had opted into when they re-check a part", () => {
+    const byDefault = reviewRow("workspace.files.write", { key: "default-{}" });
+    const optIn = reviewRow("network.fetch", {
+      key: "opt-in-{}",
+      selectedByDefault: false,
+    });
+    const { emit } = renderCard(
+      installReviewApproval({
+        approvalId: "memory",
+        parts: [installReviewPart({ identityKey: "ext-1", everydayRows: [byDefault, optIn] })],
+      })
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { expanded: false })[0] as HTMLElement);
+    fireEvent.click(screen.getByText("Plus 2 everyday permissions"));
+    fireEvent.click(screen.getByLabelText(`Allow ${installRowHeadline(optIn)} now`));
+    fireEvent.click(screen.getByLabelText("Allow Extension 1 now"));
+    fireEvent.click(screen.getByLabelText("Allow Extension 1 now"));
+    fireEvent.click(screen.getByText("Add template"));
+
+    expect(emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        resolution: {
+          decision: "install",
+          allowNow: [{ identityKey: "ext-1", permissions: [byDefault.key, optIn.key] }],
         },
-      ],
-      provides: [],
-      previousProvides: [],
-      rows: [notificationsRow, profileRow],
-      diff: {
-        added: [{ ...notificationsRow, flags: { newInDiff: true } }],
-        removed: [],
-        unchanged: [profileRow],
-        retiered: [],
-      },
+      })
+    );
+  });
+
+  it("says what did not happen when an install is refused, in the review's own words", () => {
+    renderCard(installReviewApproval({ approvalId: "failed" }), {
+      decisionError: "unit extensions/ext is not in this review",
+    });
+    expect(screen.getByText("Couldn't add these parts")).toBeTruthy();
+    expect(screen.getByText("unit extensions/ext is not in this review")).toBeTruthy();
+    expect(screen.getByText(/Your selection is still here/u)).toBeTruthy();
+    expect(screen.queryByText(/Approval action failed/u)).toBeNull();
+  });
+
+  /**
+   * The full surface (§7.2, §7.8). The card mode above is the same review in the
+   * floating overlay; these are the things only the dialog does.
+   */
+  describe("in the full-surface dialog", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    /** Two parts, each with one thing this decision can actually grant. */
+    const pairedParts = () => {
+      const first = reviewRow("workspace.files.write", { key: "row-one-{}" });
+      const second = reviewRow("network.fetch", { key: "row-two-{}" });
+      return {
+        first,
+        second,
+        parts: [
+          installReviewPart({ identityKey: "ext-1", everydayRows: [first] }),
+          installReviewPart({
+            identityKey: "ext-2",
+            title: "Extension 2",
+            everydayRows: [second],
+          }),
+        ],
+      };
     };
 
-    renderCard(approval);
-    expect(screen.getByText("+ Publishing & sending")).toBeTruthy();
-    const unchangedItem = screen.getByText(/view an account profile/i);
-    const unchangedDetails = unchangedItem.closest("details") as HTMLDetailsElement;
-    expect(unchangedDetails.open).toBe(false);
+    it("stands the detail pane beside the list on a wide window", () => {
+      stubWindowWidth(true);
+      renderCard(installReviewApproval({ approvalId: "wide" }), { layout: "dialog" });
 
-    fireEvent.click(screen.getByText("Extension 1 · v0.1.0"));
-    expect(
-      screen.getByText(
-        (content) => content.startsWith("+ ") && content.includes(notificationsRow.action)
-      )
-    ).toBeTruthy();
-    expect(unchangedDetails.open).toBe(false);
-    fireEvent.click(screen.getByText("Unchanged permissions"));
-    expect(unchangedDetails.open).toBe(true);
+      // The pane is a labelled region, open on the first part without anyone
+      // asking: a two-pane review whose second pane starts empty is one pane.
+      const pane = screen.getByRole("region", { name: "Extension 1" });
+      expect(within(pane).getByText(/Version 0\.1\.0/u)).toBeTruthy();
+
+      // And the list is still whole beside it — the pane is not a level the user
+      // navigated INTO, it is a sibling of the list they are reading.
+      expect(screen.getByText("Extension 2")).toBeTruthy();
+      // The selected row drives the pane and says so; it is not a disclosure.
+      const row = screen.getByRole("button", { current: true });
+      expect(row.getAttribute("aria-controls")).toBe(pane.id);
+      expect(row.getAttribute("aria-expanded")).toBeNull();
+    });
+
+    it("collapses to the list/detail model in place below the threshold", () => {
+      stubWindowWidth(false);
+      renderCard(installReviewApproval({ approvalId: "narrow" }), { layout: "dialog" });
+
+      // No second column at this size — and no clipped one either. The row is a
+      // disclosure again and its detail opens under it, one scroll, one column.
+      expect(screen.queryByRole("region", { name: "Extension 1" })).toBeNull();
+      const expander = screen.getAllByRole("button", { expanded: false })[0] as HTMLElement;
+      fireEvent.click(expander);
+      expect(expander.getAttribute("aria-expanded")).toBe("true");
+      expect(
+        document.getElementById(expander.getAttribute("aria-controls") as string)
+      ).toBeTruthy();
+    });
+
+    it("keeps what each part had checked while the pane moves between parts", () => {
+      stubWindowWidth(true);
+      const { first, second, parts } = pairedParts();
+      const { emit } = renderCard(installReviewApproval({ approvalId: "switch", parts }), {
+        layout: "dialog",
+      });
+
+      // Withhold one row of the first part, in the pane.
+      fireEvent.click(screen.getByText("Plus 1 everyday permission"));
+      fireEvent.click(screen.getByLabelText(`Allow ${installRowHeadline(first)} now`));
+
+      // Read the second part, then come back. Moving the pane is looking, never
+      // deciding: what was unchecked is still unchecked on return.
+      fireEvent.click(screen.getByText("Extension 2"));
+      expect(screen.getByRole("region", { name: "Extension 2" })).toBeTruthy();
+      fireEvent.click(screen.getByText("Extension 1"));
+      expect(screen.getByRole("region", { name: "Extension 1" })).toBeTruthy();
+      fireEvent.click(screen.getByText("Plus 1 everyday permission"));
+      expect(
+        (
+          screen.getByLabelText(`Allow ${installRowHeadline(first)} now`) as HTMLElement
+        ).getAttribute("aria-checked")
+      ).toBe("false");
+
+      fireEvent.click(screen.getByText("Add template"));
+      expect(emit).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          resolution: {
+            decision: "install",
+            allowNow: [
+              { identityKey: "ext-1", permissions: [] },
+              { identityKey: "ext-2", permissions: [second.key] },
+            ],
+          },
+        })
+      );
+    });
+
+    it("walks the list from the keyboard and takes the pane with it", () => {
+      stubWindowWidth(true);
+      const { parts } = pairedParts();
+      renderCard(installReviewApproval({ approvalId: "keys-two-pane", parts }), {
+        layout: "dialog",
+      });
+
+      const rows = [...document.querySelectorAll<HTMLButtonElement>("button[data-part-row]")];
+      expect(rows).toHaveLength(2);
+      // Only the current row is a tab stop, so one Tab out of a fifty-three part
+      // list lands in the detail pane rather than in part two.
+      expect(rows[0]?.tabIndex).toBe(0);
+      expect(rows[1]?.tabIndex).toBe(-1);
+
+      rows[0]?.focus();
+      fireEvent.keyDown(rows[0] as HTMLElement, { key: "ArrowDown", bubbles: true });
+      expect(screen.getByRole("region", { name: "Extension 2" })).toBeTruthy();
+      expect(document.activeElement).toBe(rows[1]);
+
+      fireEvent.keyDown(rows[1] as HTMLElement, { key: "ArrowUp", bubbles: true });
+      expect(screen.getByRole("region", { name: "Extension 1" })).toBeTruthy();
+    });
+
+    it("keeps the card's own keyboard contract inside the dialog", () => {
+      stubWindowWidth(true);
+      const { emit } = renderCard(installReviewApproval({ approvalId: "shortcuts" }), {
+        layout: "dialog",
+      });
+      const card = document.querySelector("[data-approval-card]") as HTMLElement;
+      // The surrounding dialog owns `role="dialog"`; the card does not announce a
+      // second one, but it still owns Enter and D.
+      expect(card.getAttribute("role")).toBe("group");
+
+      fireEvent.keyDown(card, { key: "Enter" });
+      expect(emit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: "resolve-install-review" })
+      );
+      fireEvent.keyDown(card, { key: "d" });
+      expect(emit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ resolution: { decision: "cancel" } })
+      );
+    });
+
+    it("still opens a floating card for every other kind of approval", () => {
+      stubWindowWidth(true);
+      renderCard(capabilityApproval({ approvalId: "plain", title: "Open a URL" }));
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(screen.queryByRole("region", { name: "Extension 1" })).toBeNull();
+    });
   });
 
   it("emits a minimize intent from the header control", () => {

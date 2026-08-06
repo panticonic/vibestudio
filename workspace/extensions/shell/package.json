@@ -170,10 +170,12 @@
             "domain": "computer",
             "verb": "act"
           },
+          "notability": "headline",
           "grantScopes": [
             "once",
             "task",
-            "session"
+            "session",
+            "version"
           ]
         }
       ],

@@ -2,6 +2,7 @@
 
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { Provider, createStore, useAtomValue } from "jotai";
+import { useEffect, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The shell client facade is mocked so we control the tree + pin sources.
@@ -93,7 +94,11 @@ function RootProbe() {
 function FullPanelProbe({ panelId }: { panelId: string }) {
   const { panel, loading } = useFullPanel(panelId);
   return (
-    <div data-testid="full-panel" data-loading={loading ? "true" : "false"}>
+    <div
+      data-testid="full-panel"
+      data-loading={loading ? "true" : "false"}
+      data-hosted-runtime-entity-id={panel?.artifacts.hostedRuntimeEntityId ?? ""}
+    >
       {panel ? `${panel.id}:${panel.artifacts.buildState}` : ""}
     </div>
   );
@@ -102,6 +107,25 @@ function FullPanelProbe({ panelId }: { panelId: string }) {
 function DescendantProbe({ panelId }: { panelId: string }) {
   const { groups } = useDescendantSiblingGroups(panelId);
   return <div data-testid="descendant">{groups.map((group) => group.selectedId).join(",")}</div>;
+}
+
+function SelectionProbe({ panelId }: { panelId: string }) {
+  const { panelMap } = usePanelTree();
+  const renderCount = useRef(0);
+  renderCount.current += 1;
+  return (
+    <div data-testid="selection" data-render-count={String(renderCount.current)}>
+      {panelMap.get(panelId)?.selectedChildId ?? ""}
+    </div>
+  );
+}
+
+function ChildrenLoader({ panelId }: { panelId: string }) {
+  const { loadChildren } = usePanelTree();
+  useEffect(() => {
+    void loadChildren(panelId);
+  }, [loadChildren, panelId]);
+  return null;
 }
 
 function renderProvider() {
@@ -244,6 +268,61 @@ describe("useFullPanel local presentation", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:ready")
+    );
+  });
+
+  it("does not let an older ready projection erase the hosted runtime identity", async () => {
+    const current = {
+      id: "panel:tree/browser",
+      title: "Browser",
+      runtimeEntityId: "panel:nav-current",
+      buildKey: null,
+      parentId: null,
+      position: 0,
+      selectedChildId: null,
+      children: [],
+      snapshot: {
+        source: "browser:https://example.test/",
+        contextId: "context-browser",
+        options: {},
+      },
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "https://example.test/",
+        hostedRuntimeEntityId: "panel:nav-current",
+      },
+      hostViewRevision: 2,
+    };
+    let resolveInitial!: (value: unknown) => void;
+    getPresentation
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInitial = resolve;
+          })
+      )
+      .mockResolvedValue(current);
+
+    render(<FullPanelProbe panelId="panel:tree/browser" />);
+    await waitFor(() => expect(getPresentation).toHaveBeenCalledOnce());
+    act(() => {
+      presentationChangeHandler?.({ revision: 2, panelIds: ["panel:tree/browser"] });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("full-panel").dataset["hostedRuntimeEntityId"]).toBe(
+        "panel:nav-current"
+      )
+    );
+
+    await act(async () => {
+      resolveInitial({
+        ...current,
+        artifacts: { buildState: "ready", htmlPath: "https://example.test/" },
+        hostViewRevision: 1,
+      });
+    });
+    expect(screen.getByTestId("full-panel").dataset["hostedRuntimeEntityId"]).toBe(
+      "panel:nav-current"
     );
   });
 });
@@ -447,5 +526,52 @@ describe("PanelTreeProvider local descendant selection", () => {
       presentationChangeHandler?.({ revision: 2, panelIds: ["panel:root"] });
     });
     await waitFor(() => expect(screen.getByTestId("descendant").textContent).toBe("panel:first"));
+  });
+
+  it("applies only the newest presentation revision and skips no-op selections", async () => {
+    listPinnedPanelIds.mockResolvedValue([]);
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:root"] }]);
+    childSlotIds.set("panel:root", ["panel:first", "panel:selected"]);
+
+    render(
+      <PanelTreeProvider>
+        <ChildrenLoader panelId="panel:root" />
+        <SelectionProbe panelId="panel:root" />
+      </PanelTreeProvider>
+    );
+
+    await waitFor(() => expect(screen.getByTestId("selection").textContent).toBe("panel:first"));
+
+    getPresentation.mockReset();
+    let resolveOlder!: (value: unknown) => void;
+    const olderResponse = new Promise((resolve) => {
+      resolveOlder = resolve;
+    });
+    getPresentation
+      .mockImplementationOnce(() => olderResponse)
+      .mockResolvedValueOnce({ id: "panel:root", selectedChildId: "panel:selected" });
+
+    act(() => {
+      presentationChangeHandler?.({ revision: 3, panelIds: ["panel:root"] });
+      presentationChangeHandler?.({ revision: 4, panelIds: ["panel:root"] });
+      presentationChangeHandler?.({ revision: 2, panelIds: ["panel:root"] });
+    });
+
+    await waitFor(() => expect(screen.getByTestId("selection").textContent).toBe("panel:selected"));
+    expect(getPresentation).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveOlder({ id: "panel:root", selectedChildId: "panel:first" });
+      await olderResponse;
+    });
+    expect(screen.getByTestId("selection").textContent).toBe("panel:selected");
+
+    const renderCount = screen.getByTestId("selection").dataset["renderCount"];
+    getPresentation.mockResolvedValue({ id: "panel:root", selectedChildId: "panel:selected" });
+    act(() => {
+      presentationChangeHandler?.({ revision: 5, panelIds: ["panel:root"] });
+    });
+    await waitFor(() => expect(getPresentation).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId("selection").dataset["renderCount"]).toBe(renderCount);
   });
 });

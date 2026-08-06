@@ -68,10 +68,11 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
     for (const [panelId, data] of prompts) {
       if (timerCleanups.current.has(panelId)) continue; // already has a timer
       const timer = setTimeout(() => {
-        void (data.kind === "password"
-          ? autofill.confirmSave(panelId, "dismiss")
-          : autofill.confirmFormFill(panelId, "dismiss"))
-          .catch((err: unknown) => console.warn("[SavePasswordBar] Dismiss failed:", err));
+        void (
+          data.kind === "password"
+            ? autofill.confirmSave(panelId, "dismiss")
+            : autofill.confirmFormFill(panelId, "dismiss")
+        ).catch((err: unknown) => console.warn("[SavePasswordBar] Dismiss failed:", err));
         setPrompts((prev) => {
           const next = new Map(prev);
           next.delete(panelId);
@@ -190,10 +191,11 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
   };
 
   const handleDismiss = () => {
-    void (prompt.kind === "password"
-      ? autofill.confirmSave(prompt.panelId, "dismiss")
-      : autofill.confirmFormFill(prompt.panelId, "dismiss"))
-      .catch((err: unknown) => console.warn("[SavePasswordBar] Dismiss failed:", err));
+    void (
+      prompt.kind === "password"
+        ? autofill.confirmSave(prompt.panelId, "dismiss")
+        : autofill.confirmFormFill(prompt.panelId, "dismiss")
+    ).catch((err: unknown) => console.warn("[SavePasswordBar] Dismiss failed:", err));
     removePrompt(prompt.panelId);
   };
 
@@ -238,11 +240,7 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
           disabled={saving}
           onClick={() => void handleSave()}
         >
-          {saving
-            ? "Saving…"
-            : prompt.kind === "password" && prompt.isUpdate
-              ? "Update"
-              : "Save"}
+          {saving ? "Saving…" : prompt.kind === "password" && prompt.isUpdate ? "Update" : "Save"}
         </Button>
         {prompt.kind === "password" ? (
           <Button

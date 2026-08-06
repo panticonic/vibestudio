@@ -69,19 +69,15 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
   );
 
   useEffect(() => {
-    // A `vibestudio://connect` link carries the full WebRTC pairing material
-    // (room/fp/code/sig). The bridge hands us the parsed pairing; re-serialize it
-    // into the link the exchange consumes.
+    // A `vibestudio://connect` link received while the app is already running
+    // carries the full WebRTC pairing material (room/fp/code/sig). The
+    // bootstrap chooser owns launch-time links, so do not drain its pending
+    // buffer here: doing that races the chooser and can reopen a second
+    // connection dialog after a successful launch pairing.
     const apply = (pairing: ConnectPairing) => {
       setPairLink(createConnectDeepLink(pairing));
       onOpenChange(true);
     };
-    void incomingPairLink
-      .getPending()
-      .then((pairing) => {
-        if (pairing) apply(pairing);
-      })
-      .catch((error) => setError(error instanceof Error ? error.message : String(error)));
     return incomingPairLink.onLink(apply);
   }, [onOpenChange]);
 

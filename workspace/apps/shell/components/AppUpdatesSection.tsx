@@ -15,9 +15,7 @@ export function AppUpdatesSection() {
   const [apps, setApps] = useState<AppUnit[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expandedDiagnostics, setExpandedDiagnostics] = useState<
-    Record<string, UnitHealth>
-  >({});
+  const [expandedDiagnostics, setExpandedDiagnostics] = useState<Record<string, UnitHealth>>({});
 
   const load = useCallback(async () => {
     try {
@@ -209,8 +207,7 @@ export function AppUpdatesSection() {
                   <Table.Cell>
                     <Flex direction="column" gap="1">
                       <Text size="1" color="gray">
-                        {unit.versions.previous.length}/{unit.versions.retentionLimit}{" "}
-                        retained
+                        {unit.versions.previous.length}/{unit.versions.retentionLimit} retained
                       </Text>
                       {latestPrevious ? (
                         <Code size="1">{shortBuild(latestPrevious.buildKey)}</Code>

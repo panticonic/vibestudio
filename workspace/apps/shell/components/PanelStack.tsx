@@ -434,6 +434,10 @@ export const PanelStack = memo(function PanelStack({
   const createChildForPanel = useCallback(
     async (panelId: string, disposition: "side" | "split-below") => {
       await panelService.createChild(panelId, "about/new", {
+        // "New child panel" is an creation command, not a navigation command:
+        // every click must get a distinct slot even when the same source is
+        // already present under this parent.
+        slug: `new-${crypto.randomUUID().slice(0, 8)}`,
         focus: true,
         placement: { disposition },
       });
@@ -1114,6 +1118,15 @@ export const PanelStack = memo(function PanelStack({
   }, [onChromeStateChange, visiblePanel]);
 
   const isTreeNavigation = navigationMode === "tree";
+
+  // Navigation mode changes the native panel slot's available width without
+  // changing the panel layout model itself. Force a presentation commit so
+  // the native WebContents view follows the sidebar opening/closing in the
+  // same frame as the shell surface.
+  useEffect(() => {
+    bumpLayoutEpoch();
+  }, [bumpLayoutEpoch, navigationMode]);
+
   const closeMobileTree = useCallback(() => {
     if (isMobile) {
       setMode("stack");

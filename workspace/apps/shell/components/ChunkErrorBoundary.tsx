@@ -42,7 +42,11 @@ export class ChunkErrorBoundary extends Component<Props, State> {
         <Flex
           align="center"
           justify="center"
-          style={{ height: "100dvh", padding: "var(--space-5)", background: "var(--surface-panel)" }}
+          style={{
+            height: "100dvh",
+            padding: "var(--space-5)",
+            background: "var(--surface-panel)",
+          }}
         >
           <Surface
             level="raised"

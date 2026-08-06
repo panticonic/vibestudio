@@ -94,9 +94,9 @@ export function PaneContent({
   ]);
 
   // Reconcile on immutable runtime identity as well as residency. Panel
-  // preparation and lease assignment are independent: the first pass may
-  // intentionally create an about:blank host, and the build-key transition is
-  // the canonical signal to upgrade that same host to real panel content.
+  // preparation and lease assignment are independent: no renderer exists for
+  // a non-executable principal, and the build-key transition is the canonical
+  // signal to create the real panel view.
   useEffect(() => {
     if (!resident) return;
     void panelService
@@ -238,7 +238,10 @@ export function PaneContent({
     );
   }
 
-  if (!artifacts?.htmlPath) {
+  const presentsCurrentEntity =
+    Boolean(artifacts?.htmlPath) && artifacts?.hostedRuntimeEntityId === fullPanel.runtimeEntityId;
+
+  if (!presentsCurrentEntity) {
     return (
       <Flex
         data-panel-content-state="preparing"
@@ -299,6 +302,7 @@ export function PaneContent({
         fullPanel.path ?? "",
         fullPanel.contextId,
         artifacts.htmlPath ?? "",
+        artifacts.hostedRuntimeEntityId ?? "",
         artifacts.buildRevision ?? "",
         artifacts.buildState ?? "",
         fullPanel.hostViewRevision ?? "",

@@ -7,12 +7,14 @@
  * approval as props and runs the matching `shellApproval.*` call when the card
  * emits an intent. The presentational card lives in `./ApprovalCard`.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { Badge, Flex, Text } from "@radix-ui/themes";
 import { ChevronRightIcon } from "@radix-ui/react-icons";
 import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
+import type { TemplateInstallResolution } from "@vibestudio/shared/authority/unitInstallReview";
+import type { InstallReviewResolution } from "@vibestudio/service-schemas/shellApproval";
 import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import {
   createApprovalStateController,
@@ -24,7 +26,10 @@ import { useShellEvent } from "../shell/useShellEvent";
 import { effectiveThemeAtom, themeConfigAtom } from "../state/themeAtoms";
 import { useNavigationActions } from "./NavigationContext";
 import { ApprovalKindIcon } from "./ApprovalCard";
+import { ApprovalFullSurface } from "./ApprovalFullSurface";
+import { InstallReviewOutcomeNotice } from "./InstallReview";
 import {
+  approvalOpensFullSurface,
   diffReviewPayloadHashes,
   getDiffReviewPayload,
   highestPendingTone,
@@ -42,28 +47,18 @@ import type { OverlayThemeInfo } from "../overlay/types";
  * floating approval card overlay to the top-right of the panel viewport.
  */
 export const APPROVAL_OVERLAY_HOST_ID = "app-approval-host";
+/**
+ * Approval events are a prompt, not the source of truth. A workspace server
+ * can create an approval while the desktop event watch is being replaced or
+ * recovering, so periodically reconcile the small pending set as well. This
+ * keeps a user from being stranded behind an invisible approval without
+ * turning every render into an RPC call.
+ */
+const APPROVAL_RECONCILE_INTERVAL_MS = 5_000;
 
 /** Workspace source path of the gad-browser panel (the file-inspection surface
  *  the diff-review escape hatch deep-links into). */
 const GAD_BROWSER_SOURCE = "panels/gad-browser";
-
-/** Minimal structural view of a panel-tree node — enough to locate an existing
- *  gad-browser panel by its snapshot source without importing the full type. */
-interface TreePanelNode {
-  id: string;
-  snapshot?: { source?: string };
-  children?: TreePanelNode[];
-}
-
-/** Depth-first search for the first live gad-browser panel in the tree. */
-function findGadBrowserPanel(nodes: TreePanelNode[]): TreePanelNode | null {
-  for (const node of nodes) {
-    if (node.snapshot?.source === GAD_BROWSER_SOURCE) return node;
-    const child = node.children ? findGadBrowserPanel(node.children) : null;
-    if (child) return child;
-  }
-  return null;
-}
 
 export function ConsentApprovalBar() {
   const [pendingAccess, setPendingAccess] = useState<PendingApproval[]>([]);
@@ -71,7 +66,42 @@ export function ConsentApprovalBar() {
     approvalId: string;
     message: string;
   } | null>(null);
-  const [submittingApprovalId, setSubmittingApprovalId] = useState<string | null>(null);
+  /**
+   * Decisions are in flight per approval, not globally.
+   *
+   * An install review leaves the pending queue as soon as its decision is
+   * accepted, while the RPC can remain open until the resulting publication
+   * lands. The next review is therefore allowed to appear before the previous
+   * receipt returns. A single global lock made that next review look enabled
+   * while silently discarding its action. Keep the exact in-flight identities
+   * instead: duplicate answers to one review are blocked, independent reviews
+   * remain answerable.
+   */
+  const submittingApprovalIdsRef = useRef<Set<string>>(new Set());
+  const [submittingApprovalIds, setSubmittingApprovalIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  /**
+   * What came of the last install review (§7.2, "Result").
+   *
+   * It has to be held here rather than in the review, because the review is
+   * gone by the time there is anything to say: accepting removes the approval
+   * from the queue and unmounts the card that asked. This state is what lets
+   * `News added` / `Open News →` exist at all, and it is deliberately outside
+   * the queue — it never delays, hides, or replaces the next approval.
+   */
+  const [installResult, setInstallResult] = useState<InstallReviewResolution | null>(null);
+  const transientWorkspaceReady =
+    installResult?.mode === "adopt-root" &&
+    installResult.decision === "accepted" &&
+    installResult.landing !== undefined &&
+    installResult.landing.failed.length === 0;
+  const installResultHasFailure = (installResult?.landing?.failed.length ?? 0) > 0;
+  const installResultAutoDismissMs = installResultHasFailure
+    ? null
+    : transientWorkspaceReady
+      ? 5_000
+      : 8_000;
   const [minimized, setMinimized] = useState(false);
   const [browseIndex, setBrowseIndex] = useState(0);
   const [attentionSeq, setAttentionSeq] = useState(0);
@@ -83,9 +113,25 @@ export function ConsentApprovalBar() {
   blobResultsRef.current = blobResults;
   const inFlightBlobsRef = useRef<Set<string>>(new Set());
   const seenApprovalIdsRef = useRef<Set<string>>(new Set());
+  const reviewingQueuedRef = useRef(false);
+  // A review can drain the pending queue before the protected operation resumes
+  // and asks for its next approval. Remember the requester across that empty
+  // edge so the continuation stays on the surface the user is already using.
+  // A queued request from anyone else still arrives quietly in the pill.
+  const reviewContinuationCallerIdRef = useRef<string | null>(null);
   const { navigateToId } = useNavigationActions();
   const effectiveTheme = useAtomValue(effectiveThemeAtom);
   const themeConfig = useAtomValue(themeConfigAtom);
+
+  // Results are transient confirmations. Failures are the exception: they name
+  // work that needs attention and remain until explicitly dismissed.
+  useEffect(() => {
+    if (!installResult || installResultAutoDismissMs === null) return;
+    const timer = window.setTimeout(() => {
+      setInstallResult((current) => (current === installResult ? null : current));
+    }, installResultAutoDismissMs);
+    return () => window.clearTimeout(timer);
+  }, [installResult, installResultAutoDismissMs]);
 
   useEffect(() => {
     const heartbeat = () => {
@@ -101,6 +147,7 @@ export function ConsentApprovalBar() {
   useShellEvent(
     "focus-approval-card",
     useCallback(() => {
+      reviewingQueuedRef.current = true;
       setMinimized(false);
       setKeyboardFocusRequested(true);
     }, [])
@@ -120,7 +167,13 @@ export function ConsentApprovalBar() {
       },
     });
     controller.start();
-    return () => controller.stop();
+    const reconcileId = window.setInterval(() => {
+      void controller.refresh("manual");
+    }, APPROVAL_RECONCILE_INTERVAL_MS);
+    return () => {
+      window.clearInterval(reconcileId);
+      controller.stop();
+    };
   }, []);
 
   // Replay the attention pulse whenever a not-yet-seen approval enters the queue.
@@ -143,14 +196,47 @@ export function ConsentApprovalBar() {
     });
   }, [pendingAccess.length]);
 
-  const current = pendingAccess[browseIndex] ?? pendingAccess[0] ?? null;
-  const queueLength = pendingAccess.length;
+  const orderedPending = useMemo(
+    () =>
+      pendingAccess
+        .map((approval, index) => ({ approval, index }))
+        .sort((left, right) => {
+          const priority = (approval: PendingApproval) => (approval.attention === "queue" ? 1 : 0);
+          return priority(left.approval) - priority(right.approval) || left.index - right.index;
+        })
+        .map(({ approval }) => approval),
+    [pendingAccess]
+  );
+  const current = orderedPending[browseIndex] ?? orderedPending[0] ?? null;
+  const queueLength = orderedPending.length;
   const canPrev = queueLength > 1 && browseIndex > 0;
   const canNext = queueLength > 1 && browseIndex < queueLength - 1;
   const currentCaller = current ? resolveCallerInfo(current) : null;
   const diffReview = current ? getDiffReviewPayload(current) : null;
   const diffHashes = diffReview ? diffReviewPayloadHashes(diffReview) : new Set<string>();
   const payloadHashes = diffHashes;
+
+  useLayoutEffect(() => {
+    if (!current) {
+      reviewingQueuedRef.current = false;
+      setMinimized(false);
+      return;
+    }
+    if (current.attention === "queue") {
+      const continuesResolvedReview = reviewContinuationCallerIdRef.current === current.callerId;
+      if (!reviewingQueuedRef.current && !continuesResolvedReview) {
+        reviewContinuationCallerIdRef.current = null;
+        setMinimized(true);
+        return;
+      }
+      reviewingQueuedRef.current = true;
+      setMinimized(false);
+      return;
+    }
+    reviewingQueuedRef.current = false;
+    reviewContinuationCallerIdRef.current = null;
+    setMinimized(false);
+  }, [current?.approvalId, current?.attention, current?.callerId]);
 
   useEffect(() => {
     setDecisionError((error) => (error && error.approvalId !== current?.approvalId ? null : error));
@@ -277,10 +363,30 @@ export function ConsentApprovalBar() {
       shellApproval.resolveMissionReview(current.approvalId, resolution)
     );
   };
+  /**
+   * Answer a review and keep what the server says came of it.
+   *
+   * The call returns a typed resolution — heading, parts, entry point, landing —
+   * and dropping it on the floor is what used to make success unshowable. A
+   * throw is a different outcome from a resolution that reports failed parts:
+   * the first leaves the review pending (the card says so inline, from
+   * `decisionError`), the second means the decision was taken and the notice
+   * below has to name what did not survive it.
+   */
+  const resolveInstallReview = (resolution: TemplateInstallResolution) => {
+    if (current?.kind !== "unit-install-review") return;
+    const approval = current;
+    setInstallResult(null);
+    runApprovalAction(approval, async () => {
+      const outcome = await shellApproval.resolveInstallReview(approval.approvalId, resolution);
+      setInstallResult(outcome);
+    });
+  };
   const runApprovalAction = (approval: PendingApproval, action: () => Promise<unknown>) => {
-    if (submittingApprovalId) return;
+    if (submittingApprovalIdsRef.current.has(approval.approvalId)) return;
+    submittingApprovalIdsRef.current.add(approval.approvalId);
     setDecisionError(null);
-    setSubmittingApprovalId(approval.approvalId);
+    setSubmittingApprovalIds(new Set(submittingApprovalIdsRef.current));
     void action()
       .catch((err: unknown) => {
         console.error("[ConsentApprovalBar] approval action failed:", err);
@@ -289,7 +395,10 @@ export function ConsentApprovalBar() {
           message: err instanceof Error ? err.message : String(err),
         });
       })
-      .finally(() => setSubmittingApprovalId(null));
+      .finally(() => {
+        submittingApprovalIdsRef.current.delete(approval.approvalId);
+        setSubmittingApprovalIds(new Set(submittingApprovalIdsRef.current));
+      });
   };
   // Diff-review escape hatch: reuse the open gad-browser panel if one exists
   // (navigate it to the new target + focus), otherwise create one. The target
@@ -332,15 +441,63 @@ export function ConsentApprovalBar() {
     })();
   };
 
+  /**
+   * `Open News →` (§7.2).
+   *
+   * Not a new mechanism: a part's `repoPath` is the very thing this shell opens
+   * panels by. `PanelStack`, the notification bar's `openPanel` instruction and
+   * the diff-review escape hatch above all call `panel.createPanel(source)`, so
+   * the entry point inherits placement, focus and the panel tree instead of
+   * growing a second way to put something on screen.
+   *
+   * Panels only, and that is a fact about client apps rather than caution. An
+   * `app` part is host chrome: it is bound to a host target in `meta`, built
+   * without a panel loader, and mounted by the app orchestrator as the window's
+   * own view — one per host. `createPanel("apps/news")` would build the wrong
+   * artifact into a panel slot with the wrong preload. There is no "open this
+   * app" action in this shell to reuse, so the result reports the app landed
+   * and offers no link, rather than offering one that cannot work.
+   *
+   * The notice clears once the thing it points at is open: it exists to hand the
+   * user to what was just added, and it has done that. If the open fails the
+   * notice stays, because dismissing it would take the only remaining link with
+   * it.
+   */
+  const openEntryPoint = (entryPoint: NonNullable<InstallReviewResolution["entryPoint"]>) => {
+    void panel
+      .createPanel(entryPoint.repoPath, { title: entryPoint.title })
+      .then(() => setInstallResult(null))
+      .catch((err: unknown) => {
+        console.error("[ConsentApprovalBar] open entry point failed:", err);
+      });
+  };
+
+  const minimizeReview = () => {
+    reviewingQueuedRef.current = false;
+    reviewContinuationCallerIdRef.current = null;
+    setMinimized(true);
+  };
+
   const handleIntent = (payload: unknown) => {
     if (typeof payload !== "object" || payload === null) return;
     const candidate = payload as { type?: unknown; approvalId?: unknown };
     if (typeof candidate.type !== "string" || typeof candidate.approvalId !== "string") return;
     const intent = payload as ApprovalCardIntent;
     if (!current || intent.approvalId !== current.approvalId) return;
+    const continueReviewSession = () => {
+      // An approval's attention class describes how an untouched request first
+      // arrives. Once the user answers an expanded review, they are actively
+      // working through this queue: a queued successor must replace the
+      // current surface instead of disappearing into the notification pill.
+      // Set this even when the local snapshot still contains one item; the
+      // server can already be creating the successor while the pending-changed
+      // event is in flight.
+      reviewingQueuedRef.current = true;
+      reviewContinuationCallerIdRef.current = current.callerId;
+    };
     switch (intent.type) {
       case "minimize":
-        setMinimized(true);
+        minimizeReview();
         return;
       case "browse":
         setBrowseIndex((idx) =>
@@ -351,22 +508,32 @@ export function ConsentApprovalBar() {
         if (currentCaller?.panelId) navigateToId(currentCaller.panelId);
         return;
       case "decide":
+        continueReviewSession();
         decide(intent.decision);
         return;
       case "device-cancel":
+        continueReviewSession();
         decide("dismiss");
         return;
       case "submit-client-config":
+        continueReviewSession();
         submitClientConfig(intent.values);
         return;
       case "submit-credential-input":
+        continueReviewSession();
         submitCredentialInput(intent.values);
         return;
       case "submit-secret-input":
+        continueReviewSession();
         submitSecretInput(intent.values);
         return;
       case "resolve-mission-review":
+        continueReviewSession();
         resolveMissionReview(intent.resolution);
+        return;
+      case "resolve-install-review":
+        continueReviewSession();
+        resolveInstallReview(intent.resolution);
         return;
       case "fetch-blob":
         fetchBlob(intent.hash, intent.refresh);
@@ -393,7 +560,17 @@ export function ConsentApprovalBar() {
     panelBackground: themeConfig.panelBackground,
   };
 
-  const overlayOpen = current != null && !minimized && anchorBounds != null;
+  /**
+   * Where this approval is hosted (§7.2, §7.8).
+   *
+   * A unit install review opens on the full surface — a window-sized dialog this
+   * chrome owns — and everything else keeps the floating content overlay. The
+   * two hosts are exclusive: the overlay is a native view above the panels, so
+   * leaving it up behind the dialog would float a second copy of the same
+   * decision over the first.
+   */
+  const fullSurface = current != null && approvalOpensFullSurface(current);
+  const overlayOpen = current != null && !minimized && !fullSurface && anchorBounds != null;
   useShellContentOverlay(
     overlayOpen && current && anchorBounds
       ? {
@@ -410,7 +587,7 @@ export function ConsentApprovalBar() {
               decisionError && decisionError.approvalId === current.approvalId
                 ? decisionError.message
                 : null,
-            actionPending: submittingApprovalId === current.approvalId,
+            actionPending: submittingApprovalIds.has(current.approvalId),
             diffReview,
             blobResults,
             appearance: effectiveTheme,
@@ -420,20 +597,87 @@ export function ConsentApprovalBar() {
     handleIntent
   );
 
-  if (!current || !currentCaller) return null;
+  /**
+   * The result of the last review, in the chrome strip (§7.2, §7.8).
+   *
+   * It sits beside whatever the queue is doing rather than in front of it: the
+   * next approval still opens, the pill still appears, and this line is only a
+   * report. That is why it renders on every branch below including the empty
+   * one — by the time there is a result there is usually no approval left, and
+   * a result that unmounted with the review would never be seen.
+   *
+   * The shape is the shell's existing post-action strip (`SavePasswordBar`'s
+   * confirmation, `UserNotificationBar`'s notice): a `data-shell-top-chrome`
+   * band above the panels, in normal DOM flow, that pushes content down instead
+   * of covering it. A successful workspace-adoption result is the exception:
+   * it is a brief confirmation with no link, because the workspace is already
+   * open. Results for later installs keep their link until followed or
+   * dismissed.
+   */
+  const resultNotice = installResult ? (
+    <div data-shell-top-chrome="install-review-result" className="install-review-result">
+      <InstallReviewOutcomeNotice
+        outcome={{ source: "resolved", resolution: installResult }}
+        compact
+        {...(!transientWorkspaceReady && installResult.entryPoint?.kind === "panel"
+          ? { onOpenEntryPoint: openEntryPoint }
+          : {})}
+        onDismiss={() => setInstallResult(null)}
+      />
+    </div>
+  ) : null;
+
+  if (!current || !currentCaller) return resultNotice;
+
+  // The full surface is chrome, not overlay: it renders here, in this document,
+  // so it can be a real dialog with the shell's focus behaviour. Closing it
+  // without deciding is the same act as minimizing the card — the review stays
+  // pending in the queue and the pill offers it back.
+  if (!minimized && fullSurface) {
+    return (
+      <>
+        {resultNotice}
+        <ApprovalFullSurface
+          approval={current}
+          caller={currentCaller}
+          queue={
+            queueLength > 1 ? { index: browseIndex, total: queueLength, canPrev, canNext } : null
+          }
+          decisionError={
+            decisionError && decisionError.approvalId === current.approvalId
+              ? decisionError.message
+              : null
+          }
+          actionPending={submittingApprovalIds.has(current.approvalId)}
+          appearance={effectiveTheme}
+          emit={handleIntent}
+          onClose={minimizeReview}
+        />
+      </>
+    );
+  }
+
   // While expanded the card lives in the overlay surface — the chrome renders
-  // nothing. Minimized, it shows the pill in the notifications strip.
-  if (!minimized) return null;
+  // nothing but the last result. Minimized, it shows the pill in the
+  // notifications strip.
+  if (!minimized) return resultNotice;
 
   return (
-    <ApprovalMinimizedPill
-      approval={current}
-      caller={currentCaller}
-      tone={highestPendingTone(pendingAccess)}
-      count={queueLength}
-      attentionSeq={attentionSeq}
-      onExpand={() => setMinimized(false)}
-    />
+    <>
+      {resultNotice}
+      <ApprovalMinimizedPill
+        approval={current}
+        caller={currentCaller}
+        tone={highestPendingTone(orderedPending)}
+        count={queueLength}
+        attentionSeq={attentionSeq}
+        onExpand={() => {
+          reviewingQueuedRef.current = true;
+          reviewContinuationCallerIdRef.current = current.callerId;
+          setMinimized(false);
+        }}
+      />
+    </>
   );
 }
 

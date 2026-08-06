@@ -35,10 +35,10 @@ describe("useShellEvent", () => {
     unsubscribe.mockResolvedValue(undefined);
     onEvent.mockReset();
     onEvent.mockImplementation((event: string, listener: (payload: unknown) => void) => {
-        order.push("listen");
-        listeners.set(event, listener);
-        return () => listeners.delete(event);
-      });
+      order.push("listen");
+      listeners.set(event, listener);
+      return () => listeners.delete(event);
+    });
     subscribe.mockImplementation(async (event: string) => {
       order.push("subscribe");
       listeners.get(event)?.(snapshot);

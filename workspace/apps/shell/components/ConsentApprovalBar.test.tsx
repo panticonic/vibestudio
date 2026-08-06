@@ -6,7 +6,7 @@ import { Theme } from "@radix-ui/themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PendingCapabilityApproval,
-  PendingUnitBatchApproval,
+  PendingUnitInstallReviewApproval,
 } from "@vibestudio/shared/approvals";
 import type { ApprovalCardIntent } from "./approvalCardModel";
 
@@ -22,6 +22,7 @@ const shellClient = vi.hoisted(() => ({
   resolve: vi.fn(() => Promise.resolve()),
   submitClientConfig: vi.fn(() => Promise.resolve()),
   submitCredentialInput: vi.fn(() => Promise.resolve()),
+  resolveInstallReview: vi.fn(() => Promise.resolve()),
   subscribe: vi.fn(() => Promise.resolve()),
   unsubscribe: vi.fn(() => Promise.resolve()),
   onEvent: vi.fn((_event: string, _listener: (payload: unknown) => void) => () => {}),
@@ -56,6 +57,7 @@ vi.mock("../shell/client", () => ({
     resolve: shellClient.resolve,
     submitClientConfig: shellClient.submitClientConfig,
     submitCredentialInput: shellClient.submitCredentialInput,
+    resolveInstallReview: shellClient.resolveInstallReview,
   },
   shellPresence: { heartbeat: shellClient.heartbeat },
   events: {
@@ -98,6 +100,37 @@ vi.mock("./NavigationContext", () => ({
   useNavigationActions: () => ({ navigateToId: shellClient.navigateToId }),
 }));
 
+/**
+ * The full surface stands in for its Radix dialog here.
+ *
+ * Not because it cannot be mounted — it can, and ApprovalFullSurface.test.tsx
+ * mounts it for real, dialog and all. It stands in because what the coordinator
+ * owes is the *routing*: which approvals go to the full surface, which keep the
+ * floating card, what happens when one closes without deciding, and what it does
+ * with the resolution the server hands back. The stub records exactly the props
+ * and callbacks that traffic runs through, and asserting on them beats digging
+ * the same values back out of a rendered dialog.
+ *
+ * Everything the stub stands in for is covered against the real thing elsewhere:
+ * the dialog, its focus behaviour and its Escape handling in
+ * ApprovalFullSurface.test.tsx, and the card inside it — layout, panes,
+ * keyboard, selection — in ApprovalCard.test.tsx.
+ */
+const fullSurface = vi.hoisted(() => ({
+  props: null as {
+    approval?: { approvalId?: string };
+    actionPending?: boolean;
+    emit?: (intent: unknown) => void;
+    onClose?: () => void;
+  } | null,
+}));
+vi.mock("./ApprovalFullSurface", () => ({
+  ApprovalFullSurface: (props: { approval: { approvalId: string }; onClose: () => void }) => {
+    fullSurface.props = props;
+    return React.createElement("div", { "data-testid": "full-surface" }, props.approval.approvalId);
+  },
+}));
+
 import { ConsentApprovalBar } from "./ConsentApprovalBar";
 
 function emit(intent: ApprovalCardIntent): void {
@@ -116,6 +149,7 @@ function capabilityApproval(
     repoPath: partial.repoPath ?? "panels/test",
     effectiveVersion: partial.effectiveVersion ?? "ev",
     requestedAt: partial.requestedAt ?? Date.now(),
+    attention: partial.attention,
     callerTitle: partial.callerTitle,
     capability: partial.capability ?? "context.boundary",
     title: partial.title,
@@ -127,30 +161,76 @@ function capabilityApproval(
   };
 }
 
-function hostAppStartupApproval(approvalId: string): PendingUnitBatchApproval {
+function hostAppStartupApproval(approvalId: string): PendingUnitInstallReviewApproval {
   return {
-    kind: "unit-batch",
-    trigger: "startup",
+    kind: "unit-install-review",
+    mode: "adopt-root",
     callerId: "system:units",
     callerKind: "system",
     repoPath: "meta",
-    effectiveVersion: "ev",
+    effectiveVersion: "",
     requestedAt: Date.now(),
-    title: "Approve host app",
-    description: "startup",
+    title: "Start this workspace?",
+    description: "Vibestudio needs to run 1 program on this computer.",
     approvalId,
-    units: [
+    parts: [
       {
-        unitKind: "app",
-        unitName: "@workspace-apps/shell",
-        displayName: "Shell",
-        version: "0.1.0",
+        identityKey: "apps/shell@ev-shell",
+        kind: "app",
+        label: "Client App",
+        surfaces: [],
+        name: "@workspace-apps/shell",
+        title: "Shell",
+        purpose: "The desktop app itself.",
+        repoPath: "apps/shell",
+        effectiveVersion: "ev-shell",
+        version: null,
+        requiredUnitKeys: [],
+        runsInBackground: false,
         target: "electron",
-        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-        ev: "ev-shell",
-        capabilities: ["panel-hosting"],
+        origin: {
+          url: null,
+          originKey: "vibestudio",
+          registrableDomain: null,
+          version: "1.4.0",
+          isHostBuild: true,
+          firstEncounter: false,
+        },
+        notableRows: [],
+        everydayRows: [],
+        change: "added",
+        section: "template",
       },
     ],
+    summary: { panels: 0, agents: 0, services: 0, clientApps: 1, extensions: 0 },
+    unchangedPartCount: 0,
+  };
+}
+
+/**
+ * A review of ordinary workspace parts — panels, not client apps, so the launch
+ * gate does not own it and it lands in this queue like any other approval.
+ */
+function installReviewApproval(approvalId: string): PendingUnitInstallReviewApproval {
+  return {
+    ...hostAppStartupApproval(approvalId),
+    mode: "install",
+    title: "Add News",
+    description: "Read and discuss personalized news briefings.",
+    parts: [
+      {
+        ...(hostAppStartupApproval(approvalId)
+          .parts[0] as PendingUnitInstallReviewApproval["parts"][number]),
+        identityKey: "panels/news@ev-news",
+        kind: "panel",
+        label: "Panel",
+        name: "@workspace-panels/news",
+        title: "News",
+        purpose: "Reads your feeds and shows briefings.",
+        repoPath: "panels/news",
+      },
+    ],
+    summary: { panels: 1, agents: 0, services: 0, clientApps: 0, extensions: 0 },
   };
 }
 
@@ -260,6 +340,54 @@ describe("ConsentApprovalBar coordinator", () => {
     fireEvent.click(pill);
     await waitFor(() => expect(overlay.options?.open).toBe(true));
     expect(screen.queryByRole("button", { name: "Review approval: Lonely" })).toBeNull();
+  });
+
+  it("keeps queued attention in the pill until the user chooses to review it", async () => {
+    shellClient.listPending.mockResolvedValueOnce([
+      capabilityApproval({
+        approvalId: "queued",
+        title: "Queued approval",
+        callerTitle: "Chat A",
+        attention: "queue",
+      }),
+    ]);
+    mountBar();
+
+    const pill = await screen.findByRole("button", { name: "Review approval: Queued approval" });
+    expect(overlay.options).toBeNull();
+    fireEvent.click(pill);
+    await waitFor(() => expect(overlay.options?.props?.approval?.approvalId).toBe("queued"));
+  });
+
+  it("shows an interrupting approval ahead of earlier queued attention", async () => {
+    shellClient.listPending.mockResolvedValueOnce([
+      capabilityApproval({ approvalId: "queued", title: "Queued", attention: "queue" }),
+      capabilityApproval({ approvalId: "interrupt", title: "Interrupt", attention: "interrupt" }),
+    ]);
+    mountBar();
+    await waitFor(() => {
+      expect(overlay.options?.props?.approval?.approvalId).toBe("interrupt");
+    });
+  });
+
+  it("keeps an active review open when the next approval was queued", async () => {
+    shellClient.resolve.mockImplementation(() => new Promise(() => undefined));
+    shellClient.listPending.mockResolvedValueOnce([
+      capabilityApproval({ approvalId: "queued", title: "Queued", attention: "queue" }),
+      capabilityApproval({ approvalId: "interrupt", title: "Interrupt", attention: "interrupt" }),
+    ]);
+    mountBar();
+    await waitFor(() => {
+      expect(overlay.options?.props?.approval?.approvalId).toBe("interrupt");
+    });
+
+    emit({ type: "decide", decision: "once", approvalId: "interrupt" });
+
+    await waitFor(() => {
+      expect(overlay.options?.open).toBe(true);
+      expect(overlay.options?.props?.approval?.approvalId).toBe("queued");
+    });
+    expect(screen.queryByRole("button", { name: "Review approval: Queued" })).toBeNull();
   });
 
   it("resolves and removes an approval on a decide intent", async () => {
@@ -456,6 +584,373 @@ describe("ConsentApprovalBar coordinator", () => {
     await waitFor(() => expect(overlay.options?.open).toBe(true));
     emit({ type: "decide", decision: "once", approvalId: "d1" });
     expect(shellClient.resolve).toHaveBeenCalledWith("d1", "once");
+  });
+
+  /**
+   * The install review is the one approval that does not float (§7.2, §7.8): it
+   * opens on the full surface, in this document, as a real dialog.
+   */
+  it("opens an install review on the full surface instead of the floating card", async () => {
+    shellClient.listPending.mockResolvedValueOnce([installReviewApproval("news")]);
+    mountBar();
+
+    await screen.findByTestId("full-surface");
+    expect(fullSurface.props?.approval?.approvalId).toBe("news");
+    // Exclusive hosts: the native overlay is a view above the panels, so leaving
+    // it up behind the dialog would float a second copy of the same decision.
+    expect(overlay.options).toBeNull();
+  });
+
+  it("keeps the floating card for approvals that are not a review", async () => {
+    shellClient.listPending.mockResolvedValueOnce([
+      capabilityApproval({ approvalId: "plain", title: "Open a URL" }),
+    ]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+    expect(screen.queryByTestId("full-surface")).toBeNull();
+  });
+
+  it("leaves the review pending when the surface is closed without deciding", async () => {
+    shellClient.listPending.mockResolvedValueOnce([installReviewApproval("news")]);
+    mountBar();
+    await screen.findByTestId("full-surface");
+
+    // Closing is not declining: the review stays in the queue and the pill
+    // offers it back, exactly as minimizing the floating card does.
+    act(() => fullSurface.props?.onClose?.());
+    expect(await screen.findByRole("button", { name: /Review approval/u })).toBeTruthy();
+    expect(screen.queryByTestId("full-surface")).toBeNull();
+    expect(shellClient.resolve).not.toHaveBeenCalled();
+  });
+
+  it("resolves the review the surface's own actions decide", async () => {
+    shellClient.listPending.mockResolvedValueOnce([installReviewApproval("news")]);
+    mountBar();
+    await screen.findByTestId("full-surface");
+
+    const resolution = { decision: "install", allowNow: [] } as const;
+    await act(async () => {
+      (fullSurface.props as unknown as { emit: (intent: unknown) => void }).emit({
+        type: "resolve-install-review",
+        approvalId: "news",
+        resolution,
+      });
+    });
+    expect(shellClient.resolveInstallReview).toHaveBeenCalledWith("news", resolution);
+  });
+
+  it("keeps the next review actionable while the previous review awaits its landing receipt", async () => {
+    let finishFirst: (() => void) | undefined;
+    let finishSecond: (() => void) | undefined;
+    shellClient.resolveInstallReview
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFirst = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSecond = resolve;
+          })
+      );
+    const first = installReviewApproval("first");
+    const second = { ...installReviewApproval("second"), attention: "queue" as const };
+    shellClient.listPending.mockResolvedValueOnce([first]);
+    mountBar();
+    await waitFor(() => expect(fullSurface.props?.approval?.approvalId).toBe("first"));
+
+    const resolution = { decision: "install", allowNow: [] } as const;
+    act(() => {
+      fullSurface.props?.emit?.({
+        type: "resolve-install-review",
+        approvalId: "first",
+        resolution,
+      });
+    });
+    expect(shellClient.resolveInstallReview).toHaveBeenCalledWith("first", resolution);
+    await waitFor(() => expect(fullSurface.props?.actionPending).toBe(true));
+
+    // The queue removes a decided review immediately. Its RPC remains open
+    // until publication landing is known, so the next review can legitimately
+    // become current before the first call returns.
+    const pendingChangedListener = shellClient.onEvent.mock.calls.find(
+      ([event]) => event === "shell-approval:pending-changed"
+    )?.[1];
+    expect(pendingChangedListener).toBeTypeOf("function");
+    act(() => pendingChangedListener?.({ pending: [second] }));
+    await waitFor(() => expect(fullSurface.props?.approval?.approvalId).toBe("second"));
+    expect(screen.queryByRole("button", { name: /Review approval/u })).toBeNull();
+    expect(fullSurface.props?.actionPending).toBe(false);
+
+    act(() => {
+      fullSurface.props?.emit?.({
+        type: "resolve-install-review",
+        approvalId: "second",
+        resolution,
+      });
+    });
+    expect(shellClient.resolveInstallReview).toHaveBeenCalledWith("second", resolution);
+    expect(shellClient.resolveInstallReview).toHaveBeenCalledTimes(2);
+
+    // Settle both deferred receipts so the mounted coordinator has no work
+    // left behind after the assertion.
+    await act(async () => {
+      finishFirst?.();
+      finishSecond?.();
+      await Promise.resolve();
+    });
+  });
+
+  it("keeps a same-agent follow-up visible across a briefly empty queue", async () => {
+    shellClient.resolveInstallReview.mockResolvedValueOnce(undefined);
+    const first = { ...installReviewApproval("first"), callerId: "agent:builder" };
+    const second = {
+      ...installReviewApproval("second"),
+      callerId: "agent:builder",
+      attention: "queue" as const,
+    };
+    shellClient.listPending.mockResolvedValueOnce([first]);
+    mountBar();
+    await waitFor(() => expect(fullSurface.props?.approval?.approvalId).toBe("first"));
+
+    act(() => {
+      fullSurface.props?.emit?.({
+        type: "resolve-install-review",
+        approvalId: "first",
+        resolution: { decision: "install", allowNow: [] },
+      });
+    });
+
+    const pendingChangedListener = shellClient.onEvent.mock.calls.find(
+      ([event]) => event === "shell-approval:pending-changed"
+    )?.[1];
+    act(() => pendingChangedListener?.({ pending: [] }));
+    await waitFor(() => expect(screen.queryByTestId("full-surface")).toBeNull());
+
+    act(() => pendingChangedListener?.({ pending: [second] }));
+    await waitFor(() => expect(fullSurface.props?.approval?.approvalId).toBe("second"));
+    expect(screen.queryByRole("button", { name: /Review approval/u })).toBeNull();
+  });
+
+  it("does not pop open an unrelated queued approval after a review drains", async () => {
+    shellClient.resolveInstallReview.mockResolvedValueOnce(undefined);
+    const first = { ...installReviewApproval("first"), callerId: "agent:builder" };
+    const unrelated = {
+      ...installReviewApproval("unrelated"),
+      callerId: "agent:other",
+      attention: "queue" as const,
+    };
+    shellClient.listPending.mockResolvedValueOnce([first]);
+    mountBar();
+    await waitFor(() => expect(fullSurface.props?.approval?.approvalId).toBe("first"));
+
+    act(() => {
+      fullSurface.props?.emit?.({
+        type: "resolve-install-review",
+        approvalId: "first",
+        resolution: { decision: "install", allowNow: [] },
+      });
+    });
+    const pendingChangedListener = shellClient.onEvent.mock.calls.find(
+      ([event]) => event === "shell-approval:pending-changed"
+    )?.[1];
+    act(() => pendingChangedListener?.({ pending: [] }));
+    act(() => pendingChangedListener?.({ pending: [unrelated] }));
+
+    expect(await screen.findByRole("button", { name: /Review approval/u })).toBeTruthy();
+    expect(screen.queryByTestId("full-surface")).toBeNull();
+  });
+
+  /**
+   * §7.2's Result. The card that asked is gone by the time there is anything to
+   * say — accepting takes the approval out of the queue — so the coordinator is
+   * the only thing left holding the answer. These cover what it may say with it.
+   */
+  async function resolveWith(
+    outcome: unknown,
+    options: { captureTimers?: boolean } = {}
+  ): Promise<void> {
+    shellClient.listPending.mockResolvedValueOnce([installReviewApproval("news")]);
+    shellClient.resolveInstallReview.mockResolvedValueOnce(outcome as never);
+    mountBar();
+    await screen.findByTestId("full-surface");
+    if (options.captureTimers) vi.useFakeTimers();
+    await act(async () => {
+      (fullSurface.props as unknown as { emit: (intent: unknown) => void }).emit({
+        type: "resolve-install-review",
+        approvalId: "news",
+        resolution: { decision: "install", allowNow: [] },
+      });
+    });
+  }
+
+  const acceptedOutcome = {
+    approvalId: "news",
+    mode: "install",
+    decision: "accepted",
+    heading: "News added",
+    subject: "News 1.2.0",
+    parts: [],
+    entryPoint: {
+      identityKey: "panels/news@ev",
+      repoPath: "panels/news",
+      title: "News",
+      kind: "panel",
+    },
+    landing: { landed: ["panels/news@ev"], failed: [], workspaceUnchanged: false },
+  };
+
+  const workspaceReadyOutcome = {
+    ...acceptedOutcome,
+    mode: "adopt-root",
+    heading: "Your workspace is ready",
+    subject: undefined,
+    entryPoint: {
+      identityKey: "about/about@ev",
+      repoPath: "about/about",
+      title: "About Vibestudio",
+      kind: "panel",
+    },
+    landing: { landed: ["about/about@ev"], failed: [], workspaceUnchanged: false },
+  } as const;
+
+  it("says what was added and opens it, by the same mechanism as every other panel", async () => {
+    await resolveWith(acceptedOutcome);
+
+    expect(await screen.findByText("News added")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open News →" }));
+
+    await waitFor(() =>
+      expect(shellClient.createPanel).toHaveBeenCalledWith("panels/news", { title: "News" })
+    );
+    // The result has handed the user to what it was pointing at, so it goes.
+    await waitFor(() => expect(screen.queryByText("News added")).toBeNull());
+  });
+
+  it("lets the result be dismissed without touching the queue", async () => {
+    await resolveWith(acceptedOutcome);
+    await screen.findByText("News added");
+
+    // The next approval is never behind this line: the surface is still up
+    // beside it while it is on screen, and dismissing decides nothing.
+    expect(screen.getByTestId("full-surface")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("News added")).toBeNull();
+    expect(screen.getByTestId("full-surface")).toBeTruthy();
+    expect(shellClient.resolve).not.toHaveBeenCalled();
+  });
+
+  it("auto-dismisses a successful install result", async () => {
+    try {
+      await resolveWith(acceptedOutcome, { captureTimers: true });
+      expect(screen.getByText("News added")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(8_000);
+      });
+
+      expect(screen.queryByText("News added")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("briefly confirms a ready workspace without offering an internal entry point", async () => {
+    try {
+      await resolveWith(workspaceReadyOutcome, { captureTimers: true });
+
+      expect(screen.getByText("Your workspace is ready")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /^Open/u })).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.queryByText("Your workspace is ready")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("names the parts that failed, and says nothing was touched only when told", async () => {
+    await resolveWith({
+      ...acceptedOutcome,
+      heading: "Couldn't add these parts",
+      entryPoint: undefined,
+      landing: {
+        landed: [],
+        failed: [
+          {
+            identityKey: "workers/feed@ev",
+            title: "Feed Importer",
+            reason: "Its build did not finish.",
+          },
+        ],
+        workspaceUnchanged: true,
+      },
+    });
+
+    // Named with a reason, never counted.
+    expect(await screen.findByText("Feed Importer")).toBeTruthy();
+    expect(screen.getByText("Its build did not finish.")).toBeTruthy();
+    expect(screen.getByText(/exactly as it was/u)).toBeTruthy();
+    // A failure interrupts.
+    expect(screen.getByRole("alert")).toBeTruthy();
+  });
+
+  it("never claims the workspace was left alone when the server did not say so", async () => {
+    await resolveWith({
+      ...acceptedOutcome,
+      heading: "Couldn't add these parts",
+      entryPoint: undefined,
+      landing: {
+        landed: ["panels/news@ev"],
+        failed: [
+          { identityKey: "workers/feed@ev", title: "Feed Importer", reason: "Build failed." },
+        ],
+        // A partial failure is not a clean one, and the surface may not round it
+        // up to one.
+        workspaceUnchanged: false,
+      },
+    });
+
+    expect(await screen.findByText("Feed Importer")).toBeTruthy();
+    expect(screen.queryByText(/exactly as it was/u)).toBeNull();
+  });
+
+  it("does not dress a cancelled review as a failure", async () => {
+    await resolveWith({
+      approvalId: "news",
+      mode: "install",
+      decision: "cancelled",
+      heading: "News wasn't added",
+      parts: [],
+    });
+
+    expect(await screen.findByText("News wasn't added")).toBeTruthy();
+    // Declining is a decision the user made on purpose. Nothing went wrong, so
+    // nothing shouts, and there is nothing to open.
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Open/u })).toBeNull();
+  });
+
+  it("offers no link for a part this shell has no way to open", async () => {
+    await resolveWith({
+      ...acceptedOutcome,
+      heading: "News added",
+      // A client app is host chrome bound to a host target, not a panel slot —
+      // there is no open action to offer, so none is shown.
+      entryPoint: {
+        identityKey: "apps/news@ev",
+        repoPath: "apps/news",
+        title: "News",
+        kind: "app",
+      },
+    });
+
+    expect(await screen.findByText("News added")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open News →" })).toBeNull();
   });
 
   it("surfaces a failed decision back through the overlay props", async () => {

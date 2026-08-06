@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventName, EventPayloads, NotificationPayload } from "@vibestudio/shared/events";
@@ -10,6 +10,7 @@ const shellClient = vi.hoisted(() => ({
   applyUpdate: vi.fn(() => Promise.resolve({ applied: true })),
   rollback: vi.fn(() => Promise.resolve()),
   restart: vi.fn(() => Promise.resolve()),
+  recoverExecution: vi.fn(() => Promise.resolve()),
   show: vi.fn(() => Promise.resolve("notif")),
   reportAction: vi.fn(() => Promise.resolve()),
   dismiss: vi.fn(() => Promise.resolve()),
@@ -27,6 +28,7 @@ vi.mock("../shell/client", () => ({
   supervisedUnits: {
     rollback: shellClient.rollback,
     restart: shellClient.restart,
+    recoverExecution: shellClient.recoverExecution,
   },
 }));
 
@@ -80,6 +82,7 @@ describe("NotificationBar", () => {
     shellClient.applyUpdate.mockClear();
     shellClient.rollback.mockClear();
     shellClient.restart.mockClear();
+    shellClient.recoverExecution.mockClear();
     shellClient.show.mockClear();
     shellClient.reportAction.mockClear();
     shellClient.dismiss.mockClear();
@@ -105,7 +108,8 @@ describe("NotificationBar", () => {
       id: "extension-crash",
       type: "error",
       title: "Extension stopped",
-      message: "@workspace-extensions/react-native failed 5 times and will not restart until reloaded.",
+      message:
+        "@workspace-extensions/react-native failed 5 times and will not restart until reloaded.",
       details: [
         { label: "Extension", value: "@workspace-extensions/react-native", mono: true },
         { label: "Attempts", value: "5" },
@@ -166,5 +170,37 @@ describe("NotificationBar", () => {
     expect(screen.getByText("Other notifications")).toBeTruthy();
     expect(screen.getByText("Older extension error")).toBeTruthy();
     expect(screen.getByText("Older failure")).toBeTruthy();
+  });
+
+  it("executes an exact runtime recovery action with its stale-action guard", async () => {
+    renderBar();
+    const digest = "a".repeat(64);
+    emitShellEvent("notification:show", {
+      id: "runtime-recovery",
+      type: "error",
+      title: "Runtime execution unavailable",
+      actions: [
+        {
+          id: "restore-exact-execution",
+          label: "Restore exact execution",
+          command: {
+            type: "runtime.execution.recover",
+            entityId: "do:workers/agent:Agent:one",
+            expectedExecutionDigest: digest,
+            strategy: "restore-exact",
+          },
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByText("Restore exact execution"));
+
+    await waitFor(() => {
+      expect(shellClient.recoverExecution).toHaveBeenCalledWith(
+        "do:workers/agent:Agent:one",
+        digest,
+        "restore-exact"
+      );
+    });
   });
 });

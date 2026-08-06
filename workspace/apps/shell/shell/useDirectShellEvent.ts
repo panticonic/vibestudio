@@ -17,8 +17,5 @@ export function useDirectShellEvent<E extends EventName>(
     callbackRef.current = callback;
   });
 
-  useEffect(
-    () => directEvents.on(event, (payload) => callbackRef.current(payload)),
-    [event]
-  );
+  useEffect(() => directEvents.on(event, (payload) => callbackRef.current(payload)), [event]);
 }

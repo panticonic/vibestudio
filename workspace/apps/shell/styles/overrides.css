@@ -661,3 +661,506 @@ html[data-overlay-dragging] * {
     width: 100%;
   }
 }
+
+/* ── The install review (docs/template-install-unit-approval-ux-plan.md §7.2) ──
+ *
+ * Wide content scrolls inside its own container; the card body never scrolls
+ * horizontally. Text wraps vertically, and no level nests a horizontal scroll
+ * inside another (§7.8).
+ */
+.install-review {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.install-review-search {
+  background: var(--color-surface);
+  border: 1px solid var(--gray-6);
+  border-radius: 6px;
+  color: var(--gray-12);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  width: 100%;
+}
+
+.install-review-search:focus-visible,
+.install-review-kind-filter:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: 1px;
+}
+
+.install-review-filters {
+  align-items: center;
+}
+
+.install-review-filters .install-review-search {
+  flex: 1 1 12rem;
+  min-width: 0;
+  width: auto;
+}
+
+.install-review-kind-filter {
+  background: var(--color-surface);
+  border: 1px solid var(--gray-6);
+  border-radius: 6px;
+  color: var(--gray-12);
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+/* The list scrolls inside itself so the actions and the status line hold still
+ * while a part is opened — with an adopt-root slate the alternative was a
+ * notification-shaped card the length of the workspace (§7.2, §7.8). Vertical
+ * only: nothing here nests a horizontal scroll inside another. */
+.install-review-list-scroll {
+  max-height: min(46vh, 420px);
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.install-review-hidden-note {
+  color: var(--amber-11);
+}
+
+.install-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.install-review-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.install-review-group {
+  min-width: 0;
+}
+
+/* Category headings remain informative when folded: the second line names a
+ * couple of parts and states whether the category has anything worth knowing. */
+.install-review-group-toggle {
+  align-items: stretch;
+  background: var(--gray-a2);
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  font: inherit;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.install-review-group-toggle:hover {
+  background: var(--gray-a3);
+}
+
+.install-review-group-toggle:disabled {
+  cursor: default;
+}
+
+.install-review-group-toggle:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: 2px;
+}
+
+.install-review-group-heading {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.install-review-group-title {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.install-review-group-count {
+  flex: 0 0 auto;
+}
+
+.install-review-group-summary {
+  color: var(--gray-11);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.install-review-group-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The parts an operation could not land (§7.2: "failures name the parts that
+   failed"). Same list reset as the review's own list — without it the browser's
+   default bullets and indent make the one list a person reads under stress the
+   only one on this surface that looks like a document. */
+.install-review-failed-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.install-review-part {
+  border-radius: 8px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.install-review-part:hover {
+  background: var(--gray-a2);
+}
+
+.install-review-part-main {
+  min-width: 0;
+}
+
+/* The expander is a button, so it needs a button's focus ring and none of a
+ * button's chrome: the row is the affordance. */
+.install-review-part-toggle {
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  font: inherit;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.install-review-part-toggle:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: 2px;
+}
+
+.install-review-part-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.install-review-part-meta {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+/* A part's own sentence, ellipsized to one line so the list stays scannable. */
+.install-review-purpose {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.install-review-notable {
+  color: var(--gray-11);
+}
+
+/* Keeps rows aligned when a part carries nothing this decision can grant. */
+.install-review-checkbox-spacer {
+  display: inline-block;
+  width: var(--space-4);
+}
+
+.install-review-chevron {
+  color: var(--gray-9);
+  flex-shrink: 0;
+  transition: transform 120ms ease;
+}
+
+.install-review-chevron.open {
+  transform: rotate(180deg);
+}
+
+.install-review-detail {
+  border-left: 2px solid var(--gray-a4);
+  margin-left: 6px;
+  min-width: 0;
+  padding-left: 12px;
+}
+
+.install-review-row {
+  min-width: 0;
+}
+
+/* A disclosure marker, never a control: this decision cannot grant these, and a
+ * checkbox would promise something the server would refuse. */
+.install-review-disclosure-marker {
+  color: var(--gray-9);
+  display: inline-flex;
+  padding-top: 2px;
+}
+
+.install-review-disclosure {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent-11);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 0;
+  text-align: left;
+}
+
+.install-review-disclosure:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent-8);
+  outline-offset: 2px;
+}
+
+.install-review-provenance {
+  border-top: 1px solid var(--gray-a3);
+  padding-top: 6px;
+}
+
+.install-review-repairs,
+.install-review-charters {
+  border-top: 1px solid var(--gray-a3);
+  padding-top: 8px;
+}
+
+.install-review-failure {
+  min-width: 0;
+}
+
+/* Named casualties, one per line — a failure that says "3 parts failed" is a
+ * count, not an answer. */
+.install-review-failed-parts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+/* The result strip (§7.2). Same band as the minimized pill and the save-password
+ * confirmation: normal flow above the panel viewport, so it pushes content down
+ * instead of covering it and never sits between the user and the next approval. */
+.install-review-result {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--surface-border);
+  background: var(--surface-card);
+  flex-shrink: 0;
+  animation: approval-pill-in var(--motion-base) var(--ease-decelerate);
+}
+
+/* A landed result is a toast-like status line, not another review card. Keep
+ * the full-width chrome band while laying its copy and actions out as one
+ * compact, wrapping row. Detailed failures still name each failed part. */
+.install-review-outcome--compact {
+  flex-direction: row;
+  align-items: center;
+  column-gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.install-review-outcome--compact .install-review-outcome-actions {
+  margin-top: 0;
+  margin-left: auto;
+}
+
+/* Below roughly 720 logical pixels the two-pane model collapses to list/detail
+ * in place. There is no minimum size that leaves the review clipped (§7.2). */
+@media (max-width: 720px) {
+  .install-review-purpose {
+    white-space: normal;
+  }
+
+  .install-review-detail {
+    margin-left: 0;
+    padding-left: 8px;
+  }
+
+  /* One scroll, not two: on a narrow surface the list gives up its own scroll
+   * region so a part's detail reads as a level of the page rather than as a
+   * pane trapped inside it. */
+  .install-review-list-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .install-review-part-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+/* ── The two-pane dialog (§7.2) ────────────────────────────────────────────
+ *
+ * A large window uses the space: the list and a persistent detail pane are
+ * siblings, each scrolling on its own vertical axis, neither nested inside the
+ * other's scroll. Only the full surface ever gets here — the floating card is
+ * capped near 472–760px by its host no matter how wide the window is, so window
+ * width says nothing about the room a card has, and the component decides in JS
+ * rather than letting a media query split a notification into two columns.
+ */
+.install-review-panes {
+  align-items: stretch;
+  column-gap: var(--space-4);
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+
+.install-review-column {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The pane holds still while the list scrolls beside it, and scrolls itself when
+ * a part has more to say than fits. Vertical only, never sideways (§7.8). */
+.install-review-detail-pane {
+  border-left: 1px solid var(--gray-a4);
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-left: var(--space-4);
+}
+
+.install-review-detail-pane:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid var(--accent-8);
+  outline-offset: 2px;
+}
+
+/* The selected row, so the pane beside it is visibly the detail OF something. */
+.install-review-part[data-selected] {
+  background: var(--accent-a3);
+}
+
+.install-review-part[data-selected]:hover {
+  background: var(--accent-a4);
+}
+
+/* In the dialog the list owns the leftover height instead of a fixed slice of
+ * the viewport: the surface is already sized, and a second cap inside it just
+ * leaves empty space under a scrollbar. */
+.install-review-panes .install-review-list-scroll {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
+/* ── The full surface (§7.2, §7.8) ─────────────────────────────────────────
+ *
+ * A window-sized dialog in the chrome document, with the panel views hidden
+ * beneath it. The card inside drops the chrome that only makes sense while
+ * floating — its own elevation, its corner animation, its width negotiation with
+ * the overlay host — and fills the surface it was given.
+ */
+.approval-full-surface {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The dialog's accessible name only. The card renders the same words visibly a
+ * few pixels below; this is what a screen reader announces on arrival. */
+.approval-full-surface-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.approval-card[data-layout="dialog"] {
+  animation: none;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--surface-border);
+  flex: 1 1 auto;
+  max-height: none;
+  max-width: none;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+/* The body stops scrolling as a whole: the panes scroll, the header and the
+ * action footer hold still, and the decision is in view at every scroll
+ * position (§7.8). */
+.approval-card[data-layout="dialog"] .approval-card-scroll {
+  display: flex;
+  overflow: hidden;
+}
+
+.approval-card[data-layout="dialog"] .approval-card-body {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
+.approval-card[data-layout="dialog"] .approval-card-main {
+  align-self: stretch;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.approval-card[data-layout="dialog"] .install-review {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Below roughly 720 logical pixels the dialog collapses to the list/detail model
+ * in place: one column, detail under its row, one scroll. Nothing is clipped and
+ * nothing needs horizontal scrolling at any size (§7.2, §7.8). */
+@media (max-width: 720px) {
+  .approval-card[data-layout="dialog"] .approval-card-scroll {
+    overflow-y: auto;
+  }
+
+  /* The narrow layout deliberately has one outer scroll instead of two panes.
+   * Release the desktop height chain so inline part details contribute to that
+   * outer scroll rather than being clipped inside the main column. */
+  .approval-card[data-layout="dialog"] .approval-card-body,
+  .approval-card[data-layout="dialog"] .approval-card-main {
+    height: auto;
+  }
+
+  .approval-card[data-layout="dialog"] .approval-card-main {
+    overflow: visible;
+  }
+}

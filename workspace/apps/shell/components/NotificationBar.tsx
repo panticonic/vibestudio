@@ -192,6 +192,12 @@ export function NotificationBar() {
           });
         } else if (action.command?.type === "runtime.supervision.restart") {
           await supervisedUnits.restart(action.command.identity);
+        } else if (action.command?.type === "runtime.execution.recover") {
+          await supervisedUnits.recoverExecution(
+            action.command.entityId,
+            action.command.expectedExecutionDigest,
+            action.command.strategy
+          );
         }
         if (action.invoke?.kind === "extension") {
           const result = await extensions.invoke(

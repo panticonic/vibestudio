@@ -6,24 +6,10 @@ import type {
   HostTargetCandidate,
   HostTargetSelection,
 } from "@vibestudio/shared/hostTargets";
-import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
-import {
-  formatCapabilities,
-  launchCopy,
-  plural,
-  shortVersion,
-  targetLabel,
-  unitKindLabel,
-  unitReviewRows,
-  unitSourceLabel,
-  unitSummaryChips,
-} from "@vibestudio/shared/bootstrapLaunchGate";
-import {
-  buildUnits,
-  hostLaunch,
-  supervisedUnits,
-  workspace,
-} from "../shell/client";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
+import { launchGateView, targetLabel } from "@vibestudio/shared/bootstrapLaunchGate";
+import { OriginText } from "./OriginText";
+import { buildUnits, hostLaunch, supervisedUnits, workspace } from "../shell/client";
 
 const HOST_TARGETS: HostTarget[] = ["electron", "react-native", "terminal"];
 
@@ -58,6 +44,96 @@ function persistSelections(selections: SelectionState): void {
   );
 }
 
+/**
+ * The launch gate's facts, in the window's order (§7.6.3, §7.6.4).
+ *
+ * This surface renders the same gate the bootstrap window does, so it renders
+ * the SAME facts in the SAME order at the SAME level: what this workspace is,
+ * which domain that URL belongs to, whether the user has run code from it
+ * before, how many programs there are, and what native code can do — all before
+ * the per-source list and none of it folded into a count. It used to read only
+ * the per-source first-encounter line, which is null in exactly the case that
+ * matters most: a foreign root promotes that line to the top level, so this
+ * surface dropped the single most useful signal it had.
+ *
+ * Organized by origin, not by unit: the question here is whose code this is and
+ * whether it may run on this computer — not what each piece can reach (§7.6.1).
+ */
+export function LaunchGateFacts({
+  approvals,
+}: {
+  approvals: PendingUnitInstallReviewApproval[];
+}) {
+  const view = launchGateView({ approvals });
+  const leadOrigin = view.sources.find(
+    (source) => source.origin.url && view.summary.includes(source.origin.url)
+  )?.origin;
+  return (
+    <Flex direction="column" gap="2">
+      <Text size="1" color="gray">
+        {leadOrigin ? <OriginText text={view.summary} origin={leadOrigin} /> : view.summary}
+      </Text>
+      {view.domainLine ? (
+        <Text size="1" color="gray">
+          {view.domainLine}
+        </Text>
+      ) : null}
+      {view.firstEncounterLine ? (
+        <Text size="1" weight="medium">
+          {view.firstEncounterLine}
+        </Text>
+      ) : null}
+      {view.programsLine ? (
+        <Text size="1" color="gray">
+          {view.programsLine}
+        </Text>
+      ) : null}
+      {view.nativeCodeWarning ? (
+        <Text size="1" weight="medium">
+          {view.nativeCodeWarning}
+        </Text>
+      ) : null}
+      {view.sources.map((source) => (
+        <Flex key={source.origin.originKey} direction="column" gap="1">
+          <Flex gap="2" wrap="wrap" align="center">
+            {/* The origin URL is the identity, never abbreviated away and never
+                replaced by a self-given name. */}
+            <Code size="1">
+              <OriginText text={source.label} origin={source.origin} />
+            </Code>
+            <Badge size="1" variant="soft">
+              {source.counts}
+            </Badge>
+          </Flex>
+          {source.domainLine ? (
+            <Text size="1" color="gray">
+              {source.domainLine}
+            </Text>
+          ) : null}
+          {source.origin.selfName && !source.origin.isHostBuild ? (
+            <Text size="1" color="gray">
+              &quot;{source.origin.selfName}&quot; — name given by this template
+            </Text>
+          ) : null}
+          {source.firstEncounterLine ? (
+            <Text size="1" color="gray">
+              {source.firstEncounterLine}
+            </Text>
+          ) : null}
+          {source.units.map((unit) => (
+            <Text key={unit.name} size="1" color="gray">
+              {unit.name} — {unit.notable || unit.purpose}
+            </Text>
+          ))}
+        </Flex>
+      ))}
+      <Text size="1" color="gray">
+        {view.declineConsequence}
+      </Text>
+    </Flex>
+  );
+}
+
 export function HostTargetsSection() {
   const [candidates, setCandidates] = useState<Record<HostTarget, HostTargetCandidate[]>>({
     electron: [],
@@ -72,7 +148,7 @@ export function HostTargetsSection() {
   const [pinnedRefs, setPinnedRefs] = useState<Record<string, string>>({});
   const [pendingApproval, setPendingApproval] = useState<{
     target: HostTarget;
-    approvals: PendingUnitBatchApproval[];
+    approvals: PendingUnitInstallReviewApproval[];
   } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,16 +167,15 @@ export function HostTargetsSection() {
       );
       const versions = new Map(
         await Promise.all(
-          apps.map(async (unit) => [
-            unit.name,
-            await supervisedUnits.versions(unit.name),
-          ] as const)
+          apps.map(async (unit) => [unit.name, await supervisedUnits.versions(unit.name)] as const)
         )
       );
       const declaredTargets =
-        (config as {
-          hostTargets?: Partial<Record<HostTarget, { app?: string }>>;
-        }).hostTargets ?? {};
+        (
+          config as {
+            hostTargets?: Partial<Record<HostTarget, { app?: string }>>;
+          }
+        ).hostTargets ?? {};
       const nextCandidates = Object.fromEntries(
         HOST_TARGETS.map((target) => [
           target,
@@ -177,10 +252,10 @@ export function HostTargetsSection() {
               })();
             const valid = Boolean(
               selected &&
-                nextCandidates[target].some(
-                  (candidate) =>
-                    candidate.name === selected.appId || candidate.source === selected.source
-                )
+              nextCandidates[target].some(
+                (candidate) =>
+                  candidate.name === selected.appId || candidate.source === selected.source
+              )
             );
             return [
               target,
@@ -390,69 +465,14 @@ export function HostTargetsSection() {
               <Text size="2" weight="medium">
                 {targetLabel(pendingApproval.target)} startup needs approval
               </Text>
-              {pendingApproval.approvals.map((approval) => (
-                <Flex key={approval.approvalId} direction="column" gap="2">
-                  <Flex direction="column" gap="1">
-                    <Text size="2" weight="medium">
-                      {launchCopy(approval).title}
-                    </Text>
-                    <Text size="1" color="gray">
-                      {launchCopy(approval).summary}
-                    </Text>
-                  </Flex>
-                  <Flex gap="2" wrap="wrap" align="center">
-                    <Badge size="1" color="amber">
-                      {plural(approval.units.length, "privileged unit")}
-                    </Badge>
-                    {unitSummaryChips(approval).map((chip) => (
-                      <Badge key={chip} size="1" variant="soft">
-                        {chip}
-                      </Badge>
-                    ))}
-                  </Flex>
-                  <details>
-                    <summary>
-                      <Text size="1" weight="medium">
-                        Review details
-                      </Text>
-                      <Text size="1" color="gray">
-                        {" "}
-                        sources, versions, capabilities
-                      </Text>
-                    </summary>
-                    <Flex direction="column" gap="1" mt="1">
-                      {approval.units.map((unit, index) => {
-                        const row = unitReviewRows(approval)[index]!;
-                        return (
-                          <Flex
-                            key={`${approval.approvalId}:${unit.unitName}`}
-                            direction="column"
-                            gap="1"
-                          >
-                            <Flex gap="2" wrap="wrap" align="center">
-                              <Text size="1" weight="medium">
-                                {row.name}
-                              </Text>
-                              <Badge size="1">{unitKindLabel(unit)}</Badge>
-                            </Flex>
-                            <Code size="1">{unitSourceLabel(unit)}</Code>
-                            <Text size="1" color="gray">
-                              {formatCapabilities(unit)}
-                            </Text>
-                          </Flex>
-                        );
-                      })}
-                    </Flex>
-                  </details>
-                </Flex>
-              ))}
+              <LaunchGateFacts approvals={pendingApproval.approvals} />
               <Flex gap="2">
                 <Button
                   size="1"
                   disabled={busy === `${pendingApproval.target}:approval:once`}
                   onClick={() => void resolvePendingApproval("once")}
                 >
-                  Trust and start
+                  Start
                 </Button>
                 <Button
                   size="1"
@@ -461,7 +481,7 @@ export function HostTargetsSection() {
                   disabled={busy === `${pendingApproval.target}:approval:deny`}
                   onClick={() => void resolvePendingApproval("deny")}
                 >
-                  Deny
+                  Quit
                 </Button>
               </Flex>
             </Flex>
@@ -545,7 +565,7 @@ export function HostTargetsSection() {
                       </Table.Cell>
                       <Table.Cell>
                         <Flex direction="column" gap="1">
-                          <Code size="1">{shortVersion(candidate.activeBundleKey)}</Code>
+                          <Code size="1">{candidate.activeBundleKey ? "built" : "none"}</Code>
                           {candidate.activeBundleKey ? (
                             <Button
                               size="1"

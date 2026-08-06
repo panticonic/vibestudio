@@ -189,17 +189,17 @@ function PanelAppContent() {
         disposition === "current" && focusedPanelId
           ? await panel.navigate(focusedPanelId, location.source, common)
           : disposition === "child" && focusedPanelId
-                ? await panel.createChild(focusedPanelId, location.source, {
-                    ...common,
-                    title: location.title,
-                    slug: location.slug,
-                    focus: location.focus ?? true,
-                  })
-                : await panel.createPanel(location.source, {
-                    ...common,
-                    title: location.title,
-                    slug: location.slug,
-                    isRoot: true,
+            ? await panel.createChild(focusedPanelId, location.source, {
+                ...common,
+                title: location.title,
+                slug: location.slug,
+                focus: location.focus ?? true,
+              })
+            : await panel.createPanel(location.source, {
+                ...common,
+                title: location.title,
+                slug: location.slug,
+                isRoot: true,
                 focus: location.focus ?? true,
               });
       if (

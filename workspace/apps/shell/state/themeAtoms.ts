@@ -79,20 +79,17 @@ export const loadThemePreferenceAtom = atom(null, (get, set) => {
 export const themeConfigAtom = atom<ThemeConfigValue>({ ...APP_THEME });
 
 /** Set + persist the theme identity. */
-export const setThemeConfigAtom = atom(
-  null,
-  (get, set, patch: Partial<ThemeConfigValue>) => {
-    const next = { ...get(themeConfigAtom), ...patch };
-    set(themeConfigAtom, next);
-    if (typeof window !== "undefined") {
-      try {
-        localStorage.setItem("theme-config", JSON.stringify(next));
-      } catch (error) {
-        console.error("Failed to save theme identity:", error);
-      }
+export const setThemeConfigAtom = atom(null, (get, set, patch: Partial<ThemeConfigValue>) => {
+  const next = { ...get(themeConfigAtom), ...patch };
+  set(themeConfigAtom, next);
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.setItem("theme-config", JSON.stringify(next));
+    } catch (error) {
+      console.error("Failed to save theme identity:", error);
     }
   }
-);
+});
 
 /** Load the persisted theme identity on startup. */
 export const loadThemeConfigAtom = atom(null, (get, set) => {
