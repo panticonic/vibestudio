@@ -15,7 +15,12 @@ afterEach(() => {
 
 const enc = new TextEncoder();
 
-function headPayload(status: number, statusText: string, headerPairs: [string, string][], finalUrl: string): Uint8Array {
+function headPayload(
+  status: number,
+  statusText: string,
+  headerPairs: [string, string][],
+  finalUrl: string
+): Uint8Array {
   return enc.encode(JSON.stringify({ status, statusText, headerPairs, finalUrl }));
 }
 

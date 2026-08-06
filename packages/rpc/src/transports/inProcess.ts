@@ -24,7 +24,8 @@ export function createInProcessNetwork(): InProcessNetwork {
     },
     async send(envelope) {
       const set = handlers.get(envelope.target);
-      if (!set?.size) throw new Error(`No in-process RPC target registered for "${envelope.target}"`);
+      if (!set?.size)
+        throw new Error(`No in-process RPC target registered for "${envelope.target}"`);
       queueMicrotask(() => {
         for (const handler of set) handler(envelope);
       });
@@ -32,7 +33,10 @@ export function createInProcessNetwork(): InProcessNetwork {
   };
 }
 
-export function inProcessTransport(selfId: string, network: InProcessNetwork): EnvelopeRpcTransport {
+export function inProcessTransport(
+  selfId: string,
+  network: InProcessNetwork
+): EnvelopeRpcTransport {
   const localHandlers = new Set<Handler>();
   const unregister = network.register(selfId, (envelope) => {
     for (const handler of localHandlers) handler(envelope);

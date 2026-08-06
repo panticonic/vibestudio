@@ -312,11 +312,19 @@ export function createServerEventBridge(
         title?: unknown;
         explicit?: unknown;
       };
-      if (typeof panelId === "string" && typeof title === "string") {
-        panelOrchestrator?.applyServerPanelTitleUpdate({
-          panelId,
-          title,
-          explicit: explicit === true,
+      if (typeof panelId === "string" && (typeof title === "string" || title === null)) {
+        void Promise.resolve(
+          panelOrchestrator?.applyServerPanelTitleUpdate({
+            panelId,
+            title,
+            explicit: explicit === true,
+          })
+        ).catch((error: unknown) => {
+          deps.warn(
+            `[panelRuntime] failed to apply title for ${panelId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
         });
       }
       return;

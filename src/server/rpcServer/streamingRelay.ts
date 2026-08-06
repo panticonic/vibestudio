@@ -106,6 +106,7 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 /** Owns streaming RPC admission, framing, proxy dispatch, and cancellation. */
 export class StreamingRelay {
   private readonly wsStreamAborts = new WeakMap<WsClientState, Map<string, AbortController>>();
+  private readonly httpStreamAborts = new Set<AbortController>();
 
   constructor(private readonly deps: StreamingRelayDeps) {}
 
@@ -120,6 +121,17 @@ export class StreamingRelay {
     for (const controller of streams.values()) {
       controller.abort();
     }
+  }
+
+  /** Abort streaming work that is not tied to an RPC WebSocket. */
+  stop(reason = "RPC server shutting down"): void {
+    const error = new Error(reason);
+    for (const controller of this.httpStreamAborts) controller.abort(error);
+  }
+
+  private trackHttp(controller: AbortController): () => void {
+    this.httpStreamAborts.add(controller);
+    return () => this.httpStreamAborts.delete(controller);
   }
 
   async handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -185,6 +197,7 @@ export class StreamingRelay {
         return;
       }
       const abortController = new AbortController();
+      const releaseAbort = this.trackHttp(abortController);
       req.on("aborted", () => abortController.abort());
       res.on("close", () => abortController.abort());
       try {
@@ -208,6 +221,7 @@ export class StreamingRelay {
           ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
         }).catch(() => {});
       } finally {
+        releaseAbort();
         res.end();
       }
       return;
@@ -236,6 +250,7 @@ export class StreamingRelay {
       return;
     }
     const abortController = new AbortController();
+    const releaseAbort = this.trackHttp(abortController);
     req.on("aborted", () => abortController.abort());
     res.on("close", () => abortController.abort());
     const emitFrame = await this.httpFrameWriter(res);
@@ -246,6 +261,7 @@ export class StreamingRelay {
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
       ...(causalParent ? { causalParent } : {}),
+      signal: abortController.signal,
       // Streaming is an alternate transport for the same semantic service
       // invocation. Unlike the unary RPC core it cannot return EACQUIRE and
       // replay an arbitrary response/request stream safely, so the host keeps
@@ -262,6 +278,7 @@ export class StreamingRelay {
         errorCode: error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
         ...(rpcErrorDataOf(error) !== undefined ? { errorData: rpcErrorDataOf(error) } : {}),
       });
+      releaseAbort();
       return;
     }
     res.writeHead(200, STREAM_HEADERS);
@@ -285,6 +302,7 @@ export class StreamingRelay {
         // The connection may already be closed.
       }
     } finally {
+      releaseAbort();
       res.end();
     }
   }
@@ -295,6 +313,7 @@ export class StreamingRelay {
     envelope: RpcEnvelope
   ): Promise<void> {
     const emitFrame = this.wsFrameWriter(client, request, envelope);
+    const inboundBody = client.uploadBodies?.take(request.requestId);
     // The socket authenticates the resident runtime. Evaluated execution is a
     // narrower, per-run admission carried by the individual request, so resolve
     // the invocation caller for every stream just as the unary path does.
@@ -335,11 +354,20 @@ export class StreamingRelay {
     const shim = client.ws as unknown as {
       takeInboundBody?: (requestId: string) => ReadableStream<Uint8Array> | undefined;
     };
-    const inboundBody = shim.takeInboundBody?.(request.requestId);
+    const effectiveInboundBody = inboundBody ?? shim.takeInboundBody?.(request.requestId);
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
     const targetId = envelope.target;
     if (targetId && targetId !== "main" && targetId !== "server") {
+      if (effectiveInboundBody) {
+        await emitFrame({
+          kind: "error",
+          status: 400,
+          message: "Streaming request bodies cannot be relayed to another RPC endpoint",
+          errorKind: "protocol",
+        });
+        return;
+      }
       const authorization = this.deps.authorizeRelay(
         client.caller.runtime.id,
         client.caller.runtime.kind,
@@ -393,7 +421,7 @@ export class StreamingRelay {
           ...(request.requestId ? { requestId: request.requestId } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(readOnly ? { readOnly: true } : {}),
-          ...(inboundBody ? { body: inboundBody } : {}),
+          ...(effectiveInboundBody ? { body: effectiveInboundBody } : {}),
           ...(causalParent ? { causalParent } : {}),
           authorityAcquisition: "wait",
         });
@@ -445,7 +473,7 @@ export class StreamingRelay {
       });
       return;
     }
-    if (inboundBody && validation.proxyParams.body !== undefined) {
+    if (effectiveInboundBody && validation.proxyParams.body !== undefined) {
       await emitFrame({
         kind: "error",
         status: 400,
@@ -460,7 +488,7 @@ export class StreamingRelay {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(readOnly ? { readOnly: true } : {}),
-      ...(inboundBody ? { body: inboundBody } : {}),
+      ...(effectiveInboundBody ? { body: effectiveInboundBody } : {}),
       ...(causalParent ? { causalParent } : {}),
       authorityAcquisition: "wait",
     });
@@ -489,7 +517,7 @@ export class StreamingRelay {
         {
           caller: context.caller,
           ...validation.proxyParams,
-          ...(inboundBody ? { body: inboundBody } : {}),
+          ...(effectiveInboundBody ? { body: effectiveInboundBody } : {}),
         },
         emitFrame,
         abortController.signal
@@ -565,6 +593,7 @@ export class StreamingRelay {
       return;
     }
     const abortController = new AbortController();
+    const releaseAbort = this.trackHttp(abortController);
     req.once("aborted", () => abortController.abort());
     res.once("close", () => abortController.abort());
     let response: Response;
@@ -575,6 +604,7 @@ export class StreamingRelay {
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         ...(causalParent ? { causalParent } : {}),
+        signal: abortController.signal,
         authorityAcquisition: "wait",
       };
       const result = await this.deps.dispatcher.dispatch(
@@ -587,6 +617,7 @@ export class StreamingRelay {
         writeJson(res, 500, {
           error: `Streaming service ${request.method} did not return a Response`,
         });
+        releaseAbort();
         return;
       }
       response = result;
@@ -604,6 +635,7 @@ export class StreamingRelay {
         })
       ).catch(() => {});
       res.end();
+      releaseAbort();
       return;
     }
 
@@ -611,6 +643,7 @@ export class StreamingRelay {
     try {
       await this.pipeResponseToHttpFrames(response, res, abortController.signal);
     } finally {
+      releaseAbort();
       if (!res.destroyed && !res.writableEnded) res.end();
     }
   }
@@ -705,6 +738,12 @@ export class StreamingRelay {
       new TextEncoder().encode(JSON.stringify(value));
 
     return (frame): Promise<void> | void => {
+      if (frame.kind === "end" || frame.kind === "error") {
+        client.uploadBodies?.fail(
+          request.requestId,
+          new Error("Streaming RPC response completed before its request body settled")
+        );
+      }
       if (sendBinaryFrame) {
         let result: Promise<void> | false;
         if (frame.kind === "head") {

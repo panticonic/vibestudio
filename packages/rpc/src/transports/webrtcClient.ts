@@ -1928,6 +1928,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           error: frame.error,
           errorKind: frame.errorKind,
           errorCode: frame.errorCode,
+          ...(frame.errorData !== undefined ? { errorData: frame.errorData } : {}),
         },
       };
       this.deliverEnvelope(envelope);

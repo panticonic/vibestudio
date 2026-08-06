@@ -230,8 +230,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
     // that happened to start the work: that handler may return while its
     // journaled/background execution is still legitimately running.
     const authorityParentNonce =
-      !executionSessionNonce &&
-      (message.type === "request" || message.type === "stream-request")
+      !executionSessionNonce && (message.type === "request" || message.type === "stream-request")
         ? config.authorityParentNonce?.()
         : undefined;
     const carriedMessage =
@@ -492,6 +491,15 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
           requestId: request.requestId,
           error: `Method "${request.method}" is not exposed by this endpoint`,
           errorKind: "application",
+          // Keep endpoint identity in the structured diagnostic channel. The
+          // human-readable error is intentionally stable, while this payload
+          // makes a stale/misrouted route distinguishable from a missing
+          // registration without exposing the endpoint's whole method table.
+          errorData: {
+            kind: "rpc-endpoint",
+            endpointId: config.selfId,
+            requestedMethod: request.method,
+          },
         })
       ).catch(logResponseSendFailure);
       return;
@@ -655,10 +663,15 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
       // specific operation should be time-bounded.
       const effectiveTimeoutMs = options?.timeoutMs;
       if (effectiveTimeoutMs !== undefined && effectiveTimeoutMs > 0) {
-        timeout = setTimeout(
-          () => rejectPending(new Error(`RPC call timed out after ${effectiveTimeoutMs}ms`)),
-          effectiveTimeoutMs
-        );
+        timeout = setTimeout(() => {
+          void send(
+            targetId,
+            { type: "request-cancel", requestId, fromId: config.selfId },
+            undefined,
+            provenance
+          ).catch(() => {});
+          rejectPending(new Error(`RPC call timed out after ${effectiveTimeoutMs}ms`));
+        }, effectiveTimeoutMs);
       }
       if (options?.signal) {
         const onAbort = (): void => {
@@ -759,9 +772,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         options,
         provenance
       );
-      // Body-capable transports (the WebRTC session) pump the request body on
-      // the bulk channel; transports that can't THROW (plan §1.6 — fail loud,
-      // never a silent base64 fallback).
+      // Body-capable transports pump the request body on their native wire;
+      // transports that cannot must throw rather than silently dropping it.
       return config.transport.stream(
         envelope,
         options?.signal ?? null,
@@ -791,9 +803,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcClient {
         );
         return config.transport.streamBody(envelope, options?.signal ?? null, options.body);
       }
-      throw new Error(
-        "Streaming request bodies (uploads) require the WebRTC transport; this transport cannot stream a request body"
-      );
+      throw new Error("This RPC transport cannot stream a request body");
     }
     return streamImpl(provenance, targetId, method, args, options);
   }

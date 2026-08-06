@@ -186,9 +186,9 @@ describe("bulk demux", () => {
     const { demux } = collect({ maxPartialStreams: 2 });
     demux.push(encodeBulkMessage(1, FRAME_HEAD, bytes(1), true));
     demux.push(encodeBulkMessage(2, FRAME_HEAD, bytes(1), true));
-    expect(() =>
-      demux.push(encodeBulkMessage(3, FRAME_HEAD, bytes(1), true))
-    ).toThrow(/partial stream count exceeds 2/);
+    expect(() => demux.push(encodeBulkMessage(3, FRAME_HEAD, bytes(1), true))).toThrow(
+      /partial stream count exceeds 2/
+    );
     expect(BULK_MUX_PARTIAL_STREAM_CAP).toBeGreaterThanOrEqual(65_536);
   });
 

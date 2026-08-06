@@ -232,8 +232,8 @@ export function createBridgeBodyReassembler(
 
 export interface BridgeStreamRelayDeps {
   /**
-   * Open the panel session's first-class stream (the WebRTC session's
-   * `streamReadable`). `body` is null for subscriptions and downloads.
+   * Open the panel session's transport-native `streamReadable`.
+   * `body` is null for subscriptions and downloads.
    */
   openStream: (
     envelope: RpcEnvelope,
@@ -289,7 +289,11 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
 
   async function run(op: RelayOp, envelope: RpcEnvelope): Promise<void> {
     try {
-      const decoded = await deps.openStream(envelope, op.controller.signal, op.body?.stream ?? null);
+      const decoded = await deps.openStream(
+        envelope,
+        op.controller.signal,
+        op.body?.stream ?? null
+      );
       if (op.controller.signal.aborted) return;
       deps.sendToPanel({
         kind: "head",
@@ -414,7 +418,8 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
         op.body?.end();
         return Promise.resolve();
       }
-      if (!op.body) return Promise.reject(new Error(`bridge stream ${op.opId} has no request body`));
+      if (!op.body)
+        return Promise.reject(new Error(`bridge stream ${op.opId} has no request body`));
       return op.body.push(decodeBridgeChunk(msg.chunk));
     },
 
@@ -640,51 +645,56 @@ export async function openBridgeStream(
 
   // Pump the caller's body across the bridge. Every send is awaited: the host
   // resolves it only while its reassembly buffer has room.
-  if (body && bodyId) void (async () => {
-    const reader = body.getReader();
-    let seq = 0;
-    try {
-      for (;;) {
-        if (pumpAborted) {
-          await reader.cancel(abortReason());
-          return;
+  if (body && bodyId)
+    void (async () => {
+      const reader = body.getReader();
+      let seq = 0;
+      try {
+        for (;;) {
+          if (pumpAborted) {
+            await reader.cancel(abortReason());
+            return;
+          }
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || value.byteLength === 0) continue;
+          for (
+            let offset = 0;
+            offset < value.byteLength && !pumpAborted;
+            offset += BRIDGE_STREAM_CHUNK_BYTES
+          ) {
+            const slice = value.subarray(
+              offset,
+              Math.min(offset + BRIDGE_STREAM_CHUNK_BYTES, value.byteLength)
+            );
+            seq += 1;
+            await surface.streamBodyChunk({
+              bodyId,
+              seq,
+              chunk: encodeBridgeChunk(slice, encoding),
+            });
+          }
         }
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!value || value.byteLength === 0) continue;
-        for (
-          let offset = 0;
-          offset < value.byteLength && !pumpAborted;
-          offset += BRIDGE_STREAM_CHUNK_BYTES
-        ) {
-          const slice = value.subarray(
-            offset,
-            Math.min(offset + BRIDGE_STREAM_CHUNK_BYTES, value.byteLength)
-          );
-          seq += 1;
-          await surface.streamBodyChunk({ bodyId, seq, chunk: encodeBridgeChunk(slice, encoding) });
+        if (!pumpAborted) await surface.streamBodyChunk({ bodyId, seq: seq + 1, done: true });
+      } catch (error) {
+        // Either the caller's stream failed (tell the host so the server settles
+        // loudly) or a send was rejected (the host already failed the op — the
+        // extra error send below rejects too and is swallowed).
+        if (!pumpAborted) {
+          try {
+            await surface.streamBodyChunk({
+              bodyId,
+              seq: seq + 1,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } catch {
+            /* op already gone host-side */
+          }
         }
+      } finally {
+        reader.releaseLock();
       }
-      if (!pumpAborted) await surface.streamBodyChunk({ bodyId, seq: seq + 1, done: true });
-    } catch (error) {
-      // Either the caller's stream failed (tell the host so the server settles
-      // loudly) or a send was rejected (the host already failed the op — the
-      // extra error send below rejects too and is swallowed).
-      if (!pumpAborted) {
-        try {
-          await surface.streamBodyChunk({
-            bodyId,
-            seq: seq + 1,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        } catch {
-          /* op already gone host-side */
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-  })();
+    })();
 
   const head = await headPromise;
   const status = constructibleResponseStatus(head.status);

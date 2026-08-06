@@ -31,8 +31,7 @@ interface ConsumedConnectLink {
 export function isConnectLink(rawUrl: unknown): rawUrl is string {
   return (
     typeof rawUrl === "string" &&
-    (rawUrl.startsWith("vibestudio://connect") ||
-      rawUrl.startsWith("https://vibestudio.app/pair"))
+    (rawUrl.startsWith("vibestudio://connect") || rawUrl.startsWith("https://vibestudio.app/pair"))
   );
 }
 

@@ -279,6 +279,9 @@ export async function createWebRtcServerClient(
     call(service, method, callArgs, options?: RpcCallOptions): Promise<unknown> {
       return rpc.call("main", `${service}.${method}`, callArgs, options);
     },
+    callTarget(targetId, method, callArgs, options?: RpcCallOptions): Promise<unknown> {
+      return rpc.call(targetId, method, callArgs, options);
+    },
     stream(service, method, callArgs, options?: RpcStreamOptions): Promise<Response> {
       // Streamed over the main shell session's bulk channel (chunked) — for
       // large bodies like gateway.fetch panel assets. `options.body` streams a

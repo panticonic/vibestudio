@@ -33,6 +33,7 @@ function response(): {
   const events = new EventEmitter();
   const res = Object.assign(events, {
     writableEnded: false,
+    destroyed: false,
     writeHead(status: number, headers?: unknown) {
       captured.status = status;
       captured.headers = headers;
@@ -41,6 +42,11 @@ function response(): {
     end(body?: string | Buffer) {
       captured.body = body === undefined ? "" : body.toString();
       this.writableEnded = true;
+      return this;
+    },
+    destroy() {
+      this.destroyed = true;
+      events.emit("close");
       return this;
     },
   }) as unknown as ServerResponse;
@@ -261,6 +267,37 @@ describe("HttpRpcHandler", () => {
 
     expect(observedReason).toEqual(new Error("HTTP RPC caller disconnected"));
     expect(disconnected.captured.body).toBe("");
+  });
+
+  it("aborts every active request when the transport is stopped", async () => {
+    let observedAbort = false;
+    let resolveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const configured = deps({
+      handleRequest: vi.fn(async (_caller, _envelope, _message, signal) => {
+        resolveEntered();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => {
+            observedAbort = true;
+            resolve();
+          })
+        );
+        return null;
+      }),
+    });
+    const handler = new HttpRpcHandler(configured);
+    const pending = handler.handle(
+      request({ body: JSON.stringify(rpcEnvelope()) }),
+      response().res
+    );
+    await entered;
+
+    handler.stop("test shutdown");
+    await pending;
+
+    expect(observedAbort).toBe(true);
   });
 });
 

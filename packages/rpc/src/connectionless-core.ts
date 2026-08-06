@@ -121,8 +121,7 @@ function registerRpc(target: object, name: string, authority: RpcAuthorityPolicy
   }
   if (
     authority.produces &&
-    (!authority.produces.capability ||
-      authority.produces.capability.startsWith("rpc:"))
+    (!authority.produces.capability || authority.produces.capability.startsWith("rpc:"))
   ) {
     throw new Error(`@rpc ${name}: opaque handle producer must name a local capability`);
   }
@@ -145,7 +144,7 @@ function applySchemaRpc(context: ClassMethodDecoratorContext): void {
     throw new Error(`@schemaRpc may only decorate methods (got ${context.kind})`);
   }
   context.addInitializer(function (this: unknown) {
-    const ctor = ((this as object) as { constructor: RpcExposedCtor }).constructor;
+    const ctor = (this as object as { constructor: RpcExposedCtor }).constructor;
     (ctor[RPC_EXPOSED_METHODS] ??= new Set<string>()).add(String(context.name));
   });
 }

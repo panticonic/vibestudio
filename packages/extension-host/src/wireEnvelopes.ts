@@ -25,15 +25,19 @@ export interface StreamChunkEnvelope {
 }
 
 export function isBinaryEnvelope(value: unknown): value is BinaryEnvelope {
-  return typeof value === "object"
-    && value !== null
-    && (value as { __bin?: unknown }).__bin === true
-    && typeof (value as { data?: unknown }).data === "string";
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { __bin?: unknown }).__bin === true &&
+    typeof (value as { data?: unknown }).data === "string"
+  );
 }
 
 export function isStreamEnvelope(value: unknown): value is StreamEnvelope {
-  return typeof value === "object"
-    && value !== null
-    && (value as { __stream?: unknown }).__stream === true
-    && typeof (value as { id?: unknown }).id === "string";
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { __stream?: unknown }).__stream === true &&
+    typeof (value as { id?: unknown }).id === "string"
+  );
 }

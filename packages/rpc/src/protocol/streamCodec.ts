@@ -65,7 +65,9 @@ export function encodeErrorFrame(payload: ErrorFramePayload): Uint8Array {
 export class FrameDecoder {
   private buf = new Uint8Array(0);
 
-  constructor(private readonly onFrame: (type: FrameType, payload: Uint8Array) => void | Promise<void>) {}
+  constructor(
+    private readonly onFrame: (type: FrameType, payload: Uint8Array) => void | Promise<void>
+  ) {}
 
   async push(chunk: Uint8Array): Promise<void> {
     if (chunk.byteLength === 0) return;
@@ -280,7 +282,7 @@ export async function decodeFramedStream(
   wireBody: ReadableStream<Uint8Array>,
   requestedUrl: string,
   callerSignal?: AbortSignal | null,
-  options?: DecodeFramedStreamOptions,
+  options?: DecodeFramedStreamOptions
 ): Promise<DecodedFramedStream> {
   let resolveHead!: (head: HeadFramePayload | null) => void;
   let rejectHead!: (error: unknown) => void;
@@ -313,9 +315,7 @@ export async function decodeFramedStream(
     headTimer = setTimeout(() => {
       headTimer = null;
       if (!headSeen) {
-        rejectHead(
-          new Error(`Streaming RPC HEAD not received within ${headTimeoutMs}ms`),
-        );
+        rejectHead(new Error(`Streaming RPC HEAD not received within ${headTimeoutMs}ms`));
       }
     }, headTimeoutMs);
     (headTimer as unknown as { unref?: () => void }).unref?.();
@@ -429,14 +429,13 @@ export async function decodeFramedResponseToStreaming(
   wireBody: ReadableStream<Uint8Array>,
   requestedUrl: string,
   callerSignal?: AbortSignal | null,
-  options?: DecodeFramedStreamOptions,
+  options?: DecodeFramedStreamOptions
 ): Promise<Response> {
   const decoded = await decodeFramedStream(wireBody, requestedUrl, callerSignal, options);
   // `new Response` only accepts statuses 200-599; anything else (1xx, or a garbled
   // frame) throws RangeError and crashes the decode. The loopback gateway returns
   // in-range statuses, so clamping is purely defensive — map out-of-range to 502.
-  const status =
-    decoded.status >= 200 && decoded.status <= 599 ? decoded.status : 502;
+  const status = decoded.status >= 200 && decoded.status <= 599 ? decoded.status : 502;
   // The wire stream for a null-body status is empty (HEAD then END); pass null.
   // Plain HTTP cancels the unused decoded stream to avoid a dangling reader.
   // WebRTC installs onBodyCancel as a wire-level stream-cancel hook, so leave the
@@ -450,7 +449,7 @@ export async function decodeFramedResponseToStreaming(
       status,
       statusText: decoded.statusText,
       headers: new Headers(decoded.headers),
-    },
+    }
   );
   if (decoded.finalUrl) {
     try {

@@ -131,6 +131,7 @@ function createTestSetup(opts?: {
     tokenManager,
     dispatcher,
     entityCache,
+    ensureUserlandDoReady: async () => undefined,
     userSubjectSource: opts?.userSubjectSource,
     membershipGate: opts?.membershipGate,
     verifyExactCausalInvocation: opts?.verifyExactCausalInvocation,
@@ -1427,7 +1428,12 @@ describe("RpcServer HTTP POST /rpc", () => {
       const dispatcher = createTestServiceDispatcher();
       registerRpcTestService(dispatcher, "credentials", ["user"], { proxyFetch: "write" });
       dispatcher.markInitialized();
-      const server = new RpcServer({ tokenManager, dispatcher, egressProxy: stubEgress });
+      const server = new RpcServer({
+        tokenManager,
+        dispatcher,
+        egressProxy: stubEgress,
+        ensureUserlandDoReady: async () => undefined,
+      });
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
@@ -1465,7 +1471,12 @@ describe("RpcServer HTTP POST /rpc", () => {
       const dispatcher = createTestServiceDispatcher();
       registerRpcTestService(dispatcher, "credentials", ["code"], { proxyFetch: "write" });
       dispatcher.markInitialized();
-      const server = new RpcServer({ tokenManager, dispatcher, egressProxy: stubEgress });
+      const server = new RpcServer({
+        tokenManager,
+        dispatcher,
+        egressProxy: stubEgress,
+        ensureUserlandDoReady: async () => undefined,
+      });
       server.initHandlers();
       const gw = new Gateway({
         tokenManager,
@@ -1559,6 +1570,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         dispatcher,
         egressProxy: stubEgress,
         entityCache,
+        ensureUserlandDoReady: async () => undefined,
       });
       server.initHandlers();
       const gw = new Gateway({
@@ -1645,6 +1657,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         tokenManager,
         dispatcher,
         egressProxy: stubEgress,
+        ensureUserlandDoReady: async () => undefined,
       });
       server.initHandlers();
       const gw = new Gateway({
@@ -1699,6 +1712,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       const server = new RpcServer({
         tokenManager,
         dispatcher,
+        ensureUserlandDoReady: async () => undefined,
       });
       server.initHandlers();
       const gw = new Gateway({
@@ -1787,6 +1801,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         tokenManager,
         dispatcher,
         egressProxy: stubEgress,
+        ensureUserlandDoReady: async () => undefined,
       });
       server.initHandlers();
       const gw = new Gateway({
@@ -1861,6 +1876,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         tokenManager,
         dispatcher,
         egressProxy: stubEgress,
+        ensureUserlandDoReady: async () => undefined,
       });
       server.initHandlers();
       const gw = new Gateway({

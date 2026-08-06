@@ -81,7 +81,10 @@ class FakeClientWS implements WebSocketLike {
   readonly roomKey: string;
   readonly role: SignalingRole;
   private readonly listeners = new Map<string, Set<(ev: unknown) => void>>();
-  constructor(url: string, private readonly hub: FakeSignalingHub) {
+  constructor(
+    url: string,
+    private readonly hub: FakeSignalingHub
+  ) {
     const parsed = new URL(url);
     this.roomKey = parsed.pathname;
     this.role = parsed.searchParams.get("role") as SignalingRole;
@@ -193,7 +196,12 @@ describe("createSignalingClient", () => {
   it("relays offer/answer and candidates between the two role-tagged peers", async () => {
     const hub = new FakeSignalingHub();
     const WS = wsCtorFor(hub);
-    const base = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
+    const base = {
+      room: "r1",
+      sig: "https://sig.test",
+      WebSocketImpl: WS,
+      fetchImpl: okIceFetch([]),
+    };
     const a = createSignalingClient({ ...base, role: "offerer" });
     const b = createSignalingClient({ ...base, role: "answerer" });
 
@@ -248,7 +256,12 @@ describe("createSignalingClient", () => {
   it("buffers inbound frames that arrive before a handler is registered", async () => {
     const hub = new FakeSignalingHub();
     const WS = wsCtorFor(hub);
-    const base = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
+    const base = {
+      room: "r1",
+      sig: "https://sig.test",
+      WebSocketImpl: WS,
+      fetchImpl: okIceFetch([]),
+    };
     const a = createSignalingClient({ ...base, role: "offerer" });
     const b = createSignalingClient({ ...base, role: "answerer" });
 
@@ -264,17 +277,27 @@ describe("createSignalingClient", () => {
   it("fetches per-session ice servers over HTTP from the room", async () => {
     const hub = new FakeSignalingHub();
     const iceServers = [
-      { urls: ["stun:stun.cloudflare.com:3478", "turn:turn.cloudflare.com:3478?transport=tcp"], username: "u", credential: "c" },
+      {
+        urls: ["stun:stun.cloudflare.com:3478", "turn:turn.cloudflare.com:3478?transport=tcp"],
+        username: "u",
+        credential: "c",
+      },
     ];
     const fetchImpl = okIceFetch(iceServers);
-    const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl });
+    const client = createSignalingClient({
+      room: "r1",
+      role: "offerer",
+      sig: "https://sig.test",
+      WebSocketImpl: wsCtorFor(hub),
+      fetchImpl,
+    });
 
     const servers = await client.fetchIceServers!();
     expect(servers).toEqual(iceServers);
     // The ice-servers URL carries NO role (it is a plain HTTP GET, not a join).
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://sig.test/room/r1/ice-servers",
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET" })
     );
     client.close();
   });
@@ -287,7 +310,13 @@ describe("createSignalingClient", () => {
       text: async () => "turn mint failed",
       json: async () => ({}),
     })) as unknown as typeof fetch;
-    const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl });
+    const client = createSignalingClient({
+      room: "r1",
+      role: "offerer",
+      sig: "https://sig.test",
+      WebSocketImpl: wsCtorFor(hub),
+      fetchImpl,
+    });
 
     await expect(client.fetchIceServers!()).rejects.toThrow(/502/);
     client.close();
@@ -302,7 +331,7 @@ describe("createSignalingClient", () => {
       (_url: string, init?: { signal?: AbortSignal }) =>
         new Promise((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-        }),
+        })
     ) as unknown as typeof fetch;
     const client = createSignalingClient({
       room: "r1",
@@ -363,7 +392,12 @@ describe("createSignalingClient", () => {
   it("evicts the incumbent when a same-role peer rejoins the room", async () => {
     const hub = new FakeSignalingHub();
     const WS = wsCtorFor(hub);
-    const base = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
+    const base = {
+      room: "r1",
+      sig: "https://sig.test",
+      WebSocketImpl: WS,
+      fetchImpl: okIceFetch([]),
+    };
     const first = createSignalingClient({ ...base, role: "offerer" });
 
     let firstClosed: string | undefined;
@@ -403,20 +437,32 @@ describe("createSignalingClient", () => {
       }
     } as unknown as WebSocketCtor;
     const fetchImpl = okIceFetch([]);
-    const client = createSignalingClient({ room: "abc-123", role: "offerer", sig: "https://sig.test/base", WebSocketImpl: WS, fetchImpl });
+    const client = createSignalingClient({
+      room: "abc-123",
+      role: "offerer",
+      sig: "https://sig.test/base",
+      WebSocketImpl: WS,
+      fetchImpl,
+    });
 
     expect(observedUrl).toBe("wss://sig.test/base/room/abc-123?role=offerer");
     await client.fetchIceServers!();
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://sig.test/base/room/abc-123/ice-servers",
-      expect.objectContaining({ method: "GET" }),
+      expect.objectContaining({ method: "GET" })
     );
     client.close();
   });
 
   it("close() fires onClosed exactly once", async () => {
     const hub = new FakeSignalingHub();
-    const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl: okIceFetch([]) });
+    const client = createSignalingClient({
+      room: "r1",
+      role: "offerer",
+      sig: "https://sig.test",
+      WebSocketImpl: wsCtorFor(hub),
+      fetchImpl: okIceFetch([]),
+    });
     let calls = 0;
     let reason: string | undefined;
     client.onClosed((r) => {
@@ -433,7 +479,12 @@ describe("createSignalingClient", () => {
     vi.useFakeTimers();
     try {
       const { WS, instances } = controllableWsCtor();
-      const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: WS });
+      const client = createSignalingClient({
+        room: "r1",
+        role: "offerer",
+        sig: "https://sig.test",
+        WebSocketImpl: WS,
+      });
       const sock = instances[0]!;
       let closed = false;
       client.onClosed(() => {
@@ -459,7 +510,12 @@ describe("createSignalingClient", () => {
     vi.useFakeTimers();
     try {
       const { WS, instances } = controllableWsCtor();
-      const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: WS });
+      const client = createSignalingClient({
+        room: "r1",
+        role: "offerer",
+        sig: "https://sig.test",
+        WebSocketImpl: WS,
+      });
       const sock = instances[0]!;
       let closedReason: string | undefined;
       let closes = 0;

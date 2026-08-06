@@ -24,10 +24,7 @@ function hasSealedExecutableIncarnation(record: EntityRecord): boolean {
   // External-document panels have a runtime identity so the hosted document can
   // connect, but deliberately have no BuildV2 image to seal. Their immutable
   // navigation entity and active lifecycle are the credential binding.
-  return !(
-    record.kind === "panel" &&
-    record.source.repoPath.startsWith("browser:")
-  );
+  return !(record.kind === "panel" && record.source.repoPath.startsWith("browser:"));
 }
 
 function connectableExecutionDigest(record: EntityRecord): string | undefined {

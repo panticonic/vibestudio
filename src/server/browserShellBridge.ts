@@ -1,4 +1,4 @@
-import { createRpcClient, type RpcEnvelope } from "@vibestudio/rpc";
+import { createRpcClient, createRpcInitiatorTransport, type RpcEnvelope } from "@vibestudio/rpc";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { PanelShellClient } from "@vibestudio/service-schemas/clients/panelShellClient";
 import { createWsTransport } from "../preload/wsTransport.js";
@@ -80,7 +80,17 @@ export function installFallbackShellBridge(
     clientLabel: stringOrUndefined(globals.__vibestudioClientLabel ?? init.clientLabel),
     reconnect: false,
   });
-  const rpc = createRpcClient({ selfId: entityId, callerKind: "panel", transport });
+  // The fallback shell and the panel runtime deliberately share one physical
+  // session, but they are still separate RPC clients. The shell client only
+  // makes host-service calls; it must not consume requests addressed to the
+  // panel runtime (for example `_agent.snapshot`) and answer them with its own
+  // missing-method response. Keep the runtime as the sole owner of inbound
+  // request/stream-request handling.
+  const rpc = createRpcClient({
+    selfId: entityId,
+    callerKind: "panel",
+    transport: createRpcInitiatorTransport(transport),
+  });
   const panelShell = new PanelShellClient(rpc);
   const eventListeners = new Map<number, (event: string, payload: unknown) => void>();
   let nextListenerId = 1;

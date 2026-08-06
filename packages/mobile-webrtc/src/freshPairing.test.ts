@@ -96,13 +96,13 @@ describe("fresh mobile pairing commit", () => {
     } = fixture();
 
     const connection = await completeFreshMobilePairing({
-        controlConnection,
-        credential,
-        pairingContext,
-        controlPairing,
-        persistCredential,
-        connectWorkspace,
-      });
+      controlConnection,
+      credential,
+      pairingContext,
+      controlPairing,
+      persistCredential,
+      connectWorkspace,
+    });
 
     expect(call.mock.calls).toEqual([
       ["main", "hubControl.routeWorkspace", [{ workspaceId: "ws-b" }]],
@@ -112,11 +112,7 @@ describe("fresh mobile pairing commit", () => {
     expect(workspaceConnection.deviceId).toBe(credential.deviceId);
     expect(connection.hubControlRpc).toBe(controlConnection.rpc);
     expect(close).not.toHaveBeenCalled();
-    expect(events).toEqual([
-      "hubControl.routeWorkspace",
-      "persist",
-      "connect-workspace",
-    ]);
+    expect(events).toEqual(["hubControl.routeWorkspace", "persist", "connect-workspace"]);
     await connection.close();
     expect(events.slice(-2)).toEqual(["workspace-close", "close"]);
   });

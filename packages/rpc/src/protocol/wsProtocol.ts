@@ -33,6 +33,8 @@ export interface WsAuthMessage {
 export interface WsRpcMessage {
   type: "ws:rpc";
   envelope: RpcEnvelope;
+  /** The enclosed stream-request has a request body on the ordered WS wire. */
+  streamBody?: true;
 }
 
 export interface WsToolResultMessage {
@@ -47,7 +49,24 @@ export interface WsRouteMessage {
   targetConnectionId?: string;
 }
 
-export type WsClientMessage = WsAuthMessage | WsRpcMessage | WsToolResultMessage | WsRouteMessage;
+export interface WsStreamBodyChunkMessage {
+  type: "ws:stream-body-chunk";
+  requestId: string;
+  seq: number;
+  payload?: string;
+  done?: boolean;
+  error?: string;
+}
+
+export type WsClientMessage =
+  | WsAuthMessage
+  | WsRpcMessage
+  | WsToolResultMessage
+  | WsRouteMessage
+  | WsStreamBodyChunkMessage;
+
+export const WS_STREAM_REQUEST_BODY_CAPABILITY = "stream-request-body-v1" as const;
+export type WsTransportCapability = typeof WS_STREAM_REQUEST_BODY_CAPABILITY;
 
 interface WsAuthResultBase {
   type: "ws:auth-result";
@@ -71,6 +90,8 @@ export interface WsAuthSuccessResultMessage extends WsAuthResultBase {
   success: true;
   /** Server's end-to-end contract; clients reject missing or mismatched values. */
   contractVersion: number;
+  /** Additive transport features this server can safely receive. */
+  transportCapabilities?: WsTransportCapability[];
 }
 
 export interface WsAuthFailureResultMessage extends WsAuthResultBase {
@@ -107,6 +128,14 @@ export interface WsRoutedResponseErrorMessage {
   error: string;
   errorKind: RpcErrorKind;
   errorCode?: string;
+  errorData?: unknown;
+}
+
+export interface WsStreamBodyAckMessage {
+  type: "ws:stream-body-ack";
+  requestId: string;
+  seq: number;
+  error?: string;
 }
 
 export type WsServerMessage =
@@ -114,4 +143,5 @@ export type WsServerMessage =
   | WsRpcResponseMessage
   | WsRoutedMessage
   | WsRoutedEventErrorMessage
-  | WsRoutedResponseErrorMessage;
+  | WsRoutedResponseErrorMessage
+  | WsStreamBodyAckMessage;

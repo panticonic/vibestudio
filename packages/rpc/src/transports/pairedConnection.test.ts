@@ -111,15 +111,21 @@ describe("createPairedConnection", () => {
 
   it("closes the transport when connect() fails (no leaked reconnect loop)", async () => {
     const { transport, close } = makeFakeTransport({ connectError: new Error("peer unreachable") });
-    await expect(createPairedConnection(baseOptions(transport))).rejects.toThrow("peer unreachable");
+    await expect(createPairedConnection(baseOptions(transport))).rejects.toThrow(
+      "peer unreachable"
+    );
     expect(close).toHaveBeenCalledOnce();
   });
 
   it("closes the transport when mainSession.ready() auth fails — the divergence bug", async () => {
     // The exact seam that leaked before: a CONNECTED transport whose main session
     // never authenticates must be closed, not left running its keepalive loop.
-    const { transport, close } = makeFakeTransport({ readyError: new Error("SESSION_AUTH_FAILED") });
-    await expect(createPairedConnection(baseOptions(transport))).rejects.toThrow("SESSION_AUTH_FAILED");
+    const { transport, close } = makeFakeTransport({
+      readyError: new Error("SESSION_AUTH_FAILED"),
+    });
+    await expect(createPairedConnection(baseOptions(transport))).rejects.toThrow(
+      "SESSION_AUTH_FAILED"
+    );
     expect(close).toHaveBeenCalledOnce();
   });
 
@@ -232,7 +238,7 @@ describe("createPairedConnection", () => {
         pairing: { room: "r", fingerprint: "AA" },
         getShellToken: () => "t",
         sig: "wss://sig.example/",
-      }),
+      })
     ).rejects.toThrow(/provider/);
   });
 });

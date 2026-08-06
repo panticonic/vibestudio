@@ -413,6 +413,7 @@ export class SessionWebSocketShim {
           error: msg.error,
           errorKind: msg.errorKind,
           errorCode: msg.errorCode,
+          errorData: msg.errorData,
         });
         return;
       case "ws:routed-event-error":

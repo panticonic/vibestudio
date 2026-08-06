@@ -102,6 +102,12 @@ describe("StreamingRelay HTTP response ownership", () => {
         ),
       ])
     ).resolves.toBeUndefined();
+    expect(dispatcher.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      "events",
+      "watch",
+      [["panel-tree-invalidated"]]
+    );
   });
 
   it("keeps the per-request evaluated caller through HTTP stream authority and egress", async () => {

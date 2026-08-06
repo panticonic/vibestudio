@@ -154,6 +154,7 @@ export interface SessionRoutedResponseErrorFrame {
   error: string;
   errorKind: RpcErrorKind;
   errorCode?: string;
+  errorData?: unknown;
 }
 
 export interface SessionRoutedEventErrorFrame {
@@ -390,9 +391,10 @@ export const SESSION_SERVER_RESPONDER: AuthenticatedCaller = {
  * bridge uses the internal `server` endpoint. Transports mint both identities;
  * authenticated userland principals cannot select `callerKind: "server"`.
  */
-export function isAuthenticatedServerCaller(
-  caller: { callerId: string; callerKind: string }
-): boolean {
+export function isAuthenticatedServerCaller(caller: {
+  callerId: string;
+  callerKind: string;
+}): boolean {
   return (
     caller.callerKind === "server" &&
     (caller.callerId === SESSION_SERVER_RESPONDER.callerId || caller.callerId === "server")

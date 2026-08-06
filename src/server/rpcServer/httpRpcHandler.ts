@@ -59,6 +59,8 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 /** HTTP transport adapter for the server's canonical RPC dispatch callbacks. */
 export class HttpRpcHandler {
   private readonly activeRequests = new Map<string, AbortController>();
+  private readonly activeBodies = new Set<IncomingMessage>();
+  private readonly activeResponses = new Set<ServerResponse>();
 
   constructor(private readonly deps: HttpRpcHandlerDeps) {}
 
@@ -74,14 +76,35 @@ export class HttpRpcHandler {
     return true;
   }
 
+  /** Abort every HTTP RPC owned by this transport generation. */
+  stop(reason = "RPC server shutting down"): void {
+    const error = new Error(reason);
+    for (const request of this.activeRequests.values()) request.abort(error);
+    for (const req of this.activeBodies) req.destroy(error);
+    for (const res of this.activeResponses) res.destroy(error);
+  }
+
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.activeBodies.add(req);
+    this.activeResponses.add(res);
+    const releaseTransport = (): void => {
+      this.activeBodies.delete(req);
+      this.activeResponses.delete(res);
+    };
+    req.once("close", releaseTransport);
+    res.once("close", releaseTransport);
     if (req.method === "POST" && req.url === "/rpc/stream") {
-      await this.deps.handleStreamingRequest(req, res);
+      try {
+        await this.deps.handleStreamingRequest(req, res);
+      } finally {
+        releaseTransport();
+      }
       return;
     }
     if (req.method !== "POST" || req.url !== "/rpc") {
       res.writeHead(404);
       res.end();
+      releaseTransport();
       return;
     }
 
@@ -91,6 +114,7 @@ export class HttpRpcHandler {
     if (!admission.ok) {
       writeJson(res, admission.status, admission.body);
       req.resume();
+      releaseTransport();
       return;
     }
 
@@ -107,6 +131,7 @@ export class HttpRpcHandler {
             "VIBESTUDIO_RPC_MAX_BODY_BYTES)",
         });
         req.destroy();
+        releaseTransport();
         return;
       }
       chunks.push(bytes);
@@ -117,6 +142,7 @@ export class HttpRpcHandler {
       envelope = JSON.parse(Buffer.concat(chunks).toString()) as RpcEnvelope;
     } catch {
       writeJson(res, 400, { error: "Invalid JSON body" });
+      releaseTransport();
       return;
     }
 
@@ -125,6 +151,7 @@ export class HttpRpcHandler {
     const message = envelope.message;
     if (!message || typeof message !== "object" || typeof message.type !== "string") {
       writeJson(res, 400, { error: "Expected an RpcEnvelope body with a message" });
+      releaseTransport();
       return;
     }
 
@@ -135,6 +162,7 @@ export class HttpRpcHandler {
       } catch (error) {
         writeJson(res, 200, { error: error instanceof Error ? error.message : String(error) });
       }
+      releaseTransport();
       return;
     }
 
@@ -149,11 +177,13 @@ export class HttpRpcHandler {
         // exists.
         writeJson(res, 409, { error: "RPC request is not active" });
       }
+      releaseTransport();
       return;
     }
 
     if (message.type !== "request") {
       writeJson(res, 400, { error: `Unsupported /rpc message type: ${message.type}` });
+      releaseTransport();
       return;
     }
 
@@ -211,6 +241,7 @@ export class HttpRpcHandler {
       if (this.activeRequests.get(requestKey) === abort) {
         this.activeRequests.delete(requestKey);
       }
+      releaseTransport();
     }
   }
 }

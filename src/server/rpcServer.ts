@@ -55,6 +55,7 @@ import {
 import type { StreamFrameType } from "@vibestudio/rpc/protocol/bulkMux";
 import { PIPE_LANE, SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
+import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import type { ToolExecutionResult } from "@vibestudio/shared/types";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
@@ -71,10 +72,12 @@ import {
 import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import type { UserSubject } from "@vibestudio/identity/types";
 import type { UserSubjectSource } from "@vibestudio/identity/userSubjectSource";
+import { userlandReceiverResourceKey } from "@vibestudio/shared/authority/userlandResources";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { DORef } from "@vibestudio/shared/doDispatcher";
 import {
   AUTHENTICATION_FRAME_MAX_BYTES,
   RPC_MAX_PENDING_AUTHENTICATIONS,
@@ -137,6 +140,7 @@ import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
 import type { DeviceCredential, PairingContext } from "@vibestudio/rpc/protocol/wsProtocol";
+import { WS_STREAM_REQUEST_BODY_CAPABILITY } from "@vibestudio/rpc/protocol/wsProtocol";
 import {
   HttpRpcHandler,
   resolveRpcMaxBodyBytes,
@@ -506,6 +510,11 @@ export class RpcServer {
     }
   >();
   private stopped = false;
+  private quiescing = false;
+
+  private isShuttingDown(): boolean {
+    return this.stopped || this.quiescing;
+  }
 
   private readonly bootId = randomUUID();
   private readonly uploadPreopenLimits: Required<RpcServerUploadPreopenLimits>;
@@ -552,6 +561,8 @@ export class RpcServer {
       >;
       fsService?: Pick<import("@vibestudio/shared/fsService").FsService, "closeHandlesForCaller">;
       entityCache?: EntityCache;
+      /** Exact active-row readiness barrier required before direct DO relay. */
+      ensureUserlandDoReady: (ref: DORef) => Promise<void>;
       /** Live host-created admission for one concrete evaluated run. */
       executionSessionForRuntime?: (
         runtimeId: string,
@@ -561,6 +572,10 @@ export class RpcServer {
       testPolicyForContext?: (
         contextId: string
       ) => import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
+      /** Resolve host-attested task membership through live runtime ancestry. */
+      taskAuthorityForRuntime?: (
+        runtimeId: string
+      ) => import("@vibestudio/rpc").TaskGrantPrincipal | null;
       /**
        * Optional: resolves the host-verified account `subject` for a caller at
        * auth time (WP0 §5.2/§5.5). Hub-backed in production (reads the shared
@@ -809,6 +824,9 @@ export class RpcServer {
       uploadPreopenLimits?: RpcServerUploadPreopenLimits;
     }
   ) {
+    if (typeof deps.ensureUserlandDoReady !== "function") {
+      throw new Error("RpcServer requires a Durable Object execution readiness barrier");
+    }
     this.dispatcher = deps.dispatcher;
     this.streamingRelay = new StreamingRelay({
       dispatcher: deps.dispatcher,
@@ -961,9 +979,15 @@ export class RpcServer {
       executionSession,
       effectiveTestPolicy
     );
+    const taskAuthority =
+      executionSession?.taskAuthority ?? this.deps.taskAuthorityForRuntime?.(callerId);
+    const withTaskAuthority = {
+      ...verified,
+      ...(taskAuthority ? { taskAuthority } : {}),
+    };
     return code && (this.deps.isCodeApproved?.(code) ?? true)
-      ? { ...verified, codeApproved: true }
-      : verified;
+      ? { ...withTaskAuthority, codeApproved: true }
+      : withTaskAuthority;
   }
 
   private authorityParentFor(
@@ -1300,6 +1324,16 @@ export class RpcServer {
     return this.pickPrimary(targetId);
   }
 
+  /** Exact route fact used by panel readiness; a lease alone is not a live RPC target. */
+  isRuntimeRouteReachable(targetId: string, connectionId: string): boolean {
+    const routedTargetId = this.resolveRoutableTargetId(targetId);
+    const client = this.getConnection(routedTargetId, connectionId);
+    return Boolean(
+      client?.ws.readyState === WebSocket.OPEN &&
+      this.connections.getBridge(routedTargetId, connectionId)
+    );
+  }
+
   private setBridge(
     callerId: string,
     connectionId: string,
@@ -1341,7 +1375,7 @@ export class RpcServer {
    * Call this when the gateway owns the socket and dispatches to us.
    */
   initHandlers(): void {
-    if (this.stopped) throw new Error("RpcServer has stopped and cannot be restarted");
+    if (this.isShuttingDown()) throw new Error("RpcServer has stopped and cannot be restarted");
     if (this.handlersInitialized) return;
     this.handlersInitialized = true;
 
@@ -1371,7 +1405,7 @@ export class RpcServer {
   private handlersInitialized = false;
 
   private handleConnection(ws: WebSocket, upgradeAdmission?: RpcWebSocketAdmissionGrant): void {
-    if (this.stopped) {
+    if (this.isShuttingDown()) {
       ws.close(1001, "Server shutting down");
       return;
     }
@@ -1586,7 +1620,7 @@ export class RpcServer {
     clientPlatform?: ClientPlatform,
     preResolved?: ResolvedRpcCredential
   ): Promise<void> {
-    if (this.stopped) {
+    if (this.isShuttingDown()) {
       ws.close(1001, "Server shutting down");
       return;
     }
@@ -1599,7 +1633,7 @@ export class RpcServer {
     // Pairing redemption crosses the child→hub boundary. The unauthenticated
     // socket may disappear while that durable operation is in flight; never
     // create session/lease/bridge state for a transport that is already gone.
-    if (this.stopped || ws.readyState !== WebSocket.OPEN) return;
+    if (this.isShuttingDown() || ws.readyState !== WebSocket.OPEN) return;
     if (!resolution.ok) {
       // Fail-loud observability: a device/panel/agent presented a token that
       // matched no grant, bearer, or pairing/refresh credential. Log the device
@@ -1775,6 +1809,7 @@ export class RpcServer {
       clientLabel,
       clientSessionId,
       clientPlatform,
+      uploadBodies: new WsUploadBodies(),
     };
 
     this.connections.addClient(client);
@@ -1843,6 +1878,7 @@ export class RpcServer {
       type: "ws:auth-result",
       success: true,
       contractVersion: RPC_CONTRACT_VERSION,
+      transportCapabilities: [WS_STREAM_REQUEST_BODY_CAPABILITY],
       callerId,
       callerKind,
       connectionId,
@@ -2130,6 +2166,23 @@ export class RpcServer {
         }
         const envelope = stampEnvelopeCaller(inboundEnvelope, authenticatedCallerOf(client.caller));
         const rpcMessage = envelope.message;
+        if (msg.streamBody) {
+          if (rpcMessage.type !== "stream-request" || !client.uploadBodies) {
+            client.ws.close(4004, "Invalid WebSocket stream body declaration");
+            return;
+          }
+          try {
+            client.uploadBodies.open(rpcMessage.requestId);
+          } catch (error) {
+            log.warn("rejected WebSocket stream body declaration", {
+              callerId: client.caller.runtime.id,
+              requestId: rpcMessage.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            client.ws.close(4004, "Invalid WebSocket stream body declaration");
+            return;
+          }
+        }
         // If the message belongs to a server-initiated call via the client's RPC bridge,
         // route it to the client transport. Streaming responses use `stream-frame`; without
         // this branch, server -> extension stream callers wait forever for HEAD.
@@ -2175,6 +2228,38 @@ export class RpcServer {
         );
         break;
       }
+      case "ws:stream-body-chunk": {
+        if (!client.uploadBodies) {
+          this.sendToWs(client.ws, {
+            type: "ws:stream-body-ack",
+            requestId: msg.requestId,
+            seq: msg.seq,
+            error: "WebSocket upload registry is unavailable",
+          });
+          break;
+        }
+        const uploadBodies = client.uploadBodies;
+        void uploadBodies
+          .push(msg)
+          .then(() =>
+            this.sendToWs(client.ws, {
+              type: "ws:stream-body-ack",
+              requestId: msg.requestId,
+              seq: msg.seq,
+            })
+          )
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            uploadBodies.fail(msg.requestId, new Error(message));
+            this.sendToWs(client.ws, {
+              type: "ws:stream-body-ack",
+              requestId: msg.requestId,
+              seq: msg.seq,
+              error: message,
+            });
+          });
+        break;
+      }
       case "ws:auth":
         // Ignore duplicate auth messages
         break;
@@ -2191,6 +2276,7 @@ export class RpcServer {
       return;
     }
     if (message.type === "stream-cancel") {
+      client.uploadBodies?.fail(message.requestId, new Error("Streaming RPC cancelled by caller"));
       this.streamingRelay.cancel(client, message.requestId);
       return;
     }
@@ -2433,6 +2519,7 @@ export class RpcServer {
                 error: err instanceof Error ? err.message : String(err),
                 errorKind: rpcErrorKindOf(err, "transport"),
                 ...(errorCode ? { errorCode } : {}),
+                ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
               }
             ).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
           }
@@ -2489,6 +2576,7 @@ export class RpcServer {
           error: errorMessage,
           errorKind: rpcErrorKindOf(err, "transport"),
           ...(errorCode ? { errorCode } : {}),
+          ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
         }),
       });
       return;
@@ -2507,6 +2595,7 @@ export class RpcServer {
             message: errorMessage,
             code: errorCode,
             errorKind: rpcErrorKindOf(err, "transport"),
+            ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
           }),
         }),
       });
@@ -2530,13 +2619,22 @@ export class RpcServer {
         error: errorMessage,
         errorKind: rpcErrorKindOf(err, "transport"),
         ...(errorCode ? { errorCode } : {}),
+        ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
       });
       return;
     }
 
     {
       const eventMessage = message as RpcEvent;
-      log.warn("relay event drop", {
+      // Palette contributions are ephemeral UI state. Panels can legitimately
+      // unregister while the shell is already shutting down (and can boot a
+      // fraction before the shell target is reachable), so an undeliverable
+      // contribution is a normal lifecycle race rather than an RPC failure.
+      // Keep the diagnostic available at verbose level without turning normal
+      // panel teardown into a warning or a perceived transport incident.
+      const logEventDrop =
+        eventMessage.event === "runtime:palette-contribution" ? log.verbose : log.warn;
+      logEventDrop("relay event drop", {
         callerId: client.caller.runtime.id,
         callerKind: client.caller.runtime.kind,
         targetId,
@@ -2552,6 +2650,7 @@ export class RpcServer {
         error: errorMessage,
         errorKind: rpcErrorKindOf(err, "transport"),
         ...(errorCode ? { errorCode } : {}),
+        ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
       });
     }
   }
@@ -2635,6 +2734,7 @@ export class RpcServer {
     const wasReplaced = !removedActive;
 
     this.streamingRelay.abortConnection(client);
+    client.uploadBodies?.closeAll(new Error("RPC connection closed"));
     for (const controller of this.inboundRequestControllers.get(client.ws)?.values() ?? []) {
       controller.abort(new Error("RPC connection closed"));
     }
@@ -2674,7 +2774,7 @@ export class RpcServer {
     // later turn after the registries have been cleared. Shutdown is terminal:
     // cleanup the concrete connection above, but never recreate session grace
     // state or timers from a delayed close callback.
-    if (this.stopped) {
+    if (this.isShuttingDown()) {
       this.finishRetiredConnection(client);
       return;
     }
@@ -2785,6 +2885,7 @@ export class RpcServer {
       this.disconnectTimers.delete(connectionKey);
     }
     this.releaseEventSession(client);
+    client.uploadBodies?.closeAll(new Error("RPC connection replaced"));
     this.connections.removeClient(client);
   }
 
@@ -3012,6 +3113,7 @@ export class RpcServer {
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
         ...(causalParent ? { causalParent } : {}),
+        signal,
       },
       {
         authenticatedCaller,
@@ -3233,8 +3335,8 @@ export class RpcServer {
     /** Response streams cannot be replayed after EACQUIRE; park before dispatch. */
     waitForAuthority?: boolean;
     signal?: AbortSignal;
-    /** Guards the one exact inline retry after a host test preauthorization. */
-    preauthorizedRetry?: boolean;
+    /** Number of exact inline retries already performed after preauthorization. */
+    preauthorizedRetries?: number;
   }): Promise<DirectAuthorityAttestation> {
     const workspaceId = this.deps.workspaceId;
     if (!workspaceId) {
@@ -3303,7 +3405,12 @@ export class RpcServer {
       ? resolvedHandle.resourceKey
       : workspaceAuthority?.methodReceiverAuthority &&
           workspaceAuthority.methodEffect.kind === "userland-capability"
-        ? `${workspaceAuthority.methodReceiverAuthority.resourceType}:do:${input.ref.source}:${input.ref.className}:${input.ref.objectKey}`
+        ? userlandReceiverResourceKey(
+            workspaceAuthority.methodReceiverAuthority.resourceType,
+            input.ref.source,
+            input.ref.className,
+            input.ref.objectKey
+          )
         : undefined;
     const policyFor = (capability: string) =>
       receiverAuthorityPolicy(
@@ -3507,7 +3614,6 @@ export class RpcServer {
         ),
         capability: selection.capability,
         resourceKey: selection.resourceKey,
-        grantCode: caller.codeApproved,
         grantStore: this.deps.capabilityGrantStore,
         reviewedClosure: this.deps.reviewedClosureFactForSession?.(sessionId) ?? null,
         contextIntegrity: authorityFacts.contextIntegrity,
@@ -3564,6 +3670,9 @@ export class RpcServer {
         callerPrincipal: leaf.context.authorizingOrigin.principal,
         sessionId,
         ...(leaf.context.session.taskRef ? { taskRef: leaf.context.session.taskRef } : {}),
+        ...(leaf.context.session.taskAuthority
+          ? { taskAuthority: leaf.context.session.taskAuthority }
+          : {}),
         ...(leaf.context.executionSession?.agentBinding?.bindingId
           ? {
               agentBindingId: leaf.context.executionSession.agentBinding.bindingId,
@@ -3627,6 +3736,11 @@ export class RpcServer {
       };
     });
     result.invocationDigest = decisions[0]?.snapshotDigest;
+    if (result.targetRequirement && result.targetCapability) {
+      result.targetInvocationDigest = decisions.find(
+        ({ leaf }) => leaf.capability === result.targetCapability
+      )?.snapshotDigest;
+    }
     const denied = decisions.find(({ decision }) => !decision.allowed);
     if (denied) {
       const preparedChallenge = "challenge" in denied.leaf ? denied.leaf.challenge : undefined;
@@ -3783,7 +3897,13 @@ export class RpcServer {
       }
       const acquisition = this.deps.directAuthorityAcquirer.request(acquisitionInput);
       if (acquisition.preauthorized) {
-        if (input.preauthorizedRetry) {
+        const retryCount = input.preauthorizedRetries ?? 0;
+        // A workspace direct call can have several independent gated leaves:
+        // first the method effect, then the target service, and sometimes a
+        // prepared context leaf. Each test-policy preauthorization admits one
+        // exact leaf, so allow one bounded retry per current leaf while still
+        // refusing an endlessly re-requested invocation.
+        if (retryCount >= Math.max(1, decisions.length)) {
           throw createRelayError(
             `${input.method}: host preauthorization did not admit the exact invocation`,
             "EACCES"
@@ -3791,7 +3911,7 @@ export class RpcServer {
         }
         return this.directDOAuthorization({
           ...input,
-          preauthorizedRetry: true,
+          preauthorizedRetries: retryCount + 1,
         });
       }
       const error = createRelayError(`${input.method}: authority acquisition required`, "EACQUIRE");
@@ -3831,6 +3951,10 @@ export class RpcServer {
     throw createRelayError(`Target not reachable: ${targetId}`, "TARGET_NOT_REACHABLE");
   }
 
+  private async ensureDirectDoReady(ref: DORef): Promise<void> {
+    await this.deps.ensureUserlandDoReady(ref);
+  }
+
   private async relayToDO(
     callerId: string,
     callerKind: CallerKind,
@@ -3841,6 +3965,7 @@ export class RpcServer {
     relayCallerScope?: RelayCallerScope
   ): Promise<unknown> {
     const ref = parseDOTarget(targetId);
+    await this.ensureDirectDoReady(ref);
     // Assertion-only: the concrete DO entity must exist before dispatch.
     // Method-specific context checks (e.g. subscribeChannel) belong in the
     // DO's own handler, not in the generic relay path. Cross-context calls
@@ -3886,24 +4011,31 @@ export class RpcServer {
         method,
         args,
         readOnly: meta?.readOnly,
+        signal: meta?.signal,
       });
       const dispatchedArgs = this.resolveOpaqueHandleArgument(args, authorization);
       const releaseAuthorityParent = this.beginAuthorityParent(targetId, authorization);
       try {
-        const result = await postToDurableObject(ref, method, dispatchedArgs, {
-          workerdUrl,
-          workerdGatewayToken,
-          ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
-          callerId,
-          callerKind,
-          ...(callerPanelId ? { callerPanelId } : {}),
-          ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
-          authorization,
-          ...(meta?.requestId ? { requestId: meta.requestId } : {}),
-          ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
-          ...(meta?.readOnly ? { readOnly: true } : {}),
-          ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
-        });
+        const result = await postToDurableObject(
+          ref,
+          method,
+          dispatchedArgs,
+          {
+            workerdUrl,
+            workerdGatewayToken,
+            ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
+            callerId,
+            callerKind,
+            ...(callerPanelId ? { callerPanelId } : {}),
+            ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
+            authorization,
+            ...(meta?.requestId ? { requestId: meta.requestId } : {}),
+            ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+            ...(meta?.readOnly ? { readOnly: true } : {}),
+            ...(meta?.causalParent ? { causalParent: meta.causalParent } : {}),
+          },
+          meta?.signal
+        );
         return this.sealProducedResourceHandle(ref, authorization, result);
       } finally {
         releaseAuthorityParent();
@@ -3978,6 +4110,7 @@ export class RpcServer {
       );
     }
     const ref = parseDOTarget(targetId);
+    await this.ensureDirectDoReady(ref);
     if (this.deps.entityCache && !this.deps.entityCache.resolveActive(targetId)) {
       throw createRelayError(
         `DO ${targetId} is not registered as an active runtime entity`,
@@ -4070,6 +4203,7 @@ export class RpcServer {
     });
 
     const url = `${this.workerdUrl}/${encodeURIComponent(workerName)}/__rpc`;
+    const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
     const res = await fetch(url, {
       method: "POST",
       headers: {
@@ -4079,7 +4213,9 @@ export class RpcServer {
           : {}),
       },
       body: JSON.stringify(envelope),
-    });
+      ...(meta?.signal ? { signal: meta.signal } : {}),
+      dispatcher: getWorkerdConnectionDispatcher(),
+    } as RequestInit);
 
     if (!res.ok) {
       let text: string;
@@ -4101,6 +4237,13 @@ export class RpcServer {
       if ("error" in responseMessage) {
         const err = new Error(responseMessage.error) as Error & { code?: unknown };
         if (responseMessage.errorCode) err.code = responseMessage.errorCode;
+        if (responseMessage.errorData !== undefined) {
+          Object.defineProperty(err, "errorData", {
+            value: responseMessage.errorData,
+            enumerable: true,
+            configurable: true,
+          });
+        }
         throw err;
       }
       return responseMessage.result;
@@ -4165,6 +4308,7 @@ export class RpcServer {
     // DO?
     if (targetId.startsWith("do:")) {
       const ref = parseDOTarget(targetId);
+      await this.ensureDirectDoReady(ref);
 
       if (!this.deps.tokenManager || !this.workerdUrl || !this.workerdGatewayToken) {
         throw new Error(
@@ -4214,6 +4358,7 @@ export class RpcServer {
         caller: { callerId: fromId, callerKind: fromKind },
         message: { type: "event", fromId, event, payload },
       });
+      const { getWorkerdConnectionDispatcher } = await import("./workerdRpcRelay.js");
       const res = await fetch(`${this.workerdUrl}/${encodeURIComponent(workerName)}/__rpc`, {
         method: "POST",
         headers: {
@@ -4223,7 +4368,8 @@ export class RpcServer {
             : {}),
         },
         body: JSON.stringify(eventEnvelope),
-      });
+        dispatcher: getWorkerdConnectionDispatcher(),
+      } as RequestInit);
       if (!res.ok) {
         let text: string;
         try {
@@ -4449,6 +4595,16 @@ export class RpcServer {
     req: IncomingMessage,
     res: import("node:http").ServerResponse
   ): Promise<void> {
+    if (this.isShuttingDown()) {
+      this.wsAdmissionFailure(res, 503, {
+        ok: false,
+        code: "server_unavailable",
+        message: "RPC server is shutting down",
+        retryAfterMs: RPC_WS_ADMISSION_RETRY_AFTER_MS,
+      });
+      req.resume();
+      return;
+    }
     const hasRequestBody =
       (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0") ||
       req.headers["transfer-encoding"] !== undefined;
@@ -4564,7 +4720,7 @@ export class RpcServer {
         return;
       }
       const resolution = boundedResolution.value;
-      if (this.stopped) {
+      if (this.isShuttingDown()) {
         this.wsAdmissionFailure(res, 503, {
           ok: false,
           code: "server_unavailable",
@@ -4604,6 +4760,11 @@ export class RpcServer {
 
   /** Upgrade a WebSocket when this RPC server directly owns the gateway route. */
   handleGatewayWsUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.isShuttingDown()) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     const wss = this.wss;
     if (!wss) {
       socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
@@ -4641,7 +4802,8 @@ export class RpcServer {
       onDown?(handler: (reason: string) => void): () => void;
     }
   ): void {
-    if (this.stopped) throw new Error("RpcServer has stopped and cannot attach a WebRTC pipe");
+    if (this.isShuttingDown())
+      throw new Error("RpcServer has stopped and cannot attach a WebRTC pipe");
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     const shims = new Map<string, SessionWebSocketShim>();
@@ -5023,7 +5185,7 @@ export class RpcServer {
     pipe.onDown?.((reason) => resetPipe(reason));
 
     pipe.onBulkFrame((streamId, type, payload) => {
-      if (this.stopped) return;
+      if (this.isShuttingDown()) return;
       if (inboundBodies.has(streamId)) {
         deliverBodyFrame(streamId, type, payload);
         return;
@@ -5034,7 +5196,7 @@ export class RpcServer {
     });
 
     pipe.onControl((data) => {
-      if (this.stopped) return;
+      if (this.isShuttingDown()) return;
       let frame: SessionControlFrame;
       try {
         frame = decodeControlFrame(decoder.decode(data));
@@ -5197,17 +5359,62 @@ export class RpcServer {
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse
   ): Promise<void> {
-    if (this.stopped) {
+    // Keep the admission endpoint on its typed protocol even after quiescing.
+    // The generic HTTP 503 shape is intentionally different and would make a
+    // normal shutdown rejection look like malformed admission JSON to clients.
+    if (req.method === "POST" && req.url === RPC_WEBSOCKET_ADMISSION_PATH) {
+      await this.handleWsAdmissionRequest(req, res);
+      return;
+    }
+    if (this.isShuttingDown()) {
       res.statusCode = 503;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "RPC server is shutting down" }));
       return;
     }
-    if (req.method === "POST" && req.url === RPC_WEBSOCKET_ADMISSION_PATH) {
-      await this.handleWsAdmissionRequest(req, res);
-      return;
-    }
     await this.httpRpc.handle(req, res);
+  }
+
+  /**
+   * Close admission and cancel transport-owned work while keeping the
+   * workerd→host back-channel available until the ordered service drain has
+   * finished. The final stop closes the WebSocket server itself.
+   */
+  quiesce(reason = "Server shutting down"): void {
+    if (this.quiescing) return;
+    this.quiescing = true;
+    this.httpRpc.stop(reason);
+    this.streamingRelay.stop(reason);
+
+    this.connections.closeAll(1001, reason);
+
+    for (const [ws, authTimer] of this.pendingAuthentications) {
+      if (authTimer) clearTimeout(authTimer);
+      ws.close(1001, reason);
+    }
+    this.pendingAuthentications.clear();
+    this.wsAdmissionGrants.clear();
+    this.pairingAdmissionReplays.clear();
+
+    for (const [, pending] of this.pendingToolCalls) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(reason));
+    }
+    this.pendingToolCalls.clear();
+
+    for (const timer of this.disconnectTimers.values()) clearTimeout(timer);
+    this.disconnectTimers.clear();
+
+    for (const waiter of this.reconnectWaiters.values()) {
+      waiter.reject(createRelayError(reason, "SERVER_SHUTTING_DOWN"));
+    }
+    this.reconnectWaiters.clear();
+    for (const waiter of this.connectionReconnectWaiters.values()) {
+      waiter.reject(createRelayError(reason, "SERVER_SHUTTING_DOWN"));
+    }
+    this.connectionReconnectWaiters.clear();
+    this.routedRequestOrigins.clear();
+    this.sessions.clear();
   }
 
   /** Shut down the server */
@@ -5216,39 +5423,7 @@ export class RpcServer {
     this.stopped = true;
     this.disposeTokenRevocationListener?.();
     this.disposeTokenRevocationListener = null;
-
-    this.connections.closeAll(1001, "Server shutting down");
-
-    for (const [ws, authTimer] of this.pendingAuthentications) {
-      if (authTimer) clearTimeout(authTimer);
-      ws.close(1001, "Server shutting down");
-    }
-    this.pendingAuthentications.clear();
-    this.wsAdmissionGrants.clear();
-    this.pairingAdmissionReplays.clear();
-
-    // Clear pending tool calls
-    for (const [, pending] of this.pendingToolCalls) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("Server shutting down"));
-    }
-    this.pendingToolCalls.clear();
-
-    for (const timer of this.disconnectTimers.values()) {
-      clearTimeout(timer);
-    }
-    this.disconnectTimers.clear();
-
-    for (const waiter of this.reconnectWaiters.values()) {
-      waiter.reject(createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN"));
-    }
-    this.reconnectWaiters.clear();
-    for (const waiter of this.connectionReconnectWaiters.values()) {
-      waiter.reject(createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN"));
-    }
-    this.connectionReconnectWaiters.clear();
-    this.routedRequestOrigins.clear();
-    this.sessions.clear();
+    this.quiesce();
 
     // Close WebSocket server
     if (this.wss) {

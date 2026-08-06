@@ -2,6 +2,9 @@ import { wsClientTransport } from "./wsClient.js";
 import type { WsLike } from "../protocol/wsAdapter.js";
 import { RPC_CONTRACT_VERSION } from "../protocol/contractVersion.js";
 import { webSocketAuthProtocol } from "../protocol/webSocketAuthProtocol.js";
+import { bytesToBase64 } from "../base64.js";
+import { FRAME_DATA, FRAME_END, FRAME_HEAD } from "../protocol/streamCodec.js";
+import { WS_STREAM_REQUEST_BODY_CAPABILITY } from "../protocol/wsProtocol.js";
 
 class FakeSocket implements WsLike {
   readyState = 0;
@@ -27,7 +30,11 @@ class FakeSocket implements WsLike {
 
   authenticate(
     contractVersion: number = RPC_CONTRACT_VERSION,
-    extras: { serverBootId?: string; sessionDirty?: boolean } = {}
+    extras: {
+      serverBootId?: string;
+      sessionDirty?: boolean;
+      transportCapabilities?: Array<typeof WS_STREAM_REQUEST_BODY_CAPABILITY>;
+    } = {}
   ): void {
     this.onmessage?.({
       data: JSON.stringify({
@@ -474,5 +481,134 @@ describe("wsClientTransport", () => {
       type: "ws:rpc",
       envelope: { target: "server", message: { requestId: "server-request-1" } },
     });
+  });
+
+  it("streams request bodies and responses over the ordered loopback WebSocket", async () => {
+    vi.useRealTimers();
+    const { sockets, transport } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+    const socket = sockets[0]!;
+    socket.open();
+    socket.authenticate(RPC_CONTRACT_VERSION, {
+      transportCapabilities: [WS_STREAM_REQUEST_BODY_CAPABILITY],
+    });
+    await connected;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    });
+    const responsePromise = transport.streamReadable!(
+      {
+        from: "panel:nav-test",
+        target: "main",
+        delivery: { caller: { callerId: "panel:nav-test", callerKind: "panel" } },
+        provenance: [{ callerId: "panel:nav-test", callerKind: "panel" }],
+        message: {
+          type: "stream-request",
+          requestId: "stream-1",
+          fromId: "panel:nav-test",
+          method: "gateway.fetch",
+          args: [{}],
+        },
+      },
+      null,
+      body
+    );
+    await flushAsyncWork();
+
+    expect(socket.sent.slice(1).map((raw) => JSON.parse(raw).type)).toEqual([
+      "ws:rpc",
+      "ws:stream-body-chunk",
+    ]);
+    expect(JSON.parse(socket.sent[1]!)).toMatchObject({
+      type: "ws:rpc",
+      streamBody: true,
+      envelope: { message: { type: "stream-request", requestId: "stream-1" } },
+    });
+    expect(JSON.parse(socket.sent[2]!)).toMatchObject({
+      requestId: "stream-1",
+      seq: 0,
+      payload: bytesToBase64(new Uint8Array([1, 2, 3])),
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "ws:stream-body-ack", requestId: "stream-1", seq: 0 }),
+    });
+    await flushAsyncWork();
+    expect(JSON.parse(socket.sent[3]!)).toMatchObject({
+      type: "ws:stream-body-chunk",
+      requestId: "stream-1",
+      seq: 1,
+      done: true,
+    });
+    socket.onmessage?.({
+      data: JSON.stringify({ type: "ws:stream-body-ack", requestId: "stream-1", seq: 1 }),
+    });
+
+    const deliverFrame = (frameType: number, payload: string) =>
+      socket.onmessage?.({
+        data: JSON.stringify({
+          type: "ws:rpc",
+          envelope: {
+            from: "main",
+            target: "panel:nav-test",
+            delivery: { caller: { callerId: "main", callerKind: "server" } },
+            provenance: [{ callerId: "main", callerKind: "server" }],
+            message: {
+              type: "stream-frame",
+              requestId: "stream-1",
+              fromId: "main",
+              frameType,
+              payload,
+            },
+          },
+        }),
+      });
+    deliverFrame(
+      FRAME_HEAD,
+      JSON.stringify({ status: 201, statusText: "Created", headerPairs: [], finalUrl: "" })
+    );
+    const response = await responsePromise;
+    deliverFrame(FRAME_DATA, bytesToBase64(new Uint8Array([9, 8])));
+    deliverFrame(FRAME_END, JSON.stringify({ bytesIn: 2 }));
+
+    const reader = response.body.getReader();
+    await expect(reader.read()).resolves.toEqual({ value: new Uint8Array([9, 8]), done: false });
+    await expect(reader.read()).resolves.toEqual({ value: undefined, done: true });
+  });
+
+  it("rejects an upload before dispatch when the server did not advertise support", async () => {
+    vi.useRealTimers();
+    const { sockets, transport } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+    const socket = sockets[0]!;
+    socket.open();
+    socket.authenticate();
+    await connected;
+    const sentBeforeUpload = socket.sent.length;
+
+    await expect(
+      transport.streamReadable!(
+        {
+          from: "panel:nav-test",
+          target: "main",
+          delivery: { caller: { callerId: "panel:nav-test", callerKind: "panel" } },
+          provenance: [{ callerId: "panel:nav-test", callerKind: "panel" }],
+          message: {
+            type: "stream-request",
+            requestId: "unsupported-upload",
+            fromId: "panel:nav-test",
+            method: "gateway.fetch",
+            args: [{}],
+          },
+        },
+        null,
+        new ReadableStream<Uint8Array>()
+      )
+    ).rejects.toThrow(/does not support WebSocket streaming request bodies/);
+    expect(socket.sent).toHaveLength(sentBeforeUpload);
   });
 });

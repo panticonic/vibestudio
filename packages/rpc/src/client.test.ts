@@ -74,6 +74,29 @@ const flushMicrotasks = async (): Promise<void> => {
 };
 
 describe("createRpcClient", () => {
+  it("identifies the endpoint for an unexposed method without exposing its method table", async () => {
+    const network = createInProcessNetwork();
+    const caller = createRpcClient({
+      selfId: "caller",
+      callerKind: "panel",
+      transport: inProcessTransport("caller", network),
+    });
+    const endpoint = createRpcClient({
+      selfId: "panel:nav-target",
+      callerKind: "panel",
+      transport: inProcessTransport("panel:nav-target", network),
+    });
+
+    await expect(caller.call("panel:nav-target", "_agent.snapshot", [])).rejects.toMatchObject({
+      message: 'Method "_agent.snapshot" is not exposed by this endpoint',
+      errorData: {
+        kind: "rpc-endpoint",
+        endpointId: "panel:nav-target",
+        requestedMethod: "_agent.snapshot",
+      },
+    });
+  });
+
   it("waits for one structured authority acquisition and retries the exact invocation", async () => {
     const network = createInProcessNetwork();
     const caller = createRpcClient({
@@ -873,6 +896,16 @@ describe("createRpcClient — explicit call deadlines", () => {
     await vi.advanceTimersByTimeAsync(1);
     const err = (await call.catch((e) => e)) as Error;
     expect(err.message).toBe("RPC call timed out after 5000ms");
+    await flushMicrotasks();
+    const requestId = (fake.sent[0]?.message as { requestId?: string } | undefined)?.requestId;
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          type: "request-cancel",
+          requestId,
+        }),
+      })
+    );
   });
 
   it("never fires when timeoutMs is 0 (opt out)", async () => {
@@ -893,9 +926,9 @@ describe("createRpcClient — explicit call deadlines", () => {
 
 describe("stream() request bodies (§1.6 uploads)", () => {
   it("THROWS when a body is passed over a transport with no body-capable stream path", async () => {
-    // The in-process transport (like plain WS and panel postMessage bridges)
-    // has no first-class `stream()` — the duplex envelope fallback cannot carry
-    // a request body, and it must never silently drop or base64 it.
+    // The in-process transport (like panel postMessage bridges) has no
+    // first-class `stream()` — the duplex envelope fallback cannot carry a
+    // request body, and it must never silently drop or base64 it.
     const network = createInProcessNetwork();
     const rpc = createRpcClient({
       selfId: "panel:1",
@@ -908,9 +941,9 @@ describe("stream() request bodies (§1.6 uploads)", () => {
         c.close();
       },
     });
-    await expect(rpc.stream("main", "gateway.fetch", [{ path: "/x" }], { body })).rejects.toThrow(
-      /require the WebRTC transport/
-    );
+    await expect(
+      rpc.stream("main", "gateway.fetch", [{ path: "/x" }], { body })
+    ).rejects.toThrow(/cannot stream a request body/);
   });
 
   it("passes the body through to a body-capable transport's stream hook", async () => {

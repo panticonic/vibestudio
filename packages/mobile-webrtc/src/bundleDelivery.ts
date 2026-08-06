@@ -249,7 +249,9 @@ export async function activateApprovedWorkspaceApp(
     );
   }
   const capabilities = Array.isArray(bootstrap["capabilities"])
-    ? bootstrap["capabilities"].filter((capability): capability is string => typeof capability === "string")
+    ? bootstrap["capabilities"].filter(
+        (capability): capability is string => typeof capability === "string"
+      )
     : [];
   options.onCapabilities?.(capabilities);
   options.smokePhase?.("embedded-bundle-activate-start");
@@ -258,7 +260,8 @@ export async function activateApprovedWorkspaceApp(
   const artifact = selectPrimaryArtifact(bootstrap, platformName());
   const integrity = String(artifact["integrity"] ?? "");
   const artifactUrl = String(artifact["url"] ?? "");
-  if (!integrity || !artifactUrl) throw new Error("Mobile app artifact is missing integrity or URL");
+  if (!integrity || !artifactUrl)
+    throw new Error("Mobile app artifact is missing integrity or URL");
   const artifactPath = new URL(artifactUrl).pathname;
   const nativeArtifactPath = String(artifact["path"] ?? artifactPath);
   const gzipped = await streamArtifactToNative(

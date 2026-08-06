@@ -11,7 +11,6 @@ import {
   type RpcConnectionStatus,
   type RpcEnvelope,
   type RpcRequestContext,
-  type RpcStreamRequest,
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
@@ -74,9 +73,8 @@ export interface PanelSession {
    */
   isClosed?(): boolean;
   /**
-   * First-class duplex stream with a §1.6 streaming REQUEST body — the WebRTC
-   * session's bulk-channel path. Absent on the loopback WS session: panel
-   * uploads then fail loudly ("uploads require the WebRTC transport").
+   * First-class duplex stream with a §1.6 streaming request body. WebRTC uses
+   * its bulk channel; loopback WebSocket uses ordered, ack-gated body frames.
    */
   streamReadable?(
     envelope: RpcEnvelope,
@@ -96,6 +94,13 @@ export interface ServerClient {
   /** Call a backend service via the server */
   call(
     service: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions
+  ): Promise<unknown>;
+  /** Call a concrete runtime target (for example a resolved Durable Object). */
+  callTarget(
+    targetId: string,
     method: string,
     args: unknown[],
     options?: RpcCallOptions
@@ -122,8 +127,8 @@ export interface ServerClient {
    * Stream a backend service method's `Response` over the pipe's bulk channel
    * (chunked) — for large/streamed bodies (e.g. `gateway.fetch` panel assets)
    * that exceed the control-channel message-size limit. `options.body` streams
-   * a REQUEST body the same way (plan §1.6 — WebRTC transport only; other
-   * transports throw).
+   * a REQUEST body on the session's native transport (WebRTC bulk or ordered
+   * loopback WebSocket upload frames).
    */
   stream(
     service: string,
@@ -329,6 +334,14 @@ export async function createServerClient(
     ): Promise<unknown> {
       return rpc.call("main", `${service}.${method}`, args, options);
     },
+    callTarget(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: RpcCallOptions
+    ): Promise<unknown> {
+      return rpc.call(targetId, method, args, options);
+    },
     stream(
       service: string,
       method: string,
@@ -396,11 +409,6 @@ export async function createServerClient(
         },
       });
       await panelTransport.connectAndWait();
-      const panelRpc = createRpcClient({
-        selfId: runtimeEntityId,
-        callerKind: "panel",
-        transport: panelTransport,
-      });
       return {
         send: (envelope: RpcEnvelope) => panelTransport.send(envelope),
         onMessage: (listener: ServerMessageListener) => panelTransport.onMessage(listener),
@@ -410,19 +418,10 @@ export async function createServerClient(
         // (§3.3) correct on the loopback WS path too.
         isClosed: () => (panelTransport.status?.() ?? "disconnected") === "disconnected",
         streamReadable: (envelope, signal, body) => {
-          const request = envelope.message as RpcStreamRequest;
-          if (request.type !== "stream-request") {
-            throw new Error(`Panel stream requires a stream-request envelope, got ${request.type}`);
+          if (!panelTransport.streamReadable) {
+            return Promise.reject(new Error("Loopback WebSocket stream transport is unavailable"));
           }
-          return panelRpc.streamReadable(envelope.target, request.method, request.args, {
-            signal: signal ?? undefined,
-            body: body ?? undefined,
-            ...(request.causalParent ? { causalParent: request.causalParent } : {}),
-            ...(envelope.delivery.idempotencyKey
-              ? { idempotencyKey: envelope.delivery.idempotencyKey }
-              : {}),
-            ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
-          });
+          return panelTransport.streamReadable(envelope, signal, body);
         },
         close: () => {
           void panelTransport.close();

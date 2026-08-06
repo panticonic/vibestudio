@@ -9,6 +9,7 @@ import type {
   WsClientMessage,
   WsServerMessage,
 } from "../protocol/wsProtocol.js";
+import { WS_STREAM_REQUEST_BODY_CAPABILITY } from "../protocol/wsProtocol.js";
 import type { RecoveryKind } from "../protocol/recoveryCoordinator.js";
 import type { WsLike, WsTransportAdapter } from "../protocol/wsAdapter.js";
 import { TERMINAL_CLOSE_CODES } from "../protocol/closeCodes.js";
@@ -19,6 +20,15 @@ import {
   rpcWebSocketAdmissionUrl,
 } from "../protocol/rpcWebSocketAdmission.js";
 import { webSocketAuthProtocol } from "../protocol/webSocketAuthProtocol.js";
+import { base64ToBytes, bytesToBase64 } from "../base64.js";
+import {
+  decodeFramedStream,
+  encodeFrame,
+  FRAME_DATA,
+  FRAME_END,
+  FRAME_ERROR,
+  type FrameType,
+} from "../protocol/streamCodec.js";
 
 export interface WsClientTransportConfig {
   selfId: string;
@@ -40,6 +50,7 @@ export interface WsClientTransportConfig {
 }
 
 const OPEN = 1;
+const UPLOAD_CHUNK_BYTES = 256 * 1024;
 
 function randomId(): string {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
@@ -48,6 +59,10 @@ function randomId(): string {
 
 function errorWithCode(message: string, code: string): Error {
   return Object.assign(new Error(message), { code });
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcTransport & {
@@ -74,6 +89,155 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   let firstConnectPromise: Promise<void> | null = null;
   let firstConnectResolve: (() => void) | null = null;
   let firstConnectReject: ((error: Error) => void) | null = null;
+  let supportsStreamRequestBodies = false;
+  const textEncoder = new TextEncoder();
+  const nativeStreams = new Map<
+    string,
+    {
+      controller: ReadableStreamDefaultController<Uint8Array>;
+      uploadAbort: AbortController | null;
+    }
+  >();
+  const uploadAcks = new Map<
+    string,
+    Map<number, { resolve: () => void; reject: (error: Error) => void }>
+  >();
+
+  const abortUpload = (requestId: string, error: Error): void => {
+    const pending = uploadAcks.get(requestId);
+    uploadAcks.delete(requestId);
+    for (const acknowledgement of pending?.values() ?? []) acknowledgement.reject(error);
+  };
+
+  const failNativeStreams = (error: Error): void => {
+    for (const entry of nativeStreams.values()) {
+      entry.uploadAbort?.abort(error);
+      try {
+        entry.controller.error(error);
+      } catch {
+        // already closed
+      }
+    }
+    nativeStreams.clear();
+    for (const pending of uploadAcks.values()) {
+      for (const acknowledgement of pending.values()) acknowledgement.reject(error);
+    }
+    uploadAcks.clear();
+  };
+
+  const sendWireMessage = (message: WsClientMessage): void => {
+    const current = socket;
+    if (!current || current.readyState !== OPEN || !authenticated) {
+      throw errorWithCode("Not connected to server", "CONNECTION_LOST");
+    }
+    current.send(JSON.stringify(message));
+  };
+
+  const sendEnvelope = async (envelope: RpcEnvelope, streamBody = false): Promise<void> => {
+    const target = config.routeTarget?.(envelope.target) ?? envelope.target;
+    const routedEnvelope = target === envelope.target ? envelope : { ...envelope, target };
+    if (streamBody && target !== "main" && target !== "server") {
+      throw new Error("WebSocket request bodies cannot be routed to another RPC endpoint");
+    }
+    const message: WsClientMessage =
+      target === "main" || target === "server"
+        ? {
+            type: "ws:rpc",
+            envelope: routedEnvelope,
+            ...(streamBody ? { streamBody: true as const } : {}),
+          }
+        : { type: "ws:route", envelope: routedEnvelope };
+    sendWireMessage(message);
+  };
+
+  const waitForUploadAck = (requestId: string, seq: number): Promise<void> => {
+    return new Promise<void>((resolve, reject) => {
+      let pending = uploadAcks.get(requestId);
+      if (!pending) {
+        pending = new Map();
+        uploadAcks.set(requestId, pending);
+      }
+      pending.set(seq, { resolve, reject });
+    });
+  };
+
+  const sendUploadChunk = async (
+    requestId: string,
+    seq: number,
+    fields: { payload?: string; done?: boolean; error?: string }
+  ): Promise<void> => {
+    const acknowledged = waitForUploadAck(requestId, seq);
+    try {
+      sendWireMessage({ type: "ws:stream-body-chunk", requestId, seq, ...fields });
+    } catch (error) {
+      const pending = uploadAcks.get(requestId);
+      const acknowledgement = pending?.get(seq);
+      pending?.delete(seq);
+      if (pending?.size === 0) uploadAcks.delete(requestId);
+      acknowledgement?.reject(asError(error));
+    }
+    try {
+      await acknowledged;
+    } catch (error) {
+      throw Object.assign(asError(error), { code: "UPLOAD_TRANSPORT_FAILED" });
+    }
+  };
+
+  const pumpUpload = async (
+    requestId: string,
+    body: ReadableStream<Uint8Array>,
+    abort: AbortController
+  ): Promise<void> => {
+    const reader = body.getReader();
+    const cancelReader = () => void reader.cancel(abort.signal.reason).catch(() => undefined);
+    abort.signal.addEventListener("abort", cancelReader, { once: true });
+    let seq = 0;
+    try {
+      while (!abort.signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        for (let offset = 0; offset < value.byteLength; offset += UPLOAD_CHUNK_BYTES) {
+          if (abort.signal.aborted) return;
+          const chunk = value.subarray(
+            offset,
+            Math.min(offset + UPLOAD_CHUNK_BYTES, value.byteLength)
+          );
+          await sendUploadChunk(requestId, seq++, { payload: bytesToBase64(chunk) });
+        }
+      }
+      if (!abort.signal.aborted) await sendUploadChunk(requestId, seq, { done: true });
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "UPLOAD_TRANSPORT_FAILED") {
+        abort.abort(error);
+      } else if (!abort.signal.aborted) {
+        const message = error instanceof Error ? error.message : String(error);
+        await sendUploadChunk(requestId, seq, { error: message }).catch(() => undefined);
+      }
+    } finally {
+      abort.signal.removeEventListener("abort", cancelReader);
+      reader.releaseLock();
+    }
+  };
+
+  const routeNativeStreamFrame = (envelope: RpcEnvelope): void => {
+    const frame = envelope.message;
+    if (frame.type !== "stream-frame") return;
+    const entry = nativeStreams.get(frame.requestId);
+    if (!entry) return;
+    const payload =
+      frame.frameType === FRAME_DATA
+        ? base64ToBytes(frame.payload)
+        : textEncoder.encode(frame.payload);
+    entry.controller.enqueue(encodeFrame(frame.frameType as FrameType, payload));
+    if (frame.frameType === FRAME_END || frame.frameType === FRAME_ERROR) {
+      nativeStreams.delete(frame.requestId);
+      const completion = new Error("Streaming RPC response completed");
+      entry.uploadAbort?.abort(completion);
+      abortUpload(frame.requestId, completion);
+      entry.controller.close();
+    }
+  };
 
   const setStatus = (next: RpcConnectionStatus): void => {
     if (status === next) return;
@@ -133,6 +297,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     firstConnectPromise = null;
     closed = true;
     authenticated = false;
+    supportsStreamRequestBodies = false;
     setStatus("disconnected");
     socket?.close(4006, "Authentication failed");
   };
@@ -202,6 +367,8 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         const nextBootId = msg.serverBootId ?? null;
         const isReconnect = hasConnectedBefore;
         authenticated = true;
+        supportsStreamRequestBodies =
+          msg.transportCapabilities?.includes(WS_STREAM_REQUEST_BODY_CAPABILITY) === true;
         hasConnectedBefore = true;
         firstConnectResolve?.();
         firstConnectResolve = null;
@@ -224,6 +391,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       case "ws:routed": {
         const envelope = msg.envelope;
         if (!envelope?.message) return;
+        routeNativeStreamFrame(envelope);
         for (const listener of messageListeners) listener(envelope);
         return;
       }
@@ -241,6 +409,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
           error: msg.error,
           errorKind: msg.errorKind,
           ...(msg.errorCode ? { errorCode: msg.errorCode } : {}),
+          ...(msg.errorData !== undefined ? { errorData: msg.errorData } : {}),
         };
         const envelope: RpcEnvelope = {
           from: msg.targetId,
@@ -261,6 +430,16 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         );
         return;
       }
+      case "ws:stream-body-ack": {
+        const pending = uploadAcks.get(msg.requestId);
+        const acknowledgement = pending?.get(msg.seq);
+        if (!acknowledgement) return;
+        pending!.delete(msg.seq);
+        if (pending!.size === 0) uploadAcks.delete(msg.requestId);
+        if (msg.error) acknowledgement.reject(new Error(msg.error));
+        else acknowledgement.resolve();
+        return;
+      }
     }
   };
 
@@ -269,6 +448,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     const prefix = config.logPrefix ?? "wsClientTransport";
     setStatus("connecting");
     authenticated = false;
+    supportsStreamRequestBodies = false;
 
     let token: string;
     try {
@@ -378,13 +558,16 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     nextSocket.onclose = (event) => {
       if (socketGeneration !== generation || socket !== nextSocket) return;
       authenticated = false;
+      supportsStreamRequestBodies = false;
       const terminalCodes = config.terminalCloseCodes
         ? new Set(config.terminalCloseCodes)
         : TERMINAL_CLOSE_CODES;
       if (closed || terminalCodes.has(event.code ?? 0) || config.reconnect === false) {
+        failNativeStreams(errorWithCode("Connection lost during streaming RPC", "CONNECTION_LOST"));
         setStatus("disconnected");
         return;
       }
+      failNativeStreams(errorWithCode("Connection lost during streaming RPC", "CONNECTION_LOST"));
       scheduleReconnect(socketGeneration);
     };
   };
@@ -435,12 +618,14 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     },
     async close(): Promise<void> {
       closed = true;
+      failNativeStreams(errorWithCode("RPC client closed", "CONNECTION_LOST"));
       clearReconnectTimer();
       admissionAbortController?.abort();
       admissionAbortController = null;
       const current = socket;
       socket = null;
       authenticated = false;
+      supportsStreamRequestBodies = false;
       setStatus("disconnected");
       if (!current || current.readyState >= 2) return;
       await new Promise<void>((resolve) => {
@@ -450,23 +635,71 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         setTimeout(done, 2000);
       });
     },
-    async send(envelope): Promise<void> {
-      const current = socket;
-      if (!current || current.readyState !== OPEN || !authenticated) {
-        throw errorWithCode("Not connected to server", "CONNECTION_LOST");
+    send: (envelope) => sendEnvelope(envelope),
+    async streamReadable(envelope, signal, body, headTimeoutMs) {
+      const request = envelope.message;
+      if (request.type !== "stream-request") {
+        throw new Error(`streamReadable() requires a stream-request envelope, got ${request.type}`);
       }
-      const target = config.routeTarget?.(envelope.target) ?? envelope.target;
-      const routedEnvelope = target === envelope.target ? envelope : { ...envelope, target };
-      // Server-initiated RPC envelopes use `from: "server"`, so their
-      // responses naturally target `server`. Both `main` and `server` are the
-      // server endpoint and must ride ws:rpc. Sending `server` via ws:route
-      // makes a valid response look like a caller-to-caller relay and the host
-      // correctly rejects it as a protocol error.
-      const message: WsClientMessage =
-        target === "main" || target === "server"
-          ? { type: "ws:rpc", envelope: routedEnvelope }
-          : { type: "ws:route", envelope: routedEnvelope };
-      current.send(JSON.stringify(message));
+      if (signal?.aborted) throw new Error("Streaming RPC aborted by caller");
+      if (nativeStreams.has(request.requestId)) {
+        throw new Error(`Streaming RPC request id ${request.requestId} is already active`);
+      }
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const uploadAbort = body ? new AbortController() : null;
+      const cancelRemote = (): void => {
+        const cancellation = new Error("Streaming RPC cancelled");
+        uploadAbort?.abort(cancellation);
+        abortUpload(request.requestId, cancellation);
+        void sendEnvelope({
+          from: envelope.from,
+          target: envelope.target,
+          delivery: envelope.delivery,
+          provenance: envelope.provenance,
+          message: {
+            type: "stream-cancel",
+            requestId: request.requestId,
+            fromId: request.fromId,
+          },
+        }).catch(() => undefined);
+      };
+      const wireBody = new ReadableStream<Uint8Array>({
+        start(next) {
+          controller = next;
+        },
+        cancel() {
+          nativeStreams.delete(request.requestId);
+          cancelRemote();
+        },
+      });
+      nativeStreams.set(request.requestId, { controller, uploadAbort });
+      const onAbort = (): void => {
+        const entry = nativeStreams.get(request.requestId);
+        if (!entry) return;
+        nativeStreams.delete(request.requestId);
+        entry.uploadAbort?.abort(signal?.reason);
+        abortUpload(request.requestId, new Error("Streaming RPC aborted by caller"));
+        entry.controller.error(new Error("Streaming RPC aborted by caller"));
+        cancelRemote();
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        if (body && !supportsStreamRequestBodies) {
+          throw new Error("Server does not support WebSocket streaming request bodies");
+        }
+        await sendEnvelope(envelope, body != null);
+      } catch (error) {
+        signal?.removeEventListener("abort", onAbort);
+        nativeStreams.delete(request.requestId);
+        uploadAbort?.abort(error);
+        controller.error(error);
+        throw error;
+      }
+      if (body && uploadAbort) void pumpUpload(request.requestId, body, uploadAbort);
+      return decodeFramedStream(wireBody, "", signal, {
+        headTimeoutMs,
+        onBodyCancel: cancelRemote,
+      }).finally(() => signal?.removeEventListener("abort", onAbort));
     },
     onMessage(handler) {
       messageListeners.add(handler);

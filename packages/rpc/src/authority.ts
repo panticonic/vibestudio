@@ -5,7 +5,8 @@ import type { CallerKind } from "./types.js";
 export type PrincipalKind = "host" | "user" | "code" | "session" | "mission";
 export type Principal = `${PrincipalKind}:${string}`;
 export type AgentGrantPrincipal = `agent:${string}`;
-export type AuthorityGrantSubject = Principal | AgentGrantPrincipal;
+export type TaskGrantPrincipal = `task:${string}`;
+export type AuthorityGrantSubject = Principal | AgentGrantPrincipal | TaskGrantPrincipal;
 export type EntityPrincipal = `entity:${string}`;
 
 export type ResourceScope =
@@ -159,10 +160,20 @@ export interface AgentExecutionSessionFact {
     bindingId: string;
   } | null;
   taskRef: string;
+  /** Opaque host-minted identity shared by the verified runtime task closure. */
+  taskAuthority?: TaskGrantPrincipal;
   harness: {
+    /** `code:<repoPath>@<effectiveVersion>` — the reviewed source identity. */
     principal: `code:${string}`;
     repoPath: string;
     effectiveVersion: string;
+    /**
+     * The artifact the recipe produced for this run. Authenticated in its own
+     * right and used for activation checks and audit; it is deliberately not
+     * part of the principal, because authorization asks which unit this is and
+     * not which build of it is loaded.
+     */
+    executionDigest: string;
   };
   eval: {
     runtimeId: string;
@@ -224,6 +235,8 @@ export interface AuthorizationContext {
     reviewedClosure?: SessionReviewedClosureFact;
     mediatingHarness?: `code:${string}`;
     taskRef?: string;
+    /** Host-attested task closure; never accepted from invocation payloads. */
+    taskAuthority?: TaskGrantPrincipal;
   };
   contextIntegrity: ContextIntegrityFact | null;
 }
@@ -240,6 +253,7 @@ export interface AuthorityGrantConstraints {
   envelopeId?: string;
   lineageAtConsent?: readonly string[];
   taskRef?: string;
+  taskAuthority?: TaskGrantPrincipal;
   agentBindingId?: string;
 }
 
@@ -339,6 +353,8 @@ export interface InvocationSnapshot {
   callerPrincipal: Principal;
   sessionId: string;
   taskRef?: string;
+  /** Host-attested task closure captured for exact retry authorization. */
+  taskAuthority?: TaskGrantPrincipal;
   agentBindingId?: string;
   agentName?: string;
   lineageClasses?: readonly string[];
@@ -387,7 +403,12 @@ export type AuthorityFailureReasonCode =
   | "eval-read-only"
   | "run-manifest-denied"
   | "run-pregranted-only"
-  | "attached-route-ceiling-denied";
+  | "attached-route-ceiling-denied"
+  // A review covering this exact unit version is open and unresolved. The call
+  // gets one recoverable error instead of an acquisition entry, so an
+  // unanswered review can never turn into a prompt per method
+  // (docs/template-install-unit-approval-ux-plan.md U6).
+  | "review-pending";
 
 export type AuthorityRemediationKind =
   | "request-user-approval"
@@ -402,7 +423,8 @@ export type AuthorityRemediationKind =
   | "broaden-run-manifest"
   | "use-prompt-enabled-run"
   | "restart-attached-run"
-  | "retry-through-host";
+  | "retry-through-host"
+  | "resolve-open-review";
 
 /**
  * Machine-readable explanation for an authority refusal. Callers and agents
@@ -422,6 +444,8 @@ export interface AuthorityFailureInfo {
       resource: { kind: "exact"; key: string };
       tier: "gated" | "critical";
     };
+    /** The open review this call is waiting on, so the UI can focus it. */
+    review?: { approvalId: string; title: string };
   };
 }
 
@@ -491,6 +515,8 @@ export interface DirectAuthorityAttestation {
   targetTier?: "gated" | "critical";
   /** Canonical protected invocation bound to a critical one-shot confirmation. */
   invocationDigest?: string;
+  /** Invocation digest for the independently authorized live target leaf. */
+  targetInvocationDigest?: string;
   resourceKey: string;
   issuedAt: number;
   expiresAt: number;

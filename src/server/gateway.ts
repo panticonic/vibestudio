@@ -25,7 +25,6 @@ import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/se
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
-import { assertPresent } from "../lintHelpers";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
@@ -182,6 +181,8 @@ export interface GatewayDeps {
 
 export class Gateway {
   private server: HttpServer | null = null;
+  private readonly sockets = new Set<Duplex>();
+  private stopPromise: Promise<void> | null = null;
   private deps: GatewayDeps;
   /** Per-upstream gateway-internal bearer tokens (audit #32). Minted once at
    *  construction; stamped onto every forwarded request after inbound auth
@@ -374,8 +375,10 @@ export class Gateway {
         return;
       }
 
-      // /_w/ (internal DO) + /_u/ (userland DO facet host) → workerd reverse proxy
-      if (url.startsWith("/_w/") || url.startsWith("/_u/")) {
+      // Host-bundle internal DO transport only. Userland DOs are reachable
+      // through guarded `/_r/` routes or RpcServer; exposing raw `/_u/` here
+      // would create an invocation path with no durable-identity readiness gate.
+      if (url.startsWith("/_w/")) {
         if (
           !validateCallerBearer(
             req,
@@ -530,9 +533,21 @@ export class Gateway {
 
     // Loopback HTTP only — the public/TLS ingress is decommissioned; remote
     // reach is the WebRTC pipe, co-located reach is loopback WS.
-    this.server = createServer(requestHandler);
+    const server = createServer(requestHandler);
+    this.server = server;
 
-    this.server.on("upgrade", (req, socket, head) => {
+    // `server.close()` stops new connections but deliberately leaves upgraded
+    // WebSocket sockets and existing keep-alive connections alone. The gateway
+    // owns both kinds of socket, so retain them explicitly and terminate them
+    // during stop. Otherwise a caller can keep the server's shutdown promise
+    // pending indefinitely even after every service has released its state.
+    server.on("connection", (socket) => {
+      this.sockets.add(socket);
+      socket.once("close", () => this.sockets.delete(socket));
+      if (this.stopPromise) socket.destroy();
+    });
+
+    server.on("upgrade", (req, socket, head) => {
       const url = req.url ?? "/";
       const rpcHandler = this.deps.getRpcHandler?.() ?? this.deps.rpcHandler;
       const panelHttpHandler = this.deps.getPanelHttpHandler?.() ?? this.deps.panelHttpHandler;
@@ -558,8 +573,9 @@ export class Gateway {
         return;
       }
 
-      // /_w/ (internal DO) + /_u/ (userland DO facet host) → workerd WS proxy
-      if (url.startsWith("/_w/") || url.startsWith("/_u/")) {
+      // Host-bundle internal DO transport only; raw userland `/_u/` upgrades
+      // are intentionally not a gateway surface (see HTTP path above).
+      if (url.startsWith("/_w/")) {
         if (
           !validateCallerBearer(
             req,
@@ -638,13 +654,13 @@ export class Gateway {
 
     const bindHost = this.deps.bindHost ?? "127.0.0.1";
     return new Promise((resolve, reject) => {
-      assertPresent(this.server).listen(port, bindHost, () => {
-        const addr = assertPresent(this.server).address();
+      server.listen(port, bindHost, () => {
+        const addr = server.address();
         const assignedPort = typeof addr === "object" && addr ? addr.port : port;
         log.info(`Gateway listening on ${bindHost}:${assignedPort}`);
         resolve(assignedPort);
       });
-      assertPresent(this.server).on("error", reject);
+      server.on("error", reject);
     });
   }
 
@@ -654,10 +670,28 @@ export class Gateway {
   }
 
   async stop(): Promise<void> {
-    if (!this.server) return;
-    return new Promise((resolve) => {
-      assertPresent(this.server).close(() => resolve());
+    if (this.stopPromise) return this.stopPromise;
+    const server = this.server;
+    if (!server) return;
+    this.server = null;
+    this.stopPromise = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        this.sockets.clear();
+        if (error) reject(error);
+        else resolve();
+      };
+      server.close((error) => finish(error));
+      // closeAllConnections does not cover upgraded WebSockets on every Node
+      // release, so destroy the explicit ownership set as the authoritative
+      // terminal operation. Destroying an in-flight socket also propagates
+      // cancellation to the HTTP/RPC handlers attached to it.
+      server.closeAllConnections?.();
+      for (const socket of this.sockets) socket.destroy();
     });
+    return this.stopPromise;
   }
 }
 

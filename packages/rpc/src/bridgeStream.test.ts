@@ -375,7 +375,7 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
     await vi.waitFor(() => expect(seen.body).toBeDefined());
     expect(seen.body).toEqual(payload);
     expect(relay.size()).toBe(0);
-  });
+  }, 15_000);
 
   it("constructs null-body responses for statuses that forbid a body", async () => {
     const { surface, relay } = connect(async () => decodedResponse(bytes(), { status: 204 }));

@@ -58,6 +58,7 @@ export type {
   AuthorityRemediationKind,
   AuthorityGrant,
   AuthorityGrantSubject,
+  TaskGrantPrincipal,
   AgentGrantPrincipal,
   AuthorityLock,
   AuthorityGrantConstraints,
@@ -119,7 +120,7 @@ export {
   retargetEnvelope,
   stampEnvelopeCaller,
 } from "./envelope.js";
-export { createHandlerRegistry } from "./transport-helpers.js";
+export { createHandlerRegistry, createRpcInitiatorTransport } from "./transport-helpers.js";
 export type { DecodedFramedStream } from "./types.js";
 export {
   BRIDGE_STREAM_CHUNK_BYTES,

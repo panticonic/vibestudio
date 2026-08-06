@@ -1,4 +1,9 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { CapabilityGrantStore } from "./services/capabilityGrantStore.js";
+import { mintUnitClearanceGrants } from "./services/unitClearanceGrants.js";
 import { WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
@@ -38,6 +43,9 @@ import {
 } from "./ingressLimits.js";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
+import { RPC_WEBSOCKET_ADMISSION_PATH } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
+import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
+import { bytesToBase64 } from "@vibestudio/rpc";
 
 describe("RPC WebSocket admission resolution deadline", () => {
   afterEach(() => vi.useRealTimers());
@@ -77,8 +85,10 @@ function makeRecord(
     id,
     kind,
     source: {
-      repoPath: opts?.repoPath ?? "",
-      effectiveVersion: opts?.effectiveVersion ?? "",
+      // Executable entities always carry a real source identity in production:
+      // the path and effective version together are their authority subject.
+      repoPath: opts?.repoPath ?? (executable ? `tests/${kind}` : ""),
+      effectiveVersion: opts?.effectiveVersion ?? (executable ? "ev-test" : ""),
     },
     contextId: opts?.contextId ?? "",
     ...(opts?.agentBinding ? { agentBinding: opts.agentBinding } : {}),
@@ -224,6 +234,29 @@ function testServer(server: RpcServer): TestRpcServer {
   return server as unknown as TestRpcServer;
 }
 
+/**
+ * A real grant store, because admission alone grants nothing.
+ *
+ * Installed code's authority now comes from stored clearance grants, so a test
+ * that wants a part to be allowed something mints the grant its review would
+ * have minted rather than relying on a manifest to authorize itself.
+ */
+function createTestGrantStore(): CapabilityGrantStore {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rpc-grants-"));
+  const store = new CapabilityGrantStore({ statePath: root });
+  grantStoreCleanups.push(() => {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  return store;
+}
+
+const grantStoreCleanups: Array<() => void> = [];
+
+afterEach(() => {
+  while (grantStoreCleanups.length > 0) grantStoreCleanups.pop()!();
+});
+
 function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> = {}) {
   const tokenManager = new TokenManager();
   const entityCache = new EntityCache();
@@ -282,6 +315,7 @@ function createServer(opts: Partial<ConstructorParameters<typeof RpcServer>[0]> 
               effectiveVersion: "ev-test",
             }
           : null,
+      ensureUserlandDoReady: async () => undefined,
       verifyExactCausalInvocation: async () => true,
       ...opts,
     }),
@@ -1266,7 +1300,12 @@ describe("RpcServer relay behavior", () => {
     } as unknown as MockDispatcher;
     const entityCache = new EntityCache();
     entityCache._onActivate(makeRecord("panel:nav-a", "panel", { contextId: "ctx-1" }));
-    const server = new RpcServer({ tokenManager, dispatcher, entityCache });
+    const server = new RpcServer({
+      tokenManager,
+      dispatcher,
+      entityCache,
+      ensureUserlandDoReady: async () => undefined,
+    });
 
     await expect(
       testServer(server).relayToDO(
@@ -1277,6 +1316,28 @@ describe("RpcServer relay behavior", () => {
         []
       )
     ).rejects.toMatchObject({ code: "DO_NOT_CREATED" });
+  });
+
+  it("runs DO readiness before consulting the disposable entity cache", async () => {
+    const ensureUserlandDoReady = vi.fn(async () => {
+      throw new Error("exact execution is unavailable");
+    });
+    const { server } = createServer({ ensureUserlandDoReady });
+
+    await expect(
+      testServer(server).relayToDO(
+        "panel:nav-a",
+        "panel",
+        "do:workers/example:Store:key",
+        "ping",
+        []
+      )
+    ).rejects.toThrow("exact execution is unavailable");
+    expect(ensureUserlandDoReady).toHaveBeenCalledWith({
+      source: "workers/example",
+      className: "Store",
+      objectKey: "key",
+    });
   });
 
   it("does not replay a DO relay when the target retires during the failed dispatch", async () => {
@@ -1469,7 +1530,7 @@ describe("RpcServer relay behavior", () => {
         context: {
           authorizingOrigin: {
             kind: "code",
-            principal: `code:extensions/browser-data@${"b".repeat(64)}`,
+            principal: "code:extensions/browser-data@ev-browser-data",
           },
         },
       },
@@ -2037,7 +2098,33 @@ describe("RpcServer relay behavior", () => {
   });
 
   it("retains the admission-bound sealed panel identity for a routed DO stream", async () => {
-    const { server, entityCache } = createServer();
+    const capabilityGrantStore = createTestGrantStore();
+    // What admitting this panel would have minted: one version-bound grant per
+    // install-clearable row. Admission alone grants nothing.
+    mintUnitClearanceGrants({
+      grantStore: capabilityGrantStore,
+      units: [
+        {
+          repoPath: "panels/chat",
+          effectiveVersion: "ev-chat",
+          authority: {
+            requests: [
+              {
+                capability: "rpc:subscribe",
+                resource: { kind: "prefix", prefix: "" },
+                tier: "gated",
+                evidence: "intentional-broad",
+              },
+            ],
+            provides: [],
+          },
+        },
+      ],
+      origin: "workspace-creation",
+      decidedBy: "user:u1",
+      issuedBy: "host:test",
+    });
+    const { server, entityCache } = createServer({ capabilityGrantStore });
     const targetId = "do:workers/pubsub-channel:PubSubChannel:chat-a";
     entityCache._onActivate(
       makeRecord("panel:nav-a", "panel", {
@@ -2096,12 +2183,12 @@ describe("RpcServer relay behavior", () => {
       context: {
         authorizingOrigin: {
           kind: "code",
-          principal: `code:panels/chat@${"a".repeat(64)}`,
+          principal: "code:panels/chat@ev-chat",
         },
       },
       grants: [
         expect.objectContaining({
-          subject: `code:panels/chat@${"a".repeat(64)}`,
+          subject: "code:panels/chat@ev-chat",
           capability: "rpc:subscribe",
         }),
       ],
@@ -2346,7 +2433,49 @@ describe("RpcServer relay behavior", () => {
   });
 
   it("preserves the active build's exact runtime-intrinsic effect in direct attestations", async () => {
+    const capabilityGrantStore = createTestGrantStore();
+    // What admitting this panel would have minted: one version-bound grant per
+    // install-clearable row. Admission alone grants nothing.
+    mintUnitClearanceGrants({
+      grantStore: capabilityGrantStore,
+      units: [
+        {
+          repoPath: "panels/chat",
+          effectiveVersion: "ev-chat",
+          authority: {
+            requests: [
+              {
+                capability: "workspace-service:probe",
+                resource: { kind: "prefix", prefix: "" },
+                tier: "gated",
+                evidence: "intentional-broad",
+              },
+            ],
+            // The receiver's declaration rides the same reviewed set, which is
+            // what makes an in-workspace service call ordinary rather than
+            // unknown.
+            provides: [
+              {
+                name: "probe",
+                title: "Probe",
+                action: "use the probe",
+                tier: "gated",
+                sensitivity: "read",
+                resourceType: "probe",
+                presentation: { domain: "automation", verb: "act" },
+                notability: "everyday",
+                grantScopes: ["once", "task", "version"],
+              },
+            ],
+          },
+        },
+      ],
+      origin: "workspace-creation",
+      decidedBy: "user:u1",
+      issuedBy: "host:test",
+    });
     const { server } = createServer({
+      capabilityGrantStore,
       resolveWorkspaceDirectAuthority: async () => [
         {
           capability: "workspace-service:probe",
@@ -2517,10 +2646,12 @@ describe("RpcServer relay behavior", () => {
         contextId: "ctx-test",
         agentBinding: null,
         taskRef: "eval:test-run",
+        taskAuthority: "task:eval-test-run",
         harness: {
-          principal: `code:workers/system-test-runner@${digest}`,
+          principal: `code:workers/system-test-runner@ev-runner`,
           repoPath: "workers/system-test-runner",
           effectiveVersion: "ev-runner",
+          executionDigest: digest,
         },
         eval: {
           runtimeId,
@@ -2645,7 +2776,7 @@ describe("RpcServer relay behavior", () => {
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
         snapshot: expect.objectContaining({
-          callerPrincipal: `code:workers/pubsub-channel@${"b".repeat(64)}`,
+          callerPrincipal: "code:workers/pubsub-channel@ev-test",
           executionMode: "test",
           testPolicyId: policy.policyId,
         }),
@@ -2709,10 +2840,12 @@ describe("RpcServer relay behavior", () => {
       contextId: "ctx:eval-session",
       agentBinding: null,
       taskRef: "eval:session-boundary",
+      taskAuthority: "task:eval-session-boundary",
       harness: {
-        principal: `code:workers/system-test-runner@${"b".repeat(64)}`,
+        principal: `code:workers/system-test-runner@ev-runner`,
         repoPath: "workers/system-test-runner",
         effectiveVersion: "ev-runner",
+        executionDigest: "b".repeat(64),
       },
       eval: {
         runtimeId,
@@ -3100,6 +3233,18 @@ describe("RpcServer relay behavior", () => {
     });
 
     await expect(relay).resolves.toEqual({ ok: true });
+  });
+
+  it("reports exact panel route reachability only while its authenticated bridge is open", () => {
+    const { server, grantPanel } = createServer();
+    expect(server.isRuntimeRouteReachable("panel:nav-a", "conn-1")).toBe(false);
+
+    const targetWs = createTestWs();
+    testServer(server).handleAuth(targetWs, grantPanel("panel:nav-a"), "conn-1");
+    expect(server.isRuntimeRouteReachable("panel:nav-a", "conn-1")).toBe(true);
+
+    targetWs.emitClose();
+    expect(server.isRuntimeRouteReachable("panel:nav-a", "conn-1")).toBe(false);
   });
 
   it("throws TARGET_NOT_REACHABLE when a panel target is disconnected", async () => {
@@ -4072,6 +4217,36 @@ describe("RpcServer caller retirement", () => {
 });
 
 describe("RpcServer terminal lifecycle", () => {
+  it("keeps admission shutdown responses on the typed protocol", async () => {
+    const { server } = createServer();
+    server.quiesce("Server shutting down");
+    const response = {
+      destroyed: false,
+      writableEnded: false,
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    };
+
+    await server.handleGatewayHttpRequest(
+      {
+        method: "POST",
+        url: RPC_WEBSOCKET_ADMISSION_PATH,
+        headers: {},
+        resume: vi.fn(),
+      } as unknown as IncomingMessage,
+      response as never
+    );
+
+    expect(response.writeHead).toHaveBeenCalledWith(
+      503,
+      expect.objectContaining({ "Content-Type": "application/json" })
+    );
+    expect(JSON.parse(response.end.mock.calls[0]?.[0] as string)).toMatchObject({
+      ok: false,
+      code: "server_unavailable",
+    });
+  });
+
   it("can own a gateway WebSocket upgrade without a second RPC path", () => {
     const { server, tokenManager } = createServer();
     const token = tokenManager.ensureToken("worker:upgrade-test", "worker");
@@ -4828,6 +5003,39 @@ describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
 
     expect(takeInboundBody).toHaveBeenCalledWith("sr-up");
     expect(seenBody).toBe(body);
+  });
+
+  it("threads an ordered loopback WebSocket upload into the service context", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    let seenBody = "";
+    dispatcher.dispatch.mockImplementation(async (ctx: { body?: ReadableStream<Uint8Array> }) => {
+      seenBody = await new Response(ctx.body).text();
+      return new Response("ok", { status: 200 });
+    });
+
+    const client = createClient();
+    client.uploadBodies = new WsUploadBodies();
+    testServer(server).connections.addClient(client);
+    const request = streamRequest("sr-ws-upload", "gateway.fetch", [
+      { path: "/x", method: "POST" },
+    ]);
+    testServer(server).handleMessage(
+      client,
+      Buffer.from(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope: clientEnvelope(client, "main", request),
+          streamBody: true,
+        })
+      )
+    );
+    await client.uploadBodies.push({
+      requestId: "sr-ws-upload",
+      seq: 0,
+      payload: bytesToBase64(new TextEncoder().encode("uploaded")),
+    });
+    await client.uploadBodies.push({ requestId: "sr-ws-upload", seq: 1, done: true });
+    await vi.waitFor(() => expect(seenBody).toBe("uploaded"));
   });
 
   it("passes the inbound body to forwardProxyFetchStream for credentials.proxyFetch", async () => {

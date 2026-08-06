@@ -279,6 +279,24 @@ describe("createServerEventBridge", () => {
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 
+  it("accepts a durable clear-title event", async () => {
+    const { handle, panelOrchestrator, eventService } = createHarness();
+
+    handle("panel-title-updated", {
+      panelId: "panel:tree/panel-1",
+      title: null,
+      explicit: true,
+    });
+    await Promise.resolve();
+
+    expect(panelOrchestrator.applyServerPanelTitleUpdate).toHaveBeenCalledWith({
+      panelId: "panel:tree/panel-1",
+      title: null,
+      explicit: true,
+    });
+    expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
   it("opens OAuth browser panels through the native panel orchestrator", async () => {
     const { handle, eventService, panelOrchestrator, warn } = createHarness();
 

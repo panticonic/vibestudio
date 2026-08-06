@@ -130,7 +130,9 @@ export interface RtcPeerConfig {
 export interface PeerConnectionProvider {
   create(config: RtcPeerConfig): RtcPeerConnectionLike | Promise<RtcPeerConnectionLike>;
   /** Local cert's DTLS SHA-256 — computed offline from the PEM (no live peer needed). */
-  localFingerprint?(config: Pick<RtcPeerConfig, "certificatePemFile" | "keyPemFile">): string | null;
+  localFingerprint?(
+    config: Pick<RtcPeerConfig, "certificatePemFile" | "keyPemFile">
+  ): string | null;
 }
 
 export interface WebRtcPairing {

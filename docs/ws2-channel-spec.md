@@ -84,7 +84,10 @@ deleted):
    `ensureRegistryHydrated()` (full re-fetch from GAD on first use per wake) +
    `cacheMessageTypeMutation`/`cacheMessageTypes`/`localMessageTypes` +
    `registryMutationFromPublishedPayload()` (derives a
-   `RegistryMutationInput` from `messageType.registered/cleared` payloads,
+   `StoredRegistryMutationInput` from encoded
+   `messageType.registered/cleared` payloads. The GAD projection retains
+   reference-class fields as stored-value refs; PubSub hydrates and validates
+   the semantic `MessageTypeDefinition` before exposing it to callers,
    throws `Invalid registry payload …` on malformed ones). This cache and
    adapter path are deleted; the canonical GAD log projection owns registry
    updates.

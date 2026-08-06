@@ -1,4 +1,4 @@
-import type { CallerKind, RpcMessage } from "./types.js";
+import type { CallerKind, EnvelopeRpcTransport, RpcMessage } from "./types.js";
 
 type AnyHandler = (sourceId: string, message: RpcMessage, callerKind?: CallerKind) => void;
 type SourceHandler = (message: RpcMessage) => void;
@@ -54,3 +54,41 @@ export function createHandlerRegistry(options?: { context?: string }) {
   return { deliver, onMessage, onAnyMessage };
 }
 
+/**
+ * Restrict an RPC transport to initiating calls and streams. Responses, events,
+ * and stream frames still reach the client using the wrapper, but requests are
+ * left exclusively to the real endpoint that shares the underlying transport.
+ */
+export function createRpcInitiatorTransport(transport: EnvelopeRpcTransport): EnvelopeRpcTransport {
+  return {
+    send: (envelope, signal) => transport.send(envelope, signal),
+    onMessage: (handler) =>
+      transport.onMessage((envelope) => {
+        const type = envelope.message.type;
+        if (type === "request" || type === "stream-request") return;
+        handler(envelope);
+      }),
+    ...(transport.status ? { status: () => transport.status!() } : {}),
+    ...(transport.ready ? { ready: () => transport.ready!() } : {}),
+    ...(transport.onStatusChange
+      ? { onStatusChange: (handler) => transport.onStatusChange!(handler) }
+      : {}),
+    ...(transport.stream
+      ? {
+          stream: (envelope, signal, body, headTimeoutMs) =>
+            transport.stream!(envelope, signal, body, headTimeoutMs),
+        }
+      : {}),
+    ...(transport.streamReadable
+      ? {
+          streamReadable: (envelope, signal, body, headTimeoutMs) =>
+            transport.streamReadable!(envelope, signal, body, headTimeoutMs),
+        }
+      : {}),
+    ...(transport.streamBody
+      ? {
+          streamBody: (envelope, signal, body) => transport.streamBody!(envelope, signal, body),
+        }
+      : {}),
+  };
+}

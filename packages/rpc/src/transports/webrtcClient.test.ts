@@ -39,7 +39,11 @@ import type {
   RtcSessionDescription,
 } from "./webrtcPeer.js";
 import type { SignalingClient } from "./webrtcSignaling.js";
-import { frameControlMessage, createControlDefragmenter, type ControlDefragmenter } from "./controlFraming.js";
+import {
+  frameControlMessage,
+  createControlDefragmenter,
+  type ControlDefragmenter,
+} from "./controlFraming.js";
 
 // ---------------------------------------------------------------------------
 // In-memory WebRTC fabric (no native module)
@@ -122,7 +126,10 @@ class FakePeer implements RtcPeerConnectionLike {
   /** Mutable selected candidate type so tests can drive a null→value resolution
    * or a mid-connection switch to relay (bug #4). */
   candType: RtcCandidateType | null = "host";
-  constructor(private readonly fabric: Fabric, readonly id: number) {}
+  constructor(
+    private readonly fabric: Fabric,
+    readonly id: number
+  ) {}
   createDataChannel(label: string, init?: { id?: number }): RtcDataChannelLike {
     return this.fabric.createChannelPair(this, init?.id ?? 0, label);
   }
@@ -458,7 +465,10 @@ class Fabric {
 
 const PAIR = { room: "room-uuid", fingerprint: "AA:BB:CC" };
 
-function makeTransport(fabric: Fabric, extra: Partial<Parameters<typeof createWebRtcTransport>[0]> = {}): WebRtcTransport {
+function makeTransport(
+  fabric: Fabric,
+  extra: Partial<Parameters<typeof createWebRtcTransport>[0]> = {}
+): WebRtcTransport {
   return createWebRtcTransport({
     provider: fabric.provider(),
     createSignaling: fabric.createSignaling,
@@ -598,7 +608,10 @@ describe("WebRTC transport — pin + hello handshake", () => {
     expect(sizes.length).toBeGreaterThanOrEqual(3); // fragmented, not one message
     for (const size of sizes) expect(size).toBeLessThanOrEqual(2048);
     // …and it reassembles intact on the far side.
-    const rpc = fabric.frames.filter((f) => f.t === "rpc").pop() as Extract<SessionControlFrame, { t: "rpc" }>;
+    const rpc = fabric.frames.filter((f) => f.t === "rpc").pop() as Extract<
+      SessionControlFrame,
+      { t: "rpc" }
+    >;
     expect((rpc.envelope.message as { args: string[] }).args[0]).toBe(payload);
     await transport.close();
   });
@@ -744,7 +757,13 @@ describe("WebRTC transport — recovery", () => {
     fabric.currentPeer().fireState("failed");
     expect(statuses).toEqual(["connecting", "connected", "disconnected"]); // BEFORE recovery
     await vi.advanceTimersByTimeAsync(2_000); // backoff ≤ 1.5 s, then re-establish
-    expect(statuses).toEqual(["connecting", "connected", "disconnected", "connecting", "connected"]);
+    expect(statuses).toEqual([
+      "connecting",
+      "connected",
+      "disconnected",
+      "connecting",
+      "connected",
+    ]);
     expect(transport.status()).toBe("connected");
     await transport.close();
   });
@@ -862,7 +881,11 @@ describe("WebRTC transport — unflushed routed request re-drive (§3.4)", () =>
   async function connectWithSession(fabric: Fabric, sessionExtra: Record<string, unknown> = {}) {
     const transport = makeTransport(fabric);
     await transport.connect();
-    const session = transport.openSession({ connectionId: "c1", getToken: () => "g", ...sessionExtra });
+    const session = transport.openSession({
+      connectionId: "c1",
+      getToken: () => "g",
+      ...sessionExtra,
+    });
     await session.ready!();
     return { transport, session };
   }
@@ -913,7 +936,7 @@ describe("WebRTC transport — unflushed routed request re-drive (§3.4)", () =>
     });
     await flushMicrotasks(120);
     expect(
-      received.some((e) => (e.message as { requestId?: string }).requestId === "routed-1"),
+      received.some((e) => (e.message as { requestId?: string }).requestId === "routed-1")
     ).toBe(true);
     await transport.close();
   });
@@ -1177,7 +1200,13 @@ describe("WebRTC transport — session lifecycle", () => {
     await session.ready!();
     expect(fabric.opens).toHaveLength(1);
 
-    fabric.sendControl({ t: "closed", sid: session.sid, code: 4008, reason: "session not open", terminal: false });
+    fabric.sendControl({
+      t: "closed",
+      sid: session.sid,
+      code: 4008,
+      reason: "session not open",
+      terminal: false,
+    });
     await flushMicrotasks();
     expect(session.isClosed()).toBe(false); // non-terminal — session survives
     await vi.advanceTimersByTimeAsync(1_500); // per-session backoff reopen
@@ -1196,10 +1225,18 @@ describe("WebRTC transport — session lifecycle", () => {
     await session.ready!();
     expect(fabric.opens).toHaveLength(1);
 
-    fabric.sendControl({ t: "closed", sid: session.sid, code: 4001, reason: "revoked", terminal: true });
+    fabric.sendControl({
+      t: "closed",
+      sid: session.sid,
+      code: 4001,
+      reason: "revoked",
+      terminal: true,
+    });
     await flushMicrotasks();
     expect(session.isClosed()).toBe(true);
-    await expect(session.send(requestEnvelope("fs.read", "r"))).rejects.toThrow(/Session is closed/);
+    await expect(session.send(requestEnvelope("fs.read", "r"))).rejects.toThrow(
+      /Session is closed/
+    );
 
     await vi.advanceTimersByTimeAsync(16_000); // any leaked retry would fire here
     expect(fabric.opens).toHaveLength(1);
@@ -1268,7 +1305,9 @@ describe("WebRTC transport — session lifecycle", () => {
     await session.ready!();
     await sent;
     await flushMicrotasks(120);
-    const sessionFrames = fabric.frames.filter((f) => f.t === "open" || f.t === "rpc").map((f) => f.t);
+    const sessionFrames = fabric.frames
+      .filter((f) => f.t === "open" || f.t === "rpc")
+      .map((f) => f.t);
     expect(sessionFrames.slice(0, 2)).toEqual(["open", "rpc"]);
     await transport.close();
   });
@@ -1310,7 +1349,12 @@ describe("WebRTC transport — streams over the bulk mux", () => {
       onStreamOpen: (frame, f) => {
         const id = frame.streamId;
         const head = new TextEncoder().encode(
-          JSON.stringify({ status: 200, statusText: "OK", headerPairs: [], finalUrl: "https://x/big" }),
+          JSON.stringify({
+            status: 200,
+            statusText: "OK",
+            headerPairs: [],
+            finalUrl: "https://x/big",
+          })
         );
         const half = Math.ceil(head.byteLength / 2);
         f.sendBulk(id, FRAME_HEAD, head.subarray(0, half), true); // MORE
@@ -1412,7 +1456,12 @@ describe("WebRTC transport — streams over the bulk mux", () => {
   it("removes the abort listener once the stream settles (no accumulation on shared signals)", async () => {
     const fabric = new Fabric({
       onStreamOpen: (frame, f) => {
-        f.sendHead(frame.streamId, { status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        f.sendHead(frame.streamId, {
+          status: 200,
+          statusText: "OK",
+          headerPairs: [],
+          finalUrl: "",
+        });
         f.sendEnd(frame.streamId, 0);
       },
     });
@@ -1810,7 +1859,12 @@ describe("WebRTC transport — request-body uploads (§1.6)", () => {
     expect(JSON.parse(new TextDecoder().decode(bodyFrames[2]!.payload))).toEqual({ bytesIn: 12 });
 
     // The response path is untouched: serve it and the caller gets a Response.
-    fabric.sendHead(openFrame!.streamId, { status: 201, statusText: "Created", headerPairs: [], finalUrl: "" });
+    fabric.sendHead(openFrame!.streamId, {
+      status: 201,
+      statusText: "Created",
+      headerPairs: [],
+      finalUrl: "",
+    });
     fabric.sendEnd(openFrame!.streamId, 0);
     const resp = await pending;
     expect(resp.status).toBe(201);
@@ -1822,7 +1876,12 @@ describe("WebRTC transport — request-body uploads (§1.6)", () => {
     const fabric = new Fabric({
       onStreamOpen: (frame, f) => {
         openFrame = frame;
-        f.sendHead(frame.streamId, { status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        f.sendHead(frame.streamId, {
+          status: 200,
+          statusText: "OK",
+          headerPairs: [],
+          finalUrl: "",
+        });
         f.sendEnd(frame.streamId, 0);
       },
     });
@@ -1861,7 +1920,7 @@ describe("WebRTC transport — request-body uploads (§1.6)", () => {
       },
       // No pre-buffering: pull fires only on actual reader demand, so `reads`
       // counts exactly the pump's read() calls.
-      new CountQueuingStrategy({ highWaterMark: 0 }),
+      new CountQueuingStrategy({ highWaterMark: 0 })
     );
     void session.stream!(streamEnvelope("up-bp"), null, body).catch(() => undefined);
     await flushMicrotasks(200);
@@ -1992,9 +2051,9 @@ describe("WebRTC transport — request-body uploads (§1.6)", () => {
         cancelled = true;
       },
     });
-    await expect(session.stream!(streamEnvelope("up-pre"), controller.signal, body)).rejects.toThrow(
-      /aborted/i,
-    );
+    await expect(
+      session.stream!(streamEnvelope("up-pre"), controller.signal, body)
+    ).rejects.toThrow(/aborted/i);
     await flushMicrotasks(120);
     expect(fabric.frames.some((f) => f.t === "stream-open")).toBe(false);
     expect(cancelled).toBe(true);

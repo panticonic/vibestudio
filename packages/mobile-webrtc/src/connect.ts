@@ -356,14 +356,9 @@ export async function reconnectMobileSession(
     currentStored = next;
   });
   try {
-    const workspace = await reconnectViaWebRtc(
-      currentStored,
-      onRecovery,
-      "workspace",
-      (next) => {
-        currentStored = next;
-      }
-    );
+    const workspace = await reconnectViaWebRtc(currentStored, onRecovery, "workspace", (next) => {
+      currentStored = next;
+    });
     return composeMobileSession(control, workspace);
   } catch (error) {
     await closeAfterFailure(

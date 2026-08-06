@@ -39,6 +39,7 @@ async function startRpcHarness() {
   const grantRequests: unknown[][] = [];
   const scopedRequests: Array<{ callerId: string; callerKind: string; method: string }> = [];
   let shellSocket: import("ws").WebSocket | undefined;
+  let panelSocket: import("ws").WebSocket | undefined;
   let reverseSequence = 0;
   const reverseCalls = new Map<
     string,
@@ -86,6 +87,7 @@ async function startRpcHarness() {
                   : "";
           callerKind = shell || pairing ? "shell" : app ? "app" : panel ? "panel" : "";
           if (shell) shellSocket = ws;
+          if (panel) panelSocket = ws;
           const success = shell || app || panel || pairing;
           ws.send(
             JSON.stringify({
@@ -215,7 +217,18 @@ async function startRpcHarness() {
     );
     return await result;
   };
-  return { port, grantRequests, scopedRequests, admissionPlatforms, callShell };
+  const sendPanelEnvelope = (envelope: RpcEnvelope): void => {
+    if (!panelSocket) throw new Error("Panel is not connected");
+    panelSocket.send(JSON.stringify({ type: "ws:rpc", envelope }));
+  };
+  return {
+    port,
+    grantRequests,
+    scopedRequests,
+    admissionPlatforms,
+    callShell,
+    sendPanelEnvelope,
+  };
 }
 
 describe("ServerClient scoped runtime callers", () => {
@@ -326,6 +339,34 @@ describe("ServerClient scoped runtime callers", () => {
       )
     ).rejects.toThrow(/not available for panel/);
     expect(harness.grantRequests).toEqual([]);
+  });
+
+  it("keeps loopback panel sessions as transport-only envelope relays", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+    const session = await client.openPanelSession("panel:nav-current", "panel-connection");
+    cleanup.push(() => session.close());
+    const received: RpcEnvelope[] = [];
+    session.onMessage((envelope) => received.push(envelope));
+
+    const request = envelopeFromMessage({
+      selfId: "main",
+      from: "main",
+      target: "panel:nav-current",
+      callerKind: "server",
+      message: {
+        type: "request",
+        requestId: "snapshot-request",
+        fromId: "main",
+        method: "_agent.snapshot",
+        args: [],
+      },
+    });
+    harness.sendPanelEnvelope(request);
+
+    await expect.poll(() => received).toContainEqual(request);
+    expect(session.streamReadable).toBeTypeOf("function");
   });
 
   it("fails closed for unsupported scoped caller kinds", async () => {

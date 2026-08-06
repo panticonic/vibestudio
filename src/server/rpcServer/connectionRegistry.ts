@@ -3,6 +3,7 @@ import type { CallerKind, WsClientInfo } from "@vibestudio/shared/serviceDispatc
 import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import { WebSocket } from "ws";
 import type { WsServerTransportInternal } from "../wsServerTransport.js";
+import type { WsUploadBodies } from "./wsUploadBodies.js";
 
 /** Server-side state for a connected WebSocket client. */
 export interface WsClientState extends WsClientInfo {
@@ -18,6 +19,7 @@ export interface WsClientState extends WsClientInfo {
   clientLabel?: string;
   clientSessionId?: string;
   clientPlatform?: ClientPlatform;
+  uploadBodies?: WsUploadBodies;
 }
 
 export interface ConnectionRegistryOptions {

@@ -142,6 +142,47 @@ describe("installFallbackShellBridge", () => {
     );
   });
 
+  it("does not let the shell RPC client answer panel runtime requests", async () => {
+    const handlers = new Set<(envelope: RpcEnvelope) => void>();
+    mocks.onMessage.mockImplementation((handler: (envelope: RpcEnvelope) => void) => {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    });
+    mocks.createWsTransport.mockReturnValue({
+      send: mocks.send,
+      onMessage: mocks.onMessage,
+      onRecovery: mocks.onRecovery,
+    });
+
+    installFallbackShellBridge({
+      __vibestudioPanelInit: {
+        entityId: "panel:nav-entry-a",
+        slotId: "panel:tree/slot-a",
+        gatewayConfig: { serverUrl: "http://127.0.0.1:4567", token: "grant-token" },
+        connectionId: "runtime-conn",
+      },
+    } as BrowserShellBridgeGlobals);
+
+    const runtimeRequest = {
+      from: "main",
+      target: "panel:nav-entry-a",
+      delivery: { caller: { callerId: "main", callerKind: "server" } },
+      provenance: [{ callerId: "main", callerKind: "server" }],
+      message: {
+        type: "request",
+        requestId: "request-agent-snapshot",
+        fromId: "main",
+        method: "_agent.snapshot",
+        args: [],
+      },
+    } satisfies RpcEnvelope;
+
+    for (const handler of handlers) handler(runtimeRequest);
+    await Promise.resolve();
+
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
   it("dispatches host events through addEventListener/removeEventListener", () => {
     let handler: ((envelope: RpcEnvelope) => void) | undefined;
     mocks.onMessage.mockImplementation((next: (envelope: RpcEnvelope) => void) => {

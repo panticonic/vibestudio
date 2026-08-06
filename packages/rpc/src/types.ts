@@ -334,11 +334,9 @@ export interface RpcStreamOptions {
   /** Exact upstream tool invocation; provenance only, never authorization. */
   causalParent?: RpcCausalParent;
   /**
-   * Streaming REQUEST body (plan §1.6 — uploads ride the bulk channel). Only
-   * body-capable transports accept it: the WebRTC session pumps it as DATA
-   * frames on the bulk channel (declared via `bodyStreamId` on the
-   * `stream-open`). Every other transport (WS, HTTP, in-process) THROWS when a
-   * body is passed — bodies never silently fall back to base64-in-args.
+   * Streaming REQUEST body. Body-capable transports carry it on their native
+   * streaming wire (WebRTC bulk frames or ordered WebSocket upload frames).
+   * Other transports throw; bodies never silently fall back to base64-in-args.
    */
   body?: ReadableStream<Uint8Array> | null;
 }
@@ -402,10 +400,9 @@ export interface EnvelopeRpcTransport {
    * `stream-request` envelope; the transport POSTs it and returns the streaming
    * `Response`. Socket transports omit this and keep the frame-envelope path.
    *
-   * `body` is the streaming REQUEST body (plan §1.6). Only the WebRTC session
-   * transport supports it (bulk-channel DATA frames keyed by the stream-open's
-   * `bodyStreamId`); transports that cannot physically stream a request body
-   * MUST throw when one is passed — never a silent drop or base64 fallback.
+   * `body` is the streaming REQUEST body. A capable transport carries it on
+   * its native wire; incapable transports MUST throw rather than silently
+   * dropping it or encoding it into args.
    */
   stream?(
     envelope: RpcEnvelope,
