@@ -31,6 +31,8 @@ import { workspaceMethods } from "../workspace.js";
 
 export const OPEN_PANEL_SIGNATURE =
   "openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle>";
+export const CREATE_PANEL_SLOT_SIGNATURE =
+  "createPanelSlot(source: string, options?: CreatePanelSlotOptions): Promise<PanelHandle>";
 
 export const PANEL_HANDLE_AUTOMATION_GUIDE =
   "The returned PanelHandle is the complete lifecycle and inspection API. " +
@@ -312,7 +314,131 @@ export const PANEL_TREE_MEMBERS = [
   "search",
   "parent",
   "navigate",
+  "navigateHistory",
 ];
+
+export const PANEL_TREE_METHOD_CATALOG = {
+  self: {
+    signature: "self(): PanelHandle",
+    description: "Return a synchronous handle for the panel that owns this runtime.",
+    argsSchema: { type: "array", maxItems: 0, prefixItems: [] },
+  },
+  get: {
+    signature: 'get(id: string, kind?: "workspace" | "browser"): PanelHandle',
+    description: "Return a synchronous handle for an exact panel slot id.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [{ type: "string" }, { enum: ["workspace", "browser"] }],
+      minItems: 1,
+      maxItems: 2,
+    },
+  },
+  rootGroups: {
+    signature: "rootGroups(input?: PanelTreeRootGroupPageInput): Promise<PanelTreeRootGroupPage>",
+    description: "List the owner-scoped root groups that contain open panels.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        {
+          type: "object",
+          properties: { cursor: { type: "string" }, limit: { type: "number" } },
+          additionalProperties: false,
+        },
+      ],
+      maxItems: 1,
+    },
+  },
+  page: {
+    signature: "page(input: PanelTreePageInput): Promise<PanelRuntimeTreePage>",
+    description:
+      "Read one bounded sibling page. The input object and its group selector are required.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        {
+          type: "object",
+          properties: {
+            group: {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    kind: { const: "roots" },
+                    ownerUserId: { type: ["string", "null"] },
+                  },
+                  required: ["kind", "ownerUserId"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: { kind: { const: "children" }, parentSlotId: { type: "string" } },
+                  required: ["kind", "parentSlotId"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+            cursor: { type: "string" },
+            limit: { type: "number" },
+          },
+          required: ["group"],
+          additionalProperties: false,
+        },
+      ],
+      minItems: 1,
+      maxItems: 1,
+    },
+  },
+  path: {
+    signature: "path(id: string): Promise<PanelRuntimeTreePath | null>",
+    argsSchema: { type: "array", prefixItems: [{ type: "string" }], minItems: 1, maxItems: 1 },
+  },
+  search: {
+    signature: "search(input: PanelTreeSearchInput): Promise<PanelRuntimeTreeSearchPage>",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            cursor: { type: "string" },
+            limit: { type: "number" },
+          },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      ],
+      minItems: 1,
+      maxItems: 1,
+    },
+  },
+  parent: {
+    signature: "parent(id: string): PanelHandle | null",
+    description: "Return the cached parent handle, or explicit null for a root panel.",
+    argsSchema: { type: "array", prefixItems: [{ type: "string" }], minItems: 1, maxItems: 1 },
+  },
+  navigate: {
+    signature:
+      "navigate(id: string, source: string, options?: PanelNavigateOptions): Promise<PanelObservation>",
+    argsSchema: {
+      type: "array",
+      prefixItems: [{ type: "string" }, { type: "string" }, { type: "object" }],
+      minItems: 2,
+      maxItems: 3,
+    },
+  },
+  navigateHistory: {
+    signature:
+      "navigateHistory(id: string, delta: -1 | 1, options?: PanelWaitOptions): Promise<PanelObservation | null>",
+    description: "Move an exact panel slot one step through its navigation history.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [{ type: "string" }, { enum: [-1, 1] }, { type: "object" }],
+      minItems: 2,
+      maxItems: 3,
+    },
+  },
+};
 
 /**
  * The full portable surface — every key `createHostedRuntime` returns. Entries
@@ -347,8 +473,12 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "openExternal",
     "Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
   ),
+  createPanelSlot: valueEntry(
+    "Commit a workspace or browser panel slot and promptly return its durable handle without focusing or waiting for application boot. Pass a stable operationId when a workflow may retry: the same operation then resolves to the same durable slot. The returned handle can be observed for readiness.",
+    CREATE_PANEL_SLOT_SIGNATURE
+  ),
   openPanel: valueEntry(
-    "Create a workspace or browser panel and return its handle after application boot-ready. The slot commits before readiness; on PanelOperationError, inspect failure.provenance.panelId instead of blindly repeating creation. " +
+    "Create a workspace or browser panel and return its handle after application boot-ready. Readiness has no fixed wall-clock deadline; pass options.signal when the caller owns cancellation. A stable operationId makes retries address the same durable slot. On PanelOperationError, inspect failure.provenance.panelId. " +
       PANEL_HANDLE_AUTOMATION_GUIDE,
     OPEN_PANEL_SIGNATURE
   ),
@@ -398,13 +528,11 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   ),
   extensions: namespaceEntry(EXTENSIONS_MEMBERS, undefined, "extensions"),
   notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),
-  panelTree: namespaceEntry(PANEL_TREE_MEMBERS),
+  panelTree: namespaceEntry(PANEL_TREE_MEMBERS, undefined, undefined, PANEL_TREE_METHOD_CATALOG),
   services: valueEntry(
     "Portable dynamic service namespace. Rich runtime clients are available by name; other services dispatch through the caller-scoped main service boundary. The same client is available in panels, workers, Durable Objects, and eval."
   ),
-  hosts: valueEntry(
-    "Portable owner-scoped attached-host access for development sessions."
-  ),
+  hosts: valueEntry("Portable owner-scoped attached-host access for development sessions."),
   runtime: valueEntry(
     "Portable typed runtime lifecycle and supervision client for the current workspace context."
   ),
@@ -416,6 +544,7 @@ export const PORTABLE_KEYS = Object.keys(portableExports);
 /** Entries whose description differs per target (panel/worker override). */
 export const PER_TARGET_DESCRIPTION_KEYS = [
   "workspace",
+  "createPanelSlot",
   "openPanel",
   "getPanelHandle",
   "panelTree",

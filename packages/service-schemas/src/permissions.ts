@@ -15,6 +15,16 @@ export const savedPermissionGrantSchema = z
     lastUsedAt: z.number().optional(),
     expiresAt: z.number().optional(),
     why: z.string().min(1),
+    /**
+     * Where this permission came from, in the words §7.7 uses: `Part of
+     * Vibestudio`, `Added with your workspace's base`, `You allowed this`.
+     *
+     * Separate from `why`, which says what the permission does. Revisiting an
+     * install-time decision needs the other half — whether this was something
+     * the user chose in the moment or something a part arrived holding — and
+     * without it every row read as though it had been prompted for.
+     */
+    origin: z.string().min(1).optional(),
     approvedBy: z.string().min(1),
     duration: z.string().min(1),
     revokeEffect: z.string().min(1),

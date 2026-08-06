@@ -126,8 +126,9 @@ is always shown, never folded into "unchanged."
 ## 3. One ratification mechanism: the approval queue
 
 Every decision a human makes about authority is an approval-queue entry.
-The queue already hosts capability, credential, userland, and unit-batch
-kinds; missions join it rather than getting a parallel sheet mechanism.
+The queue already hosts capability, credential, userland, and
+unit-install-review kinds; missions join it rather than getting a parallel
+sheet mechanism.
 
 Scope of the unification, stated precisely: what is unified is the
 **mechanism** — one queue (rendezvous, dedup, fan-out, cancellation), one
@@ -144,10 +145,13 @@ this design, not a deviation from it.
 
 Two queue kinds are (re)defined around the shared model:
 
-- `unit-version-review` — subject `unit-version` + `AuthorityRowDiff`
-  against the previously active version (or empty base for first install).
-  Replaces the current unit-batch capability-section presentation;
-  batch-of-units remains a grouping of these entries, not a separate format.
+- `unit-install-review` — one review per arriving operation, carrying one
+  `InstallReviewPart` per unit it lands, each with rows already classified
+  by timing and notability
+  (`docs/template-install-unit-approval-ux-plan.md` §7). It replaced the
+  all-or-nothing unit-batch presentation: a part whose declared authority
+  did not change produces no row at all, and acceptance carries a typed
+  per-part, per-permission selection rather than one verdict for the set.
 - `mission-review` — subject `mission-closure` + diff per §2.3, plus the
   non-authority charter sections (task, trigger, technical details) as
   typed side-sections. Used for both first approval and revision; the
@@ -280,9 +284,9 @@ Do these as replacements, not additions:
    "Code run by this agent" sections and any ceiling diff rendering) in
    favor of `AuthorityRowDiff` rendering. (Ceiling data itself dies in
    WP1.)
-2. **`unit-batch` becomes a grouping of `unit-version-review` entries**
-   sharing the row/diff model; no separate per-kind payload format for
-   capability sections.
+2. **`unit-batch` is deleted in favour of `unit-install-review`**, which
+   shares the row model and adds the clearance partition; no separate
+   per-kind payload format for capability sections.
 3. **Mission review/revision ship as queue entries from day one** — the
    mission registry's approve/edit RPCs are called only by the queue
    resolver, so there is never a UI-less approval path nor a second sheet

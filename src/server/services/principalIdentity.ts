@@ -70,6 +70,8 @@ export function resolveCodeIdentity(
     if (
       !owner ||
       !isCodeIdentityCallerKind(owner.kind) ||
+      !owner.source.repoPath ||
+      !owner.source.effectiveVersion ||
       !owner.activeBuildKey ||
       !owner.activeExecutionDigest ||
       !/^[0-9a-f]{64}$/.test(owner.activeExecutionDigest) ||
@@ -95,6 +97,11 @@ export function resolveCodeIdentity(
     }
   }
   if (!isCodeIdentityCallerKind(record.kind)) return null;
+  // Source path and effective version together are the authority subject for
+  // installed code. An entity missing either has no source identity to
+  // authorize against, so it carries no code identity at all rather than a
+  // half-formed one.
+  if (!record.source.repoPath || !record.source.effectiveVersion) return null;
   const callerKind = callerKindForPrincipalKind(record.kind);
   if (!isCodeIdentityCallerKind(callerKind)) return null;
   if (!record.activeBuildKey) return null;

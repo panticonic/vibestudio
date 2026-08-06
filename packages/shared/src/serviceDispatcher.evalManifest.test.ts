@@ -12,10 +12,41 @@ function setup(input: {
   approvals: "prompt" | "pregranted-only";
   requests?: Array<{ capability: string; resource: { kind: "exact"; key: string } }>;
   granted: boolean;
+  testPolicy?: boolean;
 }) {
   const capability = "workspace.file.write";
   const resourceKey = "context:one/file.txt";
-  const session = createTestExecutionSession({ runtimeId: "do:eval:one", agentBinding: null });
+  const session = createTestExecutionSession({
+    runtimeId: "do:eval:one",
+    agentBinding: null,
+    ...(input.testPolicy
+      ? {
+          testPolicy: {
+            policyId: "policy:manifest-test",
+            kind: "case" as const,
+            orchestratorPolicyId: "policy:orchestrator",
+            case: {
+              testId: "manifest-test",
+              agent: {
+                model: "test:model",
+                approvalLevel: 2 as const,
+                fallback: "disabled" as const,
+              },
+              authority: [
+                {
+                  ruleId: "manifest-write",
+                  capability: { kind: "exact" as const, key: capability },
+                  resource: { kind: "exact" as const, key: resourceKey },
+                  tier: "gated" as const,
+                  decision: "once" as const,
+                },
+              ],
+              unexpectedPrompts: "fail" as const,
+            },
+          },
+        }
+      : {}),
+  });
   session.eval.authorityManifest = {
     mode: input.mode,
     effects: "read-write",
@@ -32,16 +63,20 @@ function setup(input: {
     session
   );
   const dispatcher = new ServiceDispatcher();
+  let granted = input.granted;
   dispatcher.setAuthorityResolver(({ caller: resolvedCaller }) => {
     const resolved = testAuthority(resolvedCaller, capability, resourceKey);
-    return { ...resolved, grants: input.granted ? resolved.grants : [] };
+    return { ...resolved, grants: granted ? resolved.grants : [] };
   });
   const request = vi.fn(() => {
     throw new Error("approval queue must not be reached");
   });
   dispatcher.setAuthorityAcquirer({
     request,
-    acquire: vi.fn(),
+    acquire: vi.fn(async () => {
+      granted = true;
+      return { state: "decided" as const, decision: "once" as const };
+    }),
     consume: vi.fn(),
     invalidate: vi.fn(),
   });
@@ -122,6 +157,19 @@ describe("evaluated-run authority ceiling", () => {
         authorityFailure: { reasonCode: "run-pregranted-only" },
       },
     });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("accepts host-attested test preauthorization without presenting a human prompt", async () => {
+    const { dispatcher, context, request } = setup({
+      mode: "adaptive",
+      approvals: "pregranted-only",
+      granted: false,
+      testPolicy: true,
+    });
+    await expect(dispatcher.dispatch(context, "manifestTest", "write", [])).resolves.toBe(
+      "written"
+    );
     expect(request).not.toHaveBeenCalled();
   });
 });

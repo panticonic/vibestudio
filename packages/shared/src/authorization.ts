@@ -449,6 +449,7 @@ export function subjectsForOrigin(
   context: AuthorizationContext
 ): ReadonlySet<AuthorityGrantSubject> {
   const subjects = new Set<AuthorityGrantSubject>([context.authorizingOrigin.principal]);
+  if (context.session.taskAuthority) subjects.add(context.session.taskAuthority);
   if (
     context.authorizingOrigin.kind === "session" &&
     context.executionSession?.agentBinding?.bindingId
@@ -623,11 +624,7 @@ function grantConstraintsMatch(
     return false;
   if (constraints.reviewedClosureSubject !== undefined) {
     const closure = context.session.reviewedClosure;
-    if (
-      !closure ||
-      constraints.reviewedClosureSubject !== closure.subject
-    )
-      return false;
+    if (!closure || constraints.reviewedClosureSubject !== closure.subject) return false;
   }
   return true;
 }
@@ -658,11 +655,20 @@ export function lineageClasses(
   return [...classes].sort();
 }
 
+/**
+ * Structural well-formedness only.
+ *
+ * A principal's safety comes from being host-constructed out of authenticated
+ * facts, never from its shape, so this rejects malformed strings rather than
+ * asserting what a version looks like. Code principals in particular name a
+ * reviewed unit version rather than a build digest, and "versions are sha256"
+ * is an assumption about the current effective-version scheme that authorization
+ * has no business hard-coding.
+ */
 function isCanonicalPrincipal(principal: Principal): boolean {
   if (/^(host|user|session):[^:][^\0]*$/.test(principal)) return true;
   if (/^agent:[^:][^\0]*$/.test(principal)) return true;
-  if (/^code:[^@]+@[0-9a-f]{64}$/.test(principal)) return true;
-  return /^mission:[^@]+@[0-9a-f]{64}$/.test(principal);
+  return /^(code|mission):[^@\0]+@[^@\0]+$/.test(principal);
 }
 
 function compareVersions(left: string, right: string): number {

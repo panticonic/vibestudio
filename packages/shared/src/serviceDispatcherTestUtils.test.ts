@@ -18,11 +18,7 @@ describe("service dispatcher test authority", () => {
         },
       ],
     });
-    const resolved = testAuthority(
-      caller,
-      "settings.write",
-      "service:settings.update"
-    );
+    const resolved = testAuthority(caller, "settings.write", "service:settings.update");
 
     expect(resolved.context.authorizingOrigin.kind).toBe("code");
     expect(

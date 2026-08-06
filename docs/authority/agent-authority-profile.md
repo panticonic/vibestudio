@@ -10,7 +10,7 @@ can touch": a projection of the canonical grant, denial, and receiver-contract
 records into the [domain vocabulary](domain-vocabulary.md), plus the small
 amount of genuinely new state (locks, standing agent-scoped grants) that makes
 the picture editable. It is how a non-technical user reads, grows, trims, and
-revokes an agent's authority — and it is the *same* object a mission charter
+revokes an agent's authority — and it is the _same_ object a mission charter
 snapshots for unattended work.
 
 The profile is a **view with edit affordances**, not a parallel policy store.
@@ -26,22 +26,22 @@ A cell's chip is a **derived summary of its contents**, not a stored state —
 real cells mix allowances, locks, and defaults, and the display must never
 flatten that mixture into a false absolute:
 
-| Cell chip | Shown when | Backing state |
-| --- | --- | --- |
-| **Asks first** | No standing records in the cell | Default; attempts produce a just-in-time card |
-| **Allowed: {n}** | Only allowances present | Agent-scoped grants (each capability + concrete resource); asks for anything else in the cell |
-| **Never** | A cell-level lock is present | A domain×verb lock record (covers everything in the cell, including capabilities added later) |
-| **Allowed: {n} · Never: {m}** | Mixed line-item records | Grants and per-capability/resource locks side by side; asks for the remainder |
-| **Not available** 🔒 | Structurally unreachable | Receiver contracts exclude `session` (all of `safety`, some infra) |
+| Cell chip                     | Shown when                      | Backing state                                                                                 |
+| ----------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------- |
+| **Asks first**                | No standing records in the cell | Default; attempts produce a just-in-time card                                                 |
+| **Allowed: {n}**              | Only allowances present         | Agent-scoped grants (each capability + concrete resource); asks for anything else in the cell |
+| **Never**                     | A cell-level lock is present    | A domain×verb lock record (covers everything in the cell, including capabilities added later) |
+| **Allowed: {n} · Never: {m}** | Mixed line-item records         | Grants and per-capability/resource locks side by side; asks for the remainder                 |
+| **Not available** 🔒          | Structurally unreachable        | Receiver contracts exclude `session` (all of `safety`, some infra)                            |
 
 Suspended (idle-paused) grants count in neither number; they render on
 expansion with their own state line. Mixed chips always expand to the exact
 line items — the chip is a table of contents, and the line items are the
 truth.
 
-The one-sentence summary users learn: *"Agents ask first for everything,
+The one-sentence summary users learn: _"Agents ask first for everything,
 except what you've allowed, minus what you've locked — and some things agents
-can never do at all."*
+can never do at all."_
 
 ## 2. State model
 
@@ -49,7 +49,7 @@ can never do at all."*
 
 - **Reachable cells**: which (domain, verb) cells contain at least one
   capability whose receiver admits `session` principals. Everything else
-  renders *Not available*.
+  renders _Not available_.
 - **Standing allowances**: agent-scoped grants in `CapabilityGrantStore`
   (scope `agent`, §3), grouped by cell for display.
 - **Session/task grants**: short-lived grants shown only in the activity
@@ -82,14 +82,14 @@ can never do at all."*
 
 ### 2.3 Scope ladder (complete decision vocabulary)
 
-| Scope | Lifetime | Where offered |
-| --- | --- | --- |
-| `once` | Exactly this invocation snapshot | Every gated card |
-| `task` | Until the current task ends (§2.4) | Every gated card during a task |
-| `agent` | Standing, until revoked or auto-lapsed (§6) | Gated cards after eligibility (§5.4); profile page |
-| `mission` | While the approved mission closure is active | Mission review only — never a card |
-| — `deny` | This request only | Every card |
-| — `lock` | Standing, until unlocked | Card overflow menu; profile page |
+| Scope     | Lifetime                                     | Where offered                                      |
+| --------- | -------------------------------------------- | -------------------------------------------------- |
+| `once`    | Exactly this invocation snapshot             | Every gated card                                   |
+| `task`    | Until the current task ends (§2.4)           | Every gated card during a task                     |
+| `agent`   | Standing, until revoked or auto-lapsed (§6)  | Gated cards after eligibility (§5.4); profile page |
+| `mission` | While the approved mission closure is active | Mission review only — never a card                 |
+| — `deny`  | This request only                            | Every card                                         |
+| — `lock`  | Standing, until unlocked                     | Card overflow menu; profile page                   |
 
 `version` grants remain available **only** for fixed installed code
 (code-origin requests). They are never offered for session-origin agent work:
@@ -97,13 +97,15 @@ can never do at all."*
 
 ### 2.4 What "task" means
 
-A task grant is bound to the host's **authority session for the originating
-task**: the interactive agent task (channel task id) the execution-session
-fact names. It ends when that task completes, is cancelled, or its session is
-closed — not on a wall-clock timer. The card copy says "while it works on
-this task"; the enforcement key is the attested task reference. Sub-invocations
-of the same task (tool calls, sub-evals with causal parent in the same task)
-share the grant; a new task does not.
+A task grant is bound to an opaque **task authority principal** minted by the
+host from the originating execution's attested task coordinates. Runtime
+creation snapshots that principal onto verified descendants; caller-provided
+task references and panel-tree placement never confer membership. The grant is
+usable only while an admitted execution root for that principal remains live.
+Reusing a warm execution root for a new task therefore cannot move older panels
+into the new closure. The card copy says "while it works on this task".
+Sub-invocations of the same task (tool calls, child runtimes, and sub-evals)
+share the grant; unrelated runtimes and later tasks do not.
 
 ## 3. Grant semantics for `agent` scope
 
@@ -130,7 +132,7 @@ share the grant; a new task does not.
 - **Lineage-class-conditioned** (§5): a standing grant records the
   request's **lineage class** at creation — the kind of outside content, if
   any, that influenced it (e.g. `none`, `web`, `email`, `channel-external`).
-  The grant covers later requests of the *same class only*. A request
+  The grant covers later requests of the _same class only_. A request
   carrying a lineage class the grant has not seen re-prompts with the taint
   explained, and approving it may extend the grant to that class as an
   explicit choice. This replaces a binary clean/tainted rule, which would
@@ -146,7 +148,7 @@ semantics are part of the trust model, not an implementation detail:
   binding.** Grants and locks persist across the update; the profile
   activity feed records `Updated to v1.4` events so the history is
   inspectable. This matches the user's mental model ("News got better"),
-  and the unit's *changed declared behavior* is separately surfaced by its
+  and the unit's _changed declared behavior_ is separately surfaced by its
   `unit-version-review` diff — the two review systems cover each other.
 - **Replacement, ownership transfer, or re-installation after removal mints
   a new binding.** Grants never transfer; locks are archived and offered
@@ -171,22 +173,22 @@ Layout, top to bottom:
 1. **Identity header**: agent name/icon, verified unit + owner, "active
    since", link to activity.
 2. **Plain-language summary line**, generated from cell states (grammar in
-   [approval-ux-copy.md](approval-ux-copy.md) §7): e.g. *"News can see the
+   [approval-ux-copy.md](approval-ux-copy.md) §7): e.g. _"News can see the
    web and your files. It always asks before publishing or sending. It can
-   never change your safety controls."* For agent units whose installed
+   never change your safety controls."_ For agent units whose installed
    code performs direct effects, the summary includes them in a distinct
-   clause — *"Its built-in code also connects to Gmail directly"* — so the
+   clause — _"Its built-in code also connects to Gmail directly"_ — so the
    headline never claims the profile is the whole picture when a manifest
    grants more.
 3. **The grid**: eight domain rows; each row shows its verb cells with
    derived chips (§1, including mixed `Allowed · Never` chips). Tapping a
    row expands standing allowances, locks, suspended grants, and — when a
-   task is live — transient task-grant chips (*"allowed for the current
-   task"*), as individual lines: *"Publish to `panticonic/briefings` —
-   always · added Jul 12 · Remove"*. Each domain row also shows a
+   task is live — transient task-grant chips (_"allowed for the current
+   task"_), as individual lines: _"Publish to `panticonic/briefings` —
+   always · added Jul 12 · Remove"_. Each domain row also shows a
    read-only **open-access band** where applicable: ungated reads
-   receiver-open to any admitted session (*"All agents can see: panel
-   layout, project file names"*), rendered informationally with no
+   receiver-open to any admitted session (_"All agents can see: panel
+   layout, project file names"_), rendered informationally with no
    controls — so "can see your files" always has a visible, truthful home
    even where no grant exists to revoke.
 4. **Missions section** (if any): each mission with its snapshot badge and a
@@ -194,13 +196,13 @@ Layout, top to bottom:
 5. **Activity feed**: recent approvals, denials, uses of standing grants
    (each entry deep-links to the exact decision record).
 6. **Reset controls**, labeled by exactly what they clear: "Make News ask
-   first for everything" (subtext: *"Removes the permissions you've granted
-   to this agent. Your 'never' choices stay."*) and "Remove all permission
+   first for everything" (subtext: _"Removes the permissions you've granted
+   to this agent. Your 'never' choices stay."_) and "Remove all permission
    settings for News" (clears grants and locks). Neither touches the unit's
    installed-code manifest authority — that is the unit's, changed by
    version review or uninstall, and the subtext says so when such authority
-   exists: *"News's built-in code keeps its declared abilities; remove the
-   app to remove those."*
+   exists: _"News's built-in code keeps its declared abilities; remove the
+   app to remove those."_
 
 ### 4.2 Per-domain pivot (Permissions → Publishing & sending)
 
@@ -213,8 +215,8 @@ capabilities in it. Same line-item revoke affordances.
 
 The JIT card is the profile's write path
 ([approval-ux-copy.md](approval-ux-copy.md) §3). Choosing "Always for News
-(this repository)" creates the `agent` grant *and* shows a one-time toast:
-*"Saved. You can change this anytime in Permissions."* — teaching the
+(this repository)" creates the `agent` grant _and_ shows a one-time toast:
+_"Saved. You can change this anytime in Permissions."_ — teaching the
 existence of the surface at the moment it becomes relevant.
 
 ### 4.4 Locked-cell behavior
@@ -223,8 +225,8 @@ When a cell or capability is locked, agent attempts return structured
 `user-denied` (with `standing: true`) immediately; nothing is queued, no
 notification fires. The agent-facing result instructs: do not retry, tell the
 user what you could not do and why. The agent's chat surface renders the
-system-authored line (*"News wasn't allowed to publish — you've turned that
-off for this agent"*) so the user always learns work was skipped, from the
+system-authored line (_"News wasn't allowed to publish — you've turned that
+off for this agent"_) so the user always learns work was skipped, from the
 system rather than only the agent's paraphrase. A counter on the profile page
 ("3 attempts while locked, last: yesterday") keeps silent lockdown honest
 without re-prompting.
@@ -270,28 +272,28 @@ The `agent`-scope choice appears on a card when all hold:
 ## 6. Hygiene (grants must not outlive attention)
 
 - **Idle lapse**: an `agent` grant unused for 90 days is suspended — it stops
-  matching, the profile shows *"paused (not used for 3 months) — Restore"*,
-  and the next agent attempt re-prompts with the history line *"You used to
-  allow this."* No silent permanent authority.
+  matching, the profile shows _"paused (not used for 3 months) — Restore"_,
+  and the next agent attempt re-prompts with the history line _"You used to
+  allow this."_ No silent permanent authority.
 - **Agent removal**: uninstalling/retiring an agent binding revokes its
   `agent` grants and archives its locks (re-installing the same unit does
   not resurrect grants; locks are offered for restore).
 - **Periodic digest** (optional, off by default): a monthly summary
-  notification — *"Your agents used 3 standing permissions this month; 1 is
-  unused."* Links to Permissions.
+  notification — _"Your agents used 3 standing permissions this month; 1 is
+  unused."_ Links to Permissions.
 
 ## 7. Sub-agents and deputies
 
 A helper started via `subagents.create` gets its **own** binding and starts
-with the **default profile** (everything *Asks first*), regardless of the
+with the **default profile** (everything _Asks first_), regardless of the
 parent's grants — grants do not flow down. A causally delegated leg of the
-parent's task (host-attested, same task reference) uses the *parent's*
+parent's task (host-attested, same task reference) uses the _parent's_
 grants **under the parent's identity — approval cards and activity entries
 for such legs display the parent's name**, so the user's picture of "who is
 acting" matches whose grants apply. The card for `subagents.create` states
-both halves precisely: *"{Parent} may use its own permissions for work it
+both halves precisely: _"{Parent} may use its own permissions for work it
 directs. For anything the helper does independently, the helper asks
-separately."*
+separately."_
 
 ## 8. Relationship to mission charters
 
@@ -305,7 +307,7 @@ invariants:
   mission keeps its snapshot until re-approved — except **revocation**, which
   always applies immediately (revoking a grant lapses it in every mission
   snapshot that referenced it; affected missions pause with a
-  *"needs your review"* state rather than running with authority the user
+  _"needs your review"_ state rather than running with authority the user
   withdrew).
 - A mission can never carry an allowance whose profile row the user could not
   create interactively (no mission-only widening of receiver rules).

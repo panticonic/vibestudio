@@ -30,7 +30,11 @@ describe("invocation snapshot", () => {
       ...left,
       callerPrincipal: "session:conversation-2" as const,
       sessionId: "conversation-2",
-      contextLineage: { class: "external" as const, latchEpoch: 9, externalKeys: ["web:other.test"] },
+      contextLineage: {
+        class: "external" as const,
+        latchEpoch: 9,
+        externalKeys: ["web:other.test"],
+      },
       initiatorChain: ["user:other"],
       at: 999,
     };
@@ -46,13 +50,17 @@ describe("invocation snapshot", () => {
     expect(
       invocationSnapshotDigest({ ...snapshot, capabilityDefinitionDigest: "c".repeat(64) })
     ).not.toBe(digest);
-    expect(invocationSnapshotDigest({ ...snapshot, preparedStateDigest: "b".repeat(64) })).not.toBe(digest);
+    expect(invocationSnapshotDigest({ ...snapshot, preparedStateDigest: "b".repeat(64) })).not.toBe(
+      digest
+    );
     expect(
       invocationSnapshotDigest({
         ...snapshot,
         reviewedClosureSubject: "mission:m@closure",
       })
     ).not.toBe(digest);
-    expect(invocationSnapshotDigest({ ...snapshot, codeLineage: { class: "external", chain: [] } })).not.toBe(digest);
+    expect(
+      invocationSnapshotDigest({ ...snapshot, codeLineage: { class: "external", chain: [] } })
+    ).not.toBe(digest);
   });
 });

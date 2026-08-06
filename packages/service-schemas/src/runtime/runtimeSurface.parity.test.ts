@@ -6,6 +6,8 @@ import {
   CREDENTIALS_MEMBERS,
   GAD_MEMBERS,
   GIT_MEMBERS,
+  PANEL_TREE_MEMBERS,
+  PANEL_TREE_METHOD_CATALOG,
   portableExports,
   VCS_MEMBERS,
   WEBHOOKS_MEMBERS,
@@ -101,5 +103,35 @@ describe("runtime surface schemaRef parity", () => {
     expect(webhooks.schemaRef).toBe("webhookIngress");
     expect(webhooks.description).toContain("rotateSecret(subscriptionId, secret?)");
     expect(webhooks.description).toContain("agent eval");
+  });
+
+  it("keeps panel-tree help aligned with the runtime contract", () => {
+    const panelTree = portableExports["panelTree"];
+    if (!panelTree) throw new Error("missing panelTree runtime surface");
+    expect(panelTree.members).toEqual(PANEL_TREE_MEMBERS);
+    expect(panelTree.members).toContain("navigateHistory");
+    expect(PANEL_TREE_METHOD_CATALOG.page.argsSchema).toMatchObject({
+      type: "array",
+      prefixItems: [
+        {
+          properties: {
+            group: {
+              oneOf: expect.arrayContaining([
+                expect.objectContaining({
+                  properties: expect.objectContaining({ ownerUserId: expect.any(Object) }),
+                  required: expect.arrayContaining(["ownerUserId"]),
+                }),
+              ]),
+            },
+          },
+        },
+      ],
+    });
+    expect(PANEL_TREE_METHOD_CATALOG.page.argsSchema).not.toEqual(
+      expect.objectContaining({ rootGroup: expect.anything() })
+    );
+    expect(PANEL_TREE_METHOD_CATALOG.navigateHistory.signature).toContain(
+      "navigateHistory(id: string"
+    );
   });
 });

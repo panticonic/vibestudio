@@ -189,7 +189,11 @@ export const reviewedClosureMethods = defineServiceMethods({
         })
         .strict(),
     ]),
-    returns: z.object({ subject: z.string(), closureDigest: hex64, harness: z.object({ unit: z.string(), ev: hex64 }) }),
+    returns: z.object({
+      subject: z.string(),
+      closureDigest: hex64,
+      harness: z.object({ unit: z.string(), ev: hex64 }),
+    }),
     authority: { principals: ["code"] },
     access: { sensitivity: "write" },
   },

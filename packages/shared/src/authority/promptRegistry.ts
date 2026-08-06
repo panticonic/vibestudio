@@ -60,13 +60,20 @@ export function authorityPromptCardType(input: {
   return input.outsideContent ? "permission.outside" : "permission.gated";
 }
 
-const BANNED = /\b(principal|capability|grant|scope|session|mission|taint(?:ed)?|lineage|provenance|vouch|digest|hash|harness|eval|snippet|conduit|tier|attestation|origin|subject|envelope|acquisition|invocation|resource|delegation|integrity|artifact|closure|RPC|DO|dispatcher)\b/i;
+const BANNED =
+  /\b(principal|capability|grant|scope|session|mission|taint(?:ed)?|lineage|provenance|vouch|digest|hash|harness|eval|snippet|conduit|tier|attestation|origin|subject|envelope|acquisition|invocation|resource|delegation|integrity|artifact|closure|RPC|DO|dispatcher)\b/i;
 const TEMPLATE_BANNED = /\b(monorepo|DAG|node|pin|lock|fragment|subtree|upstream|ref|OID)\b/i;
 
 export function assertAuthorityPromptRegistry(): void {
   for (const [id, card] of Object.entries(AUTHORITY_PROMPT_REGISTRY)) {
-    for (const text of [card.title, card.body, ...card.actions, "banner" in card ? card.banner : ""]) {
-      if (BANNED.test(text)) throw new Error(`Authority prompt ${id} contains banned system vocabulary`);
+    for (const text of [
+      card.title,
+      card.body,
+      ...card.actions,
+      "banner" in card ? card.banner : "",
+    ]) {
+      if (BANNED.test(text))
+        throw new Error(`Authority prompt ${id} contains banned system vocabulary`);
       if (id.startsWith("template.") && TEMPLATE_BANNED.test(text)) {
         throw new Error(`Template prompt ${id} contains banned implementation vocabulary`);
       }

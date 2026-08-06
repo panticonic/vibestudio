@@ -2626,6 +2626,46 @@
         "capability": null,
         "presentation": null
       },
+      "createPanel": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "Shell-owned panel creation commits the durable slot and attaches the native view as one host operation"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "ensurePanelLoaded": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.control",
+          "rationale": "Materializes a resident panel on the caller's native host without changing shell layout focus"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "expandPanelIds": {
         "authority": {
           "inherits": true
@@ -2985,6 +3025,23 @@
           "residency": "native-effect",
           "family": "panel.mutate",
           "rationale": "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "setFocusedPanelId": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.local-panel-state",
+          "rationale": "Records the exact shell layout focus without acquiring a lease or emitting a navigation intent"
         },
         "capability": null,
         "presentation": null

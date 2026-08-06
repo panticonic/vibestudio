@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { format, resolveConfig } from "prettier";
+import { declaredMethodCapabilityDependencies } from "@vibestudio/shared/unitAuthorityInference";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = path.join(
@@ -14,6 +15,15 @@ const matrices = [
   "src/server/services/__serviceAuthorityMatrix.golden.json",
   "src/main/services/__serviceAuthorityMatrix.golden.json",
 ].map((relative) => JSON.parse(fs.readFileSync(path.join(root, relative), "utf8")));
+
+const methodDependencies = new Map();
+for (const matrix of matrices) {
+  for (const [method, dependencies] of declaredMethodCapabilityDependencies(matrix)) {
+    const combined = methodDependencies.get(method) ?? new Set();
+    for (const dependency of dependencies) combined.add(dependency);
+    methodDependencies.set(method, combined);
+  }
+}
 
 const methods = {};
 for (const matrix of matrices) {
@@ -55,6 +65,12 @@ for (const [method, row] of Object.entries(methods)) {
   capabilityPresentations[row.capability] ??= row.presentation;
 }
 
+const manifestDependencies = Object.fromEntries(
+  [...methodDependencies.entries()]
+    .filter(([, dependencies]) => dependencies.size > 0)
+    .map(([method, dependencies]) => [method.slice("service:".length), [...dependencies].sort()])
+);
+
 const sorted = (value) =>
   Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
 const banner =
@@ -71,6 +87,8 @@ export interface GeneratedHostAuthorityMethod {
 }
 
 export const HOST_AUTHORITY_METHODS = ${JSON.stringify(sorted(methods), null, 2)} as const satisfies Record<string, GeneratedHostAuthorityMethod>;
+
+export const HOST_METHOD_MANIFEST_DEPENDENCIES = ${JSON.stringify(sorted(manifestDependencies), null, 2)} as const satisfies Record<string, readonly string[]>;
 
 export const HOST_CAPABILITY_CATEGORIES = ${JSON.stringify(sorted(capabilities), null, 2)} as const satisfies Record<
     string,

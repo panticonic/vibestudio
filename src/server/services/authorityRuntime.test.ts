@@ -49,7 +49,8 @@ describe("authority runtime", () => {
         harness: {
           repoPath: "workers/system-test-runner",
           effectiveVersion,
-          principal: `code:workers/system-test-runner@${executionDigest}`,
+          principal: `code:workers/system-test-runner@${effectiveVersion}`,
+          executionDigest,
         },
         eval: {
           runId: "system-test-runner:self-development:case-1",
@@ -247,7 +248,7 @@ describe("authority runtime", () => {
 
     expect(resolved.context.authorizingOrigin).toEqual({
       kind: "code",
-      principal: `code:panels/danger@${digest}`,
+      principal: `code:panels/danger@ev-danger`,
     });
   });
 
@@ -309,7 +310,7 @@ describe("authority runtime", () => {
         kind: "exact",
         key: directAuthorityAudience("workers/target", "TargetDO", "object-1"),
       },
-      subject: `code:workers/example@${digest}`,
+      subject: `code:workers/example@ev-1`,
       constraints: { lineageAtConsent: [] },
       issuedBy: "user:u1",
       provenance: "acquisition",
@@ -341,7 +342,7 @@ describe("authority runtime", () => {
       now: 100,
     });
     const capability = directAuthorityCapability("chatOp");
-    expect(attestation.context.executingCode?.principal).toBe(`code:workers/example@${digest}`);
+    expect(attestation.context.executingCode?.principal).toBe("code:workers/example@ev-1");
     expect(
       evaluateAuthority({
         context: attestation.context,
@@ -478,7 +479,7 @@ describe("authority runtime", () => {
 
     expect(resolved.context.authorizingOrigin).toEqual({
       kind: "code",
-      principal: `code:workers/agent-worker@${digest}`,
+      principal: `code:workers/agent-worker@ev-agent`,
     });
     expect(resolved.context.agentBinding?.channelId).toBe("channel-agent");
     expect(resolved.context.contextIntegrity?.class).toBe("not-applicable");
@@ -611,11 +612,10 @@ describe("authority runtime", () => {
       workspaceId: "ws-1",
       workspaceMember: true,
       sessionId: "s-1",
-      grantCode: false,
       now: 100,
     });
     const capability = directAuthorityCapability("getCookies");
-    expect(attestation.context.executingCode?.principal).toBe(`code:product/eval@${digest}`);
+    expect(attestation.context.executingCode?.principal).toBe("code:product/eval@ev-1");
     expect(
       evaluateAuthority({
         context: attestation.context,
@@ -665,6 +665,84 @@ describe("authority runtime", () => {
         now: 101,
       })
     ).toMatchObject({ allowed: false, code: "approval-required" });
+  });
+
+  it("lets verified task descendants share a task grant without sharing sessions", () => {
+    const capability = "workspace-service:taskflow-store";
+    const resourceKey = "workspace-service:taskflow-store";
+    const taskAuthority = "task:closure-one" as const;
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-task-closure-")),
+    });
+    grantStore.issue({
+      effect: "allow",
+      capability,
+      resource: { kind: "exact", key: resourceKey },
+      subject: taskAuthority,
+      constraints: { lineageAtConsent: ["none"] },
+      issuedBy: "user:alice",
+      provenance: "acquisition",
+      scope: "task",
+      createdAt: 100,
+    });
+    const descendant = {
+      ...createVerifiedCaller("panel:taskflow", "panel", {
+        callerId: "panel:taskflow",
+        callerKind: "panel",
+        repoPath: "panels/taskflow",
+        effectiveVersion: "ev-1",
+        executionDigest: digest,
+        requested: [{ capability, resource: { kind: "exact", key: resourceKey } }],
+      }),
+      taskAuthority,
+    };
+    const resolved = authorizeVerifiedCaller(descendant, {
+      workspaceId: "ws-1",
+      workspaceMember: true,
+      sessionId: "panel-session-not-the-agent-session",
+      audience: "service:workspace-service",
+      capability,
+      resourceKey,
+      grantStore,
+      now: 101,
+    });
+    expect(
+      evaluateAuthority({
+        context: resolved.context,
+        requirement: requirementForPrincipals(["code"], capability),
+        resourceKey,
+        grants: resolved.grants,
+        now: 101,
+      })
+    ).toMatchObject({ allowed: true });
+
+    const unrelated = authorizeVerifiedCaller(
+      {
+        ...descendant,
+        runtime: { id: "panel:unrelated", kind: "panel" },
+        taskAuthority: undefined,
+      },
+      {
+        workspaceId: "ws-1",
+        workspaceMember: true,
+        sessionId: "another-session",
+        audience: "service:workspace-service",
+        capability,
+        resourceKey,
+        grantStore,
+        now: 101,
+      }
+    );
+    expect(
+      evaluateAuthority({
+        context: unrelated.context,
+        requirement: requirementForPrincipals(["code"], capability),
+        resourceKey,
+        grants: unrelated.grants,
+        now: 101,
+      })
+    ).toMatchObject({ allowed: false, code: "approval-required" });
+    grantStore.close();
   });
 
   it("does not give the workspace-source worker discretionary service authority", () => {

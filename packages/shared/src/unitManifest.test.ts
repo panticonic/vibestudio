@@ -37,6 +37,19 @@ describe("validateUnitManifest", () => {
     ).not.toThrow();
   });
 
+  it("requires extension sourcemaps without prescribing their storage format", () => {
+    expect(() =>
+      validateUnitManifest(
+        extensionUnitManifestDescriptor,
+        {
+          sourcemap: false,
+          extension: { activationEvents: ["onInvoke"], methodAuthority: {} },
+        },
+        { unitName: "@workspace-extensions/no-maps" }
+      )
+    ).toThrow(/must enable sourcemaps/);
+  });
+
   it("requires a closed-world extension method authority declaration", () => {
     expect(() =>
       validateUnitManifest(

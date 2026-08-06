@@ -15,7 +15,8 @@ import {
 
 const RESOURCE = "workspace:ws-1/repo:projects/vibestudio";
 const user = "user:alice" as const;
-const code = `code:workers/example@${"a".repeat(64)}` as `code:${string}`;
+const codeEv = "a".repeat(64);
+const code = `code:workers/example@${codeEv}` as `code:${string}`;
 const session = "session:s1" as const;
 const mission = `mission:nightly@${"b".repeat(64)}` as `mission:${string}`;
 
@@ -113,6 +114,7 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       workspaceId: "ws-1",
       contextId: "context:s1",
       taskRef: "task:s1",
+      taskAuthority: "task:s1",
       eval: {
         runtimeId: "runtime:eval:s1",
         runId: "run:s1",
@@ -127,7 +129,8 @@ function sessionContext(externalKeys: readonly string[] = []): AuthorizationCont
       harness: {
         principal: code,
         repoPath: "workers/example",
-        effectiveVersion: "ev:test",
+        effectiveVersion: codeEv,
+        executionDigest: "e".repeat(64),
       },
       agentBinding: {
         bindingId: "binding:example",
@@ -499,7 +502,7 @@ describe("compositional authority", () => {
     });
   });
 
-  it("does not accept an altered installed-unit execution digest", () => {
+  it("does not accept an altered installed-unit version", () => {
     const altered = `code:workers/example@${"d".repeat(64)}` as `code:${string}`;
     expect(
       evaluateAuthority({

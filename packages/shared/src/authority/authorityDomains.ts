@@ -1,6 +1,6 @@
 import { HOST_SEMANTIC_CAPABILITY_COPY } from "../hostApprovalCopy.js";
-import { productBuiltinCapabilityCategory } from "../productBuiltinCatalog.generated.js";
 import { generatedHostCapabilityCategory } from "./hostAuthorityCatalog.generated.js";
+import { productBuiltinCategory } from "./productBuiltinIndex.js";
 
 export const AUTHORITY_DOMAINS = {
   files: {
@@ -49,14 +49,13 @@ export interface CapabilityDomain {
 
 export function capabilityDomain(capability: string): CapabilityDomain | null {
   const generated =
-    productBuiltinCapabilityCategory(capability) ?? generatedHostCapabilityCategory(capability);
+    productBuiltinCategory(capability) ?? generatedHostCapabilityCategory(capability);
   if (generated) return generated;
   return (
-    HOST_SEMANTIC_CAPABILITY_COPY.find(
-      ({ prefix }) =>
-        (prefix.endsWith(":") || prefix.endsWith("."))
-          ? capability.startsWith(prefix)
-          : capability === prefix || capability.startsWith(`${prefix}:`)
+    HOST_SEMANTIC_CAPABILITY_COPY.find(({ prefix }) =>
+      prefix.endsWith(":") || prefix.endsWith(".")
+        ? capability.startsWith(prefix)
+        : capability === prefix || capability.startsWith(`${prefix}:`)
     )?.authorityCategory ?? null
   );
 }

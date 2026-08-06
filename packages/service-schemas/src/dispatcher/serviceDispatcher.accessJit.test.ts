@@ -179,8 +179,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
           tier: "gated",
           failure: {
             reasonCode: "approval-required",
-            reason:
-              "code:tests/service-dispatch@0000000000000000000000000000000000000000000000000000000000000000 lacks test:dry.write on test:dry.write",
+            reason: "code:tests/service-dispatch@test lacks test:dry.write on test:dry.write",
             capability: "test:dry.write",
             resourceKey: "test:dry.write",
             remediation: {
@@ -359,7 +358,7 @@ describe("dispatcher: access descriptor + JIT errors", () => {
           failure: {
             reasonCode: "approval-required",
             reason:
-              "code:tests/service-dispatch@0000000000000000000000000000000000000000000000000000000000000000 lacks workspace-service:local on do:workers/local:LocalDO:main",
+              "code:tests/service-dispatch@test lacks workspace-service:local on do:workers/local:LocalDO:main",
             capability: "workspace-service:local",
             resourceKey: "do:workers/local:LocalDO:main",
             remediation: {
@@ -705,5 +704,90 @@ describe("dispatcher: access descriptor + JIT errors", () => {
     await expect(d.dispatch(ctx("worker"), "preauthorized", "act", [])).resolves.toBe("effect");
     expect(request).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * U6 — while a review covering a part is unresolved, that part's calls get one
+ * recoverable error instead of one prompt per method.
+ *
+ * Non-admission produces prompts rather than silence: an unadmitted part's
+ * declared requests reach the evaluator with no grant, return
+ * `approval-required`, and each becomes an acquirable prompt. That is prompt
+ * spam for a question already on screen.
+ */
+describe("a part waiting on a review that is already open", () => {
+  function reviewPendingDispatcher(openReview: { approvalId: string; title: string } | null) {
+    const acquire = vi.fn();
+    const request = vi.fn();
+    const d = createTestServiceDispatcher({
+      methods: {
+        "dry.write": { tier: "gated", capability: "test:dry.write" },
+        "dry.read": { tier: "gated", capability: "test:dry.read" },
+      },
+    });
+    d.setAuthorityResolver(({ caller, capability, resourceKey }) => ({
+      ...testAuthority(caller, capability, resourceKey),
+      grants: [],
+    }));
+    d.setAuthorityAcquirer({ request, acquire, consume: vi.fn(), invalidate: vi.fn() });
+    d.setOpenReviewLookup(() => openReview);
+    d.registerService({
+      name: "dry",
+      authority: { principals: ["code"] },
+      methods: {
+        write: { description: "Write", args: z.tuple([z.string()]) },
+        read: { description: "Read", args: z.tuple([]) },
+      },
+      handler: vi.fn(async () => "effect"),
+    });
+    d.markInitialized();
+    return { d, acquire, request };
+  }
+
+  const openReview = { approvalId: "review-1", title: "what's in your workspace" };
+
+  it("creates no acquisition entry, however many methods it calls", async () => {
+    const { d, acquire, request } = reviewPendingDispatcher(openReview);
+
+    await expect(d.dispatch(ctx("worker"), "dry", "write", ["x"])).rejects.toMatchObject({
+      code: "EREVIEWPENDING",
+    });
+    await expect(d.dispatch(ctx("worker"), "dry", "read", [])).rejects.toMatchObject({
+      code: "EREVIEWPENDING",
+    });
+
+    expect(acquire).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("reports the leaf as denied rather than acquirable when preflighted", async () => {
+    const { d } = reviewPendingDispatcher(openReview);
+    await expect(d.preflightAuthority(ctx("worker"), "dry", "write", ["x"])).resolves.toMatchObject(
+      {
+        decision: "denied",
+        leaves: [{ status: "denied", failure: { reasonCode: "review-pending" } }],
+      }
+    );
+  });
+
+  it("goes back to the ordinary prompt the moment the review resolves", async () => {
+    const { d, request } = reviewPendingDispatcher(null);
+    request.mockReturnValue({
+      acquisitionId: "acq-1",
+      ownerRuntimeId: "t",
+      snapshotDigest: "d",
+      capability: "test:dry.write",
+      resourceKey: "test:dry.write",
+      tier: "gated",
+      cardType: "permission.gated",
+      renderedAction: "write it",
+      pending: false,
+    });
+
+    await expect(d.dispatch(ctx("worker"), "dry", "write", ["x"])).rejects.toMatchObject({
+      code: "EACQUIRE",
+    });
+    expect(request).toHaveBeenCalledOnce();
   });
 });

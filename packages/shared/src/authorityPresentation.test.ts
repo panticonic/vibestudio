@@ -183,6 +183,7 @@ describe("authority request presentation", () => {
             sensitivity: "write",
             resourceType: "native.shell",
             presentation: { domain: "computer", verb: "act" },
+            notability: "headline",
             grantScopes: ["once", "session"],
           },
         },

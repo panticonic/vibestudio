@@ -235,7 +235,7 @@ function validateInlineSourcemap(
 ): void {
   if (record["sourcemap"] === false) {
     throw new UnitManifestError(
-      `${descriptor.label} ${options.unitName} must use inline sourcemaps`,
+      `${descriptor.label} ${options.unitName} must enable sourcemaps`,
       "MANIFEST_SOURCEMAP"
     );
   }

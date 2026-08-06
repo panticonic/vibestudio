@@ -1,6 +1,7 @@
 import type { CapabilityScope, ResourceScope } from "@vibestudio/rpc";
 import type { BuildRecipe, CanonicalBuildValue } from "./execution/identity.js";
 import type { AuthorityDomainId, AuthorityVerb } from "./authority/authorityDomains.js";
+import type { CapabilityNotability } from "./authority/capabilityNotability.js";
 
 export interface UnitAuthorityManifest {
   /**
@@ -25,6 +26,13 @@ export interface UserlandCapabilityDefinition {
   resourceType: string;
   /** Provider-authored classification shown with immutable issuer chrome. */
   presentation: { domain: AuthorityDomainId; verb: AuthorityVerb };
+  /**
+   * Whether a reasonable non-technical person would want to know a part can do
+   * this before adding it. Provider-authored and required: the platform may
+   * promote a definition to `headline`, never demote it
+   * (docs/template-install-unit-approval-ux-plan.md §10, U4).
+   */
+  notability: CapabilityNotability;
   grantScopes: readonly UserlandGrantScope[];
 }
 
@@ -114,7 +122,12 @@ export function parseAuthorityRequests(
       );
     }
     const tier = candidate["tier"] as AuthorityRequestTier;
-    const key = `${capability}\0${tier}\0${JSON.stringify(resource)}\0${JSON.stringify(packages)}`;
+    // Tier is presentation/policy metadata, not a second capability scope.
+    // Allowing the same capability/resource once as gated and once as critical
+    // creates two review rows with one runtime identity and lets clearance
+    // classification select the wrong tier. Package routing is likewise not
+    // part of the runtime grant identity.
+    const key = `${capability}\0${JSON.stringify(resource)}`;
     if (seen.has(key)) throw new Error(`${label}.requests contains a duplicate scope`);
     seen.add(key);
     return {
@@ -174,6 +187,7 @@ export function parseUserlandCapabilities(
       "sensitivity",
       "resourceType",
       "presentation",
+      "notability",
       "grantScopes",
     ]);
     const unknown = Object.keys(candidate).filter((key) => !allowed.has(key));
@@ -243,6 +257,10 @@ export function parseUserlandCapabilities(
     if (domain === "safety") {
       throw new Error(`${entryLabel}.presentation cannot declare the Safety controls domain`);
     }
+    const notability = candidate["notability"];
+    if (notability !== "headline" && notability !== "everyday") {
+      throw new Error(`${entryLabel}.notability must be "headline" or "everyday"`);
+    }
     if (!Array.isArray(candidate["grantScopes"]) || candidate["grantScopes"].length === 0) {
       throw new Error(`${entryLabel}.grantScopes must be a non-empty array`);
     }
@@ -279,6 +297,13 @@ export function parseUserlandCapabilities(
         domain: domain as AuthorityDomainId,
         verb: verb as AuthorityVerb,
       },
+      // Critical or destructive authority is headline whatever the provider
+      // says: the platform promotes, and never lets a receiver fold its own
+      // most alarming power away (§10).
+      notability:
+        tier === "critical" || sensitivity === "destructive"
+          ? "headline"
+          : (notability as CapabilityNotability),
       grantScopes: Object.freeze([...grantScopes].sort() as UserlandGrantScope[]),
     });
   });

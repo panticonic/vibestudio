@@ -1747,23 +1747,15 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "credentials.proxyGitHttp": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.control",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "The transport exposes no Git response before the egress proxy authorizes anonymous network access or one concrete credential and remote",
     },
-    capability: "credential.use",
-    presentation: {
-      title: "Use a connected account with a Git remote",
-      action: "use a connected account with a Git remote",
-      description: "Allows {requesterKind} to use a connected account with a Git remote.",
-      group: "credentials",
-      authorityCategory: {
-        domain: "accounts",
-        verb: "act",
-      },
-    },
+    capability: null,
+    presentation: null,
   },
   "credentials.requestCredentialInput": {
     tier: {
@@ -1787,23 +1779,15 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "credentials.resolveCredential": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.read",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "Credential mediation exposes no credential before the handler authorizes the exact matched credential and use context",
     },
-    capability: "credential.use",
-    presentation: {
-      title: "Use a matching connected account",
-      action: "use a matching connected account",
-      description: "Allows {requesterKind} to use a matching connected account.",
-      group: "credentials",
-      authorityCategory: {
-        domain: "accounts",
-        verb: "act",
-      },
-    },
+    capability: null,
+    presentation: null,
   },
   "credentials.revokeCredential": {
     tier: {
@@ -3554,18 +3538,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "panelRuntime.handoffSlot": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "supervision",
-      family: "panelRuntime.control",
-      rationale:
-        "Idempotently converges a runtime lease onto the entity already committed by the builtin topology owner",
-    },
-    capability: null,
-    presentation: null,
-  },
   "panelRuntime.observeSlot": {
     tier: {
       tier: "open",
@@ -4299,6 +4271,28 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "runtime.recoverExecution": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "runtime.recovery",
+      rationale:
+        "Explicit user recovery of one exact unavailable Durable Object incarnation; expected-digest matching prevents stale actions",
+    },
+    capability: "runtime.execution.recover",
+    presentation: {
+      title: "Recover a runtime execution",
+      action: "recover a runtime execution",
+      description:
+        "Allows {requesterKind} to restore an exact retained execution or explicitly replace one unavailable incarnation.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
   "runtime.reserveEntity": {
     tier: {
       tier: "open",
@@ -4602,6 +4596,26 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "shellApproval.getWorkspaceCreationReviewState": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale: "G5: host infrastructure plumbing; semantic startup-review preparation state",
+    },
+    capability: "approvals.read",
+    presentation: {
+      title: "View requests awaiting your decision",
+      action: "view requests awaiting your decision",
+      description: "Allows {requesterKind} to view requests awaiting your decision.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
+  },
   "shellApproval.listPending": {
     tier: {
       tier: "gated",
@@ -4658,6 +4672,26 @@ export const HOST_AUTHORITY_METHODS = {
       title: "Approve initial workspace access",
       action: "approve initial workspace access",
       description: "Allows {requesterKind} to approve initial workspace access.",
+      group: "approvals",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
+  },
+  "shellApproval.resolveInstallReview": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "grant-authority",
+      family: "shellApproval.read",
+      rationale: "G5: trusted approval plumbing resolving an exact queued install review",
+    },
+    capability: "approvals.decide",
+    presentation: {
+      title: "Add or update parts of this workspace",
+      action: "add or update parts of this workspace",
+      description: "Allows {requesterKind} to answer a queued review of arriving parts.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -5143,6 +5177,30 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "view.createPanel": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "Shell-owned panel creation commits the durable slot and attaches the native view as one host operation",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "view.ensurePanelLoaded": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "Materializes a resident panel on the caller's native host without changing shell layout focus",
+    },
+    capability: null,
+    presentation: null,
+  },
   "view.expandPanelIds": {
     tier: {
       tier: "open",
@@ -5387,6 +5445,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.mutate",
       rationale:
         "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "view.setFocusedPanelId": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.local-panel-state",
+      rationale:
+        "Records the exact shell layout focus without acquiring a lease or emitting a navigation intent",
     },
     capability: null,
     presentation: null,
@@ -5810,7 +5880,16 @@ export const HOST_AUTHORITY_METHODS = {
         "The reserved or active entity incarnation is an input to runtime attestation and caller identity",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.entity.resolveActive": {
     tier: {
@@ -5822,7 +5901,16 @@ export const HOST_AUTHORITY_METHODS = {
         "The active entity incarnation is an input to runtime attestation and caller identity",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.heartbeatRegister": {
     tier: {
@@ -5975,7 +6063,16 @@ export const HOST_AUTHORITY_METHODS = {
       rationale: "Workspace-member panel-index read; no C1-C4 or G1-G5 rule applies",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.panel.updateTitle": {
     tier: {
@@ -6008,7 +6105,16 @@ export const HOST_AUTHORITY_METHODS = {
         "Exact durable slot/history/entity join used to attest the active panel identity and context",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.panelTree.page": {
     tier: {
@@ -6020,7 +6126,16 @@ export const HOST_AUTHORITY_METHODS = {
         "Bounded durable parent/child and ownership projection from the builtin slot identity authority",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.panelTree.path": {
     tier: {
@@ -6032,7 +6147,16 @@ export const HOST_AUTHORITY_METHODS = {
         "Bounded durable ancestry projection used to preserve the exact slot ownership and context boundary",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.panelTree.rootGroups": {
     tier: {
@@ -6044,7 +6168,16 @@ export const HOST_AUTHORITY_METHODS = {
         "Bounded durable ownership census over the builtin slot topology used to select an exact account forest",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.panelTree.search": {
     tier: {
@@ -6056,7 +6189,16 @@ export const HOST_AUTHORITY_METHODS = {
         "Exact typed proxy to the builtin topology owner for one bounded indexed presentation query",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.slot.close": {
     tier: {
@@ -6192,7 +6334,16 @@ export const HOST_AUTHORITY_METHODS = {
         "The stable slot-to-entity/context binding is an input to caller ancestry and context-boundary enforcement",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.slot.historyEntry": {
     tier: {
@@ -6204,7 +6355,16 @@ export const HOST_AUTHORITY_METHODS = {
         "The exact stored destination context is an input to context-boundary enforcement before history selection",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.slot.historyRelative": {
     tier: {
@@ -6216,7 +6376,16 @@ export const HOST_AUTHORITY_METHODS = {
         "Exact typed proxy to the builtin topology owner for one bounded adjacent-history read",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.slot.move": {
     tier: {
@@ -6249,7 +6418,16 @@ export const HOST_AUTHORITY_METHODS = {
         "The entity-to-slot binding determines runtime ancestry and the context-boundary target",
     },
     capability: "workspace.runtime-state.inspect",
-    presentation: null,
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
   },
   "workspace-state.slot.updateCurrentStateArgs": {
     tier: {
@@ -6554,6 +6732,48 @@ export const HOST_AUTHORITY_METHODS = {
   },
 } as const satisfies Record<string, GeneratedHostAuthorityMethod>;
 
+export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
+  "browserEnvironment.cancelDownload": ["service:browserEnvironment.cancelDownload"],
+  "browserEnvironment.cancelImportRead": ["service:browserEnvironment.cancelImportRead"],
+  "browserEnvironment.flushCookieProjection": ["service:browserEnvironment.flushCookieProjection"],
+  "browserEnvironment.getCookieProjectionDiagnostics": [
+    "service:browserEnvironment.getCookieProjectionDiagnostics",
+  ],
+  "browserEnvironment.getImportHost": ["service:browserEnvironment.getImportHost"],
+  "browserEnvironment.listDownloads": ["service:browserEnvironment.listDownloads"],
+  "browserEnvironment.listImportOpenTabs": ["service:browserEnvironment.listImportOpenTabs"],
+  "browserEnvironment.listImportSources": ["service:browserEnvironment.listImportSources"],
+  "browserEnvironment.nextImportFrame": ["service:browserEnvironment.nextImportFrame"],
+  "browserEnvironment.openDownload": ["service:browserEnvironment.openDownload"],
+  "browserEnvironment.pauseDownload": ["service:browserEnvironment.pauseDownload"],
+  "browserEnvironment.previewImportSource": ["service:browserEnvironment.previewImportSource"],
+  "browserEnvironment.resumeDownload": ["service:browserEnvironment.resumeDownload"],
+  "browserEnvironment.revealDownload": ["service:browserEnvironment.revealDownload"],
+  "browserEnvironment.startImportRead": ["service:browserEnvironment.startImportRead"],
+  "corsApproval.authorize": ["network.response.read"],
+  "externalOpen.openExternal": ["external.open"],
+  "panelCdp.consoleHistory": ["context.boundary"],
+  "panelCdp.getCdpEndpoint": ["context.boundary"],
+  "panelCdp.screenshot": ["context.boundary"],
+  "panelCdp.stop": ["context.boundary"],
+  "reviewedClosure.activate": ["reviewed-closure.activate"],
+  "runtime.cloneContext": ["context.boundary"],
+  "runtime.createContext": ["context.boundary"],
+  "runtime.createEntity": ["context.boundary"],
+  "runtime.createSubagentContext": ["context.boundary"],
+  "runtime.destroyContext": ["context.boundary"],
+  "runtime.reserveEntity": ["context.boundary"],
+  "runtime.retireEntity": ["context.boundary"],
+  "workerdInspector.getEndpoint": ["runtime.inspect"],
+  "workspace-state.panel.updateTitle": ["context.boundary"],
+  "workspace-state.slot.close": ["context.boundary"],
+  "workspace-state.slot.commitPreparedNavigation": ["context.boundary"],
+  "workspace-state.slot.create": ["context.boundary"],
+  "workspace-state.slot.move": ["context.boundary"],
+  "workspace-state.slot.updateCurrentStateArgs": ["context.boundary"],
+  "workspace.applyPreparedConfig": ["workspace.config.apply"],
+} as const satisfies Record<string, readonly string[]>;
+
 export const HOST_CAPABILITY_CATEGORIES = {
   "account-providers.configure": {
     domain: "accounts",
@@ -6655,10 +6875,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "files",
     verb: "act",
   },
-  "credential.use": {
-    domain: "accounts",
-    verb: "act",
-  },
   "credentials.audit.read": {
     domain: "safety",
     verb: "see",
@@ -6755,6 +6971,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "safety",
     verb: "manage",
   },
+  "runtime.execution.recover": {
+    domain: "automation",
+    verb: "manage",
+  },
   "runtime.inspect": {
     domain: "computer",
     verb: "see",
@@ -6814,6 +7034,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "workspace.members.remove": {
     domain: "people",
     verb: "manage",
+  },
+  "workspace.runtime-state.inspect": {
+    domain: "automation",
+    verb: "see",
   },
   "workspace.runtime-state.manage": {
     domain: "automation",
@@ -7099,16 +7323,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "act",
     },
   },
-  "credential.use": {
-    title: "Use a connected account with a Git remote",
-    action: "use a connected account with a Git remote",
-    description: "Allows {requesterKind} to use a connected account with a Git remote.",
-    group: "credentials",
-    authorityCategory: {
-      domain: "accounts",
-      verb: "act",
-    },
-  },
   "credentials.audit.read": {
     title: "View connected-account activity",
     action: "view connected-account activity",
@@ -7352,6 +7566,17 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "manage",
     },
   },
+  "runtime.execution.recover": {
+    title: "Recover a runtime execution",
+    action: "recover a runtime execution",
+    description:
+      "Allows {requesterKind} to restore an exact retained execution or explicitly replace one unavailable incarnation.",
+    group: "runtime",
+    authorityCategory: {
+      domain: "automation",
+      verb: "manage",
+    },
+  },
   "runtime.inspect": {
     title: "Inspect workspace runtimes",
     action: "inspect workspace runtimes",
@@ -7502,6 +7727,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "people",
       verb: "manage",
+    },
+  },
+  "workspace.runtime-state.inspect": {
+    title: "Inspect running workspace services",
+    action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+    description: "Read the current structure and status of running workspace services",
+    group: "workspace",
+    authorityCategory: {
+      domain: "automation",
+      verb: "see",
     },
   },
   "workspace.runtime-state.manage": {

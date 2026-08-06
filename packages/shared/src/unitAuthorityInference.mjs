@@ -187,29 +187,6 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
  * an implementation module, these are charged only at actual call sites in the
  * executable module graph.
  */
-export function inferTypedWorkspaceEffects(source) {
-  const effects = new Set();
-  const methodEffects = new Map([["removeMember", "channel.members.remove"]]);
-  for (const scriptKind of [ts.ScriptKind.TS, ts.ScriptKind.TSX]) {
-    const parsed = ts.createSourceFile(
-      scriptKind === ts.ScriptKind.TS ? "typed-effects.ts" : "typed-effects.tsx",
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      scriptKind
-    );
-    const visit = (node) => {
-      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-        const effect = methodEffects.get(node.expression.name.text);
-        if (effect) effects.add(effect);
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(parsed);
-  }
-  return effects;
-}
-
 /**
  * EventsClient selects its service name in the constructor and performs the
  * eventual RPC through a dynamic method variable. Infer that typed wrapper at
@@ -439,6 +416,52 @@ export function inferExtensionContextCapabilities(source, hostCapabilities) {
         .sort()
         .join(", ")}`
     );
+  }
+
+  return capabilities;
+}
+
+/**
+ * Infer the transport-level authority effects visible in one executable module
+ * closure. Callers map `service:<service>.<method>` through the reviewed host
+ * catalog and then compare the resulting semantic effects with the unit's
+ * explicit manifest. Keeping the syntactic recognition here gives checkout
+ * audits and exact-state builds one inference implementation.
+ */
+export function inferUnitTransportCapabilities(
+  source,
+  { hostCapabilities, serviceMethods }
+) {
+  const capabilities = new Set(["context.boundary"]);
+
+  for (const capability of inferExtensionContextCapabilities(source, hostCapabilities)) {
+    capabilities.add(capability);
+  }
+  for (const capability of inferHostedRuntimeCapabilities(source, hostCapabilities)) {
+    capabilities.add(capability);
+  }
+  for (const capability of hostCapabilities) {
+    const method = capability.slice("service:".length);
+    if (
+      source.includes(`"${method}"`) ||
+      source.includes(`'${method}'`) ||
+      source.includes(`\`${method}\``)
+    ) {
+      capabilities.add(capability);
+    }
+  }
+  for (const capability of inferEventsClientCapabilities(source, serviceMethods)) {
+    capabilities.add(capability);
+  }
+  for (const capability of inferTypedServiceClientCapabilities(source, hostCapabilities)) {
+    capabilities.add(capability);
+  }
+
+  for (const match of source.matchAll(
+    /(?:services|runtime\.services)\.([A-Za-z][\w-]*)\.([A-Za-z_$][\w$]*)/g
+  )) {
+    const capability = `service:${match[1]}.${match[2]}`;
+    if (hostCapabilities.has(capability)) capabilities.add(capability);
   }
 
   return capabilities;

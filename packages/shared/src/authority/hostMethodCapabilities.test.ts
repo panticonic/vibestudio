@@ -5,11 +5,11 @@ import {
 } from "./hostAuthorityCatalog.generated.js";
 
 describe("host method capability projection", () => {
-  it("keeps proxyFetch as an open transport instead of a generic credential prompt", () => {
-    expect(generatedHostMethodAuthority("credentials.proxyFetch")?.tier.tier).toBe("open");
-    expect(generatedHostMethodAuthority("credentials.proxyFetch")?.capability).toBeNull();
-    expect(generatedHostCapabilityMethods("credential.use")).not.toContain(
-      "credentials.proxyFetch"
-    );
+  it("keeps credential-aware transports open until they resolve a concrete use", () => {
+    for (const method of ["credentials.proxyFetch", "credentials.proxyGitHttp"]) {
+      expect(generatedHostMethodAuthority(method)?.tier.tier).toBe("open");
+      expect(generatedHostMethodAuthority(method)?.capability).toBeNull();
+      expect(generatedHostCapabilityMethods("credential.use")).not.toContain(method);
+    }
   });
 });

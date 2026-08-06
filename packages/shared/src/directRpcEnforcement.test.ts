@@ -262,6 +262,58 @@ describe("directRpcDenial", () => {
     ).toBe("EACCES");
   });
 
+  it("evaluates the live target against its own invocation-bound grant", () => {
+    const capability = "workspace-service:notes";
+    const methodDigest = "m".repeat(64);
+    const targetDigest = "t".repeat(64);
+    const dynamicContext: AuthorizationContext = {
+      ...context,
+      executingCode: {
+        ...context.executingCode!,
+        requested: [{ capability, resource: { kind: "exact", key: "do:x" } }],
+      },
+    };
+    const dynamic = attestation({
+      capability,
+      context: dynamicContext,
+      invocationDigest: methodDigest,
+      targetInvocationDigest: targetDigest,
+      targetRequirement: { kind: "capability", principal: "code", capability },
+      targetCapability: capability,
+      targetTier: "gated",
+      grants: [
+        {
+          subject: code,
+          effect: "allow",
+          capability,
+          resource: { kind: "exact", key: "do:x" },
+          constraints: { invocationDigest: targetDigest },
+          issuedBy: "user:test",
+          provenance: "acquisition",
+          createdAt: 1,
+        },
+      ],
+    });
+    expect(
+      directRpcDenial({
+        kind: "call",
+        method: "read",
+        caller: null,
+        attestation: dynamic,
+        declaration: {
+          tier: "open",
+          principals: ["code"],
+          sensitivity: "read",
+          effect: { kind: "open" },
+        },
+        audience: "do:x",
+        resourceKey: "do:x",
+        capability,
+        now: 100,
+      })
+    ).toBeNull();
+  });
+
   it("binds a critical receiver confirmation to the host-stamped invocation digest", () => {
     const capability = "channel.members.remove";
     const invocationDigest = "d".repeat(64);

@@ -31,6 +31,7 @@ export function createInvocationSnapshot(input: InvocationSnapshotInput): Invoca
     callerPrincipal: input.callerPrincipal,
     sessionId: input.sessionId,
     ...(input.taskRef ? { taskRef: input.taskRef } : {}),
+    ...(input.taskAuthority ? { taskAuthority: input.taskAuthority } : {}),
     ...(input.agentBindingId ? { agentBindingId: input.agentBindingId } : {}),
     ...(input.agentName ? { agentName: input.agentName } : {}),
     ...(input.lineageClasses ? { lineageClasses: [...input.lineageClasses] } : {}),
@@ -68,6 +69,7 @@ export function invocationSnapshotDigest(snapshot: InvocationSnapshot): string {
     argsDigest: snapshot.argsDigest,
     preparedStateDigest: snapshot.preparedStateDigest,
     taskRef: snapshot.taskRef ?? null,
+    taskAuthority: snapshot.taskAuthority ?? null,
     agentBindingId: snapshot.agentBindingId ?? null,
     lineageClasses: snapshot.lineageClasses ?? [],
     irreversible: snapshot.irreversible ?? false,
@@ -77,5 +79,8 @@ export function invocationSnapshotDigest(snapshot: InvocationSnapshot): string {
     snippetDigest: snapshot.snippetDigest,
     codeLineageClass: snapshot.codeLineage.class,
   };
-  return createHash("sha256").update(DOMAIN, "utf8").update(canonicalJson(digestFields), "utf8").digest("hex");
+  return createHash("sha256")
+    .update(DOMAIN, "utf8")
+    .update(canonicalJson(digestFields), "utf8")
+    .digest("hex");
 }

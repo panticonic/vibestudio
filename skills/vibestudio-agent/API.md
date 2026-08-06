@@ -127,7 +127,7 @@ Authority principals: `code`, `host`, `user`
 | `build.inspectExecution` | Explain one immutable execution identity, its authoritative owners, and whether its artifact and source closure remain reconstructible. |
 | `build.getAboutPages` | List available about pages for the launcher UI. |
 | `build.hasUnit` | Whether a build unit with this name exists in the workspace graph. |
-| `build.getPanelMetadata` | Launcher metadata (source path, title, description, launcher visibility) for a panel unit, or null if the name is absent or not a panel. |
+| `build.getPanelMetadata` | Launcher metadata for a panel unit resolved from the caller-selected exact workspace ref, or null if absent or not a panel. |
 | `build.listSkills` | List available workspace skill packages that can be loaded via the eval imports parameter. |
 
 ## `contentTrust`
@@ -381,7 +381,6 @@ Authority principals: `host`, `user`
 | `panelRuntime.observeSlot` | Observe the active runtime lease and latest host report for one panel slot. |
 | `panelRuntime.acquire` | Acquire the runtime lease for a panel entity. Succeeds for the current holder or an unleased entity; otherwise returns acquired:false with the existing lease. |
 | `panelRuntime.takeOver` | Forcibly take over a panel entity's runtime lease, revoking and closing any conflicting holder's connection. |
-| `panelRuntime.handoffSlot` | Move an existing slot lease from its previous runtime entity to the exact entity currently committed in workspace topology. |
 | `panelRuntime.ensureSlot` | Ensure that the current runtime entity for a slot has a presentation host lease. |
 | `panelRuntime.unloadSlot` | Release the active presentation lease for a panel slot while preserving its runtime entity and topology. |
 | `panelRuntime.release` | Release the lease for a panel entity held by the given connection id. No-op unless the connection matches the current holder. |
@@ -437,6 +436,7 @@ Authority principals: `code`, `host`, `user`
 | `runtime.reserveEntity` | Reserve a code-backed entity's stable durable identity and context without waiting for its immutable runtime image. Omitted contextId deterministically creates a fresh lifecycle-owned context; an explicit contextId shares that existing context. Reserved entities are non-executable until activateReservedEntity completes. |
 | `runtime.activateReservedEntity` | Prepare and atomically activate the immutable runtime image for a previously reserved code-backed entity. |
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
+| `runtime.recoverExecution` | Recover one unavailable Durable Object execution. restore-exact never changes its sealed identity; replace-incarnation atomically selects code from the entity's current semantic context while preserving its durable storage. |
 | `runtime.listEntities` | List exact live runtime instances (id, kind, source, key, contextId, title, createdAt). For declared source and build readiness use build.listUnits. |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
 | `runtime.listContexts` | List durable semantic workspace contexts, optionally restricted to an exact id prefix. This is domain-neutral workflow discovery; context contents remain subject to their ordinary VCS read authority. |
@@ -481,11 +481,13 @@ Authority principals: `code`, `host`, `user`
 |--------|-------------|
 | `shellApproval.resolve` | Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request. |
 | `shellApproval.resolveMissionReview` | Approve an exact pending mission closure with the selected new authority rows, or leave it unapproved. |
-| `shellApproval.resolveBootstrap` | Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval. |
+| `shellApproval.resolveInstallReview` | Accept a pending install review, allowing the selected parts and permissions now, or cancel it. |
+| `shellApproval.resolveBootstrap` | Convergently resolve a snapshot of pending startup-app approvals. IDs already settled by an earlier partial attempt are reported as not pending so the remaining decisions can continue. |
 | `shellApproval.submitClientConfig` | Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request. |
 | `shellApproval.submitCredentialInput` | Submit the user-entered credential/secret field values for a pending approval, fulfilling its credential-input request. |
 | `shellApproval.submitSecretInput` | Submit the user-entered secret field values for a pending secret-input approval, fulfilling its feedback-form request. |
 | `shellApproval.listPending` | List the approvals currently awaiting a decision, used to rehydrate the consent approval bar on mount. |
+| `shellApproval.getWorkspaceCreationReviewState` | Return the host-owned preparation state for the workspace creation review without waiting for a human decision. |
 
 ## `shellPresence`
 
@@ -623,7 +625,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace-state.entity.resolve` | Resolve an entity record by id, including a preparing reservation. |
 | `workspace-state.slot.resolveByEntity` | Resolve the OPEN slot id whose current entity is the given runtime-entity (nav) id, or null. Durable nav→slot mapping used to nest launches under the owning panel's tree slot. |
 | `workspace-state.slot.create` | Create a new slot row. |
-| `workspace-state.slot.commitPreparedNavigation` | Atomically append, replace, or select history and swap current to a prepared panel incarnation. |
+| `workspace-state.slot.commitPreparedNavigation` | Commit prepared panel history and publish the slot's desired runtime entity for presentation reconciliation. |
 | `workspace-state.slot.updateCurrentStateArgs` | Mutate the stateArgs for a slot's current history entry. |
 | `workspace-state.slot.move` | Atomically reparent a slot and place it using stable sibling anchors. |
 | `workspace-state.slot.close` | Atomically close a subtree and enqueue its runtime cleanup without materializing descendants. |

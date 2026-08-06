@@ -1356,7 +1356,7 @@
     }
   },
   "listMessageTypes": {
-    "description": "List active custom message-type definitions for a channel.",
+    "description": "List active stored custom message-type definitions for a channel. Reference-class fields are hydrated and validated by PubSub before semantic use.",
     "access": {
       "sensitivity": "read"
     },
@@ -1395,90 +1395,45 @@
             ]
           },
           "source": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "enum": [
-                      "code"
-                    ]
-                  },
-                  "code": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "code"
-                ],
-                "additionalProperties": false
+            "type": "object",
+            "properties": {
+              "protocol": {
+                "type": "string",
+                "enum": [
+                  "vibestudio.blob-ref.v1"
+                ]
               },
-              {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "enum": [
-                      "file"
-                    ]
-                  },
-                  "path": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "path"
-                ],
-                "additionalProperties": false
+              "digest": {
+                "type": "string",
+                "minLength": 1
               },
-              {
-                "type": "object",
-                "properties": {
-                  "protocol": {
-                    "type": "string",
-                    "enum": [
-                      "vibestudio.blob-ref.v1"
-                    ]
-                  },
-                  "digest": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "size": {
-                    "type": "integer",
-                    "minimum": 0
-                  },
-                  "encoding": {
-                    "type": "string",
-                    "enum": [
-                      "json",
-                      "text"
-                    ]
-                  },
-                  "originalBytes": {
-                    "type": "integer",
-                    "minimum": 0
-                  }
-                },
-                "required": [
-                  "protocol",
-                  "digest",
-                  "size",
-                  "encoding",
-                  "originalBytes"
-                ],
-                "additionalProperties": false
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "encoding": {
+                "type": "string",
+                "enum": [
+                  "json",
+                  "text"
+                ]
+              },
+              "originalBytes": {
+                "type": "integer",
+                "minimum": 0
               }
-            ]
+            },
+            "required": [
+              "protocol",
+              "digest",
+              "size",
+              "encoding",
+              "originalBytes"
+            ],
+            "additionalProperties": false
           },
           "imports": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
+            "$ref": "#/items/properties/source"
           },
           "stateSchema": {
             "type": "object",
@@ -1540,7 +1495,7 @@
     }
   },
   "getMessageType": {
-    "description": "Get one custom message-type definition from a channel registry.",
+    "description": "Get one stored custom message-type definition from a channel registry. PubSub owns its hydration boundary.",
     "access": {
       "sensitivity": "read"
     },
@@ -1581,90 +1536,45 @@
           ]
         },
         "source": {
-          "anyOf": [
-            {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "enum": [
-                    "code"
-                  ]
-                },
-                "code": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "code"
-              ],
-              "additionalProperties": false
+          "type": "object",
+          "properties": {
+            "protocol": {
+              "type": "string",
+              "enum": [
+                "vibestudio.blob-ref.v1"
+              ]
             },
-            {
-              "type": "object",
-              "properties": {
-                "type": {
-                  "type": "string",
-                  "enum": [
-                    "file"
-                  ]
-                },
-                "path": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "path"
-              ],
-              "additionalProperties": false
+            "digest": {
+              "type": "string",
+              "minLength": 1
             },
-            {
-              "type": "object",
-              "properties": {
-                "protocol": {
-                  "type": "string",
-                  "enum": [
-                    "vibestudio.blob-ref.v1"
-                  ]
-                },
-                "digest": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "size": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "encoding": {
-                  "type": "string",
-                  "enum": [
-                    "json",
-                    "text"
-                  ]
-                },
-                "originalBytes": {
-                  "type": "integer",
-                  "minimum": 0
-                }
-              },
-              "required": [
-                "protocol",
-                "digest",
-                "size",
-                "encoding",
-                "originalBytes"
-              ],
-              "additionalProperties": false
+            "size": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "encoding": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text"
+              ]
+            },
+            "originalBytes": {
+              "type": "integer",
+              "minimum": 0
             }
-          ]
+          },
+          "required": [
+            "protocol",
+            "digest",
+            "size",
+            "encoding",
+            "originalBytes"
+          ],
+          "additionalProperties": false
         },
         "imports": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
+          "$ref": "#/properties/source"
         },
         "stateSchema": {
           "type": "object",

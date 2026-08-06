@@ -493,6 +493,38 @@ export class CapabilityGrantStore {
     ).map(rowToGrant);
   }
 
+  /**
+   * Roll back an install-clearance preparation. Newly issued grants are
+   * revoked, while grants retired from the outgoing version are restored.
+   * Both operations share one SQLite transaction so a failed publication does
+   * not leave a half-restored authority set.
+   */
+  rollbackInstallClearance(input: {
+    issuedGrantIds: readonly string[];
+    restoreRevokedGrantIds: readonly string[];
+    retiredAt?: number;
+    now?: number;
+  }): void {
+    if (input.issuedGrantIds.length === 0 && input.restoreRevokedGrantIds.length === 0) return;
+    const now = input.now ?? Date.now();
+    this.transaction(() => {
+      for (const grantId of input.issuedGrantIds) {
+        this.db
+          .prepare("UPDATE authority_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+          .run(now, grantId);
+      }
+      for (const grantId of input.restoreRevokedGrantIds) {
+        this.db
+          .prepare(
+            input.retiredAt === undefined
+              ? "UPDATE authority_grants SET revoked_at = NULL WHERE id = ?"
+              : "UPDATE authority_grants SET revoked_at = NULL WHERE id = ? AND revoked_at = ?"
+          )
+          .run(...(input.retiredAt === undefined ? [grantId] : [grantId, input.retiredAt]));
+      }
+    });
+  }
+
   listAgentAuthorityGrants(agentBindingId?: string): AuthorityGrant[] {
     const subject = agentBindingId ? `agent:${agentBindingId}` : null;
     const rows = subject
@@ -648,11 +680,12 @@ export class CapabilityGrantStore {
     return changed;
   }
 
-  private transaction(work: () => void): void {
+  transaction<T>(work: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      work();
+      const result = work();
       this.db.exec("COMMIT");
+      return result;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -665,7 +698,7 @@ type EnvelopeRuleRow = Record<string, SQLOutputValue>;
 
 function rowToGrant(row: GrantRow): AuthorityGrant {
   const subject = String(row["subject"]) as AuthorityGrantSubject;
-  if (!/^(host|user|code|session|mission|agent):/.test(subject))
+  if (!/^(host|user|code|session|mission|agent|task):/.test(subject))
     throw new Error(`Invalid grant subject ${subject}`);
   const lineage = JSON.parse(String(row["lineage_at_consent"])) as unknown;
   if (!Array.isArray(lineage) || !lineage.every((value) => typeof value === "string")) {
@@ -741,7 +774,7 @@ function rowToLock(row: GrantRow): AuthorityLock {
 
 function validateGrantInput(input: IssueAuthorityGrantInput): void {
   if (!input.capability.trim()) throw new Error("Grant capability is required");
-  if (!/^(host|user|code|session|mission|agent):.+/.test(input.subject))
+  if (!/^(host|user|code|session|mission|agent|task):.+/.test(input.subject))
     throw new Error("Grant subject is not canonical");
   if (input.provenance === "critical-confirmation") {
     if (

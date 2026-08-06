@@ -1,10 +1,22 @@
 {
   "version": 1,
-  "censusDigest": "sha256:4707064fea321194b6a9ecd5ca371d8cf0746f238c57e089c78e04790afec6f1",
+  "censusDigest": "sha256:7d049c4c9b1709d52ab3b5ed016d078d21c39254d41e69e1bc4c79af43eef523",
   "decisions": {
+    "host:credentials.resolveCredential": {
+      "review": "handler-owned-exact-credential-use-approval",
+      "change": "Opens only the mediation entrypoint and removes its redundant generic credential.use dispatcher prompt. The handler still matches the concrete credential and requires the existing exact credential, caller, use, audience, workspace, and grant-scope authorization before returning any credential summary or material."
+    },
     "host:view.getPresentation": {
       "review": "trusted-chrome-local-panel-presentation-read",
       "change": "Adds an open, read-only lookup of one exact panel's Electron-local presentation projection. The service handler additionally requires the trusted panel-hosting app capability; it exposes no cross-panel mutation or server lifecycle authority."
+    },
+    "host:view.ensurePanelLoaded": {
+      "review": "trusted-chrome-local-panel-materialization",
+      "change": "Adds an open, host-local materialization operation for one exact panel. The service handler requires the trusted panel-hosting app capability and creates the native view without changing layout focus, emitting navigation intent, waiting for visible-slot readiness, or granting cross-panel or server lifecycle authority."
+    },
+    "host:view.setFocusedPanelId": {
+      "review": "trusted-chrome-local-panel-focus-persistence",
+      "change": "Adds an open, host-local write of the shell's exact focused panel id. The service handler requires the trusted panel-hosting app capability and records focus without acquiring a panel lease, loading a view, emitting navigation intent, or waiting for readiness."
     },
     "host:workspace-state.panelTree.page": {
       "review": "bounded-panel-sibling-read",
@@ -135,12 +147,12 @@
       "change": "Allows a verified user to revoke only that user's exact-origin browser grants in the current workspace environment. Code and anonymous principals remain excluded."
     },
     "host:runtime.reserveEntity": {
-      "review": "host-only-buildable-entity-reservation",
-      "change": "Generalizes the existing host-only two-phase panel reservation to every code-backed runtime kind. The receiver derives a deterministic reservation identity from the immutable code execution spec, preserves the declared kind and class, and creates no active execution before the matching activation call."
+      "review": "caller-owned-buildable-entity-reservation",
+      "change": "Generalizes two-phase reservation to every code-backed runtime kind while binding replay to the original runtime parent or a trusted host. The receiver preserves kind, source, class, context, durable owner, and lifecycle provenance and creates no active execution before activation."
     },
     "host:runtime.activateReservedEntity": {
-      "review": "host-only-sealed-reservation-activation",
-      "change": "Generalizes activation of an existing host-owned reservation to every code-backed runtime kind. The receiver requires an exact match with the reserved kind, class, and source, validates the prepared build digest and authority manifest, then advances that same durable identity through the normal activation lifecycle."
+      "review": "caller-owned-sealed-reservation-activation",
+      "change": "Allows only the reservation owner or trusted host recovery to activate a preparing code-backed identity. The receiver validates kind, source, class, and context; a retry of an already-active identity returns its committed execution without re-preparing mutable caller-supplied ref, environment, or state."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityReserve": {
       "review": "host-only-generic-entity-reservation",
@@ -341,6 +353,18 @@
     "host:developmentClientExecutor.consumeAttestation": {
       "review": "single-use-isolated-child-attestation-read",
       "change": "Lets only the exact bound isolated management shell consume one nonce-bound child runtime receipt. The inbox is short-lived and bounded, and no device credential, artifact path, or self-reported execution digest is returned."
+    },
+    "host:shellApproval.resolveInstallReview": {
+      "review": "install-review-typed-resolution",
+      "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. Same gated approvals.decide capability and same trusted-chrome principals as resolve/resolveMissionReview; the server derives the offerable rows itself and rejects any identity or permission the review did not offer, so a client cannot ask for more than it was shown."
+    },
+    "host:runtime.recoverExecution": {
+      "review": "trusted-exact-runtime-execution-recovery",
+      "change": "Adds gated recovery of one exact active Durable Object execution under the trusted runtime host. Expected execution digests fence stale requests, and the receiver either rematerializes the retained immutable build or performs the explicitly selected replacement strategy without changing durable ownership."
+    },
+    "host:shellApproval.getWorkspaceCreationReviewState": {
+      "review": "bounded-workspace-review-readiness-read",
+      "change": "Adds a read-only projection of whether the host-owned workspace creation review is pending, ready, or resolved. It exposes no approval contents, authority grants, or mutation path and remains under the existing approvals.read capability."
     }
   }
 }

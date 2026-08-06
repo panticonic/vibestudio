@@ -5816,6 +5816,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityAdvanceExecutions",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "entityAdvanceExecutions",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityCleanupComplete",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
@@ -6148,6 +6190,90 @@
       "r3b": {
         "review": "host-only-active-entity-execution-root-census",
         "change": "Adds a host-only bounded read of exact execution identities held by active workspace entities for the mandatory retention provider. It exposes no entity payload and performs no lifecycle mutation."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListPreparing",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "entityListPreparing",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListPreparingByKind",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "entityListPreparingByKind",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -23577,11 +23703,11 @@
       "rpcPlane": "host-service",
       "owner": "credentials",
       "method": "proxyGitHttp",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "secret",
       "mechanismFamily": "credentials.control",
-      "reviewRationale": "G2: credential mediation; §2 default {code, session} family",
+      "reviewRationale": "The transport exposes no Git response before the egress proxy authorizes anonymous network access or one concrete credential and remote",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:credentials.proxyGitHttp"
@@ -23669,11 +23795,11 @@
       "rpcPlane": "host-service",
       "owner": "credentials",
       "method": "resolveCredential",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "secret",
       "mechanismFamily": "credentials.read",
-      "reviewRationale": "G2: credential mediation; §2 default {code, session} family",
+      "reviewRationale": "Credential mediation exposes no credential before the handler authorizes the exact matched credential and use context",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:credentials.resolveCredential"
@@ -23704,8 +23830,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.resolveCredential),allOf(capability(user,service:credentials.resolveCredential),workspace-member),allOf(capability(code,service:credentials.resolveCredential),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "handler-owned-exact-credential-use-approval",
+        "change": "Opens only the mediation entrypoint and removes its redundant generic credential.use dispatcher prompt. The handler still matches the concrete credential and requires the existing exact credential, caller, use, audience, workspace, and grant-scope authorization before returning any credential summary or material."
       },
       "capability": "service:credentials.resolveCredential",
       "parityAssertion": "generated-census:host-authority"
@@ -29750,52 +29876,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:panelRuntime.handoffSlot",
-      "rpcPlane": "host-service",
-      "owner": "panelRuntime",
-      "method": "handoffSlot",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "panelRuntime.control",
-      "reviewRationale": "Idempotently converges a runtime lease onto the entity already committed by the builtin topology owner",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:panelRuntime.handoffSlot"
-      },
-      "authorityPrincipals": [
-        "host",
-        "user",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.handoffSlot),allOf(capability(user,service:panelRuntime.handoffSlot),workspace-member),allOf(capability(code,service:panelRuntime.handoffSlot),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:panelRuntime.handoffSlot",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:panelRuntime.observeSlot",
       "rpcPlane": "host-service",
       "owner": "panelRuntime",
@@ -31282,8 +31362,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:runtime.activateReservedEntity),allOf(capability(user,service:runtime.activateReservedEntity),workspace-member),allOf(capability(code,service:runtime.activateReservedEntity),workspace-member))",
       "r3b": {
-        "review": "host-only-sealed-reservation-activation",
-        "change": "Generalizes activation of an existing host-owned reservation to every code-backed runtime kind. The receiver requires an exact match with the reserved kind, class, and source, validates the prepared build digest and authority manifest, then advances that same durable identity through the normal activation lifecycle."
+        "review": "caller-owned-sealed-reservation-activation",
+        "change": "Allows only the reservation owner or trusted host recovery to activate a preparing code-backed identity. The receiver validates kind, source, class, and context; a retry of an already-active identity returns its committed execution without re-preparing mutable caller-supplied ref, environment, or state."
       },
       "capability": "service:runtime.activateReservedEntity",
       "parityAssertion": "generated-census:host-authority"
@@ -32063,6 +32143,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:runtime.recoverExecution",
+      "rpcPlane": "host-service",
+      "owner": "runtime",
+      "method": "recoverExecution",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "runtime.recovery",
+      "reviewRationale": "Explicit user recovery of one exact unavailable Durable Object incarnation; expected-digest matching prevents stale actions",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:runtime.recoverExecution"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:runtime.recoverExecution),allOf(capability(user,service:runtime.recoverExecution),workspace-member))",
+      "r3b": {
+        "review": "trusted-exact-runtime-execution-recovery",
+        "change": "Adds gated recovery of one exact active Durable Object execution under the trusted runtime host. Expected execution digests fence stale requests, and the receiver either rematerializes the retained immutable build or performs the explicitly selected replacement strategy without changing durable ownership."
+      },
+      "capability": "service:runtime.recoverExecution",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:runtime.reserveEntity",
       "rpcPlane": "host-service",
       "owner": "runtime",
@@ -32102,8 +32227,8 @@
       ],
       "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
       "r3b": {
-        "review": "host-only-buildable-entity-reservation",
-        "change": "Generalizes the existing host-only two-phase panel reservation to every code-backed runtime kind. The receiver derives a deterministic reservation identity from the immutable code execution spec, preserves the declared kind and class, and creates no active execution before the matching activation call."
+        "review": "caller-owned-buildable-entity-reservation",
+        "change": "Generalizes two-phase reservation to every code-backed runtime kind while binding replay to the original runtime parent or a trusted host. The receiver preserves kind, source, class, context, durable owner, and lifecycle provenance and creates no active execution before activation."
       },
       "capability": "service:runtime.reserveEntity",
       "parityAssertion": "generated-census:host-authority"
@@ -33065,6 +33190,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:shellApproval.getWorkspaceCreationReviewState",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "getWorkspaceCreationReviewState",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "G5: host infrastructure plumbing; semantic startup-review preparation state",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellApproval.getWorkspaceCreationReviewState"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:shellApproval.getWorkspaceCreationReviewState),allOf(capability(user,service:shellApproval.getWorkspaceCreationReviewState),workspace-member),allOf(capability(code,service:shellApproval.getWorkspaceCreationReviewState),workspace-member))",
+      "r3b": {
+        "review": "bounded-workspace-review-readiness-read",
+        "change": "Adds a read-only projection of whether the host-owned workspace creation review is pending, ready, or resolved. It exposes no approval contents, authority grants, or mutation path and remains under the existing approvals.read capability."
+      },
+      "capability": "service:shellApproval.getWorkspaceCreationReviewState",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:shellApproval.listPending",
       "rpcPlane": "host-service",
       "owner": "shellApproval",
@@ -33200,6 +33371,52 @@
         "change": null
       },
       "capability": "service:shellApproval.resolveBootstrap",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.resolveInstallReview",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "resolveInstallReview",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "G5: trusted approval plumbing resolving an exact queued install review",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellApproval.resolveInstallReview"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:shellApproval.resolveInstallReview),allOf(capability(user,service:shellApproval.resolveInstallReview),workspace-member),allOf(capability(code,service:shellApproval.resolveInstallReview),workspace-member))",
+      "r3b": {
+        "review": "install-review-typed-resolution",
+        "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. Same gated approvals.decide capability and same trusted-chrome principals as resolve/resolveMissionReview; the server derives the offerable rows itself and rejects any identity or permission the review did not offer, so a client cannot ask for more than it was shown."
+      },
+      "capability": "service:shellApproval.resolveInstallReview",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -34896,6 +35113,96 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:view.createPanel",
+      "rpcPlane": "host-service",
+      "owner": "view",
+      "method": "createPanel",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "panel.control",
+      "reviewRationale": "Shell-owned panel creation commits the durable slot and attaches the native view as one host operation",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:view.createPanel"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:view.createPanel),workspace-member),allOf(capability(code,service:view.createPanel),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:view.createPanel",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:view.ensurePanelLoaded",
+      "rpcPlane": "host-service",
+      "owner": "view",
+      "method": "ensurePanelLoaded",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "panel.control",
+      "reviewRationale": "Materializes a resident panel on the caller's native host without changing shell layout focus",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:view.ensurePanelLoaded"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:view.ensurePanelLoaded),workspace-member),allOf(capability(code,service:view.ensurePanelLoaded),workspace-member))",
+      "r3b": {
+        "review": "trusted-chrome-local-panel-materialization",
+        "change": "Adds an open, host-local materialization operation for one exact panel. The service handler requires the trusted panel-hosting app capability and creates the native view without changing layout focus, emitting navigation intent, waiting for visible-slot readiness, or granting cross-panel or server lifecycle authority."
+      },
+      "capability": "service:view.ensurePanelLoaded",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:view.expandPanelIds",
       "rpcPlane": "host-service",
       "owner": "view",
@@ -35838,6 +36145,51 @@
         "change": null
       },
       "capability": "service:view.setBrowserZoom",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:view.setFocusedPanelId",
+      "rpcPlane": "host-service",
+      "owner": "view",
+      "method": "setFocusedPanelId",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "view.local-panel-state",
+      "reviewRationale": "Records the exact shell layout focus without acquiring a lease or emitting a navigation intent",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:view.setFocusedPanelId"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:view.setFocusedPanelId),workspace-member),allOf(capability(code,service:view.setFocusedPanelId),workspace-member))",
+      "r3b": {
+        "review": "trusted-chrome-local-panel-focus-persistence",
+        "change": "Adds an open, host-local write of the shell's exact focused panel id. The service handler requires the trusted panel-hosting app capability and records focus without acquiring a panel lease, loading a view, emitting navigation intent, or waiting for readiness."
+      },
+      "capability": "service:view.setFocusedPanelId",
       "parityAssertion": "generated-census:host-authority"
     },
     {

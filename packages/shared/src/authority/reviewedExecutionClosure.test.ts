@@ -63,9 +63,9 @@ describe("compiled reviewed-execution exposure", () => {
         providerEv: "c".repeat(64),
       })
     ).toBe(false);
-    expect(
-      compiledExposureNetworkRedirectPolicy(exposure, "https://api.example.test")
-    ).toBe("allow-without-redirects");
+    expect(compiledExposureNetworkRedirectPolicy(exposure, "https://api.example.test")).toBe(
+      "allow-without-redirects"
+    );
     expect(compiledExposureNetworkRedirectPolicy(exposure, "https://other.test")).toBe("deny");
   });
 

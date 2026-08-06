@@ -32,13 +32,7 @@ export interface MissionCharter {
     declaredOrigins: readonly string[];
   };
   model: { modelId: string; params: Record<string, unknown> };
-  declaredLineageClasses: readonly (
-    | "none"
-    | "web"
-    | "email"
-    | "channel-external"
-    | "external"
-  )[];
+  declaredLineageClasses: readonly ("none" | "web" | "email" | "channel-external" | "external")[];
   trigger:
     | { kind: "manual" }
     | { kind: "cron"; cron: string }

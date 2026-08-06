@@ -260,6 +260,7 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
         failure: directRpcInvalidAttestationFailure(reason),
       };
     }
+    const targetInvocationDigest = attestation.targetInvocationDigest ?? invocationDigest;
     const targetDecision = evaluateAuthority({
       context: attestation.context,
       requirement: bindMethodCapability(
@@ -271,7 +272,7 @@ export function directRpcDenial(input: DirectRpcCheckInput): DirectRpcDenial | n
       locks: attestation.locks,
       now,
       tier: attestation.targetTier,
-      invocationDigest,
+      invocationDigest: targetInvocationDigest,
       providerExecutionDigest: attestation.providerExecutionDigest,
     });
     if (!targetDecision.allowed) {

@@ -2,10 +2,8 @@ import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import type { AuthorityRow } from "@vibestudio/shared/authority/authorityRows";
-import {
-  AUTHORITY_DOMAINS,
-  AUTHORITY_VERBS,
-} from "@vibestudio/shared/authority/authorityDomains";
+import { AUTHORITY_DOMAINS, AUTHORITY_VERBS } from "@vibestudio/shared/authority/authorityDomains";
+import { AUTHORITY_ACQUISITION_DECISIONS } from "@vibestudio/shared/approvalContract";
 
 /** Shared authority wire primitives live with the authority service schema so
  * consumers do not create an initialization cycle between build and approval. */
@@ -47,6 +45,10 @@ export const authorityRowSchema = z
         lineageClasses: z.array(z.string()).readonly().optional(),
       })
       .strict(),
+    // A degraded row for a capability with no reviewed presentation. It has to
+    // cross the wire: the surfaces that render it are the ones that must show
+    // it as unknown rather than quietly drop it.
+    unrecognized: z.literal(true).optional(),
     flags: z
       .object({
         lineageTainted: z.boolean().optional(),
@@ -132,7 +134,7 @@ export const authorityMethods = defineServiceMethods({
     returns: z
       .object({
         state: z.enum(["decided", "closed"]),
-        decision: z.enum(["once", "session", "version", "deny"]).optional(),
+        decision: z.enum(AUTHORITY_ACQUISITION_DECISIONS).optional(),
       })
       .strict(),
     authority: EVERY_ORIGIN,

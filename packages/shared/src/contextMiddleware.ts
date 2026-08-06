@@ -23,7 +23,7 @@ export interface ContextScope {
  */
 export async function resolveContextScope(
   contextFolderManager: ContextFolderManager,
-  contextId: string,
+  contextId: string
 ): Promise<ContextScope> {
   const contextRoot = await contextFolderManager.ensureContextFolder(contextId);
   return {

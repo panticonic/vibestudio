@@ -67,6 +67,28 @@ describe("unit authority manifest", () => {
     ]);
   });
 
+  it("rejects one runtime scope declared at two authority tiers", () => {
+    expect(() =>
+      parseUnitAuthorityManifest({
+        requests: [
+          {
+            capability: "workspace.files.write",
+            resource: { kind: "exact", key: "workspace" },
+            tier: "gated",
+            evidence: "exact",
+          },
+          {
+            capability: "workspace.files.write",
+            resource: { kind: "exact", key: "workspace" },
+            tier: "critical",
+            evidence: "exact",
+          },
+        ],
+        provides: [],
+      })
+    ).toThrow(/duplicate scope/);
+  });
+
   it("reports the exact malformed manifest field", () => {
     expect(() =>
       parseUnitAuthorityManifest({
@@ -98,6 +120,7 @@ describe("unit authority manifest", () => {
             sensitivity: "write",
             resourceType: "repository",
             presentation: { domain: "sharing", verb: "act" },
+            notability: "headline",
             grantScopes: ["version", "once"],
           },
         ],
@@ -123,6 +146,7 @@ describe("unit authority manifest", () => {
             sensitivity: "destructive",
             resourceType: "repository",
             presentation: { domain: "files", verb: "manage" },
+            notability: "headline",
             grantScopes: ["once", "session"],
           },
         ],

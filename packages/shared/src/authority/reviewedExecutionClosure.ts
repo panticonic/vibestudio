@@ -79,8 +79,7 @@ export function compileMissionExposure(
         (entry) => entry.endsWith(".*") && method.startsWith(entry.slice(0, -1))
       )
     ),
-  ]
-    .sort(compareUtf16CodeUnits);
+  ].sort(compareUtf16CodeUnits);
   const uniqueMethods = [...new Set(serviceMethods)];
   const userlandServices =
     charter.toolExposure.workspaceServiceDiscovery === "live-declarations"
@@ -100,9 +99,7 @@ export function compileMissionExposure(
           mode: "declared-origins",
           origins: [...new Set(charter.toolExposure.declaredOrigins)].sort(compareUtf16CodeUnits),
         } as const)
-      : ({ mode: charter.toolExposure.evalNetwork } as
-          | { mode: "none" }
-          | { mode: "unrestricted" });
+      : ({ mode: charter.toolExposure.evalNetwork } as { mode: "none" } | { mode: "unrestricted" });
   return { serviceMethods: uniqueMethods, userlandServices, network };
 }
 
@@ -130,8 +127,7 @@ export function compiledExposureAllowsUserlandService(
     (candidate) => candidate.name === input.name && candidate.provider === input.provider
   );
   return Boolean(
-    binding &&
-      (binding.upgradePolicy === "follow-head" || binding.providerEv === input.providerEv)
+    binding && (binding.upgradePolicy === "follow-head" || binding.providerEv === input.providerEv)
   );
 }
 

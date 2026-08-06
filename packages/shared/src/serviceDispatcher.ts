@@ -24,6 +24,7 @@ import {
 import type { AgentBinding, UserSubject } from "@vibestudio/identity/types";
 import type { RuntimeAgentBinding } from "./runtime/entitySpec.js";
 import type { AuthorizationContext, AuthorityGrant } from "./authorization.js";
+import { parseCodePrincipal } from "./authority/codePrincipal.js";
 import type {
   ApprovalDecision,
   ApprovalDetailFormat,
@@ -105,6 +106,27 @@ export function normalizeServiceArgs(args: unknown[], schema: z.ZodType): unknow
  * received string`. The leading tuple index is shown as `[n]`; deeper path
  * segments are dot-joined.
  */
+/**
+ * Capabilities a caller needs in order to see and answer a pending review.
+ *
+ * These are exempt from the open-review short-circuit (U6). U6 exists to stop
+ * prompt spam for a question already on screen — but the surface showing that
+ * question needs these calls to show it, and needs them again to resolve it.
+ * Gating them on the review turns "you already have a review open" from a
+ * helpful redirect into a state nothing can leave: the review cannot be read,
+ * cannot be answered, and therefore never closes.
+ *
+ * This is not an authority bypass. The caller still needs a grant; it simply
+ * gets the ordinary decision instead of a redirect to an unreachable review.
+ */
+const REVIEW_ANSWERING_CAPABILITIES: readonly string[] = ["approvals.read", "approvals.decide"];
+
+function answersAnOpenReview(capability: string): boolean {
+  return REVIEW_ANSWERING_CAPABILITIES.some(
+    (key) => capability === key || capability.startsWith(`${key}:`)
+  );
+}
+
 function formatArgsValidationError(error: z.ZodError): string {
   const summaries = error.issues.map((issue) => {
     const [head, ...rest] = issue.path;
@@ -260,6 +282,8 @@ export interface VerifiedCaller {
    * fact and never selects the authorizing origin.
    */
   executionSession?: import("@vibestudio/rpc").AgentExecutionSessionFact;
+  /** Host-attested live task closure inherited through runtime ancestry. */
+  taskAuthority?: import("@vibestudio/rpc").TaskGrantPrincipal;
   /**
    * Host-derived policy inherited by reviewed code running inside a canonical
    * system-test context. This does not change the authorizing origin to a
@@ -513,13 +537,61 @@ export interface AuthorityChallengePresentation {
   };
   details?: readonly { label: string; value: string; format?: ApprovalDetailFormat }[];
   diffReview?: readonly DiffReviewEntry[];
-  /** Rich unit/config review rendered by the canonical authority acquisition.
+  /**
+   * Present this decision as the install review (§7) rather than as a plain
+   * capability card.
+   *
    * This changes only the card projection; capability, resource, principal,
-   * grant, cancellation, and settlement remain owned by the dispatcher. */
-  unitBatch?: {
-    trigger: import("./approvals.js").PendingUnitBatchApproval["trigger"];
-    units: readonly import("./approvals.js").UnitBatchEntry[];
-    configWrite?: import("./approvals.js").PendingUnitBatchApproval["configWrite"];
+   * grant, cancellation, and settlement remain owned by the dispatcher. The
+   * parts are derived server-side from these units, so a client renders rows it
+   * was given and never invents one.
+   */
+  installReview?: {
+    mode: import("./approvals.js").PendingUnitInstallReviewApproval["mode"];
+    /** The operation will report its committed or failed landing. */
+    reportsLanding?: boolean;
+    /** Exact post-settlement rendezvous, minted by the host operation. */
+    landingToken?: string;
+    units: readonly import("./approvals.js").ReviewedUnit[];
+    charters?: import("./approvals.js").InstallReviewCharter[];
+    unchangedPartCount?: number;
+    template?: import("./approvals.js").PendingUnitInstallReviewApproval["template"];
+    /** Previously admitted declarations, keyed by repo path (differential review). */
+    previousRequests?: ReadonlyMap<
+      string,
+      readonly import("./authorityManifest.js").UnitAuthorityRequest[]
+    >;
+    /** Rows the user had already cleared, keyed by repo path (§7.3). */
+    previouslyCleared?: ReadonlyMap<string, ReadonlySet<string>>;
+    /** Where each unit's bytes came from, keyed by repo path. */
+    origins?: ReadonlyMap<string, import("./authority/unitInstallReview.js").InstallReviewOrigin>;
+    /** Identity keys, keyed by repo path, so acceptance names exact versions. */
+    identityKeys?: ReadonlyMap<string, string>;
+    /**
+     * Which section a part belongs to, keyed by repo path (§5.3).
+     *
+     * A template publication may also carry agent-authored repairs to parts the
+     * template does not own. They are the same publication and the same
+     * decision, but not the same question, so they are shown apart and their new
+     * authority defaults to unchecked. Derived by the gate from the candidate
+     * lock's own closure — never asserted by whoever published.
+     */
+    sections?: ReadonlyMap<string, "template" | "repair">;
+    /**
+     * `News 1.2.0` — where a part was originally installed from, keyed by repo
+     * path, for a part the relationship that brought it no longer owns (§U2).
+     *
+     * Current ownership and where something came from are different facts, and
+     * a removed template's parts keep the second one: the audit trail for why a
+     * part holds what it holds does not evaporate because the relationship
+     * ended. Only ever present for parts whose two answers disagree.
+     *
+     * Optional here because the gate derives it itself from the template lock
+     * and the admission ledger when a presenter does not; a presenter that has
+     * already resolved it says so rather than making the gate resolve twice.
+     */
+    originallyInstalledFrom?: ReadonlyMap<string, string>;
+    configWrite?: import("./approvals.js").PendingUnitInstallReviewApproval["configWrite"];
   };
   /**
    * Exact decisions meaningful for this operation. This is host-derived policy,
@@ -678,6 +750,23 @@ export class ServiceDispatcher {
       presentation?: AuthorityChallengePresentation;
     }): void | Promise<void>;
   };
+  /**
+   * Is a review covering this exact unit version still open?
+   *
+   * Non-admission produces prompts rather than silence: an unadmitted unit's
+   * declared requests reach the evaluator with no grant, return
+   * `approval-required`, and each becomes an acquirable prompt. While a review
+   * is unresolved that is prompt spam for a question the user has already been
+   * asked, so those leaves are marked NOT acquirable and resolve to a typed
+   * `review-pending` outcome naming the open review. The caller gets one
+   * recoverable error and the UI focuses the review that is already waiting
+   * (docs/template-install-unit-approval-ux-plan.md U6).
+   */
+  private openReviewFor?: (code: {
+    repoPath: string;
+    effectiveVersion: string;
+  }) => { approvalId: string; title: string } | null;
+
   private authorityObserver?: (event: {
     executionSession: NonNullable<AuthorizationContext["executionSession"]>;
     kind: "authority-requested" | "authority-decided";
@@ -697,6 +786,10 @@ export class ServiceDispatcher {
 
   setAuthorityObserver(observer: NonNullable<ServiceDispatcher["authorityObserver"]>): void {
     this.authorityObserver = observer;
+  }
+
+  setOpenReviewLookup(lookup: NonNullable<ServiceDispatcher["openReviewFor"]>): void {
+    this.openReviewFor = lookup;
   }
 
   private async observeAuthority(
@@ -1519,6 +1612,9 @@ export class ServiceDispatcher {
         callerPrincipal: resolved.context.authorizingOrigin.principal,
         sessionId: resolved.context.session.id,
         ...(resolved.context.session.taskRef ? { taskRef: resolved.context.session.taskRef } : {}),
+        ...(resolved.context.session.taskAuthority
+          ? { taskAuthority: resolved.context.session.taskAuthority }
+          : {}),
         ...(resolved.context.executionSession?.agentBinding?.bindingId
           ? {
               agentBindingId: resolved.context.executionSession.agentBinding.bindingId,
@@ -1726,12 +1822,47 @@ export class ServiceDispatcher {
         return;
       }
 
-      const acquirable = reviewedTier !== "open" && decision.code === "approval-required";
-      const authorityFailure = authorityFailureForDecision(decision, {
-        capability,
-        resourceKey,
-        tier: reviewedTier,
-      });
+      // A unit whose review is still open is not asked again, per leaf, for a
+      // question already on screen (U6). This is checked before acquirability
+      // so no acquisition entry is ever created for it.
+      const reviewSubject =
+        decision.code === "approval-required" &&
+        resolved.context.authorizingOrigin.kind === "code" &&
+        // Never point a caller at a review it is currently trying to read or
+        // answer. Doing so is not a prompt the user can satisfy — it is a
+        // deadlock: the only surface that can resolve the review is told to
+        // resolve the review first. Whatever else is unreviewed, the plumbing
+        // that presents reviews has to keep working, or nothing else can.
+        !answersAnOpenReview(capability)
+          ? // The authorizing subject IS the reviewed unit version, so ask about
+            // that rather than about whatever attribution the caller carries.
+            parseCodePrincipal(resolved.context.authorizingOrigin.principal)
+          : null;
+      const openReview = reviewSubject ? (this.openReviewFor?.(reviewSubject) ?? null) : null;
+      const acquirable =
+        reviewedTier !== "open" && decision.code === "approval-required" && !openReview;
+      const authorityFailure = openReview
+        ? {
+            reasonCode: "review-pending" as const,
+            // A person reads this. It names the review they can finish, not the
+            // repo path of the part that happened to ask first — that sentence
+            // shipped to screen as `apps/shell is waiting on the review you
+            // already have open`, which describes our bookkeeping rather than
+            // anything they can act on.
+            reason: `Waiting for you to finish reviewing ${openReview.title}.`,
+            capability,
+            resourceKey,
+            remediation: {
+              kind: "resolve-open-review" as const,
+              message: "Finish the review that is already open, then retry the exact invocation.",
+              review: openReview,
+            },
+          }
+        : authorityFailureForDecision(decision, {
+            capability,
+            resourceKey,
+            tier: reviewedTier,
+          });
       if (decision.code === "mission-change-required") {
         if (!preflight) {
           await this.authorityAcquirer?.proposeReviewedClosureRevision?.({
@@ -1800,7 +1931,11 @@ export class ServiceDispatcher {
             },
           };
         }
-        if (runManifest?.approvals === "pregranted-only") {
+        // A host-attested test policy is itself a non-interactive,
+        // closed-world preauthorization source. Let the acquisition
+        // coordinator mint its exact invocation-bound grant; ordinary runs
+        // still fail here without ever presenting a human approval.
+        if (runManifest?.approvals === "pregranted-only" && !resolved.context.testPolicy) {
           await this.observeAuthority(resolved.context, "authority-decided", {
             capability,
             resourceKey,
@@ -1941,6 +2076,15 @@ export class ServiceDispatcher {
             failure: authorityFailure,
           },
         };
+      }
+      if (openReview) {
+        // Recoverable by construction: the review is already on screen, and
+        // finishing it settles every leaf this unit was going to ask about. No
+        // access hint — there is nothing to configure and nothing went wrong;
+        // the answer is the review, and the message says so on its own.
+        throw new ServiceAccessError(service, method, authorityFailure.reason, "EREVIEWPENDING", {
+          authorityFailure,
+        });
       }
       throw new ServiceAccessError(
         service,

@@ -1,18 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import YAML from "yaml";
 import ts from "typescript";
 import {
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
-  inferEventsClientCapabilities,
-  inferExtensionContextCapabilities,
-  inferHostedRuntimeCapabilities,
-  inferTypedServiceClientCapabilities,
-  inferTypedWorkspaceEffects,
+  inferUnitTransportCapabilities,
   inferWorkspacePackageReferences,
-} from "./lib/unit-authority-inference.mjs";
+} from "@vibestudio/shared/unitAuthorityInference";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = path.join(root, "workspace");
@@ -153,15 +148,6 @@ function normalizeManifestEntry(entry) {
     ...(Array.isArray(entry.packages) ? { packages: [...new Set(entry.packages)].sort() } : {}),
   };
 }
-const workspaceManifest = YAML.parse(
-  fs.readFileSync(path.join(workspaceRoot, "meta/vibestudio.yml"), "utf8")
-);
-const userlandServiceByProtocol = new Map(
-  [...(workspaceManifest.services ?? [])].flatMap((service) =>
-    (service.protocols ?? []).map((protocol) => [protocol, service.name])
-  )
-);
-
 const serviceMethods = new Map(
   Object.entries(matrix).map(([service, entry]) => [service, Object.keys(entry.methods)])
 );
@@ -572,73 +558,10 @@ function inferCapabilities(pkg) {
     })
     .map(({ source: moduleSource }) => moduleSource)
     .join("\n");
-  const capabilities = new Set();
-  capabilities.add("context.boundary");
-
-  for (const capability of inferExtensionContextCapabilities(source, hostCapabilities)) {
-    capabilities.add(capability);
-  }
-  for (const capability of inferHostedRuntimeCapabilities(source, hostCapabilities)) {
-    capabilities.add(capability);
-  }
-
-  // Literal host/direct method names are the common RPC form. Filtering
-  // against the generated method census prevents ordinary prose from becoming
-  // authority.
-  for (const capability of hostCapabilities) {
-    const method = capability.slice("service:".length);
-    if (
-      source.includes(`"${method}"`) ||
-      source.includes(`'${method}'`) ||
-      source.includes(`\`${method}\``)
-    ) {
-      capabilities.add(capability);
-    }
-  }
-  for (const capability of inferTypedWorkspaceEffects(source)) {
-    capabilities.add(capability);
-  }
-  for (const capability of inferEventsClientCapabilities(source, serviceMethods)) {
-    capabilities.add(capability);
-  }
-  for (const capability of inferTypedServiceClientCapabilities(source, hostCapabilities)) {
-    capabilities.add(capability);
-  }
-
-  // Property-based hosted-runtime clients remain statically reviewable.
-  for (const match of source.matchAll(
-    /(?:services|runtime\.services)\.([A-Za-z][\w-]*)\.([A-Za-z_$][\w$]*)/g
-  )) {
-    const capability = `service:${match[1]}.${match[2]}`;
-    if (hostCapabilities.has(capability)) capabilities.add(capability);
-  }
-
-  const userland = [
-    ["createVcsUserlandClient", "vcs"],
-    ["createGadServiceClient", "gad.workspace"],
-    ["createChannelServiceClient", "channel"],
-    ["testkit-driver", "testkit-driver"],
-    ["vibestudio.models.v1", "models"],
-  ];
-  let resolvesUserlandService = false;
-  for (const [needle, name] of userland) {
-    if (!source.includes(needle)) continue;
-    resolvesUserlandService = true;
-    capabilities.add(`workspace-service:${name}`);
-  }
-  for (const [protocol, name] of userlandServiceByProtocol) {
-    if (
-      source.includes(`"${protocol}"`) ||
-      source.includes(`'${protocol}'`) ||
-      source.includes(`\`${protocol}\``)
-    ) {
-      resolvesUserlandService = true;
-      capabilities.add(`workspace-service:${name}`);
-    }
-  }
-  if (resolvesUserlandService) {
-    capabilities.add("service:workers.resolveService");
-  }
+  const capabilities = inferUnitTransportCapabilities(source, {
+    hostCapabilities,
+    serviceMethods,
+  });
 
   for (const capability of pkg.manifest.vibestudio?.app?.capabilities ?? []) {
     if (typeof capability === "string") capabilities.add(capability);

@@ -12,6 +12,7 @@ import {
   scopeCovers,
 } from "@vibestudio/shared/authorization";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
+import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import {
   productBuiltinMethodCapability,
   productBuiltinMethodPolicy,
@@ -59,7 +60,8 @@ export function isAttestedSystemTestHarness(
     isConduitBlessed(code) &&
     harness?.repoPath === code.repoPath &&
     harness.effectiveVersion === code.effectiveVersion &&
-    harness.principal === `code:${code.repoPath}@${code.executionDigest}`
+    harness.executionDigest === code.executionDigest &&
+    harness.principal === codePrincipal(code)
   );
 }
 
@@ -76,8 +78,6 @@ export interface AuthorityFacts {
   reviewedClosure?: import("@vibestudio/rpc").SessionReviewedClosureFact | null;
   contextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
   incarnationId?: string | null;
-  /** Live manifest/provider policy may withhold the code grant. */
-  grantCode?: boolean;
   grantStore?: CapabilityGrantStore;
   now?: number;
 }
@@ -161,9 +161,10 @@ export function authorizeVerifiedCaller(
     caller.subject && caller.subject.userId !== "system"
       ? (`user:${caller.subject.userId}` as const)
       : null;
-  const code = caller.code?.executionDigest
-    ? (`code:${caller.code.repoPath}@${caller.code.executionDigest}` as const)
-    : null;
+  // The subject is source identity, not build identity: an execution digest is
+  // still required as proof that a concrete artifact is live, but the principal
+  // names the reviewed unit version so a rebuild does not retire its grants.
+  const code = caller.code?.executionDigest ? codePrincipal(caller.code) : null;
   const entityId = caller.agentBinding?.entityId ?? (code ? caller.runtime.id : null);
   const entity = entityId ? (`entity:${entityId}` as const) : null;
   const sessionPrincipal = `session:${facts.sessionId}` as const;
@@ -174,6 +175,7 @@ export function authorizeVerifiedCaller(
   // is represented separately as an exact session-scoped confirmation facet,
   // so principal-family and manifest checks still apply to the actor itself.
   const executionSession = caller.executionSession ?? null;
+  const taskAuthority = caller.taskAuthority ?? executionSession?.taskAuthority;
   const testPolicy = caller.testPolicy ?? executionSession?.testPolicy ?? null;
   if (
     caller.testPolicy &&
@@ -272,6 +274,7 @@ export function authorizeVerifiedCaller(
       ...(facts.reviewedClosure ? { reviewedClosure: facts.reviewedClosure } : {}),
       ...(executionSession ? { mediatingHarness: executionSession.harness.principal } : {}),
       ...(executionSession ? { taskRef: executionSession.taskRef } : {}),
+      ...(taskAuthority ? { taskAuthority } : {}),
     },
     contextIntegrity:
       facts.contextIntegrity ??
@@ -299,7 +302,6 @@ export function authorizeVerifiedCaller(
     sessionId: facts.sessionId,
     now,
     grantStore: facts.grantStore,
-    grantCode: facts.grantCode ?? caller.codeApproved,
     tier: facts.tier,
   });
   if (facts.grantStore) {
@@ -314,6 +316,7 @@ export function authorizeVerifiedCaller(
     if (context.session.reviewedClosure) {
       subjects.push(context.session.reviewedClosure.subject);
     }
+    if (context.session.taskAuthority) subjects.push(context.session.taskAuthority);
     grants.push(...facts.grantStore.grantsForSubjects(subjects, facts.capability, now));
   }
   const bindingId = executionSession?.agentBinding?.bindingId;
@@ -366,7 +369,6 @@ export function attestDirectRpc(input: {
   workspaceRole?: string | null;
   sessionId: string;
   incarnationId?: string | null;
-  grantCode?: boolean;
   grantStore?: CapabilityGrantStore;
   reviewedClosure?: import("@vibestudio/rpc").SessionReviewedClosureFact | null;
   contextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
@@ -406,7 +408,6 @@ export function attestDirectRpc(input: {
     capability,
     resourceKey,
     incarnationId: input.incarnationId,
-    grantCode: input.grantCode ?? input.caller.codeApproved,
     grantStore: input.grantStore,
     reviewedClosure: input.reviewedClosure,
     contextIntegrity: input.contextIntegrity,

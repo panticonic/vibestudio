@@ -2118,23 +2118,14 @@
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "family",
           "residency": "secret",
           "family": "credentials.control",
-          "rationale": "G2: credential mediation; §2 default {code, session} family"
+          "rationale": "The transport exposes no Git response before the egress proxy authorizes anonymous network access or one concrete credential and remote"
         },
-        "capability": "credential.use",
-        "presentation": {
-          "title": "Use a connected account with a Git remote",
-          "action": "use a connected account with a Git remote",
-          "description": "Allows {requesterKind} to use a connected account with a Git remote.",
-          "group": "credentials",
-          "authorityCategory": {
-            "domain": "accounts",
-            "verb": "act"
-          }
-        }
+        "capability": null,
+        "presentation": null
       },
       "requestCredentialInput": {
         "authority": {
@@ -2199,23 +2190,14 @@
           ]
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "family",
           "residency": "secret",
           "family": "credentials.read",
-          "rationale": "G2: credential mediation; §2 default {code, session} family"
+          "rationale": "Credential mediation exposes no credential before the handler authorizes the exact matched credential and use context"
         },
-        "capability": "credential.use",
-        "presentation": {
-          "title": "Use a matching connected account",
-          "action": "use a matching connected account",
-          "description": "Allows {requesterKind} to use a matching connected account.",
-          "group": "credentials",
-          "authorityCategory": {
-            "domain": "accounts",
-            "verb": "act"
-          }
-        }
+        "capability": null,
+        "presentation": null
       },
       "revokeCredential": {
         "authority": {
@@ -5325,27 +5307,6 @@
         "capability": null,
         "presentation": null
       },
-      "handoffSlot": {
-        "authority": {
-          "principals": [
-            "host",
-            "user",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "supervision",
-          "family": "panelRuntime.control",
-          "rationale": "Idempotently converges a runtime lease onto the entity already committed by the builtin topology owner"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "observeSlot": {
         "authority": {
           "principals": [
@@ -7036,6 +6997,35 @@
           }
         }
       },
+      "recoverExecution": {
+        "authority": {
+          "principals": [
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "supervision",
+          "family": "runtime.recovery",
+          "rationale": "Explicit user recovery of one exact unavailable Durable Object incarnation; expected-digest matching prevents stale actions"
+        },
+        "capability": "runtime.execution.recover",
+        "presentation": {
+          "title": "Recover a runtime execution",
+          "action": "recover a runtime execution",
+          "description": "Allows {requesterKind} to restore an exact retained execution or explicitly replace one unavailable incarnation.",
+          "group": "runtime",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        }
+      },
       "reserveEntity": {
         "authority": {
           "principals": [
@@ -7764,6 +7754,32 @@
       ]
     },
     "methods": {
+      "getWorkspaceCreationReviewState": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "shellApproval.read",
+          "rationale": "G5: host infrastructure plumbing; semantic startup-review preparation state"
+        },
+        "capability": "approvals.read",
+        "presentation": {
+          "title": "View requests awaiting your decision",
+          "action": "view requests awaiting your decision",
+          "description": "Allows {requesterKind} to view requests awaiting your decision.",
+          "group": "approvals",
+          "authorityCategory": {
+            "domain": "safety",
+            "verb": "manage"
+          }
+        }
+      },
       "listPending": {
         "authority": {
           "inherits": true
@@ -7835,6 +7851,32 @@
           "title": "Approve initial workspace access",
           "action": "approve initial workspace access",
           "description": "Allows {requesterKind} to approve initial workspace access.",
+          "group": "approvals",
+          "authorityCategory": {
+            "domain": "safety",
+            "verb": "manage"
+          }
+        }
+      },
+      "resolveInstallReview": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "codeOnly",
+          "residency": "grant-authority",
+          "family": "shellApproval.read",
+          "rationale": "G5: trusted approval plumbing resolving an exact queued install review"
+        },
+        "capability": "approvals.decide",
+        "presentation": {
+          "title": "Add or update parts of this workspace",
+          "action": "add or update parts of this workspace",
+          "description": "Allows {requesterKind} to answer a queued review of arriving parts.",
           "group": "approvals",
           "authorityCategory": {
             "domain": "safety",
@@ -9510,7 +9552,16 @@
           "rationale": "The reserved or active entity incarnation is an input to runtime attestation and caller identity"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "entity.resolveActive": {
         "authority": {
@@ -9531,7 +9582,16 @@
           "rationale": "The active entity incarnation is an input to runtime attestation and caller identity"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "heartbeatRegister": {
         "authority": {
@@ -9758,7 +9818,16 @@
           "rationale": "Workspace-member panel-index read; no C1-C4 or G1-G5 rule applies"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "panel.updateTitle": {
         "authority": {
@@ -9930,7 +9999,16 @@
           "rationale": "Exact durable slot/history/entity join used to attest the active panel identity and context"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "panelTree.page": {
         "authority": {
@@ -9951,7 +10029,16 @@
           "rationale": "Bounded durable parent/child and ownership projection from the builtin slot identity authority"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "panelTree.path": {
         "authority": {
@@ -9972,7 +10059,16 @@
           "rationale": "Bounded durable ancestry projection used to preserve the exact slot ownership and context boundary"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "panelTree.rootGroups": {
         "authority": {
@@ -9993,7 +10089,16 @@
           "rationale": "Bounded durable ownership census over the builtin slot topology used to select an exact account forest"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "panelTree.search": {
         "authority": {
@@ -10014,7 +10119,16 @@
           "rationale": "Exact typed proxy to the builtin topology owner for one bounded indexed presentation query"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "slot.close": {
         "authority": {
@@ -10608,7 +10722,16 @@
           "rationale": "The stable slot-to-entity/context binding is an input to caller ancestry and context-boundary enforcement"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "slot.historyEntry": {
         "authority": {
@@ -10629,7 +10752,16 @@
           "rationale": "The exact stored destination context is an input to context-boundary enforcement before history selection"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "slot.historyRelative": {
         "authority": {
@@ -10650,7 +10782,16 @@
           "rationale": "Exact typed proxy to the builtin topology owner for one bounded adjacent-history read"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "slot.move": {
         "authority": {
@@ -10822,7 +10963,16 @@
           "rationale": "The entity-to-slot binding determines runtime ancestry and the context-boundary target"
         },
         "capability": "workspace.runtime-state.inspect",
-        "presentation": null
+        "presentation": {
+          "title": "Inspect running workspace services",
+          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          "description": "Read the current structure and status of running workspace services",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
       },
       "slot.updateCurrentStateArgs": {
         "authority": {

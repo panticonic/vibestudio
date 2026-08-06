@@ -42,6 +42,15 @@ workspace:
 const inventory = await rpc.call("main", "permissions.list", []);
 ```
 
+`permissions.list` returns the grant inventory directly as a `SavedPermissionGrant[]`;
+it is not wrapped in `{ grants: ... }`. Each row has non-empty `id`, `kind`,
+`callerLabel`, `scopeLabel`, `why`, `approvedBy`, `duration`, and `revokeEffect`
+fields. `kind` is `capability`, `credential-use`, or `browser-site`; optional
+resource, provenance, and timestamp fields are also returned when applicable.
+Treat the result as an array before inspecting or slicing it, especially when the
+inventory is large. This is a read-only inspection; use the explicit approval UI
+and host permission APIs for changes.
+
 Do not ask for a decision from inside provider code. Declare the resource in
 `vibestudio.authority.provides` and bind the receiving `@rpc` method to its local
 capability. The host derives the exact receiver resource, evaluates the canonical

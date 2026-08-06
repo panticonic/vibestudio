@@ -1,14 +1,14 @@
 import type { AuthorityGrant, Principal, PrincipalKind } from "@vibestudio/rpc";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
-import { scopeCovers } from "@vibestudio/shared/authorization";
 import { getProductBootManifest } from "../internalDOs/productBootManifest.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
 // Product bootstrap grants are derived only from authenticated invocation facts:
-// the receiver's live declaration decides which principal family is admitted,
-// while installed code is additionally bounded by its exact sealed manifest.
+// the receiver's live declaration decides which principal family is admitted.
 // Static source censuses are audit evidence, never runtime authority inputs.
+//
+// This covers the host and the acting human only. Installed code holds nothing
+// here — see below.
 
 export interface ProductGrantInput {
   caller: VerifiedCaller;
@@ -20,13 +20,11 @@ export interface ProductGrantInput {
   /** Undefined only for the temporary direct-RPC admission bridge. */
   tier?: "open" | "gated" | "critical";
   grantStore?: CapabilityGrantStore;
-  grantCode?: boolean;
 }
 
 /**
- * Resolve host bootstrap admission plus live user decisions. Receiver
- * requirements remain the authority boundary; code admission additionally
- * binds to the exact requests sealed into `caller.code`.
+ * Resolve host bootstrap admission for the host and the acting human. Receiver
+ * requirements remain the authority boundary.
  */
 export function productAuthorityGrants(input: ProductGrantInput): AuthorityGrant[] {
   const grants: AuthorityGrant[] = [];
@@ -46,25 +44,16 @@ export function productAuthorityGrants(input: ProductGrantInput): AuthorityGrant
     grants.push(productGrant(subject, input.capability, input.resourceKey, input.now));
   }
 
-  const code = input.principals["code"];
-  const identity = input.caller.code;
-  // A manifest is a request, never an approval. Only a host-stamped active
-  // unit incarnation may turn its exact sealed requests into version-bound
-  // authority. Unit retirement/version change removes that live fact.
-  if (!code || !identity || input.grantCode !== true) return grants;
-
-  if (
-    identity.requested?.some(
-      (request) =>
-        capabilityPatternCovers(request.capability, input.capability) &&
-        scopeCovers(request.resource, input.resourceKey)
-    )
-  ) {
-    grants.push({
-      ...productGrant(code, input.capability, input.resourceKey, input.now),
-      provenance: "sealed-manifest-admission-v1",
-    });
-  }
+  // Installed code gets NO grant here. A manifest is a request, never an
+  // approval: admitting a unit records that its exact version was reviewed and
+  // accepted, and nothing more (U3, U5). What a unit may actually do comes from
+  // ordinary stored grants — install clearance minted when the review was
+  // accepted, or an at-use decision — which the caller reads out of the
+  // canonical grant store alongside these product grants.
+  //
+  // Synthesizing an allow for every declared request is what made admission mean
+  // blanket authority, and it is what made revocation meaningless: there was no
+  // record to revoke. A declared request with no stored grant now prompts.
   return grants;
 }
 

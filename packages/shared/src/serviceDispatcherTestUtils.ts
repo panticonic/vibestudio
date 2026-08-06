@@ -1,4 +1,5 @@
 import type { AuthorizationContext, AuthorityGrant, Principal } from "@vibestudio/rpc";
+import { codePrincipal } from "./authority/codePrincipal.js";
 import {
   createHostCaller,
   ServiceAccessError,
@@ -7,11 +8,7 @@ import {
   type VerifiedCaller,
 } from "./serviceDispatcher.js";
 import type { ServiceDefinition } from "./serviceDefinition.js";
-import {
-  evaluateAuthority,
-  lineageClasses,
-  type AuthorityRequirement,
-} from "./authorization.js";
+import { evaluateAuthority, lineageClasses, type AuthorityRequirement } from "./authorization.js";
 
 const TEST_DIGEST = "0".repeat(64);
 const TEST_HOST = "host:test" as const;
@@ -23,6 +20,7 @@ export function createTestExecutionSession(input: {
   harnessPrincipal?: `code:${string}`;
   repoPath?: string;
   effectiveVersion?: string;
+  executionDigest?: string;
   contextId?: string;
   agentBinding?: {
     entityId: string;
@@ -52,12 +50,15 @@ export function createTestExecutionSession(input: {
             bindingId: input.agentBinding?.bindingId ?? "binding:test",
           },
     taskRef: `task:${input.runtimeId}`,
+    taskAuthority: `task:${input.runtimeId}`,
     ...(input.testPolicy ? { testPolicy: input.testPolicy } : {}),
     harness: {
       principal:
-        input.harnessPrincipal ?? (`code:${repoPath}@${TEST_DIGEST}` as `code:${string}`),
+        input.harnessPrincipal ??
+        (codePrincipal({ repoPath, effectiveVersion }) as `code:${string}`),
       repoPath,
       effectiveVersion,
+      executionDigest: input.executionDigest ?? TEST_DIGEST,
     },
     eval: {
       runtimeId: input.runtimeId,
@@ -82,19 +83,21 @@ export function createTestExecutionSession(input: {
  * must install a resolver backed by live identity, membership, manifests, and
  * grants; this helper deliberately lives in a test-only module.
  */
-export function createTestServiceDispatcher(opts: {
-  openMethods?: readonly string[];
-  methods?: Readonly<
-    Record<
-      string,
-      {
-        tier: "open" | "gated" | "critical";
-        session?: "family" | "codeOnly";
-        capability?: string;
-      }
-    >
-  >;
-} = {}): ServiceDispatcher {
+export function createTestServiceDispatcher(
+  opts: {
+    openMethods?: readonly string[];
+    methods?: Readonly<
+      Record<
+        string,
+        {
+          tier: "open" | "gated" | "critical";
+          session?: "family" | "codeOnly";
+          capability?: string;
+        }
+      >
+    >;
+  } = {}
+): ServiceDispatcher {
   const dispatcher = new ServiceDispatcher();
   const openMethods = new Set(opts.openMethods ?? []);
   if (openMethods.size > 0 || opts.methods) {
@@ -300,11 +303,7 @@ export function withTestServiceAuthority(definition: ServiceDefinition): Service
     handler: (context, method, args) => {
       if (context.authority) return definition.handler(context, method, args);
       const { caller, ...overrides } = context;
-      return definition.handler(
-        createTestServiceContext(caller, overrides),
-        method,
-        args
-      );
+      return definition.handler(createTestServiceContext(caller, overrides), method, args);
     },
   };
 }
@@ -343,7 +342,10 @@ export function testAuthority(
   // code remains code and must fail as `not-requested`; erasing its identity
   // here would incorrectly turn it into a user or product-host invocation.
   const code = carriesCode
-    ? (`code:${caller.code?.repoPath ?? "tests/service-dispatch"}@${caller.code?.executionDigest ?? TEST_DIGEST}` as const)
+    ? (codePrincipal({
+        repoPath: caller.code?.repoPath ?? "tests/service-dispatch",
+        effectiveVersion: caller.code?.effectiveVersion ?? "test",
+      }) as `code:${string}`)
     : null;
   const entity =
     caller.agentBinding || caller.runtime.kind === "agent" || code
@@ -357,24 +359,24 @@ export function testAuthority(
         ? { kind: "code", principal: code }
         : caller.executionSession
           ? { kind: "session", principal: sessionPrincipal }
-        : actingUser
-          ? { kind: "user", principal: actingUser }
-          : { kind: "host", principal: host ?? TEST_HOST },
+          : actingUser
+            ? { kind: "user", principal: actingUser }
+            : { kind: "host", principal: host ?? TEST_HOST },
     host,
     actingUser,
     entity,
     incarnation: null,
     executingCode: code
-        ? {
-            principal: code,
-            requested:
-              caller.code?.requested ??
-              (platformCapability
-                ? []
-                : [{ capability, resource: { kind: "exact" as const, key: resourceKey } }]),
-            sourceLineage: { class: "internal", externalKeys: [] },
-          }
-        : null,
+      ? {
+          principal: code,
+          requested:
+            caller.code?.requested ??
+            (platformCapability
+              ? []
+              : [{ capability, resource: { kind: "exact" as const, key: resourceKey } }]),
+          sourceLineage: { class: "internal", externalKeys: [] },
+        }
+      : null,
     initiatorChain: [
       ...(actingUser ? [actingUser] : []),
       ...(entity ? [entity] : []),
@@ -398,10 +400,9 @@ export function testAuthority(
       version: "1.0.0",
       expiresAt: now + 60_000,
     },
-    contextIntegrity:
-      caller.executionSession
-        ? { class: "internal", latchEpoch: 0, externalKeys: [] }
-        : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+    contextIntegrity: caller.executionSession
+      ? { class: "internal", latchEpoch: 0, externalKeys: [] }
+      : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
   };
   const subjects: Principal[] = [];
   if (host) subjects.push(host);

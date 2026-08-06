@@ -152,15 +152,43 @@ export function createCapabilityPresentationResolver(
     definition: UserlandCapabilityDefinition;
   }[] = () => []
 ): CapabilityPresentationResolver {
+  type ServiceRow = ReturnType<typeof services>[number];
+  type UserlandRow = ReturnType<typeof userlandCapabilities>[number];
+  let indexedServicesSource: readonly ServiceRow[] | null = null;
+  let indexedServices = new Map<string, ServiceRow>();
+  let indexedUserlandSource: readonly UserlandRow[] | null = null;
+  let indexedUserland = new Map<string, UserlandRow>();
+
+  const serviceByName = (name: string): ServiceRow | undefined => {
+    const current = services();
+    if (current !== indexedServicesSource) {
+      indexedServicesSource = current;
+      indexedServices = new Map(current.map((service) => [service.name, service]));
+    }
+    return indexedServices.get(name);
+  };
+
+  const userlandByIdentity = (provider: string, name: string): UserlandRow | undefined => {
+    const current = userlandCapabilities();
+    if (current !== indexedUserlandSource) {
+      indexedUserlandSource = current;
+      indexedUserland = new Map(
+        current.map((candidate) => [
+          `${candidate.provider}\0${candidate.definition.name}`,
+          candidate,
+        ])
+      );
+    }
+    return indexedUserland.get(`${provider}\0${name}`);
+  };
+
   return (capability, requesterKind) => {
     if (capability.startsWith("userland:")) {
       const identity = capability.slice("userland:".length).replace(/#\*$/u, "");
       const separator = identity.lastIndexOf("/");
       const provider = separator < 0 ? "" : identity.slice(0, separator);
       const localName = separator < 0 ? "" : identity.slice(separator + 1).split("#", 1)[0]!;
-      const declared = userlandCapabilities().find(
-        (candidate) => candidate.provider === provider && candidate.definition.name === localName
-      );
+      const declared = userlandByIdentity(provider, localName);
       if (declared) {
         const { definition } = declared;
         return renderRequester(
@@ -183,7 +211,7 @@ export function createCapabilityPresentationResolver(
       return describeCapability(capability, requesterKind);
     }
     const name = capability.slice("workspace-service:".length);
-    const service = services().find((candidate) => candidate.name === name);
+    const service = serviceByName(name);
     if (!service) return describeCapability(capability, requesterKind);
     const title = service.title?.trim() || humanize(name);
     const action = service.action?.trim() || `use ${lowerFirst(title)}`;

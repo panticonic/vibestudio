@@ -9,7 +9,19 @@ import {
   inferTypedServiceClientCapabilities,
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
-} from "./unit-authority-inference.mjs";
+} from "@vibestudio/shared/unitAuthorityInference";
+
+function sourceTreeContains(directory, pattern) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
+    if (entry.isDirectory()) {
+      if (sourceTreeContains(child, pattern)) return true;
+    } else if (/\.(?:ts|tsx|js|jsx)$/.test(entry.name) && pattern.test(fs.readFileSync(child, "utf8"))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 describe("inferTypedServiceClientCapabilities", () => {
   const host = new Set([
@@ -127,7 +139,7 @@ describe("inferEventsClientCapabilities", () => {
 });
 
 describe("declared host-method capability dependencies", () => {
-  it("seals context-boundary authority into atomic workspace-state navigation", () => {
+  it("seals context-boundary authority into the workspace navigation commit", () => {
     const matrix = JSON.parse(
       fs.readFileSync(
         new URL("../../src/server/services/__serviceAuthorityMatrix.golden.json", import.meta.url),
@@ -141,7 +153,7 @@ describe("declared host-method capability dependencies", () => {
     );
   });
 
-  it("keeps every shipped panel-navigation manifest closed over its atomic commit", () => {
+  it("keeps every shipped panel-navigation manifest closed over its semantic commit", () => {
     const missing = [];
     for (const root of ["about", "apps", "panels"]) {
       const directory = new URL(`../../workspace/${root}/`, import.meta.url);
@@ -156,6 +168,27 @@ describe("declared host-method capability dependencies", () => {
         if (requests.has("workspace.runtime-state.manage") && !requests.has("context.boundary")) {
           missing.push(`${root}/${entry.name}`);
         }
+      }
+    }
+    assert.deepEqual(missing, []);
+  });
+
+  it("declares semantic navigation authority for every buildPanelLink caller", () => {
+    const missing = [];
+    for (const root of ["about", "apps", "panels"]) {
+      const directory = new URL(`../../workspace/${root}/`, import.meta.url);
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const unitDirectory = new URL(`${entry.name}/`, directory);
+        const manifestUrl = new URL("package.json", unitDirectory);
+        if (!fs.existsSync(manifestUrl) || !sourceTreeContains(unitDirectory, /\bbuildPanelLink\b/)) {
+          continue;
+        }
+        const manifest = JSON.parse(fs.readFileSync(manifestUrl, "utf8"));
+        const requests = new Set(
+          (manifest.vibestudio?.authority?.requests ?? []).map((request) => request.capability)
+        );
+        if (!requests.has("workspace.runtime-state.manage")) missing.push(`${root}/${entry.name}`);
       }
     }
     assert.deepEqual(missing, []);

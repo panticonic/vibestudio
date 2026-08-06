@@ -46,7 +46,8 @@ export function mapServiceHandlers<const M extends ServiceMethodSchemas>(
 ): ServiceHandlers<M> {
   const mapped: Partial<ServiceHandlers<M>> = {};
   for (const method of Object.keys(methods) as Array<keyof M>) {
-    mapped[method] = ((ctx, args) => handler(method, ctx, args)) as ServiceHandlers<M>[typeof method];
+    mapped[method] = ((ctx, args) =>
+      handler(method, ctx, args)) as ServiceHandlers<M>[typeof method];
   }
   return mapped as ServiceHandlers<M>;
 }
