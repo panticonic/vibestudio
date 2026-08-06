@@ -10,10 +10,12 @@
 // pulling a Node-flavored implementation into mobile.
 
 function getRandomValuesOrThrow(target: Uint8Array): Uint8Array {
-  const webCrypto = (globalThis as { crypto?: { getRandomValues?: (arr: Uint8Array) => Uint8Array } }).crypto;
+  const webCrypto = (
+    globalThis as { crypto?: { getRandomValues?: (arr: Uint8Array) => Uint8Array } }
+  ).crypto;
   if (!webCrypto || typeof webCrypto.getRandomValues !== "function") {
     throw new Error(
-      "crypto.getRandomValues is unavailable. Ensure 'react-native-get-random-values' is imported before any crypto.randomBytes call.",
+      "crypto.getRandomValues is unavailable. Ensure 'react-native-get-random-values' is imported before any crypto.randomBytes call."
     );
   }
   return webCrypto.getRandomValues(target);
@@ -55,15 +57,29 @@ export function randomBytes(size: number): RandomBytesBuffer {
 }
 
 function notAvailable(name: string): never {
-  throw new Error(`crypto.${name} is not available on mobile; this code path should not run in the RN bundle`);
+  throw new Error(
+    `crypto.${name} is not available on mobile; this code path should not run in the RN bundle`
+  );
 }
 
-export function createHash(): never { return notAvailable("createHash"); }
-export function createHmac(): never { return notAvailable("createHmac"); }
-export function createCipheriv(): never { return notAvailable("createCipheriv"); }
-export function createDecipheriv(): never { return notAvailable("createDecipheriv"); }
-export function pbkdf2Sync(): never { return notAvailable("pbkdf2Sync"); }
-export function scryptSync(): never { return notAvailable("scryptSync"); }
+export function createHash(): never {
+  return notAvailable("createHash");
+}
+export function createHmac(): never {
+  return notAvailable("createHmac");
+}
+export function createCipheriv(): never {
+  return notAvailable("createCipheriv");
+}
+export function createDecipheriv(): never {
+  return notAvailable("createDecipheriv");
+}
+export function pbkdf2Sync(): never {
+  return notAvailable("pbkdf2Sync");
+}
+export function scryptSync(): never {
+  return notAvailable("scryptSync");
+}
 
 export default {
   randomBytes,

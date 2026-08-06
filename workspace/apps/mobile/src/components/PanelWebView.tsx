@@ -12,11 +12,13 @@ import { WebView } from "react-native-webview";
 import type {
   WebViewNavigation,
   ShouldStartLoadRequest,
+  FileDownloadEvent,
   WebViewMessageEvent,
 } from "react-native-webview/lib/WebViewTypes";
 import { isManagedHost, parsePanelUrl, LOOPBACK_PANEL_HOST } from "../services/panelUrls";
 import { tryParsePanelLocationLink, type PanelDisposition } from "@vibestudio/shared/panelLocation";
 import { openExternalUrl } from "../services/nativeCapabilities";
+import { shouldOpenPdfExternally } from "../services/mediaNavigation";
 import { VibestudioLogo } from "./VibestudioLogo";
 import type {
   PanelBootObservation,
@@ -536,6 +538,45 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
     [diagnosticsEnabled, panelId]
   );
 
+  const externalPdfPanel = !managed && shouldOpenPdfExternally(Platform.OS, url);
+  const externalPdfUrlRef = useRef<string | null>(null);
+
+  const openExternalResource = useCallback(
+    async (targetUrl: string, reason: string): Promise<void> => {
+      try {
+        await openExternalUrl(targetUrl);
+      } catch (error: unknown) {
+        logDiagnostic("external resource open failed", {
+          url: targetUrl,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    [logDiagnostic]
+  );
+
+  const openExternalPdf = useCallback(
+    (targetUrl: string) => {
+      if (externalPdfUrlRef.current === targetUrl) return;
+      externalPdfUrlRef.current = targetUrl;
+      void openExternalResource(targetUrl, "PDF").then(() => {
+        if (externalPdfUrlRef.current === targetUrl) {
+          externalPdfUrlRef.current = null;
+        }
+      });
+    },
+    [openExternalResource]
+  );
+
+  useEffect(() => {
+    if (externalPdfPanel) {
+      openExternalPdf(url);
+    } else {
+      externalPdfUrlRef.current = null;
+    }
+  }, [externalPdfPanel, openExternalPdf, url]);
+
   const dispatchHostEvent = useCallback(
     (event: string, payload: unknown) => {
       if (!managed) return;
@@ -711,6 +752,10 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
       // bypasses managed panel navigation and leaves the old runtime identity
       // attached to new panel code.
       if (isTopFrame === false) return true;
+      if (!managed && shouldOpenPdfExternally(Platform.OS, requestUrl)) {
+        openExternalPdf(requestUrl);
+        return false;
+      }
       if (requestUrl === url) return true;
 
       if (emitPanelNavigation(requestUrl)) {
@@ -724,7 +769,16 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
 
       return true;
     },
-    [emitPanelNavigation, managed, onBridgeCall, panelId, url]
+    [emitPanelNavigation, managed, onBridgeCall, openExternalPdf, panelId, url]
+  );
+
+  const handleFileDownload = useCallback(
+    (event: FileDownloadEvent) => {
+      const downloadUrl = event.nativeEvent.downloadUrl;
+      if (!/^https?:\/\//i.test(downloadUrl)) return;
+      void openExternalResource(downloadUrl, "download");
+    },
+    [openExternalResource]
   );
 
   const handleNavigationStateChange = useCallback(
@@ -1044,6 +1098,43 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
     );
   }
 
+  if (externalPdfPanel) {
+    return (
+      <View style={containerStyle}>
+        <View
+          style={[
+            styles.externalAssetContainer,
+            colors?.background != null && { backgroundColor: colors.background },
+          ]}
+        >
+          <VibestudioLogo size={72} variant="symbol" style={styles.logo} />
+          <Text style={[styles.errorTitle, colors?.text != null && { color: colors.text }]}>
+            Opening PDF
+          </Text>
+          <Text
+            style={[
+              styles.errorMessage,
+              colors?.textSecondary != null && { color: colors.textSecondary },
+            ]}
+          >
+            Your device will open this document in its PDF-capable app.
+          </Text>
+          <Pressable
+            style={[
+              styles.retryButton,
+              colors?.primary != null && { backgroundColor: colors.primary },
+            ]}
+            onPress={() => openExternalPdf(url)}
+          >
+            <Text style={[styles.retryText, colors?.text != null && { color: colors.text }]}>
+              Open PDF
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={containerStyle}>
       {isLoading && (
@@ -1082,6 +1173,7 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
         onHttpError={handleHttpError}
         onLoadEnd={handleLoadEnd}
         onRenderProcessGone={handleRenderProcessGone}
+        onFileDownload={Platform.OS === "ios" ? handleFileDownload : undefined}
         injectedJavaScriptBeforeContentLoaded={
           managed ? buildBridgeBootstrapScript(panelInit, diagnosticsEnabled || __DEV__) : undefined
         }
@@ -1099,7 +1191,7 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
             return;
           }
           if (/^https?:\/\//i.test(targetUrl)) {
-            void openExternalUrl(targetUrl);
+            void openExternalResource(targetUrl, "new window");
           }
         }}
         javaScriptEnabled
@@ -1150,6 +1242,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 32,
     backgroundColor: "#100b18",
+  },
+  externalAssetContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 32,
+    backgroundColor: "#0a0b0c",
   },
   errorTitle: {
     fontSize: 18,

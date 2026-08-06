@@ -3,6 +3,10 @@ import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { ApprovalSheet } from "./ApprovalSheet";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
+import type {
+  InstallReviewPart,
+  InstallReviewRow,
+} from "@vibestudio/shared/authority/unitInstallReview";
 
 const base = {
   approvalId: "approval-1",
@@ -62,6 +66,48 @@ const credential: PendingApproval = {
   oauthAuthorizeOrigin: "https://accounts.google.com",
   oauthTokenOrigin: "https://oauth2.googleapis.com",
   oauthAudienceDomainMismatch: true,
+  bindingLabel: "Calendar account for scheduling",
+  grantResource: {
+    bindingId: "calendar-primary",
+    action: "read",
+    resource: "calendar/events",
+  },
+};
+
+const missionReview: PendingApproval = {
+  ...base,
+  kind: "mission-review",
+  missionId: "mission-1",
+  revision: 2,
+  closureDigest: "closure-abc123",
+  reviewKind: "revision",
+  title: "Review morning briefing",
+  taskSummary: "Prepare a morning briefing.",
+  triggerSummary: "Every weekday at 08:00",
+  authority: {
+    rows: [],
+    diff: { added: [], removed: [], unchanged: [], retiered: [] },
+  },
+  toolkitDomains: [],
+  networkSummary: "No network access",
+  lineageSummary: "Workspace content",
+  charter: {
+    agentBindingId: "briefing-agent",
+    taskSpec: "Prepare a morning briefing.",
+    harness: { unit: "workers/briefing", ev: "ev-harness-123" },
+    skills: [],
+    toolExposure: {
+      services: [],
+      userlandServices: [],
+      workspaceServiceDiscovery: "bound",
+      evalNetwork: "none",
+      declaredOrigins: [],
+    },
+    model: { modelId: "openai/gpt-mobile-review", params: {} },
+    declaredLineageClasses: ["none"],
+    trigger: { kind: "cron", cron: "0 8 * * 1-5" },
+  },
+  charterChanges: [],
 };
 
 const notificationsRow = authorityRow({
@@ -135,67 +181,149 @@ const deviceCode: PendingApproval = {
   oauthTokenOrigin: "https://github.com/login/oauth/access_token",
 };
 
-const unitBatch: PendingApproval = {
+const installReview: PendingApproval = {
   ...base,
   callerId: "system:workspace-startup",
   callerKind: "system",
-  repoPath: "/projects/foo/meta",
-  kind: "unit-batch",
-  trigger: "startup",
-  title: "Run 2 workspace units",
-  description: "Approve workspace apps and extensions declared in config.",
-  units: [
+  repoPath: "meta",
+  kind: "unit-install-review",
+  mode: "adopt-root",
+  title: "Start this workspace?",
+  description: "Vibestudio needs to run 2 programs on this computer.",
+  parts: [
     {
-      unitKind: "app",
-      unitName: "mobile",
-      displayName: "Mobile",
-      version: "0.1.0",
+      identityKey: "apps/mobile@ev-mobile",
+      kind: "app",
+      label: "Client App",
+      surfaces: [],
+      name: "@workspace-apps/mobile",
+      title: "Mobile",
+      purpose: "The mobile app itself.",
+      repoPath: "apps/mobile",
+      effectiveVersion: "ev-mobile",
+      version: null,
+      requiredUnitKeys: [],
+      runsInBackground: false,
       target: "react-native",
-      source: { kind: "workspace-repo", repo: "apps/mobile", ref: "abc123" },
-      ev: "ev-mobile",
-      capabilities: ["panel-hosting"],
-      authority: {
-        provides: [],
-        requests: [
-          {
-            capability: "push.send",
-            resource: { kind: "prefix", prefix: "" },
-            tier: "gated",
-            evidence: "intentional-broad",
-          },
-          {
-            capability: "account.profile.read",
-            resource: { kind: "prefix", prefix: "" },
-            tier: "gated",
-            evidence: "intentional-broad",
-          },
-        ],
-        rows: [notificationsRow, accountProfileRow],
-        diff: {
-          added: [{ ...notificationsRow, flags: { newInDiff: true } }],
-          removed: [],
-          unchanged: [accountProfileRow],
-          retiered: [],
-        },
+      origin: {
+        url: null,
+        originKey: "vibestudio",
+        registrableDomain: null,
+        version: "1.4.0",
+        isHostBuild: true,
+        firstEncounter: false,
       },
+      notableRows: [
+        {
+          kind: "permission",
+          key: "push.send\u0000{}",
+          row: notificationsRow,
+          timing: "asks-every-time",
+          notability: "headline",
+          selectable: false,
+          selectedByDefault: false,
+        },
+      ],
+      everydayRows: [
+        {
+          kind: "permission",
+          key: "account.profile.read\u0000{}",
+          row: accountProfileRow,
+          timing: "on-add",
+          notability: "everyday",
+          selectable: true,
+          selectedByDefault: true,
+        },
+      ],
+      change: "added",
+      section: "template",
     },
     {
-      unitKind: "extension",
-      unitName: "git-tools",
-      displayName: "Git Tools",
-      target: "terminal",
-      source: { kind: "workspace-repo", repo: "extensions/git-tools", ref: "def456" },
-      ev: "ev-extension",
-      capabilities: ["filesystem"],
-      provider: {
-        name: "provider-a",
-        activeEv: "ev-provider",
-        activeBuildKey: "build-provider",
-        contractVersion: "1",
+      identityKey: "extensions/git-tools@ev-extension",
+      kind: "extension",
+      label: "Extension",
+      surfaces: [],
+      name: "@workspace-extensions/git-tools",
+      title: "Git Tools",
+      purpose: "Adds Git tools to the host.",
+      repoPath: "extensions/git-tools",
+      effectiveVersion: "ev-extension",
+      version: null,
+      requiredUnitKeys: [],
+      runsInBackground: false,
+      target: null,
+      origin: {
+        url: null,
+        originKey: "vibestudio",
+        registrableDomain: null,
+        version: "1.4.0",
+        isHostBuild: true,
+        firstEncounter: false,
       },
+      notableRows: [],
+      everydayRows: [],
+      change: "added",
+      section: "template",
     },
   ],
+  summary: { panels: 0, agents: 0, services: 0, clientApps: 1, extensions: 1 },
+  unchangedPartCount: 0,
 };
+
+/**
+ * A headline row backed by the real \`push.send\` capability (action: "send a
+ * notification"), distinguished by its resource phrase so several can coexist
+ * in one part for split/collapse tests without inventing unregistered
+ * capabilities.
+ */
+function headlineRow(id: string, timing: InstallReviewRow["timing"] = "on-add"): InstallReviewRow {
+  return {
+    kind: "permission",
+    key: `push.send#${id}`,
+    row: authorityRow({
+      capability: "push.send",
+      resource: { kind: "exact", key: id },
+      resourcePhrase: id,
+      tier: "gated",
+      statement: "declared",
+      provenance: { source: "manifest" },
+    }),
+    timing,
+    notability: "headline",
+    selectable: timing === "on-add",
+    selectedByDefault: timing === "on-add",
+  };
+}
+
+function reviewPart(
+  overrides: Partial<InstallReviewPart> & Pick<InstallReviewPart, "identityKey" | "title">
+): InstallReviewPart {
+  return {
+    kind: "worker",
+    label: "Agent",
+    surfaces: [],
+    name: overrides.title,
+    purpose: "Does its job.",
+    repoPath: "template/part",
+    effectiveVersion: "ev-part",
+    version: null,
+    requiredUnitKeys: [],
+    runsInBackground: false,
+    origin: {
+      url: null,
+      originKey: "vibestudio",
+      registrableDomain: null,
+      version: "1.4.0",
+      isHostBuild: true,
+      firstEncounter: false,
+    },
+    notableRows: [],
+    everydayRows: [],
+    change: "added",
+    section: "template",
+    ...overrides,
+  };
+}
 
 const browserPermission: PendingApproval = {
   ...base,
@@ -255,25 +383,394 @@ describe("ApprovalSheet", () => {
     [secretInput, "Enter sudo password"],
     [genericApproval, "Open another workspace branch"],
     [deviceCode, "Sign in to GitHub"],
-    [unitBatch, "Start 1 extension and 1 app"],
+    [installReview, "Start this workspace?"],
     [browserPermission, "Allow camera and microphone on https://meet.example.com?"],
+    [missionReview, "Review Review morning briefing"],
   ] as const)("renders %s", (approval, title) => {
     const { getByText } = renderSheet(approval);
     expect(getByText(title)).toBeTruthy();
   });
 
-  it("shows added unit permissions before unchanged permission details", () => {
-    const { getByText, getByTestId, queryByText } = renderSheet(unitBatch);
-    expect(getByText("New: Publishing & sending (1)")).toBeTruthy();
-    expect(queryByText("+ Publishing & sending")).toBeNull();
+  it("lazily renders the exact reviewed file diff and keeps full inspection available", async () => {
+    const diffApproval: PendingApproval = {
+      ...capability,
+      diffReview: [
+        {
+          repoPath: "panels/chat",
+          oldState: "old-state",
+          newState: "new-state",
+          diffStat: { filesChanged: 2, insertions: 1, deletions: 1 },
+          changedFiles: [
+            {
+              path: "src/message.ts",
+              kind: "changed",
+              oldHash: "old-hash",
+              newHash: "new-hash",
+            },
+            { path: "assets/icon.png", kind: "changed", binary: true },
+          ],
+        },
+      ],
+    };
+    const content = new Map([
+      ["old-hash", "one\ntwo\nthree\nfour\nfive\nold value\nseven\neight\nnine\nten"],
+      ["new-hash", "one\ntwo\nthree\nfour\nfive\nnew value\nseven\neight\nnine\nten"],
+    ]);
+    const onFetchDiffContent = jest.fn(async (_approvalId: string, hash: string) =>
+      content.get(hash)
+    );
+    const onOpenDiffFile = jest.fn(async () => undefined);
+    const { getByTestId, getByText } = renderSheet(diffApproval, {
+      onFetchDiffContent,
+      onOpenDiffFile,
+    });
 
-    fireEvent.press(getByTestId("unit-review-app-mobile"));
-    expect(getByText("+ Publishing & sending")).toBeTruthy();
-    expect(getByText("send a notification — anything in this workspace")).toBeTruthy();
-    expect(queryByText("view an account profile — anything in this workspace")).toBeNull();
+    expect(getByText("Review changes")).toBeTruthy();
+    expect(getByText("2 files · 1 repository")).toBeTruthy();
+    expect(onFetchDiffContent).not.toHaveBeenCalled();
 
-    fireEvent.press(getByText("1 unchanged permission"));
-    expect(getByText("view an account profile — anything in this workspace")).toBeTruthy();
+    fireEvent.press(getByTestId("approval-diff-file-src/message.ts"));
+    await waitFor(() => expect(onFetchDiffContent).toHaveBeenCalledTimes(2));
+    expect(onFetchDiffContent.mock.calls).toEqual(
+      expect.arrayContaining([
+        ["approval-1", "old-hash"],
+        ["approval-1", "new-hash"],
+      ])
+    );
+    await waitFor(() => expect(getByText("old value")).toBeTruthy());
+    expect(getByText("new value")).toBeTruthy();
+    expect(getByText(/unchanged context is folded/)).toBeTruthy();
+
+    fireEvent.press(getByTestId("approval-diff-open-src/message.ts"));
+    await waitFor(() =>
+      expect(onOpenDiffFile).toHaveBeenCalledWith(
+        diffApproval.diffReview![0]!.changedFiles[0],
+        diffApproval.diffReview![0]
+      )
+    );
+  });
+
+  it("shows credential binding and grant scope in request details", () => {
+    const { getByText } = renderSheet(credential);
+    expect(getByText("Calendar account for scheduling")).toBeTruthy();
+    expect(getByText("calendar-primary read calendar/events")).toBeTruthy();
+  });
+
+  it("discloses the exact mission closure, harness, and model", () => {
+    const { getByTestId, getByText, queryByText } = renderSheet(missionReview);
+    expect(queryByText("closure-abc123")).toBeNull();
+    fireEvent.press(getByTestId("mission-developer-details"));
+    expect(getByText("closure-abc123")).toBeTruthy();
+    expect(getByText("workers/briefing@ev-harness-123")).toBeTruthy();
+    expect(getByText("openai/gpt-mobile-review")).toBeTruthy();
+  });
+
+  it("puts what is worth knowing above the everyday fold", () => {
+    const { getAllByText, getByText, getByTestId, queryByText } = renderSheet(installReview);
+
+    // The list line states what is notable, or an honest ordinary footprint.
+    expect(getByText(/Publishing & sending|send a notification/)).toBeTruthy();
+    expect(queryByText("view an account profile")).toBeNull();
+
+    fireEvent.press(getByTestId("install-review-part-apps/mobile@ev-mobile"));
+    // Worth knowing is shown immediately — nothing notable is ever folded away.
+    expect(getAllByText("send a notification").length).toBeGreaterThan(0);
+    // The everyday row stays behind its own disclosure until asked for.
+    expect(queryByText("view an account profile")).toBeNull();
+    expect(getByText("Plus 1 everyday permission")).toBeTruthy();
+
+    fireEvent.press(getByText("Plus 1 everyday permission"));
+    expect(
+      getByText(
+        "These are the ordinary things parts do here. Ordinary doesn't mean harmless — open any one to see what it does."
+      )
+    ).toBeTruthy();
+    expect(getByText("view an account profile")).toBeTruthy();
+  });
+
+  it("uses the desktop category order, summaries, and intelligent default folding", () => {
+    const notable = headlineRow("notable");
+    const groupedReview: PendingApproval = {
+      ...installReview,
+      parts: [
+        reviewPart({
+          identityKey: "panels/chat@ev",
+          title: "Chat",
+          kind: "panel",
+          label: "Panel",
+          repoPath: "panels/chat",
+          notableRows: [notable],
+        }),
+        reviewPart({
+          identityKey: "workers/researcher@ev",
+          title: "Researcher",
+          repoPath: "workers/researcher",
+          notableRows: [notable],
+        }),
+        reviewPart({
+          identityKey: "about/accounts@ev",
+          title: "Accounts",
+          kind: "panel",
+          label: "Panel",
+          repoPath: "about/accounts",
+          purpose: "Manage workspace accounts.",
+        }),
+        reviewPart({
+          identityKey: "workers/pubsub@ev",
+          title: "Pubsub",
+          label: "Service",
+          repoPath: "workers/pubsub",
+          purpose: "Connect workspace conversations.",
+        }),
+      ],
+    };
+    const { getAllByText, getByTestId, getByText, queryByTestId } = renderSheet(groupedReview);
+
+    expect(
+      getAllByText(/^(App panels|Agents and background tasks|System panels|Services)$/u).map(
+        (node) => node.props.children
+      )
+    ).toEqual(["App panels", "Agents and background tasks", "System panels", "Services"]);
+
+    const appPanels = getByTestId("install-review-group-app-panels");
+    const agents = getByTestId("install-review-group-agents-and-background-tasks");
+    const systemPanels = getByTestId("install-review-group-system-panels");
+    const services = getByTestId("install-review-group-services");
+    expect(appPanels.props.accessibilityState.expanded).toBe(true);
+    expect(agents.props.accessibilityState.expanded).toBe(true);
+    expect(systemPanels.props.accessibilityState.expanded).toBe(false);
+    expect(services.props.accessibilityState.expanded).toBe(false);
+    expect(systemPanels.props.accessibilityLabel).toContain("Accounts");
+    expect(systemPanels.props.accessibilityLabel).toContain("nothing unusual");
+    expect(queryByTestId("install-review-part-about/accounts@ev")).toBeNull();
+
+    fireEvent.press(systemPanels);
+    expect(getByTestId("install-review-part-about/accounts@ev")).toBeTruthy();
+    expect(getByText("Manage workspace accounts.")).toBeTruthy();
+  });
+
+  it("keeps every category open when the whole workspace is routine", () => {
+    const routineReview: PendingApproval = {
+      ...installReview,
+      parts: [
+        reviewPart({
+          identityKey: "panels/chat@ev",
+          title: "Chat",
+          kind: "panel",
+          label: "Panel",
+          repoPath: "panels/chat",
+        }),
+        reviewPart({
+          identityKey: "about/accounts@ev",
+          title: "Accounts",
+          kind: "panel",
+          label: "Panel",
+          repoPath: "about/accounts",
+        }),
+      ],
+    };
+    const { getByTestId } = renderSheet(routineReview);
+
+    expect(getByTestId("install-review-group-app-panels").props.accessibilityState.expanded).toBe(
+      true
+    );
+    expect(
+      getByTestId("install-review-group-system-panels").props.accessibilityState.expanded
+    ).toBe(true);
+  });
+
+  it("searches and filters across folded categories without changing the decision", async () => {
+    const parts = Array.from({ length: 13 }, (_, index) =>
+      reviewPart({
+        identityKey: `unit-${index}`,
+        title: index === 0 ? "Chat" : `Worker ${index}`,
+        kind: index === 0 ? "panel" : "worker",
+        label: index === 0 ? "Panel" : "Agent",
+        repoPath: index === 0 ? "panels/chat" : `workers/worker-${index}`,
+        notableRows: index === 0 ? [headlineRow("chat")] : [],
+      })
+    );
+    const onResolveInstallReview = jest.fn(async () => undefined);
+    const { getByTestId, getByText, queryByTestId } = renderSheet(
+      { ...installReview, parts },
+      { onResolveInstallReview }
+    );
+
+    // The quiet worker category begins folded, but a search result is never
+    // trapped behind it. While filtering, the category says it cannot fold.
+    expect(
+      getByTestId("install-review-group-agents-and-background-tasks").props.accessibilityState
+        .expanded
+    ).toBe(false);
+    fireEvent.changeText(getByTestId("install-review-search"), "Worker 4");
+    expect(getByTestId("install-review-part-unit-4")).toBeTruthy();
+    expect(
+      getByTestId("install-review-group-agents-and-background-tasks").props.accessibilityState
+    ).toEqual(expect.objectContaining({ disabled: true, expanded: true }));
+    expect(getByText(/12 parts hidden by your search/u)).toBeTruthy();
+
+    fireEvent.changeText(getByTestId("install-review-search"), "");
+    fireEvent.press(getByTestId("install-review-kind-Panel"));
+    expect(getByTestId("install-review-part-unit-0")).toBeTruthy();
+    expect(queryByTestId("install-review-part-unit-4")).toBeNull();
+    expect(getByTestId("install-review-kind-Panel").props.accessibilityState.selected).toBe(true);
+
+    // Filtering changes visibility only; accepting still names every part.
+    fireEvent.press(getByTestId("approval-action-accept-install-review"));
+    await waitFor(() => {
+      const resolution = onResolveInstallReview.mock.calls[0]?.[1];
+      expect(resolution).toMatchObject({ decision: "adopt-root" });
+      expect(resolution?.decision === "cancel" ? [] : resolution?.allowNow).toHaveLength(13);
+    });
+  });
+
+  it("collapses worth knowing past five rows, but never drops one", () => {
+    const manyNotable: PendingApproval = {
+      ...installReview,
+      parts: [
+        reviewPart({
+          identityKey: "template/six@ev-six",
+          title: "Six Notable",
+          notableRows: ["a", "b", "c", "d", "e", "f"].map((id) => headlineRow(id)),
+        }),
+      ],
+    };
+    const { getAllByText, getByText, queryByText, getByTestId } = renderSheet(manyNotable);
+    fireEvent.press(getByTestId("install-review-part-template/six@ev-six"));
+
+    // Five shown, the sixth folded behind an honest count — nothing dropped.
+    expect(getAllByText("send a notification")).toHaveLength(5);
+    expect(getByText("Show all 6 notable")).toBeTruthy();
+
+    fireEvent.press(getByText("Show all 6 notable"));
+    expect(getAllByText("send a notification")).toHaveLength(6);
+    expect(queryByText("Show all 6 notable")).toBeNull();
+  });
+
+  it("auto-expands worth knowing when any row always confirms", () => {
+    const criticalAmongMany: PendingApproval = {
+      ...installReview,
+      parts: [
+        reviewPart({
+          identityKey: "template/critical@ev-critical",
+          title: "Critical Mixed",
+          notableRows: [
+            ...["a", "b", "c", "d", "e"].map((id) => headlineRow(id)),
+            headlineRow("f", "asks-every-time"),
+          ],
+        }),
+      ],
+    };
+    const { getAllByText, queryByText, getByTestId } = renderSheet(criticalAmongMany);
+    fireEvent.press(getByTestId("install-review-part-template/critical@ev-critical"));
+
+    // The one row a person must not miss forces the whole list open by default.
+    expect(queryByText("Show all 6 notable")).toBeNull();
+    expect(getAllByText("send a notification")).toHaveLength(6);
+  });
+
+  it("shows agent-authored repairs in their own section, never folded away", () => {
+    const withRepair: PendingApproval = {
+      ...installReview,
+      parts: [
+        ...installReview.parts,
+        reviewPart({
+          identityKey: "workspace/chat@ev-chat",
+          title: "Chat",
+          purpose: "Fixed to work with News.",
+          section: "repair",
+          change: "changed",
+          notableRows: [headlineRow("chat-fix")],
+        }),
+      ],
+    };
+    const { getByText, getByTestId } = renderSheet(withRepair);
+
+    // Always shown, unconditionally — a repair touches a part the template
+    // does not own, so it is never folded into or hidden behind the
+    // template's own list.
+    expect(getByText("Also changes 1 part already in your workspace")).toBeTruthy();
+    expect(getByText("Chat · Agent")).toBeTruthy();
+    fireEvent.press(getByTestId("install-review-part-workspace/chat@ev-chat"));
+    // The repair's own row, identified by its distinguishing resource phrase.
+    expect(getByText("chat-fix")).toBeTruthy();
+  });
+
+  it("renders the honest From line: origin URL, or an honest host-build statement, never a version or kind label alone", () => {
+    const foreignOrigin: PendingApproval = {
+      ...installReview,
+      parts: [
+        ...installReview.parts,
+        reviewPart({
+          identityKey: "template/news@ev-news",
+          title: "News",
+          version: "1.2.0",
+          originallyInstalledFrom: "News 1.0.0",
+          origin: {
+            url: "github.com/panticonic/news",
+            originKey: "panticonic/news",
+            registrableDomain: "github.com",
+            version: "1.2.0",
+            isHostBuild: false,
+            firstEncounter: true,
+          },
+        }),
+      ],
+    };
+    const { getByText, getByTestId, queryByText } = renderSheet(foreignOrigin);
+    fireEvent.press(getByTestId("install-review-group-directory:template"));
+    fireEvent.press(getByTestId("install-review-part-template/news@ev-news"));
+
+    // The origin URL, exactly — never "From: 1.2.0" and never "From: News".
+    expect(getByText("github.com/panticonic/news")).toBeTruthy();
+    expect(queryByText("1.2.0")).toBeNull();
+    expect(queryByText("News")).toBeNull();
+    expect(getByText("Originally installed from")).toBeTruthy();
+    expect(getByText("News 1.0.0")).toBeTruthy();
+
+    // The host's own build is named honestly rather than by a bare version.
+    fireEvent.press(getByTestId("install-review-part-apps/mobile@ev-mobile"));
+    expect(getByText("Vibestudio 1.4.0")).toBeTruthy();
+  });
+
+  it("emphasizes the registrable domain inside the URL, and states it in words", () => {
+    // The lookalike is the whole reason the emphasis exists: a person reads
+    // `github.com.attacker.net` as GitHub, and the domain that owns it is
+    // `attacker.net`. The URL is never shortened to the domain, and the domain
+    // is stated as well as drawn, because weight is invisible to a screen
+    // reader and to a monochrome display.
+    const lookalike: PendingApproval = {
+      ...installReview,
+      parts: [
+        reviewPart({
+          identityKey: "template/studio@ev-studio",
+          title: "Studio",
+          version: "2.1.0",
+          origin: {
+            url: "https://github.com.attacker.net/acme/studio",
+            originKey: "github.com.attacker.net/acme",
+            registrableDomain: "attacker.net",
+            version: "2.1.0",
+            isHostBuild: false,
+            firstEncounter: true,
+          },
+        }),
+      ],
+    };
+    const { getByText, getAllByText, getByTestId, queryByText } = renderSheet(lookalike);
+    fireEvent.press(getByTestId("install-review-part-template/studio@ev-studio"));
+
+    // Whole, never shortened to the domain.
+    expect(getByText("https://github.com.attacker.net/acme/studio")).toBeTruthy();
+    // Emphasized in place: weight and an underline, never colour alone.
+    const emphasis = getAllByText("attacker.net").find((node) => {
+      const style = Array.isArray(node.props.style) ? node.props.style[0] : node.props.style;
+      return style?.fontWeight === "800" && style?.textDecorationLine === "underline";
+    });
+    expect(emphasis).toBeTruthy();
+    // And said out loud, in the same words every other surface uses.
+    expect(getByText("Domain")).toBeTruthy();
+    expect(queryByText("github.com")).toBeNull();
   });
 
   it.each(["once", "session", "version", "deny"] as const)(
@@ -469,27 +966,33 @@ describe("ApprovalSheet", () => {
     await waitFor(() => expect(onResolve).toHaveBeenCalledWith("approval-1", "dismiss"));
   });
 
-  it("renders unit-batch approvals as workspace-owned prompts", async () => {
-    const onResolve = jest.fn(async () => undefined);
-    const { getAllByText, getByText, getByTestId } = renderSheet(unitBatch, { onResolve });
+  it("shows every part in plain language, with a checkbox only for what it can grant", async () => {
+    const onResolveInstallReview = jest.fn(async () => undefined);
+    const { getByText, getByTestId, queryByLabelText } = renderSheet(installReview, {
+      onResolveInstallReview,
+    });
 
-    expect(getByText("Workspace")).toBeTruthy();
-    expect(getByText("workspace")).toBeTruthy();
-    expect(getByText(/Mobile/)).toBeTruthy();
-    expect(getByText("Git Tools")).toBeTruthy();
+    expect(getByText("Mobile · Client App")).toBeTruthy();
+    fireEvent.press(getByTestId("install-review-group-extensions"));
+    expect(getByText("Git Tools · Extension")).toBeTruthy();
 
-    fireEvent.press(getByTestId("unit-review-app-mobile"));
-    fireEvent.press(getByTestId("unit-review-extension-git-tools"));
-    expect(getByText("Mobile")).toBeTruthy();
-    expect(getByText("mobile")).toBeTruthy();
-    expect(getByText("Terminal")).toBeTruthy();
-    expect(getByText("git-tools")).toBeTruthy();
-    expect(getAllByText("Host integration")).toHaveLength(2);
-    expect(getByText("panel-hosting")).toBeTruthy();
+    fireEvent.press(getByTestId("install-review-part-apps/mobile@ev-mobile"));
+    // The contextual row is a disclosure: its timing line carries the meaning,
+    // and there is no control that could promise what this decision cannot give.
+    expect(getByText("Asks every time, showing exactly what.")).toBeTruthy();
+    expect(queryByLabelText(`Allow ${notificationsRow.action} now`)).toBeNull();
 
-    fireEvent.press(getByTestId("approval-action-once"));
+    fireEvent.press(getByTestId("approval-action-accept-install-review"));
 
-    await waitFor(() => expect(onResolve).toHaveBeenCalledWith("approval-1", "once"));
+    await waitFor(() =>
+      expect(onResolveInstallReview).toHaveBeenCalledWith("approval-1", {
+        decision: "adopt-root",
+        allowNow: [
+          { identityKey: "apps/mobile@ev-mobile", permissions: ["account.profile.read\u0000{}"] },
+          { identityKey: "extensions/git-tools@ev-extension", permissions: [] },
+        ],
+      })
+    );
   });
 
   it("renders severe context-boundary approvals with danger-tone trust action", () => {

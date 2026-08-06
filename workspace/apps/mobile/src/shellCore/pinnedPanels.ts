@@ -32,7 +32,7 @@ export async function loadPinnedPanelIds(workspaceId: string): Promise<string[]>
 
 export async function savePinnedPanelIds(
   workspaceId: string,
-  pinnedPanelIds: string[],
+  pinnedPanelIds: string[]
 ): Promise<void> {
   const storage = getNativeAppStorage();
   const payload: PinnedPanelsFile = { version: 1, pinnedPanelIds };

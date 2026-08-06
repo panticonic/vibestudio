@@ -122,7 +122,10 @@ function promptMobileUpdate(event: AppLifecyclePayload, deps: AppUpdatePromptDep
               void deps.shellClient.workspaces
                 .rollbackApp(appId)
                 .then(() =>
-                  ensureBundle(deps.shellClient.transport, event.source ?? deps.selectedSource ?? null)
+                  ensureBundle(
+                    deps.shellClient.transport,
+                    event.source ?? deps.selectedSource ?? null
+                  )
                 )
                 .catch((error: unknown) => {
                   deps.pushToast({
@@ -139,7 +142,10 @@ function promptMobileUpdate(event: AppLifecyclePayload, deps: AppUpdatePromptDep
     {
       text: "Install",
       onPress: () => {
-        void ensureBundle(deps.shellClient.transport, event.source ?? deps.selectedSource ?? null).catch((error: unknown) => {
+        void ensureBundle(
+          deps.shellClient.transport,
+          event.source ?? deps.selectedSource ?? null
+        ).catch((error: unknown) => {
           deps.pushToast({
             title: "Update failed",
             message: error instanceof Error ? error.message : String(error),

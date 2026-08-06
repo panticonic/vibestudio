@@ -40,7 +40,11 @@ describe("panelUrls", () => {
 
   it("does not parse panel URLs outside the selected workspace prefix", () => {
     expect(
-      parsePanelUrl("https://server.example/panels/chat/?contextId=ctx-1", "server.example", "/_workspace/dev")
+      parsePanelUrl(
+        "https://server.example/panels/chat/?contextId=ctx-1",
+        "server.example",
+        "/_workspace/dev"
+      )
     ).toBeNull();
   });
 

@@ -50,7 +50,7 @@ function DrawerContentWrapper({ navigation }: { navigation: { closeDrawer: () =>
       setActivePanelId(panelId);
       navigation.closeDrawer();
     },
-    [setActivePanelId, navigation],
+    [setActivePanelId, navigation]
   );
 
   return <PanelDrawer onSelectPanel={handleSelectPanel} />;

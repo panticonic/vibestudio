@@ -43,6 +43,7 @@ import { startPanelAssetFacade, type PanelAssetFacade } from "./panelAssetFacade
 import { drainWorkspaceMutationQueue } from "./backgroundActionQueue";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
+import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
 import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { pushMethods } from "@vibestudio/service-schemas/push";
@@ -58,7 +59,7 @@ import {
   type UserNotificationAcknowledgementResult,
   type UserNotificationListResult,
 } from "@vibestudio/shared/userNotifications";
-import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import {
   HostLaunchClient,
   type HostLaunchResult,
@@ -87,6 +88,12 @@ export interface Credentials {
 }
 function createShellApprovalClient(transport: MobileRpcClient) {
   return createTypedServiceClient("shellApproval", shellApprovalMethods, (service, method, args) =>
+    transport.call("main", `${service}.${method}`, args)
+  );
+}
+
+function createBlobstoreClient(transport: MobileRpcClient) {
+  return createTypedServiceClient("blobstore", blobstoreMethods, (service, method, args) =>
     transport.call("main", `${service}.${method}`, args)
   );
 }
@@ -152,6 +159,7 @@ function createHubControlClient(transport: MobileRpcClient) {
 }
 
 type ShellApprovalClient = ReturnType<typeof createShellApprovalClient>;
+type BlobstoreClient = ReturnType<typeof createBlobstoreClient>;
 type PanelRuntimeClient = ReturnType<typeof createPanelRuntimeClient>;
 type CredentialsClient = ReturnType<typeof createCredentialsClient>;
 type PushClient = ReturnType<typeof createPushClient>;
@@ -160,7 +168,7 @@ type WorkspaceStateRpcClient = ReturnType<typeof createWorkspaceStateRpcClient>;
 type WorkspaceInfo = Awaited<ReturnType<WorkspaceClient["getInfo"]>>;
 
 export class MobileHostTargetApprovalRequiredError extends Error {
-  readonly approvals: PendingUnitBatchApproval[];
+  readonly approvals: PendingUnitInstallReviewApproval[];
 
   constructor(launch: Extract<HostLaunchResult, { status: "approval-required" }>) {
     super("Approve the workspace mobile app before opening panels.");
@@ -213,8 +221,10 @@ class MobilePanels implements PanelHost {
     this.workspaceRpc = createWorkspaceRpcClient(this.deps.transport);
     this.workspaceState = createWorkspaceStateRpcClient(this.deps.transport);
     this.browserData = createBrowserDataClient({
-      call: (service: string, method: string, args: unknown[]) =>
+      callService: (service: string, method: string, args: unknown[]) =>
         this.deps.transport.call("main", `${service}.${method}`, args),
+      callTarget: (targetId: string, method: string, args: unknown[]) =>
+        this.deps.transport.call(targetId, method, args),
     });
     const source: PanelTreeQuerySource = {
       rootGroups: (input) => this.workspaceState.panelTree.rootGroups(input),
@@ -349,8 +359,8 @@ class MobilePanels implements PanelHost {
                 exists: runtime.observation !== null,
                 ...(runtime.observation
                   ? {
-                      url: runtime.observation.url,
-                      loading: runtime.observation.loading,
+                      url: runtime.observation.view.url,
+                      loading: runtime.observation.view.loading,
                     }
                   : {}),
               },
@@ -784,6 +794,8 @@ export class ShellClient {
   readonly hubControl: ReturnType<typeof createHubControlClient>;
   readonly events: EventsClient;
   readonly shellApproval: ShellApprovalClient;
+  /** Content-addressed reads used by approval diff review and file inspection. */
+  readonly blobstore: BlobstoreClient;
   readonly panelRuntime: PanelRuntimeClient;
   readonly credentialService: CredentialsClient;
   readonly push: PushClient;
@@ -896,6 +908,7 @@ export class ShellClient {
     this.hubControl = createHubControlClient(this.transport);
     this.events = new EventsClient(this.transport, this.recovery);
     this.shellApproval = createShellApprovalClient(this.transport);
+    this.blobstore = createBlobstoreClient(this.transport);
     this.panelRuntime = createPanelRuntimeClient(this.transport);
     this.credentialService = createCredentialsClient(this.transport);
     this.push = createPushClient(this.transport);

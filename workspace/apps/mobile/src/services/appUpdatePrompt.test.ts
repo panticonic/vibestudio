@@ -43,7 +43,12 @@ describe("handleMobileAppLifecycleEvent (update-available)", () => {
   it("surfaces just the target version when no previous version is known", () => {
     const { deps, alert } = makeDeps();
     handleMobileAppLifecycleEvent(
-      { type: "update-available", appId: "apps/mobile", buildKey: "build-2", effectiveVersion: "1.2.0" },
+      {
+        type: "update-available",
+        appId: "apps/mobile",
+        buildKey: "build-2",
+        effectiveVersion: "1.2.0",
+      },
       deps
     );
     expect(alert.mock.calls[0][1]).toBe("apps/mobile v1.2.0 is ready to install.");
@@ -88,7 +93,12 @@ describe("handleMobileAppLifecycleEvent (update-available)", () => {
   it("installs through the active WebRTC transport", () => {
     const { deps, alert, ensureBundle } = makeDeps();
     handleMobileAppLifecycleEvent(
-      { type: "update-available", appId: "apps/mobile", buildKey: "build-2", source: "apps/mobile" },
+      {
+        type: "update-available",
+        appId: "apps/mobile",
+        buildKey: "build-2",
+        source: "apps/mobile",
+      },
       deps
     );
     const buttons = alert.mock.calls[0][2];

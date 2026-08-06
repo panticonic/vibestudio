@@ -9,6 +9,8 @@ export interface ToastEntry {
   tone?: ToastTone;
   createdAt: number;
   durationMs?: number;
+  actionLabel?: string;
+  onAction?: () => void | Promise<void>;
 }
 
 export type ToastInput = Omit<ToastEntry, "id" | "createdAt"> & {

@@ -71,7 +71,12 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
               title="Something went wrong"
               message={`${label} encountered an unexpected error.`}
               action={
-                <Button label="Retry" variant="filled" icon={RefreshCw} onPress={this.handleRetry} />
+                <Button
+                  label="Retry"
+                  variant="filled"
+                  icon={RefreshCw}
+                  onPress={this.handleRetry}
+                />
               }
             />
             {error?.message ? <Text style={styles.errorMessage}>{error.message}</Text> : null}

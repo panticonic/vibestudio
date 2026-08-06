@@ -138,10 +138,7 @@ export function ActionSheetHost() {
           <View {...panResponder.panHandlers} style={styles.grabArea}>
             <View style={[styles.grabber, { backgroundColor: colors.border }]} />
             {config.title ? (
-              <Text
-                style={[type.heading, styles.title, { color: colors.text }]}
-                numberOfLines={1}
-              >
+              <Text style={[type.heading, styles.title, { color: colors.text }]} numberOfLines={1}>
                 {config.title}
               </Text>
             ) : null}
@@ -180,7 +177,10 @@ export function ActionSheetHost() {
                 >
                   {Icon ? (
                     <View style={styles.rowIcon}>
-                      <Icon size={19} color={tone === "default" ? colors.textSecondary : labelColor} />
+                      <Icon
+                        size={19}
+                        color={tone === "default" ? colors.textSecondary : labelColor}
+                      />
                     </View>
                   ) : null}
                   <View style={styles.rowCopy}>
@@ -207,7 +207,10 @@ export function ActionSheetHost() {
             accessibilityLabel="Cancel"
             style={({ pressed }) => [
               styles.cancel,
-              { backgroundColor: pressed ? colors.surfaceSunken : "transparent", borderColor: colors.borderSubtle },
+              {
+                backgroundColor: pressed ? colors.surfaceSunken : "transparent",
+                borderColor: colors.borderSubtle,
+              },
             ]}
           >
             <Text style={[type.bodyStrong, { color: colors.textSecondary }]}>Cancel</Text>

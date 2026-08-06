@@ -11,12 +11,14 @@ import {
   Pressable,
 } from "react-native";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
+import type { TemplateInstallResolution } from "@vibestudio/shared/authority/unitInstallReview";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { ConnectionBar } from "./ConnectionBar";
 import { AppBar } from "./AppBar";
 import { LoadedPanelWebView } from "./LoadedPanelWebView";
 import { syncManagedWebViewThemes } from "./webViewThemes";
 import { ApprovalSheet } from "./ApprovalSheet";
+import { Toast } from "./Toast";
 import { VibestudioLogo } from "./VibestudioLogo";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
 import type { PanelWebViewHandle, PanelNavigationEvent } from "./PanelWebView";
@@ -78,7 +80,12 @@ import {
   type ApprovalStateController,
 } from "@vibestudio/shell-core/approvalState";
 import type { HostConfig } from "../services/panelUrls";
-import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
+import type {
+  ApprovalDecision,
+  DiffReviewEntry,
+  DiffReviewFile,
+  PendingApproval,
+} from "@vibestudio/shared/approvals";
 import {
   channelInviteFromNotification,
   type UserNotification,
@@ -554,6 +561,50 @@ export function MainScreen() {
     },
     [pushToast, refreshPendingApprovals, removeResolvedApproval, shellClient]
   );
+  const fetchApprovalDiffContent = useCallback(
+    async (approvalId: string, hash: string): Promise<string | null> => {
+      if (!shellClient) throw new Error("Shell client not available");
+      const approval = pendingApprovals.find((item) => item.approvalId === approvalId);
+      const belongsToReview = approval?.diffReview?.some((entry) =>
+        entry.changedFiles.some((file) => file.oldHash === hash || file.newHash === hash)
+      );
+      if (!belongsToReview) {
+        throw new Error("This file is not part of the pending reviewed change.");
+      }
+      return shellClient.blobstore.getText(hash);
+    },
+    [pendingApprovals, shellClient]
+  );
+  const openApprovalDiffFile = useCallback(
+    async (file: DiffReviewFile, entry: DiffReviewEntry) => {
+      if (!shellClient) return;
+      try {
+        await shellClient.panels.createRootPanel("panels/gad-browser", {
+          focus: true,
+          stateArgs: {
+            diffTarget: {
+              repoPath: entry.repoPath,
+              path: file.path,
+              oldHash: file.oldHash,
+              newHash: file.newHash,
+              oldState: entry.oldState,
+              newState: entry.newState,
+              binary: file.binary,
+              tooLarge: file.tooLarge,
+              files: entry.changedFiles,
+            },
+          },
+        });
+      } catch (error) {
+        pushToast({
+          title: "Could not open the file inspector",
+          message: error instanceof Error ? error.message : "Try again.",
+          tone: "danger",
+        });
+      }
+    },
+    [pushToast, shellClient]
+  );
   const submitClientConfig = useCallback(
     async (approvalId: string, values: Record<string, string>) => {
       if (!shellClient) throw new Error("Shell client not available");
@@ -640,6 +691,51 @@ export function MainScreen() {
       );
     },
     [hostConfig, panelMaterializationRetryQueue, shellClient, setActivePanelId, updateWebViewStack]
+  );
+  const resolveInstallReview = useCallback(
+    async (approvalId: string, resolution: TemplateInstallResolution) => {
+      if (!shellClient) throw new Error("Shell client not available");
+      const outcome = await shellClient.shellApproval.resolveInstallReview(approvalId, resolution);
+      removeResolvedApproval(approvalId);
+
+      const failed = outcome.landing?.failed ?? [];
+      const failure = failed.length > 0;
+      const entryPoint =
+        !failure && outcome.entryPoint?.kind === "panel" ? outcome.entryPoint : undefined;
+      const supportingCopy = failure
+        ? failed.map((part) => `${part.title}: ${part.reason}`).join(" · ")
+        : (outcome.detail ?? outcome.subject ?? "Your workspace is ready.");
+      pushToast({
+        id: `install-review:${outcome.approvalId}`,
+        title: outcome.heading,
+        message: supportingCopy,
+        tone: failure ? "danger" : outcome.decision === "accepted" ? "success" : "info",
+        durationMs: failure ? 0 : 8_000,
+        ...(entryPoint
+          ? {
+              actionLabel: `Open ${entryPoint.title}`,
+              onAction: async () => {
+                try {
+                  const created = await shellClient.panels.createRootPanel(entryPoint.repoPath, {
+                    title: entryPoint.title,
+                    focus: true,
+                  });
+                  refreshTree();
+                  activatePanel(created.id);
+                } catch (error) {
+                  pushToast({
+                    title: `Could not open ${entryPoint.title}`,
+                    message: error instanceof Error ? error.message : "Try again.",
+                    tone: "danger",
+                    durationMs: 0,
+                  });
+                }
+              },
+            }
+          : {}),
+      });
+    },
+    [activatePanel, pushToast, refreshTree, removeResolvedApproval, shellClient]
   );
   // WebViews are retained presentation slots, not runtime identities. Converge
   // every retained slot when its immutable runtime entity changes—whether the
@@ -1952,8 +2048,12 @@ export function MainScreen() {
         onSubmitCredentialInput={submitCredentialInput}
         onSubmitSecretInput={submitSecretInput}
         onResolveMissionReview={resolveMissionReview}
+        onResolveInstallReview={resolveInstallReview}
         onNavigateToPanel={activatePanel}
+        onFetchDiffContent={fetchApprovalDiffContent}
+        onOpenDiffFile={openApprovalDiffFile}
       />
+      <Toast />
     </View>
   );
 }

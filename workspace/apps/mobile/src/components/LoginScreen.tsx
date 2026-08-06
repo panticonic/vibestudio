@@ -279,10 +279,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
                 { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
               ]}
             >
-              <Text
-                style={[type.bodyStrong, { color: colors.danger }]}
-                accessibilityRole="alert"
-              >
+              <Text style={[type.bodyStrong, { color: colors.danger }]} accessibilityRole="alert">
                 {authError}
               </Text>
               <Text style={[type.caption, styles.calloutHint, { color: colors.textSecondary }]}>

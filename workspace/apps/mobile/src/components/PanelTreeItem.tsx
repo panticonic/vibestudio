@@ -197,12 +197,7 @@ export function PanelTreeItem({
             accessibilityLabel={`${item.title}. Long-press for actions.`}
           >
             <Text
-              style={[
-                type.body,
-                isActive && type.bodyStrong,
-                styles.title,
-                { color: titleColor },
-              ]}
+              style={[type.body, isActive && type.bodyStrong, styles.title, { color: titleColor }]}
               numberOfLines={1}
               ellipsizeMode="tail"
             >

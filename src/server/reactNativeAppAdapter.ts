@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { UnitApprovalCoordinator } from "@vibestudio/unit-host";
 import { normalizeUnitRepoPath as normalizeRepoPath } from "@vibestudio/unit-host";
-import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type { ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { HostTargetCandidate } from "@vibestudio/shared/hostTargets";
 import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
@@ -73,7 +73,7 @@ export interface ReactNativeAppAdapterDeps {
     build: AppBuildResultLike;
     identity: ActiveExecutionIdentity;
   };
-  approvalCoordinator?: UnitApprovalCoordinator<UnitBatchEntry>;
+  approvalCoordinator?: UnitApprovalCoordinator<ReviewedUnit>;
   entityCache?: ReactNativeEntityCache;
   getArtifactBaseUrl(): string;
   selectedSource(): string | null;
@@ -87,7 +87,7 @@ export interface ReactNativeAppAdapterDeps {
     options: { waitForApproval?: boolean }
   ): Promise<void>;
   approvalForDeclarations(declarations: WorkspaceAppDeclaration[]): {
-    entries: UnitBatchEntry[];
+    entries: ReviewedUnit[];
     identityKeys: string[];
   };
   acceptPreapprovedTrust(keys: Iterable<string>): void;

@@ -99,7 +99,10 @@ describe("MobileAssetMemoryCache oversized-asset handling", () => {
 
     const reader = first.response.body!.getReader();
     sourceController!.enqueue(new Uint8Array([1, 2, 3]));
-    await expect(reader.read()).resolves.toMatchObject({ done: false, value: new Uint8Array([1, 2, 3]) });
+    await expect(reader.read()).resolves.toMatchObject({
+      done: false,
+      value: new Uint8Array([1, 2, 3]),
+    });
     sourceController!.close();
     await expect(reader.read()).resolves.toMatchObject({ done: true });
     reader.releaseLock();

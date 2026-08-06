@@ -30,9 +30,19 @@ import type {
   PendingCredentialInputApproval,
   PendingSecretInputApproval,
   PendingDeviceCodeApproval,
-  PendingUnitBatchApproval,
-  UnitBatchEntry,
+  PendingUnitInstallReviewApproval,
+  DiffReviewEntry,
+  DiffReviewFile,
 } from "@vibestudio/shared/approvals";
+import {
+  DiffTooLargeError,
+  allAdded,
+  allRemoved,
+  countLines,
+  diffLines,
+  type DiffRow,
+  type LineDiffResult,
+} from "@vibestudio/shared/lineDiff";
 import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/authorityDomains";
 import { authorityRowKey } from "@vibestudio/shared/authority/authorityRowDiff";
 import {
@@ -53,12 +63,30 @@ import {
   getApprovalRiskTone,
   getRequesterCategoryLabel,
   getStandardApprovalDecisionActions,
-  getUnitBatchActionCopy,
+  getInstallReviewActionCopy,
   originForUrl,
   shouldOpenApprovalDetails,
 } from "@vibestudio/shared/approvalCopy";
-import { unitKindLabel } from "@vibestudio/shared/bootstrapLaunchGate";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
+import {
+  clearableRows,
+  compareInstallParts,
+  groupInstallParts,
+  groupRowsByDomain,
+  installPartGroupCount,
+  installRowHeadline,
+  originTextSegments,
+  partNotableLine,
+  selectionStatusLine,
+  INSTALL_BEHAVIOR_COPY,
+  INSTALL_ROW_TIMING_COPY,
+  type InstallReviewOrigin,
+  type InstallPartGroup,
+  type InstallReviewPart,
+  type InstallReviewRow,
+  type TemplateAcceptance,
+  type TemplateInstallResolution,
+} from "@vibestudio/shared/authority/unitInstallReview";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
 import {
@@ -89,12 +117,59 @@ import {
   type IconComponent,
 } from "../design/icons";
 import { Badge } from "./ui/primitives";
-import { Toast } from "./Toast";
 
 type CallerInfo = ApprovalCallerPresentation;
 
 function resolveCallerInfo(approval: PendingApproval): CallerInfo {
   return getApprovalCallerPresentation(approval);
+}
+
+function defaultInstallSelection(
+  parts: PendingUnitInstallReviewApproval["parts"]
+): Map<string, Set<string>> {
+  return new Map(
+    parts
+      .filter((part) => part.change !== "removed")
+      .map((part) => [
+        part.identityKey,
+        new Set(
+          clearableRows(part)
+            .filter((row) => row.selectedByDefault)
+            .map((row) => row.key)
+        ),
+      ])
+  );
+}
+
+/** Keep user choices that remain valid when the server refreshes one approval. */
+function syncInstallSelection(
+  parts: PendingUnitInstallReviewApproval["parts"],
+  previous: ReadonlyMap<string, ReadonlySet<string>>
+): Map<string, Set<string>> {
+  return new Map(
+    parts
+      .filter((part) => part.change !== "removed")
+      .map((part) => {
+        const rows = clearableRows(part);
+        const offerable = new Set(rows.map((row) => row.key));
+        const prior = previous.get(part.identityKey);
+        const selected = prior
+          ? [...prior].filter((key) => offerable.has(key))
+          : rows.filter((row) => row.selectedByDefault).map((row) => row.key);
+        return [part.identityKey, new Set(selected)] as const;
+      })
+  );
+}
+
+function installOfferSignature(approval: PendingApproval | null): string {
+  if (!approval || approval.kind !== "unit-install-review") return "";
+  return JSON.stringify(
+    approval.parts.map((part) => [
+      part.identityKey,
+      part.change,
+      clearableRows(part).map((row) => [row.key, row.selectedByDefault]),
+    ])
+  );
 }
 
 export interface ApprovalSheetProps {
@@ -114,11 +189,23 @@ export interface ApprovalSheetProps {
     resolution: { decision: "approve"; selectedAuthorityKeys: string[] } | { decision: "dismiss" }
   ) => Promise<void> | void;
   /**
+   * Accept a review with exactly what the user allowed now, or cancel it. Every
+   * part arrives either way; this decides only what is pre-authorized.
+   */
+  onResolveInstallReview: (
+    approvalId: string,
+    resolution: TemplateInstallResolution
+  ) => Promise<void> | void;
+  /**
    * Optional. When supplied and the current approval comes from a panel,
    * the caller chip becomes touchable and invokes this with the panel id.
    * Mobile wires it to `activatePanel` so the user can jump to the source.
    */
   onNavigateToPanel?: (panelId: string) => void;
+  /** Lazy trusted blob read. The sheet further restricts this to hashes in the approval payload. */
+  onFetchDiffContent?: (approvalId: string, hash: string) => Promise<string | null>;
+  /** Open the full workspace file inspector for more context or degraded files. */
+  onOpenDiffFile?: (file: DiffReviewFile, entry: DiffReviewEntry) => Promise<void> | void;
 }
 
 type PendingAction =
@@ -138,7 +225,10 @@ export function ApprovalSheet({
   onSubmitCredentialInput,
   onSubmitSecretInput,
   onResolveMissionReview,
+  onResolveInstallReview,
   onNavigateToPanel,
+  onFetchDiffContent,
+  onOpenDiffFile,
 }: ApprovalSheetProps) {
   const colors = useAtomValue(themeColorsAtom);
   const [browseIndex, setBrowseIndex] = useState(0);
@@ -157,6 +247,22 @@ export function ApprovalSheet({
   const [values, setValues] = useState<Record<string, string>>({});
   const [selectedMissionAuthorityKeys, setSelectedMissionAuthorityKeys] = useState<Set<string>>(
     new Set()
+  );
+  /**
+   * What the user has allowed now, per part. Seeded from the review's own
+   * defaults, so one tap accepts the complete slate with everything allowed and
+   * unchecking is the dial for anyone who would rather be asked (U5).
+   */
+  const [installSelection, setInstallSelection] = useState<Map<string, Set<string>>>(new Map());
+  // Recomputed on every render so the footer status line and the acceptance
+  // payload always agree with exactly what is checked on screen right now.
+  const installAllowNow: TemplateAcceptance["allowNow"] = useMemo(
+    () =>
+      [...installSelection].map(([identityKey, permissions]) => ({
+        identityKey,
+        permissions: [...permissions],
+      })),
+    [installSelection]
   );
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
@@ -179,9 +285,24 @@ export function ApprovalSheet({
 
   const isBusy = pendingAction !== null;
   const currentApprovalId = current?.approvalId;
+  const currentInstallOfferSignature = installOfferSignature(current);
+  const previousApprovalId = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (!current) return;
+    const approvalChanged = previousApprovalId.current !== currentApprovalId;
+    previousApprovalId.current = currentApprovalId;
+    if (!current) {
+      if (approvalChanged) setInstallSelection(new Map());
+      return;
+    }
+    setInstallSelection((previous) =>
+      current.kind === "unit-install-review"
+        ? approvalChanged
+          ? defaultInstallSelection(current.parts)
+          : syncInstallSelection(current.parts, previous)
+        : new Map()
+    );
+    if (!approvalChanged) return;
     setValues({});
     setSelectedMissionAuthorityKeys(
       new Set(
@@ -219,7 +340,7 @@ export function ApprovalSheet({
         : "";
       AccessibilityInfo.announceForAccessibility(`${copy.title}. ${requester}${copy.summary}`);
     }
-  }, [currentApprovalId]);
+  }, [currentApprovalId, currentInstallOfferSignature]);
 
   const runAction = useCallback(
     async (action: PendingAction, task: () => Promise<void> | void) => {
@@ -405,6 +526,40 @@ export function ApprovalSheet({
                 {copy.summary ? <ApprovalMarkdown source={copy.summary} tone="muted" /> : null}
                 {copy.warning ? <WarningBand message={copy.warning} /> : null}
                 {current.kind === "device-code" ? <DeviceCodePanel approval={current} /> : null}
+                {/* The review IS the body: parts, rows, and selection. It is
+                    not a disclosure under a request summary. */}
+                {current.kind === "unit-install-review" ? (
+                  <InstallReviewDetails
+                    approval={current}
+                    selection={installSelection}
+                    onTogglePart={(part, checked) =>
+                      setInstallSelection((currentSelection) => {
+                        const next = new Map(currentSelection);
+                        next.set(
+                          part.identityKey,
+                          checked
+                            ? new Set(
+                                clearableRows(part)
+                                  .filter((row) => row.selectedByDefault)
+                                  .map((row) => row.key)
+                              )
+                            : new Set()
+                        );
+                        return next;
+                      })
+                    }
+                    onToggleRow={(part, rowKey, checked) =>
+                      setInstallSelection((currentSelection) => {
+                        const next = new Map(currentSelection);
+                        const rows = new Set(next.get(part.identityKey) ?? []);
+                        if (checked) rows.add(rowKey);
+                        else rows.delete(rowKey);
+                        next.set(part.identityKey, rows);
+                        return next;
+                      })
+                    }
+                  />
+                ) : null}
                 {current.kind === "mission-review" ? (
                   <MissionReviewPanel
                     approval={current}
@@ -443,6 +598,21 @@ export function ApprovalSheet({
                       </View>
                     ))}
                   </View>
+                ) : null}
+                {current.diffReview && current.diffReview.length > 0 ? (
+                  <MobileDiffReview
+                    approvalId={current.approvalId}
+                    entries={current.diffReview}
+                    fetchContent={onFetchDiffContent}
+                    onOpenFile={
+                      onOpenDiffFile
+                        ? async (file, entry) => {
+                            setMinimized(true);
+                            await onOpenDiffFile(file, entry);
+                          }
+                        : undefined
+                    }
+                  />
                 ) : null}
                 {error ? <InlineError message={error} /> : null}
                 {current.kind === "client-config" ||
@@ -517,13 +687,29 @@ export function ApprovalSheet({
                       runAction("dismiss", () => onResolve(current.approvalId, "dismiss"))
                     }
                   />
-                ) : current.kind === "unit-batch" ? (
-                  <UnitBatchActions
+                ) : current.kind === "unit-install-review" ? (
+                  <InstallReviewActions
                     approval={current}
+                    allowNow={installAllowNow}
                     busy={isBusy}
                     pendingAction={pendingAction}
-                    onChoose={(decision) =>
-                      runAction(decision, () => onResolve(current.approvalId, decision))
+                    onAccept={() =>
+                      runAction("once", () =>
+                        onResolveInstallReview(current.approvalId, {
+                          decision:
+                            current.mode === "update"
+                              ? "update"
+                              : current.mode === "adopt-root"
+                                ? "adopt-root"
+                                : "install",
+                          allowNow: installAllowNow,
+                        })
+                      )
+                    }
+                    onCancel={() =>
+                      runAction("dismiss", () =>
+                        onResolveInstallReview(current.approvalId, { decision: "cancel" })
+                      )
                     }
                   />
                 ) : current.kind === "mission-review" ? (
@@ -567,7 +753,6 @@ export function ApprovalSheet({
             </Animated.View>
           </SafeAreaView>
         </KeyboardAvoidingView>
-        <Toast />
       </View>
     </Modal>
   );
@@ -1035,9 +1220,8 @@ function ApprovalDetails({
             <SecretInputDetails approval={approval} />
           ) : approval.kind === "device-code" ? (
             <DeviceCodeDetails approval={approval} />
-          ) : approval.kind === "unit-batch" ? (
-            <UnitBatchDetails approval={approval} />
-          ) : approval.kind === "browser-permission" ? (
+          ) : approval.kind === "unit-install-review" ? null : approval.kind ===
+            "browser-permission" ? (
             <BrowserPermissionDetails approval={approval} />
           ) : approval.kind === "mission-review" ? null : (
             <CapabilityDetails approval={approval} />
@@ -1058,6 +1242,17 @@ function CredentialDetails({ approval }: { approval: PendingCredentialApproval }
     <>
       <DetailRow icon={Lock} label="Account" value={formatAccount(approval)} code />
       <DetailRow icon={Lock} label="Injects as" value={formatInjection(approval)} code />
+      {approval.bindingLabel ? (
+        <DetailRow icon={Lock} label="Binding" value={approval.bindingLabel} code />
+      ) : null}
+      {approval.grantResource ? (
+        <DetailRow
+          icon={Globe}
+          label="Grant"
+          value={`${approval.grantResource.bindingId} ${approval.grantResource.action} ${approval.grantResource.resource}`}
+          code
+        />
+      ) : null}
       {approval.gitOperation ? (
         <>
           <DetailRow icon={Lock} label="Operation" value={approval.gitOperation.label} code />
@@ -1220,93 +1415,895 @@ function DeviceCodeDetails({ approval }: { approval: PendingDeviceCodeApproval }
   );
 }
 
-function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) {
+/** Beyond five, Worth knowing folds — a threshold, never a cap. Nothing is dropped. */
+const NOTABLE_COLLAPSE_THRESHOLD = 5;
+/** Search appears above this many template parts, and is absent below it (§7.2). */
+const SEARCH_THRESHOLD = 12;
+
+/**
+ * Where bytes came from, at human scale, for the `From` slot specifically.
+ *
+ * The origin URL is the only thing allowed to appear here — never a version,
+ * never a kind label, never the template's self-given name (§7.6.3). The host's
+ * own build is the one thing worth naming honestly in this slot, since its
+ * identity ships in the build rather than being asserted by a third party.
+ */
+function installOriginLabel(origin: InstallReviewOrigin): string {
+  if (origin.originStatus === "unresolved") return "";
+  if (origin.url) return origin.url;
+  if (origin.isHostBuild) return origin.version ? `Vibestudio ${origin.version}` : "Vibestudio";
+  return origin.originKey;
+}
+
+/**
+ * In a differential review the row states what CHANGED about what a part can
+ * do — nothing else. This is driven by whether the part's own rows carry a
+ * `change` mark, not by the review's mode: a part the upgrade adds outright
+ * carries no diff marks and reads as an ordinary footprint, exactly as install
+ * does, while a part whose declared authority moved reads as a diff regardless
+ * of what the surrounding operation is called.
+ */
+function installReviewSummaryLine(part: InstallReviewPart): string {
+  const changed = [...part.notableRows, ...part.everydayRows].filter((row) => row.change);
+  if (changed.length === 0) return partNotableLine(part);
+  return changed
+    .slice(0, 3)
+    .map((row) => `${row.change === "removed" ? "− " : "+ "}${installRowHeadline(row)}`)
+    .join(" · ");
+}
+
+function installReviewSummaryFragment(part: InstallReviewPart): string {
+  const summary = installReviewSummaryLine(part);
+  return summary.length === 0 ? summary : `${summary[0]?.toLowerCase() ?? ""}${summary.slice(1)}`;
+}
+
+/**
+ * The install review, as a full-screen mobile route (§7.2, §7.8).
+ *
+ * Same server-owned decision, same rows, same copy, same selection semantics as
+ * desktop — responsive presentation must not produce a weaker review anywhere.
+ * List and detail are separate navigation levels here; the back gesture never
+ * submits and never silently discards.
+ */
+function InstallReviewDetails({
+  approval,
+  selection,
+  onTogglePart,
+  onToggleRow,
+}: {
+  approval: PendingUnitInstallReviewApproval;
+  selection: ReadonlyMap<string, ReadonlySet<string>>;
+  onTogglePart: (part: InstallReviewPart, checked: boolean) => void;
+  onToggleRow: (part: InstallReviewPart, rowKey: string, checked: boolean) => void;
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  const copy = HOST_APPROVAL_COPY.installReview;
+  const [query, setQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState("");
+  const [groupExpansion, setGroupExpansion] = useState<Map<string, boolean>>(() => new Map());
+
+  // One comparator, shared with the desktop list (§7.8): a differential review
+  // leads with what changed, a first encounter leads with what is worth
+  // knowing. Sorting by title alone scattered the handful of parts that have
+  // something to say through fifty that read `Nothing unusual`, and on a phone
+  // — where the list is one column and the fold is four rows down — that is
+  // where a notable part goes to be missed.
+  const sortedParts = useMemo(
+    () =>
+      [...approval.parts].sort((left, right) => compareInstallParts(approval.mode, left, right)),
+    [approval.parts, approval.mode]
+  );
+  // A repair touches units the template does not own (§5.3): it is never mixed
+  // into the template's own list and never folded away.
+  const templateParts = sortedParts.filter((part) => part.section === "template");
+  const repairParts = sortedParts.filter((part) => part.section === "repair");
+  const needle = query.trim().toLowerCase();
+  const filtersShown = templateParts.length > SEARCH_THRESHOLD;
+  const kinds = useMemo(
+    () => [...new Set(templateParts.map((part) => part.label))].sort(),
+    [templateParts]
+  );
+  const visibleParts = filtersShown
+    ? templateParts.filter(
+        (part) =>
+          (kindFilter === "" || part.label === kindFilter) &&
+          (needle === "" ||
+            part.title.toLowerCase().includes(needle) ||
+            part.purpose.toLowerCase().includes(needle))
+      )
+    : templateParts;
+  const groups = groupInstallParts(visibleParts);
+  const anythingNotable = templateParts.some((part) => part.notableRows.length > 0);
+  const filtering = filtersShown && (needle !== "" || kindFilter !== "");
+  const groupIsOpen = (group: InstallPartGroup): boolean => {
+    if (filtering) return true;
+    const explicit = groupExpansion.get(group.key);
+    if (explicit !== undefined) return explicit;
+    return !(anythingNotable && !group.hasNotablePart);
+  };
+  const hiddenByFilter = templateParts.length - visibleParts.length;
+  const hiddenAllowed = templateParts.filter(
+    (part) => !visibleParts.includes(part) && (selection.get(part.identityKey)?.size ?? 0) > 0
+  ).length;
+
+  // An upgrade that changes nothing about what any part can do is one line —
+  // and the sheet header already carries it.
+  if (approval.parts.length === 0 && approval.unchangedPartCount > 0) return null;
+
   return (
     <>
-      {approval.configWrite ? (
-        <DetailRow
-          icon={Settings2}
-          label="Workspace config"
-          value={`${approval.configWrite.repoPath} · ${approval.configWrite.summary}`}
-          code
-        />
+      <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+        {copy.adds(approval.summary)}
+      </Text>
+      {filtersShown ? (
+        <View style={styles.installReviewFilters}>
+          <TextInput
+            accessibilityLabel={copy.filters.search}
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setQuery}
+            placeholder={copy.filters.search}
+            placeholderTextColor={colors.textTertiary}
+            style={[
+              styles.input,
+              {
+                backgroundColor: colors.surfaceSunken,
+                borderColor: colors.border,
+                color: colors.text,
+              },
+            ]}
+            testID="install-review-search"
+            value={query}
+          />
+          <ScrollView
+            horizontal
+            contentContainerStyle={styles.installReviewKindFilters}
+            keyboardShouldPersistTaps="handled"
+            showsHorizontalScrollIndicator={false}
+          >
+            {["", ...kinds].map((kind) => {
+              const selected = kindFilter === kind;
+              const label = kind || copy.filters.allKinds;
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`${copy.filters.kind}: ${label}`}
+                  key={kind || "all"}
+                  onPress={() => setKindFilter(kind)}
+                  style={({ pressed }) => [
+                    styles.installReviewKindFilter,
+                    {
+                      backgroundColor: selected ? colors.accentSoft : colors.surfaceSunken,
+                      borderColor: selected ? colors.primary : colors.border,
+                      opacity: pressed ? pressedOpacity : 1,
+                    },
+                  ]}
+                  testID={`install-review-kind-${kind || "all"}`}
+                >
+                  <Text
+                    style={[
+                      styles.installReviewKindFilterText,
+                      { color: selected ? colors.primary : colors.textSecondary },
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
       ) : null}
-      {approval.units.map((entry) => (
-        <UnitBatchEntryDetails key={`${entry.unitKind}:${entry.unitName}`} entry={entry} />
+      <View style={styles.installReviewGroups}>
+        {groups.map((group) => {
+          const open = groupIsOpen(group);
+          return (
+            <View
+              key={group.key}
+              style={[styles.installReviewGroup, { borderColor: colors.borderSubtle }]}
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: filtering, expanded: open }}
+                accessibilityLabel={`${group.title}. ${installPartGroupCount(group)} parts. ${group.parts
+                  .map((part) => `${part.title}: ${installReviewSummaryFragment(part)}`)
+                  .join(". ")}`}
+                disabled={filtering}
+                onPress={() =>
+                  setGroupExpansion((previous) => {
+                    const next = new Map(previous);
+                    next.set(group.key, !open);
+                    return next;
+                  })
+                }
+                style={({ pressed }) => [
+                  styles.installReviewGroupHeader,
+                  {
+                    backgroundColor: colors.surfaceSunken,
+                    opacity: pressed ? pressedOpacity : 1,
+                  },
+                ]}
+                testID={`install-review-group-${group.key}`}
+              >
+                <View style={styles.installReviewGroupTitleRow}>
+                  <Text style={[styles.installReviewGroupTitle, { color: colors.text }]}>
+                    {group.title}
+                  </Text>
+                  <View style={[styles.installReviewGroupBadge, { backgroundColor: colors.surfaceSunken }]}>
+                    <Text style={[styles.installReviewGroupBadgeText, { color: colors.textSecondary }]}>
+                      {installPartGroupCount(group)}
+                    </Text>
+                  </View>
+                  {open ? (
+                    <ChevronDown size={16} color={colors.textSecondary} />
+                  ) : (
+                    <ChevronRight size={16} color={colors.textSecondary} />
+                  )}
+                </View>
+              </Pressable>
+              {open ? (
+                <View style={styles.installReviewGroupParts}>
+                  {group.parts.map((part) => (
+                    <InstallReviewPartRow
+                      key={part.identityKey}
+                      part={part}
+                      mode={approval.mode}
+                      selected={selection.get(part.identityKey) ?? new Set()}
+                      onTogglePart={(checked) => onTogglePart(part, checked)}
+                      onToggleRow={(rowKey, checked) => onToggleRow(part, rowKey, checked)}
+                    />
+                  ))}
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
+      </View>
+      {hiddenByFilter > 0 ? (
+        // A filter narrows what's on screen, never what's granted. Everything
+        // it hides is still selected exactly as it was and still gets installed.
+        <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+          {copy.filters.hidden(hiddenByFilter, hiddenAllowed)}
+        </Text>
+      ) : null}
+      {approval.unchangedPartCount > 0 ? (
+        <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+          {copy.summary.unchangedParts(approval.unchangedPartCount)}
+        </Text>
+      ) : null}
+      {repairParts.length > 0 ? (
+        <View style={styles.detailsBlock} testID="install-review-repairs">
+          <Text style={[styles.detailsSummaryText, { color: colors.text }]}>
+            {copy.sections.repairs(repairParts.length)}
+          </Text>
+          {repairParts.map((part) => (
+            <InstallReviewPartRow
+              key={part.identityKey}
+              part={part}
+              mode={approval.mode}
+              selected={selection.get(part.identityKey) ?? new Set()}
+              onTogglePart={(checked) => onTogglePart(part, checked)}
+              onToggleRow={(rowKey, checked) => onToggleRow(part, rowKey, checked)}
+            />
+          ))}
+        </View>
+      ) : null}
+      {approval.charters?.map((charter) => (
+        <Text key={charter.name} style={[styles.helperText, { color: colors.textSecondary }]}>
+          {charter.name} — {charter.schedule}. {charter.purpose}
+        </Text>
       ))}
     </>
   );
 }
 
-function UnitBatchEntryDetails({ entry }: { entry: UnitBatchEntry }) {
+function InstallReviewPartRow({
+  part,
+  mode,
+  selected,
+  onTogglePart,
+  onToggleRow,
+}: {
+  part: InstallReviewPart;
+  mode: PendingUnitInstallReviewApproval["mode"];
+  selected: ReadonlySet<string>;
+  onTogglePart: (checked: boolean) => void;
+  onToggleRow: (rowKey: string, checked: boolean) => void;
+}) {
   const colors = useAtomValue(themeColorsAtom);
   const [open, setOpen] = useState(false);
-  const addedRows = entry.authority?.diff.added ?? [];
-  const retieredRows = entry.authority?.diff.retiered ?? [];
-  const addedCount = addedRows.length + retieredRows.length;
-  const changeSummary =
-    addedRows.length > 0
-      ? `New: ${[...new Set(addedRows.map((row) => AUTHORITY_DOMAINS[row.domain].label))].join(
-          ", "
-        )}`
-      : entry.authority
-        ? HOST_APPROVAL_COPY.chrome.noNewPermissions
-        : "Review exact version";
+  const clearable = clearableRows(part);
+  const allSelected = clearable.length > 0 && clearable.every((row) => selected.has(row.key));
+  const noneSelected = clearable.every((row) => !selected.has(row.key));
+  const copy = HOST_APPROVAL_COPY.installReview;
+
   return (
     <View style={styles.detailsBlock}>
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${part.title}, ${part.label}. ${installReviewSummaryLine(part)}`}
         onPress={() => setOpen((current) => !current)}
         style={styles.detailsSummary}
-        testID={`unit-review-${entry.unitKind}-${entry.unitName}`}
+        testID={`install-review-part-${part.identityKey}`}
       >
-        <ChevronDown size={14} color={colors.textSecondary} />
+        {open ? (
+          <ChevronDown size={14} color={colors.textSecondary} />
+        ) : (
+          <ChevronRight size={14} color={colors.textSecondary} />
+        )}
         <View style={styles.unitReviewSummary}>
           <Text style={[styles.detailsSummaryText, { color: colors.text }]}>
-            {entry.displayName}
-            {entry.version ? ` · v${entry.version}` : ""}
+            {part.title} · {part.label}
           </Text>
+          {part.purpose ? (
+            <Text style={[styles.unitReviewChange, { color: colors.textSecondary }]}>
+              {part.purpose}
+            </Text>
+          ) : null}
           <Text style={[styles.unitReviewChange, { color: colors.textSecondary }]}>
-            {changeSummary}
-            {addedCount > 0 ? ` (${addedCount})` : ""}
+            {mode === "update" && part.change === "added" ? "New · " : ""}
+            {installReviewSummaryLine(part)}
+          </Text>
+        </View>
+      </Pressable>
+      {clearable.length > 0 && part.change !== "removed" ? (
+        <Pressable
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: allSelected }}
+          accessibilityLabel={`Allow ${part.title} now`}
+          onPress={() => onTogglePart(!allSelected)}
+          style={styles.detailsSummary}
+        >
+          <Text style={[styles.unitReviewChange, { color: colors.textSecondary }]}>
+            {allSelected
+              ? "Allowed now"
+              : noneSelected
+                ? copy.willAsk
+                : "Allowed now, except what you unchecked"}
+          </Text>
+        </Pressable>
+      ) : null}
+      {open ? (
+        <InstallReviewPartDetail part={part} selected={selected} onToggleRow={onToggleRow} />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The notable/everyday split (§7.2, §10): Worth knowing carries every headline
+ * row and every behavioral fact, collapsing behind a disclosure only past five
+ * — never dropping one — and auto-expanded whenever something here always
+ * confirms, because that is the one row a person must not miss behind a tap.
+ * The ordinary machinery of the part folds behind its own count, with the
+ * shared honesty line attached only once it is opened.
+ */
+function InstallReviewPartDetail({
+  part,
+  selected,
+  onToggleRow,
+}: {
+  part: InstallReviewPart;
+  selected: ReadonlySet<string>;
+  onToggleRow: (rowKey: string, checked: boolean) => void;
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  const copy = HOST_APPROVAL_COPY.installReview;
+  const [showAllNotable, setShowAllNotable] = useState(false);
+  const [showEveryday, setShowEveryday] = useState(false);
+
+  const notable = part.notableRows;
+  const hasCritical = notable.some((row) => row.timing === "asks-every-time");
+  const collapsed = notable.length > NOTABLE_COLLAPSE_THRESHOLD && !showAllNotable && !hasCritical;
+  const shownNotable = collapsed ? notable.slice(0, NOTABLE_COLLAPSE_THRESHOLD) : notable;
+
+  return (
+    <View style={styles.detailRows}>
+      {notable.length > 0 ? (
+        <View style={styles.detailsBlock}>
+          <View style={styles.detailRows}>
+            {shownNotable.map((row) => (
+              <InstallReviewRowLine
+                key={row.key}
+                row={row}
+                checked={selected.has(row.key)}
+                onToggle={(checked) => onToggleRow(row.key, checked)}
+              />
+            ))}
+          </View>
+          {collapsed ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={copy.sections.showAllNotable(notable.length)}
+              onPress={() => setShowAllNotable(true)}
+              style={styles.disclosureButton}
+            >
+              <Text style={[styles.disclosureButtonText, { color: colors.primary }]}>
+                {copy.sections.showAllNotable(notable.length)}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+      {part.everydayRows.length > 0 ? (
+        <View style={styles.detailsBlock}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showEveryday }}
+            accessibilityLabel={copy.sections.everyday(part.everydayRows.length)}
+            onPress={() => setShowEveryday((open) => !open)}
+            style={styles.disclosureButton}
+          >
+            <ChevronDown size={12} color={colors.primary} />
+            <Text style={[styles.disclosureButtonText, { color: colors.primary }]}>
+              {copy.sections.everyday(part.everydayRows.length)}
+            </Text>
+          </Pressable>
+          {showEveryday ? (
+            <View style={styles.detailRows}>
+              <Text style={[styles.unitReviewChange, { color: colors.textSecondary }]}>
+                {copy.sections.everydayFraming}
+              </Text>
+              {/* Grouped by domain (§7.2), same as the desktop detail. Nine
+                  ordinary rows in a flat column are nine things to read on a
+                  phone; under `Files`, `The web`, `Your workspace` they are
+                  three, and the grouping is what makes "ordinary" legible
+                  rather than merely long. */}
+              {groupRowsByDomain(part.everydayRows).map((group) => (
+                <View key={group.label} style={styles.detailRows}>
+                  <Text
+                    style={[
+                      styles.unitReviewChange,
+                      { color: colors.textSecondary, fontWeight: "600" },
+                    ]}
+                  >
+                    {group.label}
+                  </Text>
+                  {group.rows.map((row) => (
+                    <InstallReviewRowLine
+                      key={row.key}
+                      row={row}
+                      checked={selected.has(row.key)}
+                      onToggle={(checked) => onToggleRow(row.key, checked)}
+                    />
+                  ))}
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+      {/* Identity at human scale: origin URL, never a version, kind label, or
+          digest in this slot (§7.6.3). */}
+      <DetailRow
+        icon={Globe}
+        label="From"
+        value={installOriginLabel(part.origin)}
+        emphasizeOrigin={part.origin}
+      />
+      {/* The emphasis above is visual only, so the same fact is also stated in
+          words — this row's accessibility label is exactly `originDomainFact`,
+          the string the terminal form prints. */}
+      {part.origin.registrableDomain && !part.origin.isHostBuild ? (
+        <DetailRow icon={Globe} label="Domain" value={part.origin.registrableDomain} />
+      ) : null}
+      {part.originallyInstalledFrom ? (
+        <DetailRow
+          icon={Globe}
+          label="Originally installed from"
+          value={part.originallyInstalledFrom}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+function InstallReviewRowLine({
+  row,
+  checked,
+  onToggle,
+}: {
+  row: InstallReviewRow;
+  checked: boolean;
+  onToggle: (checked: boolean) => void;
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  const headline = installRowHeadline(row);
+  const detail =
+    row.kind === "behavior" ? INSTALL_BEHAVIOR_COPY[row.fact].detail : row.row.resource;
+  const timing = INSTALL_ROW_TIMING_COPY[row.timing];
+
+  // Contextual and critical rows carry no checkbox — this decision cannot grant
+  // them, and their timing line carries the whole meaning.
+  const body = (
+    <View style={styles.unitReviewSummary}>
+      <Text style={[styles.detailsSummaryText, { color: colors.text }]}>
+        {row.change === "added" ? "+ " : row.change === "removed" ? "− " : ""}
+        {headline}
+      </Text>
+      <Text style={[styles.unitReviewChange, { color: colors.textSecondary }]}>{detail}</Text>
+      {timing ? (
+        <Text style={[styles.unitReviewChange, { color: colors.textSecondary }]}>{timing}</Text>
+      ) : null}
+    </View>
+  );
+
+  if (!row.selectable) return <View style={styles.detailsSummary}>{body}</View>;
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel={`Allow ${headline} now`}
+      onPress={() => onToggle(!checked)}
+      style={styles.detailsSummary}
+    >
+      <Text style={[styles.detailsSummaryText, { color: colors.text }]}>{checked ? "☑" : "☐"}</Text>
+      {body}
+    </Pressable>
+  );
+}
+
+const MOBILE_DIFF_CONTEXT_LINES = 3;
+const MOBILE_DIFF_MAX_CHANGED_ROWS = 400;
+const MOBILE_DIFF_MAX_COMPARISON_CELLS = 750_000;
+const MOBILE_DIFF_MAX_DISPLAY_ROWS = 1_600;
+type MobileDiffDisplayRow = DiffRow | { type: "omitted"; count: number; key: string };
+
+/** Preserve every changed line while folding long unchanged runs. */
+function compactMobileDiffRows(rows: readonly DiffRow[]): MobileDiffDisplayRow[] {
+  const keep = new Set<number>();
+  rows.forEach((row, index) => {
+    if (row.type === "context") return;
+    for (
+      let nearby = Math.max(0, index - MOBILE_DIFF_CONTEXT_LINES);
+      nearby <= Math.min(rows.length - 1, index + MOBILE_DIFF_CONTEXT_LINES);
+      nearby += 1
+    ) {
+      keep.add(nearby);
+    }
+  });
+  if (keep.size === 0) return rows.slice(0, MOBILE_DIFF_CONTEXT_LINES * 2 + 1);
+  const result: MobileDiffDisplayRow[] = [];
+  let index = 0;
+  while (index < rows.length) {
+    if (keep.has(index)) {
+      result.push(rows[index]!);
+      index += 1;
+      continue;
+    }
+    const start = index;
+    while (index < rows.length && !keep.has(index)) index += 1;
+    result.push({ type: "omitted", count: index - start, key: `${start}:${index}` });
+  }
+  return result;
+}
+
+function diffPayloadHashes(entries: readonly DiffReviewEntry[]): Set<string> {
+  const hashes = new Set<string>();
+  for (const entry of entries) {
+    for (const file of entry.changedFiles) {
+      if (file.oldHash) hashes.add(file.oldHash);
+      if (file.newHash) hashes.add(file.newHash);
+    }
+  }
+  return hashes;
+}
+
+function MobileDiffReview({
+  approvalId,
+  entries,
+  fetchContent,
+  onOpenFile,
+}: {
+  approvalId: string;
+  entries: readonly DiffReviewEntry[];
+  fetchContent?: ApprovalSheetProps["onFetchDiffContent"];
+  onOpenFile?: ApprovalSheetProps["onOpenDiffFile"];
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  const allowedHashes = useMemo(() => diffPayloadHashes(entries), [entries]);
+  const cache = useRef(new Map<string, string>());
+  const inFlight = useRef(new Map<string, Promise<string>>());
+  useEffect(() => {
+    cache.current.clear();
+    inFlight.current.clear();
+  }, [approvalId]);
+  const fetchPayloadContent = useCallback(
+    async (hash: string) => {
+      if (!allowedHashes.has(hash))
+        throw new Error("This file is not part of the reviewed change.");
+      const cached = cache.current.get(hash);
+      if (cached !== undefined) return cached;
+      const pending = inFlight.current.get(hash);
+      if (pending) return pending;
+      if (!fetchContent) throw new Error("File contents are unavailable on this client.");
+      const request = fetchContent(approvalId, hash).then((text) => {
+        if (text == null) throw new Error("This reviewed file is no longer available.");
+        cache.current.set(hash, text);
+        return text;
+      });
+      inFlight.current.set(hash, request);
+      try {
+        return await request;
+      } finally {
+        inFlight.current.delete(hash);
+      }
+    },
+    [allowedHashes, approvalId, fetchContent]
+  );
+  const totals = entries.reduce(
+    (sum, entry) => ({
+      files: sum.files + entry.diffStat.filesChanged,
+      insertions: sum.insertions + (entry.diffStat.insertions ?? 0),
+      deletions: sum.deletions + (entry.diffStat.deletions ?? 0),
+    }),
+    { files: 0, insertions: 0, deletions: 0 }
+  );
+  const hasLineTotals = entries.every((entry) => entry.diffStat.insertions != null);
+  return (
+    <View
+      style={[styles.mobileDiffReview, { borderColor: colors.border }]}
+      testID="approval-diff-review"
+    >
+      <View style={styles.mobileDiffReviewHeading}>
+        <View style={styles.mobileDiffReviewHeadingCopy}>
+          <Text style={[styles.mobileDiffReviewTitle, { color: colors.text }]}>Review changes</Text>
+          <Text style={[styles.mobileDiffMeta, { color: colors.textSecondary }]}>
+            {totals.files} {totals.files === 1 ? "file" : "files"} · {entries.length}{" "}
+            {entries.length === 1 ? "repository" : "repositories"}
+          </Text>
+        </View>
+        {hasLineTotals ? (
+          <Text style={styles.mobileDiffCounts}>
+            <Text style={{ color: colors.success }}>+{totals.insertions}</Text>
+            <Text style={{ color: colors.textSecondary }}> · </Text>
+            <Text style={{ color: colors.danger }}>−{totals.deletions}</Text>
+          </Text>
+        ) : null}
+      </View>
+      <Text style={[styles.mobileDiffHelp, { color: colors.textSecondary }]}>
+        Open a repository, then a file, to inspect the exact reviewed change before deciding.
+      </Text>
+      <View style={styles.mobileDiffRepositories}>
+        {entries.map((entry, index) => (
+          <MobileDiffRepository
+            key={`${entry.repoPath}:${entry.oldState}:${entry.newState ?? "deleted"}`}
+            entry={entry}
+            defaultOpen={index === 0}
+            fetchContent={fetchPayloadContent}
+            onOpenFile={onOpenFile}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function MobileDiffRepository({
+  entry,
+  defaultOpen,
+  fetchContent,
+  onOpenFile,
+}: {
+  entry: DiffReviewEntry;
+  defaultOpen: boolean;
+  fetchContent: (hash: string) => Promise<string>;
+  onOpenFile?: ApprovalSheetProps["onOpenDiffFile"];
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  const [open, setOpen] = useState(defaultOpen);
+  const counts =
+    entry.diffStat.insertions == null
+      ? ""
+      : ` · +${entry.diffStat.insertions} −${entry.diffStat.deletions ?? 0}`;
+  return (
+    <View style={[styles.mobileDiffRepository, { borderColor: colors.borderSubtle }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((value) => !value)}
+        style={({ pressed }) => [
+          styles.mobileDiffRepositoryHeader,
+          { backgroundColor: colors.surfaceSunken, opacity: pressed ? pressedOpacity : 1 },
+        ]}
+        testID={`approval-diff-repo-${entry.repoPath}`}
+      >
+        {open ? (
+          <ChevronDown size={16} color={colors.textSecondary} />
+        ) : (
+          <ChevronRight size={16} color={colors.textSecondary} />
+        )}
+        <View style={styles.mobileDiffRepositoryCopy}>
+          <Text
+            numberOfLines={2}
+            style={[styles.mobileDiffRepositoryTitle, { color: colors.text }]}
+          >
+            {entry.repoPath}
+          </Text>
+          <Text style={[styles.mobileDiffMeta, { color: colors.textSecondary }]}>
+            {entry.diffStat.filesChanged} {entry.diffStat.filesChanged === 1 ? "file" : "files"}
+            {counts}
+            {entry.truncated ? " · list truncated" : ""}
           </Text>
         </View>
       </Pressable>
       {open ? (
-        <View style={styles.detailRows}>
-          <DetailRow icon={Lock} label={unitKindLabel(entry)} value={entry.unitName} code />
-          <DetailRow
-            icon={Globe}
-            label="Source"
-            value={`${entry.source.repo}@${entry.source.ref}`}
-            code
-          />
-          {entry.target ? (
-            <DetailRow icon={Settings2} label="Target" value={entry.target} code />
-          ) : null}
-          {entry.version ? (
-            <DetailRow icon={Lock} label="Version" value={entry.version} code />
-          ) : null}
-          {entry.ev ? <DetailRow icon={Lock} label="EV" value={entry.ev} code /> : null}
-          {entry.integrity ? (
-            <DetailRow icon={Lock} label="Integrity" value={entry.integrity} code />
-          ) : null}
-          {entry.provider ? (
-            <DetailRow
-              icon={Settings2}
-              label="Provider"
-              value={`${entry.provider.name}@${entry.provider.activeEv ?? "unknown"}`}
-              code
+        <View style={styles.mobileDiffFiles}>
+          {entry.changedFiles.map((file) => (
+            <MobileDiffFile
+              key={file.path}
+              entry={entry}
+              file={file}
+              fetchContent={fetchContent}
+              onOpenFile={onOpenFile}
             />
+          ))}
+          {entry.changedFiles.length === 0 ? (
+            <Text style={[styles.mobileDiffHelp, { color: colors.textSecondary }]}>
+              No file details were included.
+            </Text>
           ) : null}
-          {entry.authority ? <UnitAuthorityDetails authority={entry.authority} /> : null}
-          {entry.capabilities.length > 0 ? (
-            <DetailRow
-              icon={Settings2}
-              label="Host integration"
-              value={entry.capabilities.join(", ")}
-              code
+          {entry.truncated ? (
+            <Text style={[styles.mobileDiffWarning, { color: colors.warning }]}>
+              More files changed than this inline list can show. Use the full inspector for
+              repository context.
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+type MobileFileDiffState =
+  | { status: "idle" | "loading" }
+  | { status: "ready"; result: LineDiffResult; rows: MobileDiffDisplayRow[] }
+  | { status: "error"; message: string };
+
+function MobileDiffFile({
+  entry,
+  file,
+  fetchContent,
+  onOpenFile,
+}: {
+  entry: DiffReviewEntry;
+  file: DiffReviewFile;
+  fetchContent: (hash: string) => Promise<string>;
+  onOpenFile?: ApprovalSheetProps["onOpenDiffFile"];
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  const degraded = Boolean(file.binary || file.tooLarge);
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState<MobileFileDiffState>({ status: "idle" });
+  useEffect(() => {
+    if (!open || degraded) return;
+    let cancelled = false;
+    setState({ status: "loading" });
+    void (async () => {
+      try {
+        const load = (hash: string | undefined, side: string) => {
+          if (!hash) throw new Error(`The reviewed ${side} content hash is missing.`);
+          return fetchContent(hash);
+        };
+        let result: LineDiffResult;
+        if (file.kind === "added") {
+          result = allAdded(await load(file.newHash, "new"));
+        } else if (file.kind === "removed") {
+          result = allRemoved(await load(file.oldHash, "old"));
+        } else {
+          const [oldText, newText] = await Promise.all([
+            load(file.oldHash, "old"),
+            load(file.newHash, "new"),
+          ]);
+          const oldLineCount = oldText === "" ? 0 : countLines(oldText);
+          const newLineCount = newText === "" ? 0 : countLines(newText);
+          if (oldLineCount * newLineCount > MOBILE_DIFF_MAX_COMPARISON_CELLS) {
+            throw new DiffTooLargeError("This file is too large to compare smoothly on a phone.");
+          }
+          result = diffLines(oldText, newText);
+        }
+        if (result.insertions + result.deletions > MOBILE_DIFF_MAX_CHANGED_ROWS) {
+          throw new DiffTooLargeError(
+            `This file changes ${result.insertions + result.deletions} lines, which is too much for a useful phone-sized inline diff.`
+          );
+        }
+        const rows = compactMobileDiffRows(result.rows);
+        if (rows.length > MOBILE_DIFF_MAX_DISPLAY_ROWS) {
+          throw new DiffTooLargeError(
+            "This change is too spread out for a useful phone-sized inline diff."
+          );
+        }
+        if (!cancelled) setState({ status: "ready", result, rows });
+      } catch (error) {
+        if (!cancelled)
+          setState({
+            status: "error",
+            message: error instanceof Error ? error.message : "Could not load this file diff.",
+          });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [degraded, fetchContent, file.kind, file.newHash, file.oldHash, open]);
+  const tone =
+    file.kind === "added"
+      ? [colors.success, colors.successSoft]
+      : file.kind === "removed"
+        ? [colors.danger, colors.dangerSoft]
+        : [colors.warning, colors.warningSoft];
+  const degradedMessage = file.binary
+    ? "Binary file — inline text diff is not available."
+    : file.tooLarge
+      ? "This file is too large for an inline diff."
+      : null;
+  return (
+    <View style={[styles.mobileDiffFile, { borderColor: colors.borderSubtle }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ disabled: degraded, expanded: degraded ? undefined : open }}
+        disabled={degraded}
+        onPress={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          if (state.status === "error") setState({ status: "idle" });
+          setOpen(true);
+        }}
+        style={styles.mobileDiffFileHeader}
+        testID={`approval-diff-file-${file.path}`}
+      >
+        {degraded ? null : open ? (
+          <ChevronDown size={15} color={colors.textSecondary} />
+        ) : (
+          <ChevronRight size={15} color={colors.textSecondary} />
+        )}
+        <Text style={[styles.mobileDiffKind, { color: tone[0], backgroundColor: tone[1] }]}>
+          {file.kind}
+        </Text>
+        <Text numberOfLines={2} style={[styles.mobileDiffFilePath, { color: colors.text }]}>
+          {file.path}
+        </Text>
+      </Pressable>
+      {degradedMessage ? (
+        <MobileDiffFallback
+          message={degradedMessage}
+          file={file}
+          entry={entry}
+          onOpenFile={onOpenFile}
+        />
+      ) : null}
+      {open ? (
+        <View style={styles.mobileDiffFileBody}>
+          {state.status === "idle" || state.status === "loading" ? (
+            <View style={styles.mobileDiffLoading}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={[styles.mobileDiffHelp, { color: colors.textSecondary }]}>
+                Loading reviewed content…
+              </Text>
+            </View>
+          ) : state.status === "ready" ? (
+            <>
+              <Text style={[styles.mobileDiffMeta, { color: colors.textSecondary }]}>
+                <Text style={{ color: colors.success }}>+{state.result.insertions}</Text>
+                {" · "}
+                <Text style={{ color: colors.danger }}>−{state.result.deletions}</Text>
+                {" · unchanged context is folded"}
+              </Text>
+              <MobileDiffRows rows={state.rows} />
+              {onOpenFile ? (
+                <MobileOpenDiffFileButton file={file} entry={entry} onOpenFile={onOpenFile} />
+              ) : null}
+            </>
+          ) : state.status === "error" ? (
+            <MobileDiffFallback
+              message={state.message}
+              file={file}
+              entry={entry}
+              onOpenFile={onOpenFile}
             />
           ) : null}
         </View>
@@ -1315,76 +2312,108 @@ function UnitBatchEntryDetails({ entry }: { entry: UnitBatchEntry }) {
   );
 }
 
-function UnitAuthorityDetails({
-  authority,
+function MobileDiffRows({ rows }: { rows: readonly MobileDiffDisplayRow[] }) {
+  const colors = useAtomValue(themeColorsAtom);
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator style={styles.mobileDiffCodeScroll}>
+      <View style={[styles.mobileDiffCode, { backgroundColor: colors.codeBackground }]}>
+        {rows.map((row, index) =>
+          row.type === "omitted" ? (
+            <Text key={row.key} style={[styles.mobileDiffOmitted, { color: colors.textTertiary }]}>
+              ··· {row.count} unchanged {row.count === 1 ? "line" : "lines"} ···
+            </Text>
+          ) : (
+            <View
+              key={`${row.type}:${row.oldLineNo ?? ""}:${row.newLineNo ?? ""}:${index}`}
+              style={[
+                styles.mobileDiffCodeRow,
+                {
+                  backgroundColor:
+                    row.type === "added"
+                      ? colors.successSoft
+                      : row.type === "removed"
+                        ? colors.dangerSoft
+                        : "transparent",
+                },
+              ]}
+            >
+              <Text style={[styles.mobileDiffLineNumber, { color: colors.textTertiary }]}>
+                {(row.type === "removed" ? row.oldLineNo : row.newLineNo) ?? ""}
+              </Text>
+              <Text
+                style={[
+                  styles.mobileDiffMarker,
+                  {
+                    color:
+                      row.type === "added"
+                        ? colors.success
+                        : row.type === "removed"
+                          ? colors.danger
+                          : colors.textTertiary,
+                  },
+                ]}
+              >
+                {row.type === "added" ? "+" : row.type === "removed" ? "−" : " "}
+              </Text>
+              <Text selectable style={[styles.mobileDiffCodeText, { color: colors.text }]}>
+                {row.text || " "}
+              </Text>
+            </View>
+          )
+        )}
+      </View>
+    </ScrollView>
+  );
+}
+
+function MobileDiffFallback({
+  message,
+  file,
+  entry,
+  onOpenFile,
 }: {
-  authority: NonNullable<PendingUnitBatchApproval["units"][number]["authority"]>;
+  message: string;
+  file: DiffReviewFile;
+  entry: DiffReviewEntry;
+  onOpenFile?: ApprovalSheetProps["onOpenDiffFile"];
 }) {
   const colors = useAtomValue(themeColorsAtom);
-  const [unchangedOpen, setUnchangedOpen] = useState(false);
-  const addedRows = authority.diff.added;
-  const unchanged = authority.diff.unchanged;
-  const removedCount = authority.diff.removed.length;
   return (
-    <>
-      {addedRows.length === 0 && authority.diff.retiered.length === 0 ? (
-        <DetailRow
-          icon={Lock}
-          label="Permission changes"
-          value={HOST_APPROVAL_COPY.chrome.noNewPermissions}
-        />
+    <View style={[styles.mobileDiffFallback, { backgroundColor: colors.warningSoft }]}>
+      <Text style={[styles.mobileDiffWarning, { color: colors.warning }]}>{message}</Text>
+      {onOpenFile ? (
+        <MobileOpenDiffFileButton file={file} entry={entry} onOpenFile={onOpenFile} />
       ) : null}
-      {addedRows.map((row) => (
-        <DetailRow
-          key={`authority:${row.capability}:${row.resource}`}
-          icon={Lock}
-          label={`+ ${AUTHORITY_DOMAINS[row.domain].label}`}
-          value={`${row.action} — ${row.resource}`}
-        />
-      ))}
-      {authority.diff.retiered.map(({ before, after }) => (
-        <DetailRow
-          key={`authority-tier:${after.capability}:${after.resource}`}
-          icon={Lock}
-          label="Permission level changed"
-          value={`${after.action} — ${after.resource}: ${before.tier} → ${after.tier}`}
-        />
-      ))}
-      {removedCount > 0 ? (
-        <DetailRow
-          icon={Lock}
-          label={HOST_APPROVAL_COPY.chrome.removedPermissions}
-          value={`${removedCount} request${removedCount === 1 ? "" : "s"}`}
-        />
-      ) : null}
-      {unchanged.length > 0 ? (
-        <View style={styles.detailsBlock}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ expanded: unchangedOpen }}
-            onPress={() => setUnchangedOpen((open) => !open)}
-            style={styles.detailsSummary}
-          >
-            <ChevronDown size={14} color={colors.textSecondary} />
-            <Text style={[styles.detailsSummaryText, { color: colors.textSecondary }]}>
-              {unchanged.length} unchanged permission{unchanged.length === 1 ? "" : "s"}
-            </Text>
-          </Pressable>
-          {unchangedOpen ? (
-            <View style={styles.detailRows}>
-              {unchanged.map((row) => (
-                <DetailRow
-                  key={`${row.capability}:${row.resource}`}
-                  icon={Lock}
-                  label={AUTHORITY_DOMAINS[row.domain].label}
-                  value={`${row.action} — ${row.resource}`}
-                />
-              ))}
-            </View>
-          ) : null}
-        </View>
-      ) : null}
-    </>
+    </View>
+  );
+}
+
+function MobileOpenDiffFileButton({
+  file,
+  entry,
+  onOpenFile,
+}: {
+  file: DiffReviewFile;
+  entry: DiffReviewEntry;
+  onOpenFile: NonNullable<ApprovalSheetProps["onOpenDiffFile"]>;
+}) {
+  const colors = useAtomValue(themeColorsAtom);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${file.path} in the full file inspector`}
+      onPress={() => void onOpenFile(file, entry)}
+      style={({ pressed }) => [
+        styles.mobileDiffOpenFile,
+        { opacity: pressed ? pressedOpacity : 1 },
+      ]}
+      testID={`approval-diff-open-${file.path}`}
+    >
+      <Text style={[styles.mobileDiffOpenFileText, { color: colors.primary }]}>
+        Open full file inspector
+      </Text>
+      <ChevronRight size={14} color={colors.primary} />
+    </Pressable>
   );
 }
 
@@ -1454,10 +2483,20 @@ function DetailRow({
   danger,
   secondary,
   secondarySelectable,
+  emphasizeOrigin,
 }: {
   icon: IconComponent;
   label: string;
   value: string;
+  /**
+   * When the value is an identity string, the origin it belongs to — so the
+   * registrable domain is emphasized WITHIN the URL rather than the URL being
+   * shortened to it (§7.6.3). Weight and an underline, never colour, so the
+   * emphasis survives a monochrome display; the row's accessibility label
+   * already reads the whole string, and the `Domain` row beside it states in
+   * words what the emphasis draws.
+   */
+  emphasizeOrigin?: InstallReviewOrigin;
   code?: boolean;
   format?: ApprovalDetailFormat;
   danger?: boolean;
@@ -1473,6 +2512,7 @@ function DetailRow({
       <CollapsibleTree value={value} colors={colors} />
     ) : (
       <Text
+        selectable={code || format === "code"}
         style={[
           styles.detailValue,
           code || format === "code" ? styles.codeText : null,
@@ -1482,7 +2522,20 @@ function DetailRow({
           },
         ]}
       >
-        {value}
+        {emphasizeOrigin
+          ? originTextSegments(value, emphasizeOrigin).map((segment, index) => (
+              <Text
+                key={index}
+                style={
+                  segment.emphasized
+                    ? { fontWeight: "800", textDecorationLine: "underline" }
+                    : undefined
+                }
+              >
+                {segment.text}
+              </Text>
+            ))
+          : value}
       </Text>
     );
   return (
@@ -1565,12 +2618,15 @@ function StandardActions({
   const recommendedDecision = getRecommendedStandardDecision(approval);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
   const actions = getStandardApprovalDecisionActions(approval);
-  const primaryActions = actions.filter((action) =>
-    ["once", "version", "deny"].includes(action.decision)
-  );
-  const secondaryActions = actions.filter(
-    (action) => !["once", "version", "deny"].includes(action.decision)
-  );
+  // Task scope is the recommended answer for ordinary gated work. Keep it in
+  // the primary row with the narrow one-shot and decline choices; standing
+  // trust remains in the secondary row.
+  const primaryDecisionSet =
+    recommendedDecision === "task"
+      ? new Set(["once", "task", "deny"])
+      : new Set(["once", "version", "deny"]);
+  const primaryActions = actions.filter((action) => primaryDecisionSet.has(action.decision));
+  const secondaryActions = actions.filter((action) => !primaryDecisionSet.has(action.decision));
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
@@ -1779,6 +2835,44 @@ function MissionReviewPanel({
       <Text style={[styles.detailValue, { color: colors.textSecondary }]}>
         Like all agents, it can’t change your safety controls.
       </Text>
+      <MissionDeveloperDetails approval={approval} />
+    </View>
+  );
+}
+
+function MissionDeveloperDetails({ approval }: { approval: PendingMissionReviewApproval }) {
+  const colors = useAtomValue(themeColorsAtom);
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={[styles.missionDeveloperDetails, { borderTopColor: colors.borderSubtle }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((value) => !value)}
+        style={styles.detailsSummary}
+        testID="mission-developer-details"
+      >
+        {open ? (
+          <ChevronDown size={14} color={colors.textSecondary} />
+        ) : (
+          <ChevronRight size={14} color={colors.textSecondary} />
+        )}
+        <Text style={[styles.detailsSummaryText, { color: colors.textSecondary }]}>
+          Developer details
+        </Text>
+      </Pressable>
+      {open ? (
+        <View style={styles.detailRows}>
+          <DetailRow icon={Lock} label="Closure" value={approval.closureDigest} code />
+          <DetailRow
+            icon={Settings2}
+            label="Harness"
+            value={`${approval.charter.harness.unit}@${approval.charter.harness.ev}`}
+            code
+          />
+          <DetailRow icon={Settings2} label="Model" value={approval.charter.model.modelId} code />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1826,51 +2920,64 @@ function MissionReviewActions({
   );
 }
 
-function UnitBatchActions({
+function InstallReviewActions({
   approval,
+  allowNow,
   busy,
   pendingAction,
-  onChoose,
+  onAccept,
+  onCancel,
 }: {
-  approval: PendingUnitBatchApproval;
+  approval: PendingUnitInstallReviewApproval;
+  allowNow: TemplateAcceptance["allowNow"];
   busy: boolean;
   pendingAction: PendingAction | null;
-  onChoose: (decision: ApprovalDecision) => void;
+  onAccept: () => void;
+  onCancel: () => void;
 }) {
-  const copy = getUnitBatchActionCopy(approval);
+  const colors = useAtomValue(themeColorsAtom);
+  const copy = getInstallReviewActionCopy(approval);
+  // The footer restates the selection in plain terms and updates live as rows
+  // are checked and unchecked (§7.2) — never shown for the one-line "no
+  // permission changes" upgrade, which the header already states in full.
+  const statusLine =
+    approval.parts.length === 0 && approval.unchangedPartCount > 0
+      ? null
+      : selectionStatusLine({ parts: approval.parts, allowNow });
   return (
     <View style={styles.actionGroups}>
+      {statusLine ? (
+        <Text
+          accessibilityLiveRegion="polite"
+          style={[styles.helperText, { color: colors.textSecondary }]}
+        >
+          {statusLine}
+        </Text>
+      ) : null}
       <View style={styles.actionRow}>
         <DecisionButton
-          label={copy.once.label}
-          description={copy.once.description}
+          label={copy.accept.label}
+          description={copy.accept.description}
           variant="primary"
           disabled={busy}
           loading={pendingAction === "once"}
-          onPress={() => onChoose("once")}
-          testID="approval-action-once"
+          onPress={onAccept}
+          testID="approval-action-accept-install-review"
         />
-        {copy.session ? (
+        {/* No "Not now" on the creation review: the workspace already exists,
+            and the equivalent escape is unchecking everything. */}
+        {copy.decline ? (
           <DecisionButton
-            label={copy.session.label}
-            description={copy.session.description}
-            variant="surface"
+            label={copy.decline.label}
+            description={copy.decline.description}
+            variant="outline"
             disabled={busy}
-            loading={pendingAction === "session"}
-            onPress={() => onChoose("session")}
-            testID="approval-action-session"
+            loading={pendingAction === "dismiss"}
+            icon={XCircle}
+            onPress={onCancel}
+            testID="approval-action-cancel-install-review"
           />
         ) : null}
-        <DecisionButton
-          label={copy.deny.label}
-          description={copy.deny.description}
-          variant="danger"
-          disabled={busy}
-          loading={pendingAction === "deny"}
-          icon={XCircle}
-          onPress={() => onChoose("deny")}
-          testID="approval-action-deny"
-        />
       </View>
     </View>
   );
@@ -2313,8 +3420,163 @@ const styles = StyleSheet.create({
     minHeight: touchTarget,
     paddingHorizontal: spacing.md,
   },
+  installReviewFilters: {
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  installReviewKindFilters: {
+    gap: spacing.sm,
+    paddingRight: spacing.md,
+  },
+  installReviewKindFilter: {
+    alignItems: "center",
+    borderRadius: radius.pill,
+    borderWidth: hairline,
+    justifyContent: "center",
+    minHeight: 36,
+    paddingHorizontal: spacing.md,
+  },
+  installReviewKindFilterText: {
+    ...typeRamp.caption,
+    fontWeight: "600",
+  },
+  installReviewGroups: {
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  installReviewGroup: {
+    borderRadius: radius.md,
+    borderWidth: hairline,
+    overflow: "hidden",
+  },
+  installReviewGroupHeader: {
+    gap: spacing.xs,
+    minHeight: touchTarget,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  installReviewGroupTitleRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "space-between",
+  },
+  installReviewGroupTitle: {
+    ...typeRamp.bodyStrong,
+    flex: 1,
+  },
+  installReviewGroupBadge: {
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    minWidth: 22,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    marginLeft: spacing.xs,
+  },
+  installReviewGroupBadgeText: {
+    ...typeRamp.caption,
+    fontWeight: "600" as const,
+  },
+  installReviewGroupParts: {
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.sm,
+  },
+  mobileDiffReview: {
+    borderRadius: radius.md,
+    borderWidth: hairline,
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    padding: spacing.md,
+  },
+  mobileDiffReviewHeading: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: spacing.sm,
+    justifyContent: "space-between",
+  },
+  mobileDiffReviewHeadingCopy: { flex: 1, gap: 2 },
+  mobileDiffReviewTitle: { ...typeRamp.bodyStrong },
+  mobileDiffCounts: { ...typeRamp.caption, flexShrink: 0, fontWeight: "600" },
+  mobileDiffMeta: { ...typeRamp.micro, fontWeight: "500" },
+  mobileDiffHelp: { ...typeRamp.caption },
+  mobileDiffRepositories: { gap: spacing.sm },
+  mobileDiffRepository: { borderRadius: radius.sm, borderWidth: hairline, overflow: "hidden" },
+  mobileDiffRepositoryHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: touchTarget,
+    padding: spacing.sm,
+  },
+  mobileDiffRepositoryCopy: { flex: 1, gap: 2 },
+  mobileDiffRepositoryTitle: { ...typeRamp.caption, fontWeight: "600" },
+  mobileDiffFiles: { gap: spacing.sm, padding: spacing.sm },
+  mobileDiffFile: { borderRadius: radius.sm, borderWidth: hairline, overflow: "hidden" },
+  mobileDiffFileHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: touchTarget,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  mobileDiffKind: {
+    ...typeRamp.micro,
+    borderRadius: radius.pill,
+    overflow: "hidden",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  mobileDiffFilePath: { ...typeRamp.caption, flex: 1, fontWeight: "600" },
+  mobileDiffFileBody: { gap: spacing.sm, padding: spacing.sm, paddingTop: 0 },
+  mobileDiffLoading: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
+  mobileDiffCodeScroll: { borderRadius: radius.sm, maxHeight: 420 },
+  mobileDiffCode: { minWidth: 640, paddingVertical: spacing.xs },
+  mobileDiffCodeRow: { flexDirection: "row", minHeight: 20 },
+  mobileDiffLineNumber: {
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+    fontSize: 11,
+    paddingRight: spacing.xs,
+    textAlign: "right",
+    width: 42,
+  },
+  mobileDiffMarker: {
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+    width: 20,
+  },
+  mobileDiffCodeText: {
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+    fontSize: 11,
+    lineHeight: 20,
+    paddingRight: spacing.md,
+  },
+  mobileDiffOmitted: {
+    ...typeRamp.micro,
+    fontStyle: "italic",
+    lineHeight: 24,
+    paddingLeft: spacing.md,
+  },
+  mobileDiffFallback: { gap: spacing.xs, padding: spacing.sm },
+  mobileDiffWarning: { ...typeRamp.caption, fontWeight: "500" },
+  mobileDiffOpenFile: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: touchTarget,
+  },
+  mobileDiffOpenFileText: { ...typeRamp.caption, fontWeight: "600" },
   detailsBlock: {
     marginTop: spacing.md,
+  },
+  missionDeveloperDetails: {
+    borderTopWidth: hairline,
+    marginTop: spacing.md,
+    paddingTop: spacing.sm,
   },
   detailsSummary: {
     alignItems: "center",
@@ -2337,6 +3599,17 @@ const styles = StyleSheet.create({
   detailRows: {
     gap: 9,
     paddingTop: spacing.xs + 2,
+  },
+  disclosureButton: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: touchTarget,
+  },
+  disclosureButtonText: {
+    ...typeRamp.caption,
+    fontWeight: "600",
   },
   detailRow: {
     alignItems: "flex-start",

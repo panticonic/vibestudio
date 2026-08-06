@@ -32,15 +32,15 @@ const OAUTH_PATH_PREFIX = "/oauth/callback/";
 const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const DEDUPE_MAX_ENTRIES = 32;
 interface ParsedCallback {
-    /**
-     * Pending OAuth transaction id — the trailing path segment of the relay
-     * callback URL (`/oauth/callback/<transactionId>`). The server mints it and
-     * routes the callback back to the exact pending transaction by this id.
-     */
-    transactionId: string;
-    code: string;
-    state: string;
-    rawUrl: string;
+  /**
+   * Pending OAuth transaction id — the trailing path segment of the relay
+   * callback URL (`/oauth/callback/<transactionId>`). The server mints it and
+   * routes the callback back to the exact pending transaction by this id.
+   */
+  transactionId: string;
+  code: string;
+  state: string;
+  rawUrl: string;
 }
 /**
  * Parse the limited subset of URL shapes we accept. Returns null for
@@ -48,133 +48,126 @@ interface ParsedCallback {
  * link, e.g. /connect onboarding, will be handled elsewhere).
  */
 function parseCallback(rawUrl: string): ParsedCallback | null {
-    // Universal link: https://vibestudio.app/oauth/callback/<provider>?…
-    if (rawUrl.startsWith("https://")) {
-        const noScheme = rawUrl.slice("https://".length);
-        const slash = noScheme.indexOf("/");
-        const host = slash >= 0 ? noScheme.slice(0, slash) : noScheme;
-        if (host.toLowerCase() !== UNIVERSAL_LINK_HOST)
-            return null;
-        const pathAndQuery = slash >= 0 ? noScheme.slice(slash) : "/";
-        return parsePathAndQuery(rawUrl, pathAndQuery);
-    }
-    return null;
+  // Universal link: https://vibestudio.app/oauth/callback/<provider>?…
+  if (rawUrl.startsWith("https://")) {
+    const noScheme = rawUrl.slice("https://".length);
+    const slash = noScheme.indexOf("/");
+    const host = slash >= 0 ? noScheme.slice(0, slash) : noScheme;
+    if (host.toLowerCase() !== UNIVERSAL_LINK_HOST) return null;
+    const pathAndQuery = slash >= 0 ? noScheme.slice(slash) : "/";
+    return parsePathAndQuery(rawUrl, pathAndQuery);
+  }
+  return null;
 }
 function parsePathAndQuery(rawUrl: string, pathAndQuery: string): ParsedCallback | null {
-    const queryStart = pathAndQuery.indexOf("?");
-    const path = queryStart >= 0 ? pathAndQuery.slice(0, queryStart) : pathAndQuery;
-    const query = queryStart >= 0 ? pathAndQuery.slice(queryStart + 1) : "";
-    if (!path.startsWith(OAUTH_PATH_PREFIX))
-        return null;
-    const transactionId = path.slice(OAUTH_PATH_PREFIX.length).replace(/\/+$/, "");
-    if (!transactionId || transactionId.includes("/"))
-        return null;
-    const params = new Map<string, string>();
-    for (const piece of query.split("&")) {
-        if (!piece)
-            continue;
-        const eq = piece.indexOf("=");
-        const key = eq >= 0 ? piece.slice(0, eq) : piece;
-        const value = eq >= 0 ? piece.slice(eq + 1) : "";
-        try {
-            params.set(decodeURIComponent(key), decodeURIComponent(value));
-        }
-        catch {
-            // A malformed pct-escape means we can't trust anything in this
-            // URL; bail out rather than half-parse.
-            return null;
-        }
+  const queryStart = pathAndQuery.indexOf("?");
+  const path = queryStart >= 0 ? pathAndQuery.slice(0, queryStart) : pathAndQuery;
+  const query = queryStart >= 0 ? pathAndQuery.slice(queryStart + 1) : "";
+  if (!path.startsWith(OAUTH_PATH_PREFIX)) return null;
+  const transactionId = path.slice(OAUTH_PATH_PREFIX.length).replace(/\/+$/, "");
+  if (!transactionId || transactionId.includes("/")) return null;
+  const params = new Map<string, string>();
+  for (const piece of query.split("&")) {
+    if (!piece) continue;
+    const eq = piece.indexOf("=");
+    const key = eq >= 0 ? piece.slice(0, eq) : piece;
+    const value = eq >= 0 ? piece.slice(eq + 1) : "";
+    try {
+      params.set(decodeURIComponent(key), decodeURIComponent(value));
+    } catch {
+      // A malformed pct-escape means we can't trust anything in this
+      // URL; bail out rather than half-parse.
+      return null;
     }
-    const code = params.get("code");
-    const state = params.get("state");
-    const error = params.get("error");
-    if (error) {
-        // Provider rejected the flow (user denied consent, etc.). We still
-        // need to wake up the pending promise so the UI doesn't hang; we
-        // synthesise a parsed callback with empty code so the dispatcher
-        // can reject the registry entry. The transactionId + state are enough
-        // for the server to locate and fail the pending transaction.
-        if (state) {
-            return { transactionId, code: "", state, rawUrl };
-        }
-        return null;
+  }
+  const code = params.get("code");
+  const state = params.get("state");
+  const error = params.get("error");
+  if (error) {
+    // Provider rejected the flow (user denied consent, etc.). We still
+    // need to wake up the pending promise so the UI doesn't hang; we
+    // synthesise a parsed callback with empty code so the dispatcher
+    // can reject the registry entry. The transactionId + state are enough
+    // for the server to locate and fail the pending transaction.
+    if (state) {
+      return { transactionId, code: "", state, rawUrl };
     }
-    if (!code || !state)
-        return null;
-    return { transactionId, code, state, rawUrl };
+    return null;
+  }
+  if (!code || !state) return null;
+  return { transactionId, code, state, rawUrl };
 }
 /**
  * Tiny LRU-ish dedupe set. Keyed by state since `code` is single-use and
  * the OS will never resend a different code for the same state.
  */
 class StateDedupe {
-    private readonly seen = new Map<string, number>();
-    has(state: string): boolean {
-        const ts = this.seen.get(state);
-        if (ts === undefined)
-            return false;
-        if (Date.now() - ts > DEDUPE_WINDOW_MS) {
-            this.seen.delete(state);
-            return false;
-        }
-        return true;
+  private readonly seen = new Map<string, number>();
+  has(state: string): boolean {
+    const ts = this.seen.get(state);
+    if (ts === undefined) return false;
+    if (Date.now() - ts > DEDUPE_WINDOW_MS) {
+      this.seen.delete(state);
+      return false;
     }
-    remember(state: string): void {
-        // Evict expired entries opportunistically so the map can't grow
-        // unbounded if the app is left running for days.
-        const now = Date.now();
-        if (this.seen.size >= DEDUPE_MAX_ENTRIES) {
-            for (const [k, ts] of this.seen) {
-                if (now - ts > DEDUPE_WINDOW_MS)
-                    this.seen.delete(k);
-                if (this.seen.size < DEDUPE_MAX_ENTRIES)
-                    break;
-            }
-            // If still full, drop the oldest entry (Map iteration order is
-            // insertion order).
-            if (this.seen.size >= DEDUPE_MAX_ENTRIES) {
-                const oldest = this.seen.keys().next().value;
-                if (oldest !== undefined)
-                    this.seen.delete(oldest);
-            }
-        }
-        this.seen.set(state, now);
+    return true;
+  }
+  remember(state: string): void {
+    // Evict expired entries opportunistically so the map can't grow
+    // unbounded if the app is left running for days.
+    const now = Date.now();
+    if (this.seen.size >= DEDUPE_MAX_ENTRIES) {
+      for (const [k, ts] of this.seen) {
+        if (now - ts > DEDUPE_WINDOW_MS) this.seen.delete(k);
+        if (this.seen.size < DEDUPE_MAX_ENTRIES) break;
+      }
+      // If still full, drop the oldest entry (Map iteration order is
+      // insertion order).
+      if (this.seen.size >= DEDUPE_MAX_ENTRIES) {
+        const oldest = this.seen.keys().next().value;
+        if (oldest !== undefined) this.seen.delete(oldest);
+      }
     }
-    forget(state: string): void {
-        this.seen.delete(state);
-    }
+    this.seen.set(state, now);
+  }
+  forget(state: string): void {
+    this.seen.delete(state);
+  }
 }
 const dedupe = new StateDedupe();
 function dispatch(shellClient: ShellClient, parsed: ParsedCallback): void {
-    if (dedupe.has(parsed.state)) {
-        // Duplicate delivery from the OS; the first delivery already
-        // resolved the pending flow.
-        return;
-    }
-    dedupe.remember(parsed.state);
-    // Forward to the server, which owns the OAuth transaction. We carry the
-    // explicit transactionId (the relay callback path segment) so the server
-    // resolves the exact pending transaction deterministically rather than
-    // scanning by state, plus state + code (client-forwarded path). Error
-    // responses (empty code) are forwarded too so the server can fail the
-    // waiting flow instead of hanging; it parses the error from the raw URL.
-    void shellClient.credentialService.forwardOAuthCallback({
-            transactionId: parsed.transactionId,
-            url: parsed.rawUrl,
-            state: parsed.state,
-            ...(parsed.code ? { code: parsed.code } : {}),
-        }).catch((err: unknown) => {
-        dedupe.forget(parsed.state);
-        console.warn(`[oauthHandler] Failed to forward OAuth callback for transaction=${parsed.transactionId}:`, err);
+  if (dedupe.has(parsed.state)) {
+    // Duplicate delivery from the OS; the first delivery already
+    // resolved the pending flow.
+    return;
+  }
+  dedupe.remember(parsed.state);
+  // Forward to the server, which owns the OAuth transaction. We carry the
+  // explicit transactionId (the relay callback path segment) so the server
+  // resolves the exact pending transaction deterministically rather than
+  // scanning by state, plus state + code (client-forwarded path). Error
+  // responses (empty code) are forwarded too so the server can fail the
+  // waiting flow instead of hanging; it parses the error from the raw URL.
+  void shellClient.credentialService
+    .forwardOAuthCallback({
+      transactionId: parsed.transactionId,
+      url: parsed.rawUrl,
+      state: parsed.state,
+      ...(parsed.code ? { code: parsed.code } : {}),
+    })
+    .catch((err: unknown) => {
+      dedupe.forget(parsed.state);
+      console.warn(
+        `[oauthHandler] Failed to forward OAuth callback for transaction=${parsed.transactionId}:`,
+        err
+      );
     });
 }
 function handleUrl(shellClient: ShellClient, rawUrl: string | null): void {
-    if (!rawUrl)
-        return;
-    const parsed = parseCallback(rawUrl);
-    if (!parsed)
-        return; // Not for us — let other deep-link handlers see it.
-    dispatch(shellClient, parsed);
+  if (!rawUrl) return;
+  const parsed = parseCallback(rawUrl);
+  if (!parsed) return; // Not for us — let other deep-link handlers see it.
+  dispatch(shellClient, parsed);
 }
 /**
  * Wire the OAuth deep-link listener for the lifetime of a `ShellClient`
@@ -187,23 +180,24 @@ function handleUrl(shellClient: ShellClient, rawUrl: string | null): void {
  * owns the pending OAuth transaction and completes the exchange.
  */
 export function setupOAuthHandler(shellClient: ShellClient): () => void {
-    // Cold-start path: if the OS launched the app *because* of a deep
-    // link, `getInitialURL` returns it once. Subsequent foreground
-    // re-deliveries arrive via the `url` event.
-    void Linking.getInitialURL()
-        .then((url) => handleUrl(shellClient, url))
-        .catch((err: unknown) => {
-        console.warn("[oauthHandler] getInitialURL failed", err);
+  // Cold-start path: if the OS launched the app *because* of a deep
+  // link, `getInitialURL` returns it once. Subsequent foreground
+  // re-deliveries arrive via the `url` event.
+  void Linking.getInitialURL()
+    .then((url) => handleUrl(shellClient, url))
+    .catch((err: unknown) => {
+      console.warn("[oauthHandler] getInitialURL failed", err);
     });
-    let subscription: EmitterSubscription | null = Linking.addEventListener("url", ({ url }: {
-        url: string;
-    }) => handleUrl(shellClient, url));
-    return () => {
-        if (subscription) {
-            subscription.remove();
-            subscription = null;
-        }
-    };
+  let subscription: EmitterSubscription | null = Linking.addEventListener(
+    "url",
+    ({ url }: { url: string }) => handleUrl(shellClient, url)
+  );
+  return () => {
+    if (subscription) {
+      subscription.remove();
+      subscription = null;
+    }
+  };
 }
 // Test-only export. Not part of the stable surface; the underscore
 // prefix is the convention. Used by unit tests that exercise URL

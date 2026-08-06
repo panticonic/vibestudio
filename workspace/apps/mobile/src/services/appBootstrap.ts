@@ -3,10 +3,7 @@ import {
   activateApprovedWorkspaceApp,
   type BundleDeliveryTransport,
 } from "@vibestudio/mobile-webrtc";
-import {
-  APP_CAPABILITIES_BY_TARGET,
-  type AppCapability,
-} from "@vibestudio/shared/unitManifest";
+import { APP_CAPABILITIES_BY_TARGET, type AppCapability } from "@vibestudio/shared/unitManifest";
 import { hasApprovedAppCapability, setApprovedAppCapabilities } from "./appCapabilities";
 import { registerBackgroundHandlers } from "./backgroundHandlers";
 import type { MobileRpcClient } from "./mobileTransport";

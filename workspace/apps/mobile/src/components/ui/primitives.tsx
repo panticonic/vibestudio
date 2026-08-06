@@ -4,7 +4,15 @@
  */
 
 import React, { type ReactNode } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from "react-native";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../../state/themeAtoms";
 import { pressedOpacity, radius, spacing, touchTarget, type } from "../../design/tokens";

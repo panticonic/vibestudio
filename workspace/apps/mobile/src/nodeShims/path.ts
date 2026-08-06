@@ -82,7 +82,11 @@ export function relative(from: string, to: string): string {
   const fromParts = fromAbs.split("/").filter(Boolean);
   const toParts = toAbs.split("/").filter(Boolean);
   let common = 0;
-  while (common < fromParts.length && common < toParts.length && fromParts[common] === toParts[common]) {
+  while (
+    common < fromParts.length &&
+    common < toParts.length &&
+    fromParts[common] === toParts[common]
+  ) {
     common++;
   }
   const up = fromParts.length - common;
@@ -94,6 +98,29 @@ export function relative(from: string, to: string): string {
 
 export const sep = "/";
 export const delimiter = ":";
-export const posix = { isAbsolute, normalize, join, resolve, basename, dirname, extname, relative, sep, delimiter };
+export const posix = {
+  isAbsolute,
+  normalize,
+  join,
+  resolve,
+  basename,
+  dirname,
+  extname,
+  relative,
+  sep,
+  delimiter,
+};
 
-export default { isAbsolute, normalize, join, resolve, basename, dirname, extname, relative, sep, delimiter, posix };
+export default {
+  isAbsolute,
+  normalize,
+  join,
+  resolve,
+  basename,
+  dirname,
+  extname,
+  relative,
+  sep,
+  delimiter,
+  posix,
+};

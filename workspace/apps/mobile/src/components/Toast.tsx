@@ -37,9 +37,12 @@ export function Toast() {
         return (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Dismiss notification: ${toast.title ? `${toast.title}. ` : ""}${toast.message}`}
+            accessibilityLabel={`${toast.actionLabel ?? "Dismiss notification"}: ${toast.title ? `${toast.title}. ` : ""}${toast.message}`}
             key={toast.id}
-            onPress={() => dismissToast(toast.id)}
+            onPress={() => {
+              dismissToast(toast.id);
+              if (toast.onAction) void toast.onAction();
+            }}
             style={[
               styles.toast,
               {
@@ -57,6 +60,11 @@ export function Toast() {
               ) : null}
               <Text style={[type.caption, { color: colors.textSecondary }]}>{toast.message}</Text>
             </View>
+            {toast.actionLabel ? (
+              <Text style={[type.bodyStrong, styles.action, { color: colors.accent }]}>
+                {toast.actionLabel}
+              </Text>
+            ) : null}
           </Pressable>
         );
       })}
@@ -73,7 +81,7 @@ function toneIcon(tone: ToastTone): IconComponent {
 
 function toneToColor(
   colors: { accent: string; success: string; warning: string; danger: string },
-  tone: ToastTone,
+  tone: ToastTone
 ) {
   if (tone === "success") return colors.success;
   if (tone === "warning") return colors.warning;
@@ -110,5 +118,8 @@ const styles = StyleSheet.create({
   copy: {
     flex: 1,
     gap: spacing.xxs,
+  },
+  action: {
+    alignSelf: "center",
   },
 });

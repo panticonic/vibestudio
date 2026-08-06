@@ -11,14 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import type { StyleProp, TextStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAtomValue, useSetAtom } from "jotai";
@@ -191,7 +184,11 @@ export function AppBar({
             ]}
           >
             {isLoading ? (
-              <ActivityIndicator size="small" color={colors.textSecondary} style={styles.pillSpinner} />
+              <ActivityIndicator
+                size="small"
+                color={colors.textSecondary}
+                style={styles.pillSpinner}
+              />
             ) : null}
             <View style={styles.pillCopy}>
               <Text

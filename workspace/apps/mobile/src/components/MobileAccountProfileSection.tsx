@@ -285,7 +285,11 @@ export function MobileAccountProfileSection({ client }: MobileAccountProfileSect
               onChangeText={(displayName) => updateDraft({ displayName })}
               style={[
                 styles.input,
-                { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceSunken },
+                {
+                  color: colors.text,
+                  borderColor: colors.border,
+                  backgroundColor: colors.surfaceSunken,
+                },
               ]}
               placeholderTextColor={colors.textSecondary}
             />
@@ -301,7 +305,11 @@ export function MobileAccountProfileSection({ client }: MobileAccountProfileSect
               onChangeText={(handle) => updateDraft({ handle })}
               style={[
                 styles.input,
-                { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceSunken },
+                {
+                  color: colors.text,
+                  borderColor: colors.border,
+                  backgroundColor: colors.surfaceSunken,
+                },
               ]}
               placeholderTextColor={colors.textSecondary}
             />
@@ -312,7 +320,10 @@ export function MobileAccountProfileSection({ client }: MobileAccountProfileSect
                 accessibilityLabel="Profile color preview"
                 style={[
                   styles.colorSwatch,
-                  { borderColor: colors.border, backgroundColor: normalizedColor || colors.surface },
+                  {
+                    borderColor: colors.border,
+                    backgroundColor: normalizedColor || colors.surface,
+                  },
                 ]}
               />
               <TextInput
@@ -327,7 +338,11 @@ export function MobileAccountProfileSection({ client }: MobileAccountProfileSect
                 style={[
                   styles.input,
                   styles.colorInput,
-                  { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceSunken },
+                  {
+                    color: colors.text,
+                    borderColor: colors.border,
+                    backgroundColor: colors.surfaceSunken,
+                  },
                 ]}
                 placeholderTextColor={colors.textSecondary}
               />

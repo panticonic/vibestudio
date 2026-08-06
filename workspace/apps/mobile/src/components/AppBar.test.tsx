@@ -46,7 +46,7 @@ describe("AppBar address UX", () => {
         addressSuggestions={[suggestion]}
         onAddressQueryChange={onAddressQueryChange}
         onSelectAddressSuggestion={onSelectAddressSuggestion}
-      />,
+      />
     );
 
     fireEvent(getByTestId("address-input"), "focus");

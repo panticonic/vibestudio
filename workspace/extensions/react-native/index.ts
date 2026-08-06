@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
 import type { BuildProviderInput, BuildProviderOutput } from "@vibestudio/shared/buildProvider";
+import { contentTypeForPath } from "@vibestudio/shared/contentType";
 
 export type Api = Awaited<ReturnType<typeof activate>>;
 declare module "@vibestudio/extension" {
@@ -28,14 +29,14 @@ export async function activate() {
       if (input.target !== "react-native") {
         throw new Error(`react-native provider cannot build target: ${input.target}`);
       }
-      const appManifest = input.manifest["app"] && typeof input.manifest["app"] === "object"
-        ? input.manifest["app"] as Record<string, unknown>
-        : input.manifest;
+      const appManifest =
+        input.manifest["app"] && typeof input.manifest["app"] === "object"
+          ? (input.manifest["app"] as Record<string, unknown>)
+          : input.manifest;
       const entry = String(appManifest["renderer"] ?? "index.tsx");
       const entryPath = path.resolve(input.sourcePath, entry);
-      const rnHostAbi = typeof appManifest["rnHostAbi"] === "string"
-        ? appManifest["rnHostAbi"]
-        : null;
+      const rnHostAbi =
+        typeof appManifest["rnHostAbi"] === "string" ? appManifest["rnHostAbi"] : null;
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rn-provider-"));
       const artifacts: BuildProviderOutput["artifacts"] = [];
       for (const platform of ["android", "ios"] as const) {
@@ -84,7 +85,9 @@ export async function activate() {
       return new ReadableStream<Uint8Array>({
         start(controller) {
           source.on("data", (chunk) => {
-            controller.enqueue(typeof chunk === "string" ? Buffer.from(chunk) : new Uint8Array(chunk));
+            controller.enqueue(
+              typeof chunk === "string" ? Buffer.from(chunk) : new Uint8Array(chunk)
+            );
           });
           source.on("error", (error) => controller.error(error));
           source.on("end", () => {
@@ -106,10 +109,12 @@ async function runReactNativeBundle(
   platform: "android" | "ios",
   entryPath: string,
   bundlePath: string,
-  assetsDir: string,
+  assetsDir: string
 ): Promise<void> {
   const repoRoot = resolveRepoRoot(input.workspaceRoot);
-  const bundleScript = require.resolve("react-native/scripts/bundle.js", { paths: [repoRoot, process.cwd()] });
+  const bundleScript = require.resolve("react-native/scripts/bundle.js", {
+    paths: [repoRoot, process.cwd()],
+  });
   const cliPath = require.resolve("react-native/cli.js", { paths: [repoRoot, process.cwd()] });
   const metroConfig = path.join(repoRoot, "apps", "mobile", "metro.config.js");
   const args = [
@@ -146,7 +151,7 @@ async function runReactNativeBundle(
 function run(
   command: string,
   args: string[],
-  opts: { cwd: string; env: NodeJS.ProcessEnv },
+  opts: { cwd: string; env: NodeJS.ProcessEnv }
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -161,7 +166,10 @@ function run(
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr.trim()}`));
+      else
+        reject(
+          new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr.trim()}`)
+        );
     });
   });
 }
@@ -194,24 +202,6 @@ function walkFiles(dir: string): string[] {
     else if (entry.isFile()) out.push(full);
   }
   return out;
-}
-
-function contentTypeForPath(filePath: string): string {
-  switch (path.extname(filePath).toLowerCase()) {
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    case ".gif":
-      return "image/gif";
-    case ".json":
-      return "application/json; charset=utf-8";
-    default:
-      return "application/octet-stream";
-  }
 }
 
 function releaseTempDir(tempDir: string, refs: Map<string, number>): void {

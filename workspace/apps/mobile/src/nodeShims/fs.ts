@@ -4,7 +4,9 @@
 // than silently returning wrong results.
 
 function notAvailable(name: string): never {
-  throw new Error(`fs.${name} is not available on mobile; this code path should not run in the RN bundle`);
+  throw new Error(
+    `fs.${name} is not available on mobile; this code path should not run in the RN bundle`
+  );
 }
 
 export function existsSync(): boolean {

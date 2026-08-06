@@ -132,6 +132,7 @@
             "domain": "people",
             "verb": "manage"
           },
+          "notability": "headline",
           "grantScopes": [
             "once",
             "task",

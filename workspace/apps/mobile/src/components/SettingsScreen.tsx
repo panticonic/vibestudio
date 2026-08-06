@@ -24,7 +24,15 @@ import { themeColorsAtom, themePreferenceAtom, type ThemePreference } from "../s
 import { pushToastAtom } from "../state/toastAtoms";
 import { copyToClipboard } from "../services/nativeCapabilities";
 import { spacing, radius, type, pressedOpacity, touchTarget } from "../design/tokens";
-import { ArrowLeft, Copy, Sun, Moon, Smartphone, Unplug, type IconComponent } from "../design/icons";
+import {
+  ArrowLeft,
+  Copy,
+  Sun,
+  Moon,
+  Smartphone,
+  Unplug,
+  type IconComponent,
+} from "../design/icons";
 import { Card, SectionHeader, Badge, Button, IconButton } from "./ui/primitives";
 import { ConnectionBar } from "./ConnectionBar";
 import { MobileAccountProfileSection } from "./MobileAccountProfileSection";
@@ -347,7 +355,9 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
               >
                 <View style={styles.workspaceCopy}>
                   <Text style={[type.bodyStrong, { color: colors.text }]}>{workspace.name}</Text>
-                  <Text style={[type.caption, styles.workspaceMeta, { color: colors.textSecondary }]}>
+                  <Text
+                    style={[type.caption, styles.workspaceMeta, { color: colors.textSecondary }]}
+                  >
                     {current
                       ? "Current workspace"
                       : workspace.running
