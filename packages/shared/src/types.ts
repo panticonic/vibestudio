@@ -207,6 +207,8 @@ export interface PanelViewFailure {
 
 export interface PanelArtifacts {
   htmlPath?: string;
+  /** Runtime entity currently occupying the native host view. */
+  hostedRuntimeEntityId?: string;
   bundlePath?: string;
   /** Source-resolution or compilation failure. */
   error?: string;
@@ -234,6 +236,8 @@ export interface PanelBuildStatus {
 export interface PanelViewStatus {
   exists: boolean;
   url?: string;
+  /** Runtime entity whose renderer is currently presented in this view. */
+  runtimeEntityId?: string;
   visible?: boolean;
   failure?: PanelViewFailure;
 }
@@ -271,6 +275,7 @@ export interface PanelExplicitState {
 export type PanelFocusStatus =
   | "missing"
   | "focused"
+  | "preparing"
   | "loaded"
   | "leased_elsewhere"
   | "build_failed"

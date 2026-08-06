@@ -9,7 +9,7 @@ import type { ServerClient } from "../serverClient.js";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import { buildPanelChromeState, type PanelChromeState } from "@vibestudio/shared/panelChrome";
 import { createBrowserDataClient } from "@vibestudio/browser-data";
-import { requireAppCapability } from "./appCapabilities.js";
+import { callerHasPlatformCapability, requireAppCapability } from "./appCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { dialog } from "electron";
 import { promises as fs } from "node:fs";
@@ -21,6 +21,19 @@ function requirePanelHostingAppCapability(
   method: string
 ): void {
   requireAppCapability(ctx, viewManager, "panel-hosting", `panel.${method}`);
+}
+
+function requirePanelHostingChrome(
+  ctx: ServiceContext,
+  viewManager: ViewManager,
+  method: string
+): void {
+  if (
+    callerHasPlatformCapability(ctx.caller.runtime.id, ctx.caller.runtime.kind, "panel-hosting")
+  ) {
+    return;
+  }
+  requirePanelHostingAppCapability(ctx, viewManager, method);
 }
 
 export interface PanelViewMethodDeps {
@@ -36,11 +49,30 @@ export interface PanelViewMethodDeps {
 
 export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler {
   return defineServiceHandler("view", panelMethods, {
+    createPanel: async (ctx, [parentId, source, options]) => {
+      requirePanelHostingChrome(ctx, deps.getViewManager(), "createPanel");
+      const { stateArgs, ...createOptions } = options ?? {};
+      const caller =
+        ctx.caller.runtime.kind === "app"
+          ? { callerId: ctx.caller.runtime.id, callerKind: ctx.caller.runtime.kind }
+          : undefined;
+      return deps.panelOrchestrator.createPanel(
+        parentId ?? ctx.caller.runtime.id,
+        source,
+        { ...createOptions, isRoot: parentId === null },
+        stateArgs,
+        caller
+      );
+    },
     focusPanel: (_ctx, [panelId, options]) =>
       deps.panelOrchestrator.focusPanel(panelId, {
         loadIfNeeded: true,
         ...options,
       }),
+    ensurePanelLoaded: (ctx, [panelId]) => {
+      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "ensurePanelLoaded");
+      return deps.panelOrchestrator.ensureLoaded(panelId);
+    },
     updateTheme: (ctx, [theme]) => {
       const lifecycle = deps.panelOrchestrator;
       const vm = deps.getViewManager();
@@ -242,8 +274,12 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       store.set(deps.getWorkspaceId(), await deps.getAccountUserId(), layout);
     },
     getFocusedPanelId: (ctx) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getFocusedPanelId");
+      requirePanelHostingChrome(ctx, deps.getViewManager(), "getFocusedPanelId");
       return deps.panelOrchestrator.getFocusedPanelId();
+    },
+    setFocusedPanelId: (ctx, [panelId]) => {
+      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "setFocusedPanelId");
+      return deps.panelOrchestrator.setFocusedPanelId(panelId);
     },
     getCollapsedPanelIds: async (ctx) => {
       requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getCollapsedPanelIds");
@@ -267,7 +303,10 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
 
 function requireBrowserDataClient(serverClient?: ServerClient | null) {
   if (!serverClient) throw new Error("Browser environment is unavailable");
-  return createBrowserDataClient(serverClient);
+  return createBrowserDataClient({
+    callService: (service, method, args) => serverClient.call(service, method, args),
+    callTarget: (targetId, method, args) => serverClient.callTarget(targetId, method, args),
+  });
 }
 
 function currentBrowserPage(

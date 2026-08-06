@@ -48,6 +48,7 @@ describe("createKnownPanelSlotResolver", () => {
           contextExists: () => false,
           resolveCallerContext: async () => null,
           resolveEntityContext: () => null,
+          controlsLifecycleContext: async () => false,
           resolveSubjectCaller: () => null,
         },
       })

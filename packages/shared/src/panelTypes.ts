@@ -2,11 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 // Re-export types from shared types (canonical definitions)
-export type {
-  Panel,
-  PanelSnapshot,
-  PackageManifest,
-} from "./types.js";
+export type { Panel, PanelSnapshot, PackageManifest } from "./types.js";
 export type { ChildSpec } from "@vibestudio/types";
 
 import type { PackageManifest, PanelPlacementHint } from "./types.js";

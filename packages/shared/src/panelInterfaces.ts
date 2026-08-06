@@ -47,7 +47,13 @@ export function browserEnvironmentPartition(environmentKey: string): string {
 export interface BridgePanelLifecycle {
   closePanel(panelId: string): PanelLifecycleResult | Promise<PanelLifecycleResult>;
   getInfo(panelId: string): unknown;
-  focusPanel?(panelId: string): void;
+  focusPanel?(
+    panelId: string,
+    options?: {
+      anchorPanelId?: string;
+      placement?: import("./types").PanelPlacementHint;
+    }
+  ): void | Promise<unknown>;
   updatePanelState?(
     panelId: string,
     state: import("./types.js").PanelNavigationState

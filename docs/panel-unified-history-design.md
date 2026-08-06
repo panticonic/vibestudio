@@ -90,13 +90,32 @@ from a destroyed generation.
 3. Redirect events update only the pending diagnostic record.
 4. `did-navigate` commits the final URL once.
 5. The next incarnation is prepared before the WorkspaceDO transaction.
-6. The transaction appends the incarnation and swaps the slot cursor/entity.
-7. The runtime lease transfers to the new entity.
-8. Only after a successful transfer is the previous entity retired.
+6. Userland calls the single
+   `workspace-state.slot.commitPreparedNavigation` semantic boundary.
+   WorkspaceDO appends/selects/replaces the incarnation and atomically swaps
+   the slot cursor and durable `current_entity_id` desired state.
+7. The server observes that committed state and converges the host presentation
+   lease toward it. This is a level-triggered projection: startup, reconnect,
+   or host registration can safely replay the current slot state.
+8. After the semantic commit returns, userland retires the displaced entity.
 
-Failure before step 6 leaves no history row. Failure at step 7 rolls the
-transaction back or restores the previous cursor before either entity is
-retired. History never points at an unprepared or retired entity.
+Preparation, policy, readiness, and displaced-runtime cleanup remain userland
+responsibilities. WorkspaceDO owns the semantic slot state. The host owns only
+the physical renderer projection in step 7; it neither commits navigation nor
+defines workspace history. There is no standalone lease-handoff command and no
+host navigation transaction callers can omit. A failed or lost commit response
+does not cause userland to guess which entity is current by retiring either side
+of an ambiguous response. A missing renderer leaves explicit desired-versus-
+actual presentation state that can be reconciled without a timeout or event
+log.
+
+A slot may durably reference an entity whose explicit status is `preparing`.
+That entity is not an executable principal and no presentation host creates a
+renderer for it. Sealing its build atomically changes the entity to `active`
+and publishes `panel:executionActivated`; the assigned host then creates the
+single real renderer from the sealed execution identity. Preparation never
+uses an `about:blank` panel renderer or attempts authentication before the
+principal exists.
 
 ### Same-document navigation
 

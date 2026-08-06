@@ -9,6 +9,7 @@ import {
 const readySignals = (): PanelReadinessSignals => ({
   panelId: "panel:tree/root",
   source: "panels/chat",
+  runtimeEntityId: "panel:nav-chat",
   view: {
     exists: true,
     url: "http://localhost:9000/panels/chat/",
@@ -17,6 +18,7 @@ const readySignals = (): PanelReadinessSignals => ({
   artifacts: {
     buildState: "ready",
     htmlPath: "http://localhost:9000/panels/chat/",
+    hostedRuntimeEntityId: "panel:nav-chat",
     error: null,
     viewFailure: null,
   },
@@ -43,6 +45,12 @@ describe("panel terminal readiness", () => {
 
   it.each([
     ["registered panel", (state: PanelReadinessSignals) => (state.source = null)],
+    ["current runtime entity", (state: PanelReadinessSignals) => (state.runtimeEntityId = null)],
+    [
+      "matching hosted runtime entity",
+      (state: PanelReadinessSignals) =>
+        (state.artifacts.hostedRuntimeEntityId = "panel:nav-retired"),
+    ],
     ["runtime lease", (state: PanelReadinessSignals) => (state.runtime = { leased: false })],
     ["live view", (state: PanelReadinessSignals) => (state.view.exists = false)],
     ["committed URL", (state: PanelReadinessSignals) => (state.view.url = null)],
@@ -66,6 +74,12 @@ describe("panel terminal readiness", () => {
 
   it.each([
     ["registered panel", (state: PanelReadinessSignals) => (state.source = null)],
+    ["current runtime entity", (state: PanelReadinessSignals) => (state.runtimeEntityId = null)],
+    [
+      "matching hosted runtime entity",
+      (state: PanelReadinessSignals) =>
+        (state.artifacts.hostedRuntimeEntityId = "panel:nav-retired"),
+    ],
     ["runtime lease", (state: PanelReadinessSignals) => (state.runtime = { leased: false })],
     ["live view", (state: PanelReadinessSignals) => (state.view.exists = false)],
     ["committed URL", (state: PanelReadinessSignals) => (state.view.url = null)],

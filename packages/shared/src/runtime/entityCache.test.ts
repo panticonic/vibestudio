@@ -13,6 +13,13 @@ function makeRecord(overrides: Partial<EntityRecord> = {}): EntityRecord {
     status: overrides.status ?? "active",
     cleanupComplete: overrides.cleanupComplete ?? true,
     ...(overrides.className !== undefined ? { className: overrides.className } : {}),
+    ...(overrides.activeBuildKey !== undefined ? { activeBuildKey: overrides.activeBuildKey } : {}),
+    ...(overrides.activeExecutionDigest !== undefined
+      ? { activeExecutionDigest: overrides.activeExecutionDigest }
+      : {}),
+    ...(overrides.activeAuthority !== undefined
+      ? { activeAuthority: overrides.activeAuthority }
+      : {}),
     ...(overrides.stateArgs !== undefined ? { stateArgs: overrides.stateArgs } : {}),
     ...(overrides.retiredAt !== undefined ? { retiredAt: overrides.retiredAt } : {}),
     ...(overrides.error !== undefined ? { error: overrides.error } : {}),
@@ -111,6 +118,32 @@ describe("EntityCache", () => {
       cache.hydrate([makeRecord({ id: "panel:new" })]);
       expect(cache.resolve("panel:old")).toBeNull();
       expect(cache.resolve("panel:new")).not.toBeNull();
+    });
+
+    it("does not restore a stale bootstrap entity over its durable activation", () => {
+      const bootstrap = makeRecord({
+        id: "do:workspace-source",
+        activeBuildKey: "bootstrap-build",
+      });
+      cache.registerBootstrapEntity({
+        id: bootstrap.id,
+        source: bootstrap.source,
+        activeBuildKey: bootstrap.activeBuildKey!,
+        activeExecutionDigest: "bootstrap-execution",
+        activeAuthority: { requests: [], provides: [] },
+        contextId: bootstrap.contextId,
+        className: "WorkspaceDO",
+        key: "workspace",
+      });
+
+      const durable = makeRecord({
+        id: bootstrap.id,
+        activeBuildKey: "durable-build",
+      });
+      cache._onActivate(durable);
+      cache.hydrate([durable]);
+
+      expect(cache.resolve(bootstrap.id)?.activeBuildKey).toBe("durable-build");
     });
 
     it("listActive returns only active records", () => {

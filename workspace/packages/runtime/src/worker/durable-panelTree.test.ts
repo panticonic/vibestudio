@@ -45,6 +45,7 @@ function respond(init: RequestInit | undefined, result: unknown) {
 }
 
 function readyObservation(panelId: string, source = "panels/a") {
+  const entityKey = panelId.replace(/^panel:tree\//, "");
   return {
     panelId,
     title: "Panel A",
@@ -53,8 +54,8 @@ function readyObservation(panelId: string, source = "panels/a") {
     parentId: null,
     contextId: "ctx",
     requestedRef: "main",
-    runtimeEntityId: `panel:${panelId}-current-entity`,
-    attemptId: `panel:${panelId}-current-entity@build-a`,
+    runtimeEntityId: `panel:nav-${entityKey}-current-entity`,
+    attemptId: `panel:nav-${entityKey}-current-entity@build-a`,
     effectiveVersion: "ev-a",
     buildKey: "build-a",
     phase: "ready",
@@ -63,6 +64,7 @@ function readyObservation(panelId: string, source = "panels/a") {
 }
 
 function workspaceDetailFor(panelId: string, source = "panels/a") {
+  const entityKey = panelId.replace(/^panel:tree\//, "");
   return {
     slot: { parent_slot_id: null, current_entity_title: "Panel A" },
     currentHistory: {
@@ -72,7 +74,7 @@ function workspaceDetailFor(panelId: string, source = "panels/a") {
       options: '{"ref":"main"}',
     },
     entity: {
-      id: `panel:${panelId}-current-entity`,
+      id: `panel:nav-${entityKey}-current-entity`,
       source: { effectiveVersion: "ev-a" },
       activeBuildKey: "build-a",
     },
@@ -83,8 +85,7 @@ function readyRuntimeSlot() {
   return {
     lease: { holderLabel: "Headless", platform: "headless", supportsCdp: true },
     observation: {
-      url: "http://panel.test/",
-      loading: false,
+      view: { url: "http://panel.test/", loading: false },
       boot: { phase: "ready", updatedAt: 1 },
     },
   };
@@ -115,15 +116,15 @@ describe("DurableObjectBase panelTree handles", () => {
       if (body.method === "workers.resolveService") {
         return respond(init, {
           kind: "durable-object",
-          targetId: "do:vibestudio/internal:WorkspaceDO:workspace",
+          targetId: "main",
         });
       }
-      if (body.method === "panelTreeDetail") {
+      if (body.method === "workspace-state.panelTree.detail") {
         return respond(init, {
           slot: { parent_slot_id: "root", current_entity_title: "Panel A" },
           currentHistory: { source: "panels/a", context_id: "ctx", options: null },
           entity: {
-            id: "panel:slot-a-current-entity",
+            id: "panel:nav-slot-a-current-entity",
             source: { effectiveVersion: "ev-a" },
           },
         });
@@ -151,7 +152,7 @@ describe("DurableObjectBase panelTree handles", () => {
         kind: "workspace" | "browser";
         parentId: string | null;
       }> {
-        const handle = this.panelTree.get("slot-a");
+        const handle = this.panelTree.get("panel:tree/slot-a");
         await handle.call["ping"]?.();
         await handle.emit("ready", { ok: true });
         return {
@@ -178,24 +179,18 @@ describe("DurableObjectBase panelTree handles", () => {
       {
         type: "call",
         targetId: "main",
-        method: "workers.resolveService",
-        args: ["vibestudio.workspace-state.v1", null],
+        method: "workspace-state.panelTree.detail",
+        args: ["panel:tree/slot-a"],
       },
       {
         type: "call",
-        targetId: "do:vibestudio/internal:WorkspaceDO:workspace",
-        method: "panelTreeDetail",
-        args: ["slot-a"],
-      },
-      {
-        type: "call",
-        targetId: "panel:slot-a-current-entity",
+        targetId: "panel:nav-slot-a-current-entity",
         method: "ping",
         args: [],
       },
       {
         type: "emit",
-        targetId: "panel:slot-a-current-entity",
+        targetId: "panel:nav-slot-a-current-entity",
         method: "ready",
         args: [{ ok: true }],
       },
@@ -213,10 +208,10 @@ describe("DurableObjectBase panelTree handles", () => {
       if (body.method === "workers.resolveService")
         return respond(init, {
           kind: "durable-object",
-          targetId: "do:vibestudio/internal:WorkspaceDO:workspace",
+          targetId: "main",
         });
-      if (body.method === "panelTreeDetail")
-        return respond(init, workspaceDetailFor("slot-a"));
+      if (body.method === "workspace-state.panelTree.detail")
+        return respond(init, workspaceDetailFor("panel:tree/slot-a"));
       if (body.method === "panelRuntime.observeSlot") return respond(init, readyRuntimeSlot());
       return respond(init, null);
     }) as typeof fetch;
@@ -236,7 +231,7 @@ describe("DurableObjectBase panelTree handles", () => {
         sensitivity: "read",
       })
       async probePanelTree(): Promise<boolean> {
-        return (await this.panelTree.get("slot-a").observe()).phase === "ready";
+        return (await this.panelTree.get("panel:tree/slot-a").observe()).phase === "ready";
       }
     }
 
@@ -247,8 +242,7 @@ describe("DurableObjectBase panelTree handles", () => {
     await expect(call("probePanelTree")).resolves.toBe(true);
 
     expect(calls.map(({ method }) => method)).toEqual([
-      "workers.resolveService",
-      "panelTreeDetail",
+      "workspace-state.panelTree.detail",
       "panelRuntime.observeSlot",
     ]);
   });
@@ -264,17 +258,17 @@ describe("DurableObjectBase panelTree handles", () => {
       if (body.method === "workers.resolveService") {
         return respond(init, {
           kind: "durable-object",
-          targetId: "do:vibestudio/internal:WorkspaceDO:workspace",
+          targetId: "main",
         });
       }
-      if (body.method === "panelTreeRootGroups") {
+      if (body.method === "workspace-state.panelTree.rootGroups") {
         return respond(init, {
           revision: 1,
           groups: [{ ownerUserId: null, rootCount: 1 }],
           nextCursor: null,
         });
       }
-      if (body.method === "panelTreePage") {
+      if (body.method === "workspace-state.panelTree.page") {
         const group = (body.args[0] as { group: { kind: string; parentSlotId?: string } }).group;
         const nodes =
           group.kind === "roots"
@@ -316,7 +310,7 @@ describe("DurableObjectBase panelTree handles", () => {
       ) {
         const spec = body.args[0] as { key: string; contextId?: string };
         return respond(init, {
-          id: `panel:${spec.key}`,
+          id: `panel:nav-${spec.key}`,
           contextId: spec.contextId ?? "ctx-created",
           source: {
             effectiveVersion: body.method === "runtime.reserveEntity" ? "" : "ev-created",
@@ -325,7 +319,7 @@ describe("DurableObjectBase panelTree handles", () => {
         });
       }
       if (body.method === "build.getPanelMetadata") return respond(init, { title: "Created" });
-      if (body.method === "panelTreeDetail")
+      if (body.method === "workspace-state.panelTree.detail")
         return respond(init, workspaceDetailFor(String(body.args[0]), "panels/new"));
       if (body.method === "panelRuntime.ensureSlot")
         return respond(init, { status: "assigned", lease: null });
@@ -386,7 +380,7 @@ describe("DurableObjectBase panelTree handles", () => {
     });
 
     expect(calls.map(({ method }) => method)).toContain("runtime.reserveEntity");
-    expect(calls.map(({ method }) => method)).toContain("slotCreate");
+    expect(calls.map(({ method }) => method)).toContain("workspace-state.slot.create");
     expect(calls.map(({ method }) => method)).not.toContain("panelTree.create");
   });
 
@@ -400,10 +394,10 @@ describe("DurableObjectBase panelTree handles", () => {
       if (body.method === "workers.resolveService") {
         return respond(init, {
           kind: "durable-object",
-          targetId: "do:vibestudio/internal:WorkspaceDO:workspace",
+          targetId: "main",
         });
       }
-      if (body.method === "panelTreeRootGroups") {
+      if (body.method === "workspace-state.panelTree.rootGroups") {
         return respond(init, { revision: 1, groups: [], nextCursor: null });
       }
       if (
@@ -412,7 +406,7 @@ describe("DurableObjectBase panelTree handles", () => {
       ) {
         const spec = body.args[0] as { key: string; contextId?: string };
         return respond(init, {
-          id: `panel:${spec.key}`,
+          id: `panel:nav-${spec.key}`,
           contextId: spec.contextId ?? "ctx-created",
           source: {
             effectiveVersion: body.method === "runtime.reserveEntity" ? "" : "ev-created",
@@ -421,7 +415,7 @@ describe("DurableObjectBase panelTree handles", () => {
         });
       }
       if (body.method === "build.getPanelMetadata") return respond(init, { title: "Created" });
-      if (body.method === "panelTreeDetail")
+      if (body.method === "workspace-state.panelTree.detail")
         return respond(init, workspaceDetailFor(String(body.args[0]), "panels/new"));
       if (body.method === "panelRuntime.ensureSlot")
         return respond(init, { status: "assigned", lease: null });
@@ -448,7 +442,7 @@ describe("DurableObjectBase panelTree handles", () => {
         knownId: string;
       }> {
         const created = await this.openPanel("panels/new", { focus: true });
-        const known = this.getPanelHandle("known-slot");
+        const known = this.getPanelHandle("panel:tree/known-slot");
         return { createdId: created.id, knownId: known.id };
       }
     }
@@ -459,10 +453,10 @@ describe("DurableObjectBase panelTree handles", () => {
 
     await expect(call("probePanelAliases")).resolves.toEqual({
       createdId: expect.stringMatching(/^panel:tree\/panels~new\//),
-      knownId: "known-slot",
+      knownId: "panel:tree/known-slot",
     });
     expect(calls.map(({ method }) => method)).not.toContain("panelTree.create");
-    expect(calls.map(({ method }) => method)).toContain("slotCreate");
+    expect(calls.map(({ method }) => method)).toContain("workspace-state.slot.create");
   });
 
   it("builds a panel parent handle with entity-scoped RPC and slot-scoped CDP", async () => {
@@ -479,22 +473,22 @@ describe("DurableObjectBase panelTree handles", () => {
       if (body.method === "workers.resolveService")
         return respond(init, {
           kind: "durable-object",
-          targetId: "do:vibestudio/internal:WorkspaceDO:workspace",
+          targetId: "main",
         });
-      if (body.method === "panelTreeDetail")
-        return respond(init, workspaceDetailFor("parent-slot", "panels/parent"));
+      if (body.method === "workspace-state.panelTree.detail")
+        return respond(init, workspaceDetailFor("panel:tree/parent-slot", "panels/parent"));
       if (body.method === "panelRuntime.observeSlot") return respond(init, readyRuntimeSlot());
       if (body.method === "build.getPanelMetadata") return respond(init, { title: "Parent" });
       if (body.method === "runtime.createEntity") {
         const spec = body.args[0] as { key: string };
         return respond(init, {
-          id: `panel:${spec.key}`,
+          id: `panel:nav-${spec.key}`,
           contextId: "ctx",
           source: { effectiveVersion: "ev-a" },
           buildKey: "build-a",
         });
       }
-      if (body.method === "slotCommitPreparedNavigation") {
+      if (body.method === "workspace-state.slot.commitPreparedNavigation") {
         const input = body.args[0] as {
           expectedCurrentEntityId: string;
           mutation: { entry: { entityId: string } };
@@ -545,9 +539,9 @@ describe("DurableObjectBase panelTree handles", () => {
     // Converged inbound dispatch: caller attribution rides in the envelope's
     // delivery.caller (POSTed to __rpc), not X-vibestudio-Rpc-Caller-* headers.
     const caller = {
-      callerId: "panel:parent-entity",
+      callerId: "panel:nav-parent-entity",
       callerKind: "panel",
-      callerPanelId: "parent-slot",
+      callerPanelId: "panel:tree/parent-slot",
       authorization: createTestDirectAuthority({
         callerKind: "panel",
         method: "probeParent",
@@ -580,13 +574,13 @@ describe("DurableObjectBase panelTree handles", () => {
     };
     expect(responseEnvelope.message.error).toBeUndefined();
     expect(responseEnvelope.message.result).toEqual({
-      id: "parent-slot",
+      id: "panel:tree/parent-slot",
       title: "Panel A",
       cdpEndpoint: { wsEndpoint: "ws://cdp.test" },
     });
     expect(calls).toContainEqual({
       type: "call",
-      targetId: "panel:parent-entity",
+      targetId: "panel:nav-parent-entity",
       method: "ping",
       args: [],
     });
@@ -594,10 +588,12 @@ describe("DurableObjectBase panelTree handles", () => {
       type: "call",
       targetId: "main",
       method: "panelCdp.getCdpEndpoint",
-      args: ["parent-slot"],
+      args: ["panel:tree/parent-slot"],
     });
     expect(calls.map(({ method }) => method)).toContain("runtime.supervision.restart");
-    expect(calls.map(({ method }) => method)).toContain("slotCommitPreparedNavigation");
+    expect(calls.map(({ method }) => method)).toContain(
+      "workspace-state.slot.commitPreparedNavigation"
+    );
     expect(calls.map(({ method }) => method)).not.toContain("panelTree.reload");
     expect(calls.map(({ method }) => method)).not.toContain("panelTree.rebuildPanel");
   });

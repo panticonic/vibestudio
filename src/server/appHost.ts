@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isProductSeedTrusted } from "@vibestudio/shared/productSeedTrust";
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
@@ -10,11 +11,11 @@ import {
   collectTransitiveUnitDependencyEvs,
   createPendingUnitRegistryEntry,
   createUnitBuildIdentity,
-  createUnitBatchEntryBase,
+  createReviewedUnitBase,
   findUnitGraphNode,
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
-  requestUnitBatchApproval,
+  requestUnitInstallReview,
   unitBuildIdentityFromRegistryEntry,
   canonicalUnitBuildIdentity,
   readUnitAuthorityReview,
@@ -30,6 +31,7 @@ import {
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName, NotificationPayload } from "@vibestudio/shared/events";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
+import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import {
   isAuthorizedChromeAppSource,
@@ -37,10 +39,12 @@ import {
 } from "@vibestudio/shared/chromeTrust";
 import type {
   PendingApproval,
-  PendingUnitBatchApproval,
-  UnitBatchEntry,
+  PendingUnitInstallReviewApproval,
+  ReviewedUnit,
 } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
+import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { readWorkspaceConfig, resolveDeclaredApps } from "@vibestudio/workspace/configParser";
 import {
   UnitManifestError,
@@ -73,6 +77,10 @@ import {
 } from "./runtimeExecutionIdentity.js";
 
 export type { ReactNativeAppBootstrap, ReactNativeHostReadiness } from "./reactNativeAppAdapter.js";
+
+function canonicalAuthority(value: unknown): string {
+  return sha256Canonical(value);
+}
 
 const APP_UNIT_DESCRIPTOR: UnitDescriptor<"app"> = {
   kind: "app",
@@ -185,12 +193,14 @@ interface BuildSystemLike {
   getBuild(unitPath: string, ref?: string): Promise<AppBuildResultLike>;
   getBuildByKey?(key: string): AppBuildResultLike | null;
   getEffectiveVersion(unitName: string): string | null;
+  listAffectedBuildUnits?(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
   resolveBuildUnitIdentity?(
     unitPath: string,
     ref?: string
   ): Promise<{
     unitPath: string;
     unitName: string;
+    stateHash: string;
     effectiveVersion: string;
     dependencyEvs: Record<string, string>;
     externalDeps: Record<string, string>;
@@ -244,6 +254,7 @@ interface AppGraphNode {
   internalDeps: string[];
   manifest: {
     displayName?: string;
+    title?: string;
     app?: { target?: WorkspaceAppTarget; capabilities?: AppCapability[] };
   };
 }
@@ -273,21 +284,21 @@ interface AppBuildMetadataLike {
 
 interface ApprovalQueueLike {
   request(req: {
-    kind: "unit-batch";
+    kind: "unit-install-review";
     callerId: string;
     callerKind: "panel" | "app" | "worker" | "do" | "system";
     requestedByUserId?: string;
     repoPath: string;
     effectiveVersion: string;
     dedupKey?: string | null;
-    trigger: PendingUnitBatchApproval["trigger"];
+    mode: PendingUnitInstallReviewApproval["mode"];
     title: string;
     description: string;
-    units: PendingUnitBatchApproval["units"];
-    configWrite?: PendingUnitBatchApproval["configWrite"];
-  }): Promise<
-    "once" | "task" | "mission" | "agent" | "lock" | "session" | "version" | "deny" | "dismiss"
-  >;
+    units: ReviewedUnit[];
+    /** Where each unit's bytes came from, keyed by repo path (§7.6.3). */
+    origins?: ReadonlyMap<string, InstallReviewOrigin>;
+    configWrite?: PendingUnitInstallReviewApproval["configWrite"];
+  }): Promise<"accepted" | "deny" | "dismiss">;
   listPending(): PendingApproval[];
 }
 
@@ -305,7 +316,24 @@ export interface AppHostDeps {
   eventService: EventService;
   approvalQueue: ApprovalQueueLike;
   notificationService?: NotificationServiceLike;
-  approvalCoordinator?: UnitApprovalCoordinator<UnitBatchEntry>;
+  approvalCoordinator?: UnitApprovalCoordinator<ReviewedUnit>;
+  /**
+   * Where these units' bytes came from, derived by the server from workspace
+   * state it reads itself.
+   *
+   * The launch gate is organized on origin, not on kind or permission, so an
+   * app review without this cannot answer the only question it asks. Absent in
+   * tests, where every unit reads as the host's own build.
+   */
+  resolveUnitOrigins?(
+    repoPaths: readonly string[]
+  ): Promise<ReadonlyMap<string, InstallReviewOrigin>>;
+  /**
+   * Whether this exact app version's declared authority has been admitted.
+   * Absent in tests and hosts with no authority ledger, where activation trust
+   * stands alone.
+   */
+  isAdmitted?(repoPath: string, effectiveVersion: string): boolean;
   entityCache?: Pick<EntityCache, "resolve" | "listActive" | "_onActivate" | "_onRetire">;
   executionPublicationPort?: ExecutionPublicationPort;
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
@@ -324,7 +352,7 @@ export interface AppHostDeps {
   ): { appSource: string; requiresExtensions: string[] } | null;
 }
 
-export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
+export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   readonly registry: UnitRegistry<AppRegistryEntry>;
   readonly reactNative: ReactNativeAppAdapter;
   readonly terminal: TerminalAppRuntime;
@@ -333,7 +361,7 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
     AppRegistryEntry,
     WorkspaceAppDeclaration,
     AppGraphNode,
-    UnitBatchEntry
+    ReviewedUnit
   >;
   private readonly loggedUnauthorizedPanelHostingSources = new Set<string>();
   private lastDeclared: WorkspaceAppDeclaration[] = [];
@@ -390,6 +418,27 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
         statePath: deps.statePath,
         unitKind: "app",
       }),
+      ...(deps.isAdmitted
+        ? {
+            isAdmitted: (identity) =>
+              identity.effectiveVersion !== null &&
+              deps.isAdmitted!(identity.source.repo, identity.effectiveVersion),
+          }
+        : {}),
+      // The desktop, mobile, and terminal apps that ARE Vibestudio ship with a
+      // signed record over their own source. The user decided about them by
+      // installing Vibestudio; asking again on a surface one of them renders
+      // would be a question that cannot be answered (§7.6).
+      isSeedTrusted: (node, identity) =>
+        isProductSeedTrusted({
+          unitDir: path.join(deps.workspacePath, node.relativePath),
+          identity: {
+            unitKind: "app",
+            name: identity.name,
+            source: identity.source,
+            effectiveVersion: identity.effectiveVersion,
+          },
+        }),
       makePendingEntry: (node, decl, building) => this.pendingEntryFor(node, decl, building),
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
       removeUndeclared: async (entry) => {
@@ -417,11 +466,16 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
       onApprovalCandidateError: (node, _decl, message) =>
         this.emitStatus(node.name, "error", message),
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl),
-      requestApproval: (entries, trigger) =>
-        requestUnitBatchApproval<
+      approvalOrigins: (entries) => this.resolveOriginsFor(entries),
+      approvalBatchKey: (entry) => entry.target ?? undefined,
+      requestApproval: async (entries, trigger) => {
+        // Whose code this is, resolved before the question is asked.
+        const origins = await this.resolveOriginsFor(entries);
+        return requestUnitInstallReview<
           "app",
-          UnitBatchEntry,
-          NonNullable<PendingUnitBatchApproval["configWrite"]>
+          ReviewedUnit,
+          InstallReviewOrigin,
+          NonNullable<PendingUnitInstallReviewApproval["configWrite"]>
         >({
           descriptor: APP_UNIT_DESCRIPTOR,
           approvalQueue: {
@@ -430,7 +484,9 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
           },
           entries,
           trigger,
-        }),
+          ...(origins ? { origins } : {}),
+        });
+      },
       approvalCoordinator: deps.approvalCoordinator,
       onApprovalDenied: (items) => {
         for (const { node } of items) this.emitStatus(node.name, "pending-approval", null);
@@ -520,15 +576,24 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
 
   /** Plan exact-version trust without starting a target-specific app build. */
   reviewDeclared(declared: WorkspaceAppDeclaration[] = this.lastDeclared): {
-    units: UnitBatchEntry[];
+    units: ReviewedUnit[];
     identityKeys: string[];
   } {
     const review = this.unitHost.approvalForDeclarations(declared);
     return { units: review.entries, identityKeys: review.identityKeys };
   }
 
+  /** Declared apps that ship in the host build, for the server to admit. */
+  seedTrustedDeclared(declared: WorkspaceAppDeclaration[] = this.lastDeclared): ReviewedUnit[] {
+    return this.unitHost.seedTrustedDeclarations(declared);
+  }
+
   async whenSettled(): Promise<void> {
     await this.unitHost.whenSettled();
+    // Reconcile returns once work is staged, so the line it prints is all
+    // `status=building ev=none` — true, and useless. The line a developer reads
+    // is this one: what each app actually settled on.
+    this.emitDevStatusDiagnostic("settled");
   }
 
   async whenReconciled(): Promise<void> {
@@ -545,10 +610,27 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
   }
 
   async unitChangeApprovalForCommit(
-    commit: string
-  ): Promise<{ units: UnitBatchEntry[]; identityKeys: string[] }> {
-    const units: UnitBatchEntry[] = [];
+    commit: string,
+    scope?: { changedPaths: readonly string[] }
+  ): Promise<{
+    units: ReviewedUnit[];
+    identityKeys: string[];
+    unchangedCount: number;
+    previousRequests: Map<string, readonly UnitAuthorityRequest[]>;
+    identityKeysByRepo: Map<string, string>;
+  }> {
+    const units: ReviewedUnit[] = [];
     const identityKeys: string[] = [];
+    const previousRequests = new Map<string, readonly UnitAuthorityRequest[]>();
+    const identityKeysByRepo = new Map<string, string>();
+    let unchangedCount = 0;
+    const configChanged = scope?.changedPaths.some(
+      (changedPath) => normalizeRepoPath(changedPath) === "meta/vibestudio.yml"
+    );
+    const affected =
+      scope && !configChanged && this.deps.buildSystem.listAffectedBuildUnits
+        ? new Set(await this.deps.buildSystem.listAffectedBuildUnits(commit, scope.changedPaths))
+        : null;
     for (const declaration of await this.readDeclaredAppsFromState(commit)) {
       const candidate = await this.deps.buildSystem.resolveBuildUnitIdentity?.(
         declaration.source,
@@ -557,6 +639,7 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
       if (!candidate) {
         throw new Error(`Cannot resolve app ${declaration.source} at ${commit}`);
       }
+      if (affected && !affected.has(candidate.unitName)) continue;
       const packageJsonSource = await this.deps.readWorkspaceFileAtState(
         commit,
         `${candidate.unitPath}/package.json`
@@ -569,6 +652,7 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
         version?: unknown;
         vibestudio?: {
           displayName?: unknown;
+          title?: unknown;
           authority?: unknown;
           app?: { target?: unknown; capabilities?: unknown };
         };
@@ -613,26 +697,79 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
       });
       const identityKey = canonicalUnitBuildIdentity(identity);
       const active = this.registry.get(candidate.unitName);
+      const activeIdentity = active?.activeBundleKey ? this.registryEntryIdentity(active) : null;
+      const providerChanged =
+        target === "react-native" &&
+        activeIdentity !== null &&
+        canonicalAuthority(activeIdentity.externalDeps) !== canonicalAuthority(externalDeps);
+      const currentDeclaration = this.lastDeclared.find(
+        (entry) => normalizeRepoPath(entry.source) === normalizeRepoPath(declaration.source)
+      );
+      const current = currentDeclaration
+        ? await this.deps.buildSystem.resolveBuildUnitIdentity?.(
+            currentDeclaration.source,
+            currentDeclaration.ref
+          )
+        : null;
+      const currentIdentity = current
+        ? createUnitBuildIdentity({
+            unitKind: "app" as const,
+            name: current.unitName,
+            sourceRepo: current.unitPath,
+            ref: currentDeclaration?.ref ?? "main",
+            effectiveVersion: current.effectiveVersion,
+            dependencyEvs: current.dependencyEvs,
+            externalDeps: this.externalDepsWithProvider(current.externalDeps, provider),
+            capabilities,
+          })
+        : null;
       if (
-        active?.activeBundleKey &&
-        canonicalUnitBuildIdentity(this.registryEntryIdentity(active)) === identityKey
+        !providerChanged &&
+        currentIdentity &&
+        canonicalUnitBuildIdentity(currentIdentity) === identityKey
       ) {
         continue;
       }
-      const previousAuthority = active?.activeBundleKey
-        ? (this.deps.buildSystem.getBuildByKey?.(active.activeBundleKey)?.metadata.authority ?? {
-            requests: [],
-            provides: [],
-          })
+      const previousPackageJson = current
+        ? await this.deps.readWorkspaceFileAtState(
+            current.stateHash,
+            `${current.unitPath}/package.json`
+          )
+        : null;
+      const previousAuthority = previousPackageJson
+        ? authorityReviewFromPackageJson(
+            previousPackageJson,
+            current?.unitName ?? candidate.unitName
+          )
         : { requests: [], provides: [] };
+      const authority = authorityReviewFromPackageJson(
+        packageJsonSource,
+        candidate.unitName,
+        previousAuthority,
+        this.deps.describeCapability,
+        "app"
+      );
+      identityKeys.push(identityKey);
+      identityKeysByRepo.set(candidate.unitPath, identityKey);
+      if (
+        current &&
+        !providerChanged &&
+        canonicalAuthority(previousAuthority) ===
+          canonicalAuthority({ requests: authority.requests, provides: authority.provides })
+      ) {
+        unchangedCount += 1;
+        continue;
+      }
       units.push({
-        ...createUnitBatchEntryBase({
+        ...createReviewedUnitBase({
           unitKind: "app",
           name: candidate.unitName,
           displayName:
             typeof packageJson.vibestudio?.displayName === "string"
               ? packageJson.vibestudio.displayName
-              : candidate.unitName,
+              : typeof packageJson.vibestudio?.title === "string"
+                ? packageJson.vibestudio.title
+                : candidate.unitName,
           version: typeof packageJson.version === "string" ? packageJson.version : "unknown",
           sourceRepo: candidate.unitPath,
           ref: declaration.ref,
@@ -642,23 +779,21 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
         }),
         target,
         capabilities,
-        authority: authorityReviewFromPackageJson(
-          packageJsonSource,
-          candidate.unitName,
-          previousAuthority,
-          this.deps.describeCapability,
-          "app"
-        ),
+        authority,
         integrity: null,
         provider,
       });
-      identityKeys.push(identityKey);
+      if (current) previousRequests.set(candidate.unitPath, previousAuthority.requests);
     }
-    return { units, identityKeys };
+    return { units, identityKeys, unchangedCount, previousRequests, identityKeysByRepo };
   }
 
   acceptPreapprovedTrust(keys: Iterable<string>): void {
     this.unitHost.acceptPreapprovedTrust(keys);
+  }
+
+  preparePreapprovedTrust(keys: Iterable<string>) {
+    return this.unitHost.preparePreapprovedTrust(keys);
   }
 
   listWorkspaceUnits(): Array<{
@@ -1669,7 +1804,7 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
     return {
       name: node.name,
       source: normalizeRepoPath(node.relativePath),
-      displayName: node.manifest.displayName ?? node.name,
+      displayName: node.manifest.displayName ?? node.manifest.title ?? node.name,
       target,
       declared,
       status: entry?.status ?? "not-built",
@@ -1799,6 +1934,19 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
     return true;
   }
 
+  /**
+   * Where these units came from, or nothing at all.
+   *
+   * A host with no resolver (tests, and any embedding without a workspace to
+   * read) says nothing rather than claiming provenance it cannot derive.
+   */
+  private async resolveOriginsFor(
+    entries: readonly ReviewedUnit[]
+  ): Promise<ReadonlyMap<string, InstallReviewOrigin> | undefined> {
+    if (!this.deps.resolveUnitOrigins) return undefined;
+    return this.deps.resolveUnitOrigins(entries.map((entry) => entry.source.repo));
+  }
+
   private pendingEntryFor(
     node: AppGraphNode,
     decl: WorkspaceAppDeclaration,
@@ -1819,7 +1967,7 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
     };
   }
 
-  private buildBatchEntry(node: AppGraphNode, decl: WorkspaceAppDeclaration): UnitBatchEntry {
+  private buildBatchEntry(node: AppGraphNode, decl: WorkspaceAppDeclaration): ReviewedUnit {
     const details = this.appBuildDetails(node.name);
     const active = this.registry.get(node.name);
     const previousAuthority = active?.activeBundleKey
@@ -1829,10 +1977,10 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
         })
       : { requests: [], provides: [] };
     return {
-      ...createUnitBatchEntryBase({
+      ...createReviewedUnitBase({
         unitKind: "app",
         name: node.name,
-        displayName: node.manifest.displayName,
+        displayName: node.manifest.displayName ?? node.manifest.title,
         version: readPackageVersion(node.path),
         sourceRepo: node.relativePath,
         ref: decl.ref,
@@ -2233,13 +2381,7 @@ export class AppHost implements UnitChangeApprovalProvider<UnitBatchEntry> {
 function requireUnitApprovalDecision(
   decision: Awaited<ReturnType<ApprovalQueueLike["request"]>>
 ): import("@vibestudio/unit-host").UnitApprovalDecision {
-  if (
-    decision === "once" ||
-    decision === "session" ||
-    decision === "version" ||
-    decision === "deny" ||
-    decision === "dismiss"
-  ) {
+  if (decision === "accepted" || decision === "deny" || decision === "dismiss") {
     return decision;
   }
   throw new Error(`Invalid ${decision} decision for a workspace-unit approval`);

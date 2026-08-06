@@ -17,7 +17,7 @@ const g = globalThis as typeof globalThis & {
   __vibestudioShell?: Record<string, unknown>;
   __vibestudioStateArgs?: Record<string, unknown>;
 };
-const WORKSPACE_STATE_TARGET = "do:vibestudio/internal:WorkspaceStateDO:workspace";
+const WORKSPACE_STATE_TARGET = "main";
 
 function createTransport(options?: {
   onSend?: (
@@ -102,7 +102,7 @@ describe("initRuntime", () => {
 
   it("uses the injected canonical panel id as the RPC self id", () => {
     g.__vibestudioEntityId = "panel:panel-1";
-    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioSlotId = "panel:tree/slot-1";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
@@ -118,14 +118,14 @@ describe("initRuntime", () => {
     });
 
     expect(config.entityId).toBe("panel:panel-1");
-    expect(config.slotId).toBe("slot-1");
+    expect(config.slotId).toBe("panel:tree/slot-1");
     expect(runtime.rpc.selfId).toBe("panel:panel-1");
   });
 
   it("preserves call delivery metadata through the runtime transport envelope", async () => {
     const sent: RpcEnvelope[] = [];
     g.__vibestudioEntityId = "panel:panel-1";
-    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioSlotId = "panel:tree/slot-1";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
@@ -173,7 +173,7 @@ describe("initRuntime", () => {
     const stateArgsChanged = vi.fn();
     const panelWindow = stubPanelWindow();
     g.__vibestudioEntityId = "panel:entity-1";
-    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioSlotId = "panel:tree/slot-1";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
@@ -195,9 +195,9 @@ describe("initRuntime", () => {
                 envelope,
                 message.method === "workers.resolveService"
                   ? { kind: "durable-object", targetId: WORKSPACE_STATE_TARGET }
-                  : message.method === "panelTreeDetail"
-                  ? { currentHistory: { state_args: '{"fromHost":true}' }, entity: {} }
-                  : undefined
+                  : message.method === "workspace-state.panelTree.detail"
+                    ? { currentHistory: { state_args: '{"fromHost":true}' }, entity: {} }
+                    : undefined
               )
             );
           },
@@ -208,11 +208,8 @@ describe("initRuntime", () => {
     await setStateArgs({ mode: "live" });
 
     expect(panelTreeSetStateArgsMock).toHaveBeenCalledWith(
-      "slotUpdateCurrentStateArgs",
-      [
-      "slot-1",
-        { mode: "live", fromHost: true },
-      ]
+      "workspace-state.slot.updateCurrentStateArgs",
+      ["panel:tree/slot-1", { mode: "live", fromHost: true }]
     );
     expect(panelWindow.__vibestudioStateArgs).toEqual({ mode: "live", fromHost: true });
     expect(stateArgsChanged).toHaveBeenCalledTimes(1);
@@ -227,7 +224,7 @@ describe("initRuntime", () => {
     const stateArgsChanged = vi.fn();
     const shellListeners: Array<(event: string, payload: unknown) => void> = [];
     g.__vibestudioEntityId = "panel:panel-1";
-    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioSlotId = "panel:tree/slot-1";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
@@ -262,7 +259,7 @@ describe("initRuntime", () => {
   it("normalizes loopback gateway URLs to the panel page origin", () => {
     vi.stubGlobal("location", { origin: "http://localhost:3000" });
     g.__vibestudioEntityId = "panel:panel-1";
-    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioSlotId = "panel:tree/slot-1";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
@@ -284,7 +281,7 @@ describe("initRuntime", () => {
   it("does not normalize non-equivalent gateway origins", () => {
     vi.stubGlobal("location", { origin: "http://localhost:3000" });
     g.__vibestudioEntityId = "panel:panel-1";
-    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioSlotId = "panel:tree/slot-1";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:4000", token: "token" };
@@ -309,8 +306,8 @@ describe("initRuntime", () => {
     g.__vibestudioSlotId = "child-slot";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
-    g.__vibestudioParentId = "parent-slot";
-    g.__vibestudioParentEntityId = "panel:parent-entity";
+    g.__vibestudioParentId = "panel:tree/parent-slot";
+    g.__vibestudioParentEntityId = "panel:nav-parent-entity";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
     g.__vibestudioShell = {
       setStateArgs: vi.fn(),
@@ -326,29 +323,39 @@ describe("initRuntime", () => {
             if (message.type !== "request") return;
             sends.push({ targetId: envelope.target, method: message.method, args: message.args });
             deliver(
-              responseFor(envelope, { wsEndpoint: "ws://server/cdp/parent-slot", token: "t" })
+              responseFor(envelope, {
+                wsEndpoint: "ws://server/cdp/panel:tree/parent-slot",
+                token: "t",
+              })
             );
           },
         }),
       fs: {} as never,
     });
 
-    expect(config.parentId).toBe("parent-slot");
-    expect(config.parentEntityId).toBe("panel:parent-entity");
-    expect(runtime.parentId).toBe("parent-slot");
-    expect(runtime.parentEntityId).toBe("panel:parent-entity");
-    expect(runtime.getParent()?.id).toBe("parent-slot");
-    expect(runtime.getParent()).toMatchObject({ id: "parent-slot", parentId: null });
+    expect(config.parentId).toBe("panel:tree/parent-slot");
+    expect(config.parentEntityId).toBe("panel:nav-parent-entity");
+    expect(runtime.parentId).toBe("panel:tree/parent-slot");
+    expect(runtime.parentEntityId).toBe("panel:nav-parent-entity");
+    expect(runtime.getParent()?.id).toBe("panel:tree/parent-slot");
+    expect(runtime.getParent()).toMatchObject({
+      id: "panel:tree/parent-slot",
+      parentId: null,
+    });
 
     await runtime.getParent()?.call["ping"]?.();
     await expect(runtime.getParent()?.cdp.getCdpEndpoint()).resolves.toEqual({
-      wsEndpoint: "ws://server/cdp/parent-slot",
+      wsEndpoint: "ws://server/cdp/panel:tree/parent-slot",
       token: "t",
     });
 
     expect(sends).toEqual([
-      { targetId: "panel:parent-entity", method: "ping", args: [] },
-      { targetId: "main", method: "panelCdp.getCdpEndpoint", args: ["parent-slot"] },
+      { targetId: "panel:nav-parent-entity", method: "ping", args: [] },
+      {
+        targetId: "main",
+        method: "panelCdp.getCdpEndpoint",
+        args: ["panel:tree/parent-slot"],
+      },
     ]);
   });
 
@@ -358,8 +365,8 @@ describe("initRuntime", () => {
     g.__vibestudioSlotId = "child-slot";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
-    g.__vibestudioParentId = "parent-slot";
-    g.__vibestudioParentEntityId = "panel:parent-entity";
+    g.__vibestudioParentId = "panel:tree/parent-slot";
+    g.__vibestudioParentEntityId = "panel:nav-parent-entity";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
     g.__vibestudioShell = {
       setStateArgs: vi.fn(),
@@ -377,15 +384,15 @@ describe("initRuntime", () => {
             const navigation =
               message.method === "panelTree.navigate"
                 ? {
-                    panelId: "parent-slot",
+                    panelId: "panel:tree/parent-slot",
                     title: "Next",
                     source: "panels/next",
                     kind: "workspace",
                     parentId: null,
                     contextId: "ctx-next",
                     requestedRef: "main",
-                    runtimeEntityId: "panel:next-entity",
-                    attemptId: `panel:next-entity@${"b".repeat(64)}`,
+                    runtimeEntityId: "panel:nav-next-entity",
+                    attemptId: `panel:nav-next-entity@${"b".repeat(64)}`,
                     effectiveVersion: "e".repeat(64),
                     buildKey: "b".repeat(64),
                     phase: "ready",
@@ -399,74 +406,73 @@ describe("initRuntime", () => {
                   ? { kind: "durable-object", targetId: WORKSPACE_STATE_TARGET }
                   : message.method === "build.getPanelMetadata"
                     ? { title: "Next", stateArgs: undefined }
-                  : message.method === "runtime.createEntity"
-                    ? {
-                        id: "panel:next-entity",
-                        contextId: "ctx-next",
-                        source: { effectiveVersion: "ev-next" },
-                        buildKey: "build-next",
-                      }
-                  : message.method === "slotClose"
-                    ? { closeId: "close-1", closedCount: 1 }
-                    : message.method === "slotCloseCleanupPage"
-                      ? { items: [], nextCursor: null }
-                  : message.method === "panelTreeDetail"
-                    ? {
-                        slot: { slot_id: "parent-slot", parent_slot_id: null },
-                        currentHistory: {
-                          source: "panels/current",
-                          context_id: "ctx-1",
-                          state_args: null,
-                          options: null,
-                        },
-                        entity: {
-                          id: "panel:parent-entity",
-                          source: { effectiveVersion: "ev-current" },
-                          activeBuildKey: "build-current",
-                        },
-                      }
-                    : message.method === "slotCommitPreparedNavigation"
+                    : message.method === "runtime.createEntity"
                       ? {
-                          previousEntityId: "panel:parent-entity",
-                          currentEntityId: "panel:next-entity",
+                          id: "panel:nav-next-entity",
+                          contextId: "ctx-next",
+                          source: { effectiveVersion: "ev-next" },
+                          buildKey: "build-next",
                         }
-                    : message.method === "panelRuntime.ensureSlot"
-                      ? { status: "assigned" }
-                    : message.method === "panelRuntime.observeSlot"
-                      ? {
-                          lease: {
-                            holderLabel: "test",
-                            platform: "headless",
-                            supportsCdp: false,
-                          },
-                          observation: {
-                            url: "http://test/panels/next",
-                            loading: false,
-                            boot: { phase: "ready", updatedAt: 1 },
-                          },
-                        }
-                    : message.method === "panelTree.page"
-                  ? {
-                      revision: 1,
-                      group: (message.args[0] as { group: unknown }).group,
-                      nodes: [
-                        {
-                          slotId: "sibling-slot",
-                          ownerUserId: null,
-                          title: "Sibling",
-                          source: "panels/sibling",
-                          kind: "workspace",
-                          parentSlotId: "parent-slot",
-                          runtimeEntityId: "panel:sibling-entity",
-                          createdAt: 1,
-                          childCount: 0,
-                        },
-                      ],
-                      nextCursor: null,
-                    }
-                  : navigation
-                    ? { ...navigation, observation: navigation }
-                    : undefined
+                      : message.method === "workspace-state.slot.close"
+                        ? { closeId: "close-1", closedCount: 1 }
+                        : message.method === "workspace-state.slot.closeCleanupPage"
+                          ? { items: [], nextCursor: null }
+                          : message.method === "workspace-state.panelTree.detail"
+                            ? {
+                                slot: { slot_id: "panel:tree/parent-slot", parent_slot_id: null },
+                                currentHistory: {
+                                  source: "panels/current",
+                                  context_id: "ctx-1",
+                                  state_args: null,
+                                  options: null,
+                                },
+                                entity: {
+                                  id: "panel:nav-parent-entity",
+                                  source: { effectiveVersion: "ev-current" },
+                                  activeBuildKey: "build-current",
+                                },
+                              }
+                            : message.method === "workspace-state.slot.commitPreparedNavigation"
+                              ? {
+                                  previousEntityId: "panel:nav-parent-entity",
+                                  currentEntityId: "panel:nav-next-entity",
+                                }
+                              : message.method === "panelRuntime.ensureSlot"
+                                ? { status: "assigned" }
+                                : message.method === "panelRuntime.observeSlot"
+                                  ? {
+                                      lease: {
+                                        holderLabel: "test",
+                                        platform: "headless",
+                                        supportsCdp: false,
+                                      },
+                                      observation: {
+                                        view: { url: "http://test/panels/next", loading: false },
+                                        boot: { phase: "ready", updatedAt: 1 },
+                                      },
+                                    }
+                                  : message.method === "panelTree.page"
+                                    ? {
+                                        revision: 1,
+                                        group: (message.args[0] as { group: unknown }).group,
+                                        nodes: [
+                                          {
+                                            slotId: "sibling-slot",
+                                            ownerUserId: null,
+                                            title: "Sibling",
+                                            source: "panels/sibling",
+                                            kind: "workspace",
+                                            parentSlotId: "panel:tree/parent-slot",
+                                            runtimeEntityId: "panel:sibling-entity",
+                                            createdAt: 1,
+                                            childCount: 0,
+                                          },
+                                        ],
+                                        nextCursor: null,
+                                      }
+                                    : navigation
+                                      ? { ...navigation, observation: navigation }
+                                      : undefined
               )
             );
           },
@@ -483,22 +489,22 @@ describe("initRuntime", () => {
       expect.arrayContaining([
         {
           targetId: WORKSPACE_STATE_TARGET,
-          method: "slotClose",
-          args: ["parent-slot"],
+          method: "workspace-state.slot.close",
+          args: ["panel:tree/parent-slot"],
         },
         expect.objectContaining({
           targetId: WORKSPACE_STATE_TARGET,
-          method: "slotCommitPreparedNavigation",
+          method: "workspace-state.slot.commitPreparedNavigation",
           args: [
             expect.objectContaining({
-              slotId: "parent-slot",
-              expectedCurrentEntityId: "panel:parent-entity",
+              slotId: "panel:tree/parent-slot",
+              expectedCurrentEntityId: "panel:nav-parent-entity",
               mutation: expect.objectContaining({
                 kind: "append",
                 entry: expect.objectContaining({
                   source: "panels/next",
                   contextId: "ctx-next",
-                  entityId: "panel:next-entity",
+                  entityId: "panel:nav-next-entity",
                 }),
               }),
             }),
@@ -506,8 +512,8 @@ describe("initRuntime", () => {
         }),
         {
           targetId: WORKSPACE_STATE_TARGET,
-          method: "slotUpdateCurrentStateArgs",
-          args: ["parent-slot", { mode: "fixture" }],
+          method: "workspace-state.slot.updateCurrentStateArgs",
+          args: ["panel:tree/parent-slot", { mode: "fixture" }],
         },
       ])
     );
@@ -579,7 +585,7 @@ describe("initRuntime", () => {
     const sent: RpcEnvelope[] = [];
     let deliverInbound: ((envelope: RpcEnvelope) => void) | null = null;
     g.__vibestudioEntityId = "panel:panel-1";
-    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioSlotId = "panel:tree/slot-1";
     g.__vibestudioContextId = "ctx-1";
     g.__vibestudioKind = "panel";
     g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };

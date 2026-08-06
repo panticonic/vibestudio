@@ -14,6 +14,10 @@ export function createPanelRuntimeService(deps: {
   coordinator: PanelRuntimeCoordinator;
   currentEntityForSlot(slotId: string): Promise<string | null>;
   observeHostSlot(slotId: string): Promise<PanelHostViewReport | null>;
+  /** True only after the lease's exact panel-principal RPC session is registered. */
+  isRuntimeRouteReachable?: (runtimeEntityId: string, connectionId: string) => boolean;
+  /** Spawn the renderer of last resort before retrying a programmatic lease. */
+  ensureDefaultHeadlessHost?: () => Promise<boolean>;
 }): ServiceDefinition {
   const assertOwnsClientSession = (callerId: string, clientSessionId: string) => {
     if (deps.coordinator.ownsClientSession(clientSessionId, callerId)) return;
@@ -47,15 +51,49 @@ export function createPanelRuntimeService(deps: {
       getSnapshot: () => deps.coordinator.getSnapshot(),
       observeSlot: async (_ctx, [slotId]) => {
         const current = deps.coordinator.observeSlot(slotId);
-        if (!current.lease || current.observation) return current;
-        const observation = await deps.observeHostSlot(slotId);
-        if (!observation) return current;
-        deps.coordinator.reportView(
-          current.lease.runtimeEntityId,
-          current.lease.connectionId,
-          observation
-        );
-        return deps.coordinator.observeSlot(slotId);
+        // Reconnect grace preserves ownership for a short time, but the
+        // disconnected channel cannot prove that its last page sample is
+        // still live. Wait for markConnected/reportView before refreshing the
+        // host or exposing readiness again.
+        if (!current.lease || current.lease.expiresAt !== undefined) return current;
+        // A host reports its first view as soon as navigation starts. Keep
+        // polling the host until the boot probe reaches a terminal phase;
+        // otherwise a cached `booting` observation makes every caller's
+        // waitUntilReady loop forever even after the page has become ready.
+        const phase = current.observation?.boot.phase;
+        // Managed panels have an explicit terminal boot phase. An external
+        // browser panel deliberately reports `unavailable`, so its native
+        // URL/loading pair is the readiness input instead. That pair is live
+        // host state, not a terminal durable fact: a cached `loading: false`
+        // sample can be the pre-navigation about:blank view immediately
+        // before Chromium starts the requested document. Always refresh an
+        // unavailable observation so callers cannot mistake that stale sample
+        // for a ready browser page.
+        let refreshed = current;
+        if (phase !== "ready" && phase !== "failed") {
+          const observation = await deps.observeHostSlot(slotId);
+          if (observation) {
+            deps.coordinator.reportView(
+              current.lease.runtimeEntityId,
+              current.lease.connectionId,
+              observation
+            );
+            refreshed = deps.coordinator.observeSlot(slotId);
+          }
+        }
+
+        // Managed panels must not report ready before the exact
+        // panel-principal RPC route authenticates. External browser documents
+        // deliberately have no such route: their host reports boot=unavailable
+        // and the URL/loading pair is their complete readiness contract.
+        if (
+          refreshed.observation?.boot.phase !== "unavailable" &&
+          deps.isRuntimeRouteReachable &&
+          !deps.isRuntimeRouteReachable(current.lease.runtimeEntityId, current.lease.connectionId)
+        ) {
+          return { lease: current.lease, observation: null };
+        }
+        return refreshed;
       },
       acquire: (ctx, [panelId, request]) => {
         assertOwnsClientSession(ctx.caller.runtime.id, request.clientSessionId);
@@ -65,15 +103,6 @@ export function createPanelRuntimeService(deps: {
         assertOwnsClientSession(ctx.caller.runtime.id, request.clientSessionId);
         return deps.coordinator.takeOver(panelId, request);
       },
-      handoffSlot: async (_ctx, [slotId, previousEntityId, nextEntityId]) => {
-        const current = await deps.currentEntityForSlot(slotId);
-        if (current !== nextEntityId) {
-          throw new Error(
-            `Panel runtime handoff target ${nextEntityId} is not current for slot ${slotId}`
-          );
-        }
-        return deps.coordinator.replaceRuntimeEntityForSlot(slotId, previousEntityId, nextEntityId);
-      },
       ensureSlot: async (_ctx, [slotId, entityId]) => {
         const current = await deps.currentEntityForSlot(slotId);
         if (current !== entityId) {
@@ -81,7 +110,15 @@ export function createPanelRuntimeService(deps: {
             `Panel runtime assignment target ${entityId} is not current for slot ${slotId}`
           );
         }
-        const result = deps.coordinator.ensureDefaultCdpHostForSlot(slotId, entityId);
+        let result = deps.coordinator.ensureDefaultCdpHostForSlot(slotId, entityId);
+        if (
+          !result.assigned &&
+          result.reason === "no_default_cdp_host" &&
+          deps.ensureDefaultHeadlessHost &&
+          (await deps.ensureDefaultHeadlessHost())
+        ) {
+          result = deps.coordinator.ensureDefaultCdpHostForSlot(slotId, entityId);
+        }
         if (result.assigned) return { status: "assigned" as const, lease: result.lease };
         return {
           status:

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EventService } from "@vibestudio/shared/eventsService";
+import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 
 describe("PanelRuntimeCoordinator", () => {
@@ -263,6 +264,60 @@ describe("PanelRuntimeCoordinator", () => {
     expect(coordinator.reportedViewForSlot("panel:tree/slot-mobile")).toBeNull();
   });
 
+  it("does not expose a stale ready sample while a runtime reconnects", () => {
+    const { coordinator } = createCoordinator();
+    coordinator.acquire("panel:nav-reconnecting", {
+      slotId: "panel:tree/reconnecting",
+      clientSessionId: "desktop-a",
+      connectionId: "desktop-runtime",
+    });
+    coordinator.reportView("panel:nav-reconnecting", "desktop-runtime", {
+      url: "http://127.0.0.1/panels/chat/",
+      loading: false,
+      boot: { phase: "ready" },
+    });
+
+    coordinator.markDisconnected("panel:nav-reconnecting", "desktop-runtime");
+
+    expect(coordinator.observeSlot("panel:tree/reconnecting")).toMatchObject({
+      lease: { expiresAt: expect.any(Number) },
+      observation: null,
+    });
+    expect(coordinator.reportedViewForSlot("panel:tree/reconnecting")).toBeNull();
+
+    coordinator.markConnected("panel:nav-reconnecting", "desktop-runtime");
+    expect(coordinator.observeSlot("panel:tree/reconnecting").observation).toBeNull();
+  });
+
+  it("reissues a failed headless materialization on the next ensure", () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+      supportsCdp: true,
+      loadOnLeaseAssignment: true,
+    });
+
+    const first = coordinator.ensureDefaultCdpHostForSlot("panel:tree/failed", "panel:nav-failed");
+    expect(first.assigned).toBe(true);
+    if (!first.assigned) return;
+    coordinator.reportView(first.lease.runtimeEntityId, first.lease.connectionId, {
+      url: "",
+      loading: false,
+      boot: { phase: "failed", message: "renderer could not be created" },
+    });
+
+    expect(coordinator.observeSlot("panel:tree/failed").observation).toMatchObject({
+      boot: { phase: "failed" },
+    });
+    const retry = coordinator.ensureDefaultCdpHostForSlot("panel:tree/failed", "panel:nav-failed");
+
+    expect(retry).toMatchObject({ assigned: true, lease: { platform: "headless" } });
+    expect(retry.assigned && retry.lease.connectionId).not.toBe(first.lease.connectionId);
+  });
+
   it("resolves CDP host connection ids by visible panel slot", () => {
     const { coordinator } = createCoordinator();
     coordinator.registerClient({
@@ -387,6 +442,45 @@ describe("PanelRuntimeCoordinator", () => {
     ]);
   });
 
+  it("re-announces an unobserved default-host replacement when the slot is explicitly ensured", () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+      loadOnLeaseAssignment: true,
+    });
+    coordinator.ensureDefaultCdpHostForSlot("panel:tree/slot-a", "panel:nav-old");
+    const replacement = coordinator.advanceResidentSlotEntity("panel:tree/slot-a", "panel:nav-new");
+    expect(replacement).not.toBeNull();
+
+    const leaseEvents: unknown[] = [];
+    coordinator.onLeaseChanged((event) => leaseEvents.push(event));
+    expect(
+      coordinator.ensureDefaultCdpHostForSlot("panel:tree/slot-a", "panel:nav-new")
+    ).toMatchObject({ assigned: true, lease: { runtimeEntityId: "panel:nav-new" } });
+    expect(leaseEvents).toEqual([
+      expect.objectContaining({
+        runtimeEntityId: "panel:nav-new",
+        previous: replacement,
+        next: replacement,
+        reason: "acquired",
+      }),
+    ]);
+
+    coordinator.reportView("panel:nav-new", replacement!.connectionId, {
+      url: "http://panel.test/",
+      loading: false,
+      boot: { phase: "ready", updatedAt: 1 },
+    });
+    leaseEvents.length = 0;
+    expect(
+      coordinator.ensureDefaultCdpHostForSlot("panel:tree/slot-a", "panel:nav-new")
+    ).toMatchObject({ assigned: false, reason: "already_held" });
+    expect(leaseEvents).toEqual([]);
+  });
+
   it("releases a mobile lease so the host can self-acquire the replacement runtime", () => {
     const coordinator = new PanelRuntimeCoordinator();
     const closeConnection = vi.fn();
@@ -427,6 +521,58 @@ describe("PanelRuntimeCoordinator", () => {
         reason: "released",
       }),
     ]);
+  });
+
+  it("keeps lease replacement authoritative when transport and observers throw", () => {
+    const onError = vi.fn();
+    const coordinator = new PanelRuntimeCoordinator({
+      eventService: {
+        emit: () => {
+          throw new Error("event transport failed");
+        },
+      } as unknown as EventService,
+      onError,
+    });
+    coordinator.setCloseConnection(() => {
+      throw new Error("connection close failed");
+    });
+    coordinator.registerClient({
+      clientSessionId: "desktop-session",
+      hostConnectionId: "desktop-host",
+      label: "Desktop",
+      platform: "desktop",
+      loadOnLeaseAssignment: true,
+    });
+    coordinator.acquire("panel:nav-old", {
+      slotId: "panel:tree/slot-a",
+      clientSessionId: "desktop-session",
+      connectionId: "old-connection",
+    });
+    coordinator.onLeaseChanged(() => {
+      throw new Error("lease observer failed");
+    });
+
+    const replacement = coordinator.replaceRuntimeEntityForSlot(
+      "panel:tree/slot-a",
+      "panel:nav-old",
+      "panel:nav-new"
+    );
+
+    expect(replacement?.runtimeEntityId).toBe("panel:nav-new");
+    expect(coordinator.getLease("panel:nav-old")).toBeNull();
+    expect(coordinator.getLease("panel:nav-new")).toEqual(replacement);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "connection close failed" }),
+      expect.stringContaining("close panel:nav-old")
+    );
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "event transport failed" }),
+      "emit lease event for panel:tree/slot-a"
+    );
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "lease observer failed" }),
+      "notify lease listener for panel:tree/slot-a"
+    );
   });
 
   it("converges duplicate old and replacement leases to one slot incarnation", () => {
@@ -857,6 +1003,77 @@ describe("PanelRuntimeCoordinator", () => {
         next: expect.objectContaining({ clientSessionId: "headless-session" }),
       })
     );
+  });
+
+  it("does not immediately reassign an intentionally released default lease to the same host", () => {
+    const eventService = { emit: vi.fn() };
+    const coordinator = new PanelRuntimeCoordinator({
+      eventService: eventService as unknown as EventService,
+    });
+    coordinator.registerClient({
+      clientSessionId: "desktop-session",
+      hostConnectionId: "desktop-host",
+      label: "Desktop",
+      platform: "desktop",
+      loadOnLeaseAssignment: true,
+    });
+
+    const assigned = coordinator.ensureDefaultCdpHostForSlot(
+      "panel:tree/slot-a",
+      "panel:nav-slot-a"
+    );
+    expect(assigned).toMatchObject({ assigned: true });
+    if (!assigned.assigned) throw new Error("expected default desktop lease assignment");
+
+    coordinator.release("panel:nav-slot-a", assigned.lease.connectionId, "released");
+
+    expect(coordinator.getLease("panel:nav-slot-a")).toBeNull();
+    expect(eventService.emit).toHaveBeenLastCalledWith(
+      "panel:runtimeLeaseChanged",
+      expect.objectContaining({
+        slotId: "panel:tree/slot-a",
+        runtimeEntityId: "panel:nav-slot-a",
+        reason: "released",
+        next: null,
+      })
+    );
+  });
+
+  it("converges when a capacity-limited fallback host evicts default assignments", () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    coordinator.registerClient({
+      clientSessionId: "desktop-session",
+      hostConnectionId: "desktop-host",
+      label: "Desktop",
+      platform: "desktop",
+      loadOnLeaseAssignment: true,
+    });
+
+    const resident = new Map<string, PanelRuntimeLease>();
+    let assignmentCount = 0;
+    coordinator.onLeaseChanged((event) => {
+      if (event.next?.hostConnectionId === "desktop-host") {
+        assignmentCount += 1;
+        resident.set(event.slotId, event.next);
+      } else if (event.previous?.hostConnectionId === "desktop-host") {
+        resident.delete(event.slotId);
+      }
+      if (resident.size <= 2) return;
+      const victim = resident.values().next().value as PanelRuntimeLease | undefined;
+      if (victim) coordinator.release(victim.runtimeEntityId, victim.connectionId, "released");
+    });
+
+    for (const suffix of ["a", "b", "c"]) {
+      coordinator.ensureDefaultCdpHostForSlot(
+        `panel:tree/slot-${suffix}`,
+        `panel:nav-slot-${suffix}`
+      );
+    }
+
+    expect(assignmentCount).toBe(3);
+    expect(resident.size).toBe(2);
+    expect(coordinator.getSnapshot().leases).toHaveLength(2);
+    expect(coordinator.getLease("panel:nav-slot-a")).toBeNull();
   });
 
   it("does not fall an expired desktop UI lease back to the headless CDP host", () => {

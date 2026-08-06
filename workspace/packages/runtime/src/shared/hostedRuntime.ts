@@ -58,6 +58,7 @@ export type RuntimeServiceClient = TypedServiceClient<typeof runtimeMethods>;
  * from its handle bridge) without the full internal surface.
  */
 export interface PanelRuntimePorts {
+  createPanelSlot: PanelRuntimeApi["createPanelSlot"];
   openPanel: PanelRuntimeApi["openPanel"];
   getPanelHandle: PanelRuntimeApi["getPanelHandle"];
   panelTree: PanelRuntimeTree;
@@ -124,6 +125,7 @@ export interface WorkspaceRuntime {
   readonly gatewayConfig: GatewayConfig | null;
   readonly gatewayFetch: GatewayFetch;
   openExternal(url: string, options?: OpenExternalOptions): Promise<OpenExternalResult>;
+  createPanelSlot: PanelRuntimeApi["createPanelSlot"];
   openPanel: PanelRuntimeApi["openPanel"];
   getPanelHandle: PanelRuntimeApi["getPanelHandle"];
   readonly panelTree: PanelRuntimeTree;
@@ -290,7 +292,8 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const browserData = helpfulNamespace(
     "browserData",
     createBrowserDataClient({
-      call: (service, method, args) => rpc.call("main", `${service}.${method}`, args),
+      callService: (service, method, args) => rpc.call("main", `${service}.${method}`, args),
+      callTarget: (targetId, method, args) => rpc.call(targetId, method, args),
     })
   );
   const gad = helpfulNamespace("gad", createGadClient(rpc));
@@ -344,6 +347,7 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
     gatewayConfig: host.gatewayConfig,
     gatewayFetch: host.gatewayFetch,
     openExternal: host.openExternal,
+    createPanelSlot: host.panelRuntime.createPanelSlot,
     openPanel: host.panelRuntime.openPanel,
     getPanelHandle: host.panelRuntime.getPanelHandle,
     panelTree: host.panelRuntime.panelTree,

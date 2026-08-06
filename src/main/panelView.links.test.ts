@@ -131,6 +131,24 @@ describe("PanelView plain panel links", () => {
     expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
   });
 
+  it("reports an in-place navigation transaction failure back to the launcher", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator, sendPanelEvent } = createHarness();
+    vi.mocked(panelOrchestrator.navigatePanel).mockRejectedValueOnce(
+      new Error("durable navigation commit failed: workspace state unavailable")
+    );
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    const url = "http://127.0.0.1:1234/panels/news/";
+    webContents.emit("will-navigate", { preventDefault: vi.fn() }, url);
+
+    await vi.waitFor(() => {
+      expect(sendPanelEvent).toHaveBeenCalledWith(panelId, "runtime:child-creation-error", {
+        url,
+        error: "durable navigation commit failed: workspace state unavailable",
+      });
+    });
+  });
+
   it("treats the gateway server URL host as managed when it differs from externalHost", async () => {
     const { panelId, panelView, webContents, panelOrchestrator } = createHarness({
       externalHost: "localhost",

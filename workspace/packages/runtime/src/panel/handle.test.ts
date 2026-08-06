@@ -1,18 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 function readyObservation(panelId: string, source = "panels/example") {
-  const runtimeEntityId =
-    panelId === "panel-self"
-      ? "panel:self-entity"
-      : panelId === "panel-parent"
-        ? "panel:parent-entity"
-        : `panel:${panelId}-entity`;
+  const entityKey = panelId.replace(/^panel:tree\//, "");
+  const runtimeEntityId = panelId.includes("panel:tree/panel-self")
+    ? "panel:nav-self-entity"
+    : panelId.includes("panel:tree/panel-parent")
+      ? "panel:nav-parent-entity"
+      : `panel:nav-${entityKey}-entity`;
   return {
     panelId,
     title: panelId.includes("parent") ? "Parent" : "Panel",
     source,
     kind: "workspace" as const,
-    parentId: panelId.includes("parent") ? null : "panel-parent",
+    parentId: panelId.includes("parent") ? null : "panel:tree/panel-parent",
     contextId: "ctx-meta",
     requestedRef: "main",
     runtimeEntityId,
@@ -27,11 +27,6 @@ function readyObservation(panelId: string, source = "panels/example") {
 function createRpcCall() {
   return vi.fn(async (_target: string, method: string, args: unknown[]) => {
     switch (method) {
-      case "workers.resolveService":
-        return {
-          kind: "durable-object",
-          targetId: "do:vibestudio/internal:WorkspaceDO:workspace",
-        };
       case "runtime.reserveEntity":
       case "runtime.activateReservedEntity":
       case "runtime.createEntity": {
@@ -41,7 +36,7 @@ function createRpcCall() {
           execution: { surface: "code"; source: string } | { surface: "external"; url: string };
         };
         return {
-          id: `panel:${spec.key}`,
+          id: `panel:nav-${spec.key}`,
           contextId: spec.contextId ?? "ctx-created",
           source: {
             effectiveVersion: method === "runtime.reserveEntity" ? "" : "ev-created",
@@ -49,12 +44,14 @@ function createRpcCall() {
           ...(method === "runtime.reserveEntity" ? {} : { buildKey: "build-created" }),
         };
       }
-      case "slotCreate":
-      case "panelUpdateTitle":
-      case "slotUpdateCurrentStateArgs":
+      case "workspace-state.slot.create":
+      case "workspace-state.panel.updateTitle":
+      case "workspace-state.slot.updateCurrentStateArgs":
       case "panelTree.focus":
         return undefined;
-      case "slotCommitPreparedNavigation": {
+      case "panelRuntime.ensureSlot":
+        return { status: "assigned", lease: null };
+      case "workspace-state.slot.commitPreparedNavigation": {
         const input = args[0] as {
           expectedCurrentEntityId: string;
           mutation: { entry: { entityId: string } };
@@ -66,13 +63,13 @@ function createRpcCall() {
       }
       case "build.getPanelMetadata":
         return { title: "Created" };
-      case "panelTreeRootGroups":
+      case "workspace-state.panelTree.rootGroups":
         return {
           revision: 1,
           groups: [{ ownerUserId: null, rootCount: 1 }],
           nextCursor: null,
         };
-      case "panelTreePage": {
+      case "workspace-state.panelTree.page": {
         const input = args[0] as {
           group:
             | { kind: "roots"; ownerUserId: string | null }
@@ -83,7 +80,7 @@ function createRpcCall() {
           input.group.kind === "roots"
             ? [
                 {
-                  slotId: "browser-1",
+                  slotId: "panel:tree/browser-1",
                   title: "Browser",
                   source: "browser:https://example.com",
                   kind: "browser",
@@ -99,7 +96,7 @@ function createRpcCall() {
             : childParent
               ? [
                   {
-                    slotId: "child-1",
+                    slotId: "panel:tree/child-1",
                     title: "Child",
                     source: "panels/child",
                     kind: "workspace",
@@ -115,20 +112,35 @@ function createRpcCall() {
               : [];
         return { revision: 1, group: input.group, nodes, nextCursor: null };
       }
-      case "panelTreeDetail":
+      case "workspace-state.panelTree.detail":
+        const panelId = String(args[0]);
+        const entityKey = panelId.replace(/^panel:tree\//, "");
+        const created = panelId.includes("panels~example");
         return {
           slot: {
-            parent_slot_id: String(args[0]).includes("parent") ? null : "panel-parent",
-            current_entity_title: String(args[0]).includes("parent") ? "Parent" : "Panel",
+            parent_slot_id: created
+              ? null
+              : panelId.includes("parent")
+                ? null
+                : "panel:tree/panel-parent",
+            current_entity_title: created
+              ? "Created"
+              : panelId.includes("parent")
+                ? "Parent"
+                : "Panel",
           },
           currentHistory: {
-            source: String(args[0]).includes("parent") ? "panels/parent" : "panels/self",
+            source: created
+              ? "panels/example"
+              : panelId.includes("parent")
+                ? "panels/parent"
+                : "panels/self",
             context_id: "ctx-meta",
             state_args: '{"preserved":true}',
             options: null,
           },
           entity: {
-            id: `panel:${String(args[0])}-entity`,
+            id: `panel:nav-${entityKey}-entity`,
             source: { effectiveVersion: `ev-${String(args[0])}` },
           },
         };
@@ -142,13 +154,10 @@ function createRpcCall() {
             supportsCdp: true,
           },
           observation: {
-            url: "http://panel.test/",
-            loading: false,
+            view: { url: "http://panel.test/", loading: false },
             boot: { phase: "ready", updatedAt: 1 },
           },
         };
-      case "panelRuntime.ensureSlot":
-        return { status: "assigned", lease: null };
       case "panelTree.diagnose":
         return {
           observation: readyObservation(String(args[0])),
@@ -228,7 +237,7 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, openPanel } = await import("./handle.js");
     const rpcCall = createRpcCall();
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
-      selfId: "panel-self",
+      selfId: "panel:tree/panel-self",
     });
 
     await openPanel("panels/child");
@@ -333,7 +342,7 @@ describe("PanelHandle", () => {
     const typedChild = child!.withContract({ source: "panels/child" }, "child");
 
     expect(typedChild).toBe(child);
-    expect(typedChild.id).toBe("child-1");
+    expect(typedChild.id).toBe("panel:tree/child-1");
     await (typedChild.call as Record<string, () => Promise<unknown>>)["ping"]!();
     await typedChild.emit("ready", { ok: true });
     await expect(typedChild.cdp.getCdpEndpoint()).resolves.toEqual({
@@ -347,20 +356,19 @@ describe("PanelHandle", () => {
 
     expect(rpcCall).toHaveBeenCalledWith("panel:child-entity", "ping", []);
     expect(rpcEmit).toHaveBeenCalledWith("panel:child-entity", "ready", { ok: true });
-    expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:WorkspaceDO:workspace",
-      "slotUpdateCurrentStateArgs",
-      ["child-1", { mode: "live", preserved: true }]
-    );
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.slot.updateCurrentStateArgs", [
+      "panel:tree/child-1",
+      { mode: "live", preserved: true },
+    ]);
   });
 
   it("exposes bounded panelTree queries plus get and self handles", async () => {
     const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
     const rpcCall = createRpcCall();
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
-      selfId: "panel-self",
+      selfId: "panel:tree/panel-self",
       selfRpcTargetId: "panel:self-entity",
-      parentId: "panel-parent",
+      parentId: "panel:tree/panel-parent",
       parentRpcTargetId: "panel:parent-entity",
     });
 
@@ -373,25 +381,25 @@ describe("PanelHandle", () => {
     const parent = self.parent();
 
     expect(roots.entries).toHaveLength(1);
-    expect(roots.entries[0]?.handle.id).toBe("browser-1");
+    expect(roots.entries[0]?.handle.id).toBe("panel:tree/browser-1");
     await expect(roots.entries[0]?.handle.observe()).resolves.toMatchObject({
       phase: "ready",
     });
-    expect(panelTree.get("arbitrary").id).toBe("arbitrary");
-    expect(self.id).toBe("panel-self");
+    expect(panelTree.get("panel:tree/arbitrary").id).toBe("panel:tree/arbitrary");
+    expect(self.id).toBe("panel:tree/panel-self");
     await expect(self.observe()).resolves.toMatchObject({
-      panelId: "panel-self",
-      parentId: "panel-parent",
+      panelId: "panel:tree/panel-self",
+      parentId: "panel:tree/panel-parent",
     });
     await (self.call as Record<string, () => Promise<unknown>>)["ping"]!();
-    expect(rpcCall).toHaveBeenCalledWith("panel:panel-self-entity", "ping", []);
-    expect(parent?.id).toBe("panel-parent");
+    expect(rpcCall).toHaveBeenCalledWith("panel:nav-panel-self-entity", "ping", []);
+    expect(parent?.id).toBe("panel:tree/panel-parent");
     await expect(parent?.observe()).resolves.toMatchObject({
-      panelId: "panel-parent",
+      panelId: "panel:tree/panel-parent",
       parentId: null,
     });
     await (parent!.call as Record<string, () => Promise<unknown>>)["ping"]!();
-    expect(rpcCall).toHaveBeenCalledWith("panel:panel-parent-entity", "ping", []);
+    expect(rpcCall).toHaveBeenCalledWith("panel:nav-panel-parent-entity", "ping", []);
   });
 
   it("lazily resolves arbitrary panel handles before target RPC", async () => {
@@ -400,17 +408,15 @@ describe("PanelHandle", () => {
     const rpcEmit = vi.fn(async () => undefined);
     _initPanelHandleBridge({ call: rpcCall, emit: rpcEmit, on: vi.fn() } as never);
 
-    const handle = panelTree.get("arbitrary");
+    const handle = panelTree.get("panel:tree/arbitrary");
     await (handle.call as Record<string, () => Promise<unknown>>)["ping"]!();
     await handle.emit("ready", { ok: true });
 
-    expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:WorkspaceDO:workspace",
-      "panelTreeDetail",
-      ["arbitrary"]
-    );
-    expect(rpcCall).toHaveBeenCalledWith("panel:arbitrary-entity", "ping", []);
-    expect(rpcEmit).toHaveBeenCalledWith("panel:arbitrary-entity", "ready", { ok: true });
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.panelTree.detail", [
+      "panel:tree/arbitrary",
+    ]);
+    expect(rpcCall).toHaveBeenCalledWith("panel:nav-arbitrary-entity", "ping", []);
+    expect(rpcEmit).toHaveBeenCalledWith("panel:nav-arbitrary-entity", "ready", { ok: true });
   });
 
   it("resolves arbitrary panel event targets once and filters synchronously afterward", async () => {
@@ -420,13 +426,7 @@ describe("PanelHandle", () => {
       resolveMetadata = resolve;
     });
     const rpcCall = vi.fn(async (_target: string, method: string) => {
-      if (method === "workers.resolveService") {
-        return {
-          kind: "durable-object",
-          targetId: "do:vibestudio/internal:WorkspaceDO:workspace",
-        };
-      }
-      if (method === "panelTreeDetail") return metadataPromise;
+      if (method === "workspace-state.panelTree.detail") return metadataPromise;
       return undefined;
     });
     const eventHandlers: Array<
@@ -443,7 +443,7 @@ describe("PanelHandle", () => {
     );
     _initPanelHandleBridge({ call: rpcCall, on: rpcOn } as never);
 
-    const handle = panelTree.get("arbitrary-events");
+    const handle = panelTree.get("panel:tree/arbitrary-events");
     const listener = vi.fn();
     handle.on("status", listener);
 
@@ -455,12 +455,10 @@ describe("PanelHandle", () => {
     }
     await Promise.resolve();
     await Promise.resolve();
-    expect(rpcCall).toHaveBeenCalledTimes(2);
-    expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:WorkspaceDO:workspace",
-      "panelTreeDetail",
-      ["arbitrary-events"]
-    );
+    expect(rpcCall).toHaveBeenCalledTimes(1);
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.panelTree.detail", [
+      "panel:tree/arbitrary-events",
+    ]);
     expect(listener).not.toHaveBeenCalled();
 
     resolveMetadata({
@@ -487,7 +485,7 @@ describe("PanelHandle", () => {
       payload: { ok: true },
     });
 
-    expect(rpcCall).toHaveBeenCalledTimes(2);
+    expect(rpcCall).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({ ok: true });
   });
@@ -496,68 +494,56 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
     const rpcCall = createRpcCall();
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
-      selfId: "panel-self",
+      selfId: "panel:tree/panel-self",
       selfRpcTargetId: "panel:self-entity",
-      parentId: "panel-parent",
+      parentId: "panel:tree/panel-parent",
       parentRpcTargetId: "panel:parent-entity",
     });
 
     const parent = panelTree.self().parent();
     await expect(parent?.rebuild()).resolves.toMatchObject({
-      panelId: "panel-parent",
+      panelId: "panel:tree/panel-parent",
       phase: "ready",
     });
     await expect(parent?.reload()).resolves.toMatchObject({
-      panelId: "panel-parent",
+      panelId: "panel:tree/panel-parent",
       phase: "ready",
     });
     await expect(
       parent?.navigate("panels/next", { contextId: "ctx-next", stateArgs: { mode: "live" } })
-    ).resolves.toMatchObject({ panelId: "panel-parent", phase: "ready" });
+    ).resolves.toMatchObject({ panelId: "panel:tree/panel-parent", phase: "ready" });
 
     expect(rpcCall).toHaveBeenCalledWith("main", "runtime.supervision.restart", [
-      { kind: "panel", entityId: "panel:panel-parent-entity" },
+      { kind: "panel", entityId: "panel:nav-panel-parent-entity" },
     ]);
-    expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:WorkspaceDO:workspace",
-      "slotCommitPreparedNavigation",
-      [
-        expect.objectContaining({
-          slotId: "panel-parent",
-          mutation: expect.objectContaining({ kind: "replace" }),
-        }),
-      ]
-    );
-    expect(rpcCall).not.toHaveBeenCalledWith(
-      "main",
-      "panelTree.rebuildPanel",
-      expect.any(Array)
-    );
-    expect(rpcCall).not.toHaveBeenCalledWith(
-      "main",
-      "panelTree.reload",
-      expect.any(Array)
-    );
-    expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:WorkspaceDO:workspace",
-      "slotCommitPreparedNavigation",
-      [expect.objectContaining({ slotId: "panel-parent" })]
-    );
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.slot.commitPreparedNavigation", [
+      expect.objectContaining({
+        slotId: "panel:tree/panel-parent",
+        mutation: expect.objectContaining({ kind: "replace" }),
+      }),
+    ]);
+    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildPanel", expect.any(Array));
+    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.reload", expect.any(Array));
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.slot.commitPreparedNavigation", [
+      expect.objectContaining({ slotId: "panel:tree/panel-parent" }),
+    ]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.navigate", expect.any(Array));
-    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-self"]);
-    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.reload", ["panel-self"]);
+    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildPanel", [
+      "panel:tree/panel-self",
+    ]);
+    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.reload", ["panel:tree/panel-self"]);
     expect(rpcCall).not.toHaveBeenCalledWith(
       "main",
       "panelTree.navigate",
-      expect.arrayContaining(["panel-self"])
+      expect.arrayContaining(["panel:tree/panel-self"])
     );
   });
 
   it("hydrates arbitrary parent handles from discovered tree metadata", async () => {
     const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
     _initPanelHandleBridge({ call: createRpcCall(), on: vi.fn() } as never, {
-      selfId: "panel-self",
-      parentId: "panel-parent",
+      selfId: "panel:tree/panel-self",
+      parentId: "panel:tree/panel-parent",
     });
 
     const child = (
@@ -568,22 +554,22 @@ describe("PanelHandle", () => {
     ).entries[0]?.handle;
     const parent = child?.parent();
 
-    expect(child?.id).toBe("child-1");
-    expect(panelTree.parent("child-1")?.id).toBe("parent-1");
+    expect(child?.id).toBe("panel:tree/child-1");
+    expect(panelTree.parent("panel:tree/child-1")?.id).toBe("parent-1");
     expect(parent?.id).toBe("parent-1");
   });
 
   it("creates non-panel runtime handles that cannot be targeted", async () => {
     const { createNonPanelRuntimeHandle } = await import("../shared/handles.js");
-    const parent = createNonPanelRuntimeHandle({ id: "panel-parent" });
+    const parent = createNonPanelRuntimeHandle({ id: "panel:tree/panel-parent" });
     const handle = createNonPanelRuntimeHandle({
       id: "worker:agent",
-      parentId: "panel-parent",
+      parentId: "panel:tree/panel-parent",
       parent: () => parent,
     });
 
     expect(handle.id).toBe("worker:agent");
-    expect(handle.parent()?.id).toBe("panel-parent");
+    expect(handle.parent()?.id).toBe("panel:tree/panel-parent");
     await expect(handle.observe()).rejects.toThrow("worker:agent is not a panel target");
     await expect(handle.cdp.getCdpEndpoint()).rejects.toThrow(
       "CDP is not available for panel worker:agent"
@@ -621,14 +607,11 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never);
 
-    await getPanelHandle("panel-1", "browser").cdp.navigate("https://example.com");
+    await getPanelHandle("panel:tree/panel-1", "browser").cdp.navigate("https://example.com");
 
-    expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:WorkspaceDO:workspace",
-      "slotCommitPreparedNavigation",
-      [expect.objectContaining({ slotId: "panel-1" })]
-    );
-    expect(rpcCall).toHaveBeenCalledWith("main", "panelRuntime.handoffSlot", expect.any(Array));
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.slot.commitPreparedNavigation", [
+      expect.objectContaining({ slotId: "panel:tree/panel-1" }),
+    ]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.navigate", expect.any(Array));
   });
 
@@ -638,14 +621,14 @@ describe("PanelHandle", () => {
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never);
 
     await expect(
-      getPanelHandle("panel-1").cdp.consoleHistory({ limit: 50, errorLimit: 50 })
+      getPanelHandle("panel:tree/panel-1").cdp.consoleHistory({ limit: 50, errorLimit: 50 })
     ).resolves.toMatchObject({
       entries: [expect.objectContaining({ message: "loaded" })],
       capacity: { entries: 1000, errors: 500 },
     });
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.consoleHistory", [
-      "panel-1",
+      "panel:tree/panel-1",
       { limit: 50, errorLimit: 50 },
     ]);
   });
@@ -655,22 +638,18 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never);
 
-    await expect(getPanelHandle("panel-1").diagnose()).resolves.toMatchObject({
-      observation: { panelId: "panel-1", phase: "ready" },
+    await expect(getPanelHandle("panel:tree/panel-1").diagnose()).resolves.toMatchObject({
+      observation: { panelId: "panel:tree/panel-1", phase: "ready" },
       consoleHistory: {
         entries: [expect.objectContaining({ message: "loaded" })],
       },
     });
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.consoleHistory", [
-      "panel-1",
+      "panel:tree/panel-1",
       { limit: 200, errorLimit: 100 },
     ]);
-    expect(rpcCall).not.toHaveBeenCalledWith(
-      "main",
-      "panelTree.diagnose",
-      expect.any(Array)
-    );
+    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.diagnose", expect.any(Array));
   });
 
   it("supports handle.click as a CDP automation convenience", async () => {
@@ -728,33 +707,55 @@ describe("PanelHandle", () => {
     );
   });
 
+  it("reports CDP module-loader failures instead of leaking the workerd Function error", async () => {
+    (globalThis as any).__vibestudioRequire__ = vi.fn(() => {
+      throw new Error("canonical CDP bundle was unavailable");
+    });
+    const rpcCall = createRpcCall();
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never);
+    const NativeFunction = globalThis.Function;
+    globalThis.Function = new Proxy(NativeFunction, {
+      construct() {
+        throw new TypeError("Function is not a constructor");
+      },
+    });
+    try {
+      await expect(getPanelHandle("panel-1", "browser").cdp.page()).rejects.toThrow(
+        /canonical CDP bundle was unavailable/
+      );
+    } finally {
+      globalThis.Function = NativeFunction;
+    }
+  });
+
   it("routes CDP operations through rpc for workspace and self handles", async () => {
     const rpcCall = createRpcCall();
     const { _initPanelHandleBridge, getPanelHandle, panelTree } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
-      selfId: "panel-self",
+      selfId: "panel:tree/panel-self",
     });
 
     // CDP automation is available for every panel target, including workspace
     // panels and the panel the agent is running in (panelTree.self()).
     await expect(
-      getPanelHandle("workspace-1").cdp.navigate("https://example.com")
+      getPanelHandle("panel:tree/workspace-1").cdp.navigate("https://example.com")
     ).resolves.toBeUndefined();
-    await expect(getPanelHandle("workspace-1").cdp.getCdpEndpoint()).resolves.toEqual({
+    await expect(getPanelHandle("panel:tree/workspace-1").cdp.getCdpEndpoint()).resolves.toEqual({
       wsEndpoint: "ws://localhost",
       token: "t",
     });
     await expect(panelTree.self().cdp.reload()).resolves.toBeUndefined();
 
-    expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:WorkspaceDO:workspace",
-      "slotCommitPreparedNavigation",
-      [expect.objectContaining({ slotId: "workspace-1" })]
-    );
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.slot.commitPreparedNavigation", [
+      expect.objectContaining({ slotId: "panel:tree/workspace-1" }),
+    ]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.navigate", expect.any(Array));
-    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["workspace-1"]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", [
+      "panel:tree/workspace-1",
+    ]);
     expect(rpcCall).toHaveBeenCalledWith("main", "runtime.supervision.restart", [
-      { kind: "panel", entityId: "panel:panel-self-entity" },
+      { kind: "panel", entityId: "panel:nav-panel-self-entity" },
     ]);
   });
 
@@ -770,16 +771,12 @@ describe("PanelHandle", () => {
     });
 
     expect(children.entries).toHaveLength(1);
-    expect(children.entries[0]?.handle.id).toBe("child-1");
-    expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibestudio/internal:WorkspaceDO:workspace",
-      "panelTreePage",
-      [
-        {
-          group: { kind: "children", parentSlotId: handle.id },
-          limit: 200,
-        },
-      ]
-    );
+    expect(children.entries[0]?.handle.id).toBe("panel:tree/child-1");
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.panelTree.page", [
+      {
+        group: { kind: "children", parentSlotId: handle.id },
+        limit: 200,
+      },
+    ]);
   });
 });

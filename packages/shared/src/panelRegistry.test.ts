@@ -161,14 +161,13 @@ describe("PanelRegistry", () => {
       expect(registry.getPanel("panel:tree/root")?.title).toBe("root from server");
     });
 
-    it("preserves runtime artifacts across an in-place navigate (same contextId, new source)", () => {
-      // Navigating a panel in place keeps the view session (contextId) but
-      // changes the source; the Electron-main artifacts are authoritative for the
-      // live view and must survive the next server repopulate.
+    it("does not preserve a retired incarnation's artifacts across same-slot navigation", () => {
       registry.addPanel(
         makePanel("panel:tree/root", {
+          runtimeEntityId: "panel:nav-old",
           artifacts: {
             htmlPath: "http://localhost:1234/panels/chat/",
+            hostedRuntimeEntityId: "panel:nav-old",
             buildState: "ready",
           },
         }),
@@ -178,6 +177,7 @@ describe("PanelRegistry", () => {
 
       registry.repopulate([
         makePanel("panel:tree/root", {
+          runtimeEntityId: "panel:nav-next",
           snapshot: {
             source: "panels/other",
             contextId: "ctx-panel:tree/root",
@@ -187,10 +187,7 @@ describe("PanelRegistry", () => {
         }),
       ]);
 
-      expect(registry.getPanel("panel:tree/root")?.artifacts).toEqual({
-        htmlPath: "http://localhost:1234/panels/chat/",
-        buildState: "ready",
-      });
+      expect(registry.getPanel("panel:tree/root")?.artifacts).toEqual({});
     });
 
     it("does not preserve runtime artifacts when the view session (contextId) changes", () => {
@@ -310,7 +307,11 @@ describe("PanelRegistry", () => {
         buildKey: "b".repeat(64),
         executionDigest: "e".repeat(64),
         authorityRequests: [],
-        artifacts: { buildState: "ready", htmlPath: "http://localhost/panel" },
+        artifacts: {
+          buildState: "ready",
+          htmlPath: "http://localhost/panel",
+          hostedRuntimeEntityId: "panel:nav-root",
+        },
       });
       registry.addPanel(panel, null);
 
@@ -326,6 +327,7 @@ describe("PanelRegistry", () => {
       expect(panel.artifacts).toEqual({
         buildState: "ready",
         htmlPath: "http://localhost/panel",
+        hostedRuntimeEntityId: "panel:nav-root",
       });
     });
   });

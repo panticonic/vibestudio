@@ -40,6 +40,7 @@ const WORKSPACE_RUNTIME_KEYS: Array<keyof WorkspaceRuntime> = [
   "gatewayConfig",
   "gatewayFetch",
   "openExternal",
+  "createPanelSlot",
   "openPanel",
   "getPanelHandle",
   "panelTree",
@@ -87,6 +88,7 @@ function recordingHost() {
     onStatusChange: () => () => {},
   } as unknown as RpcClient;
   const openPanel = async () => ({}) as never;
+  const createPanelSlot = async () => ({}) as never;
   const host: RuntimeHost = {
     id: "host-id",
     contextId: "ctx-1",
@@ -95,6 +97,7 @@ function recordingHost() {
     gatewayConfig: { serverUrl: "http://gw.test", token: "T" },
     gatewayFetch: async () => new Response(),
     panelRuntime: {
+      createPanelSlot,
       openPanel,
       getPanelHandle: () => ({}) as never,
       panelTree: {} as never,
@@ -120,6 +123,7 @@ describe("createHostedRuntime", () => {
   it("passes the host's panel ports through by identity", () => {
     const { host } = recordingHost();
     const core = createHostedRuntime(host);
+    expect(core.createPanelSlot).toBe(host.panelRuntime.createPanelSlot);
     expect(core.openPanel).toBe(host.panelRuntime.openPanel);
     expect(core.getPanelHandle).toBe(host.panelRuntime.getPanelHandle);
     expect(core.panelTree).toBe(host.panelRuntime.panelTree);

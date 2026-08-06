@@ -410,7 +410,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     expect(panelView.createViewForPanel).toHaveBeenCalled();
   });
 
-  it("keeps a preparing native host detached so the shell loading surface remains visible", async () => {
+  it("does not create a renderer for a preparing, non-executable principal", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/preparing", [], {
       buildKey: null,
@@ -420,24 +420,14 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     registry.addPanel(panel, null, { addAsRoot: true });
 
     const { orchestrator, panelView } = createOrchestrator(registry);
-    let hosted = false;
-    panelView.createViewForPanel.mockImplementationOnce(async () => {
-      hosted = true;
-    });
-    panelView.hasView.mockImplementation((panelId: string) => panelId === panel.id && hosted);
-
     await expect(orchestrator.ensureLoaded(panel.id)).resolves.toMatchObject({
-      status: "loaded",
-      loaded: true,
+      status: "preparing",
+      loaded: false,
     });
 
-    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
-      panel.id,
-      "about:blank",
-      panel.snapshot.contextId
-    );
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
     expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
-      buildState: "building",
+      buildState: "pending",
       buildProgress: "Preparing panel runtime...",
     });
     expect(registry.getPanel(panel.id)?.artifacts.htmlPath).toBeUndefined();
@@ -446,11 +436,13 @@ describe("PanelOrchestrator.ensureLoaded", () => {
   it("repairs a missing runtime lease for an existing native view and registers CDP", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1", [], {
+      runtimeEntityId: "panel:nav-panel:tree/panel-1",
       artifacts: {
         buildState: "ready",
         htmlPath:
           "http://127.0.0.1:1234/panels/panel%3Atree/panel-1/?contextId=ctx-panel%3Atree%2Fpanel-1&buildKey=" +
           "b".repeat(64),
+        hostedRuntimeEntityId: "panel:nav-panel:tree/panel-1",
       },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
@@ -477,23 +469,24 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     expect(cdpHost.registerTarget).toHaveBeenCalledWith(panel.id, 42);
   });
 
-  it("upgrades an existing preparation host when its execution identity is activated", async () => {
+  it("creates the sole renderer when a preparing entity becomes executable", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/prepared-after-lease", [], {
       runtimeEntityId: "panel:nav-panel:tree/prepared-after-lease",
       buildKey: null,
       executionDigest: null,
-      artifacts: { buildState: "building", buildProgress: "Preparing panel runtime..." },
+      artifacts: {
+        buildState: "building",
+        buildProgress: "Preparing panel runtime...",
+        hostedRuntimeEntityId: "panel:nav-panel:tree/prepared-after-lease",
+      },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
 
     const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
-    panelView.hasView.mockImplementation((panelId: string) => panelId === panel.id);
-
     await expect(orchestrator.ensureLoaded(panel.id)).resolves.toMatchObject({
-      panelId: panel.id,
-      status: "loaded",
-      loaded: true,
+      status: "preparing",
+      loaded: false,
     });
     expect(panelView.createViewForPanel).not.toHaveBeenCalled();
     shellCore.refreshPanel.mockClear();
@@ -541,6 +534,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
       artifacts: {
         buildState: "ready",
         htmlPath: "http://127.0.0.1:1234/panel/already-presented",
+        hostedRuntimeEntityId: "panel:nav-already-presented",
       },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
@@ -858,6 +852,11 @@ describe("PanelOrchestrator.createPanel", () => {
       `ctx-${id}`
     );
     expect(panelView.setViewVisible).toHaveBeenCalledWith(id, true);
+    expect(emit).toHaveBeenCalledWith("panel-created", {
+      panelId: id,
+      parentId: caller.id,
+      focus: true,
+    });
     expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
     expect(panelView.createViewForPanel.mock.invocationCallOrder[0]).toBeLessThan(
       panelView.setViewVisible.mock.invocationCallOrder[0] ?? 0
@@ -1488,6 +1487,129 @@ describe("PanelOrchestrator.getPanelHostObservation", () => {
 });
 
 describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
+  it("replaces an existing slot view when its lease moves to a new runtime entity", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/new-news", [], {
+      runtimeEntityId: "panel:nav-news",
+      snapshot: {
+        source: "panels/news",
+        contextId: "ctx-news",
+        options: {},
+      },
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "http://127.0.0.1:1234/about/new/",
+        hostedRuntimeEntityId: "panel:nav-about-new",
+      },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValue(true);
+
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: asPanelEntityId("panel:nav-news"),
+      previous: null,
+      next: runtimeLease("panel:nav-news", {
+        slotId: panel.id,
+        clientSessionId: orchestrator.getRuntimeClientSessionId(),
+        connectionId: "news-runtime-conn",
+      }),
+      reason: "acquired",
+    });
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+      panel.id,
+      expect.stringContaining("/panels/news/"),
+      "ctx-news"
+    );
+    expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
+      buildState: "ready",
+      hostedRuntimeEntityId: "panel:nav-news",
+      htmlPath: expect.stringContaining("/panels/news/"),
+    });
+  });
+
+  it("coalesces repeated assignment delivery for the same runtime connection", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/new-news", [], {
+      runtimeEntityId: "panel:nav-news",
+      snapshot: { source: "panels/news", contextId: "ctx-news", options: {} },
+      artifacts: { buildState: "ready" },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValue(true);
+    const event = {
+      type: "panel:runtimeLeaseChanged" as const,
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: asPanelEntityId("panel:nav-news"),
+      previous: null,
+      next: runtimeLease("panel:nav-news", {
+        slotId: panel.id,
+        clientSessionId: orchestrator.getRuntimeClientSessionId(),
+        connectionId: "news-runtime-conn",
+      }),
+      reason: "acquired" as const,
+    };
+
+    await Promise.all([
+      orchestrator.handleRuntimeLeaseChanged(event),
+      orchestrator.handleRuntimeLeaseChanged({
+        ...event,
+        version: { epoch: "test", counter: 3 },
+        previous: event.next,
+      }),
+    ]);
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes a terminal view failure when same-slot replacement cannot load", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/new-news", [], {
+      runtimeEntityId: "panel:nav-news",
+      snapshot: { source: "panels/news", contextId: "ctx-news", options: {} },
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "http://127.0.0.1:1234/about/new/",
+        hostedRuntimeEntityId: "panel:nav-about-new",
+      },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValue(true);
+    panelView.createViewForPanel.mockRejectedValueOnce(new Error("News renderer failed to load"));
+
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: asPanelEntityId("panel:nav-news"),
+      previous: null,
+      next: runtimeLease("panel:nav-news", {
+        slotId: panel.id,
+        clientSessionId: orchestrator.getRuntimeClientSessionId(),
+        connectionId: "news-runtime-conn",
+      }),
+      reason: "acquired",
+    });
+
+    expect(panelView.destroyView).toHaveBeenCalledWith(panel.id);
+    expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
+      buildState: "ready",
+      viewFailure: {
+        code: "navigation_failed",
+        message: "News renderer failed to load",
+      },
+    });
+    expect(registry.getPanel(panel.id)?.artifacts.htmlPath).toBeUndefined();
+    expect(registry.getPanel(panel.id)?.artifacts.hostedRuntimeEntityId).toBeUndefined();
+  });
+
   it("unloads local panel resources when the local runtime lease is released", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/panel-1", [], {
@@ -1672,7 +1794,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     );
   });
 
-  it("upgrades an existing preparation placeholder when the assigned runtime becomes ready", async () => {
+  it("creates a renderer when an assigned preparing runtime becomes ready", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/preparation-placeholder", [], {
       buildKey: null,
@@ -1690,7 +1812,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
         restorePolicy: "none",
       },
     });
-    panelView.hasView.mockReturnValue(true);
+    panelView.hasView.mockReturnValue(false);
     shellCore.refreshPanel.mockImplementationOnce(async () => {
       panel.effectiveVersion = "effective-ready";
       panel.buildKey = "b".repeat(64);

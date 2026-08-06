@@ -27,6 +27,9 @@ const LEASE_RECONNECT_GRACE_MS = 3000;
 type DefaultCdpHostOptions = {
   isHostAvailable?: (hostConnectionId: string) => boolean;
   replaceUnavailableLease?: boolean;
+  /** A host that deliberately relinquished this residency is not an
+   *  immediate candidate for the replacement lease. */
+  excludedHostConnectionId?: string;
 };
 
 export type RuntimeLeaseClose = (
@@ -56,7 +59,12 @@ export class PanelRuntimeCoordinator {
   private closeConnection: RuntimeLeaseClose | null = null;
   private leaseChangeListeners = new Set<(event: PanelRuntimeLeaseChangedEvent) => void>();
 
-  constructor(private readonly deps: { eventService?: EventService } = {}) {}
+  constructor(
+    private readonly deps: {
+      eventService?: EventService;
+      onError?: (error: unknown, operation: string) => void;
+    } = {}
+  ) {}
 
   setCloseConnection(fn: RuntimeLeaseClose): void {
     this.closeConnection = fn;
@@ -131,7 +139,7 @@ export class PanelRuntimeCoordinator {
       this.leases.delete(entityId);
       this.reportedViews.delete(entityId);
       const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(lease.connectionId);
-      this.closeConnection?.(
+      this.closeLeaseConnection(
         lease.runtimeEntityId,
         lease.connectionId,
         4095,
@@ -143,7 +151,7 @@ export class PanelRuntimeCoordinator {
 
     for (const { entityId, lease, wasDefaultCdpLease } of released) {
       if (this.shouldReassignDefaultCdpLease(lease, wasDefaultCdpLease)) {
-        this.assignDefaultCdpHost(entityId, lease.slotId);
+        this.assignDefaultCdpHost(entityId, lease.slotId, lease.hostConnectionId);
       }
     }
   }
@@ -214,6 +222,10 @@ export class PanelRuntimeCoordinator {
     const normalizedSlotId = asPanelSlotId(slotId);
     for (const [entityId, lease] of this.leases) {
       if (lease.slotId !== normalizedSlotId) continue;
+      // A reconnecting client still owns the lease during the short grace
+      // period, but its last page sample is no longer evidence about the
+      // current connection. Do not expose that sample as live state.
+      if (lease.expiresAt !== undefined) return null;
       const reported = this.reportedViews.get(entityId);
       if (!reported || reported.connectionId !== lease.connectionId) return null;
       return { lease, observation: reported.observation };
@@ -223,26 +235,16 @@ export class PanelRuntimeCoordinator {
 
   observeSlot(slotId: string): {
     lease: PanelRuntimeLease | null;
-    observation: {
-      url: string;
-      loading: boolean;
-      boot: PanelBootObservation;
-    } | null;
+    observation: PanelPageObservation | null;
   } {
     const lease = this.leaseForSlot(asPanelSlotId(slotId));
     if (!lease) return { lease: null, observation: null };
+    // Reconnect grace is a real lifecycle state: routing may preserve the
+    // lease briefly, but readiness cannot survive a broken runtime channel.
+    if (lease.expiresAt !== undefined) return { lease, observation: null };
     const reported = this.reportedViews.get(lease.runtimeEntityId);
     const observation = reported?.connectionId === lease.connectionId ? reported.observation : null;
-    return {
-      lease,
-      observation: observation
-        ? {
-            url: observation.view.url,
-            loading: observation.view.loading,
-            boot: observation.boot,
-          }
-        : null,
-    };
+    return { lease, observation };
   }
 
   /**
@@ -334,6 +336,7 @@ export class PanelRuntimeCoordinator {
     });
     for (const client of candidates) {
       const hostConnectionId = client.hostConnectionId ?? client.clientSessionId;
+      if (hostConnectionId === options.excludedHostConnectionId) continue;
       if (client.supportsCdp === false) continue;
       if (client.loadOnLeaseAssignment !== true) continue;
       if (options.isHostAvailable && !options.isHostAvailable(hostConnectionId)) continue;
@@ -358,12 +361,39 @@ export class PanelRuntimeCoordinator {
     const existing = this.leases.get(entityId) ?? null;
     if (existing) {
       if (!existing.supportsCdp) return { assigned: false, reason: "mobile_held", lease: existing };
+      const reported = this.reportedViews.get(entityId);
+      if (
+        reported?.connectionId === existing.connectionId &&
+        reported.observation.boot.phase === "failed" &&
+        (this.defaultCdpLeaseConnections.has(existing.connectionId) ||
+          existing.platform === "headless")
+      ) {
+        // A lease whose host has reported materialization failure no longer
+        // satisfies ensureSlot. Reissue the host incarnation so the caller
+        // gets one clean recovery attempt instead of waiting on a dead lease.
+        return this.replaceFailedCdpLease(entityId, existing, options);
+      }
       if (
         options.replaceUnavailableLease &&
         options.isHostAvailable &&
         !options.isHostAvailable(existing.hostConnectionId)
       ) {
         return this.replaceUnavailableCdpLease(entityId, existing, options);
+      }
+      if (
+        existing.loadOnLeaseAssignment &&
+        this.defaultCdpLeaseConnections.has(existing.connectionId) &&
+        reported?.connectionId !== existing.connectionId
+      ) {
+        // A lease is only the desired presentation assignment. Until its host
+        // reports the exact connection, it is not evidence that a renderer was
+        // materialized. Re-announce the current assignment when an explicit
+        // ensure observes that gap. This closes the event/state race between a
+        // slot commit and host hydration without minting another incarnation.
+        // Self-acquired desktop and mobile leases are deliberately excluded:
+        // those hosts own their renderer lifecycle.
+        this.emitChange(entityId, normalizedSlotId, existing, existing, "acquired");
+        return { assigned: true, lease: existing };
       }
       return { assigned: false, reason: "already_held", lease: existing };
     }
@@ -415,6 +445,31 @@ export class PanelRuntimeCoordinator {
   }
 
   /**
+   * Advance the runtime identity of a slot that is already resident.
+   *
+   * A committed slot is durable workspace state, not a request to allocate a
+   * renderer. Slot/entity reconciliation may therefore preserve an existing
+   * lease, but it must never create the first lease. First residency belongs
+   * to an explicit presentation consumer (`ensureSlot`, a visible desktop
+   * pane, or CDP automation).
+   */
+  advanceResidentSlotEntity(slotId: string, nextRuntimeEntityId: string): PanelRuntimeLease | null {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    const nextEntityId = asPanelEntityId(nextRuntimeEntityId);
+
+    for (const lease of this.leases.values()) {
+      if (lease.slotId !== normalizedSlotId) continue;
+      if (lease.runtimeEntityId === nextEntityId) return lease;
+      return this.replaceRuntimeEntityForSlot(
+        normalizedSlotId,
+        lease.runtimeEntityId,
+        nextEntityId
+      );
+    }
+    return null;
+  }
+
+  /**
    * Move one slot's host lease to a committed replacement runtime in a single
    * versioned transition. This prevents hosts from observing an unleased gap
    * between immutable panel incarnations.
@@ -442,7 +497,7 @@ export class PanelRuntimeCoordinator {
       this.leases.delete(previousEntityId);
       this.reportedViews.delete(previousEntityId);
       this.defaultCdpLeaseConnections.delete(previous.connectionId);
-      this.closeConnection?.(
+      this.closeLeaseConnection(
         previousEntityId,
         previous.connectionId,
         4091,
@@ -456,7 +511,12 @@ export class PanelRuntimeCoordinator {
     this.clearExpiry(previousEntityId);
     this.leases.delete(previousEntityId);
     this.reportedViews.delete(previousEntityId);
-    this.closeConnection?.(previousEntityId, previous.connectionId, 4091, "Panel runtime replaced");
+    this.closeLeaseConnection(
+      previousEntityId,
+      previous.connectionId,
+      4091,
+      "Panel runtime replaced"
+    );
 
     if (!previous.loadOnLeaseAssignment) {
       // Hosts such as mobile own their renderer lifecycle and cannot realize a
@@ -514,7 +574,7 @@ export class PanelRuntimeCoordinator {
     const entityId = asPanelEntityId(runtimeEntityId);
     const existing = this.leases.get(entityId);
     if (existing && existing.connectionId !== input.connectionId) {
-      this.closeConnection?.(
+      this.closeLeaseConnection(
         runtimeEntityId,
         existing.connectionId,
         4091,
@@ -548,7 +608,7 @@ export class PanelRuntimeCoordinator {
       (reason === "released" || reason === "expired") &&
       this.shouldReassignDefaultCdpLease(existing, wasDefaultCdpLease)
     ) {
-      this.assignDefaultCdpHost(entityId, existing.slotId);
+      this.assignDefaultCdpHost(entityId, existing.slotId, existing.hostConnectionId);
     }
   }
 
@@ -562,7 +622,7 @@ export class PanelRuntimeCoordinator {
       this.leases.delete(entityId);
       this.reportedViews.delete(entityId);
       this.defaultCdpLeaseConnections.delete(lease.connectionId);
-      this.closeConnection?.(
+      this.closeLeaseConnection(
         lease.runtimeEntityId,
         lease.connectionId,
         4094,
@@ -585,7 +645,7 @@ export class PanelRuntimeCoordinator {
     this.leases.delete(entityId);
     this.reportedViews.delete(entityId);
     this.defaultCdpLeaseConnections.delete(existing.connectionId);
-    this.closeConnection?.(
+    this.closeLeaseConnection(
       runtimeEntityId,
       existing.connectionId,
       4093,
@@ -624,6 +684,9 @@ export class PanelRuntimeCoordinator {
     const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) return;
     this.clearExpiry(entityId);
+    // The old sample belongs to the disconnected runtime channel. Keeping it
+    // would make observeSlot report ready throughout reconnect grace.
+    this.reportedViews.delete(entityId);
     const expiresAt = Date.now() + LEASE_RECONNECT_GRACE_MS;
     const next = { ...lease, expiresAt };
     this.leases.set(entityId, next);
@@ -707,9 +770,15 @@ export class PanelRuntimeCoordinator {
 
   private assignDefaultCdpHost(
     runtimeEntityId: PanelEntityId,
-    slotId: PanelSlotId
+    slotId: PanelSlotId,
+    excludedHostConnectionId?: string
   ): PanelRuntimeLease | null {
-    const client = this.getDefaultCdpHostClient();
+    // A release is an admission-control decision by the serving host (for
+    // example, resource-cap eviction), not evidence that the same host should
+    // immediately materialize the panel again. Reassignment may move durable
+    // programmatic demand to another host, but never bounce it straight back
+    // to the host that just declined residency.
+    const client = this.getDefaultCdpHostClient({ excludedHostConnectionId });
     if (!client) return null;
     const connectionId = `default-cdp-${slotId}-${randomUUID()}`;
     return this.writeLease(
@@ -741,11 +810,53 @@ export class PanelRuntimeCoordinator {
     this.clearExpiry(existing.runtimeEntityId);
     this.leases.delete(existing.runtimeEntityId);
     this.reportedViews.delete(existing.runtimeEntityId);
-    this.closeConnection?.(
+    this.closeLeaseConnection(
       existing.runtimeEntityId,
       existing.connectionId,
       4091,
       "Panel runtime lease revoked"
+    );
+    this.emitChange(existing.runtimeEntityId, existing.slotId, existing, null, "revoked");
+    return {
+      assigned: true,
+      lease: this.writeLease(
+        runtimeEntityId,
+        {
+          slotId: existing.slotId,
+          clientSessionId: client.clientSessionId,
+          connectionId: `default-cdp-${existing.slotId}-${randomUUID()}`,
+          hostConnectionId: client.hostConnectionId,
+        },
+        "acquired",
+        { defaultCdpLease: wasDefaultCdpLease }
+      ),
+    };
+  }
+
+  private replaceFailedCdpLease(
+    runtimeEntityId: PanelEntityId,
+    existing: PanelRuntimeLease,
+    options: DefaultCdpHostOptions
+  ):
+    | { assigned: true; lease: PanelRuntimeLease }
+    | { assigned: false; reason: "no_default_cdp_host"; lease: PanelRuntimeLease } {
+    const wasDefaultCdpLease = this.defaultCdpLeaseConnections.has(existing.connectionId);
+    const client = this.getDefaultCdpHostClient(
+      options,
+      wasDefaultCdpLease ? undefined : existing.platform
+    );
+    if (!client || (!wasDefaultCdpLease && client.platform !== existing.platform)) {
+      return { assigned: false, reason: "no_default_cdp_host", lease: existing };
+    }
+    this.defaultCdpLeaseConnections.delete(existing.connectionId);
+    this.clearExpiry(existing.runtimeEntityId);
+    this.leases.delete(existing.runtimeEntityId);
+    this.reportedViews.delete(existing.runtimeEntityId);
+    this.closeLeaseConnection(
+      existing.runtimeEntityId,
+      existing.connectionId,
+      4091,
+      "Panel runtime materialization retry"
     );
     this.emitChange(existing.runtimeEntityId, existing.slotId, existing, null, "revoked");
     return {
@@ -791,6 +902,19 @@ export class PanelRuntimeCoordinator {
     this.expiryTimers.delete(runtimeEntityId);
   }
 
+  private closeLeaseConnection(
+    runtimeEntityId: string,
+    connectionId: string,
+    code: number,
+    reason: string
+  ): void {
+    try {
+      this.closeConnection?.(runtimeEntityId, connectionId, code, reason);
+    } catch (error) {
+      this.deps.onError?.(error, `close ${runtimeEntityId}/${connectionId}`);
+    }
+  }
+
   private currentVersion(): RuntimeLeaseVersion {
     return { epoch: this.epoch, counter: this.counter };
   }
@@ -816,7 +940,17 @@ export class PanelRuntimeCoordinator {
       next,
       reason,
     };
-    this.deps.eventService?.emit("panel:runtimeLeaseChanged", event);
-    for (const listener of this.leaseChangeListeners) listener(event);
+    try {
+      this.deps.eventService?.emit("panel:runtimeLeaseChanged", event);
+    } catch (error) {
+      this.deps.onError?.(error, `emit lease event for ${slotId}`);
+    }
+    for (const listener of this.leaseChangeListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        this.deps.onError?.(error, `notify lease listener for ${slotId}`);
+      }
+    }
   }
 }

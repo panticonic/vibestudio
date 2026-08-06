@@ -2,7 +2,8 @@ import type { RpcClient } from "@vibestudio/rpc";
 import { decodePanelStateArgs } from "@vibestudio/shared/panelStateArgs";
 import { validateStateArgs } from "@vibestudio/shared/stateArgsValidator";
 import type { StateArgsSchema } from "@vibestudio/shared/stateArgs";
-import { createWorkspaceStateDirectClient } from "./workspaceStateDirect.js";
+import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { callWorkspaceState, createRuntimeWorkspaceStateClient } from "./workspaceStateClient.js";
 
 type PanelStateArgsRpc = Pick<RpcClient, "call">;
 
@@ -19,10 +20,9 @@ export async function readPanelStateArgs<T = Record<string, unknown>>(
   rpc: PanelStateArgsRpc,
   panelId: string
 ): Promise<T> {
-  const detail = await createWorkspaceStateDirectClient(rpc).call<PanelStateArgsDetail | null>(
-    "panelTreeDetail",
-    [panelId]
-  );
+  const detail = await callWorkspaceState<PanelStateArgsDetail | null>(rpc, "panelTree.detail", [
+    panelId,
+  ]);
   if (!detail) throw new Error(`Panel not found: ${panelId}`);
   return decodePanelStateArgs(detail.currentHistory.state_args) as T;
 }
@@ -32,10 +32,10 @@ export async function updatePanelStateArgs(
   panelId: string,
   updates: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
-  const workspaceState = createWorkspaceStateDirectClient(rpc);
-  const detail = await workspaceState.call<PanelStateArgsDetail | null>("panelTreeDetail", [
-    panelId,
-  ]);
+  const workspaceState = createRuntimeWorkspaceStateClient(rpc);
+  const detail = (await workspaceState.getPanelDetail(
+    asPanelSlotId(panelId)
+  )) as PanelStateArgsDetail | null;
   if (!detail) throw new Error(`Panel not found: ${panelId}`);
 
   const current = decodePanelStateArgs(detail.currentHistory.state_args);
@@ -52,6 +52,6 @@ export async function updatePanelStateArgs(
     throw new Error(`Invalid stateArgs: ${validation.error}`);
   }
   const next = validation.data as Record<string, unknown>;
-  await workspaceState.call("slotUpdateCurrentStateArgs", [panelId, next]);
+  await workspaceState.updateCurrentStateArgs(asPanelSlotId(panelId), next);
   return next;
 }

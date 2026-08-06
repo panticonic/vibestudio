@@ -27,7 +27,10 @@ import {
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
 import type { IndexablePanel, PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
+import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
+import { SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
   DURABLE_WORK_QUEUES,
   type DurableWorkQueue,
@@ -164,6 +167,7 @@ export interface SlotCreateInput {
     source: string;
     contextId: string;
     stateArgs?: unknown;
+    options?: unknown;
   };
 }
 
@@ -941,6 +945,22 @@ export class WorkspaceDO extends DurableObjectBase {
    */
   @schemaRpc()
   entityAdvanceExecution(input: EntityActivateInput): EntityRecord {
+    return this.ctx.storage.transactionSync(() => this.advanceEntityExecution(input));
+  }
+
+  /**
+   * Publish one source build to every affected durable identity in one SQLite
+   * transaction. Either every entity names the new incarnation or none do.
+   */
+  @schemaRpc()
+  entityAdvanceExecutions(inputs: EntityActivateInput[]): EntityRecord[] {
+    if (inputs.length === 0) return [];
+    return this.ctx.storage.transactionSync(() =>
+      inputs.map((input) => this.advanceEntityExecution(input))
+    );
+  }
+
+  private advanceEntityExecution(input: EntityActivateInput): EntityRecord {
     const nextBuildKey = validateActiveBuildKey(input.activeBuildKey);
     const nextExecutionDigest = validateActiveExecutionDigest(input.activeExecutionDigest);
     const nextAuthority = serializeActiveAuthority(input.activeAuthority);
@@ -949,43 +969,41 @@ export class WorkspaceDO extends DurableObjectBase {
         "entity execution advance requires a complete build key, execution digest, and authority manifest"
       );
     }
-    return this.ctx.storage.transactionSync(() => {
-      const id = canonicalEntityId({
-        kind: input.kind,
-        source: input.source.repoPath,
-        className: input.className,
-        key: input.key,
-      });
-      const existing = this.readEntityRow(id);
-      if (!existing) throw new Error(`entityAdvanceExecution: unknown entity ${id}`);
-      if (existing.status !== "active" && existing.status !== "preparing") {
-        throw new Error(`entityAdvanceExecution: entity ${id} is ${existing.status}`);
-      }
-      this.assertStableIdentityMatches(id, existing, input);
-      const nextOwnerUserId = input.ownerUserId ?? null;
-      if (existing.owner_user_id !== nextOwnerUserId) {
-        throw new IdentityCollisionError(id, {
-          field: "ownerUserId",
-          existing: existing.owner_user_id,
-          attempted: nextOwnerUserId,
-        });
-      }
-      this.sql.exec(
-        `UPDATE entities
-            SET source_effective_version = ?, active_build_key = ?,
-                active_execution_digest = ?, active_authority = ?,
-                status = 'active', error = NULL
-          WHERE id = ?`,
-        input.source.effectiveVersion,
-        nextBuildKey,
-        nextExecutionDigest,
-        nextAuthority,
-        id
-      );
-      const row = this.readEntityRow(id);
-      if (!row) throw new Error(`entityAdvanceExecution: failed to read ${id} after update`);
-      return this.rowToEntity(row);
+    const id = canonicalEntityId({
+      kind: input.kind,
+      source: input.source.repoPath,
+      className: input.className,
+      key: input.key,
     });
+    const existing = this.readEntityRow(id);
+    if (!existing) throw new Error(`entityAdvanceExecution: unknown entity ${id}`);
+    if (existing.status !== "active" && existing.status !== "preparing") {
+      throw new Error(`entityAdvanceExecution: entity ${id} is ${existing.status}`);
+    }
+    this.assertStableIdentityMatches(id, existing, input);
+    const nextOwnerUserId = input.ownerUserId ?? null;
+    if (existing.owner_user_id !== nextOwnerUserId) {
+      throw new IdentityCollisionError(id, {
+        field: "ownerUserId",
+        existing: existing.owner_user_id,
+        attempted: nextOwnerUserId,
+      });
+    }
+    this.sql.exec(
+      `UPDATE entities
+          SET source_effective_version = ?, active_build_key = ?,
+              active_execution_digest = ?, active_authority = ?,
+              status = 'active', error = NULL
+        WHERE id = ?`,
+      input.source.effectiveVersion,
+      nextBuildKey,
+      nextExecutionDigest,
+      nextAuthority,
+      id
+    );
+    const row = this.readEntityRow(id);
+    if (!row) throw new Error(`entityAdvanceExecution: failed to read ${id} after update`);
+    return this.rowToEntity(row);
   }
 
   /** Mark a single entity as retired. Idempotent. Returns the retired record (or null if not found). */
@@ -1906,6 +1924,27 @@ export class WorkspaceDO extends DurableObjectBase {
     return rows.map((row) => this.rowToEntity(row));
   }
 
+  /** Return durable reservations that still need their runtime image activated. */
+  @schemaRpc()
+  entityListPreparing(): EntityRecord[] {
+    const rows = this.sql
+      .exec(`SELECT * FROM entities WHERE status = 'preparing' ORDER BY created_at`)
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
+  /** Return preparing reservations of one runtime kind. */
+  @schemaRpc()
+  entityListPreparingByKind(kind: EntityKind): EntityRecord[] {
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM entities WHERE status = 'preparing' AND kind = ? ORDER BY created_at`,
+        kind
+      )
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
   /**
    * Executable entities that may still run or be selected from panel history.
    * Retired rows with no slot-history reference are deliberately excluded.
@@ -2510,10 +2549,36 @@ export class WorkspaceDO extends DurableObjectBase {
   slotCreate(input: SlotCreateInput): void {
     this.ctx.storage.transactionSync(() => {
       const existing = this.sql
-        .exec(`SELECT slot_id FROM slots WHERE slot_id = ?`, input.slotId)
-        .toArray()[0];
+        .exec(
+          `SELECT s.slot_id, s.parent_slot_id, s.current_entity_id, s.current_entry_key,
+                  s.closed_at, h.source, h.context_id, h.state_args, h.options
+             FROM slots s
+             LEFT JOIN slot_history h
+               ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
+            WHERE s.slot_id = ?`,
+          input.slotId
+        )
+        .toArray()[0] as
+        | {
+            slot_id: string;
+            parent_slot_id: string | null;
+            current_entity_id: string | null;
+            current_entry_key: string | null;
+            closed_at: number | null;
+            source: string | null;
+            context_id: string | null;
+            state_args: string | null;
+            options: string | null;
+          }
+        | undefined;
       if (existing) {
-        throw new Error(`Slot already exists: ${input.slotId}`);
+        // Idempotent resume: a retried creation carrying the identical durable
+        // identity (slot id, entry key, entity id) converges on the live slot.
+        // Any divergence is a typed collision — never a silent overwrite, and
+        // distinguishable from transport failure so the caller does not roll
+        // back state it did not create.
+        this.assertSlotCreateResumable(existing, input);
+        return;
       }
       const now = Date.now();
       const ownerUserId =
@@ -2540,6 +2605,90 @@ export class WorkspaceDO extends DurableObjectBase {
         this.appendHistoryRow(input.slotId, 0, input.initialEntry, now);
       }
     });
+  }
+
+  private assertSlotCreateResumable(
+    existing: {
+      parent_slot_id: string | null;
+      current_entity_id: string | null;
+      current_entry_key: string | null;
+      closed_at: number | null;
+      source: string | null;
+      context_id: string | null;
+      state_args: string | null;
+      options: string | null;
+    },
+    input: SlotCreateInput
+  ): void {
+    const slotId = input.slotId;
+    if (existing.closed_at !== null) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "closed",
+        existing: existing.closed_at,
+        attempted: null,
+      });
+    }
+    if (existing.parent_slot_id !== input.parentSlotId) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "parentSlotId",
+        existing: existing.parent_slot_id,
+        attempted: input.parentSlotId,
+      });
+    }
+    if (existing.current_entry_key !== (input.initialEntry?.entryKey ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "entryKey",
+        existing: existing.current_entry_key,
+        attempted: input.initialEntry?.entryKey ?? null,
+      });
+    }
+    if (existing.current_entity_id !== (input.initialEntry?.entityId ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "entityId",
+        existing: existing.current_entity_id,
+        attempted: input.initialEntry?.entityId ?? null,
+      });
+    }
+    if (existing.source !== (input.initialEntry?.source ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "source",
+        existing: existing.source,
+        attempted: input.initialEntry?.source ?? null,
+      });
+    }
+    if (existing.context_id !== (input.initialEntry?.contextId ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "contextId",
+        existing: existing.context_id,
+        attempted: input.initialEntry?.contextId ?? null,
+      });
+    }
+    const attemptedStateArgs = input.initialEntry?.stateArgs;
+    const existingStateArgs =
+      existing.state_args === null ? undefined : JSON.parse(existing.state_args);
+    if (!this.sameOptionalJson(existingStateArgs, attemptedStateArgs)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "stateArgs",
+        existing: existingStateArgs,
+        attempted: attemptedStateArgs,
+      });
+    }
+    const attemptedOptions = input.initialEntry?.options;
+    const existingOptions = existing.options === null ? undefined : JSON.parse(existing.options);
+    if (!this.sameOptionalJson(existingOptions, attemptedOptions)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "options",
+        existing: existingOptions,
+        attempted: attemptedOptions,
+      });
+    }
+  }
+
+  private sameOptionalJson(existing: unknown, attempted: unknown): boolean {
+    if (existing === undefined || attempted === undefined) {
+      return existing === attempted;
+    }
+    return canonicalJson(existing) === canonicalJson(attempted);
   }
 
   protected slotCreationOwnerUserId(): string | undefined {
@@ -2987,7 +3136,7 @@ export class WorkspaceDO extends DurableObjectBase {
     const now = Date.now();
     let resolvedEntityId: string | null = null;
     this.ctx.storage.transactionSync(() => {
-      const trimmedTitle = typeof input.title === "string" ? input.title.trim() : "";
+      const normalizedTitle = normalizePanelTitle(input.title);
       const slot = this.sql
         .exec(`SELECT current_entity_id FROM slots WHERE slot_id = ?`, input.id)
         .toArray()[0];
@@ -2998,7 +3147,7 @@ export class WorkspaceDO extends DurableObjectBase {
               .exec(`SELECT display_title FROM entities WHERE id = ?`, entityIdFromSlot)
               .toArray()[0]?.["display_title"] as string | null | undefined) ?? "")
           : "";
-      const ftsTitle = trimmedTitle.length > 0 ? trimmedTitle : currentTitle;
+      const ftsTitle = normalizedTitle ?? currentTitle;
 
       const existing = this.sql
         .exec(`SELECT rowid FROM panel_search_metadata WHERE slot_id = ?`, input.id)
@@ -3038,13 +3187,13 @@ export class WorkspaceDO extends DurableObjectBase {
       // title there so approval UIs (which look up by entity id) and the
       // FTS denormalization above agree from the moment the panel exists.
       if (
-        trimmedTitle.length > 0 &&
+        normalizedTitle !== undefined &&
         typeof entityIdFromSlot === "string" &&
         entityIdFromSlot.length > 0
       ) {
         this.sql.exec(
           `UPDATE entities SET display_title = ? WHERE id = ?`,
-          trimmedTitle,
+          normalizedTitle,
           entityIdFromSlot
         );
         resolvedEntityId = entityIdFromSlot;
@@ -3095,8 +3244,7 @@ export class WorkspaceDO extends DurableObjectBase {
    */
   @schemaRpc()
   entitySetDisplayTitle(entityId: string, title: string | null): void {
-    const normalized = typeof title === "string" ? title.trim() : "";
-    const stored = normalized.length > 0 ? normalized : null;
+    const stored = normalizePanelTitle(title) ?? null;
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(`UPDATE entities SET display_title = ? WHERE id = ?`, stored, entityId);
       if (stored === null) return;
@@ -3231,7 +3379,7 @@ export class WorkspaceDO extends DurableObjectBase {
          WHERE (? IS NULL OR rank > ? OR (rank = ? AND slot_id > ?))
          ORDER BY rank, slot_id
          LIMIT ?`,
-        `searchable_title : (${safeQuery})`,
+        safeQuery,
         cursor === null ? null : 1,
         cursor?.[0] ?? 0,
         cursor?.[0] ?? 0,

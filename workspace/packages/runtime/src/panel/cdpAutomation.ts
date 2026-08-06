@@ -46,6 +46,13 @@ async function loadCdpClient(
       throw new Error("module does not expose BrowserImpl.connect");
     } catch (error) {
       rememberLoadError("host module loader", error);
+      // A closure-held loader is the hosted runtime's authority-bearing module
+      // path. Falling through would both hide its failure and try loaders that
+      // belong to another runtime (including forbidden Function construction
+      // in workerd).
+      throw new Error(`Unable to load ${CDP_CLIENT_MODULE} for CDP automation. ${loadErrors[0]}`, {
+        cause: error,
+      });
     }
   }
   const runtimeRequire = (globalThis as Record<string, unknown>)["__vibestudioRequire__"] as
@@ -86,10 +93,10 @@ async function loadCdpClient(
       // Fall through to dynamic import for non-runtime test/node environments.
     }
   }
-  const dynamicImport = new Function("id", "return import(id)") as (
-    id: string
-  ) => Promise<CdpClientModule>;
   try {
+    const dynamicImport = new Function("id", "return import(id)") as (
+      id: string
+    ) => Promise<CdpClientModule>;
     const loaded = await dynamicImport(CDP_CLIENT_MODULE);
     if (isCdpClientModule(loaded)) return loaded;
   } catch (error) {
@@ -99,7 +106,7 @@ async function loadCdpClient(
   throw new Error(
     `Unable to load ${CDP_CLIENT_MODULE} for CDP automation. ` +
       `Call handle.cdp.page() only from contexts that expose @workspace/cdp-client.` +
-      (loadErrors.length ? ` Last load error: ${loadErrors[loadErrors.length - 1]}` : "")
+      (loadErrors.length ? ` Load errors: ${loadErrors.join("; ")}` : "")
   );
 }
 
@@ -119,10 +126,17 @@ export function createCdpAutomation(
   const connectPage = async (): Promise<CdpPage> => {
     const { BrowserImpl } = await loadCdpClient(options.loadModule);
     const endpoint = await getCdpEndpoint();
-    const connectOptions: { isElectronWebview: boolean; transportOptions?: { authToken: string } } =
-      {
-        isElectronWebview: true,
-      };
+    const connectOptions: {
+      isElectronWebview: boolean;
+      preferFetchUpgrade: boolean;
+      transportOptions?: { authToken: string };
+    } = {
+      isElectronWebview: true,
+      // Hosted EvalDO runtimes receive a closure-held loader and must route
+      // CDP through the egress-aware fetch-upgrade transport. Browser panels
+      // use their native WebSocket implementation instead.
+      preferFetchUpgrade: Boolean(options.loadModule),
+    };
     if (endpoint.token) connectOptions.transportOptions = { authToken: endpoint.token };
     const browser = await BrowserImpl.connect(endpoint.wsEndpoint, connectOptions);
     const resolvedPage = browser.contexts()[0]?.pages()[0];

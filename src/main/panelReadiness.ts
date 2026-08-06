@@ -3,6 +3,7 @@ import type { PanelRuntimeStatus } from "@vibestudio/shared/types";
 export type PanelReadinessSnapshot = {
   panelId: string;
   source: string | null;
+  runtimeEntityId: string | null;
   /** Renderer content and its runtime are ready, whether or not this panel is visible. */
   contentReady: boolean;
   /** Content-ready and bound into the visible native panel slot. */
@@ -11,6 +12,7 @@ export type PanelReadinessSnapshot = {
   artifacts: {
     buildState: string | null;
     htmlPath: string | null;
+    hostedRuntimeEntityId: string | null;
     error: string | null;
     viewFailure: string | null;
   };
@@ -23,6 +25,8 @@ export type PanelReadinessSignals = Omit<PanelReadinessSnapshot, "contentReady" 
 export function isPanelContentReady(signals: PanelReadinessSignals): boolean {
   return (
     signals.source !== null &&
+    signals.runtimeEntityId !== null &&
+    signals.artifacts.hostedRuntimeEntityId === signals.runtimeEntityId &&
     signals.runtime?.leased === true &&
     signals.view.exists &&
     !!signals.view.url &&

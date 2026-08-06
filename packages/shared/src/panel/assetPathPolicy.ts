@@ -51,8 +51,7 @@ export const PANEL_GATEWAY_PATH_PREFIXES: readonly string[] = [
 ];
 
 const PANEL_SHARED_STYLE_PATH = /^\/__vibestudio\/shared-style\/[0-9a-f]{64}\.css$/u;
-const PANEL_BUILD_ASSET_PATH =
-  /^\/__vibestudio\/panel-build\/[0-9a-f]{64}\/[^/].*$/u;
+const PANEL_BUILD_ASSET_PATH = /^\/__vibestudio\/panel-build\/[0-9a-f]{64}\/[^/].*$/u;
 
 /**
  * First path segments that live OUTSIDE the underscore-reserved namespace but

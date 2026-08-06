@@ -169,11 +169,25 @@ export class CompositorRecovery {
 
     const slots = this.deps.getActiveSlots();
     if (slots.length > 0) {
-      let anyStalled = false;
+      // capturePage is not a reliable liveness signal for a WebContentsView
+      // that is composited as a child of the hosted shell. In particular,
+      // Linux/Chromium can return an empty readback for a healthy, visible
+      // native surface. Treating that as a stall visibility-cycles the user's
+      // panel and races the shell's slot bind/clear messages. Keep the native
+      // layer alive through the non-destructive maintenance path instead.
+      this.deps.ensureSlotLayerOrder();
       for (const slot of slots) {
-        if (await this.detectAndRecoverPanelSlotStall(slot)) anyStalled = true;
+        const managed = this.deps.getView(slot.panelId);
+        if (!this.canRepaint(managed)) continue;
+        const currentSlot = this.deps
+          .getActiveSlots()
+          .find((candidate) => candidate.nativeSlotId === slot.nativeSlotId);
+        if (currentSlot?.panelId !== slot.panelId) continue;
+        managed.bounds = currentSlot.bounds;
+        managed.view.setBounds(currentSlot.bounds);
+        managed.view.webContents.invalidate();
       }
-      this.adjustProbeBackoff(anyStalled);
+      this.adjustProbeBackoff(false);
       return;
     }
 
@@ -202,33 +216,6 @@ export class CompositorRecovery {
       }
     } catch {
       // Navigation and destruction can race a capture. The next probe retries.
-    }
-  }
-
-  private async detectAndRecoverPanelSlotStall(slot: CompositorRecoverySlot): Promise<boolean> {
-    const managed = this.deps.getView(slot.panelId);
-    if (!this.canRepaint(managed)) return false;
-
-    try {
-      const image = await managed.view.webContents.capturePage();
-      const currentSlot = this.deps
-        .getActiveSlots()
-        .find((candidate) => candidate.nativeSlotId === slot.nativeSlotId);
-      if (currentSlot?.panelId !== slot.panelId) return false;
-      if (!image.isEmpty()) return false;
-
-      this.deps.logVerbose(
-        `Compositor stall detected on ${slot.panelId} (empty capture) — recovering`
-      );
-      this.deps.reconcileNativeLayerOrder();
-      managed.bounds = slot.bounds;
-      managed.view.setBounds(slot.bounds);
-      managed.view.webContents.invalidate();
-      this.cycleVisibility(managed);
-      return true;
-    } catch {
-      // Navigation and destruction can race a capture. The next probe retries.
-      return false;
     }
   }
 

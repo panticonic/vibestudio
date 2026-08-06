@@ -3,12 +3,20 @@
  */
 
 import type { CreateChildOptions } from "@vibestudio/types";
-import type { Panel, PanelNavigationState, PanelSnapshot, PackageManifest, StateArgsValue } from "../types.js";
+import type {
+  Panel,
+  PanelNavigationState,
+  PanelSnapshot,
+  PackageManifest,
+  StateArgsValue,
+} from "../types.js";
 
 /**
  * Get the current snapshot for a panel.
  */
-export function getCurrentSnapshot(panel: Pick<Panel, "id" | "snapshot" | "history">): PanelSnapshot {
+export function getCurrentSnapshot(
+  panel: Pick<Panel, "id" | "snapshot" | "history">
+): PanelSnapshot {
   if (panel.history) {
     const snapshot = panel.history.entries[panel.history.index];
     if (!snapshot) {
@@ -40,7 +48,7 @@ export function pushPanelHistorySnapshot(panel: Panel, snapshot: PanelSnapshot):
   replacePanelHistory(
     panel,
     history.entries.slice(0, history.index + 1).concat(snapshot),
-    history.index + 1,
+    history.index + 1
   );
 }
 
@@ -54,14 +62,18 @@ export function getPanelSource(panel: Pick<Panel, "id" | "snapshot" | "history">
 /**
  * Get the panel options from the current snapshot.
  */
-export function getPanelOptions(panel: Pick<Panel, "id" | "snapshot" | "history">): PanelSnapshot["options"] {
+export function getPanelOptions(
+  panel: Pick<Panel, "id" | "snapshot" | "history">
+): PanelSnapshot["options"] {
   return getCurrentSnapshot(panel).options;
 }
 
 /**
  * Get panel environment variables from the current snapshot.
  */
-export function getPanelEnv(panel: Pick<Panel, "id" | "snapshot" | "history">): Record<string, string> | undefined {
+export function getPanelEnv(
+  panel: Pick<Panel, "id" | "snapshot" | "history">
+): Record<string, string> | undefined {
   return getPanelOptions(panel).env;
 }
 
@@ -82,7 +94,9 @@ export function getInjectHostThemeVariables(panel: Panel, manifest?: PackageMani
 /**
  * Get the resolved URL for a panel.
  */
-export function getBrowserResolvedUrl(panel: Pick<Panel, "id" | "snapshot" | "history">): string | undefined {
+export function getBrowserResolvedUrl(
+  panel: Pick<Panel, "id" | "snapshot" | "history">
+): string | undefined {
   return getCurrentSnapshot(panel).resolvedUrl;
 }
 
@@ -93,7 +107,10 @@ export function getPanelRef(panel: Pick<Panel, "id" | "snapshot" | "history">): 
 export function getPanelHistoryState(panel: Panel): { canGoBack: boolean; canGoForward: boolean } {
   return {
     canGoBack: Boolean(panel.navigation?.canGoBack || (panel.history && panel.history.index > 0)),
-    canGoForward: Boolean(panel.navigation?.canGoForward || (panel.history && panel.history.index < panel.history.entries.length - 1)),
+    canGoForward: Boolean(
+      panel.navigation?.canGoForward ||
+      (panel.history && panel.history.index < panel.history.entries.length - 1)
+    ),
   };
 }
 
@@ -115,7 +132,9 @@ export function updatePanelNavigationState(panel: Panel, state: PanelNavigationS
  * Get the state args for a panel from the current snapshot.
  * Returns undefined if not set.
  */
-export function getPanelStateArgs(panel: Pick<Panel, "id" | "snapshot" | "history">): StateArgsValue | undefined {
+export function getPanelStateArgs(
+  panel: Pick<Panel, "id" | "snapshot" | "history">
+): StateArgsValue | undefined {
   return getCurrentSnapshot(panel).stateArgs;
 }
 

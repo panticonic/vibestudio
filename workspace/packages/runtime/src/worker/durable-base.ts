@@ -57,6 +57,7 @@ import { _initFsWithRpc } from "./fs.js";
 import { createNonPanelRuntimeHandle } from "../shared/handles.js";
 import {
   createPanelRuntime,
+  type CreatePanelSlotOptions,
   type OpenPanelOptions,
   type PanelRuntimeApi,
   type PanelRuntimeTree,
@@ -312,6 +313,7 @@ export abstract class DurableObjectBase {
       className: this.constructor.name,
       version: (this.constructor as typeof DurableObjectBase).schemaVersion,
       storage: this.ctx.storage,
+      schemaTables: this.requiredTables(),
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });
@@ -557,7 +559,15 @@ export abstract class DurableObjectBase {
     return this._panelRuntime;
   }
 
-  /** Open a workspace or browser panel. */
+  /** Commit an executable workspace or browser panel without presenting it. */
+  protected createPanelSlot(
+    source: string,
+    options?: CreatePanelSlotOptions
+  ): Promise<PanelHandle> {
+    return this.panelRuntime.createPanelSlot(source, options);
+  }
+
+  /** Open a workspace or browser panel and wait for application readiness. */
   protected openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle> {
     return this.panelRuntime.openPanel(source, options);
   }
@@ -577,6 +587,14 @@ export abstract class DurableObjectBase {
    *  dedupe redundant `runtime.setTitle` RPCs. Persists only across method
    *  calls within one isolate; on hibernation it resets. */
   private _titleSetForThisActivation: string | null = null;
+  /**
+   * A DO can be constructed while its runtime entity is still being prepared.
+   * Constructor-time title setters therefore run before the WorkspaceDO row is
+   * mirrored into the host principal cache. Keep the desired title until the
+   * first authenticated ordinary request instead of sending a request that can
+   * only fail with "Unknown principal kind".
+   */
+  private _pendingOwnTitle: { value: string | null; explicit: boolean } | null = null;
 
   /** Persistent state key used to record explicit (tool-driven) title sets.
    *  When this key is "1" the heuristic first-message fallback in chat agents
@@ -633,6 +651,29 @@ export abstract class DurableObjectBase {
     const normalized = title == null ? null : title.trim();
     const effective = normalized && normalized.length > 0 ? normalized : null;
     if (effective === this._titleSetForThisActivation) return;
+    this._titleSetForThisActivation = effective;
+
+    // A constructor (or another activation callback before the first request)
+    // has no authenticated inbound invocation yet. The entity activation that
+    // owns this DO is still in flight, so defer the host call until the first
+    // ordinary request after that activation commits.
+    if (!this._invocationContext.current() && this._currentRpcCallerId === null) {
+      this._pendingOwnTitle = { value: effective, explicit: options.explicit === true };
+      return;
+    }
+
+    await this.sendOwnTitle(effective, options.explicit === true);
+  }
+
+  /** Flush a constructor-time title after runtime entity activation. */
+  private async flushPendingOwnTitle(): Promise<void> {
+    const pending = this._pendingOwnTitle;
+    if (!pending) return;
+    this._pendingOwnTitle = null;
+    await this.sendOwnTitle(pending.value, pending.explicit);
+  }
+
+  private async sendOwnTitle(effective: string | null, explicit: boolean): Promise<void> {
     let bridge: Pick<RpcClient, "call">;
     try {
       bridge = this.rpc;
@@ -644,10 +685,6 @@ export abstract class DurableObjectBase {
       void err;
       return;
     }
-    // Set the flag eagerly so concurrent callers (e.g. constructor-issued
-    // setOwnTitle + the first-message fallback) see this title as already
-    // claimed and don't race to overwrite it.
-    this._titleSetForThisActivation = effective;
     // Test harnesses point GATEWAY_URL at an unreachable sentinel; emit no
     // noise when the RPC fails in that mode. Real installs surface failures.
     const gatewayUrl = String(this.env["GATEWAY_URL"] ?? "");
@@ -657,7 +694,7 @@ export abstract class DurableObjectBase {
       bridge.call("main", `${svc}.${m}`, a)
     );
     try {
-      await runtimeService.setTitle(effective, { explicit: options.explicit === true });
+      await runtimeService.setTitle(effective, { explicit });
     } catch (err) {
       if (!isTestSentinel) {
         console.warn("[DurableObjectBase] runtime.setTitle failed:", err);
@@ -1244,6 +1281,16 @@ export abstract class DurableObjectBase {
           },
         } as RpcEnvelope;
       }
+      // Constructor-time title writes are held until the first authenticated
+      // ordinary request. Lifecycle probes happen before the host commits the
+      // entity row, so they must not release that write early.
+      if (
+        message?.method !== "__lifecycle/prepare" &&
+        message?.method !== "__lifecycle/resume" &&
+        message?.method !== "__alarm"
+      ) {
+        await this.flushPendingOwnTitle();
+      }
       return await connectionless.respond(envelope);
     });
   }
@@ -1390,10 +1437,7 @@ export abstract class DurableObjectBase {
     return this.ctx.storage.transactionSync(() => {
       const previousWorkerId = this.getStateValue(DURABLE_WORK_WORKER_KEY);
       const previousActivationId = this.getStateValue(DURABLE_WORK_ACTIVATION_KEY);
-      if (
-        previousWorkerId === workerId &&
-        previousActivationId === this._durableWorkActivationId
-      ) {
+      if (previousWorkerId === workerId && previousActivationId === this._durableWorkActivationId) {
         return { adopted: false, previousWorkerId };
       }
       this.releaseDurableWorkClaims(previousWorkerId, workerId);

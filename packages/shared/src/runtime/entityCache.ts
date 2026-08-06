@@ -36,6 +36,10 @@ export class EntityCache {
 
   /** Internal: called by runtimeService after WorkspaceDO commits an activate. */
   _onActivate(record: EntityRecord): void {
+    // A bootstrap entry is only a bridge until the durable WorkspaceDO row is
+    // committed. Once that row exists, never let a later hydrate re-install
+    // the stale bootstrap build identity over the authoritative record.
+    this.bootstrapRecords.delete(record.id);
     this.records.set(record.id, record);
     this.emit(record.id, "activate");
   }
@@ -61,6 +65,20 @@ export class EntityCache {
     const record = this.records.get(id);
     if (!record || record.status !== "active") return null;
     return record;
+  }
+
+  /**
+   * The live entity for a workspace source path.
+   *
+   * Used to answer "what version of this part is running right now", which is
+   * how an update finds the clearance the outgoing version already holds
+   * (docs/template-install-unit-approval-ux-plan.md §7.3).
+   */
+  resolveActiveBySource(repoPath: string): EntityRecord | null {
+    for (const record of this.records.values()) {
+      if (record.status === "active" && record.source.repoPath === repoPath) return record;
+    }
+    return null;
   }
 
   resolveContext(id: string): string | null {

@@ -80,9 +80,7 @@ describe("LeaseTracker", () => {
   it("treats a connectionId change as unload + reload", () => {
     const tracker = new LeaseTracker(ME);
     tracker.reconcile(snapshot([lease(A)]));
-    const intents = tracker.reconcile(
-      snapshot([lease(A, { connectionId: "default-cdp-a-2" })], 2)
-    );
+    const intents = tracker.reconcile(snapshot([lease(A, { connectionId: "default-cdp-a-2" })], 2));
     expect(intents).toEqual([
       { kind: "unload", slotId: A, reason: "stale" },
       {
@@ -123,9 +121,9 @@ describe("LeaseTracker", () => {
     expect(
       tracker.apply(event(A, lease(A, { clientSessionId: "desktop-1" }), lease(A), 2))
     ).toEqual([{ kind: "unload", slotId: A, reason: "lease-transfer" }]);
-    expect(
-      tracker.apply(event(A, null, lease(A, { clientSessionId: "desktop-1" }), 3))
-    ).toEqual([]);
+    expect(tracker.apply(event(A, null, lease(A, { clientSessionId: "desktop-1" }), 3))).toEqual(
+      []
+    );
   });
 
   it("drops stale events older than the reconciled version", () => {
@@ -215,10 +213,7 @@ describe("classifyRuntimeLeaseChange", () => {
       )
     ).toMatchObject({ kind: "unassigned", reason: "lease-transfer", slotId: A });
     expect(
-      classifyRuntimeLeaseChange(
-        ME,
-        event(A, null, lease(A, { clientSessionId: "desktop" }), 3)
-      )
+      classifyRuntimeLeaseChange(ME, event(A, null, lease(A, { clientSessionId: "desktop" }), 3))
     ).toEqual({ kind: "unrelated" });
   });
 });

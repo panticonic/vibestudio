@@ -22,12 +22,11 @@ function dedupePaths(paths: string[]): string[] {
 export function createRuntimeLayout(appRoot: string): RuntimeLayout {
   const appUnpackedRoot = appRoot.replace(/\.asar$/, ".asar.unpacked");
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  const resourcesRoot =
-    appRoot.endsWith(".asar")
-      ? typeof resourcesPath === "string"
-        ? resourcesPath
-        : path.dirname(appRoot)
-      : appRoot;
+  const resourcesRoot = appRoot.endsWith(".asar")
+    ? typeof resourcesPath === "string"
+      ? resourcesPath
+      : path.dirname(appRoot)
+    : appRoot;
 
   return {
     appRoot,
@@ -76,7 +75,7 @@ export function getWorkspaceTemplateCandidates(appRoot: string): string[] {
 
 export function getExistingWorkspaceTemplateDir(
   appRoot: string,
-  configFile: string,
+  configFile: string
 ): string | null {
   for (const candidate of getWorkspaceTemplateCandidates(appRoot)) {
     if (fs.existsSync(path.join(candidate, configFile))) {
@@ -89,10 +88,10 @@ export function getExistingWorkspaceTemplateDir(
 export function getPlatformPackageBinaryPath(
   appRoot: string,
   packageName: string,
-  binaryName: string,
+  binaryName: string
 ): string {
   return getPhysicalAppPath(
     appRoot,
-    path.join("node_modules", ...packageName.split("/"), "bin", binaryName),
+    path.join("node_modules", ...packageName.split("/"), "bin", binaryName)
   );
 }

@@ -361,6 +361,33 @@ describe("WorkspaceDO.entityActivate", () => {
     ).toThrow(/Identity collision/);
   });
 
+  it("advances a source publication as one durable transaction", () => {
+    instance.entityActivate(preparedPanelInput({ key: "one" }));
+    instance.entityActivate(preparedPanelInput({ key: "two" }));
+
+    expect(() =>
+      instance.entityAdvanceExecutions([
+        preparedPanelInput({
+          key: "one",
+          source: { repoPath: SOURCE, effectiveVersion: "v2" },
+          activeBuildKey: "c".repeat(64),
+          activeExecutionDigest: "d".repeat(64),
+        }),
+        preparedPanelInput({
+          key: "two",
+          contextId: "ctx-other",
+          source: { repoPath: SOURCE, effectiveVersion: "v2" },
+          activeBuildKey: "c".repeat(64),
+          activeExecutionDigest: "d".repeat(64),
+        }),
+      ])
+    ).toThrow(/Identity collision/);
+
+    const records = instance.entityListActiveByKind("panel");
+    expect(records).toHaveLength(2);
+    expect(records.every((record) => record.activeBuildKey === "b".repeat(64))).toBe(true);
+  });
+
   it("rejects malformed active authority at the durable write boundary", () => {
     expect(() =>
       instance.entityActivate(
@@ -674,6 +701,112 @@ describe("WorkspaceDO slot operations", () => {
   let instance: WorkspaceDOTestable;
   beforeEach(async () => {
     ({ instance } = await createTestDO(WorkspaceDOTestable));
+  });
+
+  it("resumes an identical slot creation without duplicating history", () => {
+    const entity = instance.entityActivate(preparedPanelInput({ key: "retry-entry" }));
+    const input = {
+      slotId: "retry-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: entity.key,
+        entityId: entity.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    };
+
+    instance.slotCreate(input);
+    expect(() => instance.slotCreate(input)).not.toThrow();
+    expect(instance.panelTreeDetail("retry-slot")).toMatchObject({
+      slot: { current_entry_key: "retry-entry", current_entity_id: entity.id },
+      currentHistory: { cursor: 0, entry_key: "retry-entry" },
+    });
+    expect(instance.slotHistoryRelative("retry-slot", -1)).toBeNull();
+    expect(instance.slotHistoryRelative("retry-slot", 1)).toBeNull();
+  });
+
+  it("treats equivalent JSON with different property order as the same retry", () => {
+    const entity = instance.entityActivate(preparedPanelInput({ key: "canonical-entry" }));
+    const base = {
+      slotId: "canonical-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: entity.key,
+        entityId: entity.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+        stateArgs: { theme: "dark", nested: { enabled: true, count: 2 } },
+        options: { ref: "main", flags: { inspect: true, focus: false } },
+      },
+    };
+    instance.slotCreate(base);
+
+    expect(() =>
+      instance.slotCreate({
+        ...base,
+        initialEntry: {
+          ...base.initialEntry,
+          stateArgs: { nested: { count: 2, enabled: true }, theme: "dark" },
+          options: { flags: { focus: false, inspect: true }, ref: "main" },
+        },
+      })
+    ).not.toThrow();
+    expect(instance.slotHistoryRelative("canonical-slot", -1)).toBeNull();
+  });
+
+  it("rejects a reused slot id with a different durable identity", () => {
+    const first = instance.entityActivate(preparedPanelInput({ key: "collision-a" }));
+    const second = instance.entityActivate(preparedPanelInput({ key: "collision-b" }));
+    instance.slotCreate({
+      slotId: "collision-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: first.key,
+        entityId: first.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+      },
+    });
+
+    expect(() =>
+      instance.slotCreate({
+        slotId: "collision-slot",
+        parentSlotId: null,
+        initialEntry: {
+          entryKey: second.key,
+          entityId: second.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      })
+    ).toThrow(/Slot identity collision/);
+    expect(instance.panelTreeDetail("collision-slot")).toMatchObject({
+      slot: { current_entry_key: "collision-a", current_entity_id: first.id },
+    });
+  });
+
+  it("rejects a retry that changes history options under the same slot identity", () => {
+    const entity = instance.entityActivate(preparedPanelInput({ key: "option-entry" }));
+    const base = {
+      slotId: "option-slot",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: entity.key,
+        entityId: entity.id,
+        source: SOURCE,
+        contextId: "ctx-1",
+        options: { ref: "main" },
+      },
+    };
+    instance.slotCreate(base);
+
+    expect(() =>
+      instance.slotCreate({
+        ...base,
+        initialEntry: { ...base.initialEntry, options: { ref: "feature" } },
+      })
+    ).toThrow(/options/);
   });
 
   it("keyset-pages sibling groups without reading the complete forest", () => {

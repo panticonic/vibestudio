@@ -1,5 +1,4 @@
 import * as path from "path";
-import { randomBytes } from "crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type {
@@ -41,14 +40,18 @@ import {
   type RuntimeEntityHandle,
 } from "@vibestudio/shared/runtime/entitySpec";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
   RuntimeClient,
-  SlotCommitPreparedNavigationResult,
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
 } from "./workspaceStateClient.js";
+import {
+  commitPreparedPanelNavigation,
+  type PanelNavigationCommitResult,
+} from "./panelNavigationTransaction.js";
 import { aboutPanelSource, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 
 const log = createDevLogger("PanelManager");
@@ -191,16 +194,6 @@ export interface PanelManagerDeps {
    * Implementations should call into the shell's auth service.
    */
   grantConnection?(panelId: PanelEntityId): Promise<{ token: string }>;
-  /**
-   * Atomically move any host lease from the retiring runtime incarnation to
-   * its committed replacement. Called after the durable slot cursor changes
-   * and before the previous runtime is retired.
-   */
-  transferRuntimeLease?(
-    slotId: PanelSlotId,
-    previousEntityId: PanelEntityId,
-    nextEntityId: PanelEntityId
-  ): void;
 }
 
 export interface PanelOperationClients {
@@ -213,7 +206,9 @@ export interface PanelOperationClients {
 // =============================================================================
 
 function mintHistoryEntryKey(): string {
-  return `nav-${randomBytes(8).toString("hex")}`;
+  const bytes = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(bytes);
+  return `nav-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 // =============================================================================
@@ -238,7 +233,6 @@ export class PanelManager {
   private readonly workspaceConfig?: WorkspaceConfig;
   private readonly allowMissingManifests: boolean;
   private readonly grantConnectionImpl?: (panelId: PanelEntityId) => Promise<{ token: string }>;
-  private readonly transferRuntimeLeaseImpl?: PanelManagerDeps["transferRuntimeLease"];
 
   private readonly collapsedIds = new Set<string>();
   private readonly localPanelTitles = new Map<string, { source: string; title: string }>();
@@ -277,7 +271,6 @@ export class PanelManager {
     this.workspaceConfig = deps.workspaceConfig;
     this.allowMissingManifests = deps.allowMissingManifests ?? false;
     this.grantConnectionImpl = deps.grantConnection;
-    this.transferRuntimeLeaseImpl = deps.transferRuntimeLease;
   }
 
   getIncarnationChurnSnapshot(): PanelIncarnationChurnSnapshot {
@@ -399,7 +392,8 @@ export class PanelManager {
         `Panel id already in use: ${slotId}. A slug must be unique among its parent's children.`
       );
     }
-    const displayTitle = opts?.title?.trim() || manifest.title;
+    const displayTitle =
+      normalizePanelTitle(opts?.title) ?? normalizePanelTitle(manifest.title) ?? relativePath;
     const historyEntryKey = mintHistoryEntryKey();
     const stateArgsPayload = validatedStateArgs ?? {};
 
@@ -672,7 +666,10 @@ export class PanelManager {
     this.currentEntitySourceBySlot.set(slotId, handle.source);
 
     const title =
-      opts?.title?.trim() || parsed.hostname || parsed.protocol.replace(/:$/, "") || "browser";
+      normalizePanelTitle(opts?.title) ??
+      normalizePanelTitle(parsed.hostname) ??
+      normalizePanelTitle(parsed.protocol.replace(/:$/, "")) ??
+      "browser";
     const panel: Panel = {
       id: slotId,
       title,
@@ -964,22 +961,26 @@ export class PanelManager {
     });
     const entityId = asPanelEntityId(handle.id);
 
-    const transition = await workspaceState.commitPreparedNavigation({
-      slotId,
-      expectedCurrentEntityId: previousEntityId,
-      mutation: {
-        kind: "append",
-        entry: {
-          entryKey: historyEntryKey,
-          entityId,
-          source: nextSnapshot.source,
-          contextId: nextSnapshot.contextId,
-          stateArgs: stateArgsPayload,
-          options: nextSnapshot.options,
+    const transition = await commitPreparedPanelNavigation(
+      { runtime, workspaceState },
+      {
+        slotId,
+        expectedCurrentEntityId: previousEntityId,
+        mutation: {
+          kind: "append",
+          entry: {
+            entryKey: historyEntryKey,
+            entityId,
+            source: nextSnapshot.source,
+            contextId: nextSnapshot.contextId,
+            stateArgs: stateArgsPayload,
+            options: nextSnapshot.options,
+          },
         },
-      },
-    });
+      }
+    );
     this.recordIncarnationCommit("navigate");
+    this.recordNavigationRetirement(transition, "navigate");
 
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
@@ -1000,21 +1001,6 @@ export class PanelManager {
     }
 
     this.indexPanel(slotId, title, nextSnapshot.source);
-
-    if (transition.previousEntityId !== entityId) {
-      this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
-      await runtime.retireEntity(transition.previousEntityId).then(
-        () => this.recordIncarnationRetirement(false),
-        (error: unknown) => {
-          this.recordIncarnationRetirement(true);
-          log.warn(
-            `Failed to retire panel entity ${transition.previousEntityId} on navigate: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
-      );
-    }
 
     return {
       panelId: slotId,
@@ -1069,12 +1055,16 @@ export class PanelManager {
         `Prepared history entity mismatch: expected ${targetEntityId}, received ${entityId}`
       );
     }
-    const transition = await workspaceState.commitPreparedNavigation({
-      slotId,
-      expectedCurrentEntityId: currentEntityId,
-      mutation: { kind: "select", entryKey: targetEntryKey },
-    });
+    const transition = await commitPreparedPanelNavigation(
+      { runtime, workspaceState },
+      {
+        slotId,
+        expectedCurrentEntityId: currentEntityId,
+        mutation: { kind: "select", entryKey: targetEntryKey },
+      }
+    );
     this.recordIncarnationCommit("history");
+    this.recordNavigationRetirement(transition, "history navigate");
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
 
@@ -1091,38 +1081,27 @@ export class PanelManager {
         canGoForward: Boolean(await workspaceState.getRelativeSlotHistory(slotId, 1)),
       };
     }
-    if (transition.previousEntityId !== entityId) {
-      this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
-      await runtime.retireEntity(transition.previousEntityId).then(
-        () => this.recordIncarnationRetirement(false),
-        (error: unknown) => {
-          this.recordIncarnationRetirement(true);
-          log.warn(
-            `Failed to retire panel entity ${transition.previousEntityId} on history navigate: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
-      );
-    }
     const result = this.registry.getPanel(slotId) ?? null;
     return result;
   }
 
-  async updateTitle(slotId: PanelSlotId, title: string): Promise<void> {
+  async updateTitle(slotId: PanelSlotId, title: string | null): Promise<void> {
     await this.ensureViewStateLoaded();
     const livePanel = this.registry.getPanel(slotId);
-    if (livePanel) livePanel.title = title;
-    this.searchIndex?.updateTitle(slotId, title);
+    const normalized = normalizePanelTitle(title);
+    if (livePanel) {
+      const source = getPanelSource(livePanel);
+      if (normalized) {
+        livePanel.title = normalized;
+        this.localPanelTitles.set(slotId, { source, title: normalized });
+      } else {
+        this.localPanelTitles.delete(slotId);
+        livePanel.title = this.titleFor(slotId, source);
+      }
+    }
+    this.searchIndex?.updateTitle(slotId, normalized ?? "");
     await this.persistViewState();
     this.registry.notifyPanelTreeUpdate();
-  }
-
-  async resolveTitleTargetSlot(
-    entityId: string
-  ): Promise<{ slotId: PanelSlotId; titleIsAlreadyPersistedForSlot: boolean } | null> {
-    const slotId = await this.workspaceState.resolveSlotByEntity(entityId);
-    return slotId ? { slotId: asPanelSlotId(slotId), titleIsAlreadyPersistedForSlot: true } : null;
   }
 
   async updatePanelState(slotId: PanelSlotId, state: PanelNavigationState): Promise<void> {
@@ -1133,7 +1112,18 @@ export class PanelManager {
 
     if (state.pageTitle !== undefined) {
       await this.ensureViewStateLoaded();
-      this.searchIndex?.updateTitle(slotId, state.pageTitle);
+      const normalized = normalizePanelTitle(state.pageTitle);
+      if (normalized) {
+        this.localPanelTitles.set(slotId, {
+          source: getPanelSource(livePanel),
+          title: normalized,
+        });
+        livePanel.title = normalized;
+      } else {
+        this.localPanelTitles.delete(slotId);
+        livePanel.title = this.titleFor(slotId, getPanelSource(livePanel));
+      }
+      this.searchIndex?.updateTitle(slotId, normalized ?? "");
       await this.persistViewState();
     }
 
@@ -1196,7 +1186,11 @@ export class PanelManager {
   }
 
   async getPanelInit(slotId: PanelSlotId): Promise<unknown> {
-    const panel = this.registry.getPanel(slotId) ?? (await this.requireStoredPanel(slotId));
+    // Bootstrap is also the rehydration boundary for an existing renderer.
+    // Always refresh the addressed slot from durable state here so a reload
+    // cannot resurrect an older local projection (for example, a terminal
+    // layout saved just before the renderer was restarted).
+    const panel = await this.requireStoredPanel(slotId, true);
     const storedSlot = await this.workspaceState.getSlot(slotId);
     const parentId = storedSlot?.parent_slot_id ?? null;
     const parentEntityId = parentId
@@ -1263,6 +1257,7 @@ export class PanelManager {
 
     const panel = this.registry.getPanel(slotId);
     if (panel) {
+      const previousTitle = panel.title;
       const currentSnapshot = detail
         ? this.snapshotFromHistoryRow(detail.currentHistory)
         : undefined;
@@ -1271,12 +1266,25 @@ export class PanelManager {
       panel.buildKey = entity?.activeBuildKey ?? null;
       panel.executionDigest = entity?.activeExecutionDigest ?? null;
       panel.authorityRequests = entity?.activeAuthority?.requests;
-      if (slot.current_entity_title) panel.title = slot.current_entity_title;
       if (currentSnapshot) {
+        // A null durable title is a clear, not "leave the old local title in
+        // place". Drop the local fallback first so titleFor can select the
+        // manifest/metadata/browser fallback deterministically.
+        if (slot.current_entity_title == null) this.localPanelTitles.delete(slotId);
+        panel.title = this.titleFor(
+          slotId,
+          currentSnapshot.source,
+          slot.current_entity_title ?? undefined
+        );
         this.registry.replaceCurrentSnapshot(slotId, currentSnapshot, {
           entries: [currentSnapshot],
           index: 0,
         });
+      } else if (slot.current_entity_title != null) {
+        panel.title = normalizePanelTitle(slot.current_entity_title) ?? panel.title;
+      }
+      if (panel.title !== previousTitle) {
+        this.registry.notifyPanelTreeUpdate();
       }
     }
     return entityId;
@@ -1357,13 +1365,16 @@ export class PanelManager {
     entityTitle?: string,
     metadata?: PanelMetadata
   ): string {
-    const trimmedEntityTitle = entityTitle?.trim();
-    if (trimmedEntityTitle) return trimmedEntityTitle;
+    const normalizedEntityTitle = normalizePanelTitle(entityTitle);
+    if (normalizedEntityTitle) return normalizedEntityTitle;
     const manifest = this.tryResolveManifestForSource(source);
-    if (manifest?.title) return manifest.title;
-    if (metadata?.title) return metadata.title;
+    const manifestTitle = normalizePanelTitle(manifest?.title);
+    if (manifestTitle) return manifestTitle;
+    const metadataTitle = normalizePanelTitle(metadata?.title);
+    if (metadataTitle) return metadataTitle;
     const localTitle = this.localPanelTitles.get(slotId);
-    if (localTitle?.source === source && localTitle.title) return localTitle.title;
+    const normalizedLocalTitle = normalizePanelTitle(localTitle?.title);
+    if (localTitle?.source === source && normalizedLocalTitle) return normalizedLocalTitle;
     if (source.startsWith("browser:")) {
       try {
         return new URL(source.slice("browser:".length)).hostname;
@@ -1418,9 +1429,12 @@ export class PanelManager {
       stateArgs: stateArgsPayload,
     });
     const entityId = asPanelEntityId(handle.id);
-    let transition: SlotCommitPreparedNavigationResult;
-    try {
-      transition = await this.workspaceState.commitPreparedNavigation({
+    const transition = await commitPreparedPanelNavigation(
+      {
+        runtime: this.runtime,
+        workspaceState: this.workspaceState,
+      },
+      {
         slotId,
         expectedCurrentEntityId: currentEntityId,
         mutation: {
@@ -1434,22 +1448,10 @@ export class PanelManager {
             options: nextSnapshot.options,
           },
         },
-      });
-      this.recordIncarnationCommit("replace");
-    } catch (commitError) {
-      try {
-        await this.runtime.retireEntity(entityId);
-      } catch (retirementError) {
-        const combined = new Error(
-          `Atomic panel replacement failed for ${slotId}, and prepared entity ${entityId} could not be retired: ${
-            retirementError instanceof Error ? retirementError.message : String(retirementError)
-          }`
-        ) as Error & { causes: unknown[] };
-        combined.causes = [commitError, retirementError];
-        throw combined;
       }
-      throw commitError;
-    }
+    );
+    this.recordIncarnationCommit("replace");
+    this.recordNavigationRetirement(transition, "replace-current");
 
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
@@ -1469,32 +1471,24 @@ export class PanelManager {
         index: history.index,
       });
     }
-    if (transition.previousEntityId !== entityId) {
-      this.transferRuntimeLease(slotId, transition.previousEntityId, entityId);
-      await this.runtime.retireEntity(transition.previousEntityId).then(
-        () => this.recordIncarnationRetirement(false),
-        (error: unknown) => {
-          this.recordIncarnationRetirement(true);
-          log.warn(
-            `Failed to retire panel entity ${transition.previousEntityId} on replace-current: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        }
-      );
-    }
   }
 
-  private transferRuntimeLease(
-    slotId: PanelSlotId,
-    previousEntityId: PanelEntityId,
-    nextEntityId: PanelEntityId
+  private recordNavigationRetirement(
+    transition: PanelNavigationCommitResult,
+    operation: string
   ): void {
-    // Lease transfer is part of committing a replacement runtime, not a
-    // best-effort notification. If the configured coordinator rejects the
-    // transition, surface that invariant failure and keep the previous runtime
-    // alive instead of retiring it behind a stale host lease.
-    this.transferRuntimeLeaseImpl?.(slotId, previousEntityId, nextEntityId);
+    if (transition.retirement.status === "unchanged") return;
+    if (transition.retirement.status === "retired") {
+      this.recordIncarnationRetirement(false);
+      return;
+    }
+    this.recordIncarnationRetirement(true);
+    const error = transition.retirement.error;
+    log.warn(
+      `Failed to retire panel entity ${transition.previousEntityId} on ${operation}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 
   // ===========================================================================
@@ -1621,9 +1615,18 @@ export class PanelManager {
         const entity = detail.entity;
         const source = entity.source;
         const isBrowser = snapshot.source.startsWith("browser:");
+        if (detail.slot.current_entity_title == null) this.localPanelTitles.delete(slotId);
+        const preservesMaterializedView =
+          panel?.runtimeEntityId === detail.slot.current_entity_id &&
+          panel?.buildKey === (entity.activeBuildKey ?? null) &&
+          panel?.executionDigest === (entity.activeExecutionDigest ?? null);
         const projected: Panel = {
           id: slotId,
-          title: detail.slot.current_entity_title ?? slotId,
+          title: this.titleFor(
+            slotId,
+            snapshot.source,
+            detail.slot.current_entity_title ?? undefined
+          ),
           runtimeEntityId: detail.slot.current_entity_id,
           effectiveVersion: source.effectiveVersion,
           buildKey: entity.activeBuildKey ?? null,
@@ -1634,11 +1637,13 @@ export class PanelManager {
           snapshot,
           history: { entries: [snapshot], index: 0 },
           artifacts:
-            entity.status === "preparing"
-              ? { buildState: "pending", buildProgress: "Preparing panel runtime..." }
-              : isBrowser
-                ? { buildState: "ready", htmlPath: snapshot.source.slice("browser:".length) }
-                : { buildState: "building", buildProgress: "Loading panel runtime..." },
+            preservesMaterializedView && panel
+              ? panel.artifacts
+              : entity.status === "preparing"
+                ? { buildState: "pending", buildProgress: "Preparing panel runtime..." }
+                : isBrowser
+                  ? { buildState: "ready", htmlPath: snapshot.source.slice("browser:".length) }
+                  : { buildState: "building", buildProgress: "Loading panel runtime..." },
           navigation: {
             canGoBack: (detail.slot.current_history_cursor ?? 0) > 0,
             canGoForward:

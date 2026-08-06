@@ -194,7 +194,9 @@ interface NativePanelSlotModel {
   panelToSlot: Map<string, string>;
   focusedNativeSlotId: string | null;
   activeHostedShellViewId: string | null;
+  activeHostedShellInstanceId: string | null;
   hostedShellGeneration: number;
+  latestOperations: Map<string, { bindingSequence: number; operationSequence: number }>;
 }
 
 /**
@@ -247,7 +249,9 @@ export class ViewManager {
     panelToSlot: new Map(),
     focusedNativeSlotId: null,
     activeHostedShellViewId: null,
+    activeHostedShellInstanceId: null,
     hostedShellGeneration: 0,
+    latestOperations: new Map(),
   };
   private readonly hidePanelViewsUntilHostedShellReady: boolean;
   /**
@@ -320,7 +324,8 @@ export class ViewManager {
         return wc && !wc.isDestroyed() ? wc.getURL() : null;
       },
       (payload) => {
-        this.getShellChromeWebContents()?.send("vibestudio:content-overlay:forward", payload);
+        const target = this.getShellChromeWebContents();
+        target?.send("vibestudio:content-overlay:forward", payload);
       }
     );
     this.shellContentOverlay.setWindow(this.window);
@@ -727,8 +732,12 @@ export class ViewManager {
     managed.visible = true;
     managed.view.setBounds(slot.bounds);
     managed.view.setVisible(!this.shellOverlayActive);
+    this.attachNativeSlotFocusListener(slot, managed);
     if (slot.focused) {
-      this.setFocusedNativePanelSlot(slot.nativeSlotId);
+      // Recreating the native view does not represent a user focus
+      // transition. Preserve logical focus without stealing interactive focus
+      // from shell chrome while the replacement view is attached.
+      this.setFocusedNativePanelSlot(slot.nativeSlotId, false);
     }
     this.reconcileNativeLayerOrder();
   }
@@ -911,7 +920,7 @@ export class ViewManager {
     this.applyBoundsToVisiblePanel();
   }
 
-  setHostedShellReady(ownerViewId: string, ready: boolean): void {
+  setHostedShellReady(ownerViewId: string, ready: boolean, rendererInstanceId?: string): void {
     const owner = this.views.get(ownerViewId);
     if (!owner || owner.type !== "app" || !owner.hostChrome) {
       throw new Error(`Hosted shell owner is not an active panel-hosting app: ${ownerViewId}`);
@@ -924,7 +933,9 @@ export class ViewManager {
       this.nativeShellOverlay.prewarm();
       if (
         this.nativePanelSlots.activeHostedShellViewId === ownerViewId &&
-        this.nativePanelSlots.hostedShellReady
+        this.nativePanelSlots.hostedShellReady &&
+        (!rendererInstanceId ||
+          this.nativePanelSlots.activeHostedShellInstanceId === rendererInstanceId)
       ) {
         // Redundant readiness assertion from the already-active shell document
         // (e.g. a late effect after the shell's panel surfaces have bound).
@@ -944,6 +955,7 @@ export class ViewManager {
       );
       this.clearAllPanelSlots();
       this.nativePanelSlots.activeHostedShellViewId = ownerViewId;
+      this.nativePanelSlots.activeHostedShellInstanceId = rendererInstanceId ?? null;
       this.nativePanelSlots.hostedShellReady = true;
       for (const managed of this.views.values()) {
         if (managed.type !== "panel") continue;
@@ -964,12 +976,21 @@ export class ViewManager {
         `Hosted shell owner mismatch: active=${this.nativePanelSlots.activeHostedShellViewId} caller=${ownerViewId}`
       );
     }
+    if (
+      rendererInstanceId &&
+      this.nativePanelSlots.activeHostedShellInstanceId &&
+      rendererInstanceId !== this.nativePanelSlots.activeHostedShellInstanceId
+    ) {
+      log.verbose(` Ignore stale hosted shell cleanup from ${rendererInstanceId}`);
+      return;
+    }
 
     log.verbose(
       ` Hosted shell not ready: ${ownerViewId}; clearing ${this.nativePanelSlots.activeSlots.size} slot(s)`
     );
     this.nativePanelSlots.hostedShellReady = false;
     this.clearAllPanelSlots();
+    this.nativePanelSlots.activeHostedShellInstanceId = null;
     owner.visible = false;
     owner.view.setVisible(false);
     this.showBootstrapShell();
@@ -980,16 +1001,25 @@ export class ViewManager {
     ownerViewId: string,
     request: {
       nativeSlotId: string;
+      rendererInstanceId?: string;
       bindingId: string;
+      bindingSequence?: number;
+      operationSequence?: number;
       panelId: string;
       bounds: NativePanelSlotBounds;
       focused?: boolean;
     }
-  ): void {
+  ): NativePanelSlotSyncResult {
     this.assertActiveHostedShellOwner(ownerViewId);
     const nativeSlotId = this.validateNonEmptyId(request.nativeSlotId, "nativeSlotId");
     const bindingId = this.validateNonEmptyId(request.bindingId, "bindingId");
     const panelId = this.validateNonEmptyId(request.panelId, "panelId");
+    if (!this.acceptNativeSlotOperation(nativeSlotId, request)) {
+      return {
+        status: "missing",
+        reason: `stale native panel slot bind: ${nativeSlotId}`,
+      };
+    }
     const managed = this.views.get(panelId);
     if (!managed || managed.type !== "panel") {
       throw new Error(`Native panel slot target is not a panel view: ${panelId}`);
@@ -1009,6 +1039,10 @@ export class ViewManager {
     }
 
     const previousSlot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    const wasSameFocusedPanel =
+      previousSlot?.panelId === panelId &&
+      previousSlot.focused &&
+      this.nativePanelSlots.focusedNativeSlotId === nativeSlotId;
     if (previousSlot && previousSlot.panelId !== panelId) {
       this.clearPanelSlotInternal(nativeSlotId);
     } else if (previousSlot) {
@@ -1021,13 +1055,7 @@ export class ViewManager {
     const bounds = this.normalizeAndClampPanelSlotBounds(request.bounds);
     const generation = this.nativePanelSlots.hostedShellGeneration;
     const focused = request.focused === true;
-    // Native→shell focus feedback (§5.2): observe every route by which the
-    // bound view's WebContents can gain focus (keyboard traversal, programmatic
-    // wc.focus(), click) so shell layout focus can follow.
-    const wc = managed.view.webContents;
-    const onViewFocus = (): void => this.handleNativeSlotViewFocus(nativeSlotId);
-    wc.on("focus", onViewFocus);
-    this.nativePanelSlots.activeSlots.set(nativeSlotId, {
+    const slot: NativePanelSlotState = {
       nativeSlotId,
       bindingId,
       panelId,
@@ -1035,10 +1063,9 @@ export class ViewManager {
       focused,
       ownerViewId,
       ownerGeneration: generation,
-      detachFocusListener: () => {
-        if (!wc.isDestroyed()) wc.off("focus", onViewFocus);
-      },
-    });
+    };
+    this.nativePanelSlots.activeSlots.set(nativeSlotId, slot);
+    this.attachNativeSlotFocusListener(slot, managed);
     this.nativePanelSlots.panelToSlot.set(panelId, nativeSlotId);
     this.visiblePanelId = panelId;
 
@@ -1048,24 +1075,34 @@ export class ViewManager {
     managed.view.setVisible(!this.shellOverlayActive);
 
     if (focused) {
-      this.setFocusedNativePanelSlot(nativeSlotId);
+      this.setFocusedNativePanelSlot(nativeSlotId, !wasSameFocusedPanel);
     } else if (this.nativePanelSlots.focusedNativeSlotId === nativeSlotId) {
       this.nativePanelSlots.focusedNativeSlotId = null;
     }
     this.reconcileNativeLayerOrder();
+    return { status: "bound" };
   }
 
   updatePanelSlot(
     ownerViewId: string,
     request: {
       nativeSlotId: string;
+      rendererInstanceId?: string;
       bindingId: string;
+      bindingSequence?: number;
+      operationSequence?: number;
       bounds?: NativePanelSlotBounds;
       focused?: boolean;
     }
   ): NativePanelSlotSyncResult {
     this.assertActiveHostedShellOwner(ownerViewId);
     const nativeSlotId = this.validateNonEmptyId(request.nativeSlotId, "nativeSlotId");
+    if (!this.acceptNativeSlotOperation(nativeSlotId, request)) {
+      return {
+        status: "missing",
+        reason: `stale native panel slot update: ${nativeSlotId}`,
+      };
+    }
     const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (!slot) {
       const reason = `unknown native panel slot: ${nativeSlotId}`;
@@ -1096,9 +1133,12 @@ export class ViewManager {
       managed.view.setBounds(bounds);
     }
     if (typeof request.focused === "boolean") {
+      const focusChanged =
+        request.focused &&
+        (!slot.focused || this.nativePanelSlots.focusedNativeSlotId !== nativeSlotId);
       slot.focused = request.focused;
       if (request.focused) {
-        this.setFocusedNativePanelSlot(nativeSlotId);
+        this.setFocusedNativePanelSlot(nativeSlotId, focusChanged);
       } else if (this.nativePanelSlots.focusedNativeSlotId === nativeSlotId) {
         this.nativePanelSlots.focusedNativeSlotId = null;
       }
@@ -1107,8 +1147,21 @@ export class ViewManager {
     return { status: "updated" };
   }
 
-  clearPanelSlot(ownerViewId: string, nativeSlotId: string, bindingId: string): void {
+  clearPanelSlot(
+    ownerViewId: string,
+    nativeSlotId: string,
+    bindingId: string,
+    ordering?: {
+      rendererInstanceId?: string;
+      bindingSequence?: number;
+      operationSequence?: number;
+    }
+  ): void {
     this.assertActiveHostedShellOwner(ownerViewId);
+    if (!this.acceptNativeSlotOperation(nativeSlotId, ordering)) {
+      log.verbose(` Ignore stale native panel slot operation ${nativeSlotId} (${bindingId})`);
+      return;
+    }
     const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (slot) this.assertSlotOwner(slot, ownerViewId);
     if (slot && slot.bindingId !== bindingId) {
@@ -1133,6 +1186,7 @@ export class ViewManager {
       );
     }
     this.pendingSlotRestores.clear();
+    this.nativePanelSlots.latestOperations.clear();
     for (const nativeSlotId of Array.from(this.nativePanelSlots.activeSlots.keys())) {
       this.clearPanelSlotInternal(nativeSlotId);
     }
@@ -1462,6 +1516,45 @@ export class ViewManager {
   }
 
   /**
+   * Linearize renderer operations independently of async RPC dispatch. Legacy
+   * direct callers without ordering metadata remain supported for host tests;
+   * the wire schema requires both fields.
+   */
+  private acceptNativeSlotOperation(
+    nativeSlotId: string,
+    request?: {
+      rendererInstanceId?: string;
+      bindingSequence?: number;
+      operationSequence?: number;
+    }
+  ): boolean {
+    if (
+      request?.rendererInstanceId &&
+      request.rendererInstanceId !== this.nativePanelSlots.activeHostedShellInstanceId
+    ) {
+      return false;
+    }
+    if (request?.bindingSequence === undefined || request.operationSequence === undefined) {
+      return true;
+    }
+    const next = {
+      bindingSequence: request.bindingSequence,
+      operationSequence: request.operationSequence,
+    };
+    const current = this.nativePanelSlots.latestOperations.get(nativeSlotId);
+    if (
+      current &&
+      (next.bindingSequence < current.bindingSequence ||
+        (next.bindingSequence === current.bindingSequence &&
+          next.operationSequence < current.operationSequence))
+    ) {
+      return false;
+    }
+    this.nativePanelSlots.latestOperations.set(nativeSlotId, next);
+    return true;
+  }
+
+  /**
    * A slot-bound panel view's WebContents gained focus (by any route). Keep
    * main-side focus state coherent and notify listeners so the shell's layout
    * focus can follow (§5.2). Deliberately does NOT call focusVisibleView —
@@ -1478,6 +1571,17 @@ export class ViewManager {
     for (const cb of this.nativeSlotFocusedCallbacks) {
       cb({ nativeSlotId, panelId: slot.panelId });
     }
+  }
+
+  /** Install focus feedback for the current WebContents incarnation. */
+  private attachNativeSlotFocusListener(slot: NativePanelSlotState, managed: ManagedView): void {
+    slot.detachFocusListener?.();
+    const wc = managed.view.webContents;
+    const onViewFocus = (): void => this.handleNativeSlotViewFocus(slot.nativeSlotId);
+    wc.on("focus", onViewFocus);
+    slot.detachFocusListener = () => {
+      if (!wc.isDestroyed()) wc.off("focus", onViewFocus);
+    };
   }
 
   /**
@@ -1502,7 +1606,7 @@ export class ViewManager {
     };
   }
 
-  private setFocusedNativePanelSlot(nativeSlotId: string): void {
+  private setFocusedNativePanelSlot(nativeSlotId: string, focusView = true): void {
     for (const slot of this.nativePanelSlots.activeSlots.values()) {
       slot.focused = slot.nativeSlotId === nativeSlotId;
     }
@@ -1512,7 +1616,7 @@ export class ViewManager {
     const managed = this.views.get(slot.panelId);
     if (managed) {
       this.visiblePanelId = slot.panelId;
-      this.focusVisibleView(managed);
+      if (focusView) this.focusVisibleView(managed);
     }
   }
 
@@ -1521,7 +1625,7 @@ export class ViewManager {
     if (focusedSlotId) {
       return this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId ?? null;
     }
-    return this.visiblePanelId;
+    return null;
   }
 
   private chromeTopOffset(): number {
@@ -1826,6 +1930,21 @@ export class ViewManager {
     const runOperation = async (): Promise<T | null> => {
       const wasVisible = managed.visible;
       const originalBounds = { ...managed.bounds };
+      const windowWasVisible = !this.window.isDestroyed() && this.window.isVisible();
+
+      // Chromium cannot always produce a Viz surface for a WebContentsView
+      // whose parent window is hidden (capturePage then rejects with
+      // `UnknownVizError`). Reveal the parent without activating it for the
+      // duration of an inspection capture, and restore the user's exact
+      // window state afterwards. This is especially important for hidden test,
+      // headless, and background inspection surfaces.
+      if (!windowWasVisible && !this.window.isDestroyed()) {
+        this.window.showInactive();
+        // showInactive is not supported on every Linux compositor. Keep the
+        // capture contract reliable there too; this fallback only runs when
+        // the non-activating call did not make the window visible.
+        if (!this.window.isVisible()) this.window.show();
+      }
 
       // If hidden, temporarily show the view
       if (!wasVisible) {
@@ -1840,6 +1959,11 @@ export class ViewManager {
 
         // Wait for the compositor to render the view
         await this.waitForRender(managed.view.webContents);
+        // A pair of renderer animation frames does not guarantee that Viz has
+        // committed the newly attached WebContentsView surface yet. Give the
+        // native compositor one bounded turn before capturePage; this avoids a
+        // first-frame UnknownVizError on otherwise healthy panels.
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
 
       try {
@@ -1849,6 +1973,9 @@ export class ViewManager {
         if (!wasVisible) {
           managed.view.setVisible(false);
           managed.view.setBounds(originalBounds);
+        }
+        if (!windowWasVisible && !this.window.isDestroyed()) {
+          this.window.hide();
         }
       }
     };
@@ -1889,11 +2016,37 @@ export class ViewManager {
     // headless host's screenshot path (cdpHostProvider routes
     // Page.captureScreenshot here), so it MUST render unslotted panels instead
     // of declining. The isDestroyed bail above keeps it correct.
-    const image = await this.withViewVisible(id, async () => {
-      return contents.capturePage();
-    });
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const image = await this.withViewVisible(id, async () => {
+          const bounds = managed.view.getBounds();
+          return contents.capturePage({
+            x: 0,
+            y: 0,
+            width: Math.max(1, Math.round(bounds.width)),
+            height: Math.max(1, Math.round(bounds.height)),
+          });
+        });
+        if (!image || !image.isEmpty()) return image;
+        lastError = new Error("captureScreenshot returned an empty image");
+      } catch (error) {
+        lastError = error;
+      }
 
-    return image;
+      if (attempt < 2) {
+        // Viz can lose the first surface while a hidden WebContentsView is
+        // being attached. Invalidate and cycle the view before retrying the
+        // bounded capture; this recovers transient UnknownVizError failures
+        // without letting an inspection request hang indefinitely.
+        this.compositorRecovery.forceRepaint(id);
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`Failed to capture panel view ${id}: ${String(lastError)}`);
   }
 
   /**

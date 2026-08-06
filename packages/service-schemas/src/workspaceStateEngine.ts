@@ -218,6 +218,11 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     args: z.tuple([entityActivationSchema]),
     returns: entityRecordSchema,
   },
+  entityAdvanceExecutions: {
+    ...internal("write"),
+    args: z.tuple([z.array(entityActivationSchema)]),
+    returns: z.array(entityRecordSchema),
+  },
   entityRetire: {
     ...internal("destructive"),
     args: z.tuple([z.string().min(1)]),
@@ -446,6 +451,16 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     returns: z.array(entityRecordSchema),
   },
   entityListActiveByKind: {
+    ...internal("read"),
+    args: z.tuple([entityKindSchema]),
+    returns: z.array(entityRecordSchema),
+  },
+  entityListPreparing: {
+    ...internal("read"),
+    args: z.tuple([]),
+    returns: z.array(entityRecordSchema),
+  },
+  entityListPreparingByKind: {
     ...internal("read"),
     args: z.tuple([entityKindSchema]),
     returns: z.array(entityRecordSchema),

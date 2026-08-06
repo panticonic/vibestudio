@@ -19,8 +19,9 @@ function readyObservation(panelId: string, source: string) {
 }
 
 function createRpcCall() {
+  let createdTitle = "Agentic Chat";
   const runtimeEntity = {
-    id: "panel:debug-chat-entity",
+    id: "panel:nav-debug-chat-entity",
     kind: "panel",
     key: "debug-chat",
     contextId: "ctx-vault",
@@ -91,13 +92,14 @@ function createRpcCall() {
       case "runtime.reserveEntity":
       case "runtime.activateReservedEntity":
         return runtimeEntity;
-      case "slotCreate":
-      case "panelUpdateTitle":
+      case "workspace-state.slot.create":
+      case "workspace-state.panel.updateTitle":
+        if (method === "workspace-state.panel.updateTitle") createdTitle = String(args[1]);
         return undefined;
       case "panelRuntime.ensureSlot":
         return { status: "assigned" };
-      case "panelTreeDetail":
-        if (args[0] === "spectrolite") {
+      case "workspace-state.panelTree.detail":
+        if (args[0] === "panel:tree/spectrolite") {
           return {
             slot: {
               slot_id: "spectrolite",
@@ -105,7 +107,7 @@ function createRpcCall() {
               current_entity_title: "Spectrolite",
             },
             entity: {
-              id: "panel:spectrolite-entity",
+              id: "panel:nav-spectrolite-entity",
               source: { effectiveVersion: "ev-spectrolite" },
               activeBuildKey: "build-spectrolite",
             },
@@ -121,7 +123,11 @@ function createRpcCall() {
           };
         }
         return {
-          slot: { slot_id: "debug-chat", parent_slot_id: "spectrolite" },
+          slot: {
+            slot_id: "debug-chat",
+            parent_slot_id: "panel:tree/spectrolite",
+            current_entity_title: createdTitle,
+          },
           entity: {
             id: runtimeEntity.id,
             source: { effectiveVersion: "ev-chat" },
@@ -138,8 +144,7 @@ function createRpcCall() {
         return {
           lease: { holderLabel: "test", platform: "headless", supportsCdp: false },
           observation: {
-            url: "http://test/panels/chat",
-            loading: false,
+            view: { url: "http://test/panels/chat", loading: false },
             boot: { phase: "ready", updatedAt: 1 },
           },
         };
@@ -168,8 +173,8 @@ describe("panel error diagnostic chat launcher", () => {
     const { _initPanelHandleBridge } = await import("./handle.js");
     const { openPanelErrorDiagnosticChat } = await import("./errorDebugChat.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
-      selfId: "spectrolite",
-      selfRpcTargetId: "panel:spectrolite-entity",
+        selfId: "panel:tree/spectrolite",
+        selfRpcTargetId: "panel:nav-spectrolite-entity",
     });
 
     const result = await openPanelErrorDiagnosticChat(
@@ -182,7 +187,7 @@ describe("panel error diagnostic chat launcher", () => {
         userAgent: "vitest",
         timestamp: "2026-06-15T00:00:00.000Z",
       },
-      { slotId: "spectrolite", contextId: "ctx-fallback" }
+      { slotId: "panel:tree/spectrolite", contextId: "ctx-fallback" }
     );
 
     expect(result).toMatchObject({ panelId: expect.any(String), title: "Panel error debug" });

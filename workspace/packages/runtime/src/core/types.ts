@@ -21,6 +21,13 @@ export interface PanelFocusOptions {
   placement?: PanelPlacementHint;
   /** Panel to place this panel relative to; defaults to the previously focused panel. */
   anchorPanelId?: string;
+  /** Cancel readiness observation without cancelling the panel lifecycle. */
+  signal?: AbortSignal;
+}
+
+export interface PanelWaitOptions {
+  /** Cancel readiness observation without cancelling the panel lifecycle. */
+  signal?: AbortSignal;
 }
 
 // =============================================================================
@@ -151,6 +158,8 @@ export interface PanelNavigateOptions {
   env?: Record<string, string>;
   ref?: string;
   stateArgs?: Record<string, unknown>;
+  /** Cancel readiness observation after the navigation has committed. */
+  signal?: AbortSignal;
 }
 
 export interface PanelSetTitleOptions {
@@ -263,7 +272,7 @@ export interface PanelHandle<
 
   parent(): PanelHandle | null;
   navigate(source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
-  reload(): Promise<PanelObservation>;
+  reload(options?: PanelWaitOptions): Promise<PanelObservation>;
   close(): Promise<PanelLifecycleResult>;
 
   /** One bounded post-mortem packet: observation, console history, and ready document. */
@@ -276,9 +285,9 @@ export interface PanelHandle<
   takeOver(): Promise<void>;
   openDevTools(mode?: "detach" | "right" | "bottom"): Promise<void>;
   /** Transactionally prepare and activate a new immutable attempt from source. */
-  rebuild(): Promise<PanelObservation>;
+  rebuild(options?: PanelWaitOptions): Promise<PanelObservation>;
   focus(options?: PanelFocusOptions): Promise<PanelObservation>;
-  snapshot(): Promise<PanelSnapshotObservation>;
+  snapshot(options?: PanelWaitOptions): Promise<PanelSnapshotObservation>;
   tree(): Promise<unknown>;
   state(): Promise<unknown>;
   routes(): Promise<unknown>;

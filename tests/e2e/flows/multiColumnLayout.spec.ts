@@ -32,6 +32,7 @@ import {
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
+  approvePendingWorkspaceCreationReview,
   approvePendingStartupUnits,
   removeManagedTestWorkspace,
   type TestApp,
@@ -238,6 +239,7 @@ test.describe("Multi-column panel layout", () => {
         launchTimeout: 240_000,
       });
       await approvePendingStartupUnits(testApp.app);
+      await approvePendingWorkspaceCreationReview(testApp.app);
       const app = testApp.app;
 
       // The server RPC bridge connects only once the workspace runtime is

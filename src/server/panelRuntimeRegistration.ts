@@ -21,9 +21,15 @@ import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
+import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
+import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
+import {
+  callerControlsLifecycleContext,
+  type LifecycleContextControlStore,
+} from "./services/lifecycleContextControl.js";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 
@@ -123,6 +129,8 @@ export interface CommonDeps {
   contextExists: (contextId: string) => boolean;
   /** Human label for the entity owning the target context, for prompt copy. */
   resolveContextOwnerLabel?: (contextId: string) => string | undefined;
+  /** Durable lifecycle edges used to authorize a supervisor's child contexts. */
+  lifecycleContextStore: LifecycleContextControlStore;
   panelRuntimeCoordinator?: import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator;
   /**
    * Renderer of last resort: spawn (or reuse) the standalone headless host
@@ -138,7 +146,8 @@ export interface CommonDeps {
     | import("./services/workspaceService.js").WorkspaceRecurringJobStatus[];
   approvalQueue?: ApprovalQueue;
   getEffectiveVersion?: (source: string) => Promise<string | undefined>;
-  registerEntityTitleListener?: (
+  /** Register a listener that runs after a title is durable in WorkspaceDO. */
+  registerEntityTitlePersistedListener?: (
     listener: (
       entityId: string,
       title: string | undefined,
@@ -156,6 +165,102 @@ export interface CommonDeps {
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   const { container, workspace, workspaceConfig, adminToken, hostConfig } = deps;
   const isKnownPanelSlot = createKnownPanelSlotResolver(deps.dispatcher);
+
+  // Durable slot mutations are performed by several callers (desktop, mobile,
+  // panels, and the server itself). Keep the renderer query caches coherent at
+  // the server boundary instead of relying on the mutating caller to remember
+  // to notify every other client. Multiple writes in one turn share one read
+  // and one broadcast; reset=true is intentional because the bounded query
+  // cache will retain its coherent pages while refetching current truth.
+  if (deps.eventService && deps.registerSlotStateListener) {
+    const eventService = deps.eventService;
+    const registerSlotStateListener = deps.registerSlotStateListener;
+    let invalidationQueued = false;
+    const publishPanelTreeInvalidation = async (): Promise<void> => {
+      const snapshot = (await deps.dispatcher.dispatch(
+        { caller: createHostCaller("server") },
+        "workspace-state",
+        "panelTree.rootGroups",
+        [{ limit: 1 }]
+      )) as { revision?: unknown };
+      const revision = snapshot.revision;
+      if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
+        throw new Error(`Invalid panel tree revision: ${String(revision)}`);
+      }
+      const event: PanelTreeInvalidation = {
+        revision,
+        reset: true,
+        groups: [],
+        changedSlotIds: [],
+        removedSlotIds: [],
+      };
+      eventService.emit("panel-tree-invalidated", event);
+    };
+    const schedulePanelTreeInvalidation = () => {
+      if (invalidationQueued) return;
+      invalidationQueued = true;
+      queueMicrotask(() => {
+        invalidationQueued = false;
+        void publishPanelTreeInvalidation().catch((error: unknown) => {
+          log.warn(
+            `Failed to publish panel-tree invalidation: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        });
+      });
+    };
+    registerSlotStateListener(schedulePanelTreeInvalidation);
+    deps.registerEntityTitlePersistedListener?.(async (entityId, title, origin) => {
+      const serverCaller = { caller: createHostCaller("server") };
+      const slotIdForEntity = async (id: string): Promise<string | undefined> => {
+        const slotId = (await deps.dispatcher.dispatch(
+          serverCaller,
+          "workspace-state",
+          "slot.resolveByEntity",
+          [id]
+        )) as string | null;
+        return slotId ?? undefined;
+      };
+      const directPanelSlot = await slotIdForEntity(entityId);
+      if (directPanelSlot) {
+        schedulePanelTreeInvalidation();
+        eventService.emit("panel-title-updated", {
+          panelId: directPanelSlot,
+          title: title ?? null,
+          explicit: origin === "set-explicit",
+        });
+        return;
+      }
+
+      const owningSlot = await resolveOwningPanelSlot(entityId, {
+        isOpenSlot: async (id) => {
+          const slot = (await deps.dispatcher.dispatch(
+            serverCaller,
+            "workspace-state",
+            "slot.get",
+            [id]
+          )) as { closed_at?: number | null } | null;
+          return Boolean(slot && slot.closed_at == null);
+        },
+        resolveOpenSlotForEntity: slotIdForEntity,
+        resolveParentId: async (id) => deps.entityCache?.resolveActive(id)?.parentId,
+      });
+      if (!owningSlot) return;
+
+      // A worker/DO may be the active runtime behind a panel-owned
+      // execution. Its title is useful as the panel's inferred label, but
+      // must go through the canonical panel write so the next persisted
+      // event updates every client consistently.
+      if (!title) return;
+      await deps.dispatcher.dispatch(serverCaller, "workspace-state", "panel.updateTitle", [
+        owningSlot,
+        title,
+        { explicit: false },
+      ]);
+    });
+  }
+
   const requestPanelMetadataForServices = async (
     panelId: string,
     _caller: { id: string; kind: CallerKind } = { id: "server", kind: "server" }
@@ -212,6 +317,17 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       }
       return false;
     },
+    controlsLifecycleContext: (
+      callerId: string,
+      originContextId: string | null,
+      targetContextId: string
+    ) =>
+      callerControlsLifecycleContext(
+        deps.lifecycleContextStore,
+        callerId,
+        originContextId,
+        targetContextId
+      ),
     resolveSubjectCaller: (entityId: string) => {
       const rec = panelGateEntityCache.resolveActive(entityId);
       if (!rec) return null;

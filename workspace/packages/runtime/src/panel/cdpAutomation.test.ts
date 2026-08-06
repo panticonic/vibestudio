@@ -2,6 +2,29 @@ import { describe, expect, it, vi } from "vitest";
 import { createCdpAutomation } from "./cdpAutomation.js";
 
 describe("createCdpAutomation screenshot", () => {
+  it("treats the hosted module loader as authoritative without trying runtime fallbacks", async () => {
+    const hostedFailure = new Error("cell execution session is no longer active");
+    const loadModule = vi.fn(async () => {
+      throw hostedFailure;
+    });
+    const fallback = vi.fn(() => ({ BrowserImpl: { connect: vi.fn() } }));
+    (globalThis as Record<string, unknown>)["__vibestudioRequire__"] = fallback;
+    const cdp = createCdpAutomation({ call: vi.fn() } as never, "panel:tree/retained", {
+      loadModule,
+    });
+
+    try {
+      await expect(cdp.page()).rejects.toMatchObject({
+        message: expect.stringContaining("cell execution session is no longer active"),
+        cause: hostedFailure,
+      });
+      expect(loadModule).toHaveBeenCalledWith("@workspace/cdp-client");
+      expect(fallback).not.toHaveBeenCalled();
+    } finally {
+      delete (globalThis as Record<string, unknown>)["__vibestudioRequire__"];
+    }
+  });
+
   it("uses the one-RPC host capture path and returns its typed metadata", async () => {
     const shot = {
       data: "iVBORw0KGgo=",

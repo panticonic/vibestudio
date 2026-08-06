@@ -9,8 +9,11 @@ import type {
   RuntimeLeaseSnapshot,
   RuntimeLeaseVersion,
 } from "@vibestudio/shared/panel/panelLease";
-import { PanelLifecycleResultSchema } from "@vibestudio/shared/panelContracts";
-import { PanelBootObservationSchema } from "@vibestudio/shared/panelContracts";
+import {
+  PanelBootObservationSchema,
+  PanelLifecycleResultSchema,
+  PanelPageObservationSchema,
+} from "@vibestudio/shared/panelContracts";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { SchemaCoversType } from "@vibestudio/shared/schemaTypeGuard";
 import type {
@@ -110,7 +113,7 @@ export const panelRuntimeLeaseSchema = z
 export const panelRuntimeSlotObservationSchema = z
   .object({
     lease: panelRuntimeLeaseSchema.nullable(),
-    observation: panelHostViewReportSchema.nullable(),
+    observation: PanelPageObservationSchema.nullable(),
   })
   .strict();
 
@@ -240,22 +243,6 @@ export const panelRuntimeMethods = defineServiceMethods({
       "Forcibly take over a panel entity's runtime lease, revoking and closing any conflicting holder's connection.",
     args: z.tuple([z.string(), leaseRequestSchema]),
     returns: panelRuntimeAcquireResultSchema,
-    access: LEASE_ACCESS,
-  },
-  handoffSlot: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "supervision",
-      family: "panelRuntime.control",
-      rationale:
-        "Idempotently converges a runtime lease onto the entity already committed by the builtin topology owner",
-    },
-    description:
-      "Move an existing slot lease from its previous runtime entity to the exact entity currently committed in workspace topology.",
-    args: z.tuple([z.string(), z.string(), z.string()]),
-    returns: panelRuntimeLeaseSchema.nullable(),
-    authority: { principals: ["host", "user", "code"] },
     access: LEASE_ACCESS,
   },
   ensureSlot: {

@@ -51,6 +51,9 @@ export function createRuntime(deps: RuntimeDeps) {
   const parentSlotId = parentRuntimeId ? (deps.parentId ?? parentRuntimeId) : null;
   const panelRuntime = createPanelRuntime({
     rpc: base.rpc,
+    ...(typeof shell?.focusPanel === "function"
+      ? { focusPanel: (panelId, focusOptions) => shell.focusPanel(panelId, focusOptions) }
+      : {}),
     selfId: slotId,
     selfRpcTargetId: entityId,
     parentId: deps.parentId,

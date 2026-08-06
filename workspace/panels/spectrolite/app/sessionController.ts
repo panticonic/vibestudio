@@ -124,7 +124,14 @@ export class SessionController {
 
     void client
       .ready()
-      .then(() => registerSpectroliteMessageTypes(client))
+      .then(async () => {
+        await registerSpectroliteMessageTypes(client);
+        // The initial roster can be delivered before a panel has finished
+        // mounting its listener. Re-read the client's authoritative snapshot
+        // at the ready boundary so a freshly opened panel never starts with a
+        // misleading empty agent list.
+        this.handleRosterUpdate();
+      })
       .catch((err) => console.warn("[Spectrolite] message type registration failed:", err));
 
     this.unsubscribeRoster = client.onRoster(() => this.handleRosterUpdate());
@@ -208,6 +215,11 @@ export class SessionController {
         className: agent.className,
       }),
     });
+    // The subscription ACK is the authoritative confirmation that this agent
+    // is live. Presence is still reconciled from the channel stream, but the
+    // settings UI should acknowledge a successful add immediately instead of
+    // waiting for a separate best-effort broadcast to arrive.
+    this.markAgentLive(handle, launched.participantId);
     await this.persistInstalled([
       ...this.store.getState().installedAgents,
       {
@@ -336,6 +348,7 @@ export class SessionController {
             config: buildAgentConfig({ handle: DEFAULT_HANDLE, repoRoot }),
             replay: true,
           });
+          this.markAgentLive(DEFAULT_HANDLE, launched.participantId);
           if (launched.entityId) {
             await this.persistInstalled(
               this.store
@@ -384,6 +397,7 @@ export class SessionController {
             }),
             replay: true,
           });
+          this.markAgentLive(agent.handle, launched.participantId);
           if (launched.entityId) {
             await this.persistInstalled(
               this.store
@@ -446,6 +460,30 @@ export class SessionController {
           removedHandles.length === prev.removedHandles.length
             ? prev.removedHandles
             : removedHandles,
+      };
+    });
+  }
+
+  private markAgentLive(handle: string, participantId?: string): void {
+    this.store.setState((prev) => {
+      const existing = prev.roster.find((agent) => agent.handle === handle);
+      if (existing) {
+        if (existing.status === "live" && existing.participantId === participantId) {
+          return prev;
+        }
+        return {
+          roster: prev.roster.map((agent) =>
+            agent.handle === handle
+              ? { ...agent, ...(participantId ? { participantId } : {}), status: "live" as const }
+              : agent
+          ),
+        };
+      }
+      return {
+        roster: [
+          ...prev.roster,
+          { handle, ...(participantId ? { participantId } : {}), status: "live" as const },
+        ],
       };
     });
   }

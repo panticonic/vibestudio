@@ -3,6 +3,7 @@ import type { PanelHandle as CorePanelHandle, Rpc } from "../core/index.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import {
   createPanelRuntime,
+  type CreatePanelSlotOptions,
   type OpenPanelOptions,
   type PanelRuntimeApi,
   type PanelRuntimeTree,
@@ -36,6 +37,9 @@ export function _initPanelHandleBridge(
   _rpc = rpc;
   _runtime = createPanelRuntime({
     rpc,
+    ...(typeof shell?.focusPanel === "function"
+      ? { focusPanel: (id, focusOptions) => shell.focusPanel(id, focusOptions) }
+      : {}),
     selfId: options.selfId ?? null,
     selfRpcTargetId: options.selfRpcTargetId ?? options.selfId ?? null,
     parentId: options.parentId ?? null,
@@ -88,6 +92,13 @@ function getRuntime(): PanelRuntimeApi {
 
 export async function openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle> {
   return getRuntime().openPanel(source, options);
+}
+
+export async function createPanelSlot(
+  source: string,
+  options?: CreatePanelSlotOptions
+): Promise<PanelHandle> {
+  return getRuntime().createPanelSlot(source, options);
 }
 
 export async function openExternal(

@@ -540,6 +540,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
     const panel = this.panels.get(panelId);
     if (!panel || panel.runtimeEntityId !== identity.runtimeEntityId) return false;
     const alreadyPresented =
+      panel.artifacts.hostedRuntimeEntityId === identity.runtimeEntityId &&
       panel.buildKey === identity.buildKey &&
       panel.executionDigest === identity.executionDigest &&
       panel.artifacts.buildState === "ready" &&
@@ -552,6 +553,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       this.updateArtifacts(panelId, {
         ...panel.artifacts,
         htmlPath: undefined,
+        hostedRuntimeEntityId: undefined,
         buildState: "building",
         buildProgress: "Runtime image ready; loading panel...",
         error: undefined,
@@ -784,15 +786,14 @@ export class PanelRegistry implements PanelRelationshipProvider {
     try {
       const previousSnapshot = getCurrentSnapshot(previous);
       const nextSnapshot = getCurrentSnapshot(next);
-      // Runtime artifacts (htmlPath, build state, navigation) are owned by the
-      // Electron main process and are authoritative for the live view, which is
-      // keyed by the view-session contextId. The contextId is stable across an
-      // in-place navigate (the source changes but the slot/session does not), so
-      // preserve on contextId alone. Previously also requiring source/ref
-      // equality dropped htmlPath whenever a panel was navigated to a new source,
-      // and the next server repopulate (which carries no artifacts) left the
-      // panel stuck on "Preparing panel…".
-      return previousSnapshot.contextId === nextSnapshot.contextId;
+      // Runtime artifacts describe one materialized incarnation, not the slot
+      // that happens to contain it. A same-slot navigation keeps contextId but
+      // replaces runtimeEntityId; preserving the old htmlPath then makes the
+      // host mistake the retired renderer for the new panel.
+      return (
+        previous.runtimeEntityId === next.runtimeEntityId &&
+        previousSnapshot.contextId === nextSnapshot.contextId
+      );
     } catch {
       return false;
     }

@@ -11,6 +11,7 @@ import { createRuntimeService, type RuntimeEntityHooks } from "./runtimeService.
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
+import { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import {
   canonicalEntityId,
   type EntityRecord,
@@ -47,7 +48,7 @@ function approvalQueueMock(
   decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
 ): ApprovalQueue {
   return {
-    request: vi.fn(async () => decision),
+    request: vi.fn(async () => decision) as unknown as ApprovalQueue["request"],
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestMissionReview: vi.fn(async () => ({
@@ -61,6 +62,7 @@ function approvalQueueMock(
     })),
     resolve: vi.fn(),
     resolveMissionReview: vi.fn(),
+    resolveInstallReview: vi.fn(),
     submitClientConfig: vi.fn(),
     submitCredentialInput: vi.fn(),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -132,6 +134,9 @@ interface BuildDepsOptions {
   >["destroyDurableStorage"];
   onContextCreated?: Parameters<typeof createRuntimeService>[0]["onContextCreated"];
   onContextRemoved?: Parameters<typeof createRuntimeService>[0]["onContextRemoved"];
+  onPanelExecutionActivated?: Parameters<
+    typeof createRuntimeService
+  >[0]["onPanelExecutionActivated"];
   faultAbortAgentVessel?: Parameters<typeof createRuntimeService>[0]["faultAbortAgentVessel"];
 }
 
@@ -173,6 +178,8 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     }));
   const contextFolders = contextFoldersFake();
   const onRetire = opts.onRetire ?? vi.fn(async () => {});
+  const recoverExactExecution = vi.fn(async () => {});
+  const restartDurableObjectIncarnation = vi.fn(async () => {});
   const releaseEntity = opts.releaseEntity ?? vi.fn(async () => ({ status: "ready" as const }));
   const preparePanel =
     opts.preparePanel ?? vi.fn(async () => ({ effectiveVersion: "ev-panel", ...sealedExecution }));
@@ -194,12 +201,17 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     doDispatch: dispatch,
     workspaceId: "workspace-main",
     entityCache,
+    materializeExecution: async () => undefined,
   });
+  const taskAuthorities = new TaskAuthorityRegistry();
 
   const runtimeResult = createRuntimeService({
+    taskAuthorities,
     unitSupervisor: new UnitSupervisor(),
     entityStore,
     hooks: {
+      recoverExactExecution,
+      restartDurableObjectIncarnation,
       prepare: (async ({ spec, key, contextId, existingBuildKey, parent }) => {
         const targetId = canonicalEntityId({
           kind: spec.kind,
@@ -270,6 +282,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     contextFolders,
     onContextCreated: opts.onContextCreated,
     onContextRemoved: opts.onContextRemoved,
+    onPanelExecutionActivated: opts.onPanelExecutionActivated,
     setEntityTitle: opts.setEntityTitle,
     faultAbortAgentVessel: opts.faultAbortAgentVessel,
     semanticContexts,
@@ -307,12 +320,15 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     service,
     spy,
     entityCache,
+    taskAuthorities,
     contextFolders,
     approvalQueue,
     grantStore,
     prepareDurableObject,
     prepareWorker,
     onRetire,
+    recoverExactExecution,
+    restartDurableObjectIncarnation,
     releaseEntity,
     preparePanel,
     resolveAppExecution,
@@ -509,6 +525,117 @@ describe("runtimeService.forkSemanticContext", () => {
 });
 
 describe("runtimeService deferred panel activation", () => {
+  it("rejects cross-principal reservation replay and activation", async () => {
+    const { service, instance, preparePanel } = await buildDeps();
+    const owner = createVerifiedCaller("panel:reservation-owner", "panel", null, null, {
+      userId: "usr_shared",
+      handle: "shared",
+    });
+    const intruder = createVerifiedCaller("panel:reservation-intruder", "panel", null, null, {
+      userId: "usr_shared",
+      handle: "shared",
+    });
+    const spec = {
+      kind: "panel" as const,
+      execution: { surface: "code" as const, source: "panels/editor" },
+      key: "owned-reservation",
+    };
+
+    const reserved = (await service.handler({ caller: owner }, "reserveEntity", [spec])) as {
+      id: string;
+    };
+
+    await expect(service.handler({ caller: intruder }, "reserveEntity", [spec])).rejects.toThrow(
+      /does not own reservation/
+    );
+    await expect(
+      service.handler({ caller: intruder }, "activateReservedEntity", [
+        { ...spec, execution: { ...spec.execution, ref: "refs/heads/attacker" } },
+      ])
+    ).rejects.toThrow(/does not own/);
+    expect(instance.entityResolve(reserved.id)).toMatchObject({
+      status: "preparing",
+      parentId: owner.runtime.id,
+    });
+    expect(preparePanel).not.toHaveBeenCalled();
+  });
+
+  it("rejects an intruder that joins the owner's in-flight activation", async () => {
+    let markPreparationStarted!: () => void;
+    const preparationStarted = new Promise<void>((resolve) => {
+      markPreparationStarted = resolve;
+    });
+    let releasePreparation!: () => void;
+    const preparationGate = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    const preparePanel = vi.fn(async () => {
+      markPreparationStarted();
+      await preparationGate;
+      return { effectiveVersion: "ev-panel", ...sealedExecution };
+    });
+    const { service } = await buildDeps({ preparePanel });
+    const owner = panelCaller("panel:activation-owner");
+    const intruder = panelCaller("panel:activation-intruder");
+    const spec = {
+      kind: "panel" as const,
+      execution: { surface: "code" as const, source: "panels/editor" },
+      key: "in-flight-owned-reservation",
+    };
+
+    await service.handler({ caller: owner }, "reserveEntity", [spec]);
+    const ownerActivation = service.handler({ caller: owner }, "activateReservedEntity", [spec]);
+    await preparationStarted;
+
+    try {
+      await expect(
+        service.handler({ caller: intruder }, "activateReservedEntity", [spec])
+      ).rejects.toThrow(/does not own/);
+    } finally {
+      releasePreparation();
+    }
+
+    await expect(ownerActivation).resolves.toMatchObject({
+      id: canonicalEntityId({ kind: "panel", key: spec.key }),
+      buildKey: sealedExecution.buildKey,
+    });
+    expect(preparePanel).toHaveBeenCalledOnce();
+  });
+
+  it("treats activation retry as a side-effect-free read of the committed execution", async () => {
+    const preparePanel = vi.fn(async ({ ref }: { ref?: string }) => ({
+      effectiveVersion: ref === "refs/heads/other" ? "ev-other" : "ev-original",
+      ...sealedExecution,
+    }));
+    const { service, instance } = await buildDeps({ preparePanel });
+    const owner = panelCaller("panel:activation-owner");
+    const spec = {
+      kind: "panel" as const,
+      execution: {
+        surface: "code" as const,
+        source: "panels/editor",
+        ref: "refs/heads/original",
+      },
+      key: "activation-retry",
+    };
+
+    await service.handler({ caller: owner }, "reserveEntity", [spec]);
+    const first = (await service.handler({ caller: owner }, "activateReservedEntity", [spec])) as {
+      id: string;
+      source: { effectiveVersion: string };
+    };
+    const retry = (await service.handler({ caller: owner }, "activateReservedEntity", [
+      { ...spec, execution: { ...spec.execution, ref: "refs/heads/other" } },
+    ])) as { source: { effectiveVersion: string } };
+
+    expect(preparePanel).toHaveBeenCalledTimes(1);
+    expect(retry.source.effectiveVersion).toBe("ev-original");
+    expect(instance.entityResolve(first.id)).toMatchObject({
+      status: "active",
+      source: { effectiveVersion: "ev-original" },
+    });
+  });
+
   it("uses the same reservation lifecycle for non-panel code entities", async () => {
     const { service, instance, prepareWorker } = await buildDeps();
     const spec = {
@@ -548,7 +675,10 @@ describe("runtimeService deferred panel activation", () => {
   });
 
   it("publishes stable coordinates before preparation and activates the same entity later", async () => {
-    const { service, instance, entityCache, preparePanel } = await buildDeps();
+    const onPanelExecutionActivated = vi.fn();
+    const { service, instance, entityCache, preparePanel } = await buildDeps({
+      onPanelExecutionActivated,
+    });
     const spec = {
       kind: "panel" as const,
       execution: { surface: "code", source: "panels/editor" },
@@ -569,6 +699,17 @@ describe("runtimeService deferred panel activation", () => {
     });
     expect(entityCache.resolveActive(reserved.id)).toBeNull();
     expect(preparePanel).not.toHaveBeenCalled();
+    instance.slotCreate({
+      slotId: "panel:tree/reserved-panel",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: spec.key,
+        entityId: reserved.id,
+        source: "panels/editor",
+        contextId: "ctx-panel",
+        stateArgs: {},
+      },
+    });
 
     const active = (await service.handler({ caller: serverCaller }, "activateReservedEntity", [
       spec,
@@ -581,6 +722,14 @@ describe("runtimeService deferred panel activation", () => {
     });
     expect(entityCache.resolveActive(reserved.id)?.id).toBe(reserved.id);
     expect(preparePanel).toHaveBeenCalledTimes(1);
+    expect(onPanelExecutionActivated).toHaveBeenCalledWith({
+      panelId: "panel:tree/reserved-panel",
+      runtimeEntityId: reserved.id,
+      effectiveVersion: "ev-panel",
+      buildKey: "b".repeat(64),
+      executionDigest: "f".repeat(64),
+      authorityRequests: [],
+    });
   });
 
   it("atomically makes an implicit panel context a lifecycle child of its verified creator", async () => {
@@ -620,6 +769,72 @@ describe("runtimeService deferred panel activation", () => {
       contextId: reserved.contextId,
       ownerContextId: "ctx-creator",
     });
+  });
+
+  it("attributes an extension reservation to its verified initiator and owns the new context from that initiator", async () => {
+    const onContextCreated = vi.fn(async () => {});
+    const { service, instance } = await buildDeps({ onContextCreated });
+    const initiator = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "code", source: "about/browser-import-inspector" },
+        contextId: "ctx-browser-import",
+        key: "browser-import",
+      },
+    ])) as RuntimeEntityHandle;
+    const initiatingCaller = createVerifiedCaller(initiator.id, "panel", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    const extension = createVerifiedCaller(
+      "extension:@workspace-extensions/browser-data",
+      "extension",
+      null,
+      null,
+      { userId: "system", handle: "system" }
+    );
+
+    const reserved = (await service.handler(
+      { caller: extension, authorizingCaller: initiatingCaller },
+      "reserveEntity",
+      [
+        {
+          kind: "panel",
+          execution: { surface: "code", source: "about/collection" },
+          key: "imported-tabs-root",
+        },
+      ]
+    )) as RuntimeEntityHandle;
+
+    expect(instance.entityResolve(reserved.id)).toMatchObject({
+      parentId: extension.runtime.id,
+      ownerUserId: "usr_alice",
+      contextId: reserved.contextId,
+    });
+    expect(instance.contextEdgeListByOwner({ ownerContextId: "ctx-browser-import" })).toEqual([
+      {
+        contextId: reserved.contextId,
+        kind: "lifecycle",
+        ownerEntityId: initiatingCaller.runtime.id,
+      },
+    ]);
+    expect(onContextCreated).toHaveBeenCalledWith({
+      contextId: reserved.contextId,
+      ownerContextId: "ctx-browser-import",
+    });
+
+    const prepare = service.authorityPreparation?.["runtime.reserveEntity.contextBoundary"];
+    if (!prepare) throw new Error("runtime.reserveEntity authority preparation is unavailable");
+    await expect(
+      prepare({ caller: extension, authorizingCaller: initiatingCaller }, [
+        {
+          kind: "panel",
+          execution: { surface: "code", source: "about/collection" },
+          key: "imported-window",
+          contextId: reserved.contextId,
+        },
+      ])
+    ).resolves.toEqual({ selections: [], payload: null });
   });
 
   it("carries a resident test policy into an implicit panel context even without an entity-backed owner context", async () => {
@@ -662,13 +877,16 @@ describe("runtimeService deferred panel activation", () => {
     const first = (await service.handler({ caller: serverCaller }, "reserveEntity", [spec])) as {
       id: string;
       contextId: string;
+      created: boolean;
     };
     const second = (await service.handler({ caller: serverCaller }, "reserveEntity", [spec])) as {
       id: string;
       contextId: string;
+      created: boolean;
     };
 
-    expect(second).toEqual(first);
+    expect(first).toMatchObject({ created: true });
+    expect(second).toEqual({ ...first, created: false });
     expect(instance.entityResolve(first.id)).toMatchObject({
       id: first.id,
       contextId: first.contextId,
@@ -697,6 +915,24 @@ describe("runtimeService deferred panel activation", () => {
 });
 
 describe("runtimeService.createEntity (do kind)", () => {
+  it("snapshots the verified creator task onto a new runtime", async () => {
+    const { service, taskAuthorities, entityCache } = await buildDeps();
+    const taskAuthority = "task:closure-one" as const;
+    taskAuthorities.bindExecution({
+      ...createTestExecutionSession({ runtimeId: "eval:task-root" }),
+      taskAuthority,
+    });
+    const caller = {
+      ...panelCaller("panel:task-owner"),
+      taskAuthority,
+    };
+    const handle = (await service.handler({ caller }, "createEntity", [
+      doCreateSpec({ key: "task-child" }),
+    ])) as { id: string };
+
+    expect(taskAuthorities.resolveRuntime(handle.id, entityCache)).toBe("task:closure-one");
+  });
+
   it("fault-aborts only an exact active DO through the host-owned harness callback", async () => {
     const faultAbortAgentVessel = vi.fn(async () => {});
     const { service } = await buildDeps({ faultAbortAgentVessel });
@@ -2594,6 +2830,191 @@ describe("runtimeService.cloneContext", () => {
     ])) as OwnedContexts;
     expect(owned.contexts.map((c) => c.contextId)).toEqual([cloned.get("ctx-child")!.newContextId]);
     expect(result.rewired).toHaveLength(2);
+  });
+});
+
+describe("runtimeService execution recovery", () => {
+  it("restores only the expected sealed incarnation", async () => {
+    const { service, recoverExactExecution, restartDurableObjectIncarnation } = await buildDeps();
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ contextId: "ctx-recovery" }),
+    ])) as { id: string };
+
+    const result = await service.handler({ caller: shellCaller }, "recoverExecution", [
+      {
+        entityId: handle.id,
+        expectedExecutionDigest: sealedExecution.executionDigest,
+        strategy: "restore-exact",
+      },
+    ]);
+
+    expect(result).toEqual({
+      entityId: handle.id,
+      strategy: "restore-exact",
+      previousExecutionDigest: sealedExecution.executionDigest,
+      buildKey: sealedExecution.buildKey,
+      executionDigest: sealedExecution.executionDigest,
+    });
+    expect(recoverExactExecution).toHaveBeenCalledOnce();
+    expect(restartDurableObjectIncarnation).toHaveBeenCalledOnce();
+  });
+
+  it("explicitly advances a replacement from the entity's semantic context", async () => {
+    const { service, instance, prepareDurableObject, restartDurableObjectIncarnation } =
+      await buildDeps();
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ contextId: "ctx-recovery" }),
+    ])) as { id: string };
+    vi.mocked(prepareDurableObject).mockResolvedValueOnce({
+      targetId: "target:MyDO:k1",
+      effectiveVersion: "ev-replacement",
+      buildKey: "c".repeat(64),
+      executionDigest: "d".repeat(64),
+      authority: { requests: [], provides: [] },
+    });
+
+    const result = await service.handler({ caller: shellCaller }, "recoverExecution", [
+      {
+        entityId: handle.id,
+        expectedExecutionDigest: sealedExecution.executionDigest,
+        strategy: "replace-incarnation",
+      },
+    ]);
+
+    expect(result).toMatchObject({
+      entityId: handle.id,
+      strategy: "replace-incarnation",
+      previousExecutionDigest: sealedExecution.executionDigest,
+      buildKey: "c".repeat(64),
+      executionDigest: "d".repeat(64),
+    });
+    expect(prepareDurableObject).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ref: "ctx:ctx-recovery" })
+    );
+    expect(instance.entityResolve(handle.id)).toMatchObject({
+      status: "active",
+      activeBuildKey: "c".repeat(64),
+      activeExecutionDigest: "d".repeat(64),
+    });
+    expect(restartDurableObjectIncarnation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ activeExecutionDigest: "d".repeat(64) })
+    );
+  });
+
+  it("rejects a stale recovery action before changing runtime state", async () => {
+    const { service, recoverExactExecution, restartDurableObjectIncarnation } = await buildDeps();
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ contextId: "ctx-recovery" }),
+    ])) as { id: string };
+
+    await expect(
+      service.handler({ caller: shellCaller }, "recoverExecution", [
+        {
+          entityId: handle.id,
+          expectedExecutionDigest: "0".repeat(64),
+          strategy: "restore-exact",
+        },
+      ])
+    ).rejects.toThrow(/recovery action is stale/);
+    expect(recoverExactExecution).not.toHaveBeenCalled();
+    expect(restartDurableObjectIncarnation).not.toHaveBeenCalled();
+  });
+
+  it("revalidates a queued recovery request with a different expected digest", async () => {
+    const { service, recoverExactExecution } = await buildDeps();
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ contextId: "ctx-recovery-queue-stale" }),
+    ])) as { id: string };
+    let markRecoveryStarted!: () => void;
+    const recoveryStarted = new Promise<void>((resolve) => {
+      markRecoveryStarted = resolve;
+    });
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    vi.mocked(recoverExactExecution).mockImplementationOnce(async () => {
+      markRecoveryStarted();
+      await recoveryGate;
+    });
+
+    const first = service.handler({ caller: shellCaller }, "recoverExecution", [
+      {
+        entityId: handle.id,
+        expectedExecutionDigest: sealedExecution.executionDigest,
+        strategy: "restore-exact",
+      },
+    ]);
+    await recoveryStarted;
+    const stale = service.handler({ caller: shellCaller }, "recoverExecution", [
+      {
+        entityId: handle.id,
+        expectedExecutionDigest: "0".repeat(64),
+        strategy: "restore-exact",
+      },
+    ]);
+    const staleExpectation = expect(stale).rejects.toThrow(/recovery action is stale/);
+
+    releaseRecovery();
+    await expect(first).resolves.toMatchObject({ strategy: "restore-exact" });
+    await staleExpectation;
+    expect(recoverExactExecution).toHaveBeenCalledOnce();
+  });
+
+  it("executes a queued recovery request with a different strategy", async () => {
+    const {
+      service,
+      recoverExactExecution,
+      prepareDurableObject,
+      restartDurableObjectIncarnation,
+    } = await buildDeps();
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ contextId: "ctx-recovery-queue-strategy" }),
+    ])) as { id: string };
+    vi.mocked(prepareDurableObject).mockResolvedValueOnce({
+      targetId: "target:MyDO:k1",
+      effectiveVersion: "ev-queued-replacement",
+      buildKey: "c".repeat(64),
+      executionDigest: "d".repeat(64),
+      authority: { requests: [], provides: [] },
+    });
+    let markRecoveryStarted!: () => void;
+    const recoveryStarted = new Promise<void>((resolve) => {
+      markRecoveryStarted = resolve;
+    });
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    vi.mocked(recoverExactExecution).mockImplementationOnce(async () => {
+      markRecoveryStarted();
+      await recoveryGate;
+    });
+
+    const exact = service.handler({ caller: shellCaller }, "recoverExecution", [
+      {
+        entityId: handle.id,
+        expectedExecutionDigest: sealedExecution.executionDigest,
+        strategy: "restore-exact",
+      },
+    ]);
+    await recoveryStarted;
+    const replacement = service.handler({ caller: shellCaller }, "recoverExecution", [
+      {
+        entityId: handle.id,
+        expectedExecutionDigest: sealedExecution.executionDigest,
+        strategy: "replace-incarnation",
+      },
+    ]);
+
+    releaseRecovery();
+    await expect(exact).resolves.toMatchObject({ strategy: "restore-exact" });
+    await expect(replacement).resolves.toMatchObject({
+      strategy: "replace-incarnation",
+      executionDigest: "d".repeat(64),
+    });
+    expect(recoverExactExecution).toHaveBeenCalledOnce();
+    expect(restartDurableObjectIncarnation).toHaveBeenCalledTimes(2);
   });
 });
 

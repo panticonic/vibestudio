@@ -401,6 +401,12 @@ export interface RuntimeEntityHandle {
   authorityRequests?: readonly import("../authorityManifest.js").UnitAuthorityRequest[];
   contextId: string;
   targetId: string;
+  /**
+   * reserveEntity only: true when this call inserted the durable reservation,
+   * false when it deduplicated onto a pre-existing record. Callers must never
+   * retire an entity they did not create in the current attempt.
+   */
+  created?: boolean;
 }
 
 /**

@@ -128,7 +128,7 @@ describe("CompositorRecovery", () => {
     expect(harness.view.view.setVisible).not.toHaveBeenCalled();
   });
 
-  it("discards a slotted capture when that native slot was rebound during the probe", async () => {
+  it("maintains slotted surfaces without treating empty readbacks as stalls", async () => {
     const harness = createHarness(createView("old-panel", true));
     harness.state.slots = [
       {
@@ -137,20 +137,17 @@ describe("CompositorRecovery", () => {
         bounds: { x: 1, y: 2, width: 30, height: 40 },
       },
     ];
-    vi.mocked(harness.view.view.webContents.capturePage).mockImplementation(async () => {
-      harness.state.slots = [
-        {
-          nativeSlotId: "slot-1",
-          panelId: "new-panel",
-          bounds: { x: 1, y: 2, width: 30, height: 40 },
-        },
-      ];
-      return { isEmpty: () => true };
-    });
-
     await harness.recovery.probeNow();
 
-    expect(harness.deps.reconcileNativeLayerOrder).not.toHaveBeenCalled();
+    expect(harness.view.view.webContents.capturePage).not.toHaveBeenCalled();
+    expect(harness.deps.ensureSlotLayerOrder).toHaveBeenCalledOnce();
+    expect(harness.view.view.setBounds).toHaveBeenCalledWith({
+      x: 1,
+      y: 2,
+      width: 30,
+      height: 40,
+    });
+    expect(harness.view.view.webContents.invalidate).toHaveBeenCalledOnce();
     expect(harness.view.view.setVisible).not.toHaveBeenCalled();
   });
 

@@ -1,3 +1,5 @@
+import { callWorkspaceState } from "../shared/workspaceStateClient.js";
+
 export interface ReopenPanelOptions {
   source?: string;
   ref?: string;
@@ -23,13 +25,14 @@ export function createPanelSelfNavigation(options: {
     opts?: ReopenPanelOptions
   ): Promise<{ id: string; title: string }>;
 } {
-  const workspaceState = createWorkspaceStateDirectClient(options.rpc);
   const navigate = async (
     input: ReopenPanelOptions & { contextId?: string }
   ): Promise<{ id: string; title: string }> => {
     let source = input.source;
     if (!source) {
-      const detail = (await workspaceState.call("panelTreeDetail", [options.slotId])) as {
+      const detail = (await callWorkspaceState(options.rpc, "panelTree.detail", [
+        options.slotId,
+      ])) as {
         currentHistory?: { source?: string };
       } | null;
       source = detail?.currentHistory?.source;
@@ -59,4 +62,3 @@ export function createPanelSelfNavigation(options: {
     },
   };
 }
-import { createWorkspaceStateDirectClient } from "../shared/workspaceStateDirect.js";

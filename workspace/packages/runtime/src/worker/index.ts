@@ -62,6 +62,7 @@ export type { WorkerEnv, ExecutionContext } from "./types.js";
 export * from "../shared/portable.js";
 export type * from "../core/types.js";
 export type {
+  CreatePanelSlotOptions,
   OpenPanelOptions,
   PanelRuntimeTree,
 } from "../shared/panelRuntime.js";
@@ -103,11 +104,7 @@ export type {
   WorkspaceServiceInfo,
   WorkerSourceInfo,
 } from "../shared/workerd.js";
-export type {
-  WorkspaceClient,
-  WorkspaceConfig,
-  WorkspaceEntry,
-} from "../shared/workspace.js";
+export type { WorkspaceClient, WorkspaceConfig, WorkspaceEntry } from "../shared/workspace.js";
 export type {
   Disposable,
   ExtensionName,
@@ -195,6 +192,7 @@ export const extensions = runtimeMember("extensions");
 export const notifications = runtimeMember("notifications");
 export const workers = runtimeMember("workers");
 export const openExternal = runtimeMember("openExternal");
+export const createPanelSlot = runtimeMember("createPanelSlot");
 export const openPanel = runtimeMember("openPanel");
 export const getPanelHandle = runtimeMember("getPanelHandle");
 export const panelTree = runtimeMember("panelTree");
@@ -208,7 +206,9 @@ export const rpc = new Proxy(rpcDecorator as unknown as (...args: unknown[]) => 
   get(_target, property) {
     const runtime = activeRuntime;
     if (!runtime) {
-      throw new Error(`Worker runtime has not been initialized; cannot read rpc.${String(property)}`);
+      throw new Error(
+        `Worker runtime has not been initialized; cannot read rpc.${String(property)}`
+      );
     }
     const member = (runtime.rpc as unknown as Record<PropertyKey, unknown>)[property];
     return typeof member === "function" ? member.bind(runtime.rpc) : member;

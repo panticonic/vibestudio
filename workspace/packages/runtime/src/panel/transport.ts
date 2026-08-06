@@ -15,7 +15,7 @@ import type { RecoveryCoordinator, RecoveryKind } from "@vibestudio/shell-core/r
 
 /**
  * The host bridge a panel reaches its server through. A panel lives in a webview
- * and cannot touch the host's WebRTC `RTCPeerConnection` directly, so its RPC
+ * and cannot touch the host's server transport directly, so its RPC
  * crosses the webview boundary over the **shell bridge** — Electron
  * `contextBridge` IPC (`__vibestudioShell`) on desktop, the React-Native
  * `postMessage` bridge injected by `PanelWebView` on mobile. The host forwards
@@ -180,7 +180,7 @@ export function createPanelTransport(): EnvelopeRpcTransport {
     },
   };
 
-  // First-class streaming rides the bulk channel when the host exposes it.
+  // First-class streaming rides the host session's native stream when exposed.
   // Otherwise the RPC client falls back to the duplex envelope path above.
   if (typeof shell.stream === "function") {
     const streamFn = shell.stream.bind(shell);
@@ -191,16 +191,16 @@ export function createPanelTransport(): EnvelopeRpcTransport {
 
   // §1.6 upload hop: when the shell bridge exposes the stream surface
   // (streamOpen/streamBodyChunk/…), streaming REQUEST bodies pump across the
-  // bridge as chunk messages and the HOST feeds them to this panel's WebRTC
+  // bridge as chunk messages and the HOST feeds them to this panel's transport
   // session (see @vibestudio/rpc bridgeStream.ts). The RPC client calls this ONLY
   // for requests WITH a body — body-less streams keep the duplex envelope path
   // byte-identical. Without the surface, a body throws loudly in the client
-  // core ("uploads require the WebRTC transport").
+  // core.
   const streamSurface = bridgeStreamSurfaceOf(shell);
   if (streamSurface) {
     // The bridge's host owns the panel-principal session and its first-class
     // stream plane. Use that plane for body-less subscriptions as well as
-    // uploads; plain envelope relays cannot carry the WebRTC response stream.
+    // uploads; plain envelope relays cannot carry the native response stream.
     transport.stream = (envelope, signal, body) =>
       openBridgeStream(streamSurface, envelope, signal ?? null, body ?? null);
     transport.streamBody = (envelope, signal, body) => {

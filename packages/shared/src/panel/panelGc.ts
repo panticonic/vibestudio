@@ -39,7 +39,7 @@ export interface PanelGcPredicates {
  */
 function rankForEviction(
   loaded: LoadedPanelSnapshot[],
-  isPinned: (id: string) => boolean,
+  isPinned: (id: string) => boolean
 ): LoadedPanelSnapshot[] {
   return loaded
     .map((snapshot, index) => ({ snapshot, index }))
@@ -62,7 +62,7 @@ function rankForEviction(
  */
 export function selectIdlePanelVictims(
   loaded: LoadedPanelSnapshot[],
-  opts: { now: number; idleMs: number; protectedIds: Iterable<string> } & PanelGcPredicates,
+  opts: { now: number; idleMs: number; protectedIds: Iterable<string> } & PanelGcPredicates
 ): string[] {
   const protectedSet = new Set(opts.protectedIds);
   return rankForEviction(loaded, opts.isPinned)
@@ -84,7 +84,7 @@ export function selectIdlePanelVictims(
  */
 export function selectCapEvictionVictims(
   loaded: LoadedPanelSnapshot[],
-  opts: { cap: number; protectedIds: Iterable<string> } & PanelGcPredicates,
+  opts: { cap: number; protectedIds: Iterable<string> } & PanelGcPredicates
 ): string[] {
   const overBy = loaded.length - opts.cap;
   if (overBy <= 0) return [];

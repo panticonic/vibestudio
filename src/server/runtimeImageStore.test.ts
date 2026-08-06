@@ -35,6 +35,43 @@ function artifact(buildKey = "b".repeat(64)): ExecutionArtifactRefV1 {
 }
 
 describe("RuntimeImageStore sealed execution identity", () => {
+  it("treats repeated attachment as a no-op and advances only executable identity", () => {
+    const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-images-"));
+    const reservations: string[] = [];
+    try {
+      const store = new RuntimeImageStore(statePath, {
+        reserve(input) {
+          reservations.push(input.artifacts[0]!.executionDigest);
+          return { reservationId: `reservation:${reservations.length}`, epoch: 1 };
+        },
+        finalize() {},
+      });
+      const base = {
+        id: "do:workers/a:A:key",
+        source: "workers/a",
+        unitName: "@workspace-workers/a",
+        artifact: artifact(),
+        authority: { provides: [], requests: [] },
+      } as const;
+
+      const first = store.upsert(base);
+      const repeated = store.upsert(base);
+      expect(repeated).toBe(first);
+      expect(repeated.generation).toBe(1);
+      expect(reservations).toHaveLength(1);
+
+      const provenanceOnly = store.upsert({ ...base, scopeRef: "main" });
+      expect(provenanceOnly.generation).toBe(1);
+      expect(reservations).toHaveLength(1);
+
+      const advanced = store.upsert({ ...base, artifact: artifact("c".repeat(64)) });
+      expect(advanced.generation).toBe(2);
+      expect(reservations).toHaveLength(2);
+    } finally {
+      fs.rmSync(statePath, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist a runtime image when exact execution reservation fails", () => {
     const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-images-"));
     try {

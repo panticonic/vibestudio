@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
+import { PanelNavigationCommitError } from "./panelNavigationTransaction.js";
 import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
 import {
   asPanelEntityId,
@@ -18,6 +19,8 @@ import type {
 } from "@vibestudio/shared/runtime/entitySpec";
 import type {
   RuntimeClient,
+  SlotCommitPreparedNavigationInput,
+  SlotCommitPreparedNavigationResult,
   SlotCreateInput,
   SlotHistoryRow,
   SlotRow,
@@ -135,7 +138,11 @@ function createWorkspaceMemory() {
     cleanupComplete: entity.status === "retired",
   });
 
-  const workspaceState: WorkspaceStateClient = {
+  const workspaceState: WorkspaceStateClient & {
+    commitPreparedNavigation(
+      input: SlotCommitPreparedNavigationInput
+    ): Promise<SlotCommitPreparedNavigationResult>;
+  } = {
     async getPanelTreeRootGroups() {
       const owners = new Map<string | null, number>();
       for (const slot of slots.values()) {
@@ -676,6 +683,17 @@ describe("PanelManager", () => {
   it("falls back to the manifest title when no label is given", async () => {
     const { registry, manager } = namedPanelWorkspace();
     const created = await manager.create("panels/named", { isRoot: true, addAsRoot: true });
+    expect(registry.getPanel(created.panelId)?.title).toBe("Named Panel");
+  });
+
+  it("normalizes titles and restores the source fallback when a title is cleared", async () => {
+    const { registry, manager } = namedPanelWorkspace();
+    const created = await manager.create("panels/named", { isRoot: true, addAsRoot: true });
+
+    await manager.updateTitle(created.panelId, "  Support\tInbox  ");
+    expect(registry.getPanel(created.panelId)?.title).toBe("Support Inbox");
+
+    await manager.updateTitle(created.panelId, "   ");
     expect(registry.getPanel(created.panelId)?.title).toBe("Named Panel");
   });
 
@@ -1299,7 +1317,7 @@ describe("PanelManager", () => {
     expect(retireEntity).not.toHaveBeenCalled();
   });
 
-  it("transfers the host lease to a committed replacement before retiring the old runtime", async () => {
+  it("commits the replacement durably before retiring the old runtime", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
     const panelDir = path.join(workspacePath, "panels", "first");
@@ -1311,9 +1329,9 @@ describe("PanelManager", () => {
 
     const registry = new PanelRegistry({});
     const { mem, deps } = makeManagerDeps(workspacePath);
-    const transferRuntimeLease = vi.fn();
+    const commitDesiredState = vi.spyOn(deps.workspaceState, "commitPreparedNavigation");
     const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
-    const manager = new PanelManager({ registry, ...deps, transferRuntimeLease });
+    const manager = new PanelManager({ registry, ...deps });
     const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
     const previousEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
 
@@ -1321,17 +1339,21 @@ describe("PanelManager", () => {
 
     const nextEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
     expect(nextEntityId).not.toBe(previousEntityId);
-    expect(transferRuntimeLease).toHaveBeenCalledWith(
-      created.panelId,
-      previousEntityId,
-      nextEntityId
+    expect(commitDesiredState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slotId: created.panelId,
+        expectedCurrentEntityId: previousEntityId,
+        mutation: expect.objectContaining({
+          entry: expect.objectContaining({ entityId: nextEntityId }),
+        }),
+      })
     );
-    expect(transferRuntimeLease.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(commitDesiredState.mock.invocationCallOrder[0]).toBeLessThan(
       retireEntity.mock.invocationCallOrder[0]!
     );
   });
 
-  it("does not retire the previous runtime when its host lease cannot transfer", async () => {
+  it("does not retire either ambiguous runtime when the atomic commit call fails", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
     const panelDir = path.join(workspacePath, "panels", "first");
@@ -1347,15 +1369,17 @@ describe("PanelManager", () => {
     const manager = new PanelManager({
       registry,
       ...deps,
-      transferRuntimeLease: () => {
-        throw new Error("lease transfer failed");
-      },
     });
+    vi.spyOn(deps.workspaceState, "commitPreparedNavigation").mockRejectedValueOnce(
+      new Error("semantic navigation failed")
+    );
     const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
 
-    await expect(manager.replaceCurrentSnapshot(created.panelId, {})).rejects.toThrow(
-      "lease transfer failed"
-    );
+    const failure = await manager.replaceCurrentSnapshot(created.panelId, {}).catch((error) => error);
+    expect(failure).toBeInstanceOf(PanelNavigationCommitError);
+    expect(failure.errors).toEqual([
+      expect.objectContaining({ message: "semantic navigation failed" }),
+    ]);
     expect(retireEntity).not.toHaveBeenCalled();
   });
 

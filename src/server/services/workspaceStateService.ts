@@ -21,6 +21,10 @@ import {
   WORKSPACE_STATE_READ_POLICY as READ_POLICY,
   workspaceStateMethods,
 } from "@vibestudio/service-schemas/workspaceState";
+import type {
+  SlotCommitPreparedNavigationInput,
+  SlotCommitPreparedNavigationResult,
+} from "@vibestudio/service-schemas/workspaceState";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type {
@@ -31,6 +35,16 @@ import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 
 export const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
+export type SlotStateChange =
+  | {
+      kind: "current-entity";
+      slotId: string;
+      previousEntityId: string | null;
+      currentEntityId: string;
+      presentation: "awaiting-execution" | "executable";
+    }
+  | { kind: "tree" };
+
 export interface WorkspaceStateServiceDeps {
   doDispatch: DoDispatcher;
   workspaceId: string;
@@ -40,6 +54,8 @@ export interface WorkspaceStateServiceDeps {
    * succeeds.
    */
   onPanelTitleChanged?: (panelEntityId: string, title: string, explicit: boolean) => void;
+  /** Prevent inferred panel titles from replacing an explicit runtime title. */
+  isEntityTitleExplicit?: (panelEntityId: string) => boolean;
   /**
    * Notify the server's AlarmDriver that a DO's wake schedule changed, so it
    * can re-arm its timer. Called after `alarmSet`/`alarmClear` persist.
@@ -50,7 +66,7 @@ export interface WorkspaceStateServiceDeps {
    * Notify listeners that a tree query cache must be invalidated after a
    * durable slot mutation, regardless of which client initiated it.
    */
-  onSlotStateChanged?: () => void;
+  onSlotStateChanged?: (change?: SlotStateChange) => void;
   panelAccess: PanelAccessPermissionDeps;
 }
 
@@ -115,18 +131,13 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           payload: null,
         };
       },
+      "workspace-state.slot.updateCurrentStateArgs.contextBoundary": (ctx, [slotId]) =>
+        preparePanelMutation(ctx, "stateArgs.set", String(slotId)),
       "workspace-state.slot.commitPreparedNavigation.contextBoundary": async (ctx, [input]) => {
-        const commitInput = input as {
-          slotId?: string;
-          mutation?: { entry?: { contextId?: string } };
-        };
-        if (typeof commitInput.slotId !== "string" || commitInput.slotId.length === 0) {
-          return { selections: [], payload: null };
-        }
-        const target = await panelTarget(commitInput.slotId);
-        const requestedContextId = commitInput.mutation?.entry?.contextId;
-        if (typeof requestedContextId === "string" && requestedContextId.length > 0) {
-          target.requestedContextId = requestedContextId;
+        const navigation = input as SlotCommitPreparedNavigationInput;
+        const target = await panelTarget(navigation.slotId);
+        if (navigation.mutation.kind !== "select") {
+          target.requestedContextId = navigation.mutation.entry.contextId;
         }
         return {
           selections: await preparePanelAccessAuthority(
@@ -138,8 +149,6 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           payload: null,
         };
       },
-      "workspace-state.slot.updateCurrentStateArgs.contextBoundary": (ctx, [slotId]) =>
-        preparePanelMutation(ctx, "stateArgs.set", String(slotId)),
       "workspace-state.slot.move.contextBoundary": (ctx, [slotId]) =>
         preparePanelMutation(ctx, "movePanel", String(slotId)),
       "workspace-state.slot.close.contextBoundary": (ctx, [slotId]) =>
@@ -172,11 +181,32 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         await dispatch<undefined>("slotCreate", [
           { ...input, ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}) },
         ]);
-        deps.onSlotStateChanged?.();
+        deps.onSlotStateChanged?.(
+          input.initialEntry
+            ? {
+                kind: "current-entity",
+                slotId: input.slotId,
+                previousEntityId: null,
+                currentEntityId: input.initialEntry.entityId,
+                presentation: String(input.initialEntry.source).startsWith("browser:")
+                  ? "executable"
+                  : "awaiting-execution",
+              }
+            : { kind: "tree" }
+        );
       },
       "slot.commitPreparedNavigation": async (_ctx, [input]) => {
-        const result = await dispatch<unknown>("slotCommitPreparedNavigation", [input]);
-        deps.onSlotStateChanged?.();
+        const result = await dispatch<SlotCommitPreparedNavigationResult>(
+          "slotCommitPreparedNavigation",
+          [input]
+        );
+        deps.onSlotStateChanged?.({
+          kind: "current-entity",
+          slotId: input.slotId,
+          previousEntityId: result.previousEntityId,
+          currentEntityId: result.currentEntityId,
+          presentation: "executable",
+        });
         return result;
       },
       "slot.updateCurrentStateArgs": async (_ctx, [slotId, stateArgs]) => {
@@ -207,11 +237,23 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       "panel.search": (_ctx, [query, limit]) =>
         dispatch<PanelSearchResult[]>("panelSearch", [query, limit]),
       "panel.index": async (_ctx, [input]) => {
+        const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [input.id]);
+        if (detail?.entity.id && deps.isEntityTitleExplicit?.(detail.entity.id)) {
+          return detail.entity.id;
+        }
         const entityId = await dispatch<string | null>("panelIndex", [input]);
         if (entityId && input?.title) deps.onPanelTitleChanged?.(entityId, input.title, false);
         return entityId;
       },
       "panel.updateTitle": async (_ctx, [slotId, title, options]) => {
+        const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId]);
+        if (
+          detail?.entity.id &&
+          !options?.explicit &&
+          deps.isEntityTitleExplicit?.(detail.entity.id)
+        ) {
+          return detail.entity.id;
+        }
         const entityId = await dispatch<string | null>("panelUpdateTitle", [slotId, title]);
         if (entityId) deps.onPanelTitleChanged?.(entityId, title, options?.explicit === true);
         return entityId;

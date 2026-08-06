@@ -182,9 +182,20 @@ export const coreViewMethods = defineServiceMethods({
     args: z.tuple([
       z.object({
         nativeSlotId: z.string().describe("Caller-chosen identifier for the native slot."),
+        rendererInstanceId: z.string().min(1).describe("Hosted shell document incarnation."),
         bindingId: z
           .string()
           .describe("Unique incarnation of this mounted slot binding; stale releases are ignored."),
+        bindingSequence: z
+          .number()
+          .int()
+          .nonnegative()
+          .describe("Renderer-monotonic claim sequence for this slot owner."),
+        operationSequence: z
+          .number()
+          .int()
+          .positive()
+          .describe("Monotonic operation sequence within the binding incarnation."),
         panelId: z.string().describe("Panel to place into the slot."),
         bounds: ViewBoundsSchema.describe("Window-relative bounds the panel should occupy."),
         focused: z.boolean().optional().describe("Whether the slot should receive focus."),
@@ -197,7 +208,10 @@ export const coreViewMethods = defineServiceMethods({
         args: [
           {
             nativeSlotId: "slot-main",
+            rendererInstanceId: "shell-document-1",
             bindingId: "binding-main-1",
+            bindingSequence: 1,
+            operationSequence: 1,
             panelId: "panel-chat",
             bounds: { x: 0, y: 0, width: 400, height: 600 },
           },
@@ -219,7 +233,10 @@ export const coreViewMethods = defineServiceMethods({
     args: z.tuple([
       z.object({
         nativeSlotId: z.string().describe("Identifier of the previously bound native slot."),
+        rendererInstanceId: z.string().min(1),
         bindingId: z.string().describe("Incarnation returned by the corresponding bind lifecycle."),
+        bindingSequence: z.number().int().nonnegative(),
+        operationSequence: z.number().int().positive(),
         bounds: ViewBoundsSchema.optional().describe("New window-relative bounds, if changing."),
         focused: z.boolean().optional().describe("New focus state, if changing."),
       }),
@@ -240,9 +257,12 @@ export const coreViewMethods = defineServiceMethods({
     args: z.tuple([
       z.object({
         nativeSlotId: z.string().describe("Identifier of the native slot to clear."),
+        rendererInstanceId: z.string().min(1),
         bindingId: z
           .string()
           .describe("Incarnation to release; a stale incarnation cannot clear a newer binding."),
+        bindingSequence: z.number().int().nonnegative(),
+        operationSequence: z.number().int().positive(),
       }),
     ]),
     returns: z.void(),
@@ -262,6 +282,7 @@ export const coreViewMethods = defineServiceMethods({
     args: z.tuple([
       z.object({
         ready: z.boolean().describe("Whether the hosted shell has finished loading."),
+        rendererInstanceId: z.string().min(1).describe("Hosted shell document incarnation."),
       }),
     ]),
     returns: z.void(),

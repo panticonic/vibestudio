@@ -34,7 +34,7 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
         : null
     ),
     setHostedShellReady: vi.fn(),
-    bindPanelSlot: vi.fn(),
+    bindPanelSlot: vi.fn(() => ({ status: "bound" as const })),
     updatePanelSlot: vi.fn(),
     clearPanelSlot: vi.fn(),
     setThemeCss: vi.fn(),
@@ -63,7 +63,10 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
     const request = {
       nativeSlotId: "panel-stack:primary",
+      rendererInstanceId: "renderer-test",
       bindingId: "binding-test",
+      bindingSequence: 1,
+      operationSequence: 1,
       panelId: "panel-1",
       bounds: { x: 10, y: 20, width: 300, height: 200 },
       focused: true,
@@ -92,7 +95,10 @@ describe("view service", () => {
       service.handler({ caller: createVerifiedCaller(callerId, "app") }, "bindNativePanelSlot", [
         {
           nativeSlotId: "panel-stack:primary",
+          rendererInstanceId: "renderer-test",
           bindingId: "binding-test",
+          bindingSequence: 1,
+          operationSequence: 1,
           panelId: "panel-1",
           bounds: { x: 10, y: 20, width: 300, height: 200 },
         },
@@ -111,7 +117,10 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
     const request = {
       nativeSlotId: "panel-stack:primary",
+      rendererInstanceId: "renderer-test",
       bindingId: "binding-test",
+      bindingSequence: 1,
+      operationSequence: 2,
       bounds: { x: 10, y: 20, width: 300, height: 200 },
     };
 
@@ -135,7 +144,7 @@ describe("view service", () => {
 
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "setHostedShellReady", [
-        { ready: true },
+        { ready: true, rendererInstanceId: "renderer-test" },
       ])
     ).rejects.toThrow(/cannot place native panel slots/);
 

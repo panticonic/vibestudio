@@ -18,6 +18,23 @@ export const PanelPlacementHintSchema = z.object({
   minWidth: z.number().positive().optional(),
 });
 
+const PanelCreateOptionsSchema = z
+  .object({
+    title: z.string().optional(),
+    slug: z.string().optional(),
+    contextId: z.string().optional(),
+    ref: z.string().optional(),
+    focus: z.boolean().optional(),
+    stateArgs: z.record(z.string(), z.unknown()).optional(),
+    placement: PanelPlacementHintSchema.optional(),
+  })
+  .strict();
+
+const PanelCreateResultSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+});
+
 const PanelChromeStateSchema = z
   .object({
     panelId: z.string(),
@@ -90,6 +107,21 @@ const PanelPresentationSchema = z.intersection(
 );
 
 export const panelMethods = defineServiceMethods({
+  createPanel: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "Shell-owned panel creation commits the durable slot and attaches the native view as one host operation",
+    },
+    description: "Create and present a workspace panel under a parent on the current native host.",
+    args: z.tuple([z.string().nullable(), z.string(), PanelCreateOptionsSchema.optional()]),
+    returns: PanelCreateResultSchema,
+    authority: { principals: ["user", "code"] },
+    access: WRITE_ACCESS,
+  },
   focusPanel: {
     tier: {
       tier: "open",
@@ -109,6 +141,22 @@ export const panelMethods = defineServiceMethods({
         })
         .optional(),
     ]),
+    returns: PanelFocusResultSchema,
+    authority: { principals: ["user", "code"] },
+    access: WRITE_ACCESS,
+  },
+  ensurePanelLoaded: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.control",
+      rationale:
+        "Materializes a resident panel on the caller's native host without changing shell layout focus",
+    },
+    description:
+      "Ensure a panel has a native view on this host without navigating to it or waiting for visible-slot readiness.",
+    args: z.tuple([z.string()]),
     returns: PanelFocusResultSchema,
     authority: { principals: ["user", "code"] },
     access: WRITE_ACCESS,
@@ -410,6 +458,20 @@ export const panelMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.string().nullable(),
     access: READ_ACCESS,
+  },
+  setFocusedPanelId: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.local-panel-state",
+      rationale:
+        "Records the exact shell layout focus without acquiring a lease or emitting a navigation intent",
+    },
+    description: "Persist this client's focused panel id without loading or navigating the panel.",
+    args: z.tuple([z.string()]),
+    returns: z.void(),
+    access: WRITE_ACCESS,
   },
   getCollapsedPanelIds: {
     tier: {

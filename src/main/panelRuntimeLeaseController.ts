@@ -86,6 +86,10 @@ export class PanelRuntimeLeaseController {
   private readonly stateArgsPushUnsubs = new Map<string, () => void>();
   /** Slots whose lease is being acquired by a local load operation. */
   private readonly locallyLoadingSlots = new Set<string>();
+  private readonly assignedLeaseMaterializationBySlot = new Map<
+    string,
+    { connectionId: string; promise: Promise<void> }
+  >();
   private readonly explicitTitlePanelIds = new Set<string>();
   private readonly preparedViewConvergenceBySlot = new Map<string, Promise<void>>();
   private currentViewRevision = 0;
@@ -217,14 +221,23 @@ export class PanelRuntimeLeaseController {
 
   applyServerPanelTitleUpdate(update: {
     panelId: string;
-    title: string;
+    title: string | null;
     explicit?: boolean;
-  }): void {
+  }): Promise<void> {
     const panel = this.deps.registry.getPanel(update.panelId);
-    if (!panel) return;
-    if (!update.explicit && this.explicitTitlePanelIds.has(update.panelId)) return;
+    if (!panel) return Promise.resolve();
+    if (!update.explicit && this.explicitTitlePanelIds.has(update.panelId)) {
+      return Promise.resolve();
+    }
+    if (update.title === null) {
+      if (update.explicit) this.explicitTitlePanelIds.delete(update.panelId);
+      return this.deps.shellCore
+        .refreshSlotEntity(asPanelSlotId(update.panelId))
+        .then(() => undefined);
+    }
     if (update.explicit) this.explicitTitlePanelIds.add(update.panelId);
     if (panel.title !== update.title) this.deps.registry.updateTitle(update.panelId, update.title);
+    return Promise.resolve();
   }
 
   async handleLeaseChanged(event: PanelRuntimeLeaseChangedEvent): Promise<void> {
@@ -260,6 +273,39 @@ export class PanelRuntimeLeaseController {
   }
 
   private async materializeAssignedLease(slotId: string, lease: PanelRuntimeLease): Promise<void> {
+    const active = this.assignedLeaseMaterializationBySlot.get(slotId);
+    if (active) {
+      await active.promise;
+      const current = this.connectionBySlot.get(slotId);
+      const panel = this.deps.registry.getPanel(slotId);
+      const view = this.deps.getPanelView();
+      if (
+        current?.runtimeEntityId === lease.runtimeEntityId &&
+        current.connectionId === lease.connectionId &&
+        panel?.artifacts.hostedRuntimeEntityId === lease.runtimeEntityId &&
+        view?.hasView(slotId)
+      ) {
+        return;
+      }
+      return this.materializeAssignedLease(slotId, lease);
+    }
+
+    const promise = this.materializeAssignedLeaseOnce(slotId, lease).finally(() => {
+      if (this.assignedLeaseMaterializationBySlot.get(slotId)?.promise === promise) {
+        this.assignedLeaseMaterializationBySlot.delete(slotId);
+      }
+    });
+    this.assignedLeaseMaterializationBySlot.set(slotId, {
+      connectionId: lease.connectionId,
+      promise,
+    });
+    return promise;
+  }
+
+  private async materializeAssignedLeaseOnce(
+    slotId: string,
+    lease: PanelRuntimeLease
+  ): Promise<void> {
     const view = this.deps.getPanelView();
     // A local load owns view creation from lease acquisition through commit.
     // The broadcast is still applied to the registry, but must not start a
@@ -272,50 +318,50 @@ export class PanelRuntimeLeaseController {
       return;
     }
     const durablePanel = await this.deps.shellCore.refreshPanel(asPanelSlotId(slotId));
-    if (view && !view.hasView(slotId)) {
-      try {
-        // Lease delivery and query-first tree hydration are independent
-        // streams. A server-created slot can be assigned before this host has
-        // projected it into its local registry; hydrate that exact slot from
-        // authoritative workspace state instead of dropping the assignment.
-        const panel = this.deps.registry.getPanel(slotId) ?? durablePanel;
-        if (panel) {
-          await this.loadAssignedLeaseIntoView(slotId, getCurrentSnapshot(panel), lease);
-          this.resources.track(slotId);
-          await this.resources.enforceCap(slotId);
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const current = this.connectionBySlot.get(slotId);
-        // An intentional unload or a newer lease can destroy the WebContents
-        // while Electron's original loadURL promise is still settling. That
-        // commonly rejects as ERR_FAILED; it belongs to the superseded
-        // lifecycle and must not poison the durable panel with a load error.
-        if (
-          !current ||
-          current.runtimeEntityId !== lease.runtimeEntityId ||
-          current.connectionId !== lease.connectionId
-        ) {
-          return;
-        }
-        log.warn(`[handleRuntimeLeaseChanged] Failed to load assigned panel ${slotId}: ${message}`);
-        this.releaseLocalPanelRuntime(slotId, "unload");
-        this.recordPanelViewFailure(slotId, message);
-      }
-    } else if (view?.hasView(slotId)) {
-      const panel = this.deps.registry.getPanel(slotId) ?? durablePanel;
-      if (panel && !panel.artifacts.htmlPath && this.hasCompleteExecutionIdentity(panel)) {
-        await this.loadAssignedLeaseIntoView(slotId, getCurrentSnapshot(panel), lease);
-        this.resources.track(slotId);
-        await this.resources.enforceCap(slotId);
-        return;
-      }
+    if (!view) return;
+    // Lease delivery and query-first tree hydration are independent streams.
+    // Hydrate the exact slot before deciding whether its native view is current.
+    const panel = this.deps.registry.getPanel(slotId) ?? durablePanel;
+    if (!panel) return;
+    const hostsCurrentEntity =
+      view.hasView(slotId) && panel.artifacts.hostedRuntimeEntityId === lease.runtimeEntityId;
+    if (hostsCurrentEntity) {
       this.connectionBySlot.set(slotId, {
         runtimeEntityId: lease.runtimeEntityId,
         connectionId: lease.connectionId,
       });
       this.registerExistingCdpTarget(slotId);
       this.resources.track(slotId);
+      return;
+    }
+
+    try {
+      await this.loadAssignedLeaseIntoView(slotId, getCurrentSnapshot(panel), lease);
+      this.resources.track(slotId);
+      await this.resources.enforceCap(slotId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const current = this.connectionBySlot.get(slotId);
+      // An intentional unload or a newer lease can destroy the WebContents
+      // while Electron's original loadURL promise is still settling. That
+      // commonly rejects as ERR_FAILED; it belongs to the superseded
+      // lifecycle and must not poison the durable panel with a load error.
+      if (
+        !current ||
+        current.runtimeEntityId !== lease.runtimeEntityId ||
+        current.connectionId !== lease.connectionId
+      ) {
+        return;
+      }
+      log.warn(`[handleRuntimeLeaseChanged] Failed to load assigned panel ${slotId}: ${message}`);
+      const reported = await this.reportPanelMaterializationFailure(slotId, lease, message);
+      // Keep the failed server lease when the host accepted the failure
+      // report. That gives observers a terminal host state and lets the next
+      // ensureSlot call replace this failed host incarnation. If the lease
+      // itself disappeared while loading, use the ordinary local release.
+      if (reported) this.clearLocalPanelRuntime(slotId);
+      else this.releaseLocalPanelRuntime(slotId, "unload");
+      this.recordPanelViewFailure(slotId, message);
     }
   }
 
@@ -334,6 +380,10 @@ export class PanelRuntimeLeaseController {
     if (!panel) return;
     this.deps.registry.updateArtifacts(panelId, {
       ...panel.artifacts,
+      // A failed materialization has no live view. Never leave the previous
+      // incarnation's URL/identity behind as contradictory readiness state.
+      htmlPath: undefined,
+      hostedRuntimeEntityId: undefined,
       viewFailure: {
         code: "navigation_failed",
         message,
@@ -358,6 +408,8 @@ export class PanelRuntimeLeaseController {
   ): Promise<void> {
     const view = this.deps.getPanelView();
     if (!view) return;
+    const panel = this.deps.registry.getPanel(panelId);
+    if (!panel) throw new Error(`Panel not found: ${panelId}`);
     this.locallyLoadingSlots.add(panelId);
     try {
       const browserPartition = snapshot.source.startsWith("browser:")
@@ -380,6 +432,10 @@ export class PanelRuntimeLeaseController {
         this.deps.registry.updateArtifacts(panelId, {
           buildState: "ready",
           htmlPath: url,
+          hostedRuntimeEntityId:
+            this.connectionBySlot.get(panelId)?.runtimeEntityId ??
+            panel.runtimeEntityId ??
+            undefined,
           viewFailure: undefined,
         });
         this.deps.registry.notifyPanelTreeUpdate();
@@ -388,14 +444,14 @@ export class PanelRuntimeLeaseController {
         return;
       }
 
-      const panel = this.deps.registry.getPanel(panelId);
-      if (!this.hasCompleteExecutionIdentity(panel)) {
-        if (panel?.artifacts.buildState === "error") {
+      const preparedPanel = this.deps.registry.getPanel(panelId);
+      if (!this.hasCompleteExecutionIdentity(preparedPanel)) {
+        if (preparedPanel?.artifacts.buildState === "error") {
           throw new Error(
-            panel.artifacts.error ?? "Panel unavailable: its runtime image could not be prepared."
+            preparedPanel.artifacts.error ??
+              "Panel unavailable: its runtime image could not be prepared."
           );
         }
-        await this.loadPreparingPanelView(panelId, snapshot);
         this.resources.track(panelId);
         await this.resources.enforceCap(panelId);
         return;
@@ -459,9 +515,9 @@ export class PanelRuntimeLeaseController {
   }
 
   /**
-   * Upgrade a locally owned preparing view once the server has sealed the
-   * panel incarnation's immutable execution identity. This transition belongs
-   * to the native runtime host and never depends on a renderer effect.
+   * Materialize a locally owned panel only after the server has sealed the
+   * incarnation's immutable execution identity. This transition belongs to
+   * the native runtime host and never depends on a renderer effect.
    */
   async convergePreparedPanelView(
     panelId: string,
@@ -491,7 +547,7 @@ export class PanelRuntimeLeaseController {
     const view = this.deps.getPanelView();
     const panel = this.deps.registry.getPanel(panelId);
     if (
-      !view?.hasView(panelId) ||
+      !view ||
       !panel ||
       panel.snapshot.source.startsWith("browser:") ||
       !this.hasCompleteExecutionIdentity(panel)
@@ -499,7 +555,10 @@ export class PanelRuntimeLeaseController {
       return;
     }
     const snapshot = getCurrentSnapshot(panel);
-    if (panel.artifacts.htmlPath) {
+    if (
+      panel.artifacts.htmlPath &&
+      panel.artifacts.hostedRuntimeEntityId === panel.runtimeEntityId
+    ) {
       if (options.refreshPresentedIdentity) {
         // An activation event can add the server-sealed authority manifest
         // after this exact build was presented. createViewForPanel is
@@ -526,19 +585,52 @@ export class PanelRuntimeLeaseController {
     await this.resources.enforceCap(panelId);
   }
 
-  releaseLocalPanelRuntime(panelId: string, _transition: PanelRuntimeReleaseTransition): void {
+  private clearLocalPanelRuntime(panelId: string): void {
     this.resources.clear(panelId);
-    const lease = this.connectionBySlot.get(panelId);
     this.connectionBySlot.delete(panelId);
-    if (lease) {
-      void this.panelRuntime.release(lease.runtimeEntityId, lease.connectionId).catch(() => {});
-    }
     this.deps.cdpHost.cleanupPanelAccess(panelId);
     this.deps.cdpHost.unregisterTarget?.(panelId);
     const view = this.deps.getPanelView();
     if (view?.hasView(panelId)) {
       view.destroyView(panelId);
       this.recordViewMutation();
+    }
+  }
+
+  releaseLocalPanelRuntime(panelId: string, _transition: PanelRuntimeReleaseTransition): void {
+    const lease = this.connectionBySlot.get(panelId);
+    this.clearLocalPanelRuntime(panelId);
+    if (lease) {
+      void this.panelRuntime.release(lease.runtimeEntityId, lease.connectionId).catch(() => {});
+    }
+  }
+
+  private async reportPanelMaterializationFailure(
+    panelId: string,
+    lease: PanelRuntimeLease,
+    message: string
+  ): Promise<boolean> {
+    const current = this.connectionBySlot.get(panelId);
+    if (
+      !current ||
+      current.runtimeEntityId !== lease.runtimeEntityId ||
+      current.connectionId !== lease.connectionId
+    ) {
+      return false;
+    }
+    try {
+      await this.panelRuntime.reportView(lease.runtimeEntityId, lease.connectionId, {
+        url: "",
+        loading: false,
+        boot: {
+          phase: "failed",
+          runtimeEntityId: lease.runtimeEntityId,
+          message,
+        },
+      });
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -589,6 +681,7 @@ export class PanelRuntimeLeaseController {
       this.deps.registry.updateArtifacts(panelId, {
         buildState: "ready",
         htmlPath: url,
+        hostedRuntimeEntityId: lease.runtimeEntityId,
         viewFailure: undefined,
       });
       this.deps.registry.notifyPanelTreeUpdate();
@@ -603,39 +696,12 @@ export class PanelRuntimeLeaseController {
         );
         return;
       }
-      await this.loadPreparingPanelView(panelId, snapshot);
       return;
     }
     const panelUrl = this.buildPanelUrl(panelId, snapshot);
     await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
     this.recordViewMutation();
     this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
-  }
-
-  /**
-   * Materialize the native host immediately while the server seals the runtime
-   * image. The same view is navigated to the immutable build URL when the
-   * panel-tree snapshot publishes its build identity.
-   */
-  private async loadPreparingPanelView(panelId: string, snapshot: PanelSnapshot): Promise<void> {
-    const view = this.deps.getPanelView();
-    if (!view) return;
-    await view.createViewForPanel(panelId, "about:blank", snapshot.contextId);
-    this.recordViewMutation();
-    const panel = this.deps.registry.getPanel(panelId);
-    if (!panel) return;
-    this.deps.registry.updateArtifacts(panelId, {
-      ...panel.artifacts,
-      // The blank native view is only a runtime host. Keep it detached from the
-      // shell's native slot until real panel content has loaded; otherwise it
-      // covers the shell's loading surface with an opaque black page.
-      htmlPath: undefined,
-      buildState: "building",
-      buildProgress: "Preparing panel runtime...",
-      error: undefined,
-      viewFailure: undefined,
-    });
-    this.deps.registry.notifyPanelTreeUpdate();
   }
 
   private updateWorkspacePanelArtifacts(
@@ -656,6 +722,8 @@ export class PanelRuntimeLeaseController {
     this.deps.registry.updateArtifacts(panelId, {
       ...panel.artifacts,
       htmlPath: panelUrl,
+      hostedRuntimeEntityId:
+        this.connectionBySlot.get(panelId)?.runtimeEntityId ?? panel.runtimeEntityId ?? undefined,
       buildState: "ready",
       buildRevision: this.getBuildRevision(snapshot.source, snapshot.options.ref),
       buildProgress: undefined,
@@ -672,6 +740,13 @@ export class PanelRuntimeLeaseController {
       panel.executionDigest &&
       /^[0-9a-f]{64}$/.test(panel.executionDigest) &&
       panel.authorityRequests
+    );
+  }
+
+  hasExecutablePanel(panelId: string): boolean {
+    const panel = this.deps.registry.getPanel(panelId);
+    return Boolean(
+      panel?.snapshot.source.startsWith("browser:") || this.hasCompleteExecutionIdentity(panel)
     );
   }
 

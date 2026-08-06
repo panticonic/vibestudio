@@ -7,6 +7,7 @@ import type {
   PanelDiagnosticPacket,
   PanelHostObservation,
   PanelObservation,
+  PanelPageObservation,
   PanelRuntimeFailure,
   PanelSnapshotObservation,
 } from "./panel/observation.js";
@@ -48,6 +49,7 @@ export const PanelFocusResultSchema: z.ZodType<PanelFocusResult> = z.object({
   status: z.enum([
     "missing",
     "focused",
+    "preparing",
     "loaded",
     "leased_elsewhere",
     "build_failed",
@@ -131,10 +133,23 @@ export const PanelBootObservationSchema: z.ZodType<PanelBootObservation> = z.obj
   updatedAt: z.number().optional(),
 });
 
+export const PanelPageObservationSchema: z.ZodType<PanelPageObservation> = z
+  .object({
+    view: z
+      .object({
+        url: z.string(),
+        loading: z.boolean(),
+      })
+      .strict(),
+    boot: PanelBootObservationSchema,
+  })
+  .strict();
+
 export const PanelHostObservationSchema: z.ZodType<PanelHostObservation> = z.object({
   holderLabel: z.string().optional(),
   platform: z.enum(["desktop", "headless", "mobile"]).optional(),
   supportsInspection: z.boolean().optional(),
+  viewRevision: z.number().optional(),
   view: z.object({
     exists: z.boolean(),
     url: z.string().optional(),
@@ -269,6 +284,7 @@ const PanelViewFailureSchema: z.ZodType<PanelViewFailure> = z.object({
 
 const PanelArtifactsSchema: z.ZodType<PanelArtifacts> = z.object({
   htmlPath: z.string().optional(),
+  hostedRuntimeEntityId: z.string().optional(),
   bundlePath: z.string().optional(),
   error: z.string().optional(),
   viewFailure: PanelViewFailureSchema.optional(),
@@ -291,6 +307,7 @@ const PanelBuildStatusSchema: z.ZodType<PanelBuildStatus> = z.object({
 const PanelViewStatusSchema: z.ZodType<PanelViewStatus> = z.object({
   exists: z.boolean(),
   url: z.string().optional(),
+  runtimeEntityId: z.string().optional(),
   visible: z.boolean().optional(),
   failure: PanelViewFailureSchema.optional(),
 });

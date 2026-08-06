@@ -223,6 +223,16 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     await result.preparation;
     try {
       await this.awaitPanelInMirror(result.panelId);
+      // Durable creation and device-local presentation are separate facts.
+      // Publish the creation fact once the authoritative slot is committed so
+      // the shell can place it immediately, while non-focused creations remain
+      // available to tree browsers without changing the current pane.
+      this.eventService.emit("panel-created", {
+        panelId: result.panelId,
+        parentId: createOpts.parentId ?? null,
+        focus: createOpts.focus === true,
+        ...(createOpts.placement ? { placement: createOpts.placement } : {}),
+      });
       if (shouldMaterializePanelOnCreate(createOpts.initialLoad)) {
         await this.attachCreatedPanel(
           {
@@ -733,6 +743,16 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
             loaded: true,
           };
         }
+        const preparing = !this.runtime.hasExecutablePanel(targetPanelId);
+        if (preparing) {
+          return {
+            panelId: targetPanelId,
+            status: "preparing",
+            focused: true,
+            loaded: false,
+            message: "Panel runtime is preparing",
+          };
+        }
         this.runtime.recordPanelViewFailure(targetPanelId, "Panel view was not created");
         return {
           panelId: targetPanelId,
@@ -824,6 +844,15 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       await this.runtime.loadPanelIntoView(panelId);
       const nextView = this.getPanelView();
       const loaded = Boolean(nextView?.hasView(panelId));
+      if (!loaded && !this.runtime.hasExecutablePanel(panelId)) {
+        return {
+          panelId,
+          status: "preparing",
+          focused: false,
+          loaded: false,
+          message: "Panel runtime is preparing",
+        };
+      }
       if (!loaded) this.runtime.recordPanelViewFailure(panelId, "Panel view was not created");
       return {
         panelId,
@@ -1010,10 +1039,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   applyServerPanelTitleUpdate(update: {
     panelId: string;
-    title: string;
+    title: string | null;
     explicit?: boolean;
-  }): void {
-    this.runtime.applyServerPanelTitleUpdate(update);
+  }): Promise<void> {
+    return this.runtime.applyServerPanelTitleUpdate(update);
   }
 
   applyServerPanelStateArgsUpdate(update: {
@@ -1264,6 +1293,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       throw error;
     }
     if (opts.focus) {
+      // `panel-created` above is the sole creation-placement fact. Complete
+      // the host-side focus/load mechanics without emitting the existing-panel
+      // `navigate-to-panel` event as a second placement request.
       await this.focusPanelLocally(result.panelId);
     }
   }

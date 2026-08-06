@@ -16,6 +16,7 @@ import {
   type ExecutionArtifactRefV1,
   type ExecutionPublicationPort,
 } from "@vibestudio/shared/execution/retention";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 
 export interface RuntimeImageRecord {
   id: string;
@@ -168,18 +169,29 @@ export class RuntimeImageStore {
     input: Omit<RuntimeImageRecord, "generation" | "updatedAt" | "error">
   ): RuntimeImageRecord {
     const previous = this.records.get(input.id);
+    const artifact = verifyExecutionArtifactRef(input.artifact);
+    const authority = parseUnitAuthorityManifest(
+      input.authority,
+      `runtime image ${input.id} authority`
+    );
+    const sameIncarnation =
+      previous?.source === input.source &&
+      previous.unitName === input.unitName &&
+      previous.artifact.executionDigest === artifact.executionDigest &&
+      canonicalJson(previous.authority) === canonicalJson(authority);
+    const sameMetadata = previous?.scopeRef === input.scopeRef;
+    if (previous && sameIncarnation && sameMetadata && !previous.error) return previous;
+
     const record: RuntimeImageRecord = {
       ...input,
-      artifact: verifyExecutionArtifactRef(input.artifact),
-      authority: parseUnitAuthorityManifest(input.authority, `runtime image ${input.id} authority`),
-      generation: (previous?.generation ?? 0) + 1,
+      artifact,
+      authority,
+      // A selector/provenance update is not a new executable incarnation.
+      generation: sameIncarnation ? previous!.generation : (previous?.generation ?? 0) + 1,
       updatedAt: Date.now(),
     };
-    const changed =
-      previous?.artifact.buildKey !== record.artifact.buildKey ||
-      previous?.artifact.executionDigest !== record.artifact.executionDigest;
     publishExecutionOwner(
-      changed ? this.publicationPort : undefined,
+      sameIncarnation ? undefined : this.publicationPort,
       {
         owner: "runtime-image",
         ownerId: record.id,

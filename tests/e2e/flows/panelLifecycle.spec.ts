@@ -15,6 +15,7 @@ import {
   getPanelTree,
   hasElectronDisplay,
   launchTestApp,
+  approvePendingWorkspaceCreationReview,
   approvePendingStartupUnits,
   createManagedTestWorkspace,
   removeManagedTestWorkspace,
@@ -141,6 +142,7 @@ test.describe("Panel Persistence", () => {
         launchTimeout: 180_000,
       });
       await approvePendingStartupUnits(testApp.app);
+      await approvePendingWorkspaceCreationReview(testApp.app);
 
       await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
       const seededTree = await waitForRestorablePanelTree(testApp.app);
@@ -166,6 +168,7 @@ test.describe("Panel Persistence", () => {
         launchTimeout: 180_000,
       });
       await approvePendingStartupUnits(testApp.app);
+      await approvePendingWorkspaceCreationReview(testApp.app);
 
       await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
       await waitForRestorablePanelTree(testApp.app);

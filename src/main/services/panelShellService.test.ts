@@ -28,6 +28,13 @@ function createServiceHarness(appCapabilities: string[] = []) {
     focused: false,
     loaded: true,
   }));
+  const focusPanel = vi.fn(async () => ({
+    panelId: "panel-1",
+    status: "focused",
+    focused: true,
+    loaded: true,
+  }));
+  const setFocusedPanelId = vi.fn(async () => undefined);
   const takeOverPanel = vi.fn(async () => ({
     panelId: "panel-1",
     status: "loaded",
@@ -56,7 +63,9 @@ function createServiceHarness(appCapabilities: string[] = []) {
       setCurrentThemeConfig,
       broadcastThemeConfig,
       getThemeConfig,
+      focusPanel,
       ensureLoaded,
+      setFocusedPanelId,
       takeOverPanel,
       getPanelViewRevision: vi.fn(() => 4),
       refreshPanelProjection: vi.fn(async () => ({
@@ -107,6 +116,8 @@ function createServiceHarness(appCapabilities: string[] = []) {
     getThemeConfig,
     themeConfig,
     ensureLoaded,
+    focusPanel,
+    setFocusedPanelId,
     takeOverPanel,
     markBrowserNavigationIntent,
     reload,
@@ -117,6 +128,21 @@ function createServiceHarness(appCapabilities: string[] = []) {
 }
 
 describe("PanelShellService", () => {
+  it("keeps passive materialization and focus persistence separate from navigation", async () => {
+    const harness = createServiceHarness(["panel-hosting"]);
+
+    await expect(
+      harness.service.handler(appCtx, "ensurePanelLoaded", ["panel-1"])
+    ).resolves.toMatchObject({ status: "loaded", focused: false });
+    await expect(
+      harness.service.handler(appCtx, "setFocusedPanelId", ["panel-1"])
+    ).resolves.toBeUndefined();
+
+    expect(harness.ensureLoaded).toHaveBeenCalledWith("panel-1");
+    expect(harness.setFocusedPanelId).toHaveBeenCalledWith("panel-1");
+    expect(harness.focusPanel).not.toHaveBeenCalled();
+  });
+
   it("allows Electron-local host helpers for panel-hosting apps", async () => {
     const harness = createServiceHarness(["panel-hosting"]);
 

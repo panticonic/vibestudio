@@ -56,6 +56,13 @@ export const SlotCommitPreparedNavigationResultSchema = z.object({
   currentEntryKey: z.string(),
   cursor: z.number().int().nonnegative(),
 });
+export type SlotCommitPreparedNavigationInput = z.infer<
+  typeof SlotCommitPreparedNavigationInputSchema
+>;
+export type SlotCommitPreparedNavigationResult = z.infer<
+  typeof SlotCommitPreparedNavigationResultSchema
+>;
+
 
 export const SlotCreateInputSchema = z.object({
   slotId: z.string(),
@@ -289,6 +296,7 @@ export const PanelTreePlacementSchema = z
 
 export const workspaceStateMethods = defineServiceMethods({
   "panelTree.rootGroups": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -306,6 +314,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreeRootGroupsSchema,
   },
   "panelTree.page": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -323,6 +332,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreePageSchema,
   },
   "panelTree.path": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -340,6 +350,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreePathSchema.nullable(),
   },
   "panelTree.detail": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -357,6 +368,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelDetailSchema.nullable(),
   },
   "panelTree.search": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -374,6 +386,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: PanelTreeSearchPageSchema,
   },
   "slot.get": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -391,6 +404,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: SlotRowSchema.nullable(),
   },
   "slot.historyRelative": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -408,6 +422,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: SlotHistoryRowSchema.nullable(),
   },
   "slot.historyEntry": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -425,6 +440,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: SlotHistoryRowSchema.nullable(),
   },
   "entity.resolveActive": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -442,6 +458,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: EntityRecordSchema.nullable(),
   },
   "entity.resolve": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -459,6 +476,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: EntityRecordSchema.nullable(),
   },
   "slot.resolveByEntity": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -478,6 +496,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.string().nullable(),
   },
   "slot.create": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -503,6 +522,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "slot.commitPreparedNavigation": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -515,7 +535,7 @@ export const workspaceStateMethods = defineServiceMethods({
     },
     args: z.tuple([SlotCommitPreparedNavigationInputSchema]),
     description:
-      "Atomically append, replace, or select history and swap current to a prepared panel incarnation.",
+      "Commit prepared panel history and publish the slot's desired runtime entity for presentation reconciliation.",
     authority: contextBoundaryAuthority({
       service: "workspace-state",
       method: "slot.commitPreparedNavigation",
@@ -538,6 +558,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: SlotCommitPreparedNavigationResultSchema,
   },
   "slot.updateCurrentStateArgs": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -562,6 +583,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "slot.move": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -586,6 +608,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "slot.close": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -613,6 +636,7 @@ export const workspaceStateMethods = defineServiceMethods({
       .strict(),
   },
   "slot.closeCleanupPage": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -643,6 +667,7 @@ export const workspaceStateMethods = defineServiceMethods({
       .strict(),
   },
   "slot.closeOwnedRoots": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -665,6 +690,7 @@ export const workspaceStateMethods = defineServiceMethods({
       .strict(),
   },
   "slot.closeCleanupAck": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -681,6 +707,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "panel.search": {
+    agentFacing: false,
     capability: "workspace.runtime-state.inspect",
     presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
     tier: {
@@ -697,6 +724,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.array(PanelSearchResultSchema),
   },
   "panel.index": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -723,6 +751,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.string().nullable(),
   },
   "panel.updateTitle": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -751,6 +780,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.string().nullable(),
   },
   "panel.incrementAccess": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -767,6 +797,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   "panel.rebuildIndex": {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -783,6 +814,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   lifecycleLeaseUpsert: {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -800,6 +832,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   lifecycleLeaseClear: {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -817,6 +850,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   alarmSet: {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -834,6 +868,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   alarmClear: {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -851,6 +886,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   heartbeatRegister: {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {
@@ -867,6 +903,7 @@ export const workspaceStateMethods = defineServiceMethods({
     returns: z.void(),
   },
   heartbeatRemove: {
+    agentFacing: false,
     capability: "workspace.runtime-state.manage",
     presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
     tier: {

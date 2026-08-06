@@ -42,6 +42,7 @@ function stubRpc(): RpcClient {
 function fakeHost(): RuntimeHost {
   const rpc = stubRpc();
   const panelRuntime = {
+    createPanelSlot: async () => ({}) as never,
     openPanel: async () => ({}) as never,
     getPanelHandle: () => ({}) as never,
     panelTree: {} as never,

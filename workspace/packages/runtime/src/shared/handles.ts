@@ -1,5 +1,6 @@
 import type { RpcClient, RpcEventContext } from "@vibestudio/rpc";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
+import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import type { PanelTreePlacement } from "@vibestudio/shared/panel/treeIndex";
 import {
   rethrowPanelOperationError,
@@ -16,6 +17,7 @@ import type {
   PanelHandleFromContract,
   PanelNavigateOptions,
   PanelSetTitleOptions,
+  PanelWaitOptions,
   Rpc,
   TypedCallProxy,
 } from "../core/index.js";
@@ -39,7 +41,7 @@ export interface PanelHandleHostOps {
   diagnose?(id: string): Promise<PanelDiagnosticPacket>;
   parent?(id: string, parentId: string | null): PanelHandle | null;
   navigate?(id: string, source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
-  reload?(id: string): Promise<PanelObservation>;
+  reload?(id: string, options?: PanelWaitOptions): Promise<PanelObservation>;
   close?(id: string): Promise<PanelLifecycleResult>;
   archive?(id: string): Promise<void>;
   unload?(id: string): Promise<PanelLifecycleResult>;
@@ -47,13 +49,13 @@ export interface PanelHandleHostOps {
   movePanel?(id: string, newParentId: string | null, placement?: PanelTreePlacement): Promise<void>;
   takeOver?(id: string): Promise<void>;
   openDevTools?(id: string, mode?: "detach" | "right" | "bottom"): Promise<void>;
-  rebuild?(id: string): Promise<PanelObservation>;
+  rebuild?(id: string, options?: PanelWaitOptions): Promise<PanelObservation>;
   focus?(id: string, options?: PanelFocusOptions): Promise<PanelObservation>;
   stateArgs?: {
     get<T = Record<string, unknown>>(id: string): Promise<T>;
     set(id: string, updates: Record<string, unknown>): Promise<Record<string, unknown>>;
   };
-  snapshot?(id: string): Promise<PanelSnapshotObservation>;
+  snapshot?(id: string, options?: PanelWaitOptions): Promise<PanelSnapshotObservation>;
   callAgent?(id: string, method: string, args: unknown[]): Promise<unknown>;
 }
 
@@ -213,9 +215,9 @@ export function createPanelHandle<
       if (!ops?.navigate) throw new Error("navigate is not available for this handle");
       return lifecycle(() => ops.navigate!(metadata.id, source, options));
     },
-    reload: async () => {
+    reload: async (waitOptions?: PanelWaitOptions) => {
       if (!ops?.reload) throw new Error("reload is not available for this handle");
-      return lifecycle(() => ops.reload!(metadata.id));
+      return lifecycle(() => ops.reload!(metadata.id, waitOptions));
     },
     close: async () => {
       if (!ops?.close) throw new Error("close is not available for this handle");
@@ -232,7 +234,10 @@ export function createPanelHandle<
     setTitle: async (title: string, titleOptions?: PanelSetTitleOptions) => {
       if (!ops?.setTitle) throw new Error("setTitle is not available for this handle");
       await ops.setTitle(metadata.id, title, titleOptions);
-      metadata = normalizeMetadata({ ...metadata, title });
+      metadata = normalizeMetadata({
+        ...metadata,
+        title: normalizePanelTitle(title) ?? metadata.source ?? metadata.id,
+      });
     },
     movePanel: async (newParentId: string | null, placement?: PanelTreePlacement) => {
       if (!ops?.movePanel) throw new Error("movePanel is not available for this handle");
@@ -246,18 +251,18 @@ export function createPanelHandle<
       if (!ops?.openDevTools) throw new Error("openDevTools is not available for this handle");
       await ops.openDevTools(metadata.id, mode);
     },
-    rebuild: async () => {
+    rebuild: async (waitOptions?: PanelWaitOptions) => {
       if (!ops?.rebuild) throw new Error("rebuild is not available for this handle");
-      return lifecycle(() => ops.rebuild!(metadata.id));
+      return lifecycle(() => ops.rebuild!(metadata.id, waitOptions));
     },
     focus: (focusOptions?: PanelFocusOptions) => {
       if (!ops?.focus) throw new Error("focus is not available for this handle");
       return lifecycle(() => ops.focus!(metadata.id, focusOptions));
     },
-    snapshot: async () => {
+    snapshot: async (waitOptions?: PanelWaitOptions) => {
       if (!ops?.snapshot) throw new Error("snapshot is not available for this handle");
       try {
-        return await ops.snapshot(metadata.id);
+        return await ops.snapshot(metadata.id, waitOptions);
       } catch (error) {
         rethrowPanelOperationError(error);
       }
@@ -394,7 +399,7 @@ export function createNonPanelRuntimeHandle(options: {
   const unavailable = () => Promise.reject(new Error(`${options.id} is not a panel target`));
   const handle: PanelHandle = {
     id: options.id,
-    title: options.title ?? options.id,
+    title: normalizePanelTitle(options.title) ?? options.id,
     source: options.source ?? options.id,
     kind: "workspace",
     parentId: options.parentId ?? null,
@@ -438,7 +443,7 @@ function normalizeMetadata(metadata: PanelHandleMetadata): Required<PanelHandleM
   const source = stripBrowserPrefix(metadata.source ?? metadata.id);
   return {
     id: metadata.id,
-    title: metadata.title ?? metadata.id,
+    title: normalizePanelTitle(metadata.title) ?? metadata.id,
     source,
     kind,
     parentId: metadata.parentId ?? null,

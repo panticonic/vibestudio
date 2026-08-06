@@ -97,8 +97,7 @@ export function createViewService(
         ctx.caller.runtime.kind,
         "bindNativePanelSlot"
       );
-      vm.bindPanelSlot(ctx.caller.runtime.id, request);
-      return { status: "bound" };
+      return vm.bindPanelSlot(ctx.caller.runtime.id, request);
     },
     updateNativePanelSlot: (ctx, [request]) => {
       const vm = deps.getViewManager();
@@ -118,7 +117,7 @@ export function createViewService(
         ctx.caller.runtime.kind,
         "clearNativePanelSlot"
       );
-      vm.clearPanelSlot(ctx.caller.runtime.id, request.nativeSlotId, request.bindingId);
+      vm.clearPanelSlot(ctx.caller.runtime.id, request.nativeSlotId, request.bindingId, request);
       return;
     },
     setHostedShellReady: (ctx, [request]) => {
@@ -129,7 +128,7 @@ export function createViewService(
         ctx.caller.runtime.kind,
         "setHostedShellReady"
       );
-      vm.setHostedShellReady(ctx.caller.runtime.id, request.ready);
+      vm.setHostedShellReady(ctx.caller.runtime.id, request.ready, request.rendererInstanceId);
       return;
     },
     setShellOverlay: (ctx, [active]) => {

@@ -100,3 +100,85 @@ export function computePanelId(params: {
   const autoSegment = generatePanelNonce();
   return `${parentPrefix}/${escapedPath}/${autoSegment}`;
 }
+
+/**
+ * The full logical identity of one idempotent panel-open operation.
+ *
+ * A retry converges on the same panel only when its execution coordinates match.
+ * Folding source, exact ref, explicit context, and parent into the hashed segment means a
+ * caller reusing an `operationId` for a different logical open (other source,
+ * other context, other parent) derives a *distinct* slot and entity identity
+ * instead of colliding with — and potentially destroying — the first panel.
+ */
+export interface PanelOperationIdentityInput {
+  operationId: string;
+  /** Requested panel source (workspace repo path or full browser URL). */
+  source: string;
+  /** Explicit caller-provided context only; derived contexts stay out of the key. */
+  contextId?: string | null;
+  parentId?: string | null;
+  ref?: string | null;
+}
+
+export interface PanelOperationIdentity {
+  /** Stable panel-id segment (`op-<hash>`), for `computePanelId({ requestedId })`. */
+  operationSegment: string;
+  /** Stable history entry key (`nav-op-<hash>`), which also keys the runtime entity. */
+  entryKey: string;
+}
+
+/**
+ * Derive every retry-stable identifier of one logical panel open in one place.
+ */
+export async function derivePanelOperationIdentity(
+  input: PanelOperationIdentityInput
+): Promise<PanelOperationIdentity> {
+  const material = [
+    input.operationId,
+    input.source,
+    input.contextId ?? "",
+    input.parentId ?? "",
+    input.ref ?? "latest",
+  ].join("\u0000");
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(material)
+  );
+  const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 24);
+  const operationSegment = `op-${hash}`;
+  return { operationSegment, entryKey: `nav-${operationSegment}` };
+}
+
+/**
+ * Typed collision surfaced when a slot id is reused with a different durable
+ * identity (entry key / entity / parent). Distinguishable from transport
+ * failures so a retrying caller never mistakes "this identity is taken" for
+ * "the write may not have happened" — and never rolls back live state.
+ */
+export const SLOT_IDENTITY_COLLISION_CODE = "SLOT_IDENTITY_COLLISION";
+
+export class SlotIdentityCollisionError extends Error {
+  readonly code = SLOT_IDENTITY_COLLISION_CODE;
+  constructor(
+    readonly slotId: string,
+    readonly conflict: { field: string; existing: unknown; attempted: unknown }
+  ) {
+    super(
+      `Slot identity collision on ${slotId}: ${conflict.field} existing=${JSON.stringify(
+        conflict.existing
+      )} attempted=${JSON.stringify(conflict.attempted)}`
+    );
+    this.name = "SlotIdentityCollisionError";
+  }
+}
+
+/** Recognize a slot identity collision, locally thrown or reconstructed from RPC. */
+export function isSlotIdentityCollisionError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === SLOT_IDENTITY_COLLISION_CODE
+  );
+}

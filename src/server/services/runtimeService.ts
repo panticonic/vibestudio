@@ -20,6 +20,8 @@ import {
   runtimeMethods,
   type ClonedEntity,
   type CloneContextResult,
+  type RuntimeExecutionRecoveryRequest,
+  type RuntimeExecutionRecoveryResult,
 } from "@vibestudio/service-schemas/runtime";
 import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
 import {
@@ -36,6 +38,7 @@ import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import {
   buildWorkspaceContext,
   canonicalEntityId,
+  IdentityCollisionError,
   runtimeEntitySource,
   type CodeExecution,
   type EntityRecord,
@@ -56,12 +59,14 @@ import {
   type ContextBoundaryAction,
   type ContextBoundaryDeps,
 } from "./contextBoundary.js";
+import { callerControlsLifecycleContext } from "./lifecycleContextControl.js";
 import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
 import type { VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import type { UnitSupervisor } from "./unitSupervisor.js";
+import { requireActiveExecutionIdentity } from "../runtimeExecutionIdentity.js";
 
 export interface RuntimeEntityHooks {
   /**
@@ -79,6 +84,12 @@ export interface RuntimeEntityHooks {
 
   /** Cleanup hooks invoked on retire — closed at bootstrap. */
   onRetire: (record: EntityRecord) => Promise<void>;
+
+  /** Reattach only the immutable execution already sealed into this row. */
+  recoverExactExecution: (record: EntityRecord) => Promise<void>;
+
+  /** Restart a facet after exact recovery or an explicit incarnation advance. */
+  restartDurableObjectIncarnation: (record: EntityRecord) => Promise<void>;
 
   /** Release resources owned inside an entity before its durable row is retired. */
   releaseEntity: (
@@ -154,6 +165,10 @@ export type PreparedFor<E> = E extends CodeExecution
 
 export interface RuntimeServiceInternal {
   createEntity(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  /** Complete a durable code reservation from the server-owned reconciler. */
+  activateReservedEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  /** Preparing panel reservations that must be resumed after server startup. */
+  listPreparingPanels(): Promise<EntityRecord[]>;
   retireEntity(id: string): Promise<void>;
   createContext(
     ctx: Pick<ServiceContext, "caller" | "chainCaller">,
@@ -231,6 +246,8 @@ export interface RuntimeServiceDeps {
    * can't drift.
    */
   entityStore: WorkspaceEntityStore;
+  /** Host-only task closure membership, snapshotted at runtime creation. */
+  taskAuthorities: import("./taskAuthorityRegistry.js").TaskAuthorityRegistry;
   hooks: RuntimeEntityHooks;
   contextBoundary: ContextBoundaryDeps;
   contextFolders: RuntimeContextFolders;
@@ -251,6 +268,15 @@ export interface RuntimeServiceDeps {
   }) => void | Promise<void>;
   /** Remove host-only policy state after a disposable context is discarded. */
   onContextRemoved?: (input: { contextId: string }) => void | Promise<void>;
+  /**
+   * Publish the exact transition from a durable preparing panel entity to an
+   * executable incarnation. Presentation hosts derive renderer creation from
+   * this state transition; a preparing entity is never a connectable panel
+   * principal.
+   */
+  onPanelExecutionActivated?: (
+    input: import("@vibestudio/shared/events").EventPayloads["panel:executionActivated"]
+  ) => void | Promise<void>;
   /**
    * Server-controlled display-title registry. Workers (and DOs / panels)
    * call `runtime.setTitle(title)` to populate the title that approval UIs
@@ -274,6 +300,15 @@ export interface RuntimeServiceDeps {
    * attested system-test harness before aborting this exact active DO facet.
    */
   faultAbortAgentVessel?: (caller: VerifiedCaller, record: EntityRecord) => void | Promise<void>;
+  onExecutionRecovery?: (event: {
+    entityId: string;
+    expectedExecutionDigest: string;
+    strategy: RuntimeExecutionRecoveryRequest["strategy"];
+    state: "started" | "succeeded" | "failed";
+    attemptCount: number;
+    result?: RuntimeExecutionRecoveryResult;
+    error?: string;
+  }) => void;
   unitSupervisor: UnitSupervisor;
 }
 
@@ -302,7 +337,10 @@ function deriveEntityKey(srcKey: string, targetKey: string, srcId: string): stri
 export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceResult {
   const store = deps.entityStore;
   const creationChains = new Map<string, Promise<unknown>>();
+  const activationChains = new Map<string, Promise<RuntimeEntityHandle>>();
   const retirementChains = new Map<string, Promise<unknown>>();
+  const recoveryChains = new Map<string, Promise<RuntimeExecutionRecoveryResult>>();
+  let recoveryAttemptCount = 0;
 
   function isTrustedRuntimeHost(caller: VerifiedCaller): boolean {
     return caller.runtime.kind === "shell" || caller.runtime.kind === "server";
@@ -404,16 +442,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     originContextId: string | null,
     targetContextId: string
   ): Promise<boolean> {
-    if (!originContextId) return false;
-    const edges = await store.listContextEdgesByOwner({
-      ownerContextId: originContextId,
-      kind: "lifecycle",
-    });
-    const edge = edges.find((candidate) => candidate.contextId === targetContextId);
-    if (!edge?.ownerEntityId) return false;
-    if (edge.ownerEntityId === caller.runtime.id) return true;
-    const owner = await store.resolveRecord(edge.ownerEntityId);
-    return owner ? callerOwnsEntity(caller, owner) : false;
+    return callerControlsLifecycleContext(
+      store,
+      caller.runtime.id,
+      originContextId,
+      targetContextId
+    );
   }
 
   /** Resolve one current host-derived context leaf without prompting or mutating. */
@@ -536,11 +570,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
    * is not an executable principal.
    */
   async function reserveEntity(
-    caller: VerifiedCaller,
+    actors: RuntimeCreationActors,
     spec: RuntimeCodeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
+    const caller = actors.lifecycleCaller;
     assertCreateEntityAllowed(caller, spec);
-    const explicitContextId = spec.contextId;
     const key = spec.key ?? randomUUID();
     const canonicalId = canonicalEntityId({
       kind: spec.kind,
@@ -548,8 +582,48 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       className: spec.kind === "do" ? spec.className : undefined,
       key,
     });
+    // Reservations with a stable key are idempotent-by-identity; serialize them
+    // so the created-vs-existing report below cannot race a concurrent retry.
+    return serializeByKey(creationChains, canonicalId, () =>
+      reserveEntityOnce(actors, spec, key, canonicalId)
+    ) as Promise<RuntimeEntityHandle>;
+  }
+
+  async function reserveEntityOnce(
+    actors: RuntimeCreationActors,
+    spec: RuntimeCodeEntityCreateSpec,
+    key: string,
+    canonicalId: string
+  ): Promise<RuntimeEntityHandle> {
+    const caller = actors.lifecycleCaller;
+    const explicitContextId = spec.contextId;
     const requestedContextId =
       explicitContextId == null || explicitContextId === "" ? undefined : explicitContextId;
+    // Identity check before the durable upsert: an existing reservation is
+    // resumable only when the full logical identity matches. A mismatched
+    // reuse of the same key (different source or context) is a typed
+    // collision, never a silent merge onto someone else's live entity.
+    const preexisting = await store.resolveRecord(canonicalId);
+    if (preexisting && preexisting.status !== "retired") {
+      if (preexisting.source.repoPath !== spec.execution.source) {
+        throw new IdentityCollisionError(canonicalId, {
+          field: "source.repoPath",
+          existing: preexisting.source.repoPath,
+          attempted: spec.execution.source,
+        });
+      }
+      if (requestedContextId !== undefined && preexisting.contextId !== requestedContextId) {
+        throw new IdentityCollisionError(canonicalId, {
+          field: "contextId",
+          existing: preexisting.contextId,
+          attempted: requestedContextId,
+        });
+      }
+      if (!isTrustedRuntimeHost(caller) && !callerOwnsEntity(caller, preexisting)) {
+        throw new Error(`runtime.reserveEntity caller does not own reservation ${canonicalId}`);
+      }
+    }
+    const created = !preexisting || preexisting.status === "retired";
     const externalAgentBinding = await resolveAgentBinding(
       caller,
       "reserveEntity",
@@ -561,9 +635,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       requestedContextId ??
       deriveContextId(`entity-reservation:${canonicalId}`);
     const hasExplicitContext = explicitContextId != null && explicitContextId !== "";
+    const contextOwner = actors.initiatingCaller;
     const ownerContextId = hasExplicitContext
       ? null
-      : await store.resolveContext(caller.runtime.id);
+      : await store.resolveContext(contextOwner.runtime.id);
     const selfAgentChannelId = selfAgentChannelFromSpec(spec);
     const agentBinding = selfAgentChannelId
       ? { entityId: canonicalId, contextId, channelId: selfAgentChannelId }
@@ -577,16 +652,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       stateArgs: "stateArgs" in spec ? spec.stateArgs : undefined,
       agentBinding,
       parentId: caller.runtime.id,
-      ownerUserId: caller.subject?.userId,
+      ownerUserId: contextOwner.subject?.userId,
       ...(ownerContextId && ownerContextId !== contextId
         ? {
             lifecycleOwner: {
               contextId: ownerContextId,
-              entityId: caller.runtime.id,
+              entityId: contextOwner.runtime.id,
             },
           }
         : {}),
     });
+    deps.taskAuthorities.inheritRuntime(record.id, actors.initiatingCaller, store.cache);
     // An implicit reservation is the semantic creation boundary for its
     // derived lifecycle context. Register it immediately, before activation
     // can boot panel code that creates descendants. Deferring this until the
@@ -598,17 +674,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       await deps.onContextCreated?.({
         contextId,
         ownerContextId: ownerContextId ?? null,
-        ...(caller.testPolicy ? { inheritedTestPolicy: caller.testPolicy } : {}),
+        ...(contextOwner.testPolicy ? { inheritedTestPolicy: contextOwner.testPolicy } : {}),
       });
     }
-    return entityHandle(record);
+    return { ...entityHandle(record), created };
   }
 
   /**
    * Complete one reserved code-backed incarnation in place.
    */
-  async function activateReservedEntity(
-    caller: VerifiedCaller,
+  async function activateReservedEntityOnce(
+    caller: VerifiedCaller | null,
     spec: RuntimeCodeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     if (!spec.key) {
@@ -624,10 +700,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (!existing || existing.kind !== spec.kind) {
       throw new Error(`Unknown reserved entity ${canonicalId}`);
     }
-    if (!callerOwnsEntity(caller, existing)) {
-      throw new Error(
-        `runtime.activateReservedEntity caller ${caller.runtime.id} does not own ${canonicalId}`
-      );
+    if (caller && !isTrustedRuntimeHost(caller) && !callerOwnsEntity(caller, existing)) {
+      throw new Error(`runtime.activateReservedEntity caller does not own ${canonicalId}`);
+    }
+    // A reused reservation key with a different context is a different logical
+    // operation — reject it as a typed collision before any ownership logic.
+    if (spec.contextId != null && spec.contextId !== "" && existing.contextId !== spec.contextId) {
+      throw new IdentityCollisionError(canonicalId, {
+        field: "contextId",
+        existing: existing.contextId,
+        attempted: spec.contextId,
+      });
     }
     if (existing.source.repoPath !== spec.execution.source) {
       throw new Error(
@@ -639,7 +722,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         `Reserved entity ${canonicalId} belongs to class ${existing.className}, not ${spec.className}`
       );
     }
-    if (existing.status !== "preparing" && existing.status !== "active") {
+    if (existing.status === "active") {
+      // A successful activation may lose its response. Retrying the same
+      // reservation is therefore a read of the committed result, never a new
+      // preparation driven by mutable request fields such as ref, env, or
+      // stateArgs.
+      return entityHandle(existing);
+    }
+    if (existing.status !== "preparing") {
       throw new Error(`Reserved entity ${canonicalId} is ${existing.status}`);
     }
 
@@ -680,8 +770,61 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       parentId: existing.parentId,
       ownerUserId: existing.ownerUserId,
     });
+    if (
+      record.kind === "panel" &&
+      record.activeBuildKey &&
+      record.activeExecutionDigest &&
+      record.activeAuthority
+    ) {
+      const panelId = await store.resolveSlotByEntity(record.id);
+      if (panelId) {
+        await deps.onPanelExecutionActivated?.({
+          panelId,
+          runtimeEntityId: record.id,
+          effectiveVersion: record.source.effectiveVersion,
+          buildKey: record.activeBuildKey,
+          executionDigest: record.activeExecutionDigest,
+          authorityRequests: record.activeAuthority.requests,
+        });
+      }
+    }
     if (record.kind === "do") await deps.hooks.onDurableObjectActivated?.(record);
     return entityHandle(record, prepared.target.id);
+  }
+
+  async function activateReservedEntity(
+    caller: VerifiedCaller | null,
+    spec: RuntimeCodeEntityCreateSpec
+  ): Promise<RuntimeEntityHandle> {
+    if (!spec.key) {
+      return Promise.reject(new Error("activateReservedEntity requires the reserved entity key"));
+    }
+    const canonicalId = canonicalEntityId({
+      kind: spec.kind,
+      source: spec.execution.source,
+      className: spec.kind === "do" ? spec.className : undefined,
+      key: spec.key,
+    });
+
+    // Authorization is caller-specific, whereas activation is shared work.
+    // Check every caller before allowing it to observe an existing activation
+    // promise; otherwise a caller that knows the reservation id can join the
+    // owner's in-flight activation without ever passing the ownership gate in
+    // activateReservedEntityOnce.
+    const reserved = await store.resolveRecord(canonicalId);
+    if (!reserved || reserved.kind !== spec.kind) {
+      throw new Error(`Unknown reserved entity ${canonicalId}`);
+    }
+    if (caller && !isTrustedRuntimeHost(caller) && !callerOwnsEntity(caller, reserved)) {
+      throw new Error(`runtime.activateReservedEntity caller does not own ${canonicalId}`);
+    }
+    const existing = activationChains.get(canonicalId);
+    if (existing) return existing;
+    const activation = activateReservedEntityOnce(caller, spec).finally(() => {
+      if (activationChains.get(canonicalId) === activation) activationChains.delete(canonicalId);
+    });
+    activationChains.set(canonicalId, activation);
+    return activation;
   }
 
   /**
@@ -807,6 +950,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ownerUserId: actors.initiatingCaller.subject?.userId,
     };
     const record = await store.activate(activateInput);
+    deps.taskAuthorities.inheritRuntime(record.id, actors.initiatingCaller, store.cache);
     if (record.kind === "do") {
       await deps.hooks.onDurableObjectActivated?.(record);
     }
@@ -931,6 +1075,156 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         await deps.contextFolders.removeContext(record.contextId);
       }
     }
+  }
+
+  async function recoverExecution(
+    caller: VerifiedCaller,
+    input: RuntimeExecutionRecoveryRequest
+  ): Promise<RuntimeExecutionRecoveryResult> {
+    requireTrustedRuntimeHost(caller, "recoverExecution");
+    const previous = recoveryChains.get(input.entityId);
+    const run = () => {
+      const attemptCount = ++recoveryAttemptCount;
+      deps.onExecutionRecovery?.({
+        entityId: input.entityId,
+        expectedExecutionDigest: input.expectedExecutionDigest,
+        strategy: input.strategy,
+        state: "started",
+        attemptCount,
+      });
+      return recoverExecutionOnce(input)
+        .then((result) => {
+          deps.onExecutionRecovery?.({
+            entityId: input.entityId,
+            expectedExecutionDigest: input.expectedExecutionDigest,
+            strategy: input.strategy,
+            state: "succeeded",
+            attemptCount,
+            result,
+          });
+          return result;
+        })
+        .catch((error) => {
+          deps.onExecutionRecovery?.({
+            entityId: input.entityId,
+            expectedExecutionDigest: input.expectedExecutionDigest,
+            strategy: input.strategy,
+            state: "failed",
+            attemptCount,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        });
+    };
+    // Recovery requests for one entity are ordered, not coalesced. Each request
+    // must re-read the active identity after its predecessor settles so its own
+    // expected digest and strategy retain their meaning.
+    const recovery = (previous ? previous.catch(() => undefined).then(run) : run()).finally(() => {
+      if (recoveryChains.get(input.entityId) === recovery) recoveryChains.delete(input.entityId);
+    });
+    recoveryChains.set(input.entityId, recovery);
+    return recovery;
+  }
+
+  async function recoverExecutionOnce(
+    input: RuntimeExecutionRecoveryRequest
+  ): Promise<RuntimeExecutionRecoveryResult> {
+    const record = await store.resolveActiveRecord(input.entityId);
+    if (!record || record.kind !== "do" || !record.className) {
+      throw new Error(`Durable Object execution is not active: ${input.entityId}`);
+    }
+    if (!record.activeBuildKey || !record.activeExecutionDigest || !record.activeAuthority) {
+      throw new Error(`Durable Object ${record.id} has no sealed active execution identity`);
+    }
+    if (record.activeExecutionDigest !== input.expectedExecutionDigest) {
+      throw new Error(
+        `Durable Object ${record.id} advanced from execution ${input.expectedExecutionDigest} ` +
+          `to ${record.activeExecutionDigest}; recovery action is stale`
+      );
+    }
+    const previousExecutionDigest = record.activeExecutionDigest;
+
+    if (input.strategy === "restore-exact") {
+      await deps.hooks.recoverExactExecution(record);
+      await deps.hooks.restartDurableObjectIncarnation(record);
+      return {
+        entityId: record.id,
+        strategy: input.strategy,
+        previousExecutionDigest,
+        buildKey: record.activeBuildKey,
+        executionDigest: record.activeExecutionDigest,
+      };
+    }
+
+    const spec: Extract<RuntimeEntityCreateSpec, { kind: "do" }> = {
+      kind: "do",
+      execution: {
+        surface: "code",
+        source: record.source.repoPath,
+        ref: `ctx:${record.contextId}`,
+      },
+      className: record.className,
+      key: record.key,
+      contextId: record.contextId,
+      stateArgs: record.stateArgs,
+      ...(record.agentBinding
+        ? {
+            agentBinding: {
+              entityId: record.agentBinding.entityId,
+              channelId: record.agentBinding.channelId,
+            },
+          }
+        : {}),
+    };
+    const prepared = await deps.hooks.prepare({
+      spec,
+      key: record.key,
+      contextId: record.contextId,
+      ...(record.parentId
+        ? {
+            parent: {
+              parentId: record.parentId,
+              parentEntityId: record.parentId,
+            },
+          }
+        : {}),
+    });
+    if (prepared.surface !== "code") {
+      throw new Error(`Durable Object ${record.id} replacement did not prepare code`);
+    }
+    const activeIdentity = requireActiveExecutionIdentity(
+      prepared,
+      `Durable Object ${record.id} replacement`
+    );
+    const latest = await store.resolveActiveRecord(record.id);
+    if (latest?.activeExecutionDigest !== previousExecutionDigest) {
+      throw new Error(`Durable Object ${record.id} advanced while recovery was preparing`);
+    }
+    const advanced = await store.advanceExecution({
+      kind: "do",
+      source: {
+        repoPath: record.source.repoPath,
+        effectiveVersion: prepared.effectiveVersion,
+      },
+      activeBuildKey: prepared.buildKey,
+      ...activeIdentity,
+      contextId: record.contextId,
+      className: record.className,
+      key: record.key,
+      stateArgs: record.stateArgs,
+      agentBinding: record.agentBinding,
+      parentId: record.parentId,
+      ownerUserId: record.ownerUserId,
+    });
+    await deps.hooks.onDurableObjectActivated?.(advanced);
+    await deps.hooks.restartDurableObjectIncarnation(advanced);
+    return {
+      entityId: advanced.id,
+      strategy: input.strategy,
+      previousExecutionDigest,
+      buildKey: prepared.buildKey,
+      executionDigest: activeIdentity.activeExecutionDigest,
+    };
   }
 
   /** Build a clone spec from a source record: same source + class, new key/context.
@@ -1567,7 +1861,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           spec
         ),
       reserveEntity: (ctx, [spec]) =>
-        reserveEntity(ctx.caller, spec as RuntimeCodeEntityCreateSpec),
+        reserveEntity(
+          {
+            lifecycleCaller: ctx.caller,
+            initiatingCaller: verifiedInitiator(ctx),
+          },
+          spec as RuntimeCodeEntityCreateSpec
+        ),
       activateReservedEntity: (ctx, [spec]) =>
         activateReservedEntity(ctx.caller, spec as RuntimeCodeEntityCreateSpec),
       faultAbortAgentVessel: async (ctx, [{ targetId }]) => {
@@ -1584,6 +1884,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       retireEntity: async (ctx, [{ id, removeContext }]) => {
         await retireEntity(id, removeContext);
       },
+      recoverExecution: (ctx, [input]) => recoverExecution(ctx.caller, input),
       listEntities: (_ctx, [input]) => listEntities(input?.kind),
       resolveContext: (_ctx, [id]) => resolveContext(id),
       listContexts: (_ctx, [input]) => listContexts(input?.prefix),
@@ -1642,6 +1943,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     internal: {
       createEntity: (caller, spec) =>
         createEntity({ lifecycleCaller: caller, initiatingCaller: caller }, spec),
+      activateReservedEntity: (spec) => activateReservedEntity(null, spec),
+      listPreparingPanels: () => store.listPreparing("panel"),
       retireEntity: (id) => retireEntity(id),
       createContext,
       resolveContext,

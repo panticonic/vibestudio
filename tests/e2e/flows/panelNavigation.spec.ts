@@ -14,6 +14,7 @@ import {
   hasElectronDisplay,
   isPanelReady,
   launchTestApp,
+  approvePendingWorkspaceCreationReview,
   approvePendingStartupUnits,
   removeManagedTestWorkspace,
   startPanelDiagnostics,
@@ -134,6 +135,7 @@ test.describe("Panel navigation convergence", () => {
         launchTimeout: 180_000,
       });
       await approvePendingStartupUnits(testApp.app);
+      await approvePendingWorkspaceCreationReview(testApp.app);
       const initialReadiness = await ensureHostedShellReady(testApp.app, {
         panelSource: "about/new",
       });

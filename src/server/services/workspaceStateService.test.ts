@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
 
-import { createWorkspaceStateService } from "./workspaceStateService.js";
+import { createWorkspaceStateService, type SlotStateChange } from "./workspaceStateService.js";
 
 interface MockHandlerCtx {
   caller: { runtime: { kind: string; id: string }; hostOriginated?: true };
@@ -27,7 +27,8 @@ function makeDoCtx(key: { source: string; className: string; objectKey: string }
 
 function makeService(opts: {
   onPanelTitleChanged?: (entityId: string, title: string) => void;
-  onSlotStateChanged?: () => void;
+  isEntityTitleExplicit?: (entityId: string) => boolean;
+  onSlotStateChanged?: (change?: SlotStateChange) => void;
   /**
    * Map of DO method → return value. The dispatcher uses this to drive
    * outcomes (e.g. simulating the entity-id WorkspaceDO returns from
@@ -52,8 +53,10 @@ function makeService(opts: {
       resolveEntityContext: () => null,
       resolveSubjectCaller: () => null,
       ...opts.panelAccess,
+      controlsLifecycleContext: opts.panelAccess?.controlsLifecycleContext ?? (async () => false),
     },
     ...(opts.onPanelTitleChanged ? { onPanelTitleChanged: opts.onPanelTitleChanged } : {}),
+    ...(opts.isEntityTitleExplicit ? { isEntityTitleExplicit: opts.isEntityTitleExplicit } : {}),
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
   });
   return { svc, calls };
@@ -226,6 +229,28 @@ describe("workspaceStateService — title mirror hooks", () => {
     expect(result).toBe("entity:abc-current");
   });
 
+  it("does not let an inferred title replace an explicit title", async () => {
+    const onPanelTitleChanged = vi.fn();
+    const { svc, calls } = makeService({
+      onPanelTitleChanged,
+      isEntityTitleExplicit: () => true,
+      dispatchReturns: {
+        panelTreeDetail: {
+          entity: { id: "panel:abc-current" },
+        },
+      },
+    });
+
+    const result = await svc.handler(makeCtx() as never, "panel.updateTitle", [
+      "panel:abc",
+      "Document title",
+    ]);
+
+    expect(result).toBe("panel:abc-current");
+    expect(calls.map(({ method }) => method)).toEqual(["panelTreeDetail"]);
+    expect(onPanelTitleChanged).not.toHaveBeenCalled();
+  });
+
   it("does not fire onPanelTitleChanged when the slot has no current entity", async () => {
     const onPanelTitleChanged = vi.fn();
     const { svc } = makeService({
@@ -291,24 +316,6 @@ describe("workspaceStateService — slot-state change hook", () => {
 
   const mutating: Array<[method: string, args: unknown[]]> = [
     ["slot.create", [{ slotId: "s1", parentSlotId: null }]],
-    [
-      "slot.commitPreparedNavigation",
-      [
-        {
-          slotId: "s1",
-          expectedCurrentEntityId: "entity-0",
-          mutation: {
-            kind: "append",
-            entry: {
-              entryKey: "e1",
-              entityId: "entity-1",
-              source: "panels/test",
-              contextId: "ctx-1",
-            },
-          },
-        },
-      ],
-    ],
     ["slot.updateCurrentStateArgs", ["s1", {}]],
     ["slot.move", ["s1", null, { afterSlotId: "s0" }]],
     ["slot.close", ["s1"]],
@@ -322,6 +329,69 @@ describe("workspaceStateService — slot-state change hook", () => {
       expect(onSlotStateChanged).toHaveBeenCalledTimes(1);
     });
   }
+
+  it("publishes the committed durable desired entity for presentation reconciliation", async () => {
+    const onSlotStateChanged = vi.fn();
+    const result = {
+      previousEntityId: "panel:nav-about-new",
+      currentEntityId: "panel:nav-news",
+      currentEntryKey: "nav-news",
+      cursor: 1,
+    };
+    const input = {
+      slotId: "panel:tree/news",
+      expectedCurrentEntityId: result.previousEntityId,
+      mutation: {
+        kind: "append",
+        entry: {
+          entryKey: result.currentEntryKey,
+          entityId: result.currentEntityId,
+          source: "panels/news",
+          contextId: "ctx-news",
+        },
+      },
+    };
+    const { svc } = makeService({
+      onSlotStateChanged,
+      dispatchReturns: { slotCommitPreparedNavigation: result },
+    });
+
+    await expect(
+      svc.handler(makeCtx() as never, "slot.commitPreparedNavigation", [input])
+    ).resolves.toEqual(result);
+    expect(onSlotStateChanged).toHaveBeenCalledWith({
+      kind: "current-entity",
+      slotId: input.slotId,
+      previousEntityId: result.previousEntityId,
+      currentEntityId: result.currentEntityId,
+      presentation: "executable",
+    });
+  });
+
+  it("publishes a newly created slot's durable desired entity", async () => {
+    const onSlotStateChanged = vi.fn();
+    const { svc } = makeService({ onSlotStateChanged });
+    const input = {
+      slotId: "panel:tree/news",
+      parentSlotId: null,
+      initialEntry: {
+        entryKey: "nav-news",
+        entityId: "panel:nav-news",
+        source: "panels/news",
+        contextId: "ctx-news",
+      },
+    };
+
+    await svc.handler(makeCtx() as never, "slot.create", [input]);
+
+    expect(onSlotStateChanged).toHaveBeenCalledWith({
+      kind: "current-entity",
+      slotId: input.slotId,
+      previousEntityId: null,
+      currentEntityId: input.initialEntry.entityId,
+      presentation: "awaiting-execution",
+    });
+  });
 
   const reads: Array<[method: string, args: unknown[]]> = [
     ["panelTree.rootGroups", [{}]],

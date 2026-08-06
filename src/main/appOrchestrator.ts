@@ -129,8 +129,9 @@ export class AppOrchestrator {
     if (!isNewBuild && hasLoadedView) {
       // Availability is emitted at-least-once (host launch, workspace
       // rediscovery). Remounting an already-loaded identical build would
-      // re-show the view and restack it over slotted panels.
-      log.verbose(`App ${event.appId} already mounted at ${appAvailableIdentity(event)}; skipping`);
+      // re-show the view and restack it over slotted panels. This is a normal
+      // idempotent no-op, so keep it silent; logging every replay made a
+      // healthy startup look like an event loop.
       this.adopted.set(event.appId, event);
       return;
     }

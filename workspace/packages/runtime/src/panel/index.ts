@@ -33,7 +33,11 @@ export type {
   WorkspaceServiceInfo,
   WorkerSourceInfo,
 } from "../shared/workerd.js";
-export type { OpenPanelOptions, PanelRuntimeTree } from "../shared/panelRuntime.js";
+export type {
+  CreatePanelSlotOptions,
+  OpenPanelOptions,
+  PanelRuntimeTree,
+} from "../shared/panelRuntime.js";
 export type * from "../shared/gad.js";
 export type * from "../core/types.js";
 export type { Runtime } from "../setup/createRuntime.js";
@@ -85,6 +89,7 @@ _initPanelHandleBridge(rpc, {
 import {
   openExternal as _hostOpenExternal,
   openPanel as _hostOpenPanel,
+  createPanelSlot as _hostCreatePanelSlot,
   getPanelHandle as _hostGetPanelHandle,
   panelTree as _hostPanelTree,
   onChildCreated as _onChildCreated,
@@ -102,6 +107,7 @@ const _panelHost: RuntimeHost = {
   gatewayConfig,
   gatewayFetch,
   panelRuntime: {
+    createPanelSlot: _hostCreatePanelSlot,
     openPanel: _hostOpenPanel,
     getPanelHandle: _hostGetPanelHandle,
     panelTree: _hostPanelTree,
@@ -140,6 +146,7 @@ export const {
   doTargetId,
   createDurableObjectServiceClient,
   openExternal,
+  createPanelSlot,
   openPanel,
   getPanelHandle,
   panelTree,
@@ -202,8 +209,7 @@ import { createPanelSelfNavigation } from "./selfNavigation.js";
 const { reopen, switchContext } = createPanelSelfNavigation({
   rpc,
   slotId: _slotId,
-  navigatePanel: (slotId, source, options) =>
-    _hostPanelTree.navigate(slotId, source, options),
+  navigatePanel: (slotId, source, options) => _hostPanelTree.navigate(slotId, source, options),
 });
 
 export const panel = helpfulNamespace("panel", {

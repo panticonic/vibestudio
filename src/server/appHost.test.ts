@@ -19,7 +19,7 @@ import {
   executionSourceClosureDigest,
 } from "@vibestudio/shared/execution/retention";
 import { AppHost } from "./appHost.js";
-import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
+import { UnitInstallReviewCoordinator } from "./unitInstallReviewCoordinator.js";
 import type { BuildMetadata } from "./buildV2/buildStore.js";
 
 const roots: string[] = [];
@@ -95,11 +95,12 @@ function makeHarness(
   opts: {
     seeded?: boolean;
     invalidManifest?: boolean;
-    approvalDecision?: "once" | "session" | "version" | "deny";
+    approvalDecision?: "accepted" | "deny";
     useApprovalCoordinator?: boolean;
     readWorkspaceFileAtState?: (stateHash: string, filePath: string) => Promise<string | null>;
     reactNativeAppArtifactBaseUrl?: string;
     terminalAppArtifactBaseUrl?: string;
+    affectedBuildUnits?: string[];
   } = {}
 ) {
   const root = tempRoot();
@@ -199,10 +200,12 @@ function makeHarness(
     resolveBuildUnitIdentity: vi.fn(async () => ({
       unitPath: "apps/shell",
       unitName: "@workspace-apps/shell",
+      stateHash: "state:current",
       effectiveVersion: "ev-app",
       dependencyEvs: {},
       externalDeps: {},
     })),
+    listAffectedBuildUnits: vi.fn(async () => opts.affectedBuildUnits ?? [graphNode.name]),
     getExternalDeps: vi.fn(() => ({})),
     getBuildProviderDetails: vi.fn(
       () =>
@@ -241,13 +244,17 @@ function makeHarness(
   };
   const eventService = { emit: vi.fn(), getOrCreateSubscriber: vi.fn(), subscribe: vi.fn() };
   const approvalQueue = {
-    request: vi.fn(async () => opts.approvalDecision ?? ("once" as const)),
+    request: vi.fn(async (_req: unknown) => opts.approvalDecision ?? ("accepted" as const)),
     listPending: vi.fn<() => PendingApproval[]>(() => []),
+    requestWithHandle: vi.fn((req) => ({
+      approvalId: "install-review",
+      decision: approvalQueue.request(req),
+    })),
   };
   const notificationService = { show: vi.fn(() => "notification-id") };
   const entityCache = new EntityCache();
   const approvalCoordinator = opts.useApprovalCoordinator
-    ? new ServerUnitApprovalCoordinator({ approvalQueue, delayMs: 10_000 })
+    ? new UnitInstallReviewCoordinator({ approvalQueue, delayMs: 10_000 })
     : undefined;
   const host = new AppHost({
     statePath: path.join(root, "state"),
@@ -492,6 +499,22 @@ describe("AppHost", () => {
         source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       }),
     ]);
+  });
+
+  it("does not review apps for an unrelated repository publication", async () => {
+    const readWorkspaceFileAtState = vi.fn(async (_stateHash: string, filePath: string) =>
+      filePath === "meta/vibestudio.yml"
+        ? `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\napps:\n  - source: apps/shell\n`
+        : null
+    );
+    const { host } = makeHarness({ readWorkspaceFileAtState, affectedBuildUnits: [] });
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+
+    const approval = await host.unitChangeApprovalForCommit("state:next", {
+      changedPaths: ["workers/notes/index.ts"],
+    });
+
+    expect(approval).toMatchObject({ units: [], identityKeys: [], unchangedCount: 0 });
   });
 
   it("treats an omitted static app capability list as an empty declaration", async () => {
@@ -886,9 +909,9 @@ describe("AppHost", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
-        title: "Approve workspace apps",
+        kind: "unit-install-review",
+        mode: "adopt-root",
+        title: "Start this workspace?",
         units: [
           expect.objectContaining({
             unitKind: "app",
@@ -912,8 +935,8 @@ describe("AppHost", () => {
     await expect(host.activateRelease("@workspace-apps/shell")).resolves.toBeUndefined();
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "app",
@@ -950,8 +973,8 @@ describe("AppHost", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "app",
@@ -1498,8 +1521,8 @@ describe("AppHost", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "app",
@@ -1739,8 +1762,8 @@ describe("AppHost", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "app",
@@ -1847,8 +1870,8 @@ describe("AppHost", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "app",
@@ -2056,8 +2079,8 @@ describe("AppHost", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "app",
@@ -2109,8 +2132,8 @@ describe("AppHost", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "unit-batch",
-        trigger: "startup",
+        kind: "unit-install-review",
+        mode: "adopt-root",
         units: [
           expect.objectContaining({
             unitKind: "app",

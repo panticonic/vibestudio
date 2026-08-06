@@ -81,6 +81,7 @@ export interface PanelTreeSearchPage {
 }
 
 export interface PanelTreeSearchInput {
+  /** Matches indexed title, source/path, manifest description/dependencies, tags, and keywords. */
   query: string;
   cursor?: string;
   limit?: number;
