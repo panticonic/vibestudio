@@ -49,6 +49,33 @@ function executionWithInvocation(
   } as TestExecutionResult;
 }
 
+function withSuccessfulImageRead(result: TestExecutionResult): TestExecutionResult {
+  const final = result.messages.at(-1)!;
+  return {
+    ...result,
+    messages: [
+      ...result.messages.slice(0, -1),
+      {
+        kind: "message",
+        senderId: "agent",
+        complete: true,
+        contentType: "invocation",
+        content: JSON.stringify({
+          id: "call-read-image",
+          name: "read",
+          arguments: { target: "file:cdp-capture", kind: "file" },
+          execution: {
+            status: "complete",
+            terminalOutcome: "success",
+            result: { details: { mimeType: "image/png", size: 4096 } },
+          },
+        }),
+      },
+      final,
+    ],
+  } as TestExecutionResult;
+}
+
 const clickTest = cdpGadDiagnosticTests.find(
   (test) => test.name === "cdp-page-click-type-evaluate"
 )!;
@@ -62,7 +89,7 @@ const branchTest = cdpGadDiagnosticTests.find(
   (test) => test.name === "gad-branch-file-diff-probe"
 )!;
 const CLICK_FINAL =
-  "I clicked the disposable page control, evaluated the requested value, and captured a screenshot successfully.";
+  "I clicked the disposable page control, evaluated the requested value, and captured a screenshot successfully. The visible status text was State: clicked.";
 const INTEGRITY_FINAL =
   "The GAD assessment covered storage, publication, the current turn and invocation, hashes, and integrity.";
 const BRANCH_FINAL =
@@ -71,6 +98,76 @@ const STATE_FINAL =
   "The panel state was visible in the inspected automation snapshot after the change.";
 
 describe("cdp-gad diagnostics validators", () => {
+  it("accepts a successful browser action only after the screenshot is read as image content", () => {
+    const result = clickTest.validate(
+      withSuccessfulImageRead(
+        executionWithInvocation(CLICK_FINAL, {
+          id: "call-1",
+          name: "eval",
+          arguments: {
+            code: "await page.locator('button').click(); await page.screenshot(); return await page.evaluate(() => 2 + 2);",
+          },
+          execution: {
+            status: "complete",
+            terminalOutcome: "success",
+            result: { details: { returnValue: 4 } },
+          },
+        })
+      )
+    );
+
+    expect(result).toEqual({ passed: true });
+  });
+
+  it("rejects a successful screenshot call when the image was not read", () => {
+    const result = clickTest.validate(
+      executionWithInvocation(CLICK_FINAL, {
+        id: "call-1",
+        name: "eval",
+        arguments: {
+          code: "await page.locator('button').click(); await page.screenshot(); return await page.evaluate(() => 2 + 2);",
+        },
+        execution: {
+          status: "complete",
+          terminalOutcome: "success",
+          result: { details: { returnValue: 4 } },
+        },
+      })
+    );
+
+    expect(result).toMatchObject({
+      passed: false,
+      reason: expect.stringContaining("read it as image content"),
+    });
+  });
+
+  it("rejects image evidence without the page-specific visible fact", () => {
+    const result = clickTest.validate(
+      withSuccessfulImageRead(
+        executionWithInvocation(
+          "I clicked the disposable page control, evaluated the requested value, and captured a screenshot successfully.",
+          {
+            id: "call-1",
+            name: "eval",
+            arguments: {
+              code: "await page.locator('button').click(); await page.screenshot(); return await page.evaluate(() => 2 + 2);",
+            },
+            execution: {
+              status: "complete",
+              terminalOutcome: "success",
+              result: { details: { returnValue: 4 } },
+            },
+          }
+        )
+      )
+    );
+
+    expect(result).toMatchObject({
+      passed: false,
+      reason: expect.stringContaining("semantically report"),
+    });
+  });
+
   it("rejects a final success marker when an invocation failed", () => {
     const result = clickTest.validate(
       executionWithInvocation(CLICK_FINAL, {
@@ -370,7 +467,6 @@ describe("cdp-gad diagnostics prompts", () => {
       "Do not use a data: URL",
       "page.evaluate",
       "gad.inspectAgentHealth",
-      "gad.query",
       "{ rows }",
       "result.rows",
       "trajectory_branches",

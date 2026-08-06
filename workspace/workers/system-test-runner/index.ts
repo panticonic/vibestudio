@@ -22,6 +22,7 @@ interface SystemTestRunConfig {
   category?: string;
   all?: boolean;
   model?: string;
+  thinkingLevel?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   concurrency?: number;
   testTimeoutMs?: number;
 }
@@ -153,18 +154,21 @@ export class SystemTestRunnerDO extends DurableObjectBase {
 
   private async runHarnessUtility(kind: "doctor" | "list", code: string): Promise<unknown> {
     const runId = `system-test-runner:${kind}:${crypto.randomUUID()}`;
-    const subKey = `system-test-${kind}`;
-    const scopeKey = `$systemTestUtility:${kind}`;
+    // A utility call owns a finite EvalDO for exactly one invocation. Startup
+    // approval can call doctor while the CLI issues its next doctor/list
+    // request, so a kind-only scope would let one invocation dispose or
+    // overwrite another invocation's result before it was read.
+    const { subKey, scopeKey } = systemTestUtilityKeys(kind, crypto.randomUUID());
     try {
       const execute = createEvalExecutor(<T>(method: string, args: unknown[]) =>
         this.rpc.call<T>("main", method, args)
       );
       const result = await execute({
-          runId,
-          scope: { key: subKey, lifecycle: "finite" },
-          source: {
-            kind: "inline",
-            code: `
+        runId,
+        scope: { key: subKey, lifecycle: "finite" },
+        source: {
+          kind: "inline",
+          code: `
           ${code}
           const serialized = JSON.stringify(utilityValue);
           scope[${JSON.stringify(scopeKey)}] = serialized;
@@ -174,8 +178,8 @@ export class SystemTestRunnerDO extends DurableObjectBase {
             length: serialized.length,
           };
         `,
-            syntax: "typescript",
-          },
+          syntax: "typescript",
+        },
       });
       if (!result.success) {
         throw new Error(result.error ?? `system-test ${kind} eval failed`);
@@ -413,6 +417,16 @@ export class SystemTestRunnerDO extends DurableObjectBase {
       { runId: systemTestEvalRunId(runId), scopeKey: runId }
     );
   }
+}
+
+export function systemTestUtilityKeys(
+  kind: "doctor" | "list",
+  invocationId: string
+): { subKey: string; scopeKey: string } {
+  return {
+    subKey: `system-test-${kind}-${invocationId}`,
+    scopeKey: `$systemTestUtility:${kind}:${invocationId}`,
+  };
 }
 
 function systemTestEvalRunId(runId: string): string {

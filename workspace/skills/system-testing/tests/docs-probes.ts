@@ -99,7 +99,7 @@ export const docsProbeTests: TestCase[] = [
     {
       workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
       actionEvidence: [
-        /\bcreate_project\b|createProject/iu,
+        /\bcreate_projects\b|createProjects/iu,
         /\bcommit\b|vcs\.commit/iu,
         /\bpush\b|vcs\.push/iu,
         /openPanel/iu,

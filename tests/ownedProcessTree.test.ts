@@ -38,6 +38,48 @@ describe.skipIf(process.platform === "win32")("owned POSIX process tree", () => 
     expect(processTreeAlive(owned.pid!)).toBe(false);
   }, 10_000);
 
+  it("removes descendants that deliberately use their own process group", async () => {
+    const child = `
+      process.on("SIGTERM", () => {});
+      setInterval(() => {}, 1000);
+    `;
+    const parent = `
+      const { spawn } = require("node:child_process");
+      process.on("SIGTERM", () => {});
+      const child = spawn(process.execPath, ["-e", ${JSON.stringify(child)}], {
+        detached: true,
+        stdio: "ignore",
+      });
+      console.log(child.pid);
+      setInterval(() => {}, 1000);
+    `;
+    const owned = spawn(process.execPath, ["-e", parent], {
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const [childPidOutput] = await once(owned.stdout!, "data");
+    const childPid = Number(String(childPidOutput).trim());
+    expect(Number.isInteger(childPid)).toBe(true);
+
+    try {
+      const result = await terminateOwnedProcessTree(owned.pid!, {
+        termTimeoutMs: 100,
+        killTimeoutMs: 5_000,
+      });
+
+      expect(result).toMatchObject({ gone: true, escalated: true });
+      expect(processTreeAlive(owned.pid!)).toBe(false);
+      expect(() => process.kill(childPid, 0)).toThrow();
+    } finally {
+      try {
+        process.kill(-owned.pid!, "SIGKILL");
+      } catch {}
+      try {
+        process.kill(-childPid, "SIGKILL");
+      } catch {}
+    }
+  }, 10_000);
+
   it("classifies an already-exited owner as gone", async () => {
     const owned = spawn(process.execPath, ["-e", ""], {
       detached: true,

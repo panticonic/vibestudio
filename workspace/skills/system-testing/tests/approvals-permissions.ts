@@ -1,27 +1,43 @@
 import type { TestCase, TestExecutionResult } from "../types.js";
 import { completedScenarioEvidence, invocationReturnValue } from "./_scenario-evidence.js";
+import { savedPermissionGrantSchema } from "@vibestudio/service-schemas/permissions";
+const PERMISSION_LIST_CALL =
+  /\bservices\.permissions\.list\s*\(\s*\)|\brpc\.call\s*\(\s*["']main["']\s*,\s*["']permissions\.list["']\s*,\s*\[\s*\]\s*\)/u;
+const PERMISSION_MUTATION_CALL =
+  /\bservices\.permissions\.(?:revoke|updateAgentProfile|setWorkspaceAuthorityLock)\s*\(|\brpc\.call\s*\(\s*["']main["']\s*,\s*["']permissions\.(?:revoke|updateAgentProfile|setWorkspaceAuthorityLock)["']/u;
 
 function validatePermissionList(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
+  if (
+    base.evidence.calls.some((call) => {
+      const code = String(call.arguments?.["code"] ?? "");
+      return call.name === "eval" && PERMISSION_MUTATION_CALL.test(code);
+    })
+  ) {
+    return {
+      passed: false,
+      reason: "The permission inventory task invoked a mutating permission API",
+    };
+  }
   const listed = base.evidence.calls.find((call) => {
     const code = String(call.arguments?.["code"] ?? "");
     return (
       call.name === "eval" &&
       call.execution?.status === "complete" &&
       call.execution.isError !== true &&
-      /permissions\.list|["']permissions\.list["']/u.test(code) &&
-      !/permissions\.revoke/u.test(code)
+      PERMISSION_LIST_CALL.test(code)
     );
   });
   const returned = listed ? invocationReturnValue(listed) : { present: false as const };
-  const grants =
-    returned.present && returned.value && typeof returned.value === "object"
-      ? (returned.value as Record<string, unknown>)["grants"]
-      : undefined;
-  return returned.present && (Array.isArray(returned.value) || Array.isArray(grants))
+  return returned.present &&
+    Array.isArray(returned.value) &&
+    returned.value.every((grant) => savedPermissionGrantSchema.safeParse(grant).success)
     ? { passed: true, reason: undefined }
-    : { passed: false, reason: "The read-only permission listing returned no grant array" };
+    : {
+        passed: false,
+        reason: "The read-only permission listing returned an invalid grant inventory",
+      };
 }
 
 export const approvalPermissionTests: TestCase[] = [

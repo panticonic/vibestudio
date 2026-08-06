@@ -1,5 +1,4 @@
-const ARGUMENT_REJECTION =
-  /(?:^|unknown_tool_failure:\s*)Invalid arguments for tool\s+/i;
+const ARGUMENT_REJECTION = /(?:^|unknown_tool_failure:\s*)Invalid arguments for tool\s+/i;
 const SAFE_VCS_REJECTIONS = new Set([
   "ConflictPresent",
   "DependencyBlocked",
@@ -87,12 +86,14 @@ export function isSafeEvalDomainRejection(
 }
 
 /**
- * The eval runtime distinguishes a guest program throwing from its own
+ * The eval runtime distinguishes a guest program failure from its own
  * infrastructure failing. Agentic development is expected to execute,
- * diagnose, edit, and rerun imperfect user code, so a typed guest-code
- * exception remains visible in diagnostics but is not a failed platform
- * effect. Untyped eval errors and every infrastructure/cancellation failure
- * remain unexpected.
+ * diagnose, edit, and rerun imperfect user code, so every eval failure
+ * explicitly typed as `user-code` remains visible in diagnostics but is not a
+ * failed platform effect. The failure code is evidence for diagnosis, not a
+ * second allowlist that can drift as new guest-code errors are added. Untyped
+ * eval errors and every infrastructure/cancellation failure remain
+ * unexpected.
  */
 export function isEvalGuestCodeFailure(
   toolName: string,
@@ -101,8 +102,8 @@ export function isEvalGuestCodeFailure(
 ): boolean {
   return (
     toolName === "eval" &&
-    terminalReasonCode === "guest_execution_failed" &&
-    failureKind === "user-code"
+    failureKind === "user-code" &&
+    terminalReasonCode !== "module_not_available"
   );
 }
 
@@ -133,24 +134,50 @@ export function isSafeSubagentDomainRejection(
   );
 }
 
-export type BuiltInExpectedToolFailureClassification =
+export type BuiltInToolFailureClassification =
   | "argument-rejection"
   | "domain-rejection"
   | "guest-code-failure";
+
+/**
+ * A failed invocation can still be useful evidence without representing a
+ * failed platform effect. `expected` is reserved for failures a test
+ * deliberately induces; `diagnosticOnly` describes typed no-effect guards and
+ * guest-code exceptions discovered while the agent is working.
+ */
+export interface ToolFailureDisposition {
+  expected?: boolean;
+  diagnosticOnly?: boolean;
+  classification?: BuiltInToolFailureClassification;
+}
+
+/**
+ * Keep this predicate shared by suite accounting, rerun selection, reports,
+ * and diagnostics. A classification also makes older persisted trajectories
+ * safe to read after `diagnosticOnly` was added to the summary shape.
+ */
+export function isUnexpectedToolFailure(failure: ToolFailureDisposition): boolean {
+  return (
+    failure.expected !== true &&
+    failure.diagnosticOnly !== true &&
+    failure.classification === undefined
+  );
+}
 
 /**
  * One canonical classifier is shared by suite accounting and semantic
  * validators. This prevents a scenario from rejecting the same typed,
  * no-effect failure that the runner correctly keeps as diagnostic evidence.
  */
-export function classifyBuiltInExpectedToolFailure(input: {
+export function classifyBuiltInToolFailure(input: {
   name: string;
   terminalReasonCode?: string;
+  failureCode?: string;
   failureKind?: string;
   error?: unknown;
   result?: unknown;
   description?: unknown;
-}): BuiltInExpectedToolFailureClassification | null {
+}): BuiltInToolFailureClassification | null {
   if (isPreExecutionArgumentRejection(input.error, input.result, input.description)) {
     return "argument-rejection";
   }
@@ -158,14 +185,20 @@ export function classifyBuiltInExpectedToolFailure(input: {
     return "argument-rejection";
   }
   if (
-    isSafeVcsDomainRejection(input.name, input.terminalReasonCode) ||
-    isSafeProvenanceDomainRejection(input.name, input.terminalReasonCode) ||
-    isSafeEvalDomainRejection(input.name, input.terminalReasonCode) ||
-    isSafeSubagentDomainRejection(input.name, input.terminalReasonCode)
+    isSafeVcsDomainRejection(input.name, input.terminalReasonCode ?? input.failureCode) ||
+    isSafeProvenanceDomainRejection(input.name, input.terminalReasonCode ?? input.failureCode) ||
+    isSafeEvalDomainRejection(input.name, input.terminalReasonCode ?? input.failureCode) ||
+    isSafeSubagentDomainRejection(input.name, input.terminalReasonCode ?? input.failureCode)
   ) {
     return "domain-rejection";
   }
-  if (isEvalGuestCodeFailure(input.name, input.terminalReasonCode, input.failureKind)) {
+  if (
+    isEvalGuestCodeFailure(
+      input.name,
+      input.terminalReasonCode ?? input.failureCode,
+      input.failureKind
+    )
+  ) {
     return "guest-code-failure";
   }
   return null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { serializeSystemTestError } from "./structured-error.js";
+import { serializeSystemTestError, serializeSystemTestStack } from "./structured-error.js";
 
 describe("structured system-test errors", () => {
   it("preserves typed RPC evidence and indexes opaque diagnostic handles", () => {
@@ -67,5 +67,14 @@ describe("structured system-test errors", () => {
       password: "[redacted]",
     });
     expect(() => JSON.stringify(serialized)).not.toThrow();
+  });
+
+  it("redacts and bounds explicitly requested diagnostic stacks", () => {
+    const error = new TypeError("Cannot read properties of undefined (reading 'includes')");
+    error.stack = `TypeError: token=must-not-persist\n    at validate (validator.ts:12:3)`;
+
+    expect(serializeSystemTestStack(error)).toBe(
+      "TypeError: token=[redacted]\n    at validate (validator.ts:12:3)"
+    );
   });
 });

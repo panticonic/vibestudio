@@ -1,7 +1,7 @@
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
 import type { HeadlessRunner } from "./runner.js";
-import type { SystemTestFailure } from "./structured-error.js";
+import type { SystemTestFailure, SystemTestJsonValue } from "./structured-error.js";
 import type { WorkspaceRepoFixtureSpec } from "./workspace-repo-fixture.js";
 import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
 
@@ -45,6 +45,11 @@ export const CREATED_PACKAGE_WORKSPACE_REPO_FIXTURE = {
   section: "packages",
 } as const satisfies WorkspaceRepoFixtureSpec;
 
+export const CREATED_WORKER_WORKSPACE_REPO_FIXTURE = {
+  kind: "created-repository",
+  section: "workers",
+} as const satisfies WorkspaceRepoFixtureSpec;
+
 export const BUILDABLE_PANEL_WITH_DERIVED_WORKSPACE_REPO_FIXTURE = {
   kind: "buildable-panel-with-derived",
   section: "panels",
@@ -64,6 +69,10 @@ export interface ToolFailureSummary {
   expected?: boolean;
   /** Why a recorded failure is diagnostic-only rather than a failed platform effect. */
   classification?: "argument-rejection" | "domain-rejection" | "guest-code-failure";
+  /** True for a typed no-effect guard or guest-code exception. */
+  diagnosticOnly?: boolean;
+  /** Typed eval/runtime discriminator, when the protocol supplies one. */
+  failureCode?: string;
   source: "message" | "snapshot";
 }
 
@@ -167,6 +176,8 @@ export interface TestExecutionResult {
   error?: string;
   /** Schema-safe structured evidence for the primary failure. */
   failure?: SystemTestFailure;
+  /** Bounded schema-only evidence retained when validation code itself throws. */
+  validationFailure?: ValidationFailureProvenance;
   /** Cleanup errors from closing the headless session or retiring its agent */
   cleanupErrors?: string[];
   /** Schema-safe structured evidence for cleanup failures. */
@@ -179,6 +190,14 @@ export interface TestExecutionResult {
   diagnostics?: Record<string, unknown>;
   /** Non-fatal tool-call failures observed during the turn. */
   toolFailures?: ToolFailureSummary[];
+}
+
+export interface ValidationFailureProvenance {
+  testName: string;
+  validator: "harness" | "agent-completion-report";
+  phase: "validation";
+  stack?: string;
+  inputProjection: SystemTestJsonValue;
 }
 
 export interface TestResult {

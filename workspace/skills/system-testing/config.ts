@@ -6,6 +6,8 @@
  */
 export const SYSTEM_TEST_AGENT_MODEL = "openai-codex:gpt-5.3-codex-spark";
 
+export type SystemTestThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 /** Finite case budget so one wedged turn cannot hold an unattended suite forever. */
 export const DEFAULT_SYSTEM_TEST_TIMEOUT_MS = 10 * 60_000;
 

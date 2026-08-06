@@ -10,6 +10,7 @@
 import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { summarizeEntry } from "../diagnostics.js";
 import type { TestSuiteResult, TestSuiteResultEntry } from "../types.js";
+import { isUnexpectedToolFailure } from "../tool-failure-classification.js";
 import type {
   StageReportCounts,
   StageReportState,
@@ -67,9 +68,7 @@ interface SystemTestingRun {
 /** Title-case a machine category, e.g. "filesystem" -> "Filesystem". */
 function titleForCategory(category: string): string {
   if (!category) return "Stage";
-  return category
-    .replace(/[-_]+/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return category.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function statusFor(entry: TestSuiteResultEntry): StageTestStatus {
@@ -92,7 +91,7 @@ function reasonFor(entry: TestSuiteResultEntry): string | undefined {
 export async function ensureStageReportType(
   chat: ChatSandboxValue,
   scope?: Record<string, unknown>,
-  runId?: string,
+  runId?: string
 ): Promise<void> {
   const marker = "__stageReportRegisteredRunId";
   if (scope && runId && scope[marker] === runId) return;
@@ -118,7 +117,7 @@ export async function ensureStageReportType(
 export async function reportStage(
   chat: ChatSandboxValue,
   scope: Record<string, unknown>,
-  args: { prose: string; stageIndex?: number; generatedAt?: string },
+  args: { prose: string; stageIndex?: number; generatedAt?: string }
 ): Promise<{ messageId: string }> {
   const { prose } = args;
   const run = scope?.["systemTestingRun"] as SystemTestingRun | undefined;
@@ -141,7 +140,7 @@ export async function reportStage(
   // Bound to this stage's own tests (categories may span multiple stages).
   const stageTestNames = stage ? new Set(stage.tests.map(stageTestName)) : null;
   const entries = aggregate.results.filter((entry) =>
-    stageTestNames ? stageTestNames.has(entry.test.name) : entry.test.category === category,
+    stageTestNames ? stageTestNames.has(entry.test.name) : entry.test.category === category
   );
   if (entries.length === 0) {
     throw new Error(`reportStage: no test results found for stage "${title}".`);
@@ -154,9 +153,8 @@ export async function reportStage(
     passed: entry.result.passed,
     durationMs: entry.execution.duration ?? 0,
     reason: reasonFor(entry),
-    toolFailures: entry.execution.toolFailures?.filter((failure) => failure.expected !== true),
-    toolFailureCount:
-      entry.execution.toolFailures?.filter((failure) => failure.expected !== true).length ?? 0,
+    toolFailures: entry.execution.toolFailures?.filter(isUnexpectedToolFailure),
+    toolFailureCount: entry.execution.toolFailures?.filter(isUnexpectedToolFailure).length ?? 0,
     detail: summarizeEntry(entry, PER_TEST_LIMITS),
   }));
 

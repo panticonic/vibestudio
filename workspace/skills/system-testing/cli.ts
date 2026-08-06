@@ -5,10 +5,12 @@ import { HeadlessRunner } from "./runner.js";
 import { allTests } from "./stages.js";
 import { TestRunner } from "./test-runner.js";
 import type { TestCase, TestSuiteResult, TestSuiteResultEntry } from "./types.js";
+import { isUnexpectedToolFailure } from "./tool-failure-classification.js";
 import {
   DEFAULT_SYSTEM_TEST_TIMEOUT_MS,
   SYSTEM_TEST_AGENT_MODEL,
   systemTestModelRoute,
+  type SystemTestThinkingLevel,
 } from "./config.js";
 
 export const SYSTEM_TEST_RUN_SCHEMA_VERSION = 1 as const;
@@ -27,6 +29,7 @@ export interface SystemTestRunOptions {
   category?: string;
   all?: boolean;
   model?: string;
+  thinkingLevel?: SystemTestThinkingLevel;
   concurrency?: number;
   testTimeoutMs?: number;
   /** Durable orchestration heartbeat supplied by CLI/UI hosts. */
@@ -92,6 +95,7 @@ export interface SystemTestRunRecord {
     category?: string;
     all: boolean;
     model?: string;
+    thinkingLevel?: SystemTestThinkingLevel;
     modelPolicy: ReturnType<HeadlessRunner["modelPolicySnapshot"]>;
     concurrency: number;
     testTimeoutMs?: number;
@@ -192,7 +196,10 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   }
 
   const model = options.model ?? SYSTEM_TEST_AGENT_MODEL;
-  const runner = new HeadlessRunner(options.contextId, { model });
+  const runner = new HeadlessRunner(options.contextId, {
+    model,
+    ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+  });
   const tester = new TestRunner(runner, {
     testTimeoutMs,
     onTestStart: (test) => {
@@ -418,7 +425,7 @@ export function failedSystemTestNames(record: SystemTestRunRecord): string[] {
       (entry) =>
         !entry.result.passed ||
         Boolean(entry.execution.error) ||
-        (entry.execution.toolFailures ?? []).some((failure) => failure.expected !== true)
+        (entry.execution.toolFailures ?? []).some(isUnexpectedToolFailure)
     )
     .map((entry) => entry.test.name);
 }
@@ -495,17 +502,15 @@ export async function systemTestDoctor(expectedModel?: string): Promise<SystemTe
       ]);
       const declared = (config.extensions ?? []).map(({ source }) => ({
         source,
-        unit: units.find((candidate) => candidate.kind === "extension" && candidate.source === source),
+        unit: units.find(
+          (candidate) => candidate.kind === "extension" && candidate.source === source
+        ),
       }));
       const unready = declared.flatMap(({ source, unit }) => {
         if (!unit) return [`${source}=missing`];
         return unit.status !== "approval-required" && unit.status !== "error"
           ? []
-          : [
-              `${unit.name}=${unit.status}${
-                unit.lastError ? ` (${unit.lastError})` : ""
-              }`,
-            ];
+          : [`${unit.name}=${unit.status}${unit.lastError ? ` (${unit.lastError})` : ""}`];
       });
       if (unready.length > 0) {
         throw new Error(
@@ -593,14 +598,11 @@ function summarizeRun(
   const failedTests = suite.results
     .filter(
       (entry) =>
-        !isLiveRunningEntry(entry) &&
-        (!entry.result.passed || Boolean(entry.execution.error))
+        !isLiveRunningEntry(entry) && (!entry.result.passed || Boolean(entry.execution.error))
     )
     .map((entry) => entry.test.name);
   const testsWithUnexpectedToolFailures = suite.results
-    .filter((entry) =>
-      (entry.execution.toolFailures ?? []).some((failure) => failure.expected !== true)
-    )
+    .filter((entry) => (entry.execution.toolFailures ?? []).some(isUnexpectedToolFailure))
     .map((entry) => entry.test.name);
   return {
     runId,
@@ -632,6 +634,7 @@ function runConfig(
     ...(options.category ? { category: options.category } : {}),
     all: options.all === true,
     model,
+    ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
     modelPolicy: runner.modelPolicySnapshot(),
     concurrency,
     testTimeoutMs,
@@ -664,9 +667,7 @@ function suiteFromEntries(
       else if (entry.result.passed) passed++;
       else failed++;
     }
-    const failures = (entry.execution.toolFailures ?? []).filter(
-      (failure) => failure.expected !== true
-    ).length;
+    const failures = (entry.execution.toolFailures ?? []).filter(isUnexpectedToolFailure).length;
     toolFailureCount += failures;
     if (failures > 0) testsWithToolFailures++;
   }

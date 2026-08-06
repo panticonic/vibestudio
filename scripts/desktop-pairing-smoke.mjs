@@ -48,6 +48,7 @@ const defaultReadyFile = path.join(
 );
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 const HOSTED_SHELL_APP = readWorkspacePackageName("apps", "shell");
+const ELECTRON_EVALUATE_TIMEOUT_MS = 5_000;
 
 function readWorkspacePackageName(...segments) {
   const pkgPath = path.join(repoRoot, "workspace", ...segments, "package.json");
@@ -60,6 +61,19 @@ function readWorkspacePackageName(...segments) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function evaluateElectron(app, pageFunction, arg, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Electron evaluation timed out while ${label}`)),
+      ELECTRON_EVALUATE_TIMEOUT_MS
+    );
+  });
+  return Promise.race([app.evaluate(pageFunction, arg), timeout]).finally(() => {
+    clearTimeout(timer);
+  });
 }
 
 function parseArgs(argv) {
@@ -388,6 +402,8 @@ async function waitForShellOverlayCleared(app, timeoutMs) {
   const deadlineMs = Date.now() + timeoutMs;
   let hostView = null;
   let lastOverlayState;
+  let workspaceInstallApprovals = 0;
+  let lastWorkspaceInstallClickAt = 0;
   while (Date.now() < deadlineMs) {
     hostView = await getHostViewDebugInfo(app).catch(() => null);
     if (hostView?.shellOverlayActive !== lastOverlayState) {
@@ -395,6 +411,27 @@ async function waitForShellOverlayCleared(app, timeoutMs) {
       console.log(`[desktop-smoke] Shell overlay active: ${String(lastOverlayState)}`);
     }
     if (hostView?.shellOverlayActive === false) return hostView;
+
+    // A fresh remote workspace deliberately asks once before admitting the
+    // template's apps, panels, and services. Exercise that real consent step
+    // so this smoke proves the post-pair workspace is usable, rather than
+    // treating a valid first-run review as a compositor hang.
+    // A fresh workspace can have more than one unit-install review. The shell
+    // intentionally advances to the next review after each decision, so keep
+    // draining the queue until the overlay actually releases the panel layer.
+    // Pace retries so a still-pending decision cannot receive duplicate clicks.
+    if (Date.now() - lastWorkspaceInstallClickAt >= 750) {
+      const clicked = await clickDesktopButton(app, /^Add to workspace$/i);
+      if (clicked) {
+        workspaceInstallApprovals += 1;
+        lastWorkspaceInstallClickAt = Date.now();
+        console.log(
+          `[desktop-smoke] Approved workspace install review #${workspaceInstallApprovals}`
+        );
+        await sleep(250);
+        continue;
+      }
+    }
     await sleep(250);
   }
   throw new Error(
@@ -403,7 +440,7 @@ async function waitForShellOverlayCleared(app, timeoutMs) {
 }
 
 async function collectShellSnapshots(app) {
-  return app.evaluate(async ({ webContents }) => {
+  return evaluateElectron(app, async ({ webContents }) => {
     const snapshots = [];
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
@@ -445,11 +482,12 @@ async function collectShellSnapshots(app) {
       }
     }
     return snapshots;
-  });
+  }, undefined, "collecting shell snapshots");
 }
 
 async function clickDesktopButton(app, label) {
-  return app.evaluate(async ({ webContents }, labelSource) => {
+  try {
+    return await evaluateElectron(app, async ({ webContents }, labelSource) => {
     const label = new RegExp(labelSource, "i");
     const candidates = [];
     for (const contents of webContents.getAllWebContents()) {
@@ -495,11 +533,14 @@ async function clickDesktopButton(app, label) {
       }
     }
     return false;
-  }, label.source);
+    }, label.source, "clicking a desktop button");
+  } catch {
+    return false;
+  }
 }
 
 async function dismissConnectionDialog(app) {
-  return app.evaluate(async ({ webContents }) => {
+  return evaluateElectron(app, async ({ webContents }) => {
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
       try {
@@ -522,28 +563,28 @@ async function dismissConnectionDialog(app) {
       }
     }
     return false;
-  });
+  }, undefined, "dismissing the connection dialog");
 }
 
 async function getHostViewDebugInfo(app) {
-  return app.evaluate(() => {
+  return evaluateElectron(app, () => {
     const testApi = globalThis.__testApi;
     return testApi?.getHostViewDebugInfo?.() ?? null;
-  });
+  }, undefined, "reading host view diagnostics");
 }
 
 async function getPanelTree(app) {
-  return app.evaluate(() => {
+  return evaluateElectron(app, () => {
     const testApi = globalThis.__testApi;
     return testApi?.getPanelTree?.() ?? [];
-  });
+  }, undefined, "reading the panel tree");
 }
 
 async function waitForRenderedPanel(app, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let latest = [];
   while (Date.now() < deadline) {
-    latest = await app.evaluate(async ({ webContents }) => {
+    latest = await evaluateElectron(app, async ({ webContents }) => {
       const inspections = [];
       for (const contents of webContents.getAllWebContents()) {
         if (contents.isDestroyed()) continue;
@@ -635,7 +676,7 @@ async function waitForRenderedPanel(app, timeoutMs) {
         }
       }
       return inspections;
-    });
+    }, undefined, "inspecting rendered panels");
 
     const buildFailure = latest.find((entry) => entry.buildError);
     if (buildFailure) {

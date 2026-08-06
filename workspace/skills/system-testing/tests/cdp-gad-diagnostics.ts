@@ -4,8 +4,17 @@ import {
   finalMessageHasAll,
   findLastAgentMessage,
   getToolCalls,
+  hasSuccessfulImageRead,
   noIncompleteInvocations,
 } from "./_helpers.js";
+import {
+  classifyBuiltInToolFailure,
+  isUnexpectedToolFailure,
+} from "../tool-failure-classification.js";
+import {
+  panelControlAuthorityPolicy,
+  PANEL_AUTOMATION_RESOURCE,
+} from "../panel-authority.js";
 
 interface ToolFailureLike {
   name: string;
@@ -146,14 +155,16 @@ function checkedGadIntegrity(result: Parameters<typeof finalMessageHasAll>[0]) {
 function unexpectedToolFailures(
   result: Parameters<typeof finalMessageHasAll>[0]
 ): ToolFailureLike[] {
-  const fromMessages = failedToolCalls(result).map((call) => ({
-    name: call.name,
-    status: call.execution?.status,
-    terminalOutcome: call.execution?.terminalOutcome,
-    error: invocationErrorText(call.execution?.result),
-    source: "message",
-  }));
-  const fromRunner = (result.toolFailures ?? []).map((failure) => ({
+  const fromMessages = failedToolCalls(result)
+    .filter(isUnexpectedInvocation)
+    .map((call) => ({
+      name: call.name,
+      status: call.execution?.status,
+      terminalOutcome: call.execution?.terminalOutcome,
+      error: invocationErrorText(call.execution?.result),
+      source: "message",
+    }));
+  const fromRunner = (result.toolFailures ?? []).filter(isUnexpectedToolFailure).map((failure) => ({
     name: failure.name,
     status: failure.status,
     terminalOutcome: failure.terminalOutcome,
@@ -162,7 +173,10 @@ function unexpectedToolFailures(
     source: failure.source,
   }));
   const fromTerminalOutcomes = getToolCalls(result)
-    .filter((call) => /error|fail/i.test(call.execution?.terminalOutcome ?? ""))
+    .filter(
+      (call) =>
+        /error|fail/i.test(call.execution?.terminalOutcome ?? "") && isUnexpectedInvocation(call)
+    )
     .map((call) => ({
       name: call.name,
       status: call.execution?.status,
@@ -171,6 +185,72 @@ function unexpectedToolFailures(
       source: "message",
     }));
   return dedupeFailures([...fromMessages, ...fromRunner, ...fromTerminalOutcomes]);
+}
+
+function isUnexpectedInvocation(call: {
+  name: string;
+  error?: unknown;
+  description?: string;
+  result?: unknown;
+  failureKind?: string;
+  failureCode?: string;
+  terminalReasonCode?: string;
+  execution?: {
+    error?: unknown;
+    description?: string;
+    result?: unknown;
+    failureKind?: string;
+    failureCode?: string;
+    terminalReasonCode?: string;
+  };
+}): boolean {
+  const execution = call.execution;
+  const result = execution?.result ?? call.result;
+  const details =
+    result && typeof result === "object" && !Array.isArray(result) && "details" in result
+      ? (result as Record<string, unknown>)["details"]
+      : undefined;
+  const nestedFailure =
+    details && typeof details === "object" && !Array.isArray(details) && "failure" in details
+      ? (details as Record<string, unknown>)["failure"]
+      : undefined;
+  const failureDetails =
+    nestedFailure && typeof nestedFailure === "object" && !Array.isArray(nestedFailure)
+      ? (nestedFailure as Record<string, unknown>)
+      : undefined;
+  const stringField = (record: Record<string, unknown> | undefined, key: string) => {
+    const value = record?.[key];
+    return typeof value === "string" ? value : undefined;
+  };
+  return (
+    classifyBuiltInToolFailure({
+      name: call.name,
+      terminalReasonCode: execution?.terminalReasonCode ?? call.terminalReasonCode,
+      failureCode:
+        execution?.failureCode ??
+        call.failureCode ??
+        stringField(
+          details && typeof details === "object" && !Array.isArray(details)
+            ? (details as Record<string, unknown>)
+            : undefined,
+          "failureCode"
+        ) ??
+        stringField(failureDetails, "failureCode"),
+      failureKind:
+        execution?.failureKind ??
+        call.failureKind ??
+        stringField(
+          details && typeof details === "object" && !Array.isArray(details)
+            ? (details as Record<string, unknown>)
+            : undefined,
+          "failureKind"
+        ) ??
+        stringField(failureDetails, "failureKind"),
+      error: execution?.error ?? call.error,
+      result,
+      description: execution?.description ?? call.description,
+    }) === null
+  );
 }
 
 function firstOkFalsePath(result: Parameters<typeof finalMessageHasAll>[0]): string | undefined {
@@ -478,19 +558,31 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     name: "cdp-page-click-type-evaluate",
     description: "Automate a browser page with the canonical CDP client",
     category: "cdp-gad-diagnostics",
+    authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-click-page"),
+    resources: [PANEL_AUTOMATION_RESOURCE],
     prompt:
-      "On a tiny disposable browser page, use the canonical automation client to click an element, evaluate a value, and capture a screenshot. Summarize what actually succeeded.",
-    validate: (result) =>
-      checked(
+      "On a tiny disposable browser page, use the canonical automation client to click an element, capture a screenshot to an opaque temporary file, read that file as image content, evaluate a value, and report the exact visible status text after the click along with what actually succeeded.",
+    validate: (result) => {
+      const base = checked(
         result,
-        [/click/iu, /evaluat/iu, /screenshot/iu],
+        [/click/iu, /evaluat/iu, /screenshot/iu, /state:\s*clicked/iu],
         [/click/iu, /evaluat/iu, /screenshot/iu]
-      ),
+      );
+      if (!base.passed) return base;
+      return hasSuccessfulImageRead(result)
+        ? base
+        : {
+            passed: false,
+            reason: "The agent captured a screenshot but did not read it as image content",
+          };
+    },
   },
   {
     name: "cdp-page-console-dom-inspection",
     description: "Exercise canonical CDP page inspection and host historical console APIs",
     category: "cdp-gad-diagnostics",
+    authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-console-page"),
+    resources: [PANEL_AUTOMATION_RESOURCE],
     prompt:
       "Inspect a tiny disposable browser page with the canonical CDP client. Check its live console events, retained console history and errors, and visible DOM state, then report the observed results.",
     validate: (result) =>
@@ -504,6 +596,8 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     name: "panel-stateargs-cdp-roundtrip",
     description: "Inspect panel state after a change",
     category: "cdp-gad-diagnostics",
+    authorityPolicy: panelControlAuthorityPolicy("inspect-stateargs-page"),
+    resources: [PANEL_AUTOMATION_RESOURCE],
     prompt:
       "Open a workspace panel, change its state, and inspect the resulting snapshot through the panel automation surface. Tell me whether the changed state was visible.",
     validate: (result) =>

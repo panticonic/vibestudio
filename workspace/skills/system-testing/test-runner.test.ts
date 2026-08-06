@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "@workspace/agentic-core";
 import { TestRunner, validateAgentCompletionReport } from "./test-runner.js";
-import type { TestExecutionResult } from "./types.js";
+import type { TestExecutionResult, TestSuiteResult, TestSuiteResultEntry } from "./types.js";
 import type { HeadlessRunner } from "./runner.js";
 import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "./types.js";
 
@@ -208,6 +208,162 @@ describe("TestRunner", () => {
       },
     });
     expect(execution.diagnostics).not.toHaveProperty("diagnosticCollectionError");
+  });
+
+  it("persists a thrown validator as one terminal test result and still retires the session", async () => {
+    const messages = [
+      {
+        id: "prompt-validator",
+        senderId: "headless",
+        kind: "message",
+        complete: true,
+        content: "prompt",
+      },
+      {
+        id: "invocation-validator",
+        senderId: "agent",
+        kind: "message",
+        contentType: "invocation",
+        complete: true,
+        content: JSON.stringify({
+          id: "call-validator",
+          name: "eval",
+          arguments: { code: "token=must-not-persist" },
+          execution: {
+            status: "complete",
+            isError: false,
+            result: {
+              details: {
+                returnValue: {
+                  created: "panels/example",
+                  publication: { published: true },
+                },
+              },
+            },
+          },
+        }),
+      },
+      {
+        id: "answer-validator",
+        senderId: "agent",
+        kind: "message",
+        complete: true,
+        content: "Created and opened the panel.",
+      },
+    ] satisfies ChatMessage[];
+    const snapshot = {
+      channelId: "chat-validator",
+      agentEntityId: "agent-validator",
+      agentTargetId: "target-validator",
+      agentContextId: "ctx-validator",
+      messages,
+      invocations: [],
+      debugEvents: [{ kind: "panel-ready" }],
+      cleanupErrors: [],
+      participants: {},
+      connected: true,
+      duration: 10,
+    };
+    const session = {
+      channelId: snapshot.channelId,
+      messages,
+      sendAndWait: vi.fn(async () => undefined),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => snapshot),
+      close: vi.fn(async () => undefined),
+    };
+    const onTestResult = vi.fn(
+      async (_entry: TestSuiteResultEntry, _aggregate: TestSuiteResult) => undefined
+    );
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({ generatedAt: "now" })),
+    } as unknown as HeadlessRunner;
+
+    const suite = await new TestRunner(runner, { onTestResult }).runSuite([
+      {
+        name: "validator-crash",
+        category: "test",
+        description: "validator containment",
+        prompt: "create and open a panel",
+        validation: "harness" as const,
+        validate: () => {
+          const missing: { values?: string[] } = {};
+          return { passed: missing.values!.includes("ready") };
+        },
+      },
+    ]);
+
+    expect(suite).toMatchObject({ total: 1, passed: 0, failed: 0, errored: 1 });
+    expect(suite.results[0]).toMatchObject({
+      result: {
+        passed: false,
+        reason: "Error: Cannot read properties of undefined (reading 'includes')",
+      },
+      execution: {
+        error: "Cannot read properties of undefined (reading 'includes')",
+        failure: {
+          phase: "validation",
+          error: {
+            name: "TypeError",
+            message: "Cannot read properties of undefined (reading 'includes')",
+          },
+        },
+        validationFailure: {
+          testName: "validator-crash",
+          validator: "harness",
+          phase: "validation",
+          stack: expect.stringContaining("test-runner.test.ts"),
+          inputProjection: {
+            messageCount: 3,
+            invocations: [
+              {
+                name: "eval",
+                status: "complete",
+                arguments: {
+                  type: "object",
+                  fields: { code: "string" },
+                },
+                result: {
+                  type: "object",
+                  fields: {
+                    details: {
+                      type: "object",
+                      fields: {
+                        returnValue: {
+                          type: "object",
+                          fields: {
+                            created: "string",
+                            publication: {
+                              type: "object",
+                              fields: { published: "boolean" },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        snapshot: {
+          channelId: "chat-validator",
+          debugEvents: [{ kind: "panel-ready" }],
+        },
+        diagnostics: { generatedAt: "now" },
+      },
+    });
+    expect(onTestResult).toHaveBeenCalledOnce();
+    expect(onTestResult.mock.calls[0]![0]).toMatchObject({
+      execution: { validationFailure: suite.results[0]!.execution.validationFailure },
+    });
+    expect(JSON.stringify(suite.results[0]!.execution.validationFailure)).not.toContain(
+      "must-not-persist"
+    );
+    expect(session.close).toHaveBeenCalledOnce();
   });
 
   it("preserves typed fixture setup failures without changing error semantics", async () => {
@@ -420,7 +576,7 @@ describe("TestRunner", () => {
       passed: 1,
       failed: 0,
       errored: 0,
-      toolFailureCount: 3,
+      toolFailureCount: 1,
       testsWithToolFailures: 1,
     });
     expect(suite.results[0]!.execution.error).toBeUndefined();
@@ -434,11 +590,13 @@ describe("TestRunner", () => {
         }),
         expect.objectContaining({
           name: "vcs",
+          diagnosticOnly: true,
           classification: "domain-rejection",
           terminalReasonCode: "WorkingChangesPresent",
         }),
         expect.objectContaining({
           name: "eval",
+          diagnosticOnly: true,
           classification: "guest-code-failure",
           terminalReasonCode: "guest_execution_failed",
           failureKind: "user-code",
@@ -460,8 +618,8 @@ describe("TestRunner", () => {
 
     expect(expectedSuite).toMatchObject({
       passed: 1,
-      toolFailureCount: 2,
-      testsWithToolFailures: 1,
+      toolFailureCount: 0,
+      testsWithToolFailures: 0,
     });
     expect(expectedSuite.results[0]!.execution.toolFailures).toEqual(
       expect.arrayContaining([
@@ -472,6 +630,81 @@ describe("TestRunner", () => {
         }),
       ])
     );
+  });
+
+  it("fails fast when a test-policy authority prompt is unexpectedly emitted", async () => {
+    let listener: ((message: ChatMessage) => void) | undefined;
+    const session = {
+      channelId: "chat-authority-failure",
+      agentTargetId: "target-authority-failure",
+      messages: [] as ChatMessage[],
+      onMessage: vi.fn((callback: (message: ChatMessage) => void) => {
+        listener = callback;
+        return () => {
+          listener = undefined;
+        };
+      }),
+      sendAndWait: vi.fn(() => new Promise<never>(() => undefined)),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => ({
+        channelId: "chat-authority-failure",
+        agentTargetId: "target-authority-failure",
+        messages: session.messages,
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      interrupt: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+    const running = new TestRunner(runner, { testTimeoutMs: 60_000 }).runOne({
+      name: "authority-failure",
+      category: "test",
+      description: "authority failure",
+      prompt: "trigger an authority failure",
+      validation: "harness" as const,
+      validate: () => ({ passed: true }),
+    });
+
+    await vi.waitFor(() => expect(session.sendAndWait).toHaveBeenCalledOnce());
+    listener?.({
+      id: "invocation:authority-failure",
+      senderId: "agent",
+      kind: "message",
+      contentType: "invocation",
+      complete: true,
+      content: "authority failure",
+      invocation: {
+        id: "authority-failure",
+        name: "eval",
+        arguments: {},
+        execution: {
+          status: "error",
+          description:
+            "Unexpected authority prompt in system test authority-failure: workspace.runtime-state.manage",
+          result: {
+            error: "EUNEXPECTEDTESTPROMPT",
+          },
+          isError: true,
+        },
+      },
+    });
+
+    const { result, execution } = await running;
+    expect(result.passed).toBe(false);
+    expect(execution.error).toContain("Unexpected authority prompt in system test");
+    expect(execution.error).toContain("workspace.runtime-state.manage");
+    expect(session.interrupt).toHaveBeenCalledWith("target-authority-failure");
+    expect(session.close).toHaveBeenCalledOnce();
+    expect(listener).toBeUndefined();
   });
 
   it("runs custom test orchestration through the normal validation path", async () => {
@@ -1077,10 +1310,22 @@ describe("validateAgentCompletionReport", () => {
     ).toEqual({ passed: true });
   });
 
+  it("accepts one terminal declaration after transport-combined progress text", () => {
+    expect(
+      validateAgentCompletionReport(
+        execution(
+          "Comparing the read output against the write payload.\n\nTask completed.\nThe contents matched exactly."
+        )
+      )
+    ).toEqual({ passed: true });
+  });
+
   it("trusts an explicit incomplete status", () => {
     expect(
       validateAgentCompletionReport(
-        execution("Task not completed.\n\nThe documented operation returned an infrastructure error.")
+        execution(
+          "Task not completed.\n\nThe documented operation returned an infrastructure error."
+        )
       )
     ).toMatchObject({
       passed: false,
@@ -1094,6 +1339,17 @@ describe("validateAgentCompletionReport", () => {
     ).toMatchObject({
       passed: false,
       reason: expect.stringContaining("required"),
+    });
+  });
+
+  it("rejects conflicting terminal declarations", () => {
+    expect(
+      validateAgentCompletionReport(
+        execution("Task not completed.\nRetry succeeded.\nTask completed.")
+      )
+    ).toMatchObject({
+      passed: false,
+      reason: expect.stringContaining("more than one"),
     });
   });
 });

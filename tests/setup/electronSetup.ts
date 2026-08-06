@@ -36,6 +36,31 @@ import { isAutomationContextReplacement } from "./automationContext.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
+const closedElectronApplications = new WeakSet<ElectronApplication>();
+const ELECTRON_EVALUATE_TIMEOUT_MS = 10_000;
+
+function withElectronEvaluationTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`[TestSetup] Electron evaluation timed out while ${label}`)),
+      timeoutMs
+    );
+  });
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function isElectronEvaluationTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.startsWith("[TestSetup] Electron evaluation timed out")
+  );
+}
 
 export interface TestApp {
   /** The Playwright Electron application handle */
@@ -50,6 +75,17 @@ export interface TestApp {
   getHubOutput: () => string;
   /** Clean up the app and test workspace */
   cleanup: () => Promise<void>;
+}
+
+/**
+ * Playwright keeps the ElectronApplication object usable after the child
+ * process exits. Callers that poll during teardown need an explicit lifecycle
+ * check so they do not turn one terminal failure into a stream of identical
+ * "context or browser has been closed" warnings.
+ */
+export function isElectronApplicationClosed(app: ElectronApplication): boolean {
+  const child = app.process();
+  return closedElectronApplications.has(app) || child.exitCode !== null || child.killed;
 }
 
 export const ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE =
@@ -332,6 +368,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     },
     timeout: launchTimeout,
   });
+  app.once("close", () => closedElectronApplications.add(app));
   const output: string[] = [];
   const child = app.process();
   child.stdout?.on("data", (chunk) => output.push(String(chunk)));
@@ -520,28 +557,36 @@ export async function approvePendingStartupUnits(
   const deadline = Date.now() + timeoutMs;
   let lastState: unknown = null;
   const hostLaunch = new HostLaunchClient((service, method, args) =>
-    app.evaluate(
-      async (_electron, request) => {
-        const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
-        if (!testApi) throw new Error("Test API not available");
-        return testApi.rpcCall(request.service, request.method, request.args);
-      },
-      { service, method, args }
+    withElectronEvaluationTimeout(
+      app.evaluate(
+        async (_electron, request) => {
+          const testApi = (globalThis as { __testApi?: Pick<TestApi, "rpcCall"> }).__testApi;
+          if (!testApi) throw new Error("Test API not available");
+          return testApi.rpcCall(request.service, request.method, request.args);
+        },
+        { service, method, args }
+      ),
+      Math.min(ELECTRON_EVALUATE_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+      `${service}.${method}`
     )
   );
   while (Date.now() < deadline) {
     try {
       const launch = await hostLaunch.launch("electron");
       if ((await hostLaunch.resolvePendingStartupApprovals("once")) > 0) continue;
-      const hostView = await app.evaluate(async () => {
-        const testApi = (
-          globalThis as {
-            __testApi?: Pick<TestApi, "getHostViewDebugInfo">;
-          }
-        ).__testApi;
-        if (!testApi) throw new Error("Test API not available");
-        return testApi.getHostViewDebugInfo();
-      });
+      const hostView = await withElectronEvaluationTimeout(
+        app.evaluate(async () => {
+          const testApi = (
+            globalThis as {
+              __testApi?: Pick<TestApi, "getHostViewDebugInfo">;
+            }
+          ).__testApi;
+          if (!testApi) throw new Error("Test API not available");
+          return testApi.getHostViewDebugInfo();
+        }),
+        Math.min(ELECTRON_EVALUATE_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+        "reading host view diagnostics"
+      );
       lastState = { launch, hostView };
       if (launch.status === "approval-required") continue;
       const hostedShellReady =
@@ -550,16 +595,80 @@ export async function approvePendingStartupUnits(
         hostView.hostedShellUrl.includes("/_a/");
       if (launch.status === "ready" && hostedShellReady) return;
     } catch (error) {
-      if (!isAutomationContextReplacement(error)) throw error;
+      if (!isAutomationContextReplacement(error) && !isElectronEvaluationTimeout(error)) {
+        throw error;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  const initializationFailure = await readPanelInitializationFailure(app).catch(() => null);
+  const initializationFailure = await withElectronEvaluationTimeout(
+    readPanelInitializationFailure(app),
+    5_000,
+    "reading panel initialization diagnostics"
+  ).catch(() => null);
   throw new Error(
     `Timed out waiting for the cold-start unit review to settle: ${JSON.stringify({
       lastState,
       initializationFailure,
     })}`
+  );
+}
+
+/**
+ * Resolve the first-run workspace adoption review for tests whose assertions
+ * exercise ordinary panel/runtime APIs. Startup-unit approval intentionally
+ * remains separate because launch-gate tests need to inspect that review in
+ * the product UI.
+ */
+export async function approvePendingWorkspaceCreationReview(
+  app: ElectronApplication,
+  approvalIds?: readonly string[]
+): Promise<void> {
+  await app.evaluate(
+    async (_electron, requestedApprovalIds) => {
+      const testApi = (
+        globalThis as {
+          __testApi?: Pick<TestApi, "rpcCall">;
+        }
+      ).__testApi;
+      if (!testApi) throw new Error("Test API not available");
+
+      const pending = (await testApi.rpcCall("shellApproval", "listPending", [])) as Array<{
+        approvalId: string;
+        kind: string;
+        mode?: string;
+        parts?: Array<{
+          identityKey: string;
+          change?: string;
+          notableRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
+          everydayRows?: Array<{ key: string; selectable: boolean; selectedByDefault: boolean }>;
+        }>;
+      }>;
+      const requested = requestedApprovalIds ? new Set(requestedApprovalIds) : null;
+      for (const approval of pending) {
+        if (requested && !requested.has(approval.approvalId)) continue;
+        if (approval.kind !== "unit-install-review" || !approval.mode || !approval.parts) continue;
+        const decision =
+          approval.mode === "update"
+            ? "update"
+            : approval.mode === "adopt-root"
+              ? "adopt-root"
+              : "install";
+        const allowNow = approval.parts
+          .filter((part) => part.change !== "removed")
+          .map((part) => ({
+            identityKey: part.identityKey,
+            permissions: [...(part.notableRows ?? []), ...(part.everydayRows ?? [])]
+              .filter((row) => row.selectable && row.selectedByDefault)
+              .map((row) => row.key),
+          }));
+        await testApi.rpcCall("shellApproval", "resolveInstallReview", [
+          approval.approvalId,
+          { decision, allowNow },
+        ]);
+      }
+    },
+    approvalIds ? [...approvalIds] : null
   );
 }
 
@@ -876,6 +985,27 @@ export async function createPanel(
       return testApi.createPanel(parentId, source, options);
     },
     { parentId, source, options }
+  );
+}
+
+/** Create an external browser panel via the test-only main-process bridge. */
+export async function createBrowserPanel(
+  app: ElectronApplication,
+  parentId: string,
+  url: string,
+  options?: { focus?: boolean }
+): Promise<{ id: string; title: string }> {
+  return app.evaluate(
+    async (_electron, request) => {
+      const testApi = (
+        globalThis as {
+          __testApi?: Pick<TestApi, "createBrowserPanel">;
+        }
+      ).__testApi;
+      if (!testApi) throw new Error("Test API not available");
+      return testApi.createBrowserPanel(request.parentId, request.url, request.options);
+    },
+    { parentId, url, options }
   );
 }
 

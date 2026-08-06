@@ -16,7 +16,7 @@ describe("tool failure classification", () => {
     );
     expect(
       isPreExecutionArgumentRejection(
-        '[tool.vcs:execute] unknown_tool_failure: Invalid arguments for tool vcs: /path: Expected string'
+        "[tool.vcs:execute] unknown_tool_failure: Invalid arguments for tool vcs: /path: Expected string"
       )
     ).toBe(true);
     expect(
@@ -24,9 +24,9 @@ describe("tool failure classification", () => {
         '{"details":{"failure":{"message":"[tool.vcs:execute] unknown_tool_failure: Invalid arguments for tool vcs: bad root"}}}'
       )
     ).toBe(true);
-    expect(
-      isPreExecutionArgumentRejection("The user wrote: Invalid arguments for tool vcs")
-    ).toBe(false);
+    expect(isPreExecutionArgumentRejection("The user wrote: Invalid arguments for tool vcs")).toBe(
+      false
+    );
     expect(isPreExecutionArgumentRejection("[vcs.push] publication failed")).toBe(false);
   });
 
@@ -73,6 +73,7 @@ describe("tool failure classification", () => {
 
   it("separates typed guest program exceptions from eval infrastructure failures", () => {
     expect(isEvalGuestCodeFailure("eval", "guest_execution_failed", "user-code")).toBe(true);
+    expect(isEvalGuestCodeFailure("eval", "package_export_not_found", "user-code")).toBe(true);
     expect(isEvalGuestCodeFailure("eval", "guest_execution_failed", "infrastructure")).toBe(false);
     expect(isEvalGuestCodeFailure("eval", "module_not_available", "user-code")).toBe(false);
     expect(isEvalGuestCodeFailure("read", "guest_execution_failed", "user-code")).toBe(false);

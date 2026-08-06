@@ -132,7 +132,7 @@ describe("capability and resilience prompts", () => {
       expect(test.prompt, test.name).not.toMatch(/\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/u);
       expect(test.prompt, test.name).not.toMatch(/finish with|respond with|return exactly/iu);
       expect(test.prompt, test.name).not.toMatch(
-        /\b(?:createProject|forkProject|openPanel|approvals|permissions)\.\w+\s*\(/u
+        /\b(?:createProjects|forkProject|openPanel|approvals|permissions)\.\w+\s*\(/u
       );
     }
   });
@@ -234,22 +234,64 @@ describe("agent capability semantic validators", () => {
 });
 
 describe("permission semantic validators", () => {
+  const grant = {
+    id: "grant:files",
+    kind: "capability",
+    callerLabel: "News Agent",
+    scopeLabel: "this workspace",
+    capability: "workspace.files.read",
+    resource: "this workspace",
+    why: "Read files in this workspace.",
+    approvedBy: "You",
+    duration: "Until revoked",
+    revokeEffect: "Stops future reads.",
+  };
+
   it("accepts the read-only canonical permission inventory", () => {
     expect(
       scenario(approvalPermissionTests, "permissions-list").validate(
-        execution([evalCall('return rpc.call("main", "permissions.list", []);', [])])
+        execution([evalCall('return rpc.call("main", "permissions.list", []);', [grant])])
       ).passed
     ).toBe(true);
     expect(
       scenario(approvalPermissionTests, "permissions-list").validate(
+        execution([evalCall("return await services.permissions.list();", [])])
+      ).passed
+    ).toBe(true);
+  });
+
+  it("rejects wrappers and malformed grant rows instead of accepting array-shaped claims", () => {
+    const validator = scenario(approvalPermissionTests, "permissions-list");
+    expect(
+      validator.validate(
         execution([
           evalCall(
-            'const grants = await rpc.call("main", "permissions.list", []); return { grants };',
-            { grants: [] }
+            'return rpc.call("main", "permissions.list", []);',
+            { grants: [grant] }
           ),
         ])
       ).passed
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      validator.validate(
+        execution([evalCall("return await services.permissions.list();", [{ id: "not-a-grant" }])])
+      ).passed
+    ).toBe(false);
+  });
+
+  it("rejects a permission mutation even when a later listing succeeds", () => {
+    const validator = scenario(approvalPermissionTests, "permissions-list");
+    expect(
+      validator.validate(
+        execution([
+          evalCall(
+            'await rpc.call("main", "permissions.revoke", [{ kind: "capability", id: "x" }]);',
+            undefined
+          ),
+          evalCall("return await services.permissions.list();", []),
+        ])
+      ).passed
+    ).toBe(false);
   });
 });
 
@@ -422,7 +464,7 @@ describe("project lifecycle semantic validators", () => {
       scenario(projectLifecycleTests, "panel-create-commit-open").validate(
         execution([
           evalCall(
-            "const created = await createProject(input); const opened = await openPanel(created.created); return { ...created, observation: await opened.observe(), snapshot: await opened.snapshot() };",
+            "const created = await createProjects([input]); const opened = await openPanel(created.created); return { ...created, observation: await opened.observe(), snapshot: await opened.snapshot() };",
             {
               created: "panels/new-panel",
               files: ["index.tsx"],
@@ -439,7 +481,7 @@ describe("project lifecycle semantic validators", () => {
       scenario(projectLifecycleTests, "panel-create-commit-open").validate(
         execution([
           evalCall(
-            "const created = await createProject(input); const opened = await openPanel(created.created); return { created: created.created, files: created.files.length, preflightOk: created.preflight.ok, publication: created.publication, ready: await opened.observe(), snapshot: await opened.snapshot() };",
+            "const created = await createProjects([input]); const opened = await openPanel(created.created); return { created: created.created, files: created.files.length, preflightOk: created.preflight.ok, publication: created.publication, ready: await opened.observe(), snapshot: await opened.snapshot() };",
             {
               created: "panels/summarized-panel",
               files: 2,
@@ -581,6 +623,34 @@ describe("project lifecycle semantic validators", () => {
     ).toBe(false);
   });
 
+  it("rejects incomplete lifecycle projections without assuming optional arrays exist", () => {
+    const validator = scenario(projectLifecycleTests, "panel-create-commit-open");
+    const code =
+      "const created = await createProjects([input]); const opened = await openPanel(created.created); return { created: created.created, publication: created.publication, observation: await opened.observe(), snapshot: await opened.snapshot() };";
+    const malformed = [
+      undefined,
+      {},
+      { created: "panels/missing-files", publication: publication() },
+      {
+        created: "panels/missing-checked",
+        files: ["index.tsx"],
+        preflight: { ok: true, projectType: "panel" },
+        publication: publication(),
+      },
+      {
+        created: "panels/missing-publication-fields",
+        files: ["index.tsx"],
+        preflight: preflight("panel"),
+        publication: { published: true },
+      },
+    ];
+
+    for (const returnValue of malformed) {
+      expect(() => validator.validate(execution([evalCall(code, returnValue)]))).not.toThrow();
+      expect(validator.validate(execution([evalCall(code, returnValue)])).passed).toBe(false);
+    }
+  });
+
   it("requires a dry-run worker plan and identity-joined package commit", () => {
     expect(
       scenario(projectLifecycleTests, "worker-fork-classmap-dry-run").validate(
@@ -618,7 +688,7 @@ describe("project lifecycle semantic validators", () => {
 
     const applicationId = "application:package-edit";
     const result = execution([
-      evalCall("return createProject({ projectType: 'package', name: 'new-package' });", {
+      evalCall("return createProjects([{ projectType: 'package', name: 'new-package' }]);", {
         created: "packages/new-package",
         files: ["index.ts"],
         preflight: preflight("package"),

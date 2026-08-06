@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 
 const POLL_MS = 100;
 
@@ -13,13 +14,7 @@ export function processTreeAlive(pid, platform = process.platform) {
       throw error;
     }
   }
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    if (error?.code === "ESRCH") return false;
-    throw error;
-  }
+  return [...ownedProcessGroups(pid, platform)].some((group) => processGroupAlive(group));
 }
 
 export async function terminateOwnedProcessTree(
@@ -42,12 +37,20 @@ export async function terminateOwnedProcessTree(
     return { gone, escalated: true, ...(gone ? {} : { detail: result.detail }) };
   }
 
+  // The hub and its workspace children intentionally use separate POSIX
+  // process groups. Signal the hub first so it can perform its ordered
+  // graceful shutdown, but remember every descendant group while the owner
+  // is still alive. If graceful shutdown stalls, SIGKILL every group we
+  // observed; killing only the owner's group would orphan a detached child.
+  const ownedGroups = new Set([pid]);
+  refreshOwnedProcessGroups(pid, platform, ownedGroups);
   signalGroup(pid, "SIGTERM");
-  if (await waitUntilGone(pid, termTimeoutMs, platform)) {
+  if (await waitUntilOwnedGroupsGone(pid, termTimeoutMs, platform, ownedGroups)) {
     return { gone: true, escalated: false };
   }
-  signalGroup(pid, "SIGKILL");
-  const gone = await waitUntilGone(pid, killTimeoutMs, platform);
+  refreshOwnedProcessGroups(pid, platform, ownedGroups);
+  for (const group of ownedGroups) signalGroup(group, "SIGKILL");
+  const gone = await waitUntilOwnedGroupsGone(pid, killTimeoutMs, platform, ownedGroups);
   return {
     gone,
     escalated: true,
@@ -63,6 +66,96 @@ function signalGroup(pid, signal) {
   }
 }
 
+function processGroupAlive(group) {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+function refreshOwnedProcessGroups(rootPid, platform, groups) {
+  for (const group of ownedProcessGroups(rootPid, platform)) groups.add(group);
+}
+
+function ownedProcessGroups(rootPid, platform) {
+  if (platform === "win32") return new Set([rootPid]);
+  const table = readProcessTable(platform);
+  if (!table) return new Set([rootPid]);
+
+  const children = new Map();
+  for (const process of table.values()) {
+    const siblings = children.get(process.ppid) ?? [];
+    siblings.push(process.pid);
+    children.set(process.ppid, siblings);
+  }
+
+  const owned = new Set([rootPid]);
+  const pending = [rootPid];
+  while (pending.length > 0) {
+    const parent = pending.pop();
+    for (const child of children.get(parent) ?? []) {
+      if (owned.has(child)) continue;
+      owned.add(child);
+      pending.push(child);
+    }
+  }
+
+  const groups = new Set([rootPid]);
+  for (const pid of owned) {
+    const process = table.get(pid);
+    if (process) groups.add(process.pgid);
+  }
+  return groups;
+}
+
+function readProcessTable(platform) {
+  if (platform === "linux") {
+    try {
+      const table = new Map();
+      for (const entry of readdirSync("/proc")) {
+        if (!/^\d+$/.test(entry)) continue;
+        const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+        const close = stat.lastIndexOf(")");
+        if (close < 0) continue;
+        const fields = stat
+          .slice(close + 2)
+          .trim()
+          .split(/\s+/);
+        const pid = Number(entry);
+        const ppid = Number(fields[1]);
+        const pgid = Number(fields[2]);
+        if (Number.isInteger(pid) && Number.isInteger(ppid) && Number.isInteger(pgid)) {
+          table.set(pid, { pid, ppid, pgid });
+        }
+      }
+      return table;
+    } catch {
+      // Fall through to ps for non-/proc POSIX environments and restricted
+      // containers where a transient /proc entry disappeared while scanning.
+    }
+  }
+
+  const result = spawnSync("ps", ["-eo", "pid=,ppid=,pgid="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0 || typeof result.stdout !== "string") return null;
+  const table = new Map();
+  for (const line of result.stdout.split("\n")) {
+    const [pidText, ppidText, pgidText] = line.trim().split(/\s+/);
+    const pid = Number(pidText);
+    const ppid = Number(ppidText);
+    const pgid = Number(pgidText);
+    if (Number.isInteger(pid) && Number.isInteger(ppid) && Number.isInteger(pgid)) {
+      table.set(pid, { pid, ppid, pgid });
+    }
+  }
+  return table;
+}
+
 async function waitUntilGone(pid, timeoutMs, platform) {
   const deadline = Date.now() + timeoutMs;
   do {
@@ -70,6 +163,17 @@ async function waitUntilGone(pid, timeoutMs, platform) {
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   } while (Date.now() < deadline);
   return !processTreeAlive(pid, platform);
+}
+
+async function waitUntilOwnedGroupsGone(rootPid, timeoutMs, platform, groups) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    refreshOwnedProcessGroups(rootPid, platform, groups);
+    if (![...groups].some((group) => processGroupAlive(group))) return true;
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  } while (Date.now() < deadline);
+  refreshOwnedProcessGroups(rootPid, platform, groups);
+  return ![...groups].some((group) => processGroupAlive(group));
 }
 
 function runTaskkill(pid) {

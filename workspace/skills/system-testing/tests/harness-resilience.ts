@@ -274,6 +274,7 @@ export const harnessResilienceTests: TestCase[] = [
     category: "harness-resilience",
     prompt:
       "Show that a deliberate sandbox exception is visible and does not prevent a later successful evaluation.",
+    validation: "harness",
     expectedToolFailures: [{ name: "eval" }],
     validate: (result) => recoverySequence(result, thrownEval, "thrown-eval"),
   },
@@ -283,6 +284,7 @@ export const harnessResilienceTests: TestCase[] = [
     category: "harness-resilience",
     prompt:
       "Check how the sandbox handles a return value far too large for a normal tool response.",
+    validation: "harness",
     validate: validateHugeReturn,
   },
   {
@@ -290,7 +292,8 @@ export const harnessResilienceTests: TestCase[] = [
     description: "An explicitly bounded eval timeout is visible and leaves no pending tool",
     category: "harness-resilience",
     prompt:
-      "Show that an explicitly bounded sandbox run can time out visibly and that the sandbox remains usable afterward.",
+      "Run one eval containing `await new Promise(() => {});` with `timeoutMs: 250`, observe its visible timeout, then run an ordinary eval that returns `recovered` to prove the sandbox remains usable.",
+    validation: "harness",
     expectedToolFailures: [{ name: "eval", errorIncludes: "timed out" }],
     validate: (result) => recoverySequence(result, timedOutEval, "timed-out eval"),
   },
@@ -301,6 +304,7 @@ export const harnessResilienceTests: TestCase[] = [
     category: "harness-resilience",
     prompt:
       "Check whether the validation-recovery probe remains usable after it rejects a request.",
+    validation: "harness",
     orchestrate: orchestrateValidationRetry,
     validate: (result) => recoverySequence(result, invalidToolArguments, "invalid-argument", true),
   },
@@ -309,6 +313,7 @@ export const harnessResilienceTests: TestCase[] = [
     description: "A follow-up instruction after tool use still gets a fresh assistant response",
     category: "harness-resilience",
     prompt: "Use a harmless read-only tool to inspect something small and summarize it.",
+    validation: "harness",
     orchestrate: orchestrateFollowupTurn,
     validate: validateFollowupTurn,
   },

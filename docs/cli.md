@@ -25,8 +25,7 @@ standalone server from `src/server/index.ts`.
 
 ```sh
 pnpm server:live --help
-pnpm server:live --ephemeral --instance test-a
-pnpm cli --instance test-a system-test doctor --approve-startup \
+pnpm system-test --instance test-a doctor --approve-startup \
   --model openai-codex:gpt-5.3-codex-spark
 ```
 
@@ -111,16 +110,21 @@ For unattended system tests, use the system-test runner. It installs an
 explicit per-test authority policy and full-auto agent configuration:
 
 ```sh
-pnpm server:live --ephemeral --instance system-test
-pnpm cli --instance system-test system-test doctor --approve-startup \
+pnpm system-test --instance system-test doctor --approve-startup \
   --model openai-codex:gpt-5.3-codex-spark
-pnpm cli --instance system-test system-test list --json
-pnpm cli --instance system-test system-test run TEST_NAME \
+pnpm system-test --instance system-test list --json
+pnpm system-test --instance system-test run TEST_NAME \
   --model openai-codex:gpt-5.3-codex-spark
+pnpm system-test --instance system-test stop
 ```
 
+The first command reuses the selected server when one is explicitly supplied,
+or creates a named ephemeral server, waits for readiness, and pairs its
+instance-scoped CLI. Later commands reuse that exact instance. `stop` refuses
+to terminate instances not created by this launcher.
+
 This workflow has two explicit approval layers. `doctor --approve-startup`
-accepts only the fresh workspace’s exact, version-bound `startup` unit batches
+accepts only the fresh workspace’s exact, version-bound `startup` install reviews
 and refuses to consume any credential, userland, publication, or other pending
 consent. Each spawned test agent then runs with `approvalLevel: 2` plus the
 host-attested per-test authority policy. That is the supported auto-approve

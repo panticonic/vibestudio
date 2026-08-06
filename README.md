@@ -124,11 +124,12 @@ isolated instance, or `--ephemeral --instance NAME` for a disposable parallel
 test hub. Named and ephemeral instances never write their workspace
 publications into the checkout.
 Profile-owned model configuration and encrypted provider credentials remain
-shared. The launcher prints the exact CLI prefix:
+shared. For system tests, the self-provisioning launcher creates and pairs the
+disposable instance automatically:
 
 ```bash
-pnpm server:live --ephemeral --instance panel-dx
-pnpm cli --instance panel-dx system-test doctor
+pnpm system-test --instance panel-dx doctor
+pnpm system-test --instance panel-dx stop
 ```
 
 Different instances have independent leases, identities, databases, workspaces,

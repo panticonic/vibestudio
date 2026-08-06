@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { validateDeterministicSummary } from "./deterministic-validator.js";
+import {
+  panelAutomationResourcesForSuite,
+  PANEL_AUTOMATION_RESOURCE,
+} from "./panel-authority.js";
 
 describe("deterministic system-test validation", () => {
   it("parses the final fenced summary without consuming earlier invocation JSON", () => {
@@ -15,5 +19,19 @@ describe("deterministic system-test validation", () => {
       ]);
 
     expect(result).toMatchObject({ passed: true });
+  });
+
+  it("serializes every panel-control suite on the shared automation resource", () => {
+    expect(
+      [true, true, true, true].map((usesPanelAutomation) =>
+        panelAutomationResourcesForSuite({ usesPanelAutomation })
+      )
+    ).toEqual([
+      [PANEL_AUTOMATION_RESOURCE],
+      [PANEL_AUTOMATION_RESOURCE],
+      [PANEL_AUTOMATION_RESOURCE],
+      [PANEL_AUTOMATION_RESOURCE],
+    ]);
+    expect(panelAutomationResourcesForSuite({ usesPanelAutomation: false })).toBeUndefined();
   });
 });

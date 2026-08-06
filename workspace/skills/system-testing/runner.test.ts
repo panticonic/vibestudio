@@ -225,6 +225,23 @@ describe("HeadlessRunner", () => {
     });
   });
 
+  it("passes an explicit thinking level to the spawned session", async () => {
+    const runner = new HeadlessRunner("ctx-test", {
+      model: "openai-codex:gpt-5.6-luna",
+      thinkingLevel: "low",
+    });
+
+    await runner.spawn();
+
+    const config = mocks.createWithAgent.mock.calls[0]![0] as {
+      extraConfig: Record<string, unknown>;
+    };
+    expect(config.extraConfig).toMatchObject({
+      model: "openai-codex:gpt-5.6-luna",
+      thinkingLevel: "low",
+    });
+  });
+
   it("can explicitly spawn in the orchestrator context", async () => {
     const runner = new HeadlessRunner("ctx-test");
 
@@ -263,6 +280,8 @@ describe("HeadlessRunner", () => {
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Do not inspect");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("exercise the documented path honestly");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("most straightforward supported approach");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("normal approval routing");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("pregranted-only");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("If that documented approach fails, stop");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("When reporting a failure");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Task completed.");
@@ -423,6 +442,16 @@ describe("HeadlessRunner", () => {
               resource: {
                 kind: "prefix",
                 prefix: "do:workers/pubsub-channel:PubSubChannel:headless-",
+              },
+              tier: "gated",
+              decision: "once",
+            },
+            {
+              ruleId: "workspace-state-runtime",
+              capability: { kind: "exact", key: "workspace-service:workspace.state" },
+              resource: {
+                kind: "prefix",
+                prefix: "do:vibestudio/internal:WorkspaceDO:",
               },
               tier: "gated",
               decision: "once",

@@ -229,6 +229,46 @@ describe("system-testing diagnostics", () => {
     ).toBe(0);
   });
 
+  it("classifies a thrown validator separately from a session failure", () => {
+    const entry = entryWithMessages([]);
+    entry.result = {
+      passed: false,
+      reason: "Error: Cannot read properties of undefined (reading 'includes')",
+    };
+    entry.execution.error = "Cannot read properties of undefined (reading 'includes')";
+    entry.execution.failure = {
+      phase: "validation",
+      error: {
+        name: "TypeError",
+        message: "Cannot read properties of undefined (reading 'includes')",
+      },
+    };
+    entry.execution.validationFailure = {
+      testName: "typed-transcript",
+      validator: "harness",
+      phase: "validation",
+      stack: "TypeError: missing values\n    at validate (validator.ts:12:3)",
+      inputProjection: {
+        messageCount: 0,
+        invocations: [],
+      },
+    };
+
+    expect(summarizeEntry(entry)).toMatchObject({
+      likelyIssue: "validator-error",
+      sessionError: "Cannot read properties of undefined (reading 'includes')",
+      failure: {
+        phase: "validation",
+        error: { name: "TypeError" },
+      },
+      validationFailure: {
+        testName: "typed-transcript",
+        stack: expect.stringContaining("validator.ts:12:3"),
+        inputProjection: { messageCount: 0 },
+      },
+    });
+  });
+
   it("includes bounded workspace repo fixture teardown diagnostics", () => {
     const entry = entryWithMessages([]);
     entry.execution.diagnostics = {

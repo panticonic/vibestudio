@@ -1,4 +1,5 @@
 import type { TestCase } from "../types.js";
+import { PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
 import { findLastAgentMessage, getToolCalls, noIncompleteInvocations } from "./_helpers.js";
 
 function semanticEval(
@@ -99,8 +100,20 @@ export const agenticRuntimeTests: TestCase[] = [
     name: "state-args-immediate-snapshot",
     description: "Panel state changes are immediately observable",
     category: "agentic-runtime",
+    resources: [PANEL_AUTOMATION_RESOURCE],
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "manage-panel-state",
+          capability: { kind: "exact", key: "workspace.runtime-state.manage" },
+          resource: { kind: "exact", key: "workspace.runtime-state.manage" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+    },
     prompt:
-      "Change a disposable panel's state and check whether the new state is observable immediately.",
+      "Use the top-level openPanel API (not runtime.openPanel) to open a disposable about/new root with focus:false, then open panels/spectrolite as its child with stateArgs { tiny: 'start' } and focus:false. On that returned handle, call stateArgs.get, stateArgs.set({ tiny: 'updated', seq: 1 }), and stateArgs.get again. Close the child and root, then report the observed before/set/after values.",
     validate: (result) =>
       semanticEval(
         result,
@@ -117,13 +130,18 @@ export const agenticRuntimeTests: TestCase[] = [
     validate: runtimeVcsIsUsable,
   },
   {
-    name: "gad-query-positional-bindings",
-    description: "GAD query supports positional bindings",
+    name: "gad-status-summary",
+    description: "GAD status metrics are readable through the typed runtime client",
     category: "agentic-runtime",
     prompt:
-      "Run a tiny read-only parameterized query against the graph-and-data store and summarize the result.",
+      "Read the graph-and-data store's compact status metrics through its typed runtime client and summarize one returned metric.",
     validate: (result) =>
-      semanticEval(result, [/gad\.query/iu, /\[[^\]]*\]/u], [/query/iu, /result|row|returned/iu]),
+      semanticEval(
+        result,
+        [/gad\.status/iu],
+        [/status|metric/iu, /result|value|returned/iu],
+        [/metric/iu, /value/iu]
+      ),
   },
   {
     name: "channel-envelope-inspection-bounded",

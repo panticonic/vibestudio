@@ -5,6 +5,7 @@ import type {
   TestSuiteResultEntry,
   ToolFailureSummary,
 } from "./types.js";
+import { isUnexpectedToolFailure } from "./tool-failure-classification.js";
 
 export interface DiagnosticInvocation {
   id?: string;
@@ -97,6 +98,7 @@ export interface FailureDiagnostic {
   validationReason: string | null;
   sessionError: string | null;
   failure: SystemTestFailure | null;
+  validationFailure: TestSuiteResultEntry["execution"]["validationFailure"] | null;
   durationMs: number;
   modelExecution: {
     totalCalls: number;
@@ -172,8 +174,7 @@ export function summarizeFailures(
   const limits = { ...DEFAULT_LIMITS, ...opts };
   const failed = suite.results.filter(
     (entry) =>
-      !entry.result.passed ||
-      (entry.execution.toolFailures ?? []).some((failure) => failure.expected !== true)
+      !entry.result.passed || (entry.execution.toolFailures ?? []).some(isUnexpectedToolFailure)
   );
   const failures = failed.slice(0, limits.failures).map((entry) => summarizeEntry(entry, limits));
   return {
@@ -230,7 +231,7 @@ function summarizeFailure(
     connected: participant.connected,
   }));
   const unexpectedToolFailures = (entryExecution["toolFailures"] ?? []).filter(
-    (failure) => failure.expected !== true
+    isUnexpectedToolFailure
   );
 
   return {
@@ -241,6 +242,7 @@ function summarizeFailure(
     validationReason: clipOptional(entry.result.reason, limits.text) ?? null,
     sessionError: clipOptional(entryExecution["error"], limits.text) ?? null,
     failure: entryExecution["failure"] ?? null,
+    validationFailure: entryExecution["validationFailure"] ?? null,
     durationMs: entryExecution["duration"],
     modelExecution: summarizeModelExecution(
       entryExecution["modelExecutionEvidence"] ?? snapshot?.modelExecutionEvidence
@@ -380,14 +382,16 @@ function classifyFailure(
   invocations: FailureDiagnostic["invocations"],
   cleanupErrors: string[]
 ): string {
+  const failurePhase = entry.execution.failure?.phase;
+  if (failurePhase === "validation") return "validator-error";
+  if (failurePhase?.startsWith("workspace-fixture-cleanup")) return "cleanup-error";
+  if (failurePhase?.startsWith("session-cleanup")) return "cleanup-error";
   if (entry["execution"]["error"]) return "session-error";
   if (cleanupErrors.length > 0) return "cleanup-error";
   const incomplete = invocations.filter((invocation) => invocation.status !== "complete");
   if (incomplete.length > 0)
     return `incomplete-invocation:${incomplete.map((i) => i.name).join(",")}`;
-  const toolFailures = (entry.execution.toolFailures ?? []).filter(
-    (failure) => failure.expected !== true
-  );
+  const toolFailures = (entry.execution.toolFailures ?? []).filter(isUnexpectedToolFailure);
   if (toolFailures.length > 0) return `tool-error:${toolFailures.map((i) => i.name).join(",")}`;
   const errored = invocations.filter((invocation) => invocation.error || invocation.isError);
   if (errored.length > 0) return `tool-error:${errored.map((i) => i.name).join(",")}`;

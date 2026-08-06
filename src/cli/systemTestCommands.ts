@@ -7,16 +7,23 @@ import {
 } from "@vibestudio/service-schemas/eval";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
-import type { PendingApproval } from "@vibestudio/shared/approvals";
+import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
+import type {
+  PendingApproval,
+  PendingUnitInstallReviewApproval,
+} from "@vibestudio/shared/approvals";
+import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import { loadCliCredentials } from "./credentialStore.js";
 import {
   CliError,
   ConnectionError,
+  EXIT_AUTH,
   UsageError,
   jsonMode,
   printError,
   printResult,
+  redactCliSecrets,
 } from "./output.js";
 import {
   DEFAULT_SESSION,
@@ -44,6 +51,20 @@ type EvalClient = ReturnType<typeof evalClientFor>;
 type EvalStatus = Awaited<ReturnType<EvalClient["get"]>>;
 
 const DEFAULT_POLL_MS = 1_000;
+type SystemTestThinkingLevel = NonNullable<StoredSystemTestRun["config"]["thinkingLevel"]>;
+const SYSTEM_TEST_THINKING_LEVELS = new Set<SystemTestThinkingLevel>([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+function isSystemTestThinkingLevel(value: unknown): value is SystemTestThinkingLevel {
+  return (
+    typeof value === "string" && SYSTEM_TEST_THINKING_LEVELS.has(value as SystemTestThinkingLevel)
+  );
+}
 const MAX_CONSECUTIVE_STATUS_READ_FAILURES = 5;
 // Diagnostic commands must fail visibly when an unhealthy EvalDO cannot
 // reconstruct a persisted run. An unbounded inspector is especially harmful:
@@ -61,14 +82,36 @@ const EVAL_RETURN_PAGE_CHARS = Math.floor(
 // reads bypass the EvalDO run-result envelope. A 128 Ki-code-unit page becomes
 // ~342 KiB as UTF-16LE base64, comfortably bounded while reducing round trips.
 const DIRECT_SCOPE_PAGE_CHARS = 128 * 1024;
-const STARTUP_APPROVAL_QUIET_MS = 5_000;
 const STARTUP_APPROVAL_DEADLINE_MS = 60_000;
 const STARTUP_READINESS_DEADLINE_MS = 60_000;
+const STALE_STATUS_ATTESTATION_RE =
+  /host authority attestation nonce was replayed or is outside the receiver's retention bound/u;
 
 type SystemTestDoctorResult = {
   ok?: boolean;
   checks?: Array<{ name: string; ok: boolean; detail: string; data?: unknown }>;
 };
+
+export function systemTestDoctorRecovery(error: unknown): {
+  ok: false;
+  classification: "infrastructure";
+  recoverable: true;
+  automaticRecovery: "create_ephemeral_instance";
+  command: "pnpm system-test doctor";
+  error: string;
+  exitCode: number;
+} | null {
+  if (!(error instanceof CliError) || error.exitCode !== EXIT_AUTH) return null;
+  return {
+    ok: false,
+    classification: "infrastructure",
+    recoverable: true,
+    automaticRecovery: "create_ephemeral_instance",
+    command: "pnpm system-test doctor",
+    error: redactCliSecrets(error.message),
+    exitCode: error.exitCode,
+  };
+}
 
 function evalClientFor(scope: SessionScope) {
   return typedClient("eval", evalMethods, scope.client);
@@ -198,6 +241,7 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
     let driverResultReleased = false;
     let driverResourcesReleased = false;
     let cancellationCleanup = null;
+    let cancellationRequested = false;
     const retireDriver = async () => {
       if (!driver || driverRetired) return;
       await services.runtime.retireEntity({ id: driver.id });
@@ -232,6 +276,7 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
         contextId: ctx.contextId,
       }]);
       ctx.onCancel(async () => {
+        cancellationRequested = true;
         const cleanup = (async () => {
           const cancelledRecord = await rpc.call(
             driver.targetId,
@@ -245,7 +290,15 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
             runs[progressKey] = cancelledRecord;
             scope.systemTestRuns = runs;
           }
-          await releaseDriverResources();
+          const prior = lastProgress && typeof lastProgress === "object"
+            ? lastProgress
+            : { runId: progressKey, startedAt: new Date().toISOString(), total: 0, queued: [], running: [], completed: [] };
+          publishProgress({
+            ...prior,
+            status: "cancelled",
+            updatedAt: new Date().toISOString(),
+            running: [],
+          });
         })();
         cancellationCleanup = cleanup;
         await cleanup;
@@ -290,17 +343,25 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
         );
       }
     } catch (error) {
-      const prior = lastProgress && typeof lastProgress === "object"
-        ? lastProgress
-        : { runId: progressKey, startedAt: new Date().toISOString(), total: 0, queued: [], running: [], completed: [] };
-      publishProgress({
-        ...prior,
-        status: "errored",
-        updatedAt: new Date().toISOString(),
-        running: [],
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
+      if (cancellationRequested) {
+        // The cancellation owner has already stopped the nested run and
+        // recorded its terminal result. Wait for that phase here so an
+        // in-flight parent relay cannot turn normal cancellation into an
+        // infrastructure error or race driver retirement.
+        await cancellationCleanup;
+      } else {
+        const prior = lastProgress && typeof lastProgress === "object"
+          ? lastProgress
+          : { runId: progressKey, startedAt: new Date().toISOString(), total: 0, queued: [], running: [], completed: [] };
+        publishProgress({
+          ...prior,
+          status: "errored",
+          updatedAt: new Date().toISOString(),
+          running: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     } finally {
       // EvalDO starts registered cancellation cleanup before aborting ordinary
       // execution. Let it settle first, then unconditionally release both the
@@ -345,7 +406,8 @@ function readCode(runId: string, expression: string): string {
 async function startRun(
   scope: SessionScope,
   config: StoredSystemTestRun["config"],
-  artifactRoot?: string
+  artifactRoot?: string,
+  onCreated?: (stored: StoredSystemTestRun) => void
 ): Promise<StoredSystemTestRun> {
   const runId = `st_${randomUUID().replaceAll("-", "")}`;
   const stored: StoredSystemTestRun = {
@@ -356,11 +418,20 @@ async function startRun(
     sessionName: scope.session.name,
     ownerId: scope.session.entityId,
     contextId: scope.contextId,
-    subKey: scope.session.scopeKey,
+    // Each system-test run is its own finite notebook. Reusing the interactive
+    // session's warm eval scope across runs mixes distinct orchestrator trust
+    // units and is rejected by the execution-session registry.
+    subKey: runId,
     artifactDir: systemTestArtifactDir(runId, artifactRoot),
     config,
   };
   const client = evalClientFor(scope);
+  // Persist the address before transport admission. If the CLI receives a
+  // signal during start (or the acknowledgement is ambiguous), the signal
+  // handler still has the exact owner/scope/run route needed to cancel the
+  // durable EvalDO run instead of abandoning an unaddressable execution.
+  saveSystemTestRun(stored);
+  onCreated?.(stored);
   await client.start({
     ...startRouting(scope, stored),
     runId,
@@ -370,7 +441,6 @@ async function startRun(
       syntax: "typescript",
     },
   });
-  saveSystemTestRun(stored);
   return stored;
 }
 
@@ -395,15 +465,17 @@ async function waitForRun(
         status = await client.get({ ...route, runId });
         consecutiveReadFailures = 0;
       } catch (error) {
-        const retryable =
-          error instanceof ConnectionError ||
-          (error instanceof RpcError &&
-            (error.errorKind === "transport" ||
-              error.errorKind === "internal" ||
-              error.errorKind === "service"));
+        const retryable = isRetryableSystemTestStatusReadFailure(error);
         consecutiveReadFailures += 1;
         if (!retryable || consecutiveReadFailures >= MAX_CONSECUTIVE_STATUS_READ_FAILURES) {
           throw error;
+        }
+        if (isStaleSystemTestStatusAttestation(error)) {
+          // A long-lived retained connection can outlive the receiver's
+          // one-invocation attestation retention window. Status reads are
+          // idempotent, so force the next poll through a newly authenticated
+          // transport instead of surfacing a false system-test failure.
+          await connection.close().catch(() => undefined);
         }
         await new Promise((resolve) => setTimeout(resolve, pollMs));
         continue;
@@ -414,6 +486,88 @@ async function waitForRun(
   } finally {
     await release();
   }
+}
+
+function isStaleSystemTestStatusAttestation(error: unknown): boolean {
+  return error instanceof RpcError && STALE_STATUS_ATTESTATION_RE.test(error.message);
+}
+
+export function isRetryableSystemTestStatusReadFailure(error: unknown): boolean {
+  return (
+    error instanceof ConnectionError ||
+    isStaleSystemTestStatusAttestation(error) ||
+    (error instanceof RpcError &&
+      (error.errorKind === "transport" ||
+        error.errorKind === "internal" ||
+        error.errorKind === "service"))
+  );
+}
+
+/**
+ * Own the remote lifetime of a foreground durable run. A CLI process can be
+ * interrupted independently of its EvalDO, so SIGINT/SIGTERM must become the
+ * same authenticated cancellation operation as `system-test cancel`.
+ */
+function installSystemTestRunCancellation(
+  scope: SessionScope,
+  getStored: () => StoredSystemTestRun | null
+): {
+  wasInterrupted(): boolean;
+  ensureCancellation(): Promise<boolean>;
+  dispose(): void;
+} {
+  let received: NodeJS.Signals | null = null;
+  let cancellation: Promise<void> | null = null;
+  let disposed = false;
+  let dispose = (): void => undefined;
+
+  const beginCancellation = (): void => {
+    if (!received || cancellation || disposed) return;
+    const stored = getStored();
+    if (!stored) return;
+    console.error(
+      `[system-test] ${received} received; cancelling durable run ${stored.runId} before exit`
+    );
+    cancellation = evalClientFor(scope)
+      .cancel({ ...routing(scope, stored), runId: stored.runId })
+      .then(() => undefined);
+    // The eventual await in ensureCancellation owns error reporting; this
+    // branch merely prevents an async signal handler rejection from becoming
+    // an unhandled-rejection process failure.
+    void cancellation.catch(() => undefined);
+  };
+
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (received) {
+      // A second signal is an explicit request to abandon cleanup. Preserve
+      // the normal Unix exit semantics after the first signal gave cancellation
+      // a chance to run.
+      console.error("[system-test] cancellation still running; forcing process exit");
+      dispose();
+      process.kill(process.pid, signal);
+      return;
+    }
+    received = signal;
+    beginCancellation();
+  };
+  dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
+  return {
+    wasInterrupted: () => received !== null,
+    ensureCancellation: async () => {
+      beginCancellation();
+      if (cancellation) await cancellation;
+      return received !== null;
+    },
+    dispose,
+  };
 }
 
 function resultValue(status: EvalStatus): unknown {
@@ -487,35 +641,50 @@ async function run(inv: ParsedInvocation): Promise<number> {
     }
     const scope = await resolveSystemTestScope(inv);
     const testTimeoutMs = positiveInt(inv, "test-timeout-ms");
+    const thinkingLevel = inv.flags["thinking-level"];
+    if (thinkingLevel !== undefined && !isSystemTestThinkingLevel(thinkingLevel)) {
+      throw new UsageError("--thinking-level must be minimal, low, medium, high, xhigh, or max");
+    }
     const config: StoredSystemTestRun["config"] = {
       names,
       ...(category ? { category } : {}),
       all,
       ...(typeof inv.flags["model"] === "string" ? { model: inv.flags["model"] } : {}),
+      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
       concurrency: positiveInt(inv, "concurrency", 1) ?? 1,
       ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
     };
-    const stored = await startRun(scope, config, outDir(inv));
-    if (inv.flags["detach"] === true) {
-      const value = {
-        runId: stored.runId,
-        status: "running",
-        artifactDir: stored.artifactDir,
-      };
-      printResult(value, { json });
-      return 0;
+    let stored: StoredSystemTestRun | null = null;
+    const signalCancellation = installSystemTestRunCancellation(scope, () => stored);
+    try {
+      stored = await startRun(scope, config, outDir(inv), (created) => {
+        stored = created;
+      });
+      if (await signalCancellation.ensureCancellation()) return 130;
+      if (inv.flags["detach"] === true) {
+        const value = {
+          runId: stored.runId,
+          status: "running",
+          artifactDir: stored.artifactDir,
+        };
+        printResult(value, { json });
+        return 0;
+      }
+      const status = await waitForRun(
+        evalClientFor(scope),
+        routing(scope, stored),
+        stored.runId,
+        positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
+        scope.client
+      );
+      if (await signalCancellation.ensureCancellation()) return 130;
+      const value = resultValue(status);
+      const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
+      printRun(value, json, artifact);
+      return failedSummary(value) ? 1 : 0;
+    } finally {
+      signalCancellation.dispose();
     }
-    const status = await waitForRun(
-      evalClientFor(scope),
-      routing(scope, stored),
-      stored.runId,
-      positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
-      scope.client
-    );
-    const value = resultValue(status);
-    const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
-    printRun(value, json, artifact);
-    return failedSummary(value) ? 1 : 0;
   } catch (error) {
     return printError(error, { json });
   }
@@ -995,36 +1164,52 @@ async function rerun(inv: ParsedInvocation): Promise<number> {
     const scope = await resolveSystemTestScope(inv, storedPrior.sessionName);
     const concurrency = positiveInt(inv, "concurrency");
     const testTimeoutMs = positiveInt(inv, "test-timeout-ms");
-    const stored = await startRun(
-      scope,
-      {
-        ...prior.config,
-        names,
-        all: false,
-        ...(typeof inv.flags["model"] === "string" ? { model: inv.flags["model"] } : {}),
-        ...(concurrency !== undefined ? { concurrency } : {}),
-        ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
-      },
-      outDir(inv)
-    );
-    if (inv.flags["detach"] === true) {
-      printResult(
-        { runId: stored.runId, rerunOf: sourceRunId, tests: names, status: "running" },
-        { json }
-      );
-      return 0;
+    const thinkingLevel = inv.flags["thinking-level"];
+    if (thinkingLevel !== undefined && !isSystemTestThinkingLevel(thinkingLevel)) {
+      throw new UsageError("--thinking-level must be minimal, low, medium, high, xhigh, or max");
     }
-    const state = await waitForRun(
-      evalClientFor(scope),
-      routing(scope, stored),
-      stored.runId,
-      positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
-      scope.client
-    );
-    const result = resultValue(state);
-    const artifact = writeSystemTestArtifact(stored.runId, "summary", result, stored.artifactDir);
-    printRun(result, json, artifact);
-    return failedSummary(result) ? 1 : 0;
+    let stored: StoredSystemTestRun | null = null;
+    const signalCancellation = installSystemTestRunCancellation(scope, () => stored);
+    try {
+      stored = await startRun(
+        scope,
+        {
+          ...prior.config,
+          names,
+          all: false,
+          ...(typeof inv.flags["model"] === "string" ? { model: inv.flags["model"] } : {}),
+          ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+          ...(concurrency !== undefined ? { concurrency } : {}),
+          ...(testTimeoutMs !== undefined ? { testTimeoutMs } : {}),
+        },
+        outDir(inv),
+        (created) => {
+          stored = created;
+        }
+      );
+      if (await signalCancellation.ensureCancellation()) return 130;
+      if (inv.flags["detach"] === true) {
+        printResult(
+          { runId: stored.runId, rerunOf: sourceRunId, tests: names, status: "running" },
+          { json }
+        );
+        return 0;
+      }
+      const state = await waitForRun(
+        evalClientFor(scope),
+        routing(scope, stored),
+        stored.runId,
+        positiveInt(inv, "poll-ms", DEFAULT_POLL_MS) ?? DEFAULT_POLL_MS,
+        scope.client
+      );
+      if (await signalCancellation.ensureCancellation()) return 130;
+      const result = resultValue(state);
+      const artifact = writeSystemTestArtifact(stored.runId, "summary", result, stored.artifactDir);
+      printRun(result, json, artifact);
+      return failedSummary(result) ? 1 : 0;
+    } finally {
+      signalCancellation.dispose();
+    }
   } catch (error) {
     return printError(error, { json });
   }
@@ -1070,6 +1255,15 @@ async function doctor(inv: ParsedInvocation): Promise<number> {
     });
     return value.ok ? 0 : 1;
   } catch (error) {
+    const recovery = systemTestDoctorRecovery(error);
+    if (recovery) {
+      if (json) console.error(JSON.stringify(recovery));
+      else {
+        console.error(recovery.error);
+        console.error(`Automatic recovery: ${recovery.command}`);
+      }
+      return recovery.exitCode;
+    }
     return printError(error, { json });
   }
 }
@@ -1078,25 +1272,32 @@ export async function settleSystemTestStartup(
   readDoctor: () => Promise<SystemTestDoctorResult>,
   approvals: {
     listPending(): Promise<PendingApproval[]>;
-    resolve(approvalId: string, decision: "version"): Promise<void>;
+    getWorkspaceCreationReviewState(): Promise<WorkspaceCreationReviewState>;
+    resolveInstallReview(approval: PendingUnitInstallReviewApproval): Promise<void>;
   },
   options: { deadlineMs?: number; pollMs?: number } = {}
 ): Promise<{
   doctor: SystemTestDoctorResult;
-  startupApprovals: { approvedBatchIds: string[]; approvedUnitCount: number };
+  startupApprovals: { approvedReviewIds: string[]; approvedPartCount: number };
 }> {
   const deadline =
     Date.now() +
     (options.deadlineMs ?? STARTUP_APPROVAL_DEADLINE_MS + STARTUP_READINESS_DEADLINE_MS);
   const pollMs = options.pollMs ?? 250;
   const approved = new Set<string>();
-  let approvedUnitCount = 0;
+  let approvedPartCount = 0;
 
   while (true) {
+    const reviewState = await approvals.getWorkspaceCreationReviewState();
+    if (reviewState.status === "failed") {
+      throw new CliError(`workspace creation review preparation failed: ${reviewState.error}`);
+    }
+    if (reviewState.status === "unresolved") {
+      throw new CliError("workspace creation review was dismissed or denied during preparation");
+    }
     const pending = await approvals.listPending();
-    const unrelated = pending.filter(
-      (approval) => approval.kind !== "unit-batch" || approval.trigger !== "startup"
-    );
+    const startupReviews = pending.filter(isManagedStartupInstallReview);
+    const unrelated = pending.filter((approval) => !isManagedStartupInstallReview(approval));
     if (unrelated.length > 0) {
       throw new CliError(
         `system-test startup preparation found unrelated pending approval(s): ${unrelated
@@ -1104,30 +1305,52 @@ export async function settleSystemTestStartup(
           .join(", ")}`
       );
     }
-    for (const batch of pending) {
-      if (batch.kind !== "unit-batch" || batch.trigger !== "startup") continue;
+    for (const batch of startupReviews) {
       if (approved.has(batch.approvalId)) continue;
-      await approvals.resolve(batch.approvalId, "version");
+      await approvals.resolveInstallReview(batch);
       approved.add(batch.approvalId);
-      approvedUnitCount += batch.units.length;
+      approvedPartCount += batch.parts.length;
     }
 
     const result = await readDoctor();
-    if (
-      result.ok ||
-      !doctorIsWaitingForApprovedBuilds(result, { allowMissing: true }) ||
-      Date.now() >= deadline
-    ) {
+    const waitingForBuilds = doctorIsWaitingForApprovedBuilds(result, { allowMissing: true });
+    if (!result.ok && !waitingForBuilds) {
       return {
         doctor: result,
         startupApprovals: {
-          approvedBatchIds: [...approved],
-          approvedUnitCount,
+          approvedReviewIds: [...approved],
+          approvedPartCount,
         },
       };
     }
+    const reviewPreparationComplete =
+      reviewState.status === "not-required" || reviewState.status === "resolved";
+    if (result.ok && reviewPreparationComplete && pending.length === 0) {
+      return {
+        doctor: result,
+        startupApprovals: {
+          approvedReviewIds: [...approved],
+          approvedPartCount,
+        },
+      };
+    }
+    if (Date.now() >= deadline) {
+      throw new CliError(
+        `timed out waiting for semantic startup preparation (creation review: ${reviewState.status})`
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
+}
+
+function isManagedStartupInstallReview(
+  approval: PendingApproval
+): approval is PendingUnitInstallReviewApproval {
+  return (
+    approval.kind === "unit-install-review" &&
+    approval.mode === "adopt-root" &&
+    (approval.callerId === "system:units" || approval.callerId === "system:workspace-creation")
+  );
 }
 
 export async function settleSystemTestDoctor(
@@ -1152,8 +1375,8 @@ function doctorIsWaitingForApprovedBuilds(
 ): boolean {
   const failures = (result.checks ?? []).filter((check) => !check.ok);
   const transientStates = options.allowMissing
-    ? /\b(?:missing|pending-approval|building)\b/
-    : /\b(?:pending-approval|building)\b/;
+    ? /\b(?:missing|pending-approval|approval-required|building)\b/
+    : /\b(?:pending-approval|approval-required|building)\b/;
   return (
     failures.length === 1 &&
     failures[0]?.name === "required-extensions" &&
@@ -1161,57 +1384,10 @@ function doctorIsWaitingForApprovedBuilds(
   );
 }
 
-export async function settleStartupUnitBatches(
-  approvals: {
-    listPending(): Promise<PendingApproval[]>;
-    resolve(approvalId: string, decision: "version"): Promise<void>;
-  },
-  options: { quietMs?: number; deadlineMs?: number; pollMs?: number } = {}
-): Promise<{ approvedBatchIds: string[]; approvedUnitCount: number }> {
-  const quietMs = options.quietMs ?? STARTUP_APPROVAL_QUIET_MS;
-  const deadline = Date.now() + (options.deadlineMs ?? STARTUP_APPROVAL_DEADLINE_MS);
-  const pollMs = options.pollMs ?? 250;
-  const approvedBatchIds: string[] = [];
-  let approvedUnitCount = 0;
-  let quietSince: number | null = null;
-
-  while (Date.now() <= deadline) {
-    const pending = await approvals.listPending();
-    const unrelated = pending.filter(
-      (approval) => approval.kind !== "unit-batch" || approval.trigger !== "startup"
-    );
-    if (unrelated.length > 0) {
-      throw new CliError(
-        `system-test startup preparation found unrelated pending approval(s): ${unrelated
-          .map((approval) => `${approval.kind}:${approval.approvalId}`)
-          .join(", ")}`
-      );
-    }
-    const batches = pending.filter(
-      (approval): approval is Extract<PendingApproval, { kind: "unit-batch" }> =>
-        approval.kind === "unit-batch" && approval.trigger === "startup"
-    );
-    if (batches.length > 0) {
-      quietSince = null;
-      for (const batch of batches) {
-        await approvals.resolve(batch.approvalId, "version");
-        approvedBatchIds.push(batch.approvalId);
-        approvedUnitCount += batch.units.length;
-      }
-      continue;
-    }
-    quietSince ??= Date.now();
-    if (Date.now() - quietSince >= quietMs) {
-      return { approvedBatchIds, approvedUnitCount };
-    }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
-  }
-  throw new CliError("timed out waiting for startup unit approvals to settle");
-}
-
 function startupApprovalPort(): {
   listPending(): Promise<PendingApproval[]>;
-  resolve(approvalId: string, decision: "version"): Promise<void>;
+  getWorkspaceCreationReviewState(): Promise<WorkspaceCreationReviewState>;
+  resolveInstallReview(approval: PendingUnitInstallReviewApproval): Promise<void>;
 } {
   const credentials = loadCliCredentials();
   if (!credentials?.workspaceName) {
@@ -1220,7 +1396,11 @@ function startupApprovalPort(): {
   const client = typedClient("shellApproval", shellApprovalMethods, new RpcClient(credentials));
   return {
     listPending: () => client.listPending(),
-    resolve: (approvalId, decision) => client.resolve(approvalId, decision),
+    getWorkspaceCreationReviewState: () => client.getWorkspaceCreationReviewState(),
+    resolveInstallReview: (approval) =>
+      client
+        .resolveInstallReview(approval.approvalId, defaultAcceptance(approval.mode, approval.parts))
+        .then(() => undefined),
   };
 }
 
@@ -1252,6 +1432,11 @@ const RUN_FLAGS = [
   { name: "category", takesValue: true, description: "Select one test category" },
   { name: "all", takesValue: false, description: "Run the complete catalog" },
   { name: "model", takesValue: true, description: "Model ref for spawned test agents" },
+  {
+    name: "thinking-level",
+    takesValue: true,
+    description: "Thinking level for spawned test agents",
+  },
   { name: "concurrency", takesValue: true, description: "Maximum concurrent test agents" },
   {
     name: "test-timeout-ms",
@@ -1285,7 +1470,7 @@ export const systemTestCommands: CliCommand[] = [
         name: "approve-startup",
         takesValue: false,
         description:
-          "Approve only exact version-bound startup unit batches before checking readiness",
+          "Approve only exact version-bound startup install reviews before checking readiness",
       },
       ...SCOPE_FLAGS,
       JSON_FLAG,
@@ -1365,9 +1550,14 @@ export const systemTestCommands: CliCommand[] = [
     group: "system-test",
     name: "rerun",
     summary: "Rerun failed tests from an earlier run",
-    usage: "vibestudio system-test rerun RUN_ID [--detach]",
+    usage: "vibestudio system-test rerun RUN_ID [--thinking-level LEVEL] [--detach]",
     flags: [
       { name: "model", takesValue: true },
+      {
+        name: "thinking-level",
+        takesValue: true,
+        description: "Thinking level for spawned test agents",
+      },
       { name: "concurrency", takesValue: true },
       {
         name: "test-timeout-ms",

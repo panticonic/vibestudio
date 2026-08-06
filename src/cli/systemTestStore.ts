@@ -20,6 +20,7 @@ export interface StoredSystemTestRun {
     category?: string;
     all: boolean;
     model?: string;
+    thinkingLevel?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
     concurrency: number;
     /** Explicit per-test deadline. Omitted runs have no per-test timeout. */
     testTimeoutMs?: number;

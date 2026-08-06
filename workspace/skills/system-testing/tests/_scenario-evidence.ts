@@ -7,7 +7,7 @@ import {
   successfulEvalReturnValues,
   type InvocationCardPayloadLike,
 } from "./_helpers.js";
-import { classifyBuiltInExpectedToolFailure } from "../tool-failure-classification.js";
+import { classifyBuiltInToolFailure } from "../tool-failure-classification.js";
 
 export interface ScenarioEvidence {
   calls: InvocationCardPayloadLike[];
@@ -75,12 +75,33 @@ export function completedScenarioEvidence(
       call.failureKind ??
       (typeof resultDetails?.["failureKind"] === "string"
         ? resultDetails["failureKind"]
+        : undefined) ??
+      (resultDetails?.["failure"] &&
+      typeof resultDetails["failure"] === "object" &&
+      !Array.isArray(resultDetails["failure"]) &&
+      typeof (resultDetails["failure"] as Record<string, unknown>)["failureKind"] === "string"
+        ? (resultDetails["failure"] as Record<string, unknown>)["failureKind"]
         : undefined);
+    const failureCode =
+      call.execution?.failureCode ??
+      call.failureCode ??
+      (typeof resultDetails?.["failureCode"] === "string"
+        ? resultDetails["failureCode"]
+        : undefined) ??
+      (resultDetails?.["failure"] &&
+      typeof resultDetails["failure"] === "object" &&
+      !Array.isArray(resultDetails["failure"]) &&
+      typeof (resultDetails["failure"] as Record<string, unknown>)["failureCode"] === "string"
+        ? (resultDetails["failure"] as Record<string, unknown>)["failureCode"]
+        : undefined);
+    const normalizedFailureKind = typeof failureKind === "string" ? failureKind : undefined;
+    const normalizedFailureCode = typeof failureCode === "string" ? failureCode : undefined;
     return (
-      classifyBuiltInExpectedToolFailure({
+      classifyBuiltInToolFailure({
         name: call.name,
         terminalReasonCode,
-        failureKind,
+        failureCode: normalizedFailureCode,
+        failureKind: normalizedFailureKind,
         error: call.execution?.error ?? call.error,
         result: call.execution?.result ?? call.result,
         description: call.execution?.description ?? call.description,

@@ -429,6 +429,16 @@ describe("system-testing CLI-neutral API", () => {
         duration: 13,
         error: "agent turn failed",
         failure: primaryFailure,
+        validationFailure: {
+          testName: "alphabet",
+          validator: "harness" as const,
+          phase: "validation" as const,
+          stack: "TypeError: Cannot read properties of undefined (reading 'includes')\n    at validate (validator.ts:12:3)",
+          inputProjection: {
+            messageCount: 2,
+            invocations: [{ name: "eval", result: { type: "object", fields: {} } }],
+          },
+        },
         cleanupErrors: ["close: session close failed"],
         cleanupFailures: [cleanupFailure],
       },
@@ -477,20 +487,29 @@ describe("system-testing CLI-neutral API", () => {
       diagnostics: {
         failures: [
           { failure: setupFailure },
-          { failure: primaryFailure, cleanupFailures: [cleanupFailure] },
+          {
+            failure: primaryFailure,
+            validationFailure: primaryEntry.execution.validationFailure,
+            cleanupFailures: [cleanupFailure],
+          },
         ],
       },
     });
     expect(systemTestTrajectory(record, "alpha")).toMatchObject({ failure: setupFailure });
     expect(systemTestTrajectory(record, "alphabet")).toMatchObject({
       failure: primaryFailure,
+      validationFailure: primaryEntry.execution.validationFailure,
       cleanupFailures: [cleanupFailure],
     });
     expect(systemTestTrajectory(record, "alpha", { full: true })).toMatchObject({
       execution: { failure: setupFailure },
     });
     expect(systemTestTrajectory(record, "alphabet", { full: true })).toMatchObject({
-      execution: { failure: primaryFailure, cleanupFailures: [cleanupFailure] },
+      execution: {
+        failure: primaryFailure,
+        validationFailure: primaryEntry.execution.validationFailure,
+        cleanupFailures: [cleanupFailure],
+      },
     });
     const inspection = JSON.stringify(inspectSystemTestRun(record));
     expect(inspection).toContain("diagnostic:vcs:inspectable");
@@ -523,16 +542,21 @@ describe("system-testing CLI-neutral API", () => {
       contextId: "ctx-1",
       names: ["alpha"],
       model: "openai:test",
+      thinkingLevel: "low",
       concurrency: 2,
       testTimeoutMs: 99,
       onProgress: progress,
     });
 
-    expect(mocks.runnerArgs).toEqual(["ctx-1", { model: "openai:test" }]);
+    expect(mocks.runnerArgs).toEqual([
+      "ctx-1",
+      { model: "openai:test", thinkingLevel: "low" },
+    ]);
     expect(mocks.runSuite.mock.calls[0]![0]).toHaveLength(1);
     expect(mocks.runSuite.mock.calls[0]![0][0].name).toBe("alpha");
     expect(record.config).toMatchObject({
       names: ["alpha"],
+      thinkingLevel: "low",
       concurrency: 2,
       testTimeoutMs: 99,
     });

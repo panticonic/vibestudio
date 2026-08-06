@@ -49,13 +49,14 @@ larger bounded section or the full trajectory only when necessary.
 A test may pass after an unexpected platform/tool failure. Preserve that
 failure in the report and rerun set; recovery does not make the underlying
 platform path healthy. Do distinguish this from an eval result explicitly
-typed as `failureKind: "user-code"` with
-`failureCode: "guest_execution_failed"`: executing, diagnosing, editing, and
-rerunning imperfect guest code is normal agentic development. Keep that result
-in diagnostics as `guest-code-failure`, while infrastructure, cancellation,
-and untyped eval failures remain unexpected. The scenario validator must still
-require the final semantic proof (for example, a later successful verification
-return); diagnostic-only classification is not success evidence.
+typed as `failureKind: "user-code"`: executing, diagnosing, editing, and
+rerunning imperfect guest code is normal agentic development, regardless of
+which stable `failureCode` identifies the particular guest mistake. Keep that
+result in diagnostics as `guest-code-failure`, while infrastructure,
+cancellation, and untyped eval failures remain unexpected. The scenario
+validator must still require the final semantic proof (for example, a later
+successful verification return); diagnostic-only classification is not success
+evidence.
 
 Typed, pre-effect agent-control refusals are diagnostic-only for the same
 reason. In particular, `inspect_subagent` may return `InvalidReference` for an

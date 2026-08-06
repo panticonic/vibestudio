@@ -2,9 +2,11 @@ import {
   BUILDABLE_PANEL_WITH_DERIVED_WORKSPACE_REPO_FIXTURE,
   CREATED_PACKAGE_WORKSPACE_REPO_FIXTURE,
   CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
+  CREATED_WORKER_WORKSPACE_REPO_FIXTURE,
   type TestCase,
   type TestExecutionResult,
 } from "../types.js";
+import { panelControlAuthorityPolicy, PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
 import { findLastAgentMessage, getToolCalls, type InvocationCardPayloadLike } from "./_helpers.js";
 import {
   completedScenarioEvidence,
@@ -51,10 +53,14 @@ function findLifecycleResult(
   });
 }
 
-function createdProject(record: Record<string, unknown>, section: "panels" | "packages") {
+function createdProject(
+  record: Record<string, unknown>,
+  section: "panels" | "packages" | "workers"
+) {
   const publication = record["publication"];
   const preflight = record["preflight"];
-  const expectedType = section === "panels" ? "panel" : "package";
+  const expectedType =
+    section === "panels" ? "panel" : section === "workers" ? "worker" : "package";
   const hasFiles =
     (Array.isArray(record["files"]) && record["files"].length > 0) ||
     (typeof record["files"] === "number" &&
@@ -118,7 +124,7 @@ function hasBootReadyPanelEvidence(values: readonly unknown[]): boolean {
 function validatePanelCreate(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
-  const call = findLifecycleResult(result, ["createProject", "openPanel"], (record) =>
+  const call = findLifecycleResult(result, ["createProjects", "openPanel"], (record) =>
     createdProject(record, "panels")
   );
   if (!call) {
@@ -128,7 +134,7 @@ function validatePanelCreate(result: TestExecutionResult) {
     };
   }
   const code = String(call.arguments?.["code"] ?? "");
-  if (code.indexOf("createProject") >= code.lastIndexOf("openPanel")) {
+  if (code.indexOf("createProjects") >= code.lastIndexOf("openPanel")) {
     return { passed: false, reason: "The panel was not opened after project creation" };
   }
   if (!/\.snapshot\s*\(/u.test(code)) {
@@ -141,6 +147,20 @@ function validatePanelCreate(result: TestExecutionResult) {
         passed: false,
         reason:
           "The completed lifecycle returned no matching boot-ready observation and provenance-bearing snapshot",
+      };
+}
+
+function validateWorkerCreate(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  const call = findLifecycleResult(result, ["createProjects"], (record) =>
+    createdProject(record, "workers")
+  );
+  return call
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason: "No completed eval returned the published worker scaffold lifecycle result",
       };
 }
 
@@ -262,7 +282,7 @@ function validateProjectCommit(result: TestExecutionResult) {
     return (
       call.execution?.status === "complete" &&
       call.execution.isError !== true &&
-      String(call.arguments?.["code"] ?? "").includes("createProject") &&
+      String(call.arguments?.["code"] ?? "").includes("createProjects") &&
       returned.present &&
       walkRecords([returned.value]).some((record) => createdProject(record, "packages"))
     );
@@ -721,6 +741,8 @@ export const projectLifecycleTests: TestCase[] = [
     description: "Create and open a new panel project",
     category: "project-lifecycle",
     workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
+    authorityPolicy: panelControlAuthorityPolicy("inspect-created-project-panel"),
+    resources: [PANEL_AUTOMATION_RESOURCE],
     prompt: "Create a brand-new isolated panel project and open it for use.",
     validate: validatePanelCreate,
   },
@@ -729,6 +751,8 @@ export const projectLifecycleTests: TestCase[] = [
     description: "Fork and open a panel project",
     category: "project-lifecycle",
     workspaceRepoFixture: BUILDABLE_PANEL_WITH_DERIVED_WORKSPACE_REPO_FIXTURE,
+    authorityPolicy: panelControlAuthorityPolicy("inspect-forked-project-panel"),
+    resources: [PANEL_AUTOMATION_RESOURCE],
     prompt: "Fork the existing panel into a new isolated panel and open the result.",
     validate: validatePanelFork,
   },
@@ -738,6 +762,14 @@ export const projectLifecycleTests: TestCase[] = [
     category: "project-lifecycle",
     prompt: "Perform and verify a safe isolated dry run of an existing worker fork.",
     validate: validateWorkerForkPlan,
+  },
+  {
+    name: "worker-create-commit-publish",
+    description: "Create and publish a new stateless worker project",
+    category: "project-lifecycle",
+    workspaceRepoFixture: CREATED_WORKER_WORKSPACE_REPO_FIXTURE,
+    prompt: "Create and publish a brand-new isolated stateless worker project.",
+    validate: validateWorkerCreate,
   },
   {
     name: "commit-existing-project",
@@ -753,24 +785,16 @@ export const projectLifecycleTests: TestCase[] = [
     description: "Build, debug, polish, and publish a To-Do panel through the live UI",
     category: "project-lifecycle",
     workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
-    authorityPolicy: {
-      authority: [
-        {
-          ruleId: "inspect-created-panel",
-          capability: { kind: "exact", key: "panel.inspect" },
-          resource: { kind: "exact", key: "panel.inspect" },
-          tier: "gated",
-          decision: "once",
-        },
-        {
-          ruleId: "inspect-screenshot-analysis-dependency",
-          capability: { kind: "exact", key: "workspace.dependencies.inspect" },
-          resource: { kind: "exact", key: "workspace.dependencies.inspect" },
-          tier: "gated",
-          decision: "once",
-        },
-      ],
-    },
+    authorityPolicy: panelControlAuthorityPolicy("inspect-created-panel", [
+      {
+        ruleId: "inspect-screenshot-analysis-dependency",
+        capability: { kind: "exact", key: "workspace.dependencies.inspect" },
+        resource: { kind: "exact", key: "workspace.dependencies.inspect" },
+        tier: "gated",
+        decision: "once",
+      },
+    ]),
+    resources: [PANEL_AUTOMATION_RESOURCE],
     prompt:
       "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Observe the compiler defect through a structured compile or build check, then diagnose and repair only that failure while leaving the usability defect intact. Launch the compile-clean but visibly flawed panel, save a screenshot in scratch, and read that image so your UX repair is based on the rendered pixels rather than DOM text alone. Repair the usability defect in a separate source edit. Refresh the same running panel with the repaired source, save and visually read a second screenshot, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
     validate: validateTodoDebugLoop,

@@ -3,12 +3,13 @@
 The live catalog is the authority:
 
 ```bash
-pnpm cli --instance INSTANCE system-test list --json
+pnpm system-test --instance INSTANCE list --json
 ```
 
-Replace `INSTANCE` with the ID printed by the isolated `server:live` process and
-use exact returned names. Counts and categories evolve with the product and
-should not be copied into prompts or maintained as parallel prose constants.
+Use one stable unique `INSTANCE` for parallel work and exact returned names.
+The launcher provisions and pairs the isolated server when it is absent. Counts
+and categories evolve with the product and should not be copied into prompts or
+maintained as parallel prose constants.
 
 ## Coverage families
 

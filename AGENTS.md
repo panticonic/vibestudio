@@ -11,17 +11,22 @@ What you must NEVER do is patch around the wall to comply with my words: a flag,
 ## Headless system tests
 
 When a task asks to verify, diagnose, or repair Vibestudio through the headless
-agentic system tests, use the running server through the CLI:
+agentic system tests, use the self-provisioning system-test entry point. An
+unavailable, stale, or unpaired developer instance is not a blocker: the
+command creates a separate named ephemeral instance from the current checkout,
+waits for readiness, pairs its instance-scoped CLI, and then runs the requested
+operation. In parallel work, pass one stable unique `--instance ID` on every
+command.
 
-1. Run `pnpm cli [--instance ID] system-test doctor` and fix failed
-   infrastructure checks first. Use the instance id printed by the source
-   server whenever multiple developer hubs are running.
-2. Use `pnpm cli [--instance ID] system-test list --json` to discover exact test names.
+1. Run `pnpm system-test [--instance ID] doctor` and fix failed infrastructure
+   checks first. Do not run doctor against an unrelated existing source server
+   merely because it is already live.
+2. Use `pnpm system-test [--instance ID] list --json` to discover exact test names.
 3. Run the smallest relevant exact test with
-   `pnpm cli [--instance ID] system-test run TEST_NAME`.
+   `pnpm system-test [--instance ID] run TEST_NAME`.
 4. A non-zero test exit is an investigation trigger, not a reporting boundary.
-   Immediately run `pnpm cli [--instance ID] system-test inspect RUN_ID --json`,
-   then `pnpm cli [--instance ID] system-test trajectory RUN_ID TEST_NAME
+   Immediately run `pnpm system-test [--instance ID] inspect RUN_ID --json`,
+   then `pnpm system-test [--instance ID] trajectory RUN_ID TEST_NAME
    --full --json` when the bounded packet is insufficient.
 5. Classify the root cause as infrastructure, documentation, harness, or
    validator. Default to repairing infrastructure; do not route around platform
@@ -30,14 +35,21 @@ agentic system tests, use the running server through the CLI:
    the current source server is sufficient for host-code-only changes. Changes
    under `workspace/` are workspace source: a named `--bootstrap-workspace`
    preserves its semantic state across restarts and does not reread the checkout
-   template. Stop that exact instance and start
-   `pnpm server:live --ephemeral --instance ID` to test a fresh checkout copied
-   from the current template, then address it with `pnpm cli --instance ID ...`.
-   Never stop or reuse another live instance merely because it came from the
-   same checkout.
+   template. Stop the managed test instance with
+   `pnpm system-test [--instance ID] stop`, then rerun doctor to provision a
+   fresh checkout copied from the current template. Never stop or reuse another
+   live instance merely because it came from the same checkout.
 7. After it passes, run its category and then smoke coverage. Use
-   `pnpm cli [--instance ID] system-test rerun RUN_ID` to rerun every failure
+   `pnpm system-test [--instance ID] rerun RUN_ID` to rerun every failure
    or unexpected tool failure from a prior run.
+8. When verification is complete, stop the exact managed instance with
+   `pnpm system-test [--instance ID] stop`.
+
+Incorrect: stop after doctor says “not paired.” Correct: invoke
+`pnpm system-test [--instance ID] doctor`; it provisions and pairs an isolated
+ephemeral instance automatically. Report a setup blocker only when that
+automatic bootstrap itself fails and its printed supervisor log has been
+inspected.
 
 `pnpm dev` and `pnpm server:live` run under the same developer-instance
 supervisor. Every instance has its own lease, identity, databases, workspace
@@ -46,7 +58,8 @@ configuration and encrypted provider credentials remain profile-scoped and are
 shared safely. `pnpm server:live` uses the persistent `source` instance;
 `--instance NAME` selects another persistent instance; `--ephemeral` creates a
 temporary instance (an explicit name makes parallel logs and CLI commands
-stable). The supervisor prints the exact `pnpm cli --instance NAME` prefix.
+stable). `pnpm system-test` owns only instances it created and refuses to stop
+an unrelated instance.
 
 Do not stop after merely listing artifact paths or restating validation errors.
 Inspect the captured conversation, invocations, lifecycle/debug events, cleanup

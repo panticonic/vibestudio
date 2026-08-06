@@ -249,6 +249,9 @@ error and then recovers enough to satisfy validation, keep the test as passed
 but report the tool failure as an investigation item. Do not trim messages or
 snapshots from passing results; the top-level agent needs the full raw evidence
 to determine whether the issue is runtime, docs, harness, or expected recovery.
+Typed no-effect and guest-code failures are retained as diagnostic-only evidence;
+they are not unexpected failures for suite accounting or rerun selection. An
+unclassified failure remains unexpected and must be investigated.
 `summarizeFailures(scope.results)` includes both failed tests and passed tests
 with tool failures, so use it as the bounded investigation packet before
 drilling into the full raw session state.
@@ -364,7 +367,7 @@ Unit/config review does not own a separate decision path. The protected-main
 gate carries its typed unit rows and config summary through the canonical
 authority acquisition, preserving the same repository-qualified capability,
 test policy, grant, abort signal, and terminal result. An unattended test
-waiting on a unit-batch card indicates a host bypass, not missing prompt text.
+waiting on a unit-install-review card indicates a host bypass, not missing prompt text.
 
 ```typescript
 // Eval uses the same portable `rpc.call(target, method, args)` shape as panels/workers.
@@ -426,22 +429,22 @@ For each failure, determine the root cause category and act accordingly:
 
 ## Phase 4: Identify Files to Change
 
-| Symptom                       | Likely files                                                                                                                                                                                   |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| fs operation failed           | `src/server/services/fsService.ts`, `workspace/packages/runtime/src/panel/fs.ts`                                                                                                               |
-| DO storage operation failed   | `src/server/internalDOs/*`, `workspace/packages/runtime/src/worker/durable-base.ts`                                                                                                            |
+| Symptom                       | Likely files                                                                                                                                                                        |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| fs operation failed           | `src/server/services/fsService.ts`, `workspace/packages/runtime/src/panel/fs.ts`                                                                                                    |
+| DO storage operation failed   | `src/server/internalDOs/*`, `workspace/packages/runtime/src/worker/durable-base.ts`                                                                                                 |
 | Semantic VCS operation failed | `packages/service-schemas/src/vcs.ts`, `src/server/services/vcsService.ts`, `workspace/workers/workspace-source/semanticVcs*`, `workspace/packages/runtime/src/shared/vcsClient.ts` |
-| external Git operation failed | `packages/git/src/client.ts`, `workspace/extensions/git-bridge/upstream.ts`                                                                                                                       |
-| Build failed                  | `src/server/buildV2/`, `build.mjs`                                                                                                                                                             |
-| Worker/DO issue               | `src/server/services/workerService.ts`, `workspace/packages/runtime/src/worker/`                                                                                                               |
-| Panel lifecycle               | `src/main/panelOrchestrator.ts`, `src/server/services/bridgeService.ts`                                                                                                                        |
-| Credential/OAuth error        | `src/server/services/credentialService.ts`, `workspace/packages/runtime/src/shared/credentials.ts`                                                                                             |
-| Harness crash                 | `workspace/packages/harness/src/entry.ts`, `src/server/harnessManager.ts`                                                                                                                      |
-| PubSub issue                  | `workspace/packages/pubsub/src/`, `workspace/workers/pubsub-channel/`                                                                                                                          |
-| Skill import                  | `src/server/buildV2/`, package.json exports                                                                                                                                                    |
-| Agent behavior                | `workspace/workers/agent-worker/ai-chat-worker.ts`, harness config                                                                                                                             |
-| RPC routing                   | `src/shared/serviceDispatcher.ts`, `packages/rpc/src/`                                                                                                                                         |
-| Error swallowed               | Search for `.catch(` and empty catch blocks near the failure site                                                                                                                              |
+| external Git operation failed | `packages/git/src/client.ts`, `workspace/extensions/git-bridge/upstream.ts`                                                                                                         |
+| Build failed                  | `src/server/buildV2/`, `build.mjs`                                                                                                                                                  |
+| Worker/DO issue               | `src/server/services/workerService.ts`, `workspace/packages/runtime/src/worker/`                                                                                                    |
+| Panel lifecycle               | `src/main/panelOrchestrator.ts`, `src/server/services/bridgeService.ts`                                                                                                             |
+| Credential/OAuth error        | `src/server/services/credentialService.ts`, `workspace/packages/runtime/src/shared/credentials.ts`                                                                                  |
+| Harness crash                 | `workspace/packages/harness/src/entry.ts`, `src/server/harnessManager.ts`                                                                                                           |
+| PubSub issue                  | `workspace/packages/pubsub/src/`, `workspace/workers/pubsub-channel/`                                                                                                               |
+| Skill import                  | `src/server/buildV2/`, package.json exports                                                                                                                                         |
+| Agent behavior                | `workspace/workers/agent-worker/ai-chat-worker.ts`, harness config                                                                                                                  |
+| RPC routing                   | `src/shared/serviceDispatcher.ts`, `packages/rpc/src/`                                                                                                                              |
+| Error swallowed               | Search for `.catch(` and empty catch blocks near the failure site                                                                                                                   |
 
 ## Phase 5: Prepare an Editable Checkout
 

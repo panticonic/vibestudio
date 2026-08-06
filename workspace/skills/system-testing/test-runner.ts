@@ -6,7 +6,10 @@ import type {
   TestSuiteResultEntry,
   ToolFailureSummary,
 } from "./types.js";
-import { classifyBuiltInExpectedToolFailure } from "./tool-failure-classification.js";
+import {
+  classifyBuiltInToolFailure,
+  isUnexpectedToolFailure,
+} from "./tool-failure-classification.js";
 import type { HeadlessRunner } from "./runner.js";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
@@ -14,6 +17,11 @@ import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { systemTestFailure } from "./structured-error.js";
 import { materializeValidationEvidence } from "./validation-evidence.js";
 import { DEFAULT_SYSTEM_TEST_TIMEOUT_MS } from "./config.js";
+import {
+  projectValidationInput,
+  validationFailureProvenance,
+} from "./validation-failure.js";
+import type { SystemTestJsonValue } from "./structured-error.js";
 
 const NON_INTERACTIVE_TERMINAL_WAIT_REASONS = [
   "model_credential_required",
@@ -213,6 +221,7 @@ export class TestRunner {
       | Awaited<ReturnType<HeadlessRunner["prepareWorkspaceRepoFixture"]>>
       | undefined;
     let failurePhase = test.workspaceRepoFixture ? "workspace-fixture-setup" : "session-setup";
+    let validationInputProjection: SystemTestJsonValue | undefined;
     const enterPhase = (phase: string): void => {
       failurePhase = phase;
       this.opts?.onTestPhase?.(test, phase);
@@ -233,6 +242,8 @@ export class TestRunner {
           ? `Timed out waiting for agent to finish test "${test.name}" during ${phase}`
           : `Timed out waiting for agent to finish test "${test.name}"`;
         const controller = new AbortController();
+        let stopAuthorityWatch: (() => void) | undefined;
+        let authorityFailure: Promise<never> | undefined;
         this.activeWaits.add(controller);
         if (this.cancellationError) controller.abort(this.cancellationError);
         try {
@@ -241,11 +252,30 @@ export class TestRunner {
           }
           const remaining = remainingTimeMs();
           if (remaining <= 0) throw new Error(timeoutMessage);
+          const onMessage = (
+            targetSession as unknown as {
+              onMessage?: (listener: (message: ChatMessage) => void) => () => void;
+            }
+          ).onMessage;
+          if (typeof onMessage === "function") {
+            authorityFailure = new Promise<never>((_resolve, reject) => {
+              stopAuthorityWatch = onMessage.call(targetSession, (message) => {
+                const failure = unexpectedTestPolicyFailure(message);
+                if (failure) reject(failure);
+              });
+            });
+          }
           const wait = targetSession.sendAndWait(prompt, {
             signal: controller.signal,
             terminalWaitingReasons: NON_INTERACTIVE_TERMINAL_WAIT_REASONS,
           });
-          await this.withTimeout(wait, remaining, timeoutMessage, controller);
+          await this.withTimeout(
+            authorityFailure ? Promise.race([wait, authorityFailure]) : wait,
+            remaining,
+            timeoutMessage,
+            controller
+          );
+          stopAuthorityWatch?.();
         } catch (error) {
           const terminalError = this.cancellationError ?? error;
           try {
@@ -260,6 +290,10 @@ export class TestRunner {
           }
           throw terminalError;
         } finally {
+          // The listener is installed before sendAndWait so an authority
+          // rejection cannot turn into a long model retry loop. Remove it on
+          // both ordinary completion and interruption.
+          stopAuthorityWatch?.();
           this.activeWaits.delete(controller);
         }
         return await this.captureAndAssertModelExecution(
@@ -298,13 +332,14 @@ export class TestRunner {
         execution,
         testRunner.validationEvidenceReader
       );
-      validationExecution.toolFailures = classifyExpectedToolFailures(
+      validationExecution.toolFailures = classifyToolFailures(
         collectToolFailures(validationExecution),
         test.expectedToolFailures
       );
       // Persist only the bounded summaries. The canonical request/result bodies
       // remain content-addressed in the durable execution record.
       execution.toolFailures = validationExecution.toolFailures;
+      validationInputProjection = projectValidationInput(validationExecution);
       enterPhase("validation");
       const result =
         test.validation === "harness"
@@ -342,7 +377,14 @@ export class TestRunner {
         ...(modelExecutionEvidence !== undefined ? { modelExecutionEvidence } : {}),
         ...(snapshot ? { provenance: provenanceFromSnapshot(snapshot) } : {}),
       };
-      execution.toolFailures = classifyExpectedToolFailures(
+      if (failurePhase === "validation") {
+        execution.validationFailure = validationFailureProvenance({
+          test,
+          error: err,
+          inputProjection: validationInputProjection ?? projectValidationInput(execution),
+        });
+      }
+      execution.toolFailures = classifyToolFailures(
         collectToolFailures(execution),
         test.expectedToolFailures
       );
@@ -667,6 +709,42 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+const UNEXPECTED_TEST_PROMPT = /EUNEXPECTEDTESTPROMPT|Unexpected authority prompt in system test/iu;
+
+/**
+ * An unexpected test-policy prompt is a harness/configuration failure, not a
+ * recoverable guest operation. It must end the turn as soon as the invocation
+ * result arrives; otherwise the model can spend the whole test timeout
+ * retrying a capability that the test intentionally did not authorize.
+ */
+function unexpectedTestPolicyFailure(message: ChatMessage): Error | null {
+  if (message.contentType !== "invocation") return null;
+  const payload = ((message as { invocation?: unknown }).invocation ??
+    parseJson(message.content)) as InvocationLike | undefined;
+  const execution = isRecord(payload?.execution) ? payload.execution : undefined;
+  const status = asString(execution?.["status"]) ?? asString(payload?.status);
+  if (status !== "error" && status !== "failed" && execution?.["isError"] !== true) {
+    return null;
+  }
+  const candidates = [
+    payload?.error,
+    execution?.["error"],
+    execution?.["description"],
+    execution?.["result"],
+    payload?.result,
+    message.error,
+    message.content,
+  ];
+  for (const candidate of candidates) {
+    if (candidate === undefined) continue;
+    const text = typeof candidate === "string" ? candidate : safeJson(candidate);
+    if (UNEXPECTED_TEST_PROMPT.test(text)) {
+      return new Error(clip(text, 2_000));
+    }
+  }
+  return null;
+}
+
 function timeoutDiagnosticDetails(
   messages: readonly ChatMessage[],
   snapshot?: SessionSnapshot
@@ -718,6 +796,7 @@ interface InvocationLike {
   terminalOutcome?: unknown;
   terminalReasonCode?: unknown;
   failureKind?: unknown;
+  failureCode?: unknown;
   error?: unknown;
   result?: unknown;
   execution?: {
@@ -725,6 +804,7 @@ interface InvocationLike {
     terminalOutcome?: unknown;
     terminalReasonCode?: unknown;
     failureKind?: unknown;
+    failureCode?: unknown;
     description?: unknown;
     error?: unknown;
     result?: unknown;
@@ -767,23 +847,24 @@ function collectToolFailures(execution: TestExecutionResult): ToolFailureSummary
   return failures;
 }
 
-function classifyExpectedToolFailures(
+function classifyToolFailures(
   failures: ToolFailureSummary[],
   expected: TestCase["expectedToolFailures"]
 ): ToolFailureSummary[] {
   return failures.map((failure) => {
-    const builtIn = classifyBuiltInExpectedToolFailure({
+    const builtIn = classifyBuiltInToolFailure({
       name: failure.name,
       terminalReasonCode: failure.terminalReasonCode,
+      failureCode: failure.failureCode,
       failureKind: failure.failureKind,
       error: failure.error,
       result: failure.resultSummary,
     });
     if (builtIn) {
       // Correctable and fail-closed does not mean intentional. Keep the
-      // classification so diagnostics can distinguish an ergonomics problem
-      // from a failed platform effect, but count it unless this exact test
-      // declared that it deliberately exercises the failure.
+      // classification and retain the invocation, but make the distinction
+      // explicit so a guest-code exception cannot become an infrastructure
+      // regression merely because the agent explored a bad input.
       const text = `${failure.error ?? ""}\n${failure.resultSummary ?? ""}`.toLowerCase();
       const deliberatelyExpected = expected?.some(
         (candidate) =>
@@ -791,8 +872,8 @@ function classifyExpectedToolFailures(
           (!candidate.errorIncludes || text.includes(candidate.errorIncludes.toLowerCase()))
       );
       return deliberatelyExpected
-        ? { ...failure, expected: true, classification: builtIn }
-        : { ...failure, classification: builtIn };
+        ? { ...failure, expected: true, diagnosticOnly: true, classification: builtIn }
+        : { ...failure, diagnosticOnly: true, classification: builtIn };
     }
     if (!expected?.length) return failure;
     const text = `${failure.error ?? ""}\n${failure.resultSummary ?? ""}`.toLowerCase();
@@ -806,7 +887,7 @@ function classifyExpectedToolFailures(
 }
 
 function unexpectedToolFailures(failures: ToolFailureSummary[] | undefined): ToolFailureSummary[] {
-  return (failures ?? []).filter((failure) => failure.expected !== true);
+  return (failures ?? []).filter(isUnexpectedToolFailure);
 }
 
 function summarizeToolFailure(
@@ -834,10 +915,18 @@ function summarizeToolFailure(
   const rawResult = invocation.result ?? exec.result;
   const resultDetails =
     isRecord(rawResult) && isRecord(rawResult["details"]) ? rawResult["details"] : undefined;
+  const nestedFailure =
+    resultDetails && isRecord(resultDetails["failure"]) ? resultDetails["failure"] : undefined;
   const failureKind =
     asString(exec.failureKind) ??
     asString(invocation.failureKind) ??
-    (resultDetails ? asString(resultDetails["failureKind"]) : undefined);
+    (resultDetails ? asString(resultDetails["failureKind"]) : undefined) ??
+    (nestedFailure ? asString(nestedFailure["failureKind"]) : undefined);
+  const failureCode =
+    asString(exec.failureCode) ??
+    asString(invocation.failureCode) ??
+    (resultDetails ? asString(resultDetails["failureCode"]) : undefined) ??
+    (nestedFailure ? asString(nestedFailure["failureCode"]) : undefined);
   const name = asString(invocation.name) ?? asString(invocation.method) ?? "(unknown)";
   return {
     id: asString(invocation.id),
@@ -845,6 +934,7 @@ function summarizeToolFailure(
     status,
     terminalOutcome,
     terminalReasonCode,
+    ...(failureCode ? { failureCode } : {}),
     ...(failureKind === "user-code" ||
     failureKind === "infrastructure" ||
     failureKind === "cancelled"
@@ -910,18 +1000,27 @@ export function validateAgentCompletionReport(result: TestExecutionResult): Test
     ?.content?.trim();
   if (!final) return { passed: false, reason: "No agent completion report received" };
 
-  if (final.startsWith("Task completed.")) return { passed: true };
-  if (final.startsWith("Task not completed.")) {
+  const declarations = [
+    ...final.matchAll(/(?:^|\n)(Task completed\.|Task not completed\.)(?=\s|$)/gu),
+  ];
+  if (declarations.length !== 1) {
     return {
       passed: false,
-      reason: `Agent reported that it did not complete the task: ${final.slice(0, 400)}`,
+      reason:
+        declarations.length === 0
+          ? "Agent completion report did not contain the required standalone “Task completed.” or “Task not completed.” status declaration"
+          : "Agent completion report contained more than one terminal status declaration",
     };
   }
-  return {
-    passed: false,
-    reason:
-      "Agent completion report did not begin with the required “Task completed.” or “Task not completed.” status marker",
-  };
+  const [declaration] = declarations;
+  if (declaration![1] === "Task completed.") return { passed: true };
+  if (declaration![1] === "Task not completed.") {
+    return {
+      passed: false,
+      reason: `Agent reported that it did not complete the task: ${final.slice(declaration!.index, declaration!.index + 400)}`,
+    };
+  }
+  throw new Error("unreachable completion declaration");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

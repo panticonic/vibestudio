@@ -449,22 +449,22 @@ describe("semantic system-test validators", () => {
     ).toEqual({ passed: true });
   });
 
-  it("accepts gad.query with positional bindings", () => {
+  it("accepts typed gad.status metrics", () => {
     const test = agenticRuntimeTests.find(
-      (candidate) => candidate.name === "gad-query-positional-bindings"
+      (candidate) => candidate.name === "gad-status-summary"
     )!;
     expect(
       test.validate(
-        execution("The query returned one result row.", [
+        execution("The GAD status returned one metric value.", [
           {
             name: "eval",
             arguments: {
-              code: 'return await gad.query("SELECT type FROM nodes WHERE type = ? LIMIT ?", ["table", 1]);',
+              code: "return await gad.status();",
             },
             execution: {
               status: "complete",
               isError: false,
-              result: { rows: [{ type: "table" }] },
+              result: { metrics: [{ metric: "log_events", value: 1 }] },
             },
           },
         ])

@@ -541,13 +541,13 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(state).toMatchObject({
       repositoryId: "repository:fixture",
       repoPath: "panels/system-test-panel-source",
-      seedFilePaths: ["index.ts", "package.json"],
+      seedFilePaths: ["index.tsx", "package.json"],
     });
     const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
     expect(seededText).toContain('"@workspace-panels/system-test-panel-source"');
-    expect(seededText).toContain('"template": "vanilla"');
+    expect(seededText).toContain('"react": "^19.0.0"');
     expect(seededText).toContain('"authority": {');
-    expect(seededText).toContain('"requests": []');
+    expect(seededText).toContain('"capability": "context.boundary"');
 
     fake.createTaskRepositories(["panels/system-test-panel-fork"]);
     await expect(fixture.cleanup(state)).resolves.toEqual({

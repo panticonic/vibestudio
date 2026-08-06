@@ -699,23 +699,55 @@ async function runMultiUserPhase(options, resultsDir) {
         JSON.stringify(aliceIds) === JSON.stringify(bobIds),
         "members must inspect the same approval queue"
       );
-      const created = await childRpc(
-        aliceChild,
-        "panelTree.create",
-        { surface: "code", source: "panels/chat" },
-        {
-          name: "Shared smoke panel",
-          focus: false,
-        }
+
+      // Panel creation is a two-phase runtime operation now: create the
+      // executable entity, then commit its durable tree slot. The old
+      // panelTree.create/getTreeSnapshot calls were removed when the tree was
+      // moved behind the workspace-state service, so keep this smoke aligned
+      // with the same contracts used by the product panel runtime.
+      const entryKey = `smoke-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      const createdEntity = await childRpc(aliceChild, "runtime.createEntity", {
+        kind: "panel",
+        execution: { surface: "code", source: "panels/chat" },
+        key: entryKey,
+        stateArgs: {},
+      });
+      const createdSlotId = `panel:tree/full-smoke-${entryKey}`;
+      await childRpc(aliceChild, "workspace-state.slot.create", {
+        slotId: createdSlotId,
+        parentSlotId: null,
+        initialEntry: {
+          entryKey,
+          entityId: createdEntity.id,
+          source: "panels/chat",
+          contextId: createdEntity.contextId,
+          stateArgs: {},
+        },
+      });
+
+      const rootGroups = await childRpc(bobChild, "workspace-state.panelTree.rootGroups", {
+        limit: 100,
+      });
+      const rootPages = await Promise.all(
+        (rootGroups.groups ?? []).map((group) =>
+          childRpc(bobChild, "workspace-state.panelTree.page", {
+            group: { kind: "roots", ownerUserId: group.ownerUserId },
+            limit: 200,
+          })
+        )
       );
-      const bobSnapshot = await childRpc(bobChild, "panelTree.getTreeSnapshot");
-      const flatten = (panels) =>
-        panels.flatMap((panel) => [panel, ...flatten(panel.children ?? [])]);
-      const allPanels = (bobSnapshot.forest ?? []).flatMap((group) => group.rootPanels ?? []);
+      const allPanels = rootPages.flatMap((page) => page.nodes ?? []);
       expect(
-        flatten(allPanels).some((panel) => panel.id === created.id),
+        allPanels.some((panel) => panel.slotId === createdSlotId),
         "Bob must see Alice's panel"
       );
+
+      // This is a durable-state contract smoke, so retire the temporary
+      // runtime entity after verifying visibility. A fresh smoke hub also
+      // tears down at process exit, but explicit cleanup keeps long-lived
+      // diagnostic runs from accumulating stale rows.
+      await childRpc(aliceChild, "workspace-state.slot.close", createdSlotId).catch(() => {});
+      await childRpc(aliceChild, "runtime.retireEntity", { id: createdEntity.id }).catch(() => {});
     });
 
     await step("workspace and hub presence aggregate physical endpoints", async () => {

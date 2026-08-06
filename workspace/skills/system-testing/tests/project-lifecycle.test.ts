@@ -69,7 +69,7 @@ describe("project lifecycle prompts", () => {
 
     for (const prompt of panelPrompts) {
       expect(prompt).not.toMatch(/finish with|respond with|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/iu);
-      expect(prompt).not.toMatch(/createProject|forkProject|openPanel|dryRun/iu);
+      expect(prompt).not.toMatch(/createProjects|forkProject|openPanel|dryRun/iu);
     }
   });
 
@@ -89,10 +89,50 @@ describe("project lifecycle prompts", () => {
       kind: "created-repository",
       section: "packages",
     });
+    expect(fixtureFor("worker-create-commit-publish")).toEqual({
+      kind: "created-repository",
+      section: "workers",
+    });
     expect(fixtureFor("panel-todo-debug-polish")).toEqual({
       kind: "created-repository",
       section: "panels",
     });
+  });
+
+  it("accepts a published generated worker scaffold", () => {
+    const test = projectLifecycleTests.find(({ name }) => name === "worker-create-commit-publish")!;
+    const result = {
+      duration: 0,
+      messages: [
+        { kind: "message", senderId: "user", complete: true, content: "prompt" },
+        invocation(
+          "create-worker-project",
+          "eval",
+          { code: `return createProjects([{ projectType: "worker", name: "isolated-worker" }]);` },
+          {
+            returnValue: {
+              created: "workers/isolated-worker",
+              files: ["index.ts", "package.json"],
+              preflight: {
+                ok: true,
+                projectType: "worker",
+                checked: ["index.ts", "package.json"],
+              },
+              publication: {
+                published: true,
+                committedEventId: "event:worker",
+                publishedEventId: "event:worker",
+                mainEventId: "event:worker",
+                effectId: "effect:worker",
+              },
+            },
+          }
+        ),
+        { kind: "message", senderId: "agent", complete: true, content: "Created." },
+      ],
+    } as TestExecutionResult;
+
+    expect(test.validate(result)).toEqual({ passed: true, reason: undefined });
   });
 
   it("grants only panel and dependency inspection to the To-Do loop", () => {
@@ -100,6 +140,30 @@ describe("project lifecycle prompts", () => {
 
     expect(test.authorityPolicy).toEqual({
       authority: [
+        {
+          ruleId: "manage-panel-state",
+          capability: { kind: "exact", key: "workspace.runtime-state.manage" },
+          resource: { kind: "exact", key: "workspace.runtime-state.manage" },
+          tier: "gated",
+          decision: "once",
+        },
+        {
+          ruleId: "manage-panel-context-boundary",
+          capability: { kind: "exact", key: "context.boundary" },
+          resource: { kind: "prefix", prefix: "context/" },
+          tier: "gated",
+          decision: "once",
+        },
+        {
+          ruleId: "use-testkit-driver",
+          capability: { kind: "exact", key: "workspace-service:testkit-driver" },
+          resource: {
+            kind: "exact",
+            key: "do:workers/testkit-driver:TestkitDriverDO:workspace-testkit-driver",
+          },
+          tier: "gated",
+          decision: "once",
+        },
         {
           ruleId: "inspect-created-panel",
           capability: { kind: "exact", key: "panel.inspect" },
@@ -126,7 +190,7 @@ describe("project lifecycle prompts", () => {
       invocation(
         "create",
         "eval",
-        { code: "createProject()" },
+        { code: "createProjects()" },
         {
           returnValue: {
             created: source,

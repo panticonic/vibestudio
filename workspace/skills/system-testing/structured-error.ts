@@ -61,6 +61,17 @@ export function serializeSystemTestError(error: unknown): StructuredSystemTestEr
   };
 }
 
+/** Bounded/redacted stack text for failures whose call site is itself the
+ * diagnostic evidence (for example a semantic validator exception). */
+export function serializeSystemTestStack(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  try {
+    return typeof error.stack === "string" ? boundedText(error.stack) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function systemTestFailure(phase: string, error: unknown): SystemTestFailure {
   return { phase, error: serializeSystemTestError(error) };
 }

@@ -32,13 +32,22 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
 1. Check infrastructure first:
 
    ```bash
-   pnpm cli --instance INSTANCE system-test doctor --approve-startup \
+   pnpm system-test --instance INSTANCE doctor --approve-startup \
      --model openai-codex:gpt-5.3-codex-spark
    ```
 
+   This command is the provisioning boundary as well as the diagnostic one. If
+   `INSTANCE` is absent, stale, unpaired, or has no server yet, the launcher
+   creates a named ephemeral server from the current checkout, waits for its
+   ready record, and pairs the instance-scoped CLI before running `doctor`.
+   Agents should invoke it directly; “no server is running” is not a blocker and
+   is not a reason to ask the user to start one. Use one stable unique instance
+   name throughout parallel work. The launcher refuses to take ownership of an
+   unrelated existing instance.
+
    Repair failed infrastructure checks before interpreting scenario behavior.
    On a fresh disposable instance, `--approve-startup` resolves only exact,
-   version-bound startup unit batches and refuses if any unrelated consent is
+   version-bound startup install reviews and refuses if any unrelated consent is
    pending. It does not approve credentials, userland requests, publication,
    or standing grants. Test turns themselves use the runner's host-attested
    authority policy and `approvalLevel: 2`; this pair is the supported
@@ -59,13 +68,13 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
 2. Discover the exact current test name:
 
    ```bash
-   pnpm cli --instance INSTANCE system-test list --json
+   pnpm system-test --instance INSTANCE list --json
    ```
 
 3. Run the smallest relevant exact test:
 
    ```bash
-   pnpm cli --instance INSTANCE system-test run TEST_NAME \
+   pnpm system-test --instance INSTANCE run TEST_NAME \
      --model openai-codex:gpt-5.3-codex-spark
    ```
 
@@ -115,7 +124,7 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
 4. On any non-zero exit, inspect the durable run packet immediately:
 
    ```bash
-   pnpm cli --instance INSTANCE system-test inspect RUN_ID --json
+   pnpm system-test --instance INSTANCE inspect RUN_ID --json
    ```
 
    Completed runs are inspected from the terminal heartbeat packet first, so
@@ -128,43 +137,52 @@ For CLI-driven verification, diagnosis, or repair, follow this order:
    trajectory:
 
    ```bash
-   pnpm cli --instance INSTANCE system-test trajectory RUN_ID TEST_NAME --full --json
+   pnpm system-test --instance INSTANCE trajectory RUN_ID TEST_NAME --full --json
    ```
 
 5. Classify the root cause as infrastructure, documentation, harness, or
    validator. Default to repairing infrastructure. Do not compensate for a
    platform or documentation defect by teaching the prompt the answer.
 
-Use a named ephemeral developer instance for destructive or publication-heavy
-system testing. Each non-`source` instance acquires its own workspace from the
-exact promoted base-template pin and never publishes back to that upstream, so
-parallel hubs cannot seed one another's next bootstrap:
+Use a stable named instance for destructive or publication-heavy system
+testing. The first command provisions its ephemeral server automatically. Each
+instance acquires its own workspace from the exact promoted base-template pin
+and never publishes back to that upstream, so parallel hubs cannot seed one
+another's next bootstrap:
 
 ```bash
-pnpm server:live --ephemeral --instance system-tests-a
-pnpm cli --instance system-tests-a system-test doctor --approve-startup \
+pnpm system-test --instance system-tests-a doctor --approve-startup \
   --model openai-codex:gpt-5.3-codex-spark
 ```
 
 6. Implement the root fix and run focused conventional tests/type checks.
    Restarting the current source server is sufficient for host-code-only
    changes. A named `--bootstrap-workspace` deliberately preserves its acquired
-   semantic state and never reacquires the promoted base pin on restart. Stop
-   it and start
-   `pnpm server:live --ephemeral --instance INSTANCE` to test a fresh checkout
-   acquired from the exact promoted base template pin. The source-server supervisor isolates the
+   semantic state and never reacquires the promoted base pin on restart. For a
+   fresh checkout after workspace-source changes, run
+   `pnpm system-test --instance INSTANCE stop`, then invoke `doctor` again; the
+   launcher provisions a fresh checkout acquired from the exact promoted base
+   template pin. The source-server supervisor isolates the
    hub lease, identity, databases, workspace, ports, ready file, CLI device, and
    CLI sessions while reusing profile-owned model configuration and encrypted
    provider credentials. Address that exact hub with
-   `pnpm cli --instance INSTANCE ...`; never terminate or retarget another
+   `pnpm system-test --instance INSTANCE ...`; never terminate or retarget another
    developer's live instance.
 
 7. After the exact test passes, run its category and then smoke coverage. Use
    the prior run to rerun every failure or unexpected tool failure:
 
    ```bash
-   pnpm cli --instance INSTANCE system-test rerun RUN_ID
+   pnpm system-test --instance INSTANCE rerun RUN_ID
    ```
+
+8. When verification is complete, stop exactly the managed instance:
+
+   ```bash
+   pnpm system-test --instance INSTANCE stop
+   ```
+
+   The launcher refuses to stop an instance it did not create.
 
 Stop only when repair requires missing credentials, new authority, unavailable
 external infrastructure, or a server restart that has not been authorized.
@@ -283,6 +301,10 @@ The report card is a bounded presentation, not the diagnostic record. Full
 messages and snapshots remain in `scope.results.results`. Mention recovered
 tool failures even when the final task passed; they can reveal infrastructure
 defects hidden by successful agent recovery.
+Typed no-effect and guest-code failures remain visible in the diagnostic record,
+but are diagnostic-only and do not count as unexpected tool failures. Only an
+unclassified failure is an unexpected failure that belongs in rerun and failure
+summaries.
 
 Ordinary local agent tools have no implicit wall-clock deadline. They inherit
 explicit cancellation from the owning turn; tools and deferred protocols may

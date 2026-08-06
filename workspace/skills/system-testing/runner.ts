@@ -5,7 +5,11 @@ import {
 } from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
 import { blobstore, gad, rpc, vcs } from "@workspace/runtime";
-import { SYSTEM_TEST_AGENT_MODEL, systemTestModelRoute } from "./config.js";
+import {
+  SYSTEM_TEST_AGENT_MODEL,
+  systemTestModelRoute,
+  type SystemTestThinkingLevel,
+} from "./config.js";
 import { systemTestFailure } from "./structured-error.js";
 import {
   WorkspaceRepoFixtureLifecycle,
@@ -30,7 +34,7 @@ Your job is to exercise the documented path honestly, not to make the test pass 
 
 When a task depends on Vibestudio behavior, use the relevant docs or skill files to choose the most straightforward supported approach.
 
-Treat the request like a normal user's request. Route from the Available skills index to the closest user-facing skill before doing a broad source search. Do not inspect \`skills/system-testing\`, its test definitions, validators, marker strings, or captured artifacts to reverse-engineer what the test expects; those are harness implementation, not product documentation.
+Treat the request like a normal user's request. Route from the Available skills index to the closest user-facing skill before doing a broad source search. Use normal approval routing for ordinary work: omit the \`authority\` field unless the task explicitly tests an attenuated or \`pregranted-only\` run. \`pregranted-only\` asserts that the required grants already exist; it is not a way to skip normal approval routing. Do not inspect \`skills/system-testing\`, its test definitions, validators, marker strings, or captured artifacts to reverse-engineer what the test expects; those are harness implementation, not product documentation.
 
 This session is genuinely headless: there is no initial visible panel ancestor. The panel tree still works. If a task needs an actual child panel and getParent() is null, follow the documented headless tree pattern: create an owned root panel explicitly, create the requested panel with that root's id as parentId, and close the temporary root to clean the subtree.
 
@@ -42,7 +46,7 @@ Use file-loaded eval for substantive multi-line or multi-file eval work. Do not 
 
 Keep evidence bounded. Report summaries, counts, ids, byte lengths, exact error messages, the final agent message, the validation reason, and the relevant tool call statuses/errors. Do not paste large raw payloads, full database rows, full channel envelopes, image data, or secrets.
 
-Every final response should be concise and begin with exactly one of these status markers:
+Every final response should be concise and contain exactly one terminal status declaration at the start of a line:
 \`Task completed.\`
 \`Task not completed.\`
 The summary may continue on that line or the next. Summarize what you verified and mention any problems or retries encountered along the way. For an incomplete task, include the concrete mismatch or error. Never just refer to files or artifacts; describe what the evidence shows.`;
@@ -157,6 +161,7 @@ export class HeadlessRunner {
     sessions: Set<HeadlessSession>;
     testNames: Map<HeadlessSession, string | null>;
     modelPolicy: ModelPolicyState;
+    thinkingLevel?: SystemTestThinkingLevel;
     sessionPolicies: Map<HeadlessSession, ModelPolicyState>;
   };
   private readonly testName: string | null;
@@ -173,11 +178,12 @@ export class HeadlessRunner {
    */
   constructor(
     contextId: string,
-    opts?: { model?: string },
+    opts?: { model?: string; thinkingLevel?: SystemTestThinkingLevel },
     shared?: {
       sessions: Set<HeadlessSession>;
       testNames: Map<HeadlessSession, string | null>;
       modelPolicy: HeadlessRunner["shared"]["modelPolicy"];
+      thinkingLevel?: SystemTestThinkingLevel;
       sessionPolicies: Map<HeadlessSession, ModelPolicyState>;
     },
     testName: string | null = null,
@@ -191,6 +197,7 @@ export class HeadlessRunner {
       sessions: new Set(),
       testNames: new Map(),
       sessionPolicies: new Map(),
+      ...(opts?.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
       modelPolicy: {
         ...modelRoute,
         activeModel: primaryModel,
@@ -267,7 +274,10 @@ export class HeadlessRunner {
         : opts?.authorityPolicy;
     return new HeadlessRunner(
       this.contextId,
-      { model: this.shared.modelPolicy.primaryModel },
+      {
+        model: this.shared.modelPolicy.primaryModel,
+        ...(this.shared.thinkingLevel ? { thinkingLevel: this.shared.thinkingLevel } : {}),
+      },
       this.shared,
       testName,
       workspaceRepoFixture,
@@ -292,6 +302,16 @@ export class HeadlessRunner {
             resource: {
               kind: "prefix",
               prefix: "do:workers/pubsub-channel:PubSubChannel:headless-",
+            },
+            tier: "gated",
+            decision: "once",
+          },
+          {
+            ruleId: "workspace-state-runtime",
+            capability: { kind: "exact", key: "workspace-service:workspace.state" },
+            resource: {
+              kind: "prefix",
+              prefix: "do:vibestudio/internal:WorkspaceDO:",
             },
             tier: "gated",
             decision: "once",
@@ -419,7 +439,8 @@ export class HeadlessRunner {
         clientId: rpc.selfId,
         rpc: rpcConfig,
       },
-      rpcCall: (t: string, m: string, args: unknown[]) => rpcConfig.call(t, m, args),
+      rpcCall: (t: string, m: string, args: unknown[], options) =>
+        rpcConfig.call(t, m, args, options),
       source: opts?.source ?? "workers/agent-worker",
       className: opts?.className ?? "AiChatWorker",
       ...(agentContextId ? { contextId: agentContextId } : {}),
@@ -439,6 +460,7 @@ export class HeadlessRunner {
         systemPrompt: `${SYSTEM_TEST_AGENT_PROMPT}${fixturePrompt}${opts?.additionalSystemPrompt ?? ""}`,
         systemPromptMode: "append",
         model,
+        ...(this.shared.thinkingLevel ? { thinkingLevel: this.shared.thinkingLevel } : {}),
       },
     });
     this.shared.sessions.add(session);

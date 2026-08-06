@@ -1,54 +1,51 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
 import {
+  isRetryableSystemTestStatusReadFailure,
   settleSystemTestDoctor,
   settleSystemTestStartup,
-  settleStartupUnitBatches,
   systemTestJsonPageExpression,
+  systemTestDoctorRecovery,
   systemTestRunCode,
 } from "./systemTestCommands.js";
+import { RpcError } from "./rpcClient.js";
+import { AuthError } from "./output.js";
+
+describe("system-test status polling", () => {
+  it("reopens after a stale one-invocation host attestation", () => {
+    expect(
+      isRetryableSystemTestStatusReadFailure(
+        new RpcError(
+          "[eval.get] getRun: host authority attestation nonce was replayed or is outside the receiver's retention bound",
+          undefined,
+          "application"
+        )
+      )
+    ).toBe(true);
+    expect(
+      isRetryableSystemTestStatusReadFailure(
+        new RpcError("[eval.get] getRun: host authority attestation is bound to another invocation")
+      )
+    ).toBe(false);
+  });
+});
+
+describe("system-test doctor infrastructure recovery", () => {
+  it("classifies missing pairing as automatically recoverable local infrastructure", () => {
+    expect(systemTestDoctorRecovery(new AuthError("not paired"))).toEqual({
+      ok: false,
+      classification: "infrastructure",
+      recoverable: true,
+      automaticRecovery: "create_ephemeral_instance",
+      command: "pnpm system-test doctor",
+      error: "not paired",
+      exitCode: 3,
+    });
+    expect(systemTestDoctorRecovery(new Error("validator failed"))).toBeNull();
+  });
+});
 
 describe("system-test startup preparation", () => {
-  it("approves only version-bound startup unit batches", async () => {
-    const pending = [
-      {
-        kind: "unit-batch" as const,
-        trigger: "startup" as const,
-        approvalId: "approval:startup",
-        units: [{ unitName: "extensions/shell" }],
-      },
-    ];
-    const resolved: Array<[string, string]> = [];
-    const result = await settleStartupUnitBatches(
-      {
-        listPending: async () => pending.splice(0) as never,
-        resolve: async (approvalId, decision) => {
-          resolved.push([approvalId, decision]);
-        },
-      },
-      { quietMs: 0, deadlineMs: 1_000 }
-    );
-
-    expect(result).toEqual({
-      approvedBatchIds: ["approval:startup"],
-      approvedUnitCount: 1,
-    });
-    expect(resolved).toEqual([["approval:startup", "version"]]);
-  });
-
-  it("refuses to fold unrelated consent into unattended test setup", async () => {
-    await expect(
-      settleStartupUnitBatches(
-        {
-          listPending: async () =>
-            [{ kind: "credential", approvalId: "approval:credential" }] as never,
-          resolve: async () => undefined,
-        },
-        { quietMs: 0, deadlineMs: 1_000 }
-      )
-    ).rejects.toThrow(/unrelated pending approval.*credential:approval:credential/i);
-  });
-
   it("waits for approved extension builds to become ready", async () => {
     const results = [
       {
@@ -77,10 +74,11 @@ describe("system-test startup preparation", () => {
 
   it("keeps approving startup batches and waits while their extensions reconcile", async () => {
     const pending: Array<{
-      kind: "unit-batch";
-      trigger: "startup";
+      kind: "unit-install-review";
+      mode: "adopt-root";
+      callerId: "system:units";
       approvalId: string;
-      units: Array<{ unitName: string }>;
+      parts: Array<{ repoPath: string }>;
     }> = [];
     const resolved: string[] = [];
     let reads = 0;
@@ -89,10 +87,11 @@ describe("system-test startup preparation", () => {
         reads += 1;
         if (reads === 1) {
           pending.push({
-            kind: "unit-batch",
-            trigger: "startup",
+            kind: "unit-install-review",
+            mode: "adopt-root",
+            callerId: "system:units",
             approvalId: "approval:late",
-            units: [{ unitName: "extensions/git-bridge" }],
+            parts: [{ repoPath: "extensions/git-bridge" }],
           });
         }
         return reads < 3
@@ -115,9 +114,11 @@ describe("system-test startup preparation", () => {
             };
       },
       {
+        getWorkspaceCreationReviewState: async () =>
+          reads < 2 ? { status: "preparing" } : { status: "not-required" },
         listPending: async () => pending.splice(0) as never,
-        resolve: async (approvalId) => {
-          resolved.push(approvalId);
+        resolveInstallReview: async (approval) => {
+          resolved.push(approval.approvalId);
         },
       },
       { deadlineMs: 1_000, pollMs: 0 }
@@ -125,10 +126,80 @@ describe("system-test startup preparation", () => {
 
     expect(prepared.doctor.ok).toBe(true);
     expect(prepared.startupApprovals).toEqual({
-      approvedBatchIds: ["approval:late"],
-      approvedUnitCount: 1,
+      approvedReviewIds: ["approval:late"],
+      approvedPartCount: 1,
     });
     expect(resolved).toEqual(["approval:late"]);
+  });
+
+  it("does not declare startup ready before a late install review can be published", async () => {
+    const review = {
+      kind: "unit-install-review" as const,
+      mode: "adopt-root" as const,
+      callerId: "system:workspace-creation" as const,
+      approvalId: "approval:after-first-doctor",
+      parts: [{ repoPath: "workers/workspace-source" }],
+    };
+    let pendingReads = 0;
+    let stateReads = 0;
+    const resolved: string[] = [];
+
+    const prepared = await settleSystemTestStartup(
+      async () => ({
+        ok: true,
+        checks: [{ name: "required-extensions", ok: true, detail: "ready" }],
+      }),
+      {
+        getWorkspaceCreationReviewState: async () => {
+          stateReads += 1;
+          if (stateReads === 1) return { status: "preparing" } as const;
+          if (stateReads === 2) {
+            return {
+              status: "pending",
+              approvalId: review.approvalId,
+              partCount: review.parts.length,
+            } as const;
+          }
+          return { status: "resolved" } as const;
+        },
+        listPending: async () => {
+          pendingReads += 1;
+          return (pendingReads === 2 ? [review] : []) as never;
+        },
+        resolveInstallReview: async (approval) => {
+          resolved.push(approval.approvalId);
+        },
+      },
+      { deadlineMs: 1_000, pollMs: 0 }
+    );
+
+    expect(prepared.doctor.ok).toBe(true);
+    expect(resolved).toEqual(["approval:after-first-doctor"]);
+    expect(prepared.startupApprovals.approvedReviewIds).toEqual(["approval:after-first-doctor"]);
+    expect(stateReads).toBe(3);
+  });
+
+  it("refuses to autoapprove an unrelated adopt-root review", async () => {
+    await expect(
+      settleSystemTestStartup(
+        async () => ({ ok: true }),
+        {
+          getWorkspaceCreationReviewState: async () => ({ status: "preparing" }),
+          listPending: async () =>
+            [
+              {
+                kind: "unit-install-review",
+                mode: "adopt-root",
+                callerId: "system:template-import",
+                approvalId: "approval:unrelated",
+                parts: [],
+              },
+            ] as never,
+          resolveInstallReview: async () => undefined,
+        },
+        { deadlineMs: 1_000, pollMs: 0 }
+      )
+    ).rejects.toThrow(/unrelated pending approval.*approval:unrelated/i);
   });
 
   it("returns terminal doctor failures without masking them as startup settling", async () => {
@@ -152,7 +223,7 @@ describe("system-test startup preparation", () => {
 });
 
 describe("system-test durable driver lifecycle", () => {
-  it("uses short start/status/result RPCs and keeps the driver alive through cancellation cleanup", () => {
+  it("uses short start/status/result RPCs and retires the driver after parent unwind", () => {
     const code = systemTestRunCode("st_test", {
       names: ["probe"],
       all: false,
@@ -168,7 +239,9 @@ describe("system-test durable driver lifecycle", () => {
     );
     expect(code).not.toContain('kind: "do",\n        source: "workers/system-test-runner"');
     expect(code).toContain("let cancellationCleanup = null");
+    expect(code).toContain("let cancellationRequested = false");
     expect(code).toContain("cancellationCleanup = cleanup");
+    expect(code).toContain('status: "cancelled"');
     expect(code).toContain("if (cancellationCleanup)");
     expect(code).toContain("await releaseDriverResources()");
     expect(code).toContain('"releaseSystemTestRunResult"');
@@ -176,6 +249,13 @@ describe("system-test durable driver lifecycle", () => {
     expect(code).toContain('snapshot?.status === "cancelling"');
     expect(code.indexOf("await services.runtime.retireEntity")).toBeLessThan(
       code.indexOf("driverRetired = true")
+    );
+    const cancellationStart = code.indexOf("ctx.onCancel(async () => {");
+    const pollingStart = code.indexOf("for (;;) {", cancellationStart);
+    expect(cancellationStart).toBeGreaterThanOrEqual(0);
+    expect(pollingStart).toBeGreaterThan(cancellationStart);
+    expect(code.slice(cancellationStart, pollingStart)).not.toContain(
+      "await releaseDriverResources()"
     );
     expect(code.indexOf('"releaseSystemTestRunResult"')).toBeLessThan(
       code.indexOf("driverResultReleased = true")

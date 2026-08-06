@@ -851,19 +851,38 @@ function repositorySeedFiles(
             type: "module",
             vibestudio: {
               title: `System Test ${repoName}`,
-              entry: "index.ts",
-              authority: { requests: [], provides: [] },
-              template: "vanilla",
+              entry: "index.tsx",
+              authority: {
+                requests: [
+                  {
+                    capability: "context.boundary",
+                    resource: { kind: "prefix", prefix: "context" },
+                    tier: "critical",
+                    evidence: "bounded-dynamic",
+                  },
+                ],
+                provides: [],
+              },
+              exposeModules: ["react", "react/jsx-runtime", "react/jsx-dev-runtime"],
             },
+            dependencies: { react: "^19.0.0" },
           },
           null,
           2
         )}\n`,
       },
       {
-        path: "index.ts",
-        content:
-          'document.getElementById("root")!.textContent = "Buildable system-test panel fixture";\n',
+        path: "index.tsx",
+        content: [
+          'import type { CSSProperties } from "react";',
+          "",
+          "const style: CSSProperties = { minHeight: \"100vh\", display: \"grid\", placeContent: \"center\" };",
+          "",
+          "export default function SystemTestPanelFixture() {",
+          '  return <main style={style}>Buildable system-test panel fixture</main>;',
+          "}",
+          "",
+        ].join("\n"),
       },
     ];
   }

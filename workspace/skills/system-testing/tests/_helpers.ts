@@ -8,6 +8,7 @@ export interface InvocationCardPayloadLike {
   terminalOutcome?: string;
   terminalReasonCode?: string;
   failureKind?: string;
+  failureCode?: string;
   result?: unknown;
   error?: unknown;
   isError?: boolean;
@@ -17,6 +18,7 @@ export interface InvocationCardPayloadLike {
     terminalOutcome?: string;
     terminalReasonCode?: string;
     failureKind?: string;
+    failureCode?: string;
     result?: unknown;
     error?: unknown;
     isError?: boolean;
@@ -304,6 +306,36 @@ export function getToolCalls(result: TestExecutionResult): InvocationCardPayload
   return calls;
 }
 
+/**
+ * A screenshot call only proves that bytes were produced.  Visual inspection
+ * requires the agent to send the captured artifact through the documented
+ * `read` surface, whose result is delivered as image content to the model.
+ */
+export function hasSuccessfulImageRead(result: TestExecutionResult): boolean {
+  return getToolCalls(result).some((call) => {
+    if (
+      call.name !== "read" ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true
+    ) {
+      return false;
+    }
+    const target = call.arguments?.["target"] ?? call.arguments?.["path"];
+    if (typeof target !== "string" || target.length === 0) return false;
+    const executionResult = call.execution.result;
+    if (!isRecord(executionResult)) return false;
+    const details = isRecord(executionResult["details"])
+      ? executionResult["details"]
+      : executionResult;
+    return (
+      typeof details["mimeType"] === "string" &&
+      details["mimeType"].startsWith("image/") &&
+      typeof details["size"] === "number" &&
+      details["size"] > 0
+    );
+  });
+}
+
 /** Normalize historical nested cards and current flattened invocation projections. */
 function normalizeInvocationCard(call: InvocationCardPayloadLike): InvocationCardPayloadLike {
   const nested = call.execution;
@@ -313,6 +345,7 @@ function normalizeInvocationCard(call: InvocationCardPayloadLike): InvocationCar
     call.terminalOutcome !== undefined ||
     call.terminalReasonCode !== undefined ||
     call.failureKind !== undefined ||
+    call.failureCode !== undefined ||
     call.result !== undefined ||
     call.error !== undefined ||
     call.isError !== undefined;
@@ -324,6 +357,7 @@ function normalizeInvocationCard(call: InvocationCardPayloadLike): InvocationCar
       terminalOutcome: nested?.terminalOutcome ?? call.terminalOutcome,
       terminalReasonCode: nested?.terminalReasonCode ?? call.terminalReasonCode,
       failureKind: nested?.failureKind ?? call.failureKind,
+      failureCode: nested?.failureCode ?? call.failureCode,
       result: nested?.result ?? call.result,
       error: nested?.error ?? call.error,
       isError: nested?.isError ?? call.isError,
@@ -342,8 +376,7 @@ export function successfulEvalCode(result: TestExecutionResult): string {
   const writtenSources = new Map<string, string>();
   const successfulSources: string[] = [];
   for (const call of getToolCalls(result)) {
-    const successful =
-      call.execution?.status === "complete" && call.execution.isError !== true;
+    const successful = call.execution?.status === "complete" && call.execution.isError !== true;
     if (
       successful &&
       call.name === "write" &&
@@ -1083,8 +1116,7 @@ export function requireRevertEvidence(result: TestExecutionResult): {
     const readAtCommittedEvent =
       readProvenance?.["status"] === "attached" &&
       eventRefEquals(readProvenance["state"], restoredEventId);
-    const restoredByRead =
-      Boolean(restoredRead) && Boolean(cleanStatus || readAtCommittedEvent);
+    const restoredByRead = Boolean(restoredRead) && Boolean(cleanStatus || readAtCommittedEvent);
     const restoredByInverseEffect = cleanStatus && inverseContentEffect;
     if (!restoredByRead && !restoredByInverseEffect) continue;
     return { passed: true, reason: undefined };

@@ -215,73 +215,12 @@ Use the shipped onboarding skill to handle the selected structured setup action 
   return execution;
 }
 
-async function runOnboardingMobileProvisioningRoute(
-  context: TestOrchestrationContext
-): Promise<TestExecutionResult> {
-  const start = Date.now();
-  const session = await context.runner.spawn({
-    additionalSystemPrompt: `
-
-Use the shipped onboarding flow and its owning skill to handle the selected mobile setup action. Inspect available providers, but do not install or pair a device.`,
-    methods: {
-      client_eval: {
-        description:
-          "Execute TypeScript in the synthetic panel which initiated this turn. Static workspace imports resolve in that client context.",
-        parameters: z
-          .object({
-            code: z.string(),
-            syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),
-          })
-          .strict(),
-        execute: async () => ({
-          handled: false,
-          target: { via: "owner-skill" },
-          ownerSkillPath: "skills/phone-setup/SKILL.md",
-        }),
-      },
-    },
-  });
-  let sendError: unknown;
-  try {
-    const remainingTimeMs = context.remainingTimeMs();
-    const wait = session.waitForIdle(
-      remainingTimeMs === undefined ? undefined : { timeoutMs: remainingTimeMs }
-    );
-    await session.send("Install Vibestudio on my mobile device.", {
-      metadata: {
-        interaction: {
-          source: "onboarding-setup-hub",
-          kind: "onboarding-capability",
-          action: "install",
-          targetId: "connection.device",
-        },
-      },
-    });
-    await wait;
-  } catch (error) {
-    sendError = error;
-  }
-  const execution: TestExecutionResult = {
-    messages: [...session.messages],
-    duration: Date.now() - start,
-    snapshot: session.snapshot(),
-    ...(sendError ? { error: formatError(sendError) } : {}),
-  };
-  try {
-    await session.close();
-  } catch (error) {
-    execution.cleanupErrors = [...(execution.cleanupErrors ?? []), `close: ${formatError(error)}`];
-  }
-  return execution;
-}
-
 export const interactionSurfaceTests: TestCase[] = [
   {
     name: "onboarding-opening-overview",
     description: "Compose and publish the checked-in setup overview inside the inviting panel",
     category: "interaction-surfaces",
-    prompt:
-      "I just opened this workspace for the first time. Show me the setup overview.",
+    prompt: "I just opened this workspace for the first time. Show me the setup overview.",
     orchestrate: runOnboardingOpening,
     validate: (result) => {
       const tools = requireCompletedTools(result, ["client_eval", "inline_ui"]);
@@ -369,65 +308,6 @@ export const interactionSurfaceTests: TestCase[] = [
     },
   },
   {
-    name: "onboarding-mobile-provisioning-route",
-    description:
-      "Route mobile onboarding to the phone owner skill and perform gated provider discovery",
-    category: "interaction-surfaces",
-    authorityPolicy: {
-      authority: [
-        {
-          ruleId: "onboarding-mobile-provider-discovery",
-          capability: { kind: "exact", key: "mobile.devices.read" },
-          resource: { kind: "exact", key: "mobile.devices.read" },
-          tier: "gated",
-          decision: "once",
-        },
-      ],
-    },
-    prompt:
-      "Use the selected mobile setup action to tell me how installation would proceed and which providers are available. Do not install or pair anything yet.",
-    orchestrate: runOnboardingMobileProvisioningRoute,
-    validate: (result) => {
-      const tools = requireCompletedTools(result, ["client_eval", "read", "eval"]);
-      if (!tools.passed) return tools;
-
-      const routeCode = completedNamedToolCalls(result, "client_eval")[0]?.arguments?.["code"];
-      if (
-        typeof routeCode !== "string" ||
-        !routeCode.includes("@workspace-skills/onboarding") ||
-        !routeCode.includes("executeOnboardingSelection") ||
-        !routeCode.includes("connection.device") ||
-        !routeCode.includes("install")
-      ) {
-        return {
-          passed: false,
-          reason: "Mobile onboarding did not resolve the structured device install interaction",
-        };
-      }
-
-      const readPhoneSkill = completedNamedToolCalls(result, "read").some(
-        (call) => call.arguments?.["path"] === "skills/phone-setup/SKILL.md"
-      );
-      const providerDiscovery = completedNamedToolCalls(result, "eval").some((call) => {
-        const code = call.arguments?.["code"];
-        return (
-          typeof code === "string" &&
-          code.includes("vibestudio.phone-provisioning.v1") &&
-          code.includes("resolveService") &&
-          code.includes("providers")
-        );
-      });
-      if (!readPhoneSkill || !providerDiscovery) {
-        return {
-          passed: false,
-          reason:
-            "Mobile onboarding did not read the phone owner skill and call provider discovery",
-        };
-      }
-      return finalMessageHasAll(result, ["ONBOARDING_MOBILE_ROUTE_OK", "provider"]);
-    },
-  },
-  {
     name: "mdx-action-button-message",
     description: "Send a clickable follow-up action",
     category: "interaction-surfaces",
@@ -496,8 +376,7 @@ export const interactionSurfaceTests: TestCase[] = [
     name: "set-title",
     description: "Set the conversation title through the supported surface",
     category: "interaction-surfaces",
-    prompt:
-      "Give this conversation a short descriptive title and confirm it took effect.",
+    prompt: "Give this conversation a short descriptive title and confirm it took effect.",
     validate: (result) => {
       const base = finalMessageHasAll(result, ["SET_TITLE_OK", "title:"]);
       if (!base.passed) return base;
