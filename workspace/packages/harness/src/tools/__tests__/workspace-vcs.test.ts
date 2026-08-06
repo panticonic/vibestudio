@@ -22,15 +22,21 @@ function fixture() {
     coordinates: [
       {
         coordinate: { kind: "file" as const, id: "file:source" },
-        paths: { base: "packages/demo/a.ts", ours: "packages/demo/a.ts", theirs: "packages/demo/a.ts" },
+        paths: {
+          base: "packages/demo/a.ts",
+          ours: "packages/demo/a.ts",
+          theirs: "packages/demo/a.ts",
+        },
         status: "adopt" as const,
-        aspects: [{
-          aspect: "content" as const,
-          base: { hash: "blob:base" },
-          ours: { hash: "blob:base" },
-          theirs: { hash: "blob:source" },
-          status: "adopt" as const,
-        }],
+        aspects: [
+          {
+            aspect: "content" as const,
+            base: { hash: "blob:base" },
+            ours: { hash: "blob:base" },
+            theirs: { hash: "blob:source" },
+            status: "adopt" as const,
+          },
+        ],
         attribution: {
           ours: [],
           theirs: [{ changeId: "change:source", workUnitId: "work:source" }],
@@ -39,13 +45,15 @@ function fixture() {
         summary: "adopt file packages/demo/a.ts",
       },
     ],
-    intents: [{
-      workUnitId: "work:source",
-      side: "theirs" as const,
-      intent: { text: "Update the source", tier: "stated" as const },
-      coordinates: [{ kind: "file" as const, id: "file:source" }],
-      state: "pending" as const,
-    }],
+    intents: [
+      {
+        workUnitId: "work:source",
+        side: "theirs" as const,
+        intent: { text: "Update the source", tier: "stated" as const },
+        coordinates: [{ kind: "file" as const, id: "file:source" }],
+        state: "pending" as const,
+      },
+    ],
     intentsTruncated: false,
     nextCursor: null,
   }));
@@ -85,6 +93,8 @@ function fixture() {
           appliedChangeId: "applied-change:origin",
         },
         workUnit: { kind: "work-unit", workUnitId: "work-unit:origin" },
+        workUnitId: "work-unit:origin",
+        tier: "stated",
         command: { kind: "command", commandId: "command:origin" },
         path: [],
         stop: "authored",
@@ -206,7 +216,9 @@ describe("workspace VCS agent tool", () => {
       parameters: tool.parameters,
     });
 
-    expect(contract).toContain("Browse and edit ordinary paths with the dedicated filesystem tools");
+    expect(contract).toContain(
+      "Browse and edit ordinary paths with the dedicated filesystem tools"
+    );
     expect(contract).not.toContain('"const":"listDirectory"');
     expect(contract).not.toContain('"const":"listFiles"');
   });
@@ -284,11 +296,13 @@ describe("workspace VCS agent tool", () => {
     await tool.execute("call:resolve", {
       operation: "merge",
       sourceEventId: "event:source",
-      resolutions: [{
-        coordinate: { kind: "file", id: "file:source" },
-        resolution: "current",
-        rationale: "The authored file preserves both intended behaviors.",
-      }],
+      resolutions: [
+        {
+          coordinate: { kind: "file", id: "file:source" },
+          resolution: "current",
+          rationale: "The authored file preserves both intended behaviors.",
+        },
+      ],
     });
 
     expect(f.merge).toHaveBeenCalledWith({
@@ -296,11 +310,13 @@ describe("workspace VCS agent tool", () => {
       expectedWorkingHead: f.working,
       commandId: "command:reconcile",
       source: { kind: "event", eventId: "event:source" },
-      resolutions: [{
-        coordinate: { kind: "file", id: "file:source" },
-        resolution: "current",
-        rationale: "The authored file preserves both intended behaviors.",
-      }],
+      resolutions: [
+        {
+          coordinate: { kind: "file", id: "file:source" },
+          resolution: "current",
+          rationale: "The authored file preserves both intended behaviors.",
+        },
+      ],
     });
   });
 
@@ -314,14 +330,18 @@ describe("workspace VCS agent tool", () => {
     await tool.execute("call:decline", {
       operation: "merge",
       sourceEventId: "event:source",
-      resolutions: [{
-        coordinate: { kind: "file", id: "file:source" },
-        resolution: "ours",
-      }],
+      resolutions: [
+        {
+          coordinate: { kind: "file", id: "file:source" },
+          resolution: "ours",
+        },
+      ],
     });
-    expect(f.merge).toHaveBeenCalledWith(expect.objectContaining({
-      resolutions: [{ coordinate: { kind: "file", id: "file:source" }, resolution: "ours" }],
-    }));
+    expect(f.merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolutions: [{ coordinate: { kind: "file", id: "file:source" }, resolution: "ours" }],
+      })
+    );
     expect(f.vcs.readFile).not.toHaveBeenCalled();
   });
 
@@ -392,6 +412,8 @@ describe("workspace VCS agent tool", () => {
             appliedChangeId: "applied-change:import",
           },
           workUnit: { kind: "work-unit", workUnitId: "work-unit:import" },
+          workUnitId: "work-unit:import",
+          tier: "stated",
           command: { kind: "command", commandId: "command:import" },
           path: [],
           stop: "import-boundary",

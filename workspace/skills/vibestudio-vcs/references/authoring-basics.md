@@ -54,10 +54,11 @@ attaches only memory for that exact working-head file state, or reports a stale
 read in structured details instead of attaching history from different bytes
 or adding warning prose to the file content. The visible
 **workspace memory** block answers why the displayed lines exist using
-blame-selected work episodes, intent/commit/original-request evidence when
-recorded, merge decisions, and recent file history. It shows one
-copyable deeper target per episode; the structured details retain every typed
-root. This is a projection of canonical GAD facts, not a second claims store.
+tier-labeled intent, merge-arrival context, independently labeled commit
+evidence, and intent-annotated file history. It samples for coverage, orders
+surprise before routine work, collapses the reading context's own work, and
+gives the cursored continuations once. This is a projection of canonical GAD
+facts, not a second claims store.
 
 Do not ask the model to choose a provenance level or recall keywords before
 reading. Do not repeat a graph walk when the attachment is already conclusive.
@@ -91,7 +92,9 @@ For a direct causally bound service request, supply:
 - optional `intentSummary` only when the author explicitly supplied meaningful
   purpose. Agent-facing tools expose this as `intent`; never manufacture a
   summary from the operation or path.
-- an optional concise intent summary.
+
+The intent stated here is the tier-labeled reason the next reader sees above
+these lines; omitted intent remains honestly `trigger` or `mechanical`.
 
 Treat one edit request as one work unit and one local application. Keep the
 returned `workingHead`, `workUnitId`, `applicationId`, and `changeIds` when the

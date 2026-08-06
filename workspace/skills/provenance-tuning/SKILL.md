@@ -29,7 +29,8 @@ than present when semantic state no longer names those bytes, and confirm that
 this diagnostic does not add warning prose to the file content. Inspect the
   blame-selected roots instead of comparing rendered prose alone. Then inspect
   the model-visible block: it should plainly answer “why do these lines exist?”
-  and offer one copyable deeper target without dumping every internal root.
+  with tier-labeled intent and application-anchored arrival context, then offer
+  its once-only cursored continuations without dumping every internal root.
 
 ## Classify the ownership problem
 

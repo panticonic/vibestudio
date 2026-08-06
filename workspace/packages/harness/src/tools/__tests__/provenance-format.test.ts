@@ -60,6 +60,7 @@ describe("provenance formatting", () => {
           incorporatedChangeIds: [],
           decisionCount: 0,
           decisionIds: [],
+          intent: { text: "import external snapshot", tier: "mechanical" },
           intentSummary: null,
           authorContextId: "context:import",
           triggerEvidence: null,

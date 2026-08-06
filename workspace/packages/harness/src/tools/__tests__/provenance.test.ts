@@ -237,6 +237,7 @@ function fixture() {
                 incorporatedChangeIds: [],
                 decisionCount: 0,
                 decisionIds: [],
+                intent: { text: "Rename the public entry point", tier: "stated" as const },
                 intentSummary: "Rename the public entry point",
                 authorContextId: "context:1",
                 triggerEvidence: null,
@@ -380,14 +381,18 @@ function fixture() {
               kind: "decision" as const,
               value: {
                 decisionId: input.node.decisionId,
+                intent: { text: "Keep the current implementation", tier: "stated" as const },
+                sourceIntents: [],
                 sourceState: working,
                 targetBasis: working,
-                entries: [{
-                  coordinate: { kind: "file" as const, id: "file:source" },
-                  resolution: "ours" as const,
-                  accountedSourceChangeIds: ["change:source"],
-                  rationale: "Not relevant to this context",
-                }],
+                entries: [
+                  {
+                    coordinate: { kind: "file" as const, id: "file:source" },
+                    resolution: "ours" as const,
+                    accountedSourceChangeIds: ["change:source"],
+                    rationale: "Not relevant to this context",
+                  },
+                ],
               },
             },
           };
@@ -601,7 +606,7 @@ describe("createProvenanceTool", () => {
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(text).toContain(
-      'node · work-unit · edit · command command:1 · intent "Rename the public entry point"'
+      'node · work-unit · edit · stated: "Rename the public entry point" · command command:1'
     );
     expect(text).toContain(
       '{"kind":"work-unit","workUnitId":"work-unit:1"} —authored-change→ {"kind":"change","changeId":"change:1"}'

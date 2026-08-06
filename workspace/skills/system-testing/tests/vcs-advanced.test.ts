@@ -82,15 +82,10 @@ describe("reduced VCS agentic catalog", () => {
                 change: { kind: "change", changeId: "change:retry" },
                 workUnit: { kind: "work-unit", workUnitId: "work-unit:retry" },
                 command: { kind: "command", commandId: "command:retry" },
-                cause: {
-                  message: {
-                    kind: "trajectory-message",
-                    logId: "trajectory:author",
-                    head: "main",
-                    messageId: "message:author",
-                  },
-                  triggerText:
-                    "Meridian relays reserve one retry slot for delayed acknowledgements",
+                authorContextId: "context:author",
+                intent: {
+                  tier: "trigger",
+                  text: "asked by user:test: Meridian relays reserve one retry slot for delayed acknowledgements",
                 },
               },
             ],
@@ -348,7 +343,7 @@ describe("reduced VCS agentic catalog", () => {
           "concise-natural-recovery",
           "eval",
           [
-            'const cmd = (label) => `demo:${label}:${Date.now()}:${Math.random()}`;',
+            "const cmd = (label) => `demo:${label}:${Date.now()}:${Math.random()}`;",
             'const first = await rpc.call("main", "vcs.edit", [{ commandId: cmd("advance"), expectedWorkingHead: staleBasis, changes }]);',
             'try { await rpc.call("main", "vcs.edit", [{ commandId: cmd("stale"), expectedWorkingHead: staleBasis, changes }]); } catch (error) { staleError = { code: error.code }; }',
             'const afterRefusal = await rpc.call("main", "vcs.status", [{ contextId }]);',
@@ -1148,12 +1143,7 @@ describe("reduced VCS agentic catalog", () => {
       stop: "import-boundary",
     };
     const calls = [
-      invocation(
-        "mixed-blame",
-        "vcs",
-        { operation: "blame" },
-        { spans: [nativeSpan, importSpan] }
-      ),
+      invocation("mixed-blame", "vcs", { operation: "blame" }, { spans: [nativeSpan, importSpan] }),
       invocation("import-blame", "vcs", { operation: "blame" }, { spans: [importSpan] }),
       invocation(
         "native-walk",

@@ -34,16 +34,13 @@ the exact displayed UTF-16 range. A concurrent semantic-state change yields
 unmanaged, and temporarily unavailable projections stay out of model-visible
 file content and remain available in structured read details for diagnostics.
 
-The visible attachment is headed **workspace memory · why … lines … exist** so
-its role is apparent without learning graph vocabulary. It groups the terminal
-blame spans for that range into a small number of work episodes and hydrates
-only the recorded facts a future agent can use:
-work intent, commit message, counteractions, reachable merge decisions,
-external snapshot boundary, originating invocation/turn/trigger message, and
-recent file history. The prose shows one copyable
-`provenance({ target: ... })` continuation per episode; complete typed roots
-remain in structured read details for custom `inspect`, `neighbors`, `history`,
-or `blame` work.
+The visible attachment is headed **workspace memory · why … lines … exist**.
+It chooses a bounded coverage-first episode sample, then orders merge arrivals,
+imports/counteractions, foreign work, and the reading context's collapsed work.
+Intent is always labeled `stated`, `trigger`, or `mechanical`; commit messages
+never substitute for it. Merge applications name their anchoring decision and
+composed content carries both parent intents. One footer teaches the exact
+`provenance`, `history`, and `blame` continuations.
 
 This projection is intentionally automatic and bounded. It has no model-chosen
 tier, keyword recall parameter, ranking store, suppression ledger, or copied
@@ -145,7 +142,10 @@ applied-change nodes. Its terminal `appliedChange`, `change`, `workUnit`, and
 unchanged to `inspect` or `neighbors`. Follow `realizes-change` from
 `appliedChange` when the mapped-content route matters, or inspect the other
 roots directly to reach semantic intent and the causal trajectory invocation.
-The service does not duplicate those causal edges into every blame span.
+The span also carries the terminal `workUnitId` and resolved intent `tier`, but
+never intent prose. Treat `mechanical` as absence of purpose evidence: inspect
+the code and work unit before trusting a purpose claim. The service does not
+duplicate those causal edges into every blame span.
 Use the terminal change's `authoredByWorkUnitId` for the exact ownership join.
 Do not require that change to appear in a work unit's bounded authored-change
 preview; page `authored-change` neighbors only when full membership is needed.
@@ -164,6 +164,12 @@ Intent always displays its evidence tier. `stated` comes only from explicit
 authoring intent or a recorded work-unit description; `trigger` is a named
 sender's bounded request excerpt; `mechanical` is a labeled effect summary.
 Never promote a mechanical summary into claimed purpose.
+
+To reconstruct purpose drift, page file `history` and read each change's
+optional resolved `intent`. A tier drop to `mechanical` marks missing purpose
+evidence; an intent shift without `viaDecisionId` is local drift; a shift with
+`viaDecisionId` is imported purpose, so inspect that decision. Event-root
+history deliberately has neither annotation.
 
 Report what the graph proves. Import has one deliberate terminal condition:
 blame calls an ordinary terminal change an import boundary when its owning work

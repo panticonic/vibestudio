@@ -63,12 +63,13 @@ function requireInjectedReadMemory(result: TestExecutionResult) {
       Array.isArray(episodes) &&
       episodes.some((episode) => {
         if (!isRecord(episode)) return false;
-        const cause = episode["cause"];
+        const intent = episode["intent"];
         return (
-          isRecord(cause) &&
-          typeof cause["triggerText"] === "string" &&
-          cause["triggerText"].includes(READ_MEMORY_REASON) &&
-          isRecord(cause["message"]) &&
+          isRecord(intent) &&
+          intent["tier"] === "trigger" &&
+          typeof intent["text"] === "string" &&
+          intent["text"].includes(READ_MEMORY_REASON) &&
+          typeof episode["authorContextId"] === "string" &&
           isRecord(episode["change"]) &&
           isRecord(episode["workUnit"]) &&
           isRecord(episode["command"])
@@ -80,7 +81,7 @@ function requireInjectedReadMemory(result: TestExecutionResult) {
     return {
       passed: false,
       reason:
-        "No ordinary read returned hash/range-bound attached memory with the prior request and reusable typed roots",
+        "No ordinary read returned hash/range-bound attached memory with durable trigger-tier intent and reusable typed roots",
     };
   }
   const displayedRange = attached["displayedRange"];
@@ -239,22 +240,22 @@ function requireDistinctMixedBlameSpans(result: TestExecutionResult) {
     const importedCommand = imported?.["command"];
     return Boolean(
       authored &&
-        imported &&
-        isRecord(authoredChange) &&
-        isRecord(importedChange) &&
-        isRecord(authoredWork) &&
-        isRecord(importedWork) &&
-        isRecord(authoredCommand) &&
-        isRecord(importedCommand) &&
-        Number.isInteger(authored["start"]) &&
-        Number.isInteger(authored["end"]) &&
-        Number.isInteger(imported["start"]) &&
-        Number.isInteger(imported["end"]) &&
-        authoredChange["changeId"] !== importedChange["changeId"] &&
-        authoredWork["workUnitId"] !== importedWork["workUnitId"] &&
-        authoredCommand["commandId"] !== importedCommand["commandId"] &&
-        Math.max(authored["start"] as number, imported["start"] as number) >=
-          Math.min(authored["end"] as number, imported["end"] as number)
+      imported &&
+      isRecord(authoredChange) &&
+      isRecord(importedChange) &&
+      isRecord(authoredWork) &&
+      isRecord(importedWork) &&
+      isRecord(authoredCommand) &&
+      isRecord(importedCommand) &&
+      Number.isInteger(authored["start"]) &&
+      Number.isInteger(authored["end"]) &&
+      Number.isInteger(imported["start"]) &&
+      Number.isInteger(imported["end"]) &&
+      authoredChange["changeId"] !== importedChange["changeId"] &&
+      authoredWork["workUnitId"] !== importedWork["workUnitId"] &&
+      authoredCommand["commandId"] !== importedCommand["commandId"] &&
+      Math.max(authored["start"] as number, imported["start"] as number) >=
+        Math.min(authored["end"] as number, imported["end"] as number)
     );
   });
   if (!sameObservationContainsDistinctOrigins) {

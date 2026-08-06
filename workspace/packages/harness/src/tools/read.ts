@@ -18,12 +18,7 @@ import { resolveToCwd } from "./path-utils.js";
 import { sha256Hex } from "@vibestudio/content-addressing";
 import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import type { VcsReadMemoryResult } from "@vibestudio/service-schemas/vcs";
-import {
-  toVcsPath,
-  toolContextId,
-  type ToolVcs,
-  type ToolWorkspaceContext,
-} from "./tool-vcs.js";
+import { toVcsPath, toolContextId, type ToolVcs, type ToolWorkspaceContext } from "./tool-vcs.js";
 import { renderReadMemoryBlock } from "./read-memory.js";
 import {
   DEFAULT_MAX_BYTES,
@@ -232,6 +227,8 @@ export function createReadTool(
       }
       const block = renderReadMemoryBlock({
         label: workspacePath,
+        content: text,
+        readingContextId: toolContextId(provenanceDeps.context),
         startLine: displayed.startLine,
         endLine: displayed.endLine,
         result: provenance,
@@ -495,8 +492,7 @@ function formatTextResult(
     .slice(0, startLine)
     .reduce((total, line) => total + line.length + 1, 0);
   const displayedEnd = displayedStart + truncation.content.length;
-  const displayedEndLine =
-    startLineDisplay + Math.max(0, truncation.outputLines - 1);
+  const displayedEndLine = startLineDisplay + Math.max(0, truncation.outputLines - 1);
   let outputText: string;
   let details: ReadToolDetails = {};
   if (truncation.firstLineExceedsLimit) {

@@ -241,7 +241,10 @@ describe("joined VCS scenario validators", () => {
               {
                 coordinate: { kind: "file", id: "file:source", paths: {} },
                 status: "adopt",
-                attribution: { ours: [], theirs: [{ changeId: sourceChangeId, workUnitId: "work:source" }] },
+                attribution: {
+                  ours: [],
+                  theirs: [{ changeId: sourceChangeId, workUnitId: "work:source" }],
+                },
               },
             ],
           },
@@ -292,6 +295,31 @@ describe("joined VCS scenario validators", () => {
         {
           operation: "push",
           result: { eventId: integratedEventId, mainEventId: integratedEventId },
+        }
+      ),
+      invocation(
+        "fresh-read",
+        "read",
+        { path: "projects/demo/collaborator.md" },
+        {
+          provenance: {
+            status: "attached",
+            episodes: [
+              {
+                arrival: {
+                  mode: "arrived",
+                  decision: { kind: "decision", decisionId },
+                  parentIntents: [
+                    {
+                      workUnitId: "work:source",
+                      role: "source",
+                      intent: { tier: "stated", text: "Add collaborator note" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
         }
       ),
     ];

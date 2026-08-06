@@ -192,6 +192,7 @@ describe("one authored-change model", () => {
       incorporatedChangeIds: [],
       decisionCount: 0,
       decisionIds: [],
+      intent: { text: "Rename the greeting", tier: "stated" as const },
       intentSummary: "Rename the greeting",
       authorContextId: "context:1",
       triggerEvidence: null,
@@ -400,7 +401,9 @@ describe("simple local mutations", () => {
         resolutions: [{ coordinate: { kind: "file", id: "file:1" }, resolution: "manual" }],
       }).success
     ).toBe(false);
-    expect(vcsMergeInputSchema.safeParse({ ...merge, mergeSessionId: "session:1" }).success).toBe(false);
+    expect(vcsMergeInputSchema.safeParse({ ...merge, mergeSessionId: "session:1" }).success).toBe(
+      false
+    );
     expect(
       vcsMergeInputSchema.safeParse({
         ...merge,
@@ -699,6 +702,7 @@ describe("honest external snapshot imports", () => {
       incorporatedChangeIds: [],
       decisionCount: 0,
       decisionIds: [],
+      intent: { text: "Import the requested external snapshot", tier: "stated" as const },
       intentSummary: "Import the requested external snapshot",
       authorContextId: "context:import",
       triggerEvidence: null,
@@ -1107,6 +1111,8 @@ describe("walkable bounded reads", () => {
             appliedChangeId: "applied-change:1",
           },
           workUnit: { kind: "work-unit" as const, workUnitId: "work-unit:1" },
+          workUnitId: "work-unit:1",
+          tier: "stated" as const,
           command: { kind: "command" as const, commandId: "command:1" },
           path: [],
           stop: "authored" as const,

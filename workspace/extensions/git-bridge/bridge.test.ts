@@ -102,6 +102,7 @@ function importWorkUnitInspection(revision: string, sourceUri: string, workUnitI
         incorporatedChangeIds: [],
         decisionCount: 0,
         decisionIds: [],
+        intent: { text: "Import snapshot", tier: "stated" as const },
         intentSummary: "Import snapshot",
         authorContextId: "context:import",
         triggerEvidence: null,

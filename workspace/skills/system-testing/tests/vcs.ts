@@ -28,6 +28,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function requireMergeArrivalMemory(result: TestExecutionResult) {
+  const found = getToolCalls(result).some((call) => {
+    if (call.name !== "read" || call.execution?.status !== "complete") return false;
+    const resultValue = call.execution.result;
+    const details = isRecord(resultValue) ? resultValue["details"] : null;
+    const provenance = isRecord(details) ? details["provenance"] : null;
+    const episodes = isRecord(provenance) ? provenance["episodes"] : null;
+    return (
+      Array.isArray(episodes) &&
+      episodes.some((episode) => {
+        if (!isRecord(episode)) return false;
+        const arrival = episode["arrival"];
+        if (!isRecord(arrival)) return false;
+        const decision = arrival["decision"];
+        const parents = arrival["parentIntents"];
+        return (
+          arrival["mode"] === "arrived" &&
+          isRecord(decision) &&
+          typeof decision["decisionId"] === "string" &&
+          Array.isArray(parents) &&
+          parents.some(
+            (parent) =>
+              isRecord(parent) && parent["role"] === "source" && isRecord(parent["intent"])
+          )
+        );
+      })
+    );
+  });
+  return found
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason:
+          "No fresh ordinary read carried application-anchored merge arrival with the source intent",
+      };
+}
+
 function requireCanonicalStatus(result: TestExecutionResult) {
   const status = getToolCalls(result).find(
     (call) =>
@@ -129,7 +166,10 @@ async function orchestrateIncrementalIntegration(
   const fixtureName = context.runner.workspaceRepoName;
   if (!fixtureName) throw new Error("incremental integration requires a repository fixture");
   const repoPath = `projects/${fixtureName}`;
-  const sessions: Array<{ role: "agent-a" | "agent-b"; session: HeadlessSession }> = [];
+  const sessions: Array<{
+    role: "agent-a" | "agent-b" | "reader";
+    session: HeadlessSession;
+  }> = [];
   const cleanupErrors: string[] = [];
   let firstPhase: ChatMessage[] = [];
   let error: string | undefined;
@@ -182,15 +222,25 @@ async function orchestrateIncrementalIntegration(
       `Main advanced while your separate local note remained unpublished. Bring the incoming semantic changes into your context one local decision at a time, commit the combined history, and publish it. Verify through ordinary file reads that both collaborators' notes remain, and report what happened.`,
       "agent A incrementally integrates and publishes"
     );
+
+    const reader = await context.runner.spawn({ context: "task" });
+    sessions.push({ role: "reader", session: reader });
+    await context.sendAndWait(
+      reader,
+      `Freshly inspect ${repoPath}. Read the collaborators' note files through ordinary reads and explain the recorded source intent and how those bytes arrived here.`,
+      "fresh reader observes merged intent and arrival"
+    );
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
 
   const agentA = sessions.find(({ role }) => role === "agent-a")?.session;
   const agentB = sessions.find(({ role }) => role === "agent-b")?.session;
+  const reader = sessions.find(({ role }) => role === "reader")?.session;
   const messages = [
     ...firstPhase,
     ...(agentB ? ([...agentB.messages] as ChatMessage[]) : []),
+    ...(reader ? ([...reader.messages] as ChatMessage[]) : []),
     ...(agentA ? ([...agentA.messages] as ChatMessage[]).slice(firstPhase.length) : []),
   ];
   const snapshots = sessions.map(({ role, session }) => safeSnapshot(role, session));
@@ -233,10 +283,10 @@ async function orchestrateIncrementalIntegration(
 }
 
 function safeSnapshot(
-  role: "agent-a" | "agent-b",
+  role: "agent-a" | "agent-b" | "reader",
   session: HeadlessSession
 ): {
-  role: "agent-a" | "agent-b";
+  role: "agent-a" | "agent-b" | "reader";
   snapshot?: SessionSnapshot;
   error?: string;
 } {
@@ -303,7 +353,9 @@ export const vcsTests: TestCase[] = [
         "vcs.push",
         "vcs.status",
       ]);
-      return operations.passed ? requireIncrementalIntegrationEvidence(result) : operations;
+      if (!operations.passed) return operations;
+      const integration = requireIncrementalIntegrationEvidence(result);
+      return integration.passed ? requireMergeArrivalMemory(result) : integration;
     },
   },
 ];

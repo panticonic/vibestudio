@@ -44,6 +44,12 @@ explanation answers the question, stop; its typed change target is the
 continuation for `provenance` only when deeper context can change the answer or
 action.
 
+Read intent tiers literally: `stated` is the author's explicit purpose,
+`trigger` is durable assignment evidence with its sender, and `mechanical` is
+only an effect description. A mechanical span warrants reading the code and
+inspecting its work unit. Merge-arrival text follows the exact application and
+decision; composed bytes name both parent purposes.
+
 Call explicit provenance at a real decision boundary: before relying on
 unfamiliar code, integrating another context, explaining an edit whose attached
 memory is inconclusive, or attributing copied content. A normal file read is
@@ -80,6 +86,11 @@ origin into one “author” value. Walk the relevant edges for the question.
 - `vcs.history` pages committed ancestry from an event root or past changes to a
   stable file identity at an exact state. It is not a second general graph walk.
 - `vcs.blame` traces one exact file range through content-coordinate mappings.
+
+For “what has this file been for?”, walk file history as purpose evidence.
+Compare each optional resolved intent: `mechanical` is a gap, a changed intent
+without `viaDecisionId` is local drift, and one with `viaDecisionId` is imported
+purpose whose decision should be inspected.
 
 Continue `neighbors` with the same target and returned cursor. If a question
 changes, begin a new read. Never parse an ID, manufacture a node kind, query

@@ -4701,7 +4701,14 @@ export class SemanticWorkspace {
       (left, right) =>
         Number(left["start"]) - Number(right["start"]) || Number(left["end"]) - Number(right["end"])
     );
-    const page = ordered.slice(0, input.limit);
+    const page = ordered.slice(0, input.limit).map((span) => {
+      const workUnitId = String((span["workUnit"] as Row)["workUnitId"]);
+      return {
+        ...span,
+        workUnitId,
+        tier: this.intentForWorkUnit(workUnitId).tier,
+      };
+    });
     const next = ordered[input.limit];
     return {
       state: input.state,
@@ -4787,12 +4794,19 @@ export class SemanticWorkspace {
       else grouped.set(key, { span, ranges: [range] });
     }
 
+    // Blame spans do not overlap. Choosing the widest episodes first therefore
+    // maximizes coverage of the displayed range before presentation salience
+    // reorders the bounded sample in the harness.
     const episodes = [...grouped.values()]
-      .sort(
-        (left, right) =>
+      .sort((left, right) => {
+        const covered = (value: typeof left) =>
+          value.ranges.reduce((total, range) => total + range.end - range.start, 0);
+        return (
+          covered(right) - covered(left) ||
           left.ranges[0]!.start - right.ranges[0]!.start ||
           left.ranges[0]!.end - right.ranges[0]!.end
-      )
+        );
+      })
       .slice(0, input.episodeLimit)
       .map(({ span, ranges }) => this.readMemoryEpisode(span, ranges, input.contextId));
 
@@ -4837,9 +4851,7 @@ export class SemanticWorkspace {
     const workUnitNode = this.inspectNode(workUnitRef);
     const change = changeNode["value"] as Row;
     const workUnit = workUnitNode["value"] as Row;
-    const commandId = String(commandRef["commandId"]);
     const workUnitId = String(workUnitRef["workUnitId"]);
-    const changeId = String(changeRef["changeId"]);
 
     const commitRow = this.deps.sql
       .exec(
@@ -4856,40 +4868,7 @@ export class SemanticWorkspace {
       )
       .toArray()[0] as Row | undefined;
 
-    const decisionRows = this.deps.sql
-      .exec(
-        `SELECT decision.decision_id, source.coordinate_kind, source.coordinate_id,
-                entry.resolution, entry.rationale
-           FROM gad_decision_source_changes source
-           JOIN gad_integration_decisions decision
-             ON decision.decision_id = source.decision_id
-           JOIN gad_merge_decision_entries entry
-             ON entry.decision_id = source.decision_id
-            AND entry.coordinate_kind = source.coordinate_kind
-            AND entry.coordinate_id = source.coordinate_id
-          WHERE source.change_id = ?
-          ORDER BY decision.created_at DESC, decision.decision_id
-          LIMIT 32`,
-        changeId
-      )
-      .toArray() as Row[];
-    const decisions = decisionRows
-      .filter((row) =>
-        this.provenanceNodeReachable([contextId], {
-          kind: "decision",
-          decisionId: String(row["decision_id"]),
-        })
-      )
-      .slice(0, 8)
-      .map((row) => ({
-        decision: { kind: "decision", decisionId: String(row["decision_id"]) },
-        coordinate: {
-          kind: String(row["coordinate_kind"]),
-          id: String(row["coordinate_id"]),
-        },
-        resolution: String(row["resolution"]),
-        rationale: row["rationale"] == null ? null : String(row["rationale"]),
-      }));
+    const arrival = this.readMemoryArrival(span, contextId);
 
     return {
       ranges,
@@ -4900,7 +4879,8 @@ export class SemanticWorkspace {
       command: commandRef,
       changeKind: change["kind"],
       counteractsChangeIds: change["counteractsChangeIds"],
-      intentSummary: workUnit["intentSummary"],
+      intent: this.intentForWorkUnit(workUnitId),
+      authorContextId: String(workUnit["authorContextId"]),
       createdAt: workUnit["createdAt"],
       externalSnapshot: workUnit["externalSnapshot"],
       commit: commitRow
@@ -4910,8 +4890,84 @@ export class SemanticWorkspace {
             createdAt: String(commitRow["created_at"]),
           }
         : null,
-      cause: this.readMemoryCause(commandId),
-      decisions,
+      arrival,
+    };
+  }
+
+  private readMemoryArrival(span: Row, contextId: string): Row | null {
+    const appliedChangeId = String((span["appliedChange"] as Row)["appliedChangeId"]);
+    const path = Array.isArray(span["path"]) ? (span["path"] as Row[]) : [];
+    const incorporation = path.find((edge) => edge["kind"] === "incorporates-content");
+    const anchorAppliedChangeId = incorporation
+      ? String((incorporation["from"] as Row)["appliedChangeId"] ?? "")
+      : appliedChangeId;
+    const authored = this.appliedChangeMetadata(appliedChangeId);
+    const anchor = this.appliedChangeMetadata(anchorAppliedChangeId);
+    const row = this.deps.sql
+      .exec(
+        `SELECT decision.decision_id, entry.coordinate_id, entry.resolution, entry.rationale
+           FROM gad_applied_changes applied
+           JOIN gad_work_unit_applications application
+             ON application.application_id = applied.application_id
+           JOIN gad_integration_decisions decision
+             ON decision.work_unit_id = application.work_unit_id
+           JOIN gad_merge_decision_entries entry
+             ON entry.decision_id = decision.decision_id
+            AND entry.coordinate_kind = 'file'
+           JOIN gad_change_coordinates coordinate
+             ON coordinate.change_id = ? AND coordinate.file_id = entry.coordinate_id
+          WHERE applied.applied_change_id = ?
+          ORDER BY decision.created_at, decision.decision_id
+          LIMIT 1`,
+        authored.changeId,
+        anchorAppliedChangeId
+      )
+      .toArray()[0] as Row | undefined;
+    if (!row) return null;
+    const decisionId = String(row["decision_id"]);
+    if (!this.provenanceNodeReachable([contextId], { kind: "decision", decisionId })) return null;
+    const parentRows = (
+      incorporation
+        ? this.deps.sql.exec(
+            `SELECT DISTINCT change.work_unit_id,
+                    CASE WHEN EXISTS (
+                      SELECT 1 FROM gad_decision_source_changes source
+                       WHERE source.decision_id = ? AND source.change_id = change.change_id
+                    ) THEN 'source' ELSE 'current' END AS role
+               FROM gad_content_edges edge
+               JOIN gad_applied_changes parent
+                 ON parent.applied_change_id = edge.parent_applied_change_id
+               JOIN gad_changes change ON change.change_id = parent.change_id
+              WHERE edge.child_applied_change_id = ? AND edge.relation = 'incorporates'
+              ORDER BY role DESC, change.work_unit_id LIMIT 2`,
+            decisionId,
+            anchorAppliedChangeId
+          )
+        : this.deps.sql.exec(
+            `SELECT DISTINCT change.work_unit_id, 'source' AS role
+               FROM gad_decision_source_changes source
+               JOIN gad_changes change ON change.change_id = source.change_id
+              WHERE source.decision_id = ?
+                AND source.coordinate_kind = 'file'
+                AND source.coordinate_id = ?
+              ORDER BY change.work_unit_id LIMIT 2`,
+            decisionId,
+            String(row["coordinate_id"])
+          )
+    ).toArray() as Row[];
+    return {
+      decision: { kind: "decision", decisionId },
+      resolution: String(row["resolution"]),
+      mode: incorporation ? "arrived" : "accepted",
+      rationale: row["rationale"] == null ? null : String(row["rationale"]),
+      parentIntents: parentRows.map((parent) => {
+        const workUnitId = String(parent["work_unit_id"]);
+        return {
+          workUnitId,
+          role: String(parent["role"]),
+          intent: this.intentForWorkUnit(workUnitId),
+        };
+      }),
     };
   }
 
@@ -6478,6 +6534,18 @@ export class SemanticWorkspace {
     }));
     return {
       decisionId,
+      intent: this.intentForWorkUnit(String(row["work_unit_id"])),
+      sourceIntents: [
+        ...new Set(
+          entries.flatMap((entry) =>
+            entry.accountedSourceChangeIds.map(
+              (changeId) => this.changeRequired(changeId).workUnitId
+            )
+          )
+        ),
+      ]
+        .slice(0, 500)
+        .map((workUnitId) => ({ workUnitId, intent: this.intentForWorkUnit(workUnitId) })),
       sourceState:
         row["source_delta_id"] == null
           ? { kind: "event", eventId: String(row["source_event_id"]) }
@@ -8440,6 +8508,7 @@ export class SemanticWorkspace {
               `SELECT decision_id AS id FROM gad_integration_decisions
                 WHERE work_unit_id = ? ORDER BY created_at, decision_id LIMIT 200`
             ),
+            intent: this.intentForWorkUnit(workUnitId),
             intentSummary: row["intent_summary"] == null ? null : String(row["intent_summary"]),
             authorContextId: String(row["author_context_id"]),
             triggerEvidence:
@@ -9982,8 +10051,18 @@ export class SemanticWorkspace {
                  ON state_chain.state_kind = 'event'
                 AND event_application.event_id = state_chain.state_id
            ), candidates AS (
-             SELECT change.change_id, change.kind, work.intent_summary, work.created_at,
+             SELECT change.change_id, change.kind, change.work_unit_id, work.created_at,
                     lineage.depth,
+                    (SELECT decision.decision_id
+                       FROM gad_decision_source_changes source
+                       JOIN gad_integration_decisions decision
+                         ON decision.decision_id = source.decision_id
+                       JOIN gad_work_unit_applications merge_application
+                         ON merge_application.work_unit_id = decision.work_unit_id
+                      WHERE source.change_id = change.change_id
+                        AND merge_application.application_id = lineage.application_id
+                      ORDER BY decision.created_at, decision.decision_id
+                      LIMIT 1) AS via_decision_id,
                     printf('%020d:%020d:',
                       9223372036854775807 - lineage.application_ordinal,
                       9223372036854775807 - applied.ordinal) || change.change_id AS sort_key,
@@ -10000,7 +10079,7 @@ export class SemanticWorkspace {
                  ON coordinate.change_id = change.change_id AND coordinate.file_id = ?
                JOIN gad_work_units work ON work.work_unit_id = change.work_unit_id
            )
-           SELECT change_id, kind, intent_summary, created_at, depth, sort_key
+           SELECT change_id, kind, work_unit_id, created_at, depth, sort_key, via_decision_id
              FROM candidates
             WHERE occurrence = 1
               AND (depth > ? OR (depth = ? AND (? IS NULL OR sort_key > ?)))
@@ -10025,8 +10104,11 @@ export class SemanticWorkspace {
           entry: {
             node: { kind: "change", changeId },
             createdAt: String(row["created_at"]),
-            summary:
-              row["intent_summary"] == null ? String(row["kind"]) : String(row["intent_summary"]),
+            summary: String(row["kind"]),
+            intent: this.intentForWorkUnit(String(row["work_unit_id"])),
+            ...(row["via_decision_id"] == null
+              ? {}
+              : { viaDecisionId: String(row["via_decision_id"]) }),
           },
         };
       });

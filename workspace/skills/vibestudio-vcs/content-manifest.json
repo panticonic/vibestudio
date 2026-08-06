@@ -20,7 +20,7 @@
     },
     {
       "path": "references/authoring-basics.md",
-      "sha256": "7c6d5262752e5a7d59380f56213c3be46eef95a6a192ba65bb7dc030bd99a24a"
+      "sha256": "154a022556ea0dec2e18833c3a98e6130739c0142926576854e56f5f53192f32"
     },
     {
       "path": "references/checks-and-publication.md",
@@ -44,11 +44,11 @@
     },
     {
       "path": "references/provenance-and-blame.md",
-      "sha256": "f4d370fe2f422c8a8e105a74ea0c08db98a24ad910c2cd909bf7bd69eac5e957"
+      "sha256": "f247f9dba5d0bba5ac066720907e0179b91ceb645060e95ad2069c6ab7e493cb"
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "36390a480bfc0f08413432279734dc74afb8c4b0bf07de3285b543ed4dc2fd8c"
+      "sha256": "5f7d86b686f6cb450f8293864c2fc70c5cf4db9cc71e491661ffb513c58c0313"
     },
     {
       "path": "references/public-contract.md",
@@ -71,5 +71,5 @@
       "sha256": "d22ad51daf013c5d22dd9a08b52c995b53d0d8c49ba13354af8d289aa890dbc8"
     }
   ],
-  "packageDigest": "e2fc2ee75a800ae5ce126b7bbf5d444371f1a85653c6bc6ba92c702acb3fb494"
+  "packageDigest": "efe6f2c32160012fbe83bd55bb5e67fa7164b141b0e1712197da9f5262cbbe6f"
 }

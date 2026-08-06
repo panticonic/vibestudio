@@ -84,8 +84,8 @@ function inspectedNodeSummary(inspection: CanonicalProvenanceInspection): string
       return [
         "work-unit",
         value.kind,
+        `${value.intent.tier}: ${quoted(value.intent.text)}`,
         `command ${value.commandId}`,
-        value.intentSummary ? `intent ${quoted(value.intentSummary)}` : null,
         countedPreview(
           value.authoredChangeCount,
           value.authoredChangeIds.length,
@@ -119,6 +119,11 @@ function inspectedNodeSummary(inspection: CanonicalProvenanceInspection): string
       const value = node.value;
       return [
         "decision",
+        `${value.intent.tier}: ${quoted(value.intent.text)}`,
+        ...value.sourceIntents.map(
+          (source) =>
+            `source ${source.workUnitId} ${source.intent.tier}: ${quoted(source.intent.text)}`
+        ),
         `${value.entries.length} coordinate entr${value.entries.length === 1 ? "y" : "ies"}`,
         `${value.entries.reduce((count, entry) => count + entry.accountedSourceChangeIds.length, 0)} accounted source changes`,
       ]

@@ -298,13 +298,15 @@ describe("SemanticWorkspace repository counteractions", () => {
     expect(capturedIntent).toMatchObject({
       kind: "complete",
       result: {
-        intents: [{
-          side: "theirs",
-          intent: {
-            tier: "trigger",
-            text: "asked by user:alice: Move the parser without changing its behavior",
+        intents: [
+          {
+            side: "theirs",
+            intent: {
+              tier: "trigger",
+              text: "asked by user:alice: Move the parser without changing its behavior",
+            },
           },
-        }],
+        ],
       },
     });
     sql.exec(`ROLLBACK TO captured_intent_survives_command_cleanup`);
@@ -1135,6 +1137,8 @@ describe("SemanticWorkspace repository counteractions", () => {
           end: 4,
           stop: "authored",
           change: { kind: "change", changeId: editChangeId },
+          workUnitId: edited.workUnitId,
+          tier: "trigger",
           command: { kind: "command", commandId: "command:edit-non-ascii-copy" },
           path: [],
         },
@@ -1203,7 +1207,14 @@ describe("SemanticWorkspace repository counteractions", () => {
       kind: "complete",
       result: {
         entries: [
-          { node: { kind: "change", changeId: editChangeId }, summary: "text" },
+          {
+            node: { kind: "change", changeId: editChangeId },
+            summary: "text",
+            intent: {
+              tier: "trigger",
+              text: "asked by user:alice: Move the parser without changing its behavior",
+            },
+          },
           expect.objectContaining({ summary: "file-move" }),
           expect.objectContaining({ summary: "file-copy" }),
         ],
@@ -1408,16 +1419,13 @@ describe("SemanticWorkspace repository counteractions", () => {
             stop: "authored",
             change: { kind: "change", changeId: editChangeId },
             workUnit: { kind: "work-unit", workUnitId: edited.workUnitId },
-            command: { kind: "command", commandId: "command:edit-non-ascii-copy" },
-            cause: {
-              invocation,
-              turn,
-              message,
-              toolName: "vcs-tool",
-              turnSummary: "Move the parser",
-              triggerText: "Move the parser without changing its behavior",
-              sender: { kind: "user", id: "user:alice", participantId: "user:alice" },
+            intent: {
+              tier: "trigger",
+              text: "asked by user:alice: Move the parser without changing its behavior",
             },
+            authorContextId: "context:test",
+            command: { kind: "command", commandId: "command:edit-non-ascii-copy" },
+            arrival: null,
           },
         ],
       },
@@ -1604,6 +1612,7 @@ describe("SemanticWorkspace repository counteractions", () => {
     if (eventHistory.kind !== "complete") throw new Error("history did not complete");
     const expectedEventHistory = vcsHistoryResultSchema.parse(eventHistory.result).entries;
     expect(expectedEventHistory.length).toBeGreaterThan(1);
+    expect(expectedEventHistory.every((entry) => entry.intent === undefined)).toBe(true);
     await expect(
       collectHistoryPages({ kind: "event", eventId: imported.eventId })
     ).resolves.toEqual(expectedEventHistory);

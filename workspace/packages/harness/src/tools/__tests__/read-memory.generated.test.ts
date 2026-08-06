@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { VcsReadMemoryEpisode, VcsReadMemoryResult } from "@vibestudio/service-schemas/vcs";
-import { renderReadMemoryBlock } from "../read-memory.js";
+import { READ_MEMORY_RENDER_BUDGET, renderReadMemoryBlock } from "../read-memory.js";
 
 const HASH = "a".repeat(64);
 
@@ -18,12 +18,12 @@ function episode(
     command: { kind: "command", commandId: `command:${index}` },
     changeKind: "text-edit",
     counteractsChangeIds: [],
-    intentSummary: `Keep invariant ${index} owned by its caller`,
+    intent: { text: `Keep invariant ${index} owned by its caller`, tier: "stated" },
+    authorContextId: `context:${index}`,
     createdAt: `2026-07-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
     externalSnapshot: null,
     commit: null,
-    cause: null,
-    decisions: [],
+    arrival: null,
     ...overrides,
   };
 }
@@ -48,6 +48,8 @@ function attached(overrides: Partial<Extract<VcsReadMemoryResult, { status: "att
 function render(result: Extract<VcsReadMemoryResult, { status: "attached" }>): string | null {
   return renderReadMemoryBlock({
     label: "packages/fixture/src/memory.ts",
+    content: Array.from({ length: 220 }, (_, index) => `line ${index + 1}`).join("\n"),
+    readingContextId: "context:reader",
     startLine: 4,
     endLine: 9,
     result,
@@ -67,10 +69,13 @@ describe("generated read-memory renderer corpus", () => {
               ]
             : [{ start: index * 17, end: index * 17 + 9 }],
         stop: index % 3 === 0 ? "import-boundary" : "authored",
-        intentSummary:
-          index === 5
-            ? `  Preserve   a whitespace-normalized invariant ${"x".repeat(400)}  `
-            : `Keep generated invariant ${index} intact`,
+        intent: {
+          tier: "stated",
+          text:
+            index === 5
+              ? `  Preserve   a whitespace-normalized invariant ${"x".repeat(400)}  `
+              : `Keep generated invariant ${index} intact`,
+        },
         counteractsChangeIds: index % 4 === 0 ? [`change:prior:${index}`] : [],
         commit:
           index % 2 === 0
@@ -80,46 +85,30 @@ describe("generated read-memory renderer corpus", () => {
                 createdAt: "2026-07-22T10:01:00.000Z",
               }
             : null,
-        cause:
-          index % 2 === 1
+        arrival:
+          index % 3 === 1
             ? {
-                invocation: {
-                  kind: "trajectory-invocation",
-                  logId: `trajectory:${index}`,
-                  head: "main",
-                  invocationId: `invocation:${index}`,
-                },
-                turn: {
-                  kind: "trajectory-turn",
-                  logId: `trajectory:${index}`,
-                  head: "main",
-                  turnId: `turn:${index}`,
-                },
-                message: {
-                  kind: "trajectory-message",
-                  logId: `trajectory:${index}`,
-                  head: "main",
-                  messageId: `message:${index}`,
-                },
-                toolName: "edit",
-                terminalOutcome: "success",
-                requestRef: null,
-                turnSummary: null,
-                triggerText: `User requested invariant ${index}`,
-                sender: { kind: "user", id: "user:fixture", participantId: "user:fixture" },
+                decision: { kind: "decision", decisionId: `decision:${index}` },
+                resolution: "composed",
+                rationale: `Reconcile generated branch ${index}`,
+                mode: "arrived",
+                parentIntents:
+                  index === 1
+                    ? [
+                        {
+                          workUnitId: "work-unit:source",
+                          role: "source",
+                          intent: { text: "Tighten retry behavior", tier: "trigger" },
+                        },
+                        {
+                          workUnitId: "work-unit:current",
+                          role: "current",
+                          intent: { text: "Migrate configuration", tier: "stated" },
+                        },
+                      ]
+                    : [],
               }
             : null,
-        decisions:
-          index % 3 === 1
-            ? [
-                {
-                  decision: { kind: "decision", decisionId: `decision:${index}` },
-                  coordinate: { kind: "file", id: `file:${index}` },
-                  resolution: "composed",
-                  rationale: `Reconcile generated branch ${index}`,
-                },
-              ]
-            : [],
         externalSnapshot:
           index % 3 === 0
             ? {
@@ -148,96 +137,59 @@ describe("generated read-memory renderer corpus", () => {
     const second = render(result);
 
     expect(first).toBe(second);
+    expect(first!.length).toBeLessThanOrEqual(READ_MEMORY_RENDER_BUDGET);
     expect(first).toContain(
-      "why packages/fixture/src/memory.ts lines 4-9 exist · verified against this exact file content"
+      "why packages/fixture/src/memory.ts lines 4-9 exist · verified against this exact content"
     );
-    expect(first).toContain("UTF-16 34-36, 38-43");
+    expect(first).toContain("● lines ");
     expect(first).toContain("imported from outside workspace history");
     expect(first).toContain("counteracts change:prior:0");
-    expect(first).toContain('original request "User requested invariant 1"');
     expect(first).toContain('committed as "Commit preserves invariant 0"');
-    expect(first).toContain('decision composed for {"kind":"file","id":"file:1"}');
-    expect(first).toContain("external source git https://example.test/library-0.git @ revision-0");
+    expect(first).toContain('arrived via merge {"kind":"decision","decisionId":"decision:1"}');
+    expect(first).toContain('source trigger: "Tighten retry behavior"');
+    expect(first).toContain('composed with yours stated: "Migrate configuration"');
     expect(first).toContain("earlier file history");
     expect(first).toContain(
-      "more history exists; continue from an exact target above with provenance"
+      "attachment truncated; use the cursored continuations below for complete coverage"
     );
-    expect(first).toContain(
-      'inspect deeper with provenance({ target: {"kind":"change","changeId":"change:1"} })'
-    );
+    expect(first).toContain("dig deeper · provenance({ target: … })");
     expect(first).toContain("…");
     expect(first).not.toContain("  Preserve   a whitespace");
 
     const lines = first?.split("\n") ?? [];
-    expect(lines.filter((line) => line.startsWith("● UTF-16 "))).toHaveLength(12);
-    expect(lines.filter((line) => line.startsWith("  - "))).toHaveLength(8);
-    expect(lines.indexOf("  earlier file history")).toBeGreaterThan(
-      lines.findIndex((line) =>
-        line.includes("external source git https://example.test/library-9.git")
-      )
-    );
+    expect(lines.filter((line) => line.startsWith("● lines ")).length).toBeGreaterThan(0);
+    expect(lines.filter((line) => line.startsWith("- "))).toHaveLength(8);
+    expect(first!.match(/dig deeper/gu)).toHaveLength(1);
   });
 
-  it("uses the strongest available semantic summary without emitting empty fields", () => {
+  it("keeps intent and commit evidence in separate labeled slots", () => {
     const output = render(
       attached({
         episodes: [
           episode(1, {
-            intentSummary: null,
+            intent: { text: "edit fixture.ts", tier: "mechanical" },
             commit: {
               event: { kind: "event", eventId: "event:commit" },
               message: "Commit message is the semantic fallback",
               createdAt: "2026-07-22T10:01:00.000Z",
             },
-            cause: {
-              invocation: {
-                kind: "trajectory-invocation",
-                logId: "trajectory:fallback",
-                head: "main",
-                invocationId: "invocation:fallback",
-              },
-              turn: null,
-              message: null,
-              toolName: null,
-              terminalOutcome: null,
-              requestRef: null,
-              turnSummary: "Turn summary should not outrank a commit",
-              triggerText: "Prompt detail should be present but not duplicate the summary",
-              sender: null,
-            },
           }),
           episode(2, {
-            intentSummary: null,
+            intent: { text: "asked by user: update the fixture", tier: "trigger" },
             commit: null,
-            cause: {
-              invocation: {
-                kind: "trajectory-invocation",
-                logId: "trajectory:turn",
-                head: "main",
-                invocationId: "invocation:turn",
-              },
-              turn: null,
-              message: null,
-              toolName: null,
-              terminalOutcome: null,
-              requestRef: null,
-              turnSummary: "Turn summary is the fallback",
-              triggerText: "Different trigger remains useful",
-              sender: null,
-            },
           }),
-          episode(3, { intentSummary: null, commit: null, cause: null }),
+          episode(3, {
+            intent: { text: "edit fixture.ts", tier: "mechanical" },
+            commit: null,
+          }),
         ],
       })
     );
 
-    expect(output).toContain('why "Commit message is the semantic fallback"');
-    expect(output).toContain(
-      'original request "Prompt detail should be present but not duplicate the summary"'
-    );
-    expect(output).toContain('why "Turn summary is the fallback"');
-    expect(output).toContain('original request "Different trigger remains useful"');
-    expect(output).not.toContain("why null");
+    expect(output).toContain('mechanical: "edit fixture.ts"');
+    expect(output).toContain('committed as "Commit message is the semantic fallback"');
+    expect(output).toContain('trigger: "asked by user: update the fixture"');
+    expect(output).not.toContain('stated: "Commit message is the semantic fallback"');
     expect(output).not.toContain("committed as null");
     expect(output).not.toContain("original request null");
   });
@@ -256,8 +208,35 @@ describe("generated read-memory renderer corpus", () => {
         ],
       })
     );
-    expect(historyOnly).toContain("verified against this exact file content");
+    expect(historyOnly).toContain("verified against this exact content");
     expect(historyOnly).toContain("A prior commit still explains this file");
     expect(historyOnly).not.toContain("inspect deeper with provenance");
+  });
+
+  it("collapses the reading context's own episode without dropping its intent", () => {
+    const output = renderReadMemoryBlock({
+      label: "packages/fixture/src/memory.ts",
+      content: "one\ntwo\nthree",
+      readingContextId: "context:self",
+      startLine: 1,
+      endLine: 3,
+      result: attached({
+        episodes: [
+          episode(0, {
+            authorContextId: "context:self",
+            intent: { text: "Keep the invariant explicit", tier: "stated" },
+            counteractsChangeIds: ["change:old"],
+            commit: {
+              event: { kind: "event", eventId: "event:self" },
+              message: "implementation detail",
+              createdAt: "2026-07-22T10:01:00.000Z",
+            },
+          }),
+        ],
+      }),
+    });
+    expect(output).toContain('yours · stated: "Keep the invariant explicit"');
+    expect(output).not.toContain("counteracts");
+    expect(output).not.toContain("committed as");
   });
 });

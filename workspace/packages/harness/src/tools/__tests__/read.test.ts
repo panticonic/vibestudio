@@ -42,7 +42,8 @@ describe("createReadTool", () => {
           command: { kind: "command" as const, commandId: "command:value" },
           changeKind: "text-edit" as const,
           counteractsChangeIds: [],
-          intentSummary: "Keep the retry budget owned by the caller",
+          intent: { text: "Keep the retry budget owned by the caller", tier: "stated" as const },
+          authorContextId: "context:author",
           createdAt: "2026-07-01T10:00:00.000Z",
           externalSnapshot: null,
           commit: {
@@ -50,33 +51,7 @@ describe("createReadTool", () => {
             message: "Preserve caller-owned retries",
             createdAt: "2026-07-01T10:01:00.000Z",
           },
-          cause: {
-            invocation: {
-              kind: "trajectory-invocation" as const,
-              logId: "trajectory:value",
-              head: "main",
-              invocationId: "invocation:value",
-            },
-            turn: {
-              kind: "trajectory-turn" as const,
-              logId: "trajectory:value",
-              head: "main",
-              turnId: "turn:value",
-            },
-            message: {
-              kind: "trajectory-message" as const,
-              logId: "trajectory:value",
-              head: "main",
-              messageId: "message:value",
-            },
-            toolName: "edit",
-            terminalOutcome: "success",
-            requestRef: null,
-            turnSummary: null,
-            triggerText: "Do not move retry ownership into the transport",
-            sender: { kind: "user", id: "user:test", participantId: "user:test" },
-          },
-          decisions: [],
+          arrival: null,
         },
       ],
       history: [],
@@ -114,10 +89,10 @@ describe("createReadTool", () => {
       ),
     });
     expect((result.content[1] as { text: string }).text).toContain(
-      'why "Keep the retry budget owned by the caller"'
+      'stated: "Keep the retry budget owned by the caller"'
     );
     expect((result.content[1] as { text: string }).text).toContain(
-      'provenance({ target: {"kind":"change","changeId":"change:value"} })'
+      'change {"kind":"change","changeId":"change:value"}'
     );
     expect(result.details).toMatchObject({
       displayedRange: {

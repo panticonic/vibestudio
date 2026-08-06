@@ -450,6 +450,10 @@ export const vcsExternalSnapshotSchema = z
   });
 export type VcsExternalSnapshot = z.infer<typeof vcsExternalSnapshotSchema>;
 
+export const vcsIntentEvidenceSchema = z
+  .object({ text: nonEmptyText.max(1_200), tier: z.enum(["stated", "trigger", "mechanical"]) })
+  .strict();
+
 export const vcsWorkUnitSchema = z
   .object({
     workUnitId: id("Authored work unit."),
@@ -471,6 +475,7 @@ export const vcsWorkUnitSchema = z
       .max(200),
     decisionCount: z.number().int().nonnegative(),
     decisionIds: z.array(id("Bounded preview of integration decisions made here.")).max(200),
+    intent: vcsIntentEvidenceSchema,
     intentSummary: nonEmptyText.nullable(),
     authorContextId: contextId,
     triggerEvidence: z
@@ -536,12 +541,7 @@ export const vcsMergeCoordinateRefSchema = z.discriminatedUnion("kind", [
 ]);
 export type VcsMergeCoordinateRef = z.infer<typeof vcsMergeCoordinateRefSchema>;
 
-export const vcsMergeResolutionKindSchema = z.enum([
-  "composed",
-  "theirs",
-  "ours",
-  "current",
-]);
+export const vcsMergeResolutionKindSchema = z.enum(["composed", "theirs", "ours", "current"]);
 export type VcsMergeResolutionKind = z.infer<typeof vcsMergeResolutionKindSchema>;
 
 export const vcsMergeDecisionEntrySchema = z
@@ -557,6 +557,17 @@ export const vcsMergeDecisionEntrySchema = z
 export const vcsIntegrationDecisionSchema = z
   .object({
     decisionId: id("Merge decision."),
+    intent: vcsIntentEvidenceSchema,
+    sourceIntents: z
+      .array(
+        z
+          .object({
+            workUnitId: id("Source authoring work unit."),
+            intent: vcsIntentEvidenceSchema,
+          })
+          .strict()
+      )
+      .max(500),
     sourceState: z.union([vcsEventNodeRefSchema, vcsExternalDeltaNodeRefSchema]),
     targetBasis: vcsStateNodeRefSchema,
     entries: z.array(vcsMergeDecisionEntrySchema).max(500),
@@ -1144,9 +1155,6 @@ export const vcsStatusResultSchema = z
   .strict();
 export type VcsStatusResult = z.infer<typeof vcsStatusResultSchema>;
 
-export const vcsIntentEvidenceSchema = z
-  .object({ text: nonEmptyText.max(1_200), tier: z.enum(["stated", "trigger", "mechanical"]) })
-  .strict();
 export const vcsIntentProjectionSchema = z
   .object({
     workUnitId: id("Attributed work unit."),
@@ -1653,7 +1661,9 @@ export const vcsHistoryEntrySchema = z
     createdAt: timestamp.nullable(),
     summary: nonEmptyText,
     intent: vcsIntentEvidenceSchema.optional(),
-    viaDecisionId: id("Merge decision through which this authored change entered history.").optional(),
+    viaDecisionId: id(
+      "Merge decision through which this authored change entered history."
+    ).optional(),
   })
   .strict();
 
@@ -1746,32 +1756,6 @@ export const vcsReadMemoryInputSchema = z
   .strict();
 export type VcsReadMemoryInput = z.infer<typeof vcsReadMemoryInputSchema>;
 
-export const vcsReadMemoryCauseSchema = z
-  .object({
-    invocation: vcsTrajectoryInvocationRefSchema,
-    turn: vcsTrajectoryTurnRefSchema.nullable(),
-    message: vcsTrajectoryMessageRefSchema.nullable(),
-    toolName: nonEmptyText.nullable(),
-    terminalOutcome: nonEmptyText.nullable(),
-    requestRef: vcsTrajectoryRequestRefSchema.nullable(),
-    turnSummary: nonEmptyText.nullable(),
-    triggerText: z.string().nullable(),
-    sender: vcsTrajectorySenderRefSchema.nullable(),
-  })
-  .strict();
-export type VcsReadMemoryCause = z.infer<typeof vcsReadMemoryCauseSchema>;
-
-export const vcsReadMemoryDecisionSchema = z
-  .object({
-    decision: z
-      .object({ kind: z.literal("decision"), decisionId: id("Integration decision.") })
-      .strict(),
-    coordinate: vcsMergeCoordinateRefSchema,
-    resolution: z.enum(["adopt", "convergent", "composed", "ours", "current"]),
-    rationale: nonEmptyText.nullable(),
-  })
-  .strict();
-
 export const vcsReadMemoryArrivalSchema = z
   .object({
     decision: z
@@ -1785,6 +1769,7 @@ export const vcsReadMemoryArrivalSchema = z
         z
           .object({
             workUnitId: id("Parent authoring work unit."),
+            role: z.enum(["source", "current"]),
             intent: vcsIntentEvidenceSchema,
           })
           .strict()
@@ -1815,7 +1800,6 @@ export const vcsReadMemoryEpisodeSchema = z
       })
       .strict()
       .nullable(),
-    cause: vcsReadMemoryCauseSchema.nullable(),
     arrival: vcsReadMemoryArrivalSchema.nullable(),
   })
   .strict();
