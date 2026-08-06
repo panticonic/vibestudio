@@ -18,10 +18,13 @@ waits for readiness, pairs its instance-scoped CLI, and then runs the requested
 operation. In parallel work, pass one stable unique `--instance ID` on every
 command.
 
-1. Run `pnpm system-test [--instance ID] doctor` and fix failed infrastructure
-   checks first. Do not run doctor against an unrelated existing source server
-   merely because it is already live.
-2. Use `pnpm system-test [--instance ID] list --json` to discover exact test names.
+1. Run `pnpm system-test [--instance ID] doctor` before the first test on a
+   managed instance, or when infrastructure may have changed, and fix failed
+   infrastructure checks first. Reuse a recent successful doctor result for an
+   unchanged instance. Do not run doctor against an unrelated existing source
+   server merely because it is already live.
+2. Use `pnpm system-test [--instance ID] list --json` only when the exact test
+   name is not already known.
 3. Run the smallest relevant exact test with
    `pnpm system-test [--instance ID] run TEST_NAME`.
 4. A non-zero test exit is an investigation trigger, not a reporting boundary.
@@ -39,9 +42,13 @@ command.
    `pnpm system-test [--instance ID] stop`, then rerun doctor to provision a
    fresh checkout copied from the current template. Never stop or reuse another
    live instance merely because it came from the same checkout.
-7. After it passes, run its category and then smoke coverage. Use
-   `pnpm system-test [--instance ID] rerun RUN_ID` to rerun every failure
-   or unexpected tool failure from a prior run.
+7. Verification is evidence-directed. Do not automatically run category or
+   smoke coverage after an exact test passes, and do not rerun tests that
+   already passed unless the subsequent change could affect them or there is
+   concrete evidence of nondeterminism. Expand to the smallest relevant set
+   justified by the changed behavior and its plausible blast radius. Use
+   `pnpm system-test [--instance ID] rerun RUN_ID` only when multiple failures
+   from that run remain relevant to the same fix.
 8. When verification is complete, stop the exact managed instance with
    `pnpm system-test [--instance ID] stop`.
 
@@ -62,10 +69,11 @@ stable). `pnpm system-test` owns only instances it created and refuses to stop
 an unrelated instance.
 
 Do not stop after merely listing artifact paths or restating validation errors.
-Inspect the captured conversation, invocations, lifecycle/debug events, cleanup
-errors, provenance, and runtime diagnostics and explain the concrete mismatch.
-Stop only when repair requires missing credentials, new authority, unavailable
-external infrastructure, or a server restart the user has not authorized.
+Inspect the smallest set of captured evidence needed to explain the concrete
+mismatch; use deeper trajectories and additional diagnostics only when the
+bounded failure packet is insufficient. Stop only when repair requires missing
+credentials, new authority, unavailable external infrastructure, or a server
+restart the user has not authorized.
 
 System-test artifacts are stored with restrictive permissions under
 `${XDG_CONFIG_HOME:-~/.config}/vibestudio/system-test-runs/<run-id>/` unless

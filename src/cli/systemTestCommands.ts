@@ -1448,13 +1448,12 @@ function startupApprovalPort(): {
       // server restart or a state transition that predates event publication;
       // it is not a completion deadline.
       return new Promise<void>((resolve) => {
-        let timer: ReturnType<typeof setTimeout>;
         const finish = () => {
           clearTimeout(timer);
           waiters.delete(finish);
           resolve();
         };
-        timer = setTimeout(finish, 5_000);
+        const timer = setTimeout(finish, 5_000);
         timer.unref?.();
         waiters.add(finish);
       });
