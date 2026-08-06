@@ -1974,17 +1974,17 @@ export class ServiceDispatcher {
           ...(attachedHost ? { attachedHost } : {}),
         };
         let presented: AcquisitionInfo | undefined;
-        await this.observeAuthority(resolved.context, "authority-requested", {
-          capability,
-          resourceKey,
-          tier,
-          snapshotDigest,
-        });
         if (
           this.authorityAcquirer &&
           (ctx.authorityAcquisition === "wait" ||
             resolved.context.authorizingOrigin.kind !== "code")
         ) {
+          await this.observeAuthority(resolved.context, "authority-requested", {
+            capability,
+            resourceKey,
+            tier,
+            snapshotDigest,
+          });
           this.authorityAcquirer.invalidate(
             snapshotDigest,
             caller.runtime.id,
