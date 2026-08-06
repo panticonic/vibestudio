@@ -386,6 +386,22 @@
         color: var(--text-soft);
         font-size: 12px;
       }
+      /* The registrable domain, emphasized inside the URL that contains it.
+         Weight and an underline, never colour alone: this has to read on a
+         monochrome display, and the same fact is written out in full on the
+         adjacent Domain line for anyone who hears the page rather than sees
+         it. The surrounding URL is dimmed rather than the domain brightened,
+         so nothing is hidden and the eye still lands on the domain. */
+      .origin-domain {
+        color: var(--text);
+        font-weight: 800;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .launch-origin > span:not(.origin-domain),
+      .meta > span:not(.origin-domain) {
+        color: var(--text-muted);
+      }
       .unit-capabilities {
         color: var(--text-soft);
         font-size: 12px;

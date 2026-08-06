@@ -114,36 +114,39 @@ describe("HostLaunchClient", () => {
       target: "electron",
       approvals: [],
     });
-    expect(call).not.toHaveBeenCalledWith(
-      "runtime",
-      "supervision.prepare",
-      expect.anything()
-    );
+    expect(call).not.toHaveBeenCalledWith("runtime", "supervision.prepare", expect.anything());
   });
 
-  it("resolves only startup unit batches from the shared pending queue", async () => {
+  it("resolves only the reviews the launch gate owns, and leaves the rest alone", async () => {
     const call = vi.fn(async (service: string, method: string) => {
       if (service === "shellApproval" && method === "listPending") {
         return [
           {
-            kind: "unit-batch",
-            trigger: "startup",
+            kind: "unit-install-review",
+            mode: "adopt-root",
             approvalId: "startup-1",
-            units: [{ unitKind: "panel" }],
+            parts: [{ kind: "app", repoPath: "apps/shell", target: "electron" }],
           },
-          { kind: "unit-batch", trigger: "source-change", approvalId: "source-1" },
+          {
+            // A part already in the workspace was edited. `apps/shell` can
+            // render that one, so the launch gate must not answer it.
+            kind: "unit-install-review",
+            mode: "part-changed",
+            approvalId: "source-1",
+            parts: [{ kind: "panel", repoPath: "panels/chat" }],
+          },
           { kind: "capability", approvalId: "capability-1" },
         ];
       }
-      if (service === "shellApproval" && method === "resolve") return undefined;
+      if (service === "shellApproval" && method === "resolveBootstrap") return undefined;
       throw new Error(`Unexpected call ${service}.${method}`);
     });
 
     const client = new HostLaunchClient(call);
     await expect(client.resolvePendingStartupApprovals("once")).resolves.toBe(1);
-    expect(call).toHaveBeenCalledWith("shellApproval", "resolve", ["startup-1", "once"]);
+    expect(call).toHaveBeenCalledWith("shellApproval", "resolveBootstrap", [["startup-1"], "once"]);
     expect(call).not.toHaveBeenCalledWith("shellApproval", "resolveBootstrap", [
-      "source-1",
+      ["source-1"],
       "once",
     ]);
   });

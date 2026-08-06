@@ -1,4 +1,7 @@
-import type { PendingApproval, PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type {
+  PendingApproval,
+  PendingUnitInstallReviewApproval,
+} from "@vibestudio/shared/approvals";
 import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import type { HostTarget } from "@vibestudio/shared/hostTargets";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
@@ -17,7 +20,7 @@ export type HostLaunchResult =
   | {
       status: "approval-required";
       target: HostTarget;
-      approvals: PendingUnitBatchApproval[];
+      approvals: PendingUnitInstallReviewApproval[];
     }
   | {
       status: "preparing" | "unavailable";
@@ -138,26 +141,24 @@ export class HostLaunchClient {
   }
 
   async resolveApprovals(
-    approvals: readonly PendingUnitBatchApproval[],
+    approvals: readonly PendingUnitInstallReviewApproval[],
     decision: "once" | "deny"
   ): Promise<void> {
-    for (const approval of approvals) {
-      await this.call("shellApproval", "resolveBootstrap", [approval.approvalId, decision]);
-    }
+    if (approvals.length === 0) return;
+    await this.call("shellApproval", "resolveBootstrap", [
+      approvals.map((approval) => approval.approvalId),
+      decision,
+    ]);
   }
 
   async resolvePendingStartupApprovals(decision: "once" | "deny"): Promise<number> {
     const pending = (await this.call("shellApproval", "listPending", [])) as PendingApproval[];
-    const approvals = pending.filter(
-      (approval): approval is PendingUnitBatchApproval =>
-        approval.kind === "unit-batch" && approval.trigger === "startup"
-    );
-    for (const approval of approvals) {
-      await this.call(
-        "shellApproval",
-        isBootstrapUnitApproval(approval) ? "resolveBootstrap" : "resolve",
-        [approval.approvalId, decision]
-      );
+    const approvals = pending.filter(isBootstrapUnitApproval);
+    if (approvals.length > 0) {
+      await this.call("shellApproval", "resolveBootstrap", [
+        approvals.map((approval) => approval.approvalId),
+        decision,
+      ]);
     }
     return approvals.length;
   }
@@ -171,9 +172,9 @@ export class HostLaunchClient {
       status: "approval-required",
       target,
       approvals: pending.filter(
-        (approval): approval is PendingUnitBatchApproval =>
-          approval.kind === "unit-batch" &&
-          approval.units.some((unit) => relevantSources.has(unit.source.repo))
+        (approval): approval is PendingUnitInstallReviewApproval =>
+          approval.kind === "unit-install-review" &&
+          approval.parts.some((part) => relevantSources.has(part.repoPath))
       ),
     };
   }

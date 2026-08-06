@@ -12,7 +12,9 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
+import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
 import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
+import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
@@ -61,10 +63,13 @@ export function createShellApprovalService(deps: {
   approvalQueue: ApprovalQueue;
   metrics?: PushMetrics;
   deviceLabelFor?: (deviceId: string) => string | undefined;
+  workspaceCreationReviewState?: () => WorkspaceCreationReviewState;
 }): ServiceDefinition {
   const { approvalQueue } = deps;
   const metrics = deps.metrics ?? pushMetrics;
   const deviceLabelFor = deps.deviceLabelFor ?? (() => undefined);
+  const workspaceCreationReviewState =
+    deps.workspaceCreationReviewState ?? (() => ({ status: "resolved" as const }));
   const serviceName = "shellApproval";
 
   return {
@@ -79,6 +84,14 @@ export function createShellApprovalService(deps: {
           .find((approval) => approval.approvalId === approvalId);
         if (!pending) {
           throw new ServiceError(serviceName, "resolve", "No pending approval found", "ENOENT");
+        }
+        if (pending.kind === "unit-install-review") {
+          throw new ServiceError(
+            serviceName,
+            "resolve",
+            "Unit install reviews must be resolved through resolveInstallReview",
+            "EINVAL"
+          );
         }
         // The resolver rides into the queue's `settle` coordinator, which
         // writes the ApprovalProvenanceRecord and broadcasts `resolvedBy`.
@@ -112,20 +125,71 @@ export function createShellApprovalService(deps: {
           source: ctx.caller.runtime.kind,
         });
       },
-      resolveBootstrap: async (ctx, [approvalId, decision]) => {
+      resolveInstallReview: async (ctx, [approvalId, resolution]) => {
         const pending = approvalQueue
           .listPending()
           .find((approval) => approval.approvalId === approvalId);
-        if (!pending || !isBootstrapUnitApproval(pending)) {
+        if (!pending || pending.kind !== "unit-install-review") {
           throw new ServiceError(
             serviceName,
-            "resolveBootstrap",
-            "No pending startup app approval found",
+            "resolveInstallReview",
+            "No pending review found",
             "ENOENT"
           );
         }
-        await approvalQueue.resolve(approvalId, decision, resolverFrom(ctx, deviceLabelFor));
-        metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
+        const resolver = resolverFrom(ctx, deviceLabelFor);
+        if (!resolver) {
+          throw new ServiceError(
+            serviceName,
+            "resolveInstallReview",
+            "Adding or updating parts requires an authenticated human",
+            "EACCES"
+          );
+        }
+        const result = await approvalQueue.resolveInstallReview(approvalId, resolution, resolver);
+        metrics.recordApprovalResolved({
+          decision: resolution.decision,
+          source: ctx.caller.runtime.kind,
+        });
+        // The receipt goes back to the surface that asked (§7.2). It is the only
+        // one that knows a decision was made here, so it is the only one that
+        // can say what came of it — including that the outcome is still under
+        // way, which is what an absent `landing` means.
+        return result;
+      },
+      resolveBootstrap: async (ctx, [approvalIds, decision]) => {
+        const results: Array<{
+          approvalId: string;
+          status: "resolved" | "not-pending";
+        }> = [];
+        const resolver = resolverFrom(ctx, deviceLabelFor);
+        // The launch gate answers an install review, so it settles through the
+        // install-review path like every other surface — that path is what
+        // records admission and mints clearance. The gate offers no
+        // per-permission choice (§7.6 asks whose code this is, not what it may
+        // reach), so accepting clears the full slate the manifest allows.
+        // A batch may have partially settled before one resolution fails. The
+        // result makes already-settled ids explicit; retrying the same snapshot
+        // can therefore skip them and converge on the remaining approvals.
+        for (const approvalId of approvalIds) {
+          const pending = approvalQueue
+            .listPending()
+            .find((approval) => approval.approvalId === approvalId);
+          if (!pending || !isBootstrapUnitApproval(pending)) {
+            results.push({ approvalId, status: "not-pending" });
+            continue;
+          }
+          await approvalQueue.resolveInstallReview(
+            approvalId,
+            decision === "once"
+              ? defaultAcceptance(pending.mode, pending.parts)
+              : { decision: "cancel" },
+            resolver
+          );
+          metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
+          results.push({ approvalId, status: "resolved" });
+        }
+        return results;
       },
       submitClientConfig: async (ctx, [approvalId, values]) => {
         const pending = approvalQueue
@@ -185,6 +249,7 @@ export function createShellApprovalService(deps: {
         metrics.recordApprovalResolved({ decision: "submit", source: ctx.caller.runtime.kind });
       },
       listPending: () => approvalQueue.listPending(),
+      getWorkspaceCreationReviewState: () => workspaceCreationReviewState(),
     }),
   };
 }

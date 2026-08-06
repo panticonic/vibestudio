@@ -4,25 +4,21 @@ import {
   type RpcClient,
   type RpcEnvelope,
 } from "@vibestudio/rpc";
-import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
 import {
   approvalIds,
-  formatCapabilities,
-  launchCopy as getLaunchCopy,
-  plural,
+  launchGateView,
   samePendingApprovals,
   type BootstrapDecision,
-  unitKindLabel,
-  unitReviewRows,
-  unitSourceLabel,
-  unitSummaryChips,
+  type LaunchGateView,
 } from "@vibestudio/shared/bootstrapLaunchGate";
 import {
   HostLaunchClient,
   type HostLaunchResult,
 } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { parseConnectLink } from "@vibestudio/shared/connect";
+import { appendLaunchGateFacts, appendSources } from "./launchGateDom.js";
 import {
   isStartupConnectionProgress,
   type StartupConnectionProgress,
@@ -105,7 +101,7 @@ function getHostLaunchClient(): HostLaunchClient {
   return hostLaunchClient;
 }
 const hostTarget = "electron";
-let pending: PendingUnitBatchApproval[] = [];
+let pending: PendingUnitInstallReviewApproval[] = [];
 let rendering = false;
 let launchResult: HostLaunchResult | null = null;
 /** Header copy for the current launch state; the initial value covers the frame
@@ -121,7 +117,7 @@ function scheduleRefresh(): void {
   launchRefreshLoop.request();
 }
 
-function setPending(next: PendingUnitBatchApproval[]): boolean {
+function setPending(next: PendingUnitInstallReviewApproval[]): boolean {
   if (samePendingApprovals(pending, next)) return false;
   pending = next;
   const pendingIds = approvalIds(next);
@@ -142,7 +138,7 @@ function setLaunchResult(next: HostLaunchResult): boolean {
 }
 
 async function decide(
-  approval: PendingUnitBatchApproval,
+  approval: PendingUnitInstallReviewApproval,
   decision: BootstrapDecision
 ): Promise<void> {
   if (decidingApprovalIds.has(approval.approvalId)) return;
@@ -181,7 +177,7 @@ async function decide(
 
 function appendDecisionButton(
   card: HTMLElement,
-  approval: PendingUnitBatchApproval,
+  approval: PendingUnitInstallReviewApproval,
   label: string,
   decision: BootstrapDecision,
   className?: string
@@ -205,78 +201,25 @@ function appendDecisionButton(
   card.append(button);
 }
 
-function appendUnitSummary(card: HTMLElement, approval: PendingUnitBatchApproval): void {
-  const summary = document.createElement("div");
-  summary.className = "unit-summary";
-  const total = document.createElement("div");
-  total.className = "unit-summary-total";
-  total.textContent = plural(approval.units.length, "privileged unit");
-  summary.append(total);
-
-  const chips = document.createElement("div");
-  chips.className = "unit-summary-chips";
-  for (const label of unitSummaryChips(approval)) {
-    const chip = document.createElement("span");
-    chip.className = "unit-chip";
-    chip.textContent = label;
-    chips.append(chip);
-  }
-  summary.append(chips);
-  card.append(summary);
-}
-
-function appendUnitReview(card: HTMLElement, approval: PendingUnitBatchApproval): void {
-  const details = document.createElement("details");
-  details.className = "unit-review";
-  details.open = openReviewApprovalIds.has(approval.approvalId);
-  details.addEventListener("toggle", () => {
-    if (details.open) openReviewApprovalIds.add(approval.approvalId);
-    else openReviewApprovalIds.delete(approval.approvalId);
-  });
-  const summary = document.createElement("summary");
-  const title = document.createElement("span");
-  title.textContent = "Review details";
-  const hint = document.createElement("span");
-  hint.className = "unit-review-hint";
-  hint.textContent = "sources, versions, capabilities";
-  summary.append(title, hint);
-  details.append(summary);
-
-  const list = document.createElement("ul");
-  list.className = "unit-list";
-  const rows = unitReviewRows(approval);
-  approval.units.forEach((unit, index) => {
-    const review = rows[index];
-    if (review === undefined) return;
-    const row = document.createElement("li");
-    const text = document.createElement("div");
-    const name = document.createElement("div");
-    name.className = "unit-name";
-    name.textContent = review.name;
-    const meta = document.createElement("div");
-    meta.className = "unit-meta";
-    meta.textContent = unitSourceLabel(unit);
-    const caps = document.createElement("div");
-    caps.className = "unit-capabilities";
-    caps.textContent = formatCapabilities(unit);
-    const kind = document.createElement("div");
-    kind.className = "unit-kind";
-    kind.textContent = unitKindLabel(unit);
-    text.append(name, meta, caps);
-    row.append(text, kind);
-    list.append(row);
-  });
-  details.append(list);
-  card.append(details);
-}
-
-function appendApprovalActions(card: HTMLElement, approval: PendingUnitBatchApproval): void {
+function appendApprovalActions(card: HTMLElement, view: LaunchGateView): void {
+  const approval = { approvalId: view.approvalIds[0] ?? "" } as PendingUnitInstallReviewApproval;
   const actions = document.createElement("div");
   actions.className = "toolbar";
-  appendDecisionButton(actions, approval, "Trust and start", "once", "primary");
-  appendDecisionButton(actions, approval, "Deny", "deny", "danger");
+  appendDecisionButton(actions, approval, view.acceptLabel, "once", "primary");
+  appendDecisionButton(actions, approval, view.declineLabel, "deny", "danger");
   card.append(actions);
-  if (decidingApprovalIds.has(approval.approvalId)) {
+  // Declining must be honest about its consequence, and the consequence
+  // differs between "the app will not start" and "one extension will not run".
+  const consequence = document.createElement("div");
+  consequence.className = "unit-meta launch-decline-consequence";
+  consequence.id = "launch-decline-consequence";
+  consequence.textContent = view.declineConsequence;
+  card.append(consequence);
+  // It reads after the buttons, so it is bound to the one it is about: a
+  // screen reader hears what declining costs while on the decline button,
+  // rather than after having pressed it.
+  actions.lastElementChild?.setAttribute("aria-describedby", consequence.id);
+  if (view.approvalIds.some((id) => decidingApprovalIds.has(id))) {
     const status = document.createElement("div");
     status.className = "status";
     status.textContent = "Starting the workspace...";
@@ -400,25 +343,37 @@ function render(): void {
     if (pending.length === 0) {
       return;
     }
-    for (const approval of pending) {
-      const copy = getLaunchCopy(approval);
-      const card = document.createElement("article");
-      card.className = "approval";
+    // One card for the whole set, organized by origin rather than by unit: the
+    // question here is whose code this is, not what each piece may reach.
+    const view = launchGateView({ approvals: pending });
+    const card = document.createElement("article");
+    card.className = "approval";
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-labelledby", "launch-gate-title");
 
-      const title = document.createElement("div");
-      title.className = "title";
-      title.textContent = copy.title;
+    const title = document.createElement("div");
+    title.className = "title";
+    title.id = "launch-gate-title";
+    title.textContent = view.title;
 
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = copy.summary;
-
-      card.append(title, meta);
-      appendUnitSummary(card, approval);
-      appendUnitReview(card, approval);
-      appendApprovalActions(card, approval);
-      approvalsContainer.appendChild(card);
-    }
+    card.append(title);
+    // Everything a person needs in order to decide comes before the buttons in
+    // DOM order, so a screen reader reaches it before the actions: what this
+    // workspace is, which domain that URL belongs to, whether it is new to them,
+    // how much of it there is, and what native code can do. None of it is behind
+    // a disclosure (§7.6.3).
+    const described = appendLaunchGateFacts(card, view);
+    card.setAttribute("aria-describedby", described.join(" "));
+    appendSources(card, view, {
+      open: openReviewApprovalIds.has(view.approvalIds[0] ?? ""),
+      onToggle: (open) => {
+        const key = view.approvalIds[0] ?? "";
+        if (open) openReviewApprovalIds.add(key);
+        else openReviewApprovalIds.delete(key);
+      },
+    });
+    appendApprovalActions(card, view);
+    approvalsContainer.appendChild(card);
   } finally {
     rendering = false;
   }

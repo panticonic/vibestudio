@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, ServiceError } from "@vibestudio/shared/serviceDispatcher";
-import type { PendingApproval, PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type {
+  PendingApproval,
+  PendingUnitInstallReviewApproval,
+} from "@vibestudio/shared/approvals";
 import { createApprovalQueue } from "./approvalQueue.js";
 import { createShellApprovalService } from "./shellApprovalService.js";
 import { createPushMetrics } from "./pushMetrics.js";
 
-function startupApproval(id = "startup-1"): PendingUnitBatchApproval {
+function startupApproval(id = "startup-1"): PendingUnitInstallReviewApproval {
   return {
-    kind: "unit-batch",
+    kind: "unit-install-review",
     approvalId: id,
     callerId: "system:startup",
     callerKind: "system",
@@ -16,21 +19,66 @@ function startupApproval(id = "startup-1"): PendingUnitBatchApproval {
     requestedAt: 10,
     title: "Workspace apps need approval",
     description: "Approve startup apps.",
-    trigger: "startup",
-    units: [
+    mode: "adopt-root",
+    parts: [
       {
-        unitKind: "app",
-        unitName: "@workspace-apps/shell",
-        displayName: "Shell",
-        source: { kind: "workspace-repo", repo: "apps/shell", ref: "HEAD" },
-        ev: "ev:startup",
-        capabilities: ["panel-hosting"],
+        identityKey: "apps/shell@ev",
+        kind: "app",
+        label: "Client App",
+        surfaces: [],
+        name: "@workspace-apps/shell",
+        title: "Shell",
+        purpose: "The desktop app itself.",
+        repoPath: "apps/shell",
+        effectiveVersion: "ev",
+        version: null,
+        requiredUnitKeys: [],
+        runsInBackground: false,
+        target: "electron",
+        origin: {
+          url: null,
+          originKey: "vibestudio",
+          registrableDomain: null,
+          version: null,
+          isHostBuild: true,
+          firstEncounter: false,
+        },
+        notableRows: [],
+        everydayRows: [],
+        change: "added",
+        section: "template",
       },
     ],
+    summary: { panels: 0, agents: 0, services: 0, clientApps: 1, extensions: 0 },
+    unchangedPartCount: 0,
   };
 }
 
 describe("shellApprovalService", () => {
+  it("returns the host-owned creation review preparation state", async () => {
+    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const service = createShellApprovalService({
+      approvalQueue,
+      workspaceCreationReviewState: () => ({
+        status: "pending",
+        approvalId: "approval:creation",
+        partCount: 2,
+      }),
+    });
+
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("system-test", "server") },
+        "getWorkspaceCreationReviewState",
+        []
+      )
+    ).resolves.toEqual({
+      status: "pending",
+      approvalId: "approval:creation",
+      partCount: 2,
+    });
+  });
+
   it("accepts every approval decision exposed by the consent UI", () => {
     const service = createShellApprovalService({
       approvalQueue: {
@@ -43,6 +91,7 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve: vi.fn(),
         resolveMissionReview: vi.fn(),
+        resolveInstallReview: vi.fn(),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -68,6 +117,7 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve: vi.fn(),
         resolveMissionReview: vi.fn(),
+        resolveInstallReview: vi.fn(),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -94,6 +144,7 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve,
         resolveMissionReview: vi.fn(),
+        resolveInstallReview: vi.fn(),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -116,14 +167,18 @@ describe("shellApprovalService", () => {
 
     await expect(
       service.handler({ caller: createVerifiedCaller("bootstrap", "app") }, "resolveBootstrap", [
-        "credential-1",
+        ["credential-1"],
         "once",
       ])
-    ).rejects.toMatchObject({ name: "ServiceError", code: "ENOENT" });
+    ).resolves.toEqual([{ approvalId: "credential-1", status: "not-pending" }]);
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it("resolves startup approvals through the bootstrap method", async () => {
+  // The launch gate settles through the install-review path like every other
+  // review surface: that path is what records admission and mints clearance, so
+  // a unit decided here is not left running with no record of the decision.
+  it("resolves startup approvals through the shared install-review path", async () => {
+    const resolveInstallReview = vi.fn();
     const resolve = vi.fn();
     const metrics = createPushMetrics();
     const service = createShellApprovalService({
@@ -137,6 +192,7 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve,
         resolveMissionReview: vi.fn(),
+        resolveInstallReview,
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -149,12 +205,109 @@ describe("shellApprovalService", () => {
     await service.handler(
       { caller: createVerifiedCaller("bootstrap", "app") },
       "resolveBootstrap",
-      ["startup-1", "once"]
+      [["startup-1"], "once"]
     );
-    expect(resolve).toHaveBeenCalledWith("startup-1", "once", undefined);
+    // Accepting clears the full slate: the gate asks whose code this is, not
+    // what it may reach, so it offers no per-permission choice to carry.
+    expect(resolveInstallReview).toHaveBeenCalledWith(
+      "startup-1",
+      { decision: "adopt-root", allowNow: [{ identityKey: "apps/shell@ev", permissions: [] }] },
+      undefined
+    );
+    expect(resolve).not.toHaveBeenCalled();
     expect(metrics.snapshot().approval_resolved_total).toMatchObject({
       "decision=once,source=app": 1,
     });
+  });
+
+  it("cancels the launch gate on deny, leaving nothing admitted", async () => {
+    const resolveInstallReview = vi.fn();
+    const metrics = createPushMetrics();
+    const service = createShellApprovalService({
+      approvalQueue: {
+        request: vi.fn(),
+        requestClientConfig: vi.fn(),
+        requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
+        requestCredentialInput: vi.fn(),
+        requestMissionReview: vi.fn(async () => ({ decision: "cancelled" as const })),
+        presentDeviceCode: vi.fn(),
+        onPendingChanged: vi.fn(),
+        resolve: vi.fn(),
+        resolveMissionReview: vi.fn(),
+        resolveInstallReview,
+        submitClientConfig: vi.fn(),
+        submitSecretInput: vi.fn(),
+        submitCredentialInput: vi.fn(),
+        listPending: vi.fn(() => [startupApproval("startup-1")]),
+        cancelForCaller: vi.fn(),
+      },
+      metrics,
+    });
+
+    await service.handler(
+      { caller: createVerifiedCaller("bootstrap", "app") },
+      "resolveBootstrap",
+      [["startup-1"], "deny"]
+    );
+    expect(resolveInstallReview).toHaveBeenCalledWith(
+      "startup-1",
+      { decision: "cancel" },
+      undefined
+    );
+  });
+
+  it("continues a partially applied startup decision on retry", async () => {
+    const pending = [startupApproval("startup-1"), startupApproval("startup-2")];
+    let secondAttempts = 0;
+    const resolveInstallReview = vi.fn(async (approvalId: string) => {
+      if (approvalId === "startup-2" && secondAttempts++ === 0) {
+        throw new Error("transient admission failure");
+      }
+      const index = pending.findIndex((approval) => approval.approvalId === approvalId);
+      if (index >= 0) pending.splice(index, 1);
+      return {
+        approvalId,
+        mode: "adopt-root" as const,
+        decision: "accepted" as const,
+        heading: "Workspace access approved",
+        parts: [],
+      };
+    });
+    const service = createShellApprovalService({
+      approvalQueue: {
+        request: vi.fn(),
+        requestClientConfig: vi.fn(),
+        requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
+        requestCredentialInput: vi.fn(),
+        requestMissionReview: vi.fn(async () => ({ decision: "cancelled" as const })),
+        presentDeviceCode: vi.fn(),
+        onPendingChanged: vi.fn(),
+        resolve: vi.fn(),
+        resolveMissionReview: vi.fn(),
+        resolveInstallReview,
+        submitClientConfig: vi.fn(),
+        submitSecretInput: vi.fn(),
+        submitCredentialInput: vi.fn(),
+        listPending: vi.fn(() => pending),
+        cancelForCaller: vi.fn(),
+      },
+    });
+    const ctx = { caller: createVerifiedCaller("bootstrap", "app") };
+
+    await expect(
+      service.handler(ctx, "resolveBootstrap", [["startup-1", "startup-2"], "once"])
+    ).rejects.toThrow("transient admission failure");
+    await expect(
+      service.handler(ctx, "resolveBootstrap", [["startup-1", "startup-2"], "once"])
+    ).resolves.toEqual([
+      { approvalId: "startup-1", status: "not-pending" },
+      { approvalId: "startup-2", status: "resolved" },
+    ]);
+    expect(resolveInstallReview.mock.calls.map(([approvalId]) => approvalId)).toEqual([
+      "startup-1",
+      "startup-2",
+      "startup-2",
+    ]);
   });
 
   it("rejects a second verdict and records only the accepted resolution", async () => {

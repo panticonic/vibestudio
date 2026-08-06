@@ -9,6 +9,8 @@ export interface ApprovalAttention {
   handlePendingChanged(pending: PendingApproval[]): void;
   /** Stop frame flashing once the user has brought the window forward. */
   handleWindowFocus(): void;
+  /** Stop attention updates before the server connection is torn down. */
+  dispose(): void;
   /**
    * Pull the current pending list from the server. `quiet` seeds the
    * seen-set and badge without alerting — used at startup so approvals
@@ -33,6 +35,7 @@ export function createApprovalAttention(deps: {
   const knownIds = new Set<string>();
   let flashing = false;
   let activeNotification: Notification | null = null;
+  let disposed = false;
 
   const liveWindow = (): BaseWindow | null => {
     const win = deps.getWindow();
@@ -108,7 +111,7 @@ export function createApprovalAttention(deps: {
       closeNotification();
       return;
     }
-    const firstFresh = fresh[0];
+    const firstFresh = fresh.find((approval) => approval.attention !== "queue");
     if (quiet || !firstFresh) return;
 
     const win = liveWindow();
@@ -124,18 +127,29 @@ export function createApprovalAttention(deps: {
 
   return {
     handlePendingChanged(pending) {
+      if (disposed) return;
       apply(pending, false);
     },
     handleWindowFocus() {
+      if (disposed) return;
+      flash(false);
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      closeNotification();
       flash(false);
     },
     async refresh(opts = {}) {
+      if (disposed) return;
       try {
         const pending = await deps.listPending();
+        if (disposed) return;
         if (Array.isArray(pending)) {
           apply(pending, opts.quiet === true);
         }
       } catch (err) {
+        if (disposed) return;
         const msg = err instanceof Error ? err.message : String(err);
         log.warn(`[approvalAttention] listPending refresh failed: ${msg}`);
       }

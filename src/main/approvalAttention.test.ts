@@ -56,43 +56,27 @@ function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval
     capability: "network",
     title: "Access api.example.com",
     ...overrides,
-  } as PendingApproval;
+  } as unknown as PendingApproval;
 }
 
 function makeStartupUnitApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {
   return {
-    kind: "unit-batch",
+    kind: "unit-install-review",
     approvalId: "startup-unit-approval",
     callerId: "system:units",
     callerKind: "system",
     repoPath: "meta",
     effectiveVersion: "ev-app",
     requestedAt: 1,
-    trigger: "startup",
-    title: "Approve workspace units",
-    description: "Approve units.",
-    units: [
-      {
-        unitKind: "app",
-        unitName: "@workspace-apps/mobile",
-        displayName: "Mobile",
-        target: "react-native",
-        source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-        ev: "ev-mobile",
-        capabilities: [],
-      },
-      {
-        unitKind: "extension",
-        unitName: "@workspace-extensions/native",
-        displayName: "Native Extension",
-        target: null,
-        source: { kind: "workspace-repo", repo: "extensions/native", ref: "main" },
-        ev: "ev-extension",
-        capabilities: ["native-code"],
-      },
+    mode: "adopt-root",
+    title: "Start this workspace?",
+    description: "Vibestudio needs to run 2 programs on this computer.",
+    parts: [
+      { kind: "app", repoPath: "apps/mobile", target: "react-native" },
+      { kind: "extension", repoPath: "extensions/native", target: null },
     ],
     ...overrides,
-  } as PendingApproval;
+  } as unknown as PendingApproval;
 }
 
 function makeWindow(opts: { focused?: boolean; visible?: boolean } = {}) {
@@ -114,6 +98,16 @@ function makeAttention(window: ReturnType<typeof makeWindow> | null, pending?: P
     listPending: vi.fn(async () => pending ?? null),
     log: { warn: vi.fn() },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
 }
 
 beforeEach(() => {
@@ -170,6 +164,17 @@ describe("createApprovalAttention", () => {
     expect(electronMocks.app.setBadgeCount).toHaveBeenCalledWith(1);
   });
 
+  it("badges quietly queued approvals without flashing or notifying", () => {
+    const window = makeWindow({ focused: false });
+    const attention = makeAttention(window);
+
+    attention.handlePendingChanged([makeApproval({ attention: "queue" })]);
+
+    expect(electronMocks.app.setBadgeCount).toHaveBeenCalledWith(1);
+    expect(window.flashFrame).not.toHaveBeenCalledWith(true);
+    expect(electronMocks.notificationInstances).toHaveLength(0);
+  });
+
   it("does not re-alert for approvals it has already seen", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
@@ -211,5 +216,22 @@ describe("createApprovalAttention", () => {
     notification!.handlers.get("click")?.();
     expect(window.show).toHaveBeenCalled();
     expect(window.focus).toHaveBeenCalled();
+  });
+
+  it("silences an in-flight refresh disposed during shutdown", async () => {
+    const pending = deferred<PendingApproval[]>();
+    const warn = vi.fn();
+    const attention = createApprovalAttention({
+      getWindow: () => makeWindow() as never,
+      listPending: () => pending.promise,
+      log: { warn },
+    });
+
+    const refresh = attention.refresh();
+    attention.dispose();
+    pending.reject(new Error("Connection lost before the response arrived"));
+
+    await refresh;
+    expect(warn).not.toHaveBeenCalled();
   });
 });
