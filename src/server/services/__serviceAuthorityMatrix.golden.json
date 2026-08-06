@@ -1714,6 +1714,7 @@
           "approval": [
             {
               "capability": "network.response.read",
+              "tier": "gated",
               "operation": {
                 "kind": "network",
                 "verb": "Read cross-origin response"
@@ -1979,7 +1980,8 @@
           "approval": [
             {
               "when": "caller is a userland runtime (panel/app/worker/do)",
-              "capability": "client-config-delete",
+              "capability": "account-providers.delete",
+              "tier": "critical",
               "operation": {
                 "kind": "credential",
                 "verb": "Disable client configuration"
@@ -2098,7 +2100,24 @@
           "inherits": true
         },
         "access": {
-          "sensitivity": "write"
+          "sensitivity": "write",
+          "approval": [
+            {
+              "when": "the request selects a stored credential the caller is not already allowed to use",
+              "capability": "credential.use",
+              "tier": "gated",
+              "operation": {
+                "kind": "credential",
+                "verb": "Use credential"
+              },
+              "grantScopes": [
+                "once",
+                "session",
+                "version"
+              ],
+              "reason": "Injecting a stored credential into an outbound request requires authorization for that exact credential and use context."
+            }
+          ]
         },
         "tier": {
           "tier": "open",
@@ -2115,7 +2134,24 @@
           "inherits": true
         },
         "access": {
-          "sensitivity": "write"
+          "sensitivity": "write",
+          "approval": [
+            {
+              "when": "the request selects a stored credential the caller is not already allowed to use",
+              "capability": "credential.use",
+              "tier": "gated",
+              "operation": {
+                "kind": "credential",
+                "verb": "Use credential"
+              },
+              "grantScopes": [
+                "once",
+                "session",
+                "version"
+              ],
+              "reason": "Injecting a stored credential into an outbound request requires authorization for that exact credential and use context."
+            }
+          ]
         },
         "tier": {
           "tier": "open",
@@ -2176,6 +2212,8 @@
           "approval": [
             {
               "when": "caller is not already granted use of the matched credential",
+              "capability": "credential.use",
+              "tier": "gated",
               "operation": {
                 "kind": "credential",
                 "verb": "Use credential"
@@ -3771,6 +3809,7 @@
             {
               "when": "caller is panel/app/worker/do",
               "capability": "external.open",
+              "tier": "gated",
               "operation": {
                 "kind": "browser",
                 "verb": "Open external browser"
@@ -6197,6 +6236,7 @@
             {
               "when": "cloning another, already-existing context than the caller",
               "capability": "context.boundary",
+              "tier": "gated",
               "operation": {
                 "kind": "runtime",
                 "verb": "Clone context"
@@ -6512,6 +6552,7 @@
             {
               "when": "launching into another, already-existing context than the caller",
               "capability": "context.boundary",
+              "tier": "gated",
               "operation": {
                 "kind": "runtime",
                 "verb": "Create runtime entity"
@@ -6808,6 +6849,7 @@
             {
               "when": "destroying another agent or panel's existing context (not one you own)",
               "capability": "context.boundary",
+              "tier": "critical",
               "operation": {
                 "kind": "runtime",
                 "verb": "Destroy context"
@@ -7001,18 +7043,19 @@
         "authority": {
           "principals": [
             "user",
-            "host"
+            "host",
+            "code"
           ]
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "family",
           "residency": "supervision",
           "family": "runtime.recovery",
-          "rationale": "Explicit user recovery of one exact unavailable Durable Object incarnation; expected-digest matching prevents stale actions"
+          "rationale": "Exact recovery is restricted by the receiver to interactive trusted chrome; expected-digest matching prevents stale actions"
         },
         "capability": "runtime.execution.recover",
         "presentation": {
@@ -7756,17 +7799,114 @@
     "methods": {
       "getWorkspaceCreationReviewState": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "approvals.read"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "approvals.read"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "approvals.read"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "approvals.read"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "approvals.read"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.read",
+            "leaves": [
+              {
+                "capability": "approvals.read",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "approvals.read"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "approvals.read"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.read",
-          "rationale": "G5: host infrastructure plumbing; semantic startup-review preparation state"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared approvals.read leaf"
         },
         "capability": "approvals.read",
         "presentation": {
@@ -7782,17 +7922,114 @@
       },
       "listPending": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "approvals.read"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "approvals.read"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "approvals.read"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "approvals.read"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "approvals.read"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.read",
+            "leaves": [
+              {
+                "capability": "approvals.read",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "approvals.read"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "approvals.read"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "read"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.read",
-          "rationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared approvals.read leaf"
         },
         "capability": "approvals.read",
         "presentation": {
@@ -7808,17 +8045,114 @@
       },
       "resolve": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "approvals.decide"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "approvals.decide"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.decide",
+            "leaves": [
+              {
+                "capability": "approvals.decide",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.read",
-          "rationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf"
         },
         "capability": "approvals.decide",
         "presentation": {
@@ -7834,17 +8168,114 @@
       },
       "resolveBootstrap": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "approvals.decide"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "approvals.decide"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.decide",
+            "leaves": [
+              {
+                "capability": "approvals.decide",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.read",
-          "rationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf"
         },
         "capability": "approvals.decide",
         "presentation": {
@@ -7860,17 +8291,114 @@
       },
       "resolveInstallReview": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "approvals.decide"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "approvals.decide"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.decide",
+            "leaves": [
+              {
+                "capability": "approvals.decide",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.read",
-          "rationale": "G5: trusted approval plumbing resolving an exact queued install review"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf"
         },
         "capability": "approvals.decide",
         "presentation": {
@@ -7886,17 +8414,114 @@
       },
       "resolveMissionReview": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "approvals.decide"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "approvals.decide"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "approvals.decide"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.decide",
+            "leaves": [
+              {
+                "capability": "approvals.decide",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "approvals.decide"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.read",
-          "rationale": "G5: trusted approval plumbing resolving an exact queued mission closure"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf"
         },
         "capability": "approvals.decide",
         "presentation": {
@@ -7912,17 +8537,114 @@
       },
       "submitClientConfig": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "protected-input.submit"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "protected-input.submit"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.protected-input",
+            "leaves": [
+              {
+                "capability": "protected-input.submit",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "protected-input.submit"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "protected-input.submit"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.control",
-          "rationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf"
         },
         "capability": "protected-input.submit",
         "presentation": {
@@ -7938,17 +8660,114 @@
       },
       "submitCredentialInput": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "protected-input.submit"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "protected-input.submit"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.protected-input",
+            "leaves": [
+              {
+                "capability": "protected-input.submit",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "protected-input.submit"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "protected-input.submit"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.control",
-          "rationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf"
         },
         "capability": "protected-input.submit",
         "presentation": {
@@ -7964,17 +8783,114 @@
       },
       "submitSecretInput": {
         "authority": {
-          "inherits": true
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "protected-input.submit"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "protected-input.submit"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "protected-input.submit"
+          },
+          "prepared": {
+            "resolver": "shellApproval.presenter.protected-input",
+            "leaves": [
+              {
+                "capability": "protected-input.submit",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "protected-input.submit"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "protected-input.submit"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
         },
         "access": {
           "sensitivity": "write"
         },
         "tier": {
-          "tier": "gated",
+          "tier": "open",
           "session": "codeOnly",
           "residency": "grant-authority",
           "family": "shellApproval.control",
-          "rationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing"
+          "rationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf"
         },
         "capability": "protected-input.submit",
         "presentation": {

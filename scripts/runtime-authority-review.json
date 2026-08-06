@@ -1,10 +1,54 @@
 {
   "version": 1,
-  "censusDigest": "sha256:7d049c4c9b1709d52ab3b5ed016d078d21c39254d41e69e1bc4c79af43eef523",
+  "censusDigest": "sha256:28a1b758a6855a16cada98ebecd5cb6a1972bdecad25c442b1b01584a8b01bbd",
   "decisions": {
     "host:credentials.resolveCredential": {
       "review": "handler-owned-exact-credential-use-approval",
       "change": "Opens only the mediation entrypoint and removes its redundant generic credential.use dispatcher prompt. The handler still matches the concrete credential and requires the existing exact credential, caller, use, audience, workspace, and grant-scope authorization before returning any credential summary or material."
+    },
+    "host:remoteCred.getCurrent": {
+      "review": "trusted-chrome-secret-free-connection-status",
+      "change": "Opens the secret-free remote connection status projection to its existing authenticated principals. App callers remain restricted by the handler to authorized workspace chrome carrying panel-hosting; no pairing material, refresh token, credential value, or connection mutation is exposed."
+    },
+    "host:runtime.recoverExecution": {
+      "review": "interactive-chrome-exact-execution-recovery",
+      "change": "Opens only the transport for exact execution recovery and admits code principals so the trusted Shell app can carry the user's notification action without a self-referential grant. The receiver requires live interactive panel-hosting chrome, binds the entity and expected execution digest, and rejects stale or ordinary installed-app calls."
+    },
+    "host:shellApproval.listPending": {
+      "review": "root-presenter-independent-approval-read",
+      "change": "Opens approval-queue rehydration while selecting a prepared approvals.read leaf for non-chrome code. Trusted panel-hosting presenters and host principals select no leaf, so the surface that renders authority requests never depends on the grant it must present."
+    },
+    "host:shellApproval.getWorkspaceCreationReviewState": {
+      "review": "root-presenter-independent-startup-review-read",
+      "change": "Opens startup-review state discovery while selecting a prepared approvals.read leaf for non-chrome code. Trusted presenters can always render the launch decision; other installed presenters retain ordinary approvals.read enforcement."
+    },
+    "host:shellApproval.resolve": {
+      "review": "root-presenter-independent-approval-decision",
+      "change": "Opens the approval decision transport while selecting a prepared approvals.decide leaf for non-chrome code. Trusted presenters answer only exact live queue entries and no longer require authority to grant that same authority."
+    },
+    "host:shellApproval.resolveMissionReview": {
+      "review": "root-presenter-independent-mission-review-decision",
+      "change": "Opens exact mission-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code and the receiver's authenticated-human requirement."
+    },
+    "host:shellApproval.resolveInstallReview": {
+      "review": "root-presenter-independent-install-review-decision",
+      "change": "Opens exact install-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code, selected-row validation, admission recording, and clearance minting in the receiver."
+    },
+    "host:shellApproval.resolveBootstrap": {
+      "review": "root-presenter-independent-bootstrap-decision",
+      "change": "Opens convergent bootstrap-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code and exact pending-review validation."
+    },
+    "host:shellApproval.submitClientConfig": {
+      "review": "root-presenter-independent-client-config-input",
+      "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending client-config validation."
+    },
+    "host:shellApproval.submitCredentialInput": {
+      "review": "root-presenter-independent-credential-input",
+      "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending credential-input validation."
+    },
+    "host:shellApproval.submitSecretInput": {
+      "review": "root-presenter-independent-secret-input",
+      "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending secret-input validation."
     },
     "host:view.getPresentation": {
       "review": "trusted-chrome-local-panel-presentation-read",

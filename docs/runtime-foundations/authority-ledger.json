@@ -30878,11 +30878,11 @@
       "rpcPlane": "host-service",
       "owner": "remoteCred",
       "method": "getCurrent",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "secret",
       "mechanismFamily": "remoteCred.read",
-      "reviewRationale": "G2: credential mediation; §2 default {code, session} family",
+      "reviewRationale": "Open bias: returns secret-free connection status to authorized chrome; no C1-C4 or G1-G5 rule applies",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:remoteCred.getCurrent"
@@ -30912,8 +30912,8 @@
       ],
       "r3aRequirement": "anyOf(allOf(capability(user,service:remoteCred.getCurrent),workspace-member),allOf(capability(code,service:remoteCred.getCurrent),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "trusted-chrome-secret-free-connection-status",
+        "change": "Opens the secret-free remote connection status projection to its existing authenticated principals. App callers remain restricted by the handler to authorized workspace chrome carrying panel-hosting; no pairing material, refresh token, credential value, or connection mutation is exposed."
       },
       "capability": "service:remoteCred.getCurrent",
       "parityAssertion": "generated-census:host-authority"
@@ -32147,18 +32147,19 @@
       "rpcPlane": "host-service",
       "owner": "runtime",
       "method": "recoverExecution",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "supervision",
       "mechanismFamily": "runtime.recovery",
-      "reviewRationale": "Explicit user recovery of one exact unavailable Durable Object incarnation; expected-digest matching prevents stale actions",
+      "reviewRationale": "Exact recovery is restricted by the receiver to interactive trusted chrome; expected-digest matching prevents stale actions",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:runtime.recoverExecution"
       },
       "authorityPrincipals": [
         "user",
-        "host"
+        "host",
+        "code"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -32179,7 +32180,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:runtime.recoverExecution),allOf(capability(user,service:runtime.recoverExecution),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:runtime.recoverExecution),allOf(capability(user,service:runtime.recoverExecution),workspace-member),allOf(capability(code,service:runtime.recoverExecution),workspace-member))",
       "r3b": {
         "review": "trusted-exact-runtime-execution-recovery",
         "change": "Adds gated recovery of one exact active Durable Object execution under the trusted runtime host. Expected execution digests fence stale requests, and the receiver either rematerializes the retained immutable build or performs the explicitly selected replacement strategy without changing durable ownership."
@@ -33194,19 +33195,20 @@
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "getWorkspaceCreationReviewState",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.read",
-      "reviewRationale": "G5: host infrastructure plumbing; semantic startup-review preparation state",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.read leaf",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:shellApproval.getWorkspaceCreationReviewState"
+        "key": "approvals.read"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -33227,7 +33229,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.getWorkspaceCreationReviewState),allOf(capability(user,service:shellApproval.getWorkspaceCreationReviewState),workspace-member),allOf(capability(code,service:shellApproval.getWorkspaceCreationReviewState),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.read\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "bounded-workspace-review-readiness-read",
         "change": "Adds a read-only projection of whether the host-owned workspace creation review is pending, ready, or resolved. It exposes no approval contents, authority grants, or mutation path and remains under the existing approvals.read capability."
@@ -33236,23 +33238,67 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:shellApproval.listPending",
+      "id": "host:shellApproval.getWorkspaceCreationReviewState#capability:approvals.read",
       "rpcPlane": "host-service",
       "owner": "shellApproval",
-      "method": "listPending",
+      "method": "getWorkspaceCreationReviewState",
       "tier": "gated",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.read",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.read leaf",
+      "capability": "approvals.read",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:shellApproval.listPending"
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.read"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.listPending",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "listPending",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.read leaf",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "approvals.read"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -33273,12 +33319,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.listPending),allOf(capability(user,service:shellApproval.listPending),workspace-member),allOf(capability(code,service:shellApproval.listPending),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.read\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "root-presenter-independent-approval-read",
+        "change": "Opens approval-queue rehydration while selecting a prepared approvals.read leaf for non-chrome code. Trusted panel-hosting presenters and host principals select no leaf, so the surface that renders authority requests never depends on the grant it must present."
       },
       "capability": "service:shellApproval.listPending",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.listPending#capability:approvals.read",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "listPending",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.read leaf",
+      "capability": "approvals.read",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.read"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.read\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -33286,19 +33375,20 @@
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "resolve",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.read",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:shellApproval.resolve"
+        "key": "approvals.decide"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -33319,12 +33409,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.resolve),allOf(capability(user,service:shellApproval.resolve),workspace-member),allOf(capability(code,service:shellApproval.resolve),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.decide\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "root-presenter-independent-approval-decision",
+        "change": "Opens the approval decision transport while selecting a prepared approvals.decide leaf for non-chrome code. Trusted presenters answer only exact live queue entries and no longer require authority to grant that same authority."
       },
       "capability": "service:shellApproval.resolve",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.resolve#capability:approvals.decide",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "resolve",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
+      "capability": "approvals.decide",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.decide"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -33332,19 +33465,20 @@
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "resolveBootstrap",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.read",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:shellApproval.resolveBootstrap"
+        "key": "approvals.decide"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -33365,12 +33499,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.resolveBootstrap),allOf(capability(user,service:shellApproval.resolveBootstrap),workspace-member),allOf(capability(code,service:shellApproval.resolveBootstrap),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.decide\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "root-presenter-independent-bootstrap-decision",
+        "change": "Opens convergent bootstrap-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code and exact pending-review validation."
       },
       "capability": "service:shellApproval.resolveBootstrap",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.resolveBootstrap#capability:approvals.decide",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "resolveBootstrap",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
+      "capability": "approvals.decide",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.decide"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -33378,19 +33555,20 @@
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "resolveInstallReview",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.read",
-      "reviewRationale": "G5: trusted approval plumbing resolving an exact queued install review",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:shellApproval.resolveInstallReview"
+        "key": "approvals.decide"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -33411,7 +33589,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.resolveInstallReview),allOf(capability(user,service:shellApproval.resolveInstallReview),workspace-member),allOf(capability(code,service:shellApproval.resolveInstallReview),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.decide\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
         "review": "install-review-typed-resolution",
         "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. Same gated approvals.decide capability and same trusted-chrome principals as resolve/resolveMissionReview; the server derives the offerable rows itself and rejects any identity or permission the review did not offer, so a client cannot ask for more than it was shown."
@@ -33420,7 +33598,97 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:shellApproval.resolveInstallReview#capability:approvals.decide",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "resolveInstallReview",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
+      "capability": "approvals.decide",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.decide"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:shellApproval.resolveMissionReview",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "resolveMissionReview",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.read",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "approvals.decide"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"approvals.decide\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "root-presenter-independent-mission-review-decision",
+        "change": "Opens exact mission-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code and the receiver's authenticated-human requirement."
+      },
+      "capability": "service:shellApproval.resolveMissionReview",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.resolveMissionReview#capability:approvals.decide",
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "resolveMissionReview",
@@ -33428,41 +33696,38 @@
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.read",
-      "reviewRationale": "G5: trusted approval plumbing resolving an exact queued mission closure",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
+      "capability": "approvals.decide",
       "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:shellApproval.resolveMissionReview"
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.decide"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "session"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
         "session",
         "acting-user",
-        "device",
         "runtime-entity",
         "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
+        "schema-owned-authority-preparation"
       ],
       "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
       },
       "predicates": [
         "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
+        "exact-prepared-resource",
+        "registered-preparer"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.resolveMissionReview),allOf(capability(user,service:shellApproval.resolveMissionReview),workspace-member),allOf(capability(code,service:shellApproval.resolveMissionReview),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"approvals.decide\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
+        "review": "schema-owned-prepared-leaf",
         "change": null
       },
-      "capability": "service:shellApproval.resolveMissionReview",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -33470,19 +33735,20 @@
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "submitClientConfig",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.control",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:shellApproval.submitClientConfig"
+        "key": "protected-input.submit"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -33503,12 +33769,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.submitClientConfig),allOf(capability(user,service:shellApproval.submitClientConfig),workspace-member),allOf(capability(code,service:shellApproval.submitClientConfig),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"protected-input.submit\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "root-presenter-independent-client-config-input",
+        "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending client-config validation."
       },
       "capability": "service:shellApproval.submitClientConfig",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.submitClientConfig#capability:protected-input.submit",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "submitClientConfig",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.control",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
+      "capability": "protected-input.submit",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.protected-input"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -33516,19 +33825,20 @@
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "submitCredentialInput",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.control",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:shellApproval.submitCredentialInput"
+        "key": "protected-input.submit"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -33549,12 +33859,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.submitCredentialInput),allOf(capability(user,service:shellApproval.submitCredentialInput),workspace-member),allOf(capability(code,service:shellApproval.submitCredentialInput),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"protected-input.submit\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "root-presenter-independent-credential-input",
+        "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending credential-input validation."
       },
       "capability": "service:shellApproval.submitCredentialInput",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.submitCredentialInput#capability:protected-input.submit",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "submitCredentialInput",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.control",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
+      "capability": "protected-input.submit",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.protected-input"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -33562,19 +33915,20 @@
       "rpcPlane": "host-service",
       "owner": "shellApproval",
       "method": "submitSecretInput",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "shellApproval.control",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:shellApproval.submitSecretInput"
+        "key": "protected-input.submit"
       },
       "authorityPrincipals": [
-        "user",
         "code",
-        "host"
+        "host",
+        "session",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -33595,12 +33949,55 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:shellApproval.submitSecretInput),allOf(capability(user,service:shellApproval.submitSecretInput),workspace-member),allOf(capability(code,service:shellApproval.submitSecretInput),workspace-member))",
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"protected-input.submit\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "root-presenter-independent-secret-input",
+        "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending secret-input validation."
       },
       "capability": "service:shellApproval.submitSecretInput",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellApproval.submitSecretInput#capability:protected-input.submit",
+      "rpcPlane": "host-service",
+      "owner": "shellApproval",
+      "method": "submitSecretInput",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "grant-authority",
+      "mechanismFamily": "shellApproval.control",
+      "reviewRationale": "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
+      "capability": "protected-input.submit",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "shellApproval.presenter.protected-input"
+      },
+      "authorityPrincipals": [
+        "code",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"protected-input.submit\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
       "parityAssertion": "generated-census:host-authority"
     },
     {

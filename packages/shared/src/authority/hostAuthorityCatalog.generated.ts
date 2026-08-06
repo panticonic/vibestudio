@@ -3918,11 +3918,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "remoteCred.getCurrent": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "remoteCred.read",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "Open bias: returns secret-free connection status to authorized chrome; no C1-C4 or G1-G5 rule applies",
     },
     capability: "remote-client.read",
     presentation: {
@@ -4273,12 +4274,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "runtime.recoverExecution": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "supervision",
       family: "runtime.recovery",
       rationale:
-        "Explicit user recovery of one exact unavailable Durable Object incarnation; expected-digest matching prevents stale actions",
+        "Exact recovery is restricted by the receiver to interactive trusted chrome; expected-digest matching prevents stale actions",
     },
     capability: "runtime.execution.recover",
     presentation: {
@@ -4598,11 +4599,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.getWorkspaceCreationReviewState": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
-      rationale: "G5: host infrastructure plumbing; semantic startup-review preparation state",
+      rationale:
+        "The transport is open; non-chrome presenters receive one prepared approvals.read leaf",
     },
     capability: "approvals.read",
     presentation: {
@@ -4618,12 +4620,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.listPending": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared approvals.read leaf",
     },
     capability: "approvals.read",
     presentation: {
@@ -4639,12 +4641,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.resolve": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
     },
     capability: "approvals.decide",
     presentation: {
@@ -4660,12 +4662,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.resolveBootstrap": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
     },
     capability: "approvals.decide",
     presentation: {
@@ -4681,11 +4683,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.resolveInstallReview": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
-      rationale: "G5: trusted approval plumbing resolving an exact queued install review",
+      rationale:
+        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
     },
     capability: "approvals.decide",
     presentation: {
@@ -4701,11 +4704,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.resolveMissionReview": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
-      rationale: "G5: trusted approval plumbing resolving an exact queued mission closure",
+      rationale:
+        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
     },
     capability: "approvals.decide",
     presentation: {
@@ -4721,12 +4725,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.submitClientConfig": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.control",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
     },
     capability: "protected-input.submit",
     presentation: {
@@ -4742,12 +4746,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.submitCredentialInput": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.control",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
     },
     capability: "protected-input.submit",
     presentation: {
@@ -4763,12 +4767,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "shellApproval.submitSecretInput": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.control",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
     },
     capability: "protected-input.submit",
     presentation: {
@@ -6751,6 +6755,10 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "browserEnvironment.revealDownload": ["service:browserEnvironment.revealDownload"],
   "browserEnvironment.startImportRead": ["service:browserEnvironment.startImportRead"],
   "corsApproval.authorize": ["network.response.read"],
+  "credentials.deleteClientConfig": ["account-providers.delete"],
+  "credentials.proxyFetch": ["credential.use"],
+  "credentials.proxyGitHttp": ["credential.use"],
+  "credentials.resolveCredential": ["credential.use"],
   "externalOpen.openExternal": ["external.open"],
   "panelCdp.consoleHistory": ["context.boundary"],
   "panelCdp.getCdpEndpoint": ["context.boundary"],
@@ -6764,6 +6772,15 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "runtime.destroyContext": ["context.boundary"],
   "runtime.reserveEntity": ["context.boundary"],
   "runtime.retireEntity": ["context.boundary"],
+  "shellApproval.getWorkspaceCreationReviewState": ["approvals.read"],
+  "shellApproval.listPending": ["approvals.read"],
+  "shellApproval.resolve": ["approvals.decide"],
+  "shellApproval.resolveBootstrap": ["approvals.decide"],
+  "shellApproval.resolveInstallReview": ["approvals.decide"],
+  "shellApproval.resolveMissionReview": ["approvals.decide"],
+  "shellApproval.submitClientConfig": ["protected-input.submit"],
+  "shellApproval.submitCredentialInput": ["protected-input.submit"],
+  "shellApproval.submitSecretInput": ["protected-input.submit"],
   "workerdInspector.getEndpoint": ["runtime.inspect"],
   "workspace-state.panel.updateTitle": ["context.boundary"],
   "workspace-state.slot.close": ["context.boundary"],
