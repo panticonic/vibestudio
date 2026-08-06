@@ -10,6 +10,11 @@ import { openPanel as runtimeOpenPanel, panelTree } from "@workspace/runtime";
 import type { OpenPanelOptions as RuntimeOpenPanelOptions, PanelHandle } from "@workspace/runtime";
 import { activeTestContext } from "./run.js";
 import { withCdpSession } from "./cdp.js";
+// Workspace-panel CDP must use the driver DO. Keep this registration anchored
+// to the panel helper itself: eval callers commonly import only runSuites and
+// summarize from the package entry, which lets an entry-point-only side effect
+// be tree-shaken before this helper is used.
+import "./driver.js";
 import { TestAssertionError } from "./expect.js";
 
 export type OpenPanelOptions = RuntimeOpenPanelOptions;
@@ -33,6 +38,25 @@ function assertNotAborted(signal: AbortSignal | undefined, label: string): void 
   if (!signal?.aborted) return;
   const reason = signal.reason instanceof Error ? signal.reason.message : String(signal.reason);
   throw new TestAssertionError(`${label} aborted${reason ? `: ${reason}` : ""}`);
+}
+
+function diagnosticErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!error || typeof error !== "object" || Array.isArray(error)) return message;
+  const data = (error as { errorData?: unknown }).errorData;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return message;
+  const diagnostic = data as Record<string, unknown>;
+  // RPC endpoint identity is deliberately the only structured detail surfaced
+  // in a test timeout. It distinguishes a stale route from a missing runtime
+  // registration without dumping arbitrary remote error payloads into reports.
+  if (
+    diagnostic["kind"] === "rpc-endpoint" &&
+    typeof diagnostic["endpointId"] === "string" &&
+    typeof diagnostic["requestedMethod"] === "string"
+  ) {
+    return `${message} (endpoint=${diagnostic["endpointId"]}, method=${diagnostic["requestedMethod"]})`;
+  }
+  return message;
 }
 
 function sleep(ms: number, signal: AbortSignal | undefined, label: string): Promise<void> {
@@ -80,7 +104,7 @@ export async function waitFor<T>(
     }
     if (Date.now() >= deadline) {
       const suffix = lastError
-        ? ` (last error: ${lastError instanceof Error ? lastError.message : String(lastError)})`
+        ? ` (last error: ${diagnosticErrorMessage(lastError)})`
         : "";
       throw new TestAssertionError(`${label} timed out after ${timeoutMs}ms${suffix}`);
     }

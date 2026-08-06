@@ -19,7 +19,10 @@ const BASE_PANELS: Array<{ source: string; stateArgs?: Record<string, unknown> }
   { source: "panels/chat" },
 ];
 
-export const panelViewport = suite("panel-viewport", { timeoutMs: 90_000 });
+export const panelViewport = suite("panel-viewport", {
+  timeoutMs: 90_000,
+  usesPanelAutomation: true,
+});
 
 for (const { source, stateArgs } of BASE_PANELS) {
   panelViewport.test(`${source} fits a phone-sized viewport`, async (t) =>

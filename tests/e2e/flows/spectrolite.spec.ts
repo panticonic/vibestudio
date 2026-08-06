@@ -5,6 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 import YAML from "yaml";
 import {
+  approvePendingWorkspaceCreationReview,
   approvePendingStartupUnits,
   clickPanelSelector,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
@@ -14,6 +15,7 @@ import {
   getPanelText,
   getPanelTree,
   hasElectronDisplay,
+  isElectronApplicationClosed,
   isPanelReady,
   launchTestApp,
   removeManagedTestWorkspace,
@@ -28,6 +30,7 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 type PendingApproval = {
   approvalId: string;
   kind: string;
+  allowedDecisions?: string[];
   options?: Array<{
     value: string;
     tone?: string;
@@ -202,6 +205,7 @@ async function listPendingApprovals(app: ElectronApplication): Promise<PendingAp
   const pending = (await rpcCall(app, "shellApproval", "listPending", [])) as Array<{
     approvalId: string;
     kind: string;
+    allowedDecisions?: unknown;
     options?: Array<{
       value: unknown;
       tone?: unknown;
@@ -211,6 +215,9 @@ async function listPendingApprovals(app: ElectronApplication): Promise<PendingAp
   return pending.map((approval) => ({
     approvalId: approval.approvalId,
     kind: approval.kind,
+    allowedDecisions: Array.isArray(approval.allowedDecisions)
+      ? approval.allowedDecisions.filter((decision): decision is string => typeof decision === "string")
+      : undefined,
     options: Array.isArray(approval.options)
       ? approval.options.map((option) => ({
           value: String(option.value),
@@ -262,11 +269,22 @@ async function resolveApproval(app: ElectronApplication, approval: PendingApprov
       await testApi.rpcCall("shellApproval", "resolveUserland", [pending.approvalId, choice]);
       return;
     }
-    await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, "session"]);
+    const decision = pending.allowedDecisions?.find((candidate) => candidate !== "deny") ?? "once";
+    await testApi.rpcCall("shellApproval", "resolve", [pending.approvalId, decision]);
   }, approval);
 }
 
 async function resolvePendingShellApprovals(app: ElectronApplication): Promise<void> {
+  if (isElectronApplicationClosed(app)) return;
+  // Install reviews have a structured decision payload and are intentionally
+  // rejected by the generic approval resolver. Resolve them through the same
+  // typed path as the real shell consent surface before handling ordinary
+  // approvals below.
+  await approvePendingWorkspaceCreationReview(app).catch((error) => {
+    if (isElectronApplicationClosed(app)) return;
+    console.warn("Failed to resolve E2E install review:", error);
+  });
+  if (isElectronApplicationClosed(app)) return;
   const pending = await listPendingApprovals(app).catch(() => []);
   for (const approval of pending) {
     await resolveApproval(app, approval).catch((error) => {
@@ -279,6 +297,7 @@ async function resolvePendingShellApprovals(app: ElectronApplication): Promise<v
 }
 
 async function findLoadedSpectrolitePanelId(app: TestApp): Promise<string> {
+  if (isElectronApplicationClosed(app.app)) return "";
   await resolvePendingShellApprovals(app.app);
   const panels = flattenPanels(await getPanelTree(app.app));
   for (const panel of panels) {
@@ -466,32 +485,42 @@ async function isMobileSpectroliteLayout(app: TestApp, panelId: string): Promise
 }
 
 async function ensureMobileShellStackMode(app: ElectronApplication): Promise<void> {
-  await app.evaluate(async ({ webContents }) => {
-    const contents = webContents
-      .getAllWebContents()
-      .find(
-        (candidate) => !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
-      );
-    if (!contents) return;
-    try {
-      await Promise.race([
-        contents.executeJavaScript(
-          `(() => {
-            const labels = ["Close panel tree", "Switch to breadcrumb navigation"];
-            const button = Array.from(document.querySelectorAll("[aria-label]"))
-              .find((node) => labels.includes(node.getAttribute("aria-label") ?? ""));
-            if (!(button instanceof HTMLElement)) return false;
-            button.click();
-            return true;
-          })()`,
-          true
-        ),
-        new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
-      ]);
-    } catch {
-      // The hosted shell can replace its document while adopting the workspace.
-    }
-  });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const result = await app
+      .evaluate(async ({ webContents }) => {
+        const labels = ["Close panel tree", "Switch to breadcrumb navigation"];
+        for (const contents of webContents.getAllWebContents()) {
+          if (contents.isDestroyed()) continue;
+          try {
+            const result = await contents.executeJavaScript(
+              `(() => {
+                const shell = Boolean(
+                  document.querySelector('[data-shell-top-chrome="titlebar"]') ||
+                  document.querySelector('[aria-label="Menu"]') ||
+                  document.querySelector('[data-native-panel-slot-id]')
+                );
+                if (!shell) return { shell: false, clicked: false, alreadyStack: false };
+                const button = Array.from(document.querySelectorAll("[aria-label]"))
+                  .find((node) => ${JSON.stringify(labels)}.includes(node.getAttribute("aria-label") ?? ""));
+                if (!(button instanceof HTMLElement)) {
+                  return { shell: true, clicked: false, alreadyStack: true };
+                }
+                button.click();
+                return { shell: true, clicked: true, alreadyStack: false };
+              })()`,
+              true
+            );
+            if (result.clicked || result.alreadyStack) return result;
+          } catch {
+            // The hosted shell can replace its document while adopting the workspace.
+          }
+        }
+        return { shell: false, clicked: false, alreadyStack: false };
+      })
+      .catch(() => ({ shell: false, clicked: false, alreadyStack: false }));
+    if (result.clicked || result.alreadyStack) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 async function openFilesDrawer(app: TestApp, panelId: string): Promise<void> {
@@ -731,7 +760,14 @@ async function getPanelLayoutIssues(app: TestApp, panelId: string): Promise<stri
         const rect = node.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) issues.push(selector + " has no visible area");
         if (rect.right > window.innerWidth + 1 || rect.bottom > window.innerHeight + 1) {
-          issues.push(selector + " overflows viewport");
+          issues.push(
+            selector +
+              " overflows viewport " +
+              JSON.stringify({
+                rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+                viewport: { width: window.innerWidth, height: window.innerHeight },
+              })
+          );
         }
       }
       const editor = document.querySelector('[data-testid="spectrolite-editor"]');
@@ -908,6 +944,10 @@ test.describe("Spectrolite", () => {
   });
 
   test("supports manual agent add and complete removal", async () => {
+    // Agent image activation can include a first-use workerd build. Keep the
+    // diagnostic failure path alive long enough to report the actual agent
+    // error instead of letting the outer test timeout close Electron first.
+    test.setTimeout(240000);
     workspacePath = createManagedTestWorkspace();
     initializeDefaultVaultRepo(workspacePath);
     replaceInitPanels(workspacePath, {
@@ -1024,23 +1064,50 @@ test.describe("Spectrolite", () => {
         () => false
       ));
     expect(selectedAgentClicked).toBe(true);
-    await expect
-      .poll(
-        async () => {
-          await resolvePendingShellApprovals(testApp!.app);
-          return executePanelScript<number>(
-            testApp!.app,
-            panelId,
-            `
-        document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]').length
+    try {
+      await expect
+        .poll(
+          async () => {
+            await resolvePendingShellApprovals(testApp!.app);
+            return executePanelScript<number>(
+              testApp!.app,
+              panelId,
+              `
+          document.querySelectorAll('[data-testid^="spectrolite-agent-remove-"]').length
+        `
+            );
+          },
+          {
+            timeout: 120000,
+          }
+        )
+        .toBeGreaterThan(removeCountBeforeAdd);
+    } catch (error) {
+      const diagnostics = await executePanelScript<{
+        text: string;
+        error: string | null;
+        agents: string[];
+      }>(
+        testApp.app,
+        panelId,
+        `
+        (() => ({
+          text: document.body.innerText,
+          error: document.querySelector('[data-testid="spectrolite-agent-error"]')?.textContent ?? null,
+          agents: Array.from(document.querySelectorAll('[data-testid^="spectrolite-agent-"]'))
+            .map((node) => node.getAttribute('data-testid'))
+            .filter((id): id is string => Boolean(id)),
+        }))()
       `
-          );
-        },
-        {
-          timeout: 120000,
-        }
-      )
-      .toBeGreaterThan(removeCountBeforeAdd);
+      ).catch(() => ({ text: "<panel unavailable>", error: null, agents: [] }));
+      const pending = await listPendingApprovals(testApp.app).catch(() => []);
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\n` +
+          `Manual agent add diagnostics: ${JSON.stringify({ diagnostics, pending })}\n` +
+          `Electron output tail:\n${testApp.getOutput().slice(-12_000)}\n` +
+          `Hub output tail:\n${testApp.getHubOutput().slice(-20_000)}`
+      );
+    }
 
     const removeIdsAfterAdd = await executePanelScript<string[]>(
       testApp.app,

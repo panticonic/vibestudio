@@ -16,8 +16,15 @@ import { openPanel, panelText, waitFor } from "../panels.js";
 // lifecycle suites instead of becoming an implicit testkit dependency.
 export const TARGET_PANEL_SOURCE = "panels/chat";
 
-export const panelLifecycle = suite("panel-lifecycle", { timeoutMs: 60_000 })
-  .test("panel tree is queryable and entries carry ids and titles", async () => {
+export const panelLifecycle = suite("panel-lifecycle", {
+  timeoutMs: 60_000,
+  usesPanelAutomation: true,
+})
+  .test("panel tree is queryable and entries carry ids and titles", async (t) => {
+    // A fresh headless context has no visible ancestor. Establish the exact
+    // root fixture this query needs instead of assuming launcher state exists.
+    const root = await openPanel(TARGET_PANEL_SOURCE, { parentId: null, focus: false });
+    t.defer(() => root.close().then(() => undefined));
     const groups = await panelTree.rootGroups({ limit: 1 });
     expect(groups.groups.length, "owner group count").toBeGreaterThanOrEqual(1);
     const page = await panelTree.page({

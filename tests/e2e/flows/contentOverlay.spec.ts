@@ -83,7 +83,7 @@ async function waitHostedShellReady(testApp: TestApp): Promise<void> {
                     if (document.querySelector(".titlebar-breadcrumb-scroll")
                       || document.querySelector('[aria-label="Menu"]')) return "ready";
                     const approve = Array.from(document.querySelectorAll("button"))
-                      .find((b) => /^(Trust and start|Approve and start)$/.test((b.textContent ?? "").trim()));
+                      .find((b) => /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/.test((b.textContent ?? "").trim()));
                     if (approve) { approve.click(); return "approved"; }
                     return "waiting";
                   })()`,
@@ -335,6 +335,97 @@ test.describe("Content overlay", () => {
     expect(probe?.text).toContain("Always for News");
     expect(probe?.text).toContain("Don't allow");
     expect(probe?.text).not.toContain("Trust this version");
+
+    // The surface is a separate WebContentsView. Verify that an intent emitted
+    // by it reaches the hosted shell document that owns the coordinator before
+    // relying on the visual drag assertions below.
+    await testApp.app.evaluate(async ({ webContents }) => {
+      const host = webContents
+        .getAllWebContents()
+        .find(
+          (candidate) =>
+            !candidate.isDestroyed() &&
+            candidate.getTitle() === "@workspace-apps/shell" &&
+            !candidate.getURL().includes("overlaySurface=")
+        );
+      const overlay = webContents
+        .getAllWebContents()
+        .find(
+          (candidate) =>
+            !candidate.isDestroyed() && candidate.getURL().includes("overlaySurface=")
+        );
+      if (!host || !overlay) throw new Error("content overlay host or surface not found");
+      await host.executeJavaScript(
+        `(() => { globalThis.__e2eContentOverlayIntent = null; globalThis.__vibestudioContentOverlayHost.on((payload) => { globalThis.__e2eContentOverlayIntent = payload; }); return true; })()`,
+        true
+      );
+      await overlay.executeJavaScript(
+        `globalThis.__vibestudioContentOverlay.emitIntent({ type: "e2e-intent", approvalId: "e2e-cap" });`,
+        true
+      );
+    });
+    await expect
+      .poll(
+        () =>
+          testApp!.app.evaluate(async ({ webContents }) => {
+            const host = webContents
+              .getAllWebContents()
+              .find(
+                (candidate) =>
+                  !candidate.isDestroyed() &&
+                  candidate.getTitle() === "@workspace-apps/shell" &&
+                  !candidate.getURL().includes("overlaySurface=")
+              );
+            if (!host) return null;
+            return host.executeJavaScript(`globalThis.__e2eContentOverlayIntent`, true);
+          }),
+        { timeout: 10_000, intervals: [200, 400, 800] }
+      )
+      .toEqual({ type: "e2e-intent", approvalId: "e2e-cap" });
+
+    await testApp.app.evaluate(async ({ webContents }) => {
+      const host = webContents
+        .getAllWebContents()
+        .find(
+          (candidate) =>
+            !candidate.isDestroyed() &&
+            candidate.getTitle() === "@workspace-apps/shell" &&
+            !candidate.getURL().includes("overlaySurface=")
+        );
+      const overlay = webContents
+        .getAllWebContents()
+        .find(
+          (candidate) =>
+            !candidate.isDestroyed() && candidate.getURL().includes("overlaySurface=")
+        );
+      if (!host || !overlay) throw new Error("content overlay host or surface not found");
+      await host.executeJavaScript(`globalThis.__e2eContentOverlayIntent = null`, true);
+      const result = await overlay.executeJavaScript(
+        `(() => { const button = document.querySelector("button[data-approval-decision]"); if (!(button instanceof HTMLButtonElement)) return { found: false }; button.click(); return { found: true, decision: button.getAttribute("data-approval-decision") }; })()`,
+        true
+      );
+      if (!result || !(result as { found?: boolean }).found) {
+        throw new Error("approval decision button semantic hook was not rendered");
+      }
+    });
+    await expect
+      .poll(
+        () =>
+          testApp!.app.evaluate(async ({ webContents }) => {
+            const host = webContents
+              .getAllWebContents()
+              .find(
+                (candidate) =>
+                  !candidate.isDestroyed() &&
+                  candidate.getTitle() === "@workspace-apps/shell" &&
+                  !candidate.getURL().includes("overlaySurface=")
+              );
+            if (!host) return null;
+            return host.executeJavaScript(`globalThis.__e2eContentOverlayIntent`, true);
+          }),
+        { timeout: 10_000, intervals: [200, 400, 800] }
+      )
+      .toMatchObject({ type: "decide", approvalId: "e2e-cap" });
 
     // Panels were NOT blanked — at least one panel remains in the live tree.
     await expect

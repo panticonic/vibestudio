@@ -33,6 +33,16 @@ export interface SavedPermissionGrant {
   lastUsedAt?: number;
   expiresAt?: number;
   why: string;
+  /**
+   * Which decision this permission arrived with, in §7.7's words: `Part of
+   * Vibestudio`, `Added with News`, `You allowed this`.
+   *
+   * Distinct from `why`, which says what the permission does. This screen is
+   * where an install-time choice is revisited in both directions, and that is
+   * only possible if a row minted by a review is distinguishable from one the
+   * person answered a prompt for.
+   */
+  origin?: string;
   approvedBy: string;
   duration: string;
   revokeEffect: string;
@@ -502,6 +512,22 @@ function GrantCard({
             <dd style={{ margin: 0 }}>
               <Text size="2">{grant.why}</Text>
             </dd>
+            {/* §7.7: which decision this arrived with. Without it a permission
+                minted by a review is indistinguishable from one the person
+                answered a prompt for, and this screen is where an install-time
+                choice is meant to be revisited in both directions. */}
+            {grant.origin ? (
+              <>
+                <dt>
+                  <Text size="1" weight="bold">
+                    Where it came from
+                  </Text>
+                </dt>
+                <dd style={{ margin: 0 }}>
+                  <Text size="2">{grant.origin}</Text>
+                </dd>
+              </>
+            ) : null}
             <dt>
               <Text size="1" weight="bold">
                 Approved by
@@ -527,10 +553,13 @@ function GrantCard({
               <Text size="2">{grant.revokeEffect}</Text>
             </dd>
           </dl>
+          {/* The part, never its effective version. That value is a 64-character
+              content hash: it is the right key for the grant and the wrong thing
+              to put in front of a person, who cannot compare two of them and
+              gains nothing from either (§7.6.3). */}
           {grant.repoPath ? (
             <Text size="1" color="gray">
               {grant.repoPath}
-              {grant.effectiveVersion ? ` · version ${grant.effectiveVersion}` : ""}
             </Text>
           ) : null}
           <Text size="1" color="gray">

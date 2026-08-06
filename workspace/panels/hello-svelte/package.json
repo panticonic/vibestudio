@@ -72,6 +72,7 @@
     "@workspace/svelte": "workspace:*"
   },
   "devDependencies": {
-    "svelte": "^5.55.0"
+    "svelte": "^5.55.0",
+    "vitest": "^3.2.2"
   }
 }

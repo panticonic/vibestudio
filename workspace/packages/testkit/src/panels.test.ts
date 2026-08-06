@@ -12,7 +12,10 @@ vi.mock("@workspace/runtime", () => ({
     },
   },
 }));
-vi.mock("./cdp.js", () => ({ withCdpSession: vi.fn() }));
+vi.mock("./cdp.js", () => ({
+  withCdpSession: vi.fn(),
+  _registerDriverRoute: vi.fn(),
+}));
 
 describe("testkit panel helpers", () => {
   beforeEach(() => {
@@ -28,5 +31,27 @@ describe("testkit panel helpers", () => {
     await openPanel("panels/testbench");
 
     expect(mocks.runtimeOpenPanel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps canonical RPC endpoint identity in polling diagnostics", async () => {
+    const { waitFor } = await import("./panels.js");
+    const error = Object.assign(new Error('Method "_agent.snapshot" is not exposed by this endpoint'), {
+      errorData: {
+        kind: "rpc-endpoint",
+        endpointId: "panel:nav-stale",
+        requestedMethod: "_agent.snapshot",
+      },
+    });
+
+    await expect(
+      waitFor(
+        () => {
+          throw error;
+        },
+        { timeoutMs: 0, label: "snapshot" }
+      )
+    ).rejects.toThrow(
+      'last error: Method "_agent.snapshot" is not exposed by this endpoint (endpoint=panel:nav-stale, method=_agent.snapshot)'
+    );
   });
 });

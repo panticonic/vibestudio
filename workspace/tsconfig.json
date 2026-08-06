@@ -106,7 +106,12 @@
       "@workspace-workers/workspace-source": ["workspace/workers/workspace-source/index.ts"],
       "@workspace/about-shared/types": ["workspace/packages/about-shared/types.ts"],
       "@workspace/about-shared/templates": ["workspace/packages/about-shared/templates.ts"],
-      "@workspace/about-shared/template-review": ["workspace/packages/about-shared/templateReview.tsx"],
+      "@workspace/about-shared/template-review": [
+        "workspace/packages/about-shared/templateReview.tsx"
+      ],
+      "@workspace/template-management/react": [
+        "workspace/packages/template-management/src/react.ts"
+      ],
       "@workspace/agentic-chat": ["workspace/packages/agentic-chat/index.ts"],
       "@workspace/agentic-chat/chat": [
         "workspace/packages/agentic-chat/components/AgenticChat.tsx"
@@ -147,9 +152,7 @@
       "@workspace/react": ["workspace/packages/react/src/index.ts"],
       "@workspace/react/responsive": ["workspace/packages/react/src/responsive.ts"],
       "@workspace/runtime": ["workspace/packages/runtime/src/panel/index.ts"],
-      "@workspace/runtime/panel-runtime": [
-        "workspace/packages/runtime/src/shared/panelRuntime.ts"
-      ],
+      "@workspace/runtime/panel-runtime": ["workspace/packages/runtime/src/shared/panelRuntime.ts"],
       "@workspace/runtime/internal/diagnostics": [
         "workspace/packages/runtime/src/internal/diagnostics.ts"
       ],

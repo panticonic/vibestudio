@@ -184,7 +184,7 @@ async function approveStartupUnitsIfNeeded(testApp: TestApp): Promise<void> {
 
                   const approveAll = Array.from(document.querySelectorAll("button"))
                     .find((button) =>
-                      /^(Trust and start|Approve and start)$/.test((button.textContent ?? "").trim())
+                      /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/.test((button.textContent ?? "").trim())
                     );
                   if (!approveAll) return "waiting";
                   approveAll.click();

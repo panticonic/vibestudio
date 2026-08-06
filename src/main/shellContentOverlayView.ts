@@ -90,6 +90,23 @@ export class ShellContentOverlayView {
   };
 
   /**
+   * The preload announces readiness after installing the render listener. A
+   * navigation can finish before the page has installed its React listener,
+   * so this handshake is the authoritative point at which the current render
+   * payload is safe to deliver.
+   */
+  private readonly handleReady = (event: Electron.IpcMainEvent, payload: unknown) => {
+    if (!this.isOwnSender(event.sender.id)) return;
+    const url =
+      payload && typeof payload === "object" && "url" in payload && typeof payload.url === "string"
+        ? payload.url
+        : undefined;
+    const view = this.view;
+    if (!view || view.webContents.isDestroyed()) return;
+    this.markLoaded(view, url);
+  };
+
+  /**
    * Drag the overlay around the window, then snap it to the nearest anchor
    * corner on release. The surface reports screen coordinates (stable as the
    * native view moves under the cursor) so the view tracks the pointer 1:1.
@@ -141,6 +158,7 @@ export class ShellContentOverlayView {
   ) {
     ipcMain.on("vibestudio:content-overlay:size", this.handleSize);
     ipcMain.on("vibestudio:content-overlay:intent", this.handleIntent);
+    ipcMain.on("vibestudio:content-overlay:ready", this.handleReady);
     ipcMain.on("vibestudio:content-overlay:drag", this.handleDrag);
   }
 
@@ -223,6 +241,7 @@ export class ShellContentOverlayView {
     this.cancelSnap();
     ipcMain.removeListener("vibestudio:content-overlay:size", this.handleSize);
     ipcMain.removeListener("vibestudio:content-overlay:intent", this.handleIntent);
+    ipcMain.removeListener("vibestudio:content-overlay:ready", this.handleReady);
     ipcMain.removeListener("vibestudio:content-overlay:drag", this.handleDrag);
     if (this.view && !this.view.webContents.isDestroyed()) {
       if (this.window) this.window.contentView.removeChildView(this.view);
@@ -255,10 +274,7 @@ export class ShellContentOverlayView {
     this.overlayWcId = this.view.webContents.id;
     const view = this.view;
     view.webContents.on("did-finish-load", () => {
-      if (view.webContents.isDestroyed()) return;
-      this.loaded = true;
-      this.pushRender();
-      this.applyPendingFocus();
+      this.markLoaded(view);
     });
     this.window?.contentView.addChildView(this.view);
     return this.view;
@@ -274,11 +290,32 @@ export class ShellContentOverlayView {
     if (this.loadedUrl === url) return;
     this.loadedUrl = url;
     this.loaded = false;
-    void view.webContents.loadURL(url).catch((error: unknown) => {
-      log.warn(
-        `Failed to load content overlay surface: ${error instanceof Error ? error.message : String(error)}`
-      );
-    });
+    void view.webContents
+      .loadURL(url)
+      .then(() => {
+        // `did-finish-load` is the normal signal, but Electron can resolve the
+        // navigation promise without delivering that event to a newly-created
+        // WebContentsView during a rapid hide/show or renderer replacement.
+        // Treat both as the same idempotent commit so the first render payload
+        // can never be stranded behind a blank transparent overlay.
+        this.markLoaded(view, url);
+      })
+      .catch((error: unknown) => {
+        log.warn(
+          `Failed to load content overlay surface: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+  }
+
+  private markLoaded(view: WebContentsView, url = this.loadedUrl): void {
+    if (view.webContents.isDestroyed() || (url && this.loadedUrl !== url)) return;
+    if (this.loaded) {
+      this.applyPendingFocus();
+      return;
+    }
+    this.loaded = true;
+    this.pushRender();
+    this.applyPendingFocus();
   }
 
   private pushRender(): void {

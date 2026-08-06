@@ -47,3 +47,9 @@ contextBridge.exposeInMainWorld("__vibestudioContentOverlay", {
     ipcRenderer.send("vibestudio:content-overlay:drag", { phase, screenX, screenY });
   },
 });
+
+// Tell main that the preload-side IPC listener is installed. Main uses this
+// handshake to replay the current surface after navigation, avoiding a blank
+// transparent overlay when the navigation event wins a startup race with the
+// React surface's asynchronous mount.
+ipcRenderer.send("vibestudio:content-overlay:ready", { url: window.location.href });

@@ -37,6 +37,8 @@ export interface SuiteOptions {
   timeoutMs?: number;
   /** Fail tests when supervision observes error-level findings (default true). */
   failOnSupervision?: boolean;
+  /** This suite opens or drives a workspace panel through the panel runtime. */
+  usesPanelAutomation?: boolean;
 }
 
 export class Suite {
