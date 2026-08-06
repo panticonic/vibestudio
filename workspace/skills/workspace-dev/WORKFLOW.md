@@ -71,25 +71,26 @@ Before scaffolding, decide on persistence and agent integration:
 
 ## Development loop
 
-1. Scaffold with eval:
+1. Scaffold with eval. When building a panel with a backing service, create
+   both together so the user sees one approval prompt:
 
 ```ts
-import { createProject } from "@workspace-skills/workspace-dev";
+import { createProjects } from "@workspace-skills/workspace-dev";
 
-const created = await createProject({
-  projectType: "panel",
-  name: "my-app",
-  title: "My App",
-});
-// `created.created` is the full canonical source: "panels/my-app".
-scope.createdProject = created;
-return created;
+scope.created = await createProjects([
+  { projectType: "worker", name: "my-store", title: "My Store" },
+  { projectType: "panel", name: "my-app", title: "My App" },
+]);
+// Each entry's `.created` is the full canonical source: "workers/my-store", "panels/my-app".
+return scope.created;
 ```
 
-Require `created.preflight.ok === true`,
-`created.preflight.scope === "planned-repository"`, and
-`created.preflight.semanticBuildGate === "pending-publication"`, then retain
-`created.publication`. Preflight proves the mutation-free structural and
+Even for a single project, use `createProjects` with a one-element array.
+
+Require `preflight.ok === true`,
+`preflight.scope === "planned-repository"`, and
+`preflight.semanticBuildGate === "pending-publication"` on each result, then
+retain `publication`. Preflight proves the mutation-free structural and
 dependency checks; protected publication proves the exact-state compiler and
 semantic-authority gate. If the eval fails with
 `errorData.code === "project_preflight_failed"`, use its dependency issues as
@@ -103,8 +104,8 @@ Repair the named source/manifest rather than selecting another fork source.
 
 Creation, publication, and opening are distinct durable phases. Eval rejection
 does not roll back an earlier published phase. If opening or verification fails,
-reuse `scope.createdProject.created` and retry only that phase; do not call
-`createProject` again and do not add another `panels/` prefix.
+reuse the `created` path from scope and retry only that phase; do not call
+`createProjects` again and do not add another `panels/` prefix.
 
 If the eval instead fails with
 `errorData.code === "scaffold_publication_failed"`, the repository is already

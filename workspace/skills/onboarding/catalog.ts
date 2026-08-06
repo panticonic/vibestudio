@@ -14,7 +14,6 @@ export type SetupPresentationState =
   | "not-configured"
   | "in-progress"
   | "needs-attention"
-  | "not-installed"
   | "unavailable"
   | "unknown";
 
@@ -38,7 +37,6 @@ export const setupActions = [
   "change",
   "grants",
   "resume",
-  "install",
   "refresh",
   "explore",
 ] as const;
@@ -53,7 +51,6 @@ export type SetupActionTarget =
   | { via: "model-settings" }
   | { via: "panel"; path: "panels/local-models" | "about/browser-import-inspector" }
   | { via: "shell-navigation"; target: ShellNavigationTarget }
-  | { via: "template-catalog"; templateId: string }
   | { via: "conversation" };
 
 export interface OnboardingCapabilityDefinition {
@@ -65,8 +62,6 @@ export interface OnboardingCapabilityDefinition {
   scope: OnboardingScope;
   tier: OnboardingTier;
   ownerSkillPath?: string;
-  /** Registry id that owns this capability when it is not installed. */
-  templateId?: string;
   actions?: Partial<Record<SetupAction, SetupActionTarget>>;
   visibility: "primary" | "secondary" | "advanced" | "contextual";
   setup?: {
@@ -114,13 +109,11 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     scope: "user-workspace",
     tier: "direct",
     ownerSkillPath: "skills/google-workspace/SKILL.md",
-    templateId: "google-workspace",
     actions: {
       setup: { via: "owner-skill" },
       repair: { via: "owner-skill" },
       reconnect: { via: "owner-skill" },
       check: { via: "owner-skill" },
-      install: { via: "template-catalog", templateId: "google-workspace" },
       ...connectionManagement,
     },
     visibility: "primary",
@@ -138,13 +131,11 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     scope: "user-workspace",
     tier: "direct",
     ownerSkillPath: "skills/github/SKILL.md",
-    templateId: "github",
     actions: {
       setup: { via: "owner-skill" },
       repair: { via: "owner-skill" },
       reconnect: { via: "owner-skill" },
       check: { via: "owner-skill" },
-      install: { via: "template-catalog", templateId: "github" },
       ...connectionManagement,
     },
     visibility: "primary",
@@ -180,12 +171,9 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     role: "optional-configuration",
     scope: "server",
     tier: "direct",
-    ownerSkillPath: "skills/local-models/SKILL.md",
-    templateId: "local-models",
     actions: {
       setup: { via: "panel", path: "panels/local-models" },
       change: { via: "panel", path: "panels/local-models" },
-      install: { via: "template-catalog", templateId: "local-models" },
     },
     visibility: "secondary",
     setup: {
@@ -219,11 +207,9 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     scope: "device",
     tier: "host-topology",
     ownerSkillPath: "skills/phone-setup/SKILL.md",
-    templateId: "mobile",
     actions: {
       setup: { via: "shell-navigation", target: "connection-settings" },
       change: { via: "shell-navigation", target: "connection-settings" },
-      install: { via: "template-catalog", templateId: "mobile" },
     },
     visibility: "secondary",
     setup: {

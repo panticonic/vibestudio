@@ -12,13 +12,9 @@ export const WORKSPACE_SOURCE_DIRS = [
   "projects",
 ] as const;
 
-export type WorkspaceSourceDir = typeof WORKSPACE_SOURCE_DIRS[number];
+export type WorkspaceSourceDir = (typeof WORKSPACE_SOURCE_DIRS)[number];
 
-export const WORKSPACE_STATE_DIRS = [
-  ".cache",
-  ".databases",
-  ".context-projections",
-] as const;
+export const WORKSPACE_STATE_DIRS = [".cache", ".databases", ".context-projections"] as const;
 
 export const WORKSPACE_IMPORT_PARENT_DIRS = [
   "panels",
@@ -33,7 +29,7 @@ export const WORKSPACE_IMPORT_PARENT_DIRS = [
   "projects",
 ] as const;
 
-export type WorkspaceImportParentDir = typeof WORKSPACE_IMPORT_PARENT_DIRS[number];
+export type WorkspaceImportParentDir = (typeof WORKSPACE_IMPORT_PARENT_DIRS)[number];
 
 // ---------------------------------------------------------------------------
 // Buildable-unit taxonomy

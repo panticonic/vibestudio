@@ -248,6 +248,31 @@ export const templateLocatorSchema = z.union([
     .strict(),
 ]);
 
+export const templateAddRequestSchema = z.union([
+  z
+    .object({
+      catalogId: z.string().trim().min(1),
+      /** Refresh is explicit because it may perform network work. Omit it to
+       * prepare from the last verified catalog snapshot. */
+      refreshCatalog: z.boolean().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      url: z.string().url(),
+      credential: WorkspaceLogicalCredentialNameSchema.optional(),
+    })
+    .strict(),
+]);
+
+export const templateAddPreparationSchema = z
+  .object({
+    name: z.string().trim().min(1),
+    description: z.string().optional(),
+    inspection: templateInspectionSchema,
+  })
+  .strict();
+
 const catalogEntrySchema = z
   .object({
     id: z.string(),
@@ -330,6 +355,13 @@ export const templatesMethods = defineServiceMethods({
       "Resolve and verify a template closure in userland without changing the workspace. Catalog selections require the reviewed registry revision.",
     args: z.tuple([templateLocatorSchema]),
     returns: templateInspectionSchema,
+    access: READ_ACCESS,
+  },
+  prepareAdd: {
+    description:
+      "Prepare one catalog selection or template address as an exact, reviewable add operation without changing the workspace. Catalog refresh remains explicit.",
+    args: z.tuple([templateAddRequestSchema]),
+    returns: templateAddPreparationSchema,
     access: READ_ACCESS,
   },
   inspectAuthoring: {
@@ -523,6 +555,8 @@ export type TemplateInspection = z.infer<typeof templateInspectionSchema>;
 export type TemplateOperation = z.infer<typeof templateOperationSchema>;
 export type TemplateReviewHandle = z.infer<typeof templateReviewHandleSchema>;
 export type TemplateLocator = z.infer<typeof templateLocatorSchema>;
+export type TemplateAddRequest = z.infer<typeof templateAddRequestSchema>;
+export type TemplateAddPreparation = z.infer<typeof templateAddPreparationSchema>;
 export type TemplateExactPin = z.infer<typeof WorkspaceTemplatePinSchema>;
 export type TemplateAuthoringRequest = z.infer<typeof templateAuthoringRequestSchema>;
 export type TemplateAuthoringInspection = z.infer<typeof templateAuthoringInspectionSchema>;

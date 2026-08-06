@@ -270,7 +270,8 @@ summary.
 - `payload_ref_json` is the storage column name even when JSON is inline; there
   is no `payload_json` column.
 - Presence envelopes project into `channel_roster`.
-- Read-only CTEs are allowed through `gad.query`; write CTEs are rejected.
+- GAD inspection is exposed through typed, bounded runtime methods rather than a
+  raw SQL query method.
 - Stored-value digests are synchronous SHA-256 over canonical bytes. Semantic
   identities use the canonical VCS identity constructors and protocols.
 

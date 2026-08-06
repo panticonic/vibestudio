@@ -34,8 +34,9 @@ commit, and content digest only in a labeled Details view.
 
 ## Rules that do not bend
 
-- Invoke composer `inspect` before every `add`, including a catalog
-  selection. Do not guess its exact version or what it includes.
+- Invoke composer `prepareAdd` before every new `add`. It is the shared
+  Templates workflow used by direct UI and agents; do not reproduce catalog
+  resolution or guess an exact version.
 - Agents propose; the host approval boundary decides. A returned pending
   operation means approved composition changes are waiting for ordinary VCS
   review, not that host approval is still pending. Never show or repeat an
@@ -65,21 +66,23 @@ commit, and content digest only in a labeled Details view.
 
 ## Add a template
 
-1. Invoke `inspect` with `{ url, credential? }`, `{ alias }`, or
-   `{ catalogId, registryCommit, registrySnapshot }` as appropriate. A catalog selection without
-   the exact revision it was rendered from is invalid. `credential`, when
-   present, is the workspace's logical credential name, never a concrete
-   credential id. Explain the returned parts, choices, and optional setup
-   suggestions in plain language.
+1. Invoke `prepareAdd` with `{ url, credential? }` or `{ catalogId,
+refreshCatalog? }`. Use `refreshCatalog: true` only when the user explicitly
+   asked to refresh the Templates surface. Onboarding does not offer template
+   installation. The composer binds a catalog id to the verified
+   registry coordinates and returns `{ name, description?, inspection }`.
+   `credential`, when present, is the workspace's logical credential name,
+   never a concrete credential id. Explain the returned parts, choices, and
+   optional setup suggestions in plain language.
 2. Discuss every repository conflict choice. Record each choice explicitly as
    `keep`, `take`, or `skip`; never rely on a hidden default. Template
    dependencies name URLs only, so inherited version disagreements do not
    exist: the current lock wins. Catalog selections and previously unseen
    dependencies resolve from the reviewed registry revision; a direct URL is
-   independently discovered and verified to the exact pin returned by
-   `inspect`.
-3. Invoke `add` with `{ pin: inspection.pin, commandId, choices? }`, a fresh
-   `commandId`, and any choices already discussed. Pass `inspection.pin`
+   independently discovered and verified to the exact pin returned by the
+   preparation.
+3. Invoke `add` with `{ pin: preparation.inspection.pin, commandId, choices? }`, a fresh
+   `commandId`, and any choices already discussed. Pass the preparation pin
    unchanged: it is the one exact version already fetched and verified by
    `inspect`; never reconstruct it or send the locator again. The invocation
    itself crosses the host approval boundary.
@@ -173,23 +176,14 @@ Submitting the returned coordinates to a registry is a separate reviewed Git
 change. The default workspace intentionally does not imply registry governance
 or silently edit a catalog.
 
-## Catalog interactions from onboarding
+## Catalog ownership
 
-The onboarding `TemplateCatalog.tsx` sends typed interactions:
-
-```ts
-{ source: "onboarding-template-catalog", kind: "template-add", targetId: "news", catalogId: "news", registryCommit: "<40-character commit>", registrySnapshot: "v1-sha256:<64-character digest>" }
-```
-
-or, for a pasted address:
-
-```ts
-{ source: "onboarding-template-catalog", kind: "template-add", targetId: "url", url: "https://…" }
-```
-
-Route the full interaction through `executeTemplateSelection`; never infer an
-operation from the button text. Then use the same inspect-and-approval flow
-above.
+The template composer owns preparation and mutation. The shared template
+management component owns the human review state machine. The Templates page
+and shell settings embed that same component; agents invoke the same
+`prepareAdd` and `add` methods directly. Onboarding does not advertise or
+install templates. No surface implements its own catalog-to-inspection
+orchestration.
 
 Catalog reads are cache-only. Invoke `catalog` with no arguments when rendering
 or inspecting the current observation. Invoke `catalog` with

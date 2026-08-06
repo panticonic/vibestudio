@@ -67,3 +67,20 @@ describe("canonical executable repository contracts", () => {
     });
   }
 });
+
+describe("panel debugging guidance", () => {
+  it("keeps the bounded loop explicit about context refs and durable phase receipts", () => {
+    const skill = fs.readFileSync(path.join(workspaceRoot, "skills/workspace-dev/SKILL.md"), "utf8");
+    const loop = fs.readFileSync(
+      path.join(workspaceRoot, "skills/workspace-dev/PANEL_DEBUG_LOOP.md"),
+      "utf8"
+    );
+
+    expect(skill).toContain("PANEL_DEBUG_LOOP.md");
+    expect(loop).toContain("Never call `createProjects` again");
+    expect(loop).toContain("ref: `ctx:${ctx.contextId}`");
+    expect(loop).toContain("requestedRef");
+    expect(loop).toContain("const page = await scope.panel.cdp.page(); // fresh after runtime replacement");
+    expect(loop).toContain("await page.screenshot({ fullPage: true })");
+  });
+});

@@ -167,25 +167,21 @@ All panels and apps must respect the host theme and work on mobile viewports:
 
 ## Quick Start Workflow
 
-Create and open a panel with one durable creation receipt. Store that receipt
-before the later open/verification phase so a failure after publication cannot
-cause creation to be repeated:
+When building functionality that needs both a panel and a backing service,
+create them together with `createProjects` — one call, one approval prompt:
 
 ```ts
 eval({ code: `
-  import { createProject } from "@workspace-skills/workspace-dev";
+  import { createProjects } from "@workspace-skills/workspace-dev";
   import { openPanel } from "@workspace/runtime";
 
-  scope.createdProject = await createProject({
-    projectType: "panel",
-    name: "my-app",
-    title: "My App",
-  });
-  // `created` is already the canonical source, e.g. "panels/my-app".
-  // Never prepend "panels/" a second time.
-  scope.createdPanel = await openPanel(scope.createdProject.created);
+  scope.created = await createProjects([
+    { projectType: "worker", name: "task-board-store", title: "Task Board Store" },
+    { projectType: "panel", name: "task-board", title: "Task Board" },
+  ]);
+  scope.createdPanel = await openPanel(scope.created[1].created);
   return {
-    created: scope.createdProject,
+    created: scope.created,
     observation: await scope.createdPanel.observe(),
     snapshot: await scope.createdPanel.snapshot(),
   };
@@ -193,7 +189,11 @@ eval({ code: `
 })
 ```
 
-Success returns `{ created, files, preflight, publication }`.
+Even for a single project, use `createProjects` with a one-element array.
+
+`createProjects` returns an array of results, one per project.
+Each result includes
+`{ created, files, preflight, publication }`.
 For every project type, `created` is the complete canonical repository path
 (`panels/name`, `workers/name`, and so on), not a basename. Pass it directly to
 APIs that accept a workspace source.
@@ -229,7 +229,7 @@ protected publication fails, the helper throws `ScaffoldPublicationError`.
 Eval preserves its structured `errorData`, including
 `code: "scaffold_publication_failed"`, `published: false`, the exact committed
 event and original push request, the nested typed VCS error, and its command-ID
-retry policy. Do not call `createProject` again. Branch on
+retry policy. Do not call `createProjects` again. Branch on
 `retry.commandIdPolicy`: use `recoverProjectPublication` for an uncertain
 external effect or a refusal that only needs a freshly observed main. For
 `repair-source-and-recommit`, consume every nested `BuildGateFailed` diagnostic,
@@ -238,10 +238,10 @@ event, and publish from fresh status. Retrying the rejected commit cannot pass.
 `stop-integrity-investigation` is terminal pending investigation.
 
 Eval is not a transaction: if creation publishes and a later statement in the
-same cell fails, that repository still exists. Resume from
-`scope.createdProject` and retry only the failed open/verification phase. Never
-rerun `createProject` because `openPanel`, `snapshot`, or another downstream
-operation failed.
+same cell fails, those repositories still exist. Resume from
+`scope.created` and retry only the failed
+open/verification phase. Never rerun `createProjects` because
+`openPanel`, `snapshot`, or another downstream operation failed.
 
 The same rule applies to `forkPanel`, `forkWorker`, and every mutating helper:
 assign its receipt into `scope` before the next awaited operation. A panel
@@ -272,8 +272,8 @@ move the current panel to an already-created branch.
 For context-local scratch files under `projects/`, do not scaffold. Write inside
 a repo-shaped path such as `projects/tmp-name/note.md`; that repo remains private
 to the current context until you intentionally commit the complete local chain
-and publish its committed workspace event. `createProject` is for published
-workspace units: it scaffolds one coherent unit and takes it through the
+and publish its committed workspace event. `createProjects` is for published
+workspace units: it scaffolds coherent units and takes them through the
 canonical commit/publication protocol. File-oriented APIs also accept a shorthand such as
 `projects/note.md`, canonicalize it to `projects/note/note.md`, and return the
 canonical path; use the full form when composing later paths.
@@ -323,10 +323,10 @@ key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 
 | Task                        | How                                                                                                                                                                                                                                                                                                                                                                  |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Create project              | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `return await createProject({ projectType, name, title })`; retain its exact `publication`, or recover the committed event from structured `scaffold_publication_failed` data without rerunning creation                                                                             |
+| Create projects             | `eval` — `import { createProjects } from "@workspace-skills/workspace-dev"` then `return await createProjects([{ projectType, name, title }, ...])`. Create related units (e.g. a DO store + its panel) in one call for one approval prompt. Even for a single project, pass a one-element array. Retain the exact `publication`; recover from `scaffold_publication_failed` data without rerunning creation |
 | Fork panel                  | `eval` — `import { forkPanel } from "@workspace-skills/workspace-dev"`; store the `dryRun: true` plan, then assign the applied receipt to `scope.forkedProject` **before** opening `scope.forkedProject.created`. Store the handle too, and return the structured observation and snapshot without string-coercing either. If open/snapshot fails, resume from scope; never fork again. |
 | Fork worker                 | `eval` — `import { forkWorker } from "@workspace-skills/workspace-dev"` then `forkWorker({ from: "workers/source", name: "new-worker", title, dryRun: true })`; pass `classMap` for multi-class workers                                                                                                                                                              |
-| Build app database          | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a live service with `authority.principals` and explicit `@rpc` receiver policies, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).                     |
+| Build app database          | Create a worker DO with `DurableObjectBase` + `this.sql` — include it in the same `createProjects` call as its panel. Declare it as a live service with `authority.principals` and explicit `@rpc` receiver policies, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases). |
 | Add repo guidance           | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages                                                                                                                                                                                               |
 | Launch panel                | `eval` — `const handle = await openPanel(source)` for pushed/main code, or `openPanel(source, { contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })`for intentional context-local code; return both`await handle.observe()`and`await handle.snapshot()` before reporting success.                                                                             |
 | Inspect panel console       | `eval` — `const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 100 })`; read `history.errors`, `history.entries`, `history.dropped`, and `history.capacity`. The return value is an object, not an array.                                                                                                                                       |
@@ -362,7 +362,7 @@ shell's stable hub session and are not available from workspace eval.
 - Panel lifecycle operations (`openPanel`, bounded `panelTree` reads, `PanelHandle.observe`,
   `rebuild`/`reload`/`close`) are portable across panel, worker, DO, and eval
   contexts; presentation and CDP still require an available host.
-- Project scaffolding (`createProject`), semantic workspace VCS operations,
+- Project scaffolding (`createProjects`), semantic workspace VCS operations,
   typecheck, and test runs work in **headless** sessions via eval + RPC.
 - Unit tests run through `@workspace-extensions/test-runner`, not shell commands.
 

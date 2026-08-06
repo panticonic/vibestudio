@@ -22,6 +22,10 @@ interface OnboardingHostTopologySnapshot {
   };
 }
 
+interface AuthorityPreflightResult {
+  decision: "allowed" | "acquirable" | "denied";
+}
+
 interface SkillCatalogEntry {
   skillPath: string;
 }
@@ -61,13 +65,38 @@ function currentConnectionRoute(): "local" | "remote" {
   }
 }
 
+async function canReadHubControl(method: "listDevices" | "listWorkspaces"): Promise<boolean> {
+  try {
+    const result = await callMain<AuthorityPreflightResult>("authority.preflight", {
+      service: "hubControl",
+      method,
+      args: [],
+    });
+    return result.decision === "allowed";
+  } catch {
+    return false;
+  }
+}
+
 async function readHostTopology(): Promise<OnboardingHostTopologySnapshot> {
-  const [devices, workspaces] = await Promise.allSettled([
-    callMain<{ devices: unknown[] }>("hubControl.listDevices"),
-    callMain<unknown[]>("hubControl.listWorkspaces"),
+  // These are intentionally optional setup reads. Preflight avoids sending a
+  // gated call that is guaranteed to fail (and would be noisy over Electron's
+  // IPC handler) while preserving the honest Unknown state until the user has
+  // explicitly granted access through the relevant workflow.
+  const [canReadDevices, canReadWorkspaces] = await Promise.all([
+    canReadHubControl("listDevices"),
+    canReadHubControl("listWorkspaces"),
   ]);
-  const deviceList = devices.status === "fulfilled" ? devices.value.devices : null;
-  const workspaceList = workspaces.status === "fulfilled" ? workspaces.value : null;
+  const [devices, workspaces] = await Promise.all([
+    canReadDevices
+      ? callMain<{ devices: unknown[] }>("hubControl.listDevices").catch(() => null)
+      : Promise.resolve(null),
+    canReadWorkspaces
+      ? callMain<unknown[]>("hubControl.listWorkspaces").catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const deviceList = devices?.devices ?? null;
+  const workspaceList = workspaces;
   return {
     devices: {
       availability: deviceList ? "available" : "unknown",
@@ -101,7 +130,6 @@ function nextAction(
     return role === "migration" && actions.setup ? "setup" : undefined;
   }
   if (state === "using-defaults" && actions.change) return "change";
-  if (state === "not-installed" && actions.install) return "install";
   if (state === "unavailable") return undefined;
   if (actions.setup) return "setup";
   if (actions.change) return "change";
@@ -130,7 +158,7 @@ function unknownSnapshot(
 
 function hostSnapshots(
   host: OnboardingHostTopologySnapshot,
-  mobileInstalled: boolean,
+  mobileOwnerAvailable: boolean,
   observedAt: string
 ): SetupCapabilitySnapshot[] {
   const device = onboardingCatalog.find((entry) => entry.id === "connection.device")!;
@@ -138,16 +166,16 @@ function hostSnapshots(
   const deviceActions = device.actions ?? {};
   const remoteActions = remote.actions ?? {};
 
-  const deviceSnapshot: SetupCapabilitySnapshot = !mobileInstalled
+  const deviceSnapshot: SetupCapabilitySnapshot = !mobileOwnerAvailable
     ? {
         id: device.id,
-        state: "not-installed",
-        summary: "Mobile support is available to install for this workspace.",
+        state: "unavailable",
+        summary:
+          "Device setup is unavailable because its base capability owner could not be loaded.",
         scope: device.scope,
         tier: device.tier,
-        attention: "none",
-        nextAction: "install",
-        rawStage: "not-installed",
+        attention: "blocking",
+        rawStage: "owner-unavailable",
         observedAt,
       }
     : host.devices.availability === "unknown"
@@ -224,11 +252,11 @@ export async function composeOnboardingSnapshot(
 
   let host: SetupCapabilitySnapshot[];
   try {
-    const [topology, mobileInstalled] = await Promise.all([
+    const [topology, mobileOwnerAvailable] = await Promise.all([
       (dependencies.readHostTopology ?? readHostTopology)(),
       (dependencies.hasSkill ?? hasSkill)("skills/phone-setup/SKILL.md"),
     ]);
-    host = hostSnapshots(topology, mobileInstalled, observedAt);
+    host = hostSnapshots(topology, mobileOwnerAvailable, observedAt);
   } catch {
     host = onboardingCatalog
       .filter((entry) => entry.setup && entry.tier === "host-topology")

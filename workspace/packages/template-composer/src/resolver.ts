@@ -17,6 +17,7 @@ import {
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
+  WorkspaceTemplatePresentation,
   WorkspaceTemplateDeclaration,
   WorkspaceTemplateLock,
   WorkspaceTemplateLockNode,
@@ -148,6 +149,8 @@ export interface ResolvedTemplateNode {
   fragment: TemplateManifestFragment;
   fragmentYaml: string;
   fragmentDigest: CanonicalSnapshotDigest;
+  /** Sanitized self-given name and sentence, when the manifest offered any. */
+  presentation?: WorkspaceTemplatePresentation;
   excludedSuggestions: {
     trust?: unknown;
     providers?: unknown;
@@ -213,6 +216,7 @@ interface ParsedTemplateManifest {
   fragment: TemplateManifestFragment;
   fragmentYaml: string;
   fragmentDigest: CanonicalSnapshotDigest;
+  presentation?: WorkspaceTemplatePresentation;
   excludedSuggestions: ResolvedTemplateNode["excludedSuggestions"];
 }
 
@@ -245,6 +249,10 @@ function sanitizeTemplateManifest(top: ParsedTopLayer): TemplateManifestFragment
     disable: _disable,
     trust: _trust,
     providers: _providers,
+    // Self-description is presentation, not configuration: it identifies the
+    // node that asserted it and must not be inherited by whatever composes it.
+    // It travels in the lock node instead (see `presentation` below).
+    template: _template,
     git,
     ...accepted
   } = top;
@@ -309,6 +317,9 @@ function parseTemplateManifest(
     const fragmentYaml = canonicalYaml(fragment);
     return {
       dependencies: (top.templates?.use ?? []).map(normalizeDeclaration),
+      // Already sanitized by the manifest schema; carried verbatim so the lock
+      // holds exactly what a reader may print and nothing that needs repairing.
+      ...(top.template === undefined ? {} : { presentation: top.template }),
       fragment,
       fragmentYaml,
       fragmentDigest: digestBytes(new TextEncoder().encode(fragmentYaml)),
@@ -611,6 +622,7 @@ export async function resolveTemplateComposition(
         fragment: parsed.fragment,
         fragmentYaml: parsed.fragmentYaml,
         fragmentDigest: parsed.fragmentDigest,
+        ...(parsed.presentation === undefined ? {} : { presentation: parsed.presentation }),
         excludedSuggestions: parsed.excludedSuggestions,
       };
       nodes.set(nodeId, node);
@@ -763,6 +775,7 @@ export async function resolveTemplateComposition(
     pin: node.pin,
     parents: node.parents,
     fragmentDigest: node.fragmentDigest,
+    ...(node.presentation === undefined ? {} : { presentation: node.presentation }),
     suggestions: Object.fromEntries(
       (["trust", "providers"] as const).flatMap((section) => {
         const value = node.excludedSuggestions[section];

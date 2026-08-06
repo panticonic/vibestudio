@@ -108,14 +108,15 @@ function resetRuntimeMocks(): void {
         }>;
       }>;
     }) => {
-      const change = input.changes[0]!;
-      for (const file of change.files) {
-        addFile(
-          `${change.repoPath}/${file.path}`,
-          file.content.kind === "text"
-            ? file.content.text
-            : Uint8Array.from(atob(file.content.base64), (character) => character.charCodeAt(0))
-        );
+      for (const change of input.changes) {
+        for (const file of change.files) {
+          addFile(
+            `${change.repoPath}/${file.path}`,
+            file.content.kind === "text"
+              ? file.content.text
+              : Uint8Array.from(atob(file.content.base64), (character) => character.charCodeAt(0))
+          );
+        }
       }
       return {
         workingHead: { kind: "application", applicationId: "application:created" },
@@ -132,23 +133,25 @@ function resetRuntimeMocks(): void {
   });
 }
 
-describe("createProject", () => {
+describe("createProjects", () => {
   beforeEach(resetRuntimeMocks);
 
   it("scaffolds a plain project as a content repo under projects/", async () => {
-    const { createProject } = await import("./create-project.js");
+    const { createProjects } = await import("./create-project.js");
 
-    const result = await createProject({
+    const [result] = await createProjects([{
       projectType: "project",
       name: "scratch-notes",
       title: "Scratch Notes",
-    });
+    }]);
 
     expect(result).toMatchObject({
       created: "projects/scratch-notes",
       files: ["README.md"],
       preflight: {
         ok: true,
+        scope: "planned-repository",
+        semanticBuildGate: "pending-publication",
         projectType: "project",
       },
       publication: {
@@ -189,29 +192,37 @@ describe("createProject", () => {
   });
 
   it("rejects removed agent scaffolding", async () => {
-    const { createProject } = await import("./create-project.js");
+    const { createProjects } = await import("./create-project.js");
 
-    await expect(createProject({ projectType: "agent", name: "helper" })).rejects.toThrow(
+    await expect(createProjects([{ projectType: "agent", name: "helper" }])).rejects.toThrow(
       /panel, package, skill, project, worker/
     );
     expect(mocks.commit).not.toHaveBeenCalled();
   });
 
   it("declares the generated panel entry explicitly", async () => {
-    const { createProject } = await import("./create-project.js");
+    const { createProjects } = await import("./create-project.js");
 
-    await createProject({ projectType: "panel", name: "hello", title: "Hello" });
+    await createProjects([{ projectType: "panel", name: "hello", title: "Hello" }]);
 
     expect(JSON.parse(mocks.files.get("panels/hello/package.json") as string)).toMatchObject({
       vibestudio: {
         title: "Hello",
         entry: "index.tsx",
-        authority: { requests: [], provides: [] },
+        authority: {
+          requests: [
+            {
+              capability: "context.boundary",
+              resource: { kind: "prefix", prefix: "context" },
+              tier: "critical",
+              evidence: "bounded-dynamic",
+            },
+          ],
+          provides: [],
+        },
         exposeModules: expect.arrayContaining([
           "react",
           "react/jsx-runtime",
-          "@radix-ui/themes",
-          "@workspace/react",
         ]),
       },
     });
@@ -219,9 +230,9 @@ describe("createProject", () => {
 
   it("keeps the built-in default panel deterministic without consulting template files", async () => {
     addFile("templates/default/template.json", JSON.stringify({ framework: "svelte" }));
-    const { createProject } = await import("./create-project.js");
+    const { createProjects } = await import("./create-project.js");
 
-    await createProject({ projectType: "panel", name: "default-panel", title: "Default Panel" });
+    await createProjects([{ projectType: "panel", name: "default-panel", title: "Default Panel" }]);
 
     expect(mocks.files.has("panels/default-panel/index.tsx")).toBe(true);
     expect(mocks.files.has("panels/default-panel/App.svelte")).toBe(false);
@@ -229,22 +240,22 @@ describe("createProject", () => {
 
   it("generates every executable template with a publication-valid authority contract", async () => {
     addFile("templates/svelte/template.json", JSON.stringify({ framework: "svelte" }));
-    const { createProject } = await import("./create-project.js");
+    const { createProjects } = await import("./create-project.js");
 
-    await createProject({ projectType: "panel", name: "react-panel", title: "React Panel" });
-    await createProject({
+    await createProjects([{ projectType: "panel", name: "react-panel", title: "React Panel" }]);
+    await createProjects([{
       projectType: "panel",
       name: "svelte-panel",
       title: "Svelte Panel",
       template: "svelte",
-    });
-    await createProject({ projectType: "worker", name: "plain-worker", title: "Plain Worker" });
-    await createProject({
+    }]);
+    await createProjects([{ projectType: "worker", name: "plain-worker", title: "Plain Worker" }]);
+    await createProjects([{
       projectType: "worker",
       name: "agent-worker",
       title: "Agent Worker",
       template: "agentic",
-    });
+    }]);
 
     for (const [path, packageName] of [
       ["panels/react-panel/package.json", "@workspace-panels/react-panel"],
@@ -254,18 +265,37 @@ describe("createProject", () => {
     ] as const) {
       const source = mocks.files.get(path);
       expect(typeof source).toBe("string");
-      expect(authorityReviewFromPackageJson(source as string, packageName).requests).toEqual([]);
+      expect(authorityReviewFromPackageJson(source as string, packageName).requests).toEqual([
+        expect.objectContaining({ capability: "context.boundary" }),
+      ]);
     }
   });
 
-  it("rejects names and titles that would produce invalid generated source", async () => {
-    const { createProject } = await import("./create-project.js");
+  it("keeps the default panel at baseline authority instead of exposing the runtime umbrella", async () => {
+    const { createProjects } = await import("./create-project.js");
 
-    await expect(createProject({ projectType: "panel", name: "Bad Name" })).rejects.toThrow(
+    await createProjects([{ projectType: "panel", name: "minimal", title: "Minimal" }]);
+
+    const manifest = JSON.parse(mocks.files.get("panels/minimal/package.json") as string);
+    expect(manifest.dependencies).toEqual({ react: "^19.0.0" });
+    expect(manifest.vibestudio.exposeModules).toEqual([
+      "react",
+      "react/jsx-runtime",
+      "react/jsx-dev-runtime",
+    ]);
+    expect(mocks.files.get("panels/minimal/index.tsx")).not.toMatch(
+      /@workspace\/(?:runtime|react|ui)/u
+    );
+  });
+
+  it("rejects names and titles that would produce invalid generated source", async () => {
+    const { createProjects } = await import("./create-project.js");
+
+    await expect(createProjects([{ projectType: "panel", name: "Bad Name" }])).rejects.toThrow(
       /Project name/
     );
     await expect(
-      createProject({ projectType: "panel", name: "valid-name", title: 'Broken " title' })
+      createProjects([{ projectType: "panel", name: "valid-name", title: 'Broken " title' }])
     ).rejects.toThrow(/Project title/);
     expect(mocks.commit).not.toHaveBeenCalled();
   });
@@ -280,9 +310,9 @@ describe("createProject", () => {
         },
       })
     );
-    const { createProject, ScaffoldPublicationError } = await import("./create-project.js");
+    const { createProjects, ScaffoldPublicationError } = await import("./create-project.js");
 
-    const failure = await createProject({ projectType: "panel", name: "broken" }).catch(
+    const failure = await createProjects([{ projectType: "panel", name: "broken" }]).catch(
       (error: unknown) => error
     );
     expect(failure).toBeInstanceOf(ScaffoldPublicationError);
@@ -290,7 +320,7 @@ describe("createProject", () => {
       code: "scaffold_publication_failed",
       stage: "push",
       created: "panels/broken",
-      files: ["index.tsx", "package.json"],
+      files: ["panels/broken/index.tsx", "panels/broken/package.json"],
       committedEventId: "event:committed",
       published: false,
       publicationRequest: {
@@ -322,12 +352,12 @@ describe("createProject", () => {
         errorData: { code: "ExternalEffectFailed", effectId: "effect:uncertain" },
       })
     );
-    const { createProject, recoverProjectPublication, ScaffoldPublicationError } =
+    const { createProjects, recoverProjectPublication, ScaffoldPublicationError } =
       await import("./create-project.js");
-    const failure = await createProject({
+    const failure = await createProjects([{
       projectType: "panel",
       name: "recoverable",
-    }).catch((error: unknown) => error);
+    }]).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(ScaffoldPublicationError);
     const typedFailure = failure as InstanceType<typeof ScaffoldPublicationError>;
     const originalRequest = typedFailure.errorData.publicationRequest;
@@ -360,12 +390,12 @@ describe("createProject", () => {
         errorData: { code: "RevisionChanged" },
       })
     );
-    const { createProject, recoverProjectPublication, ScaffoldPublicationError } =
+    const { createProjects, recoverProjectPublication, ScaffoldPublicationError } =
       await import("./create-project.js");
-    const failure = (await createProject({
+    const failure = (await createProjects([{
       projectType: "panel",
       name: "reobserved",
-    }).catch((error: unknown) => error)) as InstanceType<typeof ScaffoldPublicationError>;
+    }]).catch((error: unknown) => error)) as InstanceType<typeof ScaffoldPublicationError>;
     mocks.status.mockResolvedValueOnce({
       contextId: "ctx:test",
       committed: { kind: "event", eventId: "event:committed" },
@@ -387,18 +417,46 @@ describe("createProject", () => {
     expect(recoveredRequest.commandId).not.toBe(failure.errorData.publicationRequest.commandId);
   });
 
+  it("refuses to retry a source-invalid scaffold commit", async () => {
+    mocks.push.mockRejectedValueOnce(
+      Object.assign(new Error("Build gate failed"), {
+        errorData: {
+          code: "BuildGateFailed",
+          diagnostics: [{ source: "tsc", message: "index.tsx is invalid" }],
+        },
+      })
+    );
+    const { createProjects, recoverProjectPublication, ScaffoldPublicationError } =
+      await import("./create-project.js");
+    const failure = (await createProjects([{
+      projectType: "panel",
+      name: "source-invalid",
+    }]).catch((error: unknown) => error)) as InstanceType<typeof ScaffoldPublicationError>;
+
+    expect(failure.errorData.retry.commandIdPolicy).toBe("repair-source-and-recommit");
+    await expect(recoverProjectPublication(failure)).rejects.toMatchObject({
+      errorData: {
+        stage: "repair-source",
+        cause: { code: "BuildGateFailed" },
+        retry: { safeToRerun: false },
+      },
+    });
+    expect(mocks.status).toHaveBeenCalledTimes(1);
+    expect(mocks.push).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses recovery when the context no longer points exactly at the scaffold commit", async () => {
     mocks.push.mockRejectedValueOnce(
       Object.assign(new Error("Main advanced"), {
         errorData: { code: "RevisionChanged" },
       })
     );
-    const { createProject, recoverProjectPublication, ScaffoldPublicationRecoveryError } =
+    const { createProjects, recoverProjectPublication, ScaffoldPublicationRecoveryError } =
       await import("./create-project.js");
-    const failure = await createProject({
+    const failure = await createProjects([{
       projectType: "panel",
       name: "changed",
-    }).catch((error: unknown) => error);
+    }]).catch((error: unknown) => error);
     mocks.status.mockResolvedValueOnce({
       contextId: "ctx:test",
       committed: { kind: "event", eventId: "event:committed" },
@@ -430,15 +488,15 @@ describe("createProject", () => {
       appliedAt: "2026-07-24T00:00:00.000Z",
     });
     const {
-      createProject,
+      createProjects,
       recoverProjectPublication,
       ScaffoldPublicationError,
       ScaffoldPublicationRecoveryError,
     } = await import("./create-project.js");
-    const failure = await createProject({
+    const failure = await createProjects([{
       projectType: "panel",
       name: "invalid-receipt",
-    }).catch((error: unknown) => error);
+    }]).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(ScaffoldPublicationError);
     expect(
@@ -473,13 +531,13 @@ describe("createProject", () => {
   });
 
   it("returns the exact invalid project name and a valid generated-name recipe", async () => {
-    const { createProject } = await import("./create-project.js");
+    const { createProjects } = await import("./create-project.js");
 
     await expect(
-      createProject({
+      createProjects([{
         projectType: "panel",
         name: "todo-2026-07-24T20:30:00.000Z",
-      })
+      }])
     ).rejects.toThrow(
       /Project name "todo-2026-07-24T20:30:00\.000Z" is invalid.*Date\.now\(\)\.toString\(36\).*Raw ISO timestamps/u
     );

@@ -4,6 +4,7 @@ import type {
   WorkspaceTemplateDeclaration,
   WorkspaceTemplatePin,
   WorkspaceTemplateRegistryDeclaration,
+  WorkspaceTemplatePresentation,
   WorkspaceCreationDescriptor,
 } from "./types.js";
 
@@ -141,6 +142,88 @@ export const WorkspaceTemplatesConfigSchema = z
       .optional(),
   })
   .strict();
+
+// A template's name and one-sentence description, as the template says them.
+//
+// These two strings are the only self-asserted text this system carries about a
+// source, and they exist because the alternative was worse: without them the
+// install header could say nothing more than a stem chopped off the repository
+// URL, which is neither the name the author chose nor a sentence about what the
+// thing does. They buy a readable heading, and they buy nothing else — origin
+// stays the URL, which nobody gets to assert about themselves. The sanitizer
+// below is therefore not defensive tidying; it is the entire reason this field
+// is safe to carry at all.
+
+/** A name has to fit a heading; a description has to fit one line beneath it. */
+const TEMPLATE_NAME_MAX = 60;
+const TEMPLATE_DESCRIPTION_MAX = 200;
+
+// Every character class that can make one string look like two, or like a
+// different element of the surface it lands on. Control characters and line
+// separators break the single-line contract; bidi overrides and isolates
+// reorder what follows them, so a name can visually swallow the URL printed
+// next to it; zero-width characters hide a difference between two names that
+// render identically. The interpunct is here for a specific reason: the install
+// header prints `github.com/acme/news · News 1.2.0`, so a name containing one
+// can forge a second field in that line.
+const TEMPLATE_TEXT_FORBIDDEN = new RegExp(
+  "[" +
+    "\\u0000-\\u001F\\u007F-\\u009F" + // C0/C1 controls, every newline included
+    "\\u00B7\\u2022\\u2027" + // interpunct and bullets: forged field separators
+    "\\u200B-\\u200F\\u2028\\u2029\\u202A-\\u202E" + // zero-width, line/para, bidi
+    "\\u2060-\\u2064\\u2066-\\u206F\\uFEFF" +
+    "]",
+  "u"
+);
+
+/**
+ * The one gate every self-asserted display string passes through.
+ *
+ * It DROPS rather than repairs. A name that is too long, or that carries a
+ * character able to impersonate another part of the surface, is not a name this
+ * system can render honestly — and a truncated or partially stripped version of
+ * a hostile string is still a string its author shaped. Rendering nothing costs
+ * a heading; rendering something dangerous costs the meaning of every heading.
+ *
+ * Whitespace is collapsed first, because the difference between one space and
+ * forty is layout, not content, and nobody should have to read the difference.
+ */
+export function sanitizeTemplateDisplayText(value: unknown, max: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const collapsed = value.replace(/\s+/gu, " ").trim();
+  if (collapsed.length === 0) return undefined;
+  if (collapsed.length > max) return undefined;
+  if (TEMPLATE_TEXT_FORBIDDEN.test(collapsed)) return undefined;
+  return collapsed;
+}
+
+/**
+ * Normalize a template's self-description, dropping whatever cannot be rendered
+ * honestly. Never throws: a hostile name must cost the template its heading,
+ * never the user's ability to install or remove the template at all.
+ */
+export function sanitizeTemplatePresentation(
+  value: unknown
+): WorkspaceTemplatePresentation | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const raw = value as { name?: unknown; description?: unknown };
+  const name = sanitizeTemplateDisplayText(raw.name, TEMPLATE_NAME_MAX);
+  const description = sanitizeTemplateDisplayText(raw.description, TEMPLATE_DESCRIPTION_MAX);
+  if (name === undefined && description === undefined) return undefined;
+  return {
+    ...(name === undefined ? {} : { name }),
+    ...(description === undefined ? {} : { description }),
+  };
+}
+
+/**
+ * The manifest field. Parsing runs the sanitizer rather than validating against
+ * it, so the sanitized form is the only form that ever reaches workspace state —
+ * there is no path by which raw manifest text is stored and cleaned later.
+ */
+export const WorkspaceTemplatePresentationSchema = z
+  .unknown()
+  .transform((value) => sanitizeTemplatePresentation(value));
 
 const WorkspaceServicePrincipalSchema = z.enum(["host", "user", "code", "session", "mission"]);
 const WorkspaceServicePresentationSchema = z
@@ -367,6 +450,16 @@ const WorkspaceConfigManifestShape = WorkspaceConfigSchema.omit({ id: true });
 export const WorkspaceConfigTopLayerSchema = WorkspaceConfigManifestShape.extend({
   templates: WorkspaceTemplatesConfigSchema.optional(),
   disable: z.array(z.string().trim().min(1)).optional(),
+  /**
+   * What a template calls itself, read only out of a template's own manifest.
+   *
+   * It is accepted here and NOT in the sanitized fragment, because it is not
+   * configuration: nothing about how the workspace runs depends on it, and
+   * inheriting it would let a dependency rename the workspace that composed it.
+   * The resolver lifts it into the lock node instead, where it stays attached to
+   * the one pin that asserted it.
+   */
+  template: WorkspaceTemplatePresentationSchema.optional(),
 }).strict();
 
 /**
@@ -405,6 +498,23 @@ const WorkspaceTemplateLockNodeSchema = z
     pin: WorkspaceTemplatePinSchema,
     parents: z.array(z.string().regex(/^t-[0-9a-f]+$/)),
     fragmentDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
+    /**
+     * The node's self-given name and sentence, already sanitized.
+     *
+     * It lives in the lock rather than in the fragment because the lock is the
+     * only template record the server reads and integrity-checks for itself, and
+     * a heading the server cannot verify the provenance of is a heading it must
+     * not print. Re-sanitized on read all the same: the lock's fingerprint
+     * proves nobody edited these bytes after the composer wrote them, which is a
+     * different claim from the template not having authored them hostile.
+     */
+    presentation: z
+      .object({
+        name: z.string().optional(),
+        description: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     suggestions: z
       .object({
         trust: z

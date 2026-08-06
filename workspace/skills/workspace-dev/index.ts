@@ -1,5 +1,5 @@
 export {
-  createProject,
+  createProjects,
   forkProject,
   forkPanel,
   forkWorker,
@@ -8,6 +8,7 @@ export {
   ScaffoldPublicationRecoveryError,
 } from "./create-project.js";
 export type {
+  CreateProjectParams,
   ForkProjectOptions,
   ForkProjectResult,
   ProjectPublication,

@@ -41,6 +41,7 @@ export interface ScaffoldPublicationFailureData {
     commandIdPolicy:
       | "reuse-identical-only-if-outcome-uncertain"
       | "reobserve-status-and-use-new-command"
+      | "repair-source-and-recommit"
       | "stop-integrity-investigation";
   };
 }
@@ -61,7 +62,7 @@ export class ScaffoldPublicationError extends Error {
 
 export interface ScaffoldPublicationRecoveryFailureData {
   code: "scaffold_publication_recovery_failed";
-  stage: "validate-receipt" | "validate-context" | "push";
+  stage: "validate-receipt" | "validate-context" | "repair-source" | "push";
   created: string;
   committedEventId: string;
   publicationRequest: ScaffoldPublicationFailureData["publicationRequest"];
@@ -193,6 +194,22 @@ export async function recoverProjectPublication(
       cause: {
         code: "IntegrityFailure",
         message: "The original publication receipt was invalid; automatic recovery is unsafe",
+        errorData: failure.vcsError.errorData,
+      },
+      retry: { operation: "recoverProjectPublication", safeToRerun: false },
+    });
+  }
+  if (failure.retry.commandIdPolicy === "repair-source-and-recommit") {
+    throw new ScaffoldPublicationRecoveryError({
+      code: "scaffold_publication_recovery_failed",
+      stage: "repair-source",
+      created: failure.created,
+      committedEventId: failure.committedEventId,
+      publicationRequest: failure.publicationRequest,
+      cause: {
+        code: "BuildGateFailed",
+        message:
+          "The committed scaffold did not pass the exact build gate. Repair every structured diagnostic, rebuild, and commit a new event before publishing; retrying this commit cannot succeed.",
         errorData: failure.vcsError.errorData,
       },
       retry: { operation: "recoverProjectPublication", safeToRerun: false },
@@ -341,6 +358,8 @@ async function writeProjectFiles(
           commandIdPolicy:
             detail.code === "ExternalEffectFailed"
               ? "reuse-identical-only-if-outcome-uncertain"
+              : detail.code === "BuildGateFailed"
+                ? "repair-source-and-recommit"
               : detail.code === "IntegrityFailure"
                 ? "stop-integrity-investigation"
                 : "reobserve-status-and-use-new-command",
@@ -383,17 +402,23 @@ function toPascalCase(str: string): string {
     .join("");
 }
 
-export async function createProject(params: {
+export interface CreateProjectParams {
   projectType: string;
   name: string;
   title?: string;
   template?: string;
-}): Promise<{
-  created: string;
-  files: string[];
+}
+
+interface ResolvedProject {
+  projectType: ProjectType;
+  projectPath: string;
+  name: string;
+  title: string;
+  files: Record<string, string>;
   preflight: ProjectPreflightReport;
-  publication: ProjectPublication;
-}> {
+}
+
+async function resolveProject(params: CreateProjectParams): Promise<ResolvedProject> {
   const { projectType, name, title = name, template } = params;
 
   assertProjectIdentity(name, title);
@@ -407,12 +432,10 @@ export async function createProject(params: {
   const canonicalProjectType = projectType as ProjectType;
   const projectPath = `${typeDir}/${name}`;
 
-  // Check if already exists
   if (await fs.exists(projectPath)) {
     throw new Error(`Project already exists: ${projectPath}`);
   }
 
-  // Generate template files
   const files: Record<string, string> = {};
 
   switch (projectType) {
@@ -437,7 +460,7 @@ export async function createProject(params: {
 
       if (panelFramework !== "react" && panelFramework !== "svelte") {
         throw new Error(
-          `Panel framework "${panelFramework}" is not supported by createProject; choose the default React or Svelte template.`
+          `Panel framework "${panelFramework}" is not supported; choose the default React or Svelte template.`
         );
       }
 
@@ -494,7 +517,8 @@ export async function createProject(params: {
 </style>
 `;
       } else {
-        // Default: React + Radix
+        // Default: a minimal React panel with only the executable baseline
+        // authority. Framework helpers can be added deliberately when needed.
         files["package.json"] = serializeProjectManifest({
           projectType: "panel",
           name,
@@ -505,24 +529,13 @@ export async function createProject(params: {
             "react",
             "react/jsx-runtime",
             "react/jsx-dev-runtime",
-            "@radix-ui/themes",
-            "@workspace/runtime",
-            "@workspace/react",
-            "@workspace/ui/panel",
           ],
           dependencies: {
-            "@workspace/runtime": "workspace:*",
-            "@workspace/react": "workspace:*",
-            "@workspace/ui": "workspace:*",
-            "@radix-ui/themes": "^3.2.1",
             react: "^19.0.0",
           },
         });
         files["index.tsx"] =
           `import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { usePanelTheme } from "@workspace/react";
-import { useAppTheme } from "@workspace/ui/panel";
-import { Flex, Text, Theme } from "@radix-ui/themes";
 
 type DataMode = "fixture" | "live";
 const DataModeContext = createContext<{ mode: DataMode; message: string }>({
@@ -547,26 +560,31 @@ function DataModeProvider({ children }: { children: ReactNode }) {
 }
 
 export default function ${toPascalCase(name)}() {
-  const theme = usePanelTheme();
-  const appTheme = useAppTheme();
-  const content = <${toPascalCase(name)}Content />;
-
   return (
-    <Theme appearance={theme} {...appTheme}>
-      <DataModeProvider>
-        {content}
-      </DataModeProvider>
-    </Theme>
+    <DataModeProvider>
+      <${toPascalCase(name)}Content />
+    </DataModeProvider>
   );
 }
 
 function ${toPascalCase(name)}Content() {
   const data = useContext(DataModeContext);
   return (
-      <Flex direction="column" align="center" justify="center" style={{ height: "100vh" }}>
-        <Text size="5">${title}</Text>
-        <Text size="2" color="gray">{data.message}</Text>
-      </Flex>
+    <main style={{
+      minHeight: "100vh",
+      display: "grid",
+      placeContent: "center",
+      gap: 8,
+      padding: 24,
+      boxSizing: "border-box",
+      color: "var(--vibestudio-text, CanvasText)",
+      background: "var(--vibestudio-background, Canvas)",
+      fontFamily: "system-ui, sans-serif",
+      textAlign: "center",
+    }}>
+      <h1 style={{ margin: 0, color: "var(--vibestudio-accent, AccentColor)" }}>${title}</h1>
+      <p style={{ margin: 0, opacity: 0.7 }}>{data.message}</p>
+    </main>
   );
 }
 `;
@@ -731,15 +749,121 @@ export default {
     files,
   });
 
-  // Create the repository, then commit + push it (edit → commit → push).
-  const publication = await writeProjectFiles(
-    projectPath,
-    files,
-    `Scaffold ${projectType} ${name}`
-  );
-
-  return { created: projectPath, files: Object.keys(files), preflight, publication };
+  return { projectType: canonicalProjectType, projectPath, name, title, files, preflight };
 }
+
+/**
+ * Create multiple workspace projects in a single atomic operation.
+ *
+ * All repositories are created, committed, and published together — one VCS
+ * edit, one commit, one push, one approval prompt. Use this whenever building
+ * related units (e.g. a DO service and its panel) so the user sees one
+ * consolidated review instead of separate prompts for each.
+ */
+export async function createProjects(
+  projects: CreateProjectParams[]
+): Promise<
+  Array<{
+    created: string;
+    files: string[];
+    preflight: ProjectPreflightReport;
+    publication: ProjectPublication;
+  }>
+> {
+  if (projects.length === 0) throw new Error("createProjects requires at least one project");
+
+  const resolved = await Promise.all(projects.map(resolveProject));
+
+  const allChanges: Array<{
+    kind: "repository-create";
+    repoPath: string;
+    files: Array<{
+      path: string;
+      content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+      mode: number;
+    }>;
+  }> = resolved.map((project) => ({
+    kind: "repository-create" as const,
+    repoPath: project.projectPath,
+    files: Object.entries(project.files)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([filePath, content]) => ({
+        path: filePath.replace(/^\/+/, ""),
+        content:
+          typeof content === "string"
+            ? { kind: "text" as const, text: content }
+            : { kind: "bytes" as const, base64: bytesToBase64(content as unknown as Uint8Array) },
+        mode: 0o644,
+      })),
+  }));
+
+  const names = resolved.map((p) => `${p.projectType} ${p.name}`).join(", ");
+  const message = `Scaffold ${names}`;
+  const command = (operation: string) =>
+    `workspace-dev:${operation}:${contextId}:${crypto.randomUUID()}`;
+
+  const beforeCreate = await vcs.status({ contextId });
+  const created = await vcs.edit({
+    contextId,
+    expectedWorkingHead: beforeCreate.workingHead,
+    commandId: command("create-repositories"),
+    intentSummary: message,
+    changes: allChanges,
+  });
+  const committed = await vcs.commit({
+    contextId,
+    expectedWorkingHead: created.workingHead,
+    commandId: command("commit"),
+    message,
+  });
+  if (committed.event.kind !== "event") {
+    throw new Error("VCS commit did not return a committed event");
+  }
+  const publicationRequest = {
+    contextId,
+    expectedCommittedEventId: committed.event.eventId,
+    expectedMainEventId: beforeCreate.mainEventId,
+    commandId: command("publish"),
+  };
+  try {
+    const published = await vcs.push(publicationRequest);
+    const publication = publicationFromReceipt(published, committed.event.eventId);
+    return resolved.map((project) => ({
+      created: project.projectPath,
+      files: Object.keys(project.files),
+      preflight: project.preflight,
+      publication,
+    }));
+  } catch (error) {
+    const detail = errorDetail(error);
+    throw new ScaffoldPublicationError(
+      {
+        code: "scaffold_publication_failed",
+        stage: "push",
+        created: resolved.map((p) => p.projectPath).join(", "),
+        files: resolved.flatMap((p) => Object.keys(p.files).map((f) => `${p.projectPath}/${f}`)).sort(),
+        committedEventId: committed.event.eventId,
+        published: false,
+        publicationRequest,
+        vcsError: detail,
+        retry: {
+          operation: "vcs.push",
+          statusRequest: { contextId },
+          commandIdPolicy:
+            detail.code === "ExternalEffectFailed"
+              ? "reuse-identical-only-if-outcome-uncertain"
+              : detail.code === "BuildGateFailed"
+                ? "repair-source-and-recommit"
+              : detail.code === "IntegrityFailure"
+                ? "stop-integrity-investigation"
+                : "reobserve-status-and-use-new-command",
+        },
+      },
+      error
+    );
+  }
+}
+
 
 const COPY_SKIP_DIRS = new Set([
   ".cache",

@@ -16,8 +16,15 @@
     },
     "inspect": {
       "tier": "read",
-      "arguments": ["{ alias } | { url, credential? } | { catalogId, registryCommit, registrySnapshot }"],
+      "arguments": [
+        "{ alias } | { url, credential? } | { catalogId, registryCommit, registrySnapshot }"
+      ],
       "returns": "TemplateInspection"
+    },
+    "prepareAdd": {
+      "tier": "read",
+      "arguments": ["{ url, credential? } | { catalogId, refreshCatalog? }"],
+      "returns": "TemplateAddPreparation"
     },
     "inspectAuthoring": {
       "tier": "read",
@@ -85,12 +92,13 @@
     "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, inheritedParts, parents: [{ alias, direct, url, credential?, ref, commit, snapshot }], parentClosureFingerprint, manifest, manifestDigest, fingerprint }",
     "TemplatePublication": "{ operationId, destination: { provider, owner, name }, created, remoteUrl, webUrl, templateUrl, ref, commit, snapshot, parts }",
     "TemplateInspection": "{ pin: { url, credential?, ref, commit, snapshot }, fingerprint, roots, templates, addedParts, retainedParts, orphanedParts, conflicts, excludedSuggestions: [{ alias, section, value }] }",
+    "TemplateAddPreparation": "{ name, description?, inspection: TemplateInspection }",
     "TemplateSuggestionDecision": "{ operationId, state: accepted|declined, section, publicationEventId? }",
     "ResumableTemplateOperation": "{ operationId, kind: add|pull|remove|recompose|adopt-bootstrap, contextId, state: pending|reviewing, fingerprint, review? }",
     "TemplateCatalogSnapshot": "{ version: 1, revision, systemEpoch, entries: [{ id, name, description, tags, recommended, url, promoted: { ref, commit, snapshot } }], source: verified|cache, stale, verifiedAt, refreshError? }"
   },
   "invariants": [
-    "inspect before add",
+    "prepareAdd before every new add; UI and agents use the same preparation method",
     "pass inspect.pin unchanged to add; add never resolves a URL, alias, catalog entry, or moving ref",
     "repository conflicts require explicit keep|take|skip choices before a mutation is proposed",
     "the current lock wins for every already-resolved URL; catalog selections and unseen dependencies resolve from the reviewed registry revision, while direct URLs use inspect's independently discovered exact pin",

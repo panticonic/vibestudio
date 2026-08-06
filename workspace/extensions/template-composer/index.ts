@@ -4,10 +4,12 @@ import type {
   WorkspaceTemplatePin,
 } from "@vibestudio/workspace-contracts/types";
 import type {
+  TemplateAddRequest,
   TemplateAuthoringInspection,
   TemplateAuthoringRequest,
   TemplateLocator,
 } from "@vibestudio/service-schemas/templates";
+import { templateLocatorSchema } from "@vibestudio/service-schemas/templates";
 import {
   WorkspaceConfigTopLayerSchema,
   WorkspaceTemplatePinSchema,
@@ -286,6 +288,35 @@ async function pinForLocator(
         url,
         ...(locator.credential ? { credential: locator.credential } : {}),
       });
+}
+
+async function inspectLocator(
+  ctx: ExtensionContextLike,
+  env: Environment,
+  locator: TemplateLocator
+) {
+  const pin = await pinForLocator(ctx, env, locator);
+  const preview = await inspectAdd(
+    ctx,
+    env,
+    pin,
+    [],
+    {},
+    "catalogId" in locator
+      ? {
+          catalogId: locator.catalogId,
+          registryCommit: locator.registryCommit,
+          registrySnapshot: locator.registrySnapshot,
+        }
+      : undefined
+  );
+  return inspectionResult(
+    preview.inspection,
+    env.observation.lock,
+    preview.conflicts,
+    env.observation.top.templates?.suggestionDecisions,
+    pin
+  );
 }
 
 async function adoptionAwareInput(
@@ -884,28 +915,37 @@ export async function activate(ctx: ExtensionContextLike) {
 
     async inspect(locator: TemplateLocator) {
       const env = await environment(ctx);
-      const pin = await pinForLocator(ctx, env, locator);
-      const preview = await inspectAdd(
-        ctx,
-        env,
-        pin,
-        [],
-        {},
-        "catalogId" in locator
-          ? {
-              catalogId: locator.catalogId,
-              registryCommit: locator.registryCommit,
-              registrySnapshot: locator.registrySnapshot,
-            }
-          : undefined
-      );
-      return inspectionResult(
-        preview.inspection,
-        env.observation.lock,
-        preview.conflicts,
-        env.observation.top.templates?.suggestionDecisions,
-        pin
-      );
+      return inspectLocator(ctx, env, locator);
+    },
+
+    async prepareAdd(request: TemplateAddRequest) {
+      if ("catalogId" in request) {
+        const env = await environment(ctx, {
+          requireCatalog: true,
+          refresh: request.refreshCatalog === true,
+        });
+        const entry = env.catalog!.entries.find((candidate) => candidate.id === request.catalogId);
+        if (!entry) throw new Error(`Unknown template catalog id: ${request.catalogId}`);
+        return {
+          name: entry.name,
+          description: entry.description,
+          inspection: await inspectLocator(
+            ctx,
+            env,
+            templateLocatorSchema.parse({
+              catalogId: entry.id,
+              registryCommit: env.catalog!.coordinates.commit,
+              registrySnapshot: env.catalog!.coordinates.snapshot,
+            })
+          ),
+        };
+      }
+      const env = await environment(ctx);
+      const inspection = await inspectLocator(ctx, env, request);
+      return {
+        name: inspection.templates[0]?.alias ?? "Selected template",
+        inspection,
+      };
     },
 
     async inspectAuthoring(input: TemplateAuthoringRequest) {

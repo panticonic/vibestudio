@@ -43,7 +43,7 @@ When authoring or moving skills, keep repo-specific guidance with the code it de
 Some skills also export code you can use in eval. Workspace packages (`@workspace-skills/*`, `@workspace/*`, `@vibestudio/*`) are **auto-resolved** — just write the `import` and they're built on first use:
 
 ```
-eval({ code: `import { createProject } from "@workspace-skills/workspace-dev"; ...` })
+eval({ code: `import { createProjects } from "@workspace-skills/workspace-dev"; ...` })
 ```
 
 npm packages require the `imports` parameter: `imports: { "lodash": "npm:4" }`
@@ -54,7 +54,7 @@ Before using eval, read the **sandbox** skill — it has the complete API refere
 - **architecture** — the theory of the whole system: trust boundary, unit kinds, log-first storage, semantic workspace state, permissions/credentials (`skills/architecture/SKILL.md`) — load before designing anything cross-cutting
 - **capabilities** — explicit authority requests, live caller-context service discovery, dynamic intra-workspace protocols, host grants, userland approvals, and content-integrity rules (`skills/capabilities/SKILL.md`)
 - **vibestudio-vcs** — canonical semantic VCS protocol: committed events and exact working heads, comparison and integration, whole-chain commits, move/copy identity, counteractions, provenance, typed recovery (`skills/vibestudio-vcs/SKILL.md`)
-- **workspace-dev** — building panels, workers, Durable Objects; exports `createProject`, `forkProject`
+- **workspace-dev** — building panels, workers, Durable Objects; exports `createProjects`, `forkProject`
 - **browser-import** — importing cookies, passwords, bookmarks, history from installed browsers
 - **api-integrations** — connecting to OAuth APIs (Gmail, GitHub, Slack, Notion, Linear)
 - **agentic-do** — changing the host chat agent's model/provider defaults and live effort, approval, chattiness, or subagent behavior
@@ -64,7 +64,7 @@ Before using eval, read the **sandbox** skill — it has the complete API refere
 
 ## Diagnostics — explicit checks and runtime projections
 
-**Builds are explicit advisory checks, not publication gates.** Before committing or publishing, run the smallest relevant typecheck, test, or build against the exact context working head. `services.build.getBuildReport(unit, "ctx:<contextId>")` returns structured diagnostics with source, severity, file, line, column, message, and optional source context. A build report creates no semantic event, grants no approval, and advances no pointer. Fix the cited source through an ordinary working application, then rerun the check.
+**Builds are explicit advisory checks, not publication gates.** Before committing or publishing, run the smallest relevant typecheck, test, or build against the exact context working head. `services.build.getBuildReport(unit, "ctx:<contextId>")` returns structured esbuild, TypeScript, and authority diagnostics with source, severity, file, line, column, message, and optional source context. An `authority` error means installed code statically reaches a capability absent from that unit's explicit manifest ceiling; add the narrowest reviewed request rather than retrying at runtime. A build report creates no semantic event, grants no approval, and advances no pointer. Fix the cited source through an ordinary working application, then rerun the check. Protected-main publication repeats the same exact-candidate check and refuses the push on any error diagnostic.
 
 When publication reports that current `main` is not reachable, do not invoke a file-oriented shortcut. Resolve current main and the context's exact committed event, compare them, account for every actionable change through adopt/reconcile/decline, then commit those local decisions. The semantic commit derives its integration parent from the incorporated work. Retry the push from the returned committed event. Follow the typed result discriminant; never parse explanatory prose. See `skills/vibestudio-vcs/references/semantic-commit.md` and `skills/vibestudio-vcs/references/typed-recovery.md`.
 

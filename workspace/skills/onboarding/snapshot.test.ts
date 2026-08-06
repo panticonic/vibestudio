@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { callMain } from "@workspace/runtime";
 
 vi.mock("@workspace/runtime", () => ({
   callMain: vi.fn(),
@@ -44,6 +45,38 @@ function dependencies(
 }
 
 describe("composeOnboardingSnapshot", () => {
+  it("preflights optional host reads instead of logging denied IPC calls", async () => {
+    const callMainMock = vi.mocked(callMain);
+    callMainMock.mockImplementation(async (method: string) => {
+      if (method === "authority.preflight") {
+        return { decision: "acquirable", leaves: [] };
+      }
+      if (method === "workspace.listSkills") return [{ skillPath: "skills/phone-setup/SKILL.md" }];
+      throw new Error(`Unexpected call: ${method}`);
+    });
+
+    const snapshot = await composeOnboardingSnapshot({}, { now: () => new Date("2026-07-24") });
+
+    expect(callMainMock).toHaveBeenCalledWith("authority.preflight", {
+      service: "hubControl",
+      method: "listDevices",
+      args: [],
+    });
+    expect(callMainMock).toHaveBeenCalledWith("authority.preflight", {
+      service: "hubControl",
+      method: "listWorkspaces",
+      args: [],
+    });
+    expect(callMainMock).not.toHaveBeenCalledWith("hubControl.listDevices");
+    expect(callMainMock).not.toHaveBeenCalledWith("hubControl.listWorkspaces");
+    expect(snapshot.find((entry) => entry.id === "connection.device")).toEqual(
+      expect.objectContaining({ state: "unknown" })
+    );
+    expect(snapshot.find((entry) => entry.id === "connection.remote-server")).toEqual(
+      expect.objectContaining({ state: "unknown" })
+    );
+  });
+
   it("fault-isolates direct adapters and stamps one observation time", async () => {
     const adapters = Object.fromEntries(
       [
@@ -103,7 +136,7 @@ describe("composeOnboardingSnapshot", () => {
     );
   });
 
-  it("advertises mobile as installable until the phone setup owner exists", async () => {
+  it("reports a missing shipped mobile owner as a base capability fault", async () => {
     const deps = dependencies({
       "ai-provider": healthy,
       "google-workspace": healthy,
@@ -119,11 +152,12 @@ describe("composeOnboardingSnapshot", () => {
 
     expect(snapshot.find((entry) => entry.id === "connection.device")).toEqual(
       expect.objectContaining({
-        state: "not-installed",
-        nextAction: "install",
-        rawStage: "not-installed",
+        state: "unavailable",
+        attention: "blocking",
+        rawStage: "owner-unavailable",
       })
     );
+    expect(snapshot.find((entry) => entry.id === "connection.device")?.nextAction).toBeUndefined();
   });
 
   it("does not offer setup again for a verified connection", async () => {

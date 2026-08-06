@@ -1,13 +1,11 @@
 # Official template repositories: slim base, build-proven dependencies, Git registry
 
-Status: implementation updated 2026-07-30. Userland capabilities/GAD,
-clone-first bootstrap, composer D1, runtime-discovered onboarding, and exact
-registry-selection contracts are implemented. The full host, browser, userland,
-mobile, authority-ledger, zero-exemption boundary, and host-without-workspace
-conventional gates pass. Physical repository extraction waits on the live
-WebRTC/E2E/agentic validation gates in this plan, then creation of the external
-repositories and promotion CI. Publishing a standalone npm SDK is explicitly
-not an extraction prerequisite.
+Status: corrected 2026-08-04. No optional template repositories or verified
+template catalog entries are currently deployed. All seven planned extraction
+outcomes still ship in `workspace/` as part of the base product. Extraction is
+blocked on the pre-extraction functional verification checklist, followed by
+creation of the external repositories and promotion CI. Publishing a
+standalone npm SDK is explicitly not an extraction prerequisite.
 
 ## Outcome
 
@@ -18,7 +16,8 @@ Git repositories, composed by a userland package that ships in base:
   useful on its own; the root every workspace is created from; independently
   bootable with its flattened runtime manifest present.
 - **Feature template repositories** — one per user-visible outcome (news,
-  browser, terminal, mobile, …), each vendoring only the units that outcome
+  Google Workspace, GitHub, local models, mobile, Spectrolite, and examples),
+  each vendoring only the units that outcome
   owns. Templates correspond to outcomes a user would ask for, never to
   packages: a user adds "News" and gets a working news workspace; they never
   reason about `packages/feeds`.
@@ -32,7 +31,7 @@ service, resolver, journal, or checked-in catalog. It also supersedes
 `docs/host-residency-redesign.md` H10 for templates: not a builtin service —
 userland, which is where the code already is.
 
-## Current state (verified 2026-07-29)
+## Current implemented infrastructure
 
 Already true in-tree, so no longer plan material:
 
@@ -222,16 +221,16 @@ building unless offline creation becomes a requirement (§Deferred).
 
 ## Repository inventory
 
-| Repository                             | Contents                                                                                                                                                                                                                |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repository                             | Contents                                                                                                                                                                                                                                                               |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `vibestudio-workspace-base`            | Every repository not assigned to one of the seven optional outcomes below, including shell, browser, terminal, onboarding + templates skills, model settings, pubsub, shared integrations and channel-fork packages, agent/runtime/UI foundations, and developer tools |
-| `vibestudio-template-news`             | `panels/news`, `workers/news-agent`, and `packages/feeds`; shared `packages/channel-fork` remains in base because base-owned agent chat also consumes it                                                                  |
-| `vibestudio-template-google-workspace` | Gmail agent and package plus Google Workspace/Drive skills; shared `packages/integrations` remains in base because the Git bridge and GitHub skill also consume it                                                        |
-| `vibestudio-template-github`           | The GitHub user skill; generic Git transport/composition and the shared integrations package remain in base                                                                                                             |
-| `vibestudio-template-mobile`           | Mobile app, React Native and mobile-debug extensions, and the phone-setup/mobile-system-testing skills                                                                                                                   |
-| `vibestudio-template-local-models`     | local-models panel and extension                                                                                                                                                                                        |
-| `vibestudio-template-spectrolite`      | Spectrolite panel, MDX editor package                                                                                                                                                                                   |
-| `vibestudio-template-examples`         | `panels/hello-svelte` (the current workspace has no `hello-vanilla` repository)                                                                                                                                          |
+| `vibestudio-template-news`             | `panels/news`, `workers/news-agent`, and `packages/feeds`; shared `packages/channel-fork` remains in base because base-owned agent chat also consumes it                                                                                                               |
+| `vibestudio-template-google-workspace` | Gmail agent and package plus Google Workspace/Drive skills; shared `packages/integrations` remains in base because the Git bridge and GitHub skill also consume it                                                                                                     |
+| `vibestudio-template-github`           | The GitHub user skill; generic Git transport/composition and the shared integrations package remain in base                                                                                                                                                            |
+| `vibestudio-template-mobile`           | Mobile app, React Native and mobile-debug extensions, and the phone-setup/mobile-system-testing skills                                                                                                                                                                 |
+| `vibestudio-template-local-models`     | local-models panel and extension                                                                                                                                                                                                                                       |
+| `vibestudio-template-spectrolite`      | Spectrolite panel, MDX editor package                                                                                                                                                                                                                                  |
+| `vibestudio-template-examples`         | `panels/hello-svelte` (the current workspace has no `hello-vanilla` repository)                                                                                                                                                                                        |
 
 **Developer tools belong to base.** Vibestudio is a place where people build
 things; the development surface (`panels/development`, `panels/testbench`,
@@ -366,8 +365,10 @@ Current migration state:
    bootstrap, package residency, deletion, and host-without-workspace gates.
 2. **Done:** the ownership inventory in §Repository inventory is reflected by
    the authoring inventory/closure API and validated against buildable source.
-3. **Done:** optional onboarding skills use runtime `hasSkill(...)` discovery;
-   onboarding has no compile-time imports of their implementations.
+3. **Done:** onboarding uses runtime owner discovery and has no compile-time
+   imports of capability implementations. While every planned extraction
+   owner remains in base, a missing owner is reported as unavailable base
+   functionality, never as an installable template.
 4. **Done:** URL-only `templates.use`, lock-first resolution, derived aliases,
    exact epoch matching, and build-gated publication are live.
 5. **Done:** establish the composed host + base + optional validation contract
@@ -388,7 +389,8 @@ Current migration state:
    (D5), delete the in-tree `workspace/` source, and prove that production
    builds and fresh workspace creation have no checkout-relative workspace
    fallback.
-10. Change onboarding discovery and presentation so capabilities supplied by
+10. **After repositories and catalog entries are deployed**, change onboarding
+    discovery and presentation so capabilities supplied by
     an optional template are shown as installable, not ready or configurable.
     Selecting one routes through the ordinary verified registry selection and
     template-install flow. After installation, the same catalog entry
@@ -457,9 +459,10 @@ Decided against for now, recorded so the reasoning is not relitigated:
 - **Offline first-run** (D5): revisit only if creation must work without
   connectivity; the cache cost is described there.
 - **Automatic installation of a first-run recommended set**: `recommended`
-  remains presentational. Onboarding may recommend and offer each optional
-  template, but installation remains an explicit user selection through the
-  ordinary reviewed template-install flow.
+  remains presentational. After an optional repository and its verified catalog
+  entry are deployed, onboarding may recommend and offer it, but installation
+  remains an explicit user selection through the ordinary reviewed
+  template-install flow.
 - **Splitting developer tools by audience**: all in base until first-run
   latency bites; under D1 the extracted harness template is an ordinary
   feature declaring base by URL, so the split stays cheap.

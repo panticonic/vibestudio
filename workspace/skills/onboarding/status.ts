@@ -181,9 +181,9 @@ export function createDefaultStatusDependencies(): OnboardingStatusDependencies 
 
 function unavailable(summary: string, rawStage: string): CapabilityOnboardingStatusResult {
   return {
-    state: rawStage === "not-installed" ? "not-installed" : "unavailable",
+    state: "unavailable",
     summary,
-    attention: "none",
+    attention: "blocking",
     rawStage,
   };
 }
@@ -431,23 +431,27 @@ export function createStatusAdapters(
     "google-workspace": async (opts) =>
       (await deps.hasSkill("skills/google-workspace/SKILL.md"))
         ? googleResult(await deps.google({ verify: opts?.verify === true }), opts?.verify === true)
-        : unavailable("Google Workspace is not installed in this workspace.", "not-installed"),
+        : unavailable(
+            "Google Workspace is unavailable because its base capability owner could not be loaded.",
+            "owner-unavailable"
+          ),
     github: async (opts) =>
       (await deps.hasSkill("skills/github/SKILL.md"))
         ? githubResult(await deps.github({ verify: opts?.verify === true }), opts?.verify === true)
-        : unavailable("GitHub setup is not installed in this workspace.", "not-installed"),
+        : unavailable(
+            "GitHub setup is unavailable because its base capability owner could not be loaded.",
+            "owner-unavailable"
+          ),
     "ai-provider": async () => aiProviderResult(await deps.modelSettings()),
     "agent-defaults": async () => agentDefaultsResult(await deps.modelSettings()),
     "local-models": async () =>
-      (await deps.hasSkill("skills/local-models/SKILL.md"))
-        ? localModelsResult(await deps.localModelsStatus(), await deps.localModelsList())
-        : unavailable("Local models are not installed in this workspace.", "not-installed"),
+      localModelsResult(await deps.localModelsStatus(), await deps.localModelsList()),
     "browser-environment": async () => browserImportResult(await deps.browserImportJobs()),
     "web-search": async () => {
       if (!(await deps.hasSkill("skills/web-research/SKILL.md"))) {
         return unavailable(
-          "Enhanced web search is not installed in this workspace.",
-          "not-installed"
+          "Enhanced web search is unavailable because its base capability owner could not be loaded.",
+          "owner-unavailable"
         );
       }
       const provider = await deps.activeSearchProvider();

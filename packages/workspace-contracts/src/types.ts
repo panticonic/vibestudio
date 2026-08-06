@@ -157,6 +157,20 @@ export interface WorkspaceTemplatesConfig {
   >;
 }
 
+/**
+ * What a template calls itself: a name and one sentence, as the template's own
+ * manifest states them.
+ *
+ * Self-asserted and unverified, so it may only ever be a title. Origin remains
+ * the pin URL, which is the one fact about a source nobody gets to assert about
+ * themselves — a template naming itself after this platform must therefore
+ * change nothing about where the review says its bytes came from.
+ */
+export interface WorkspaceTemplatePresentation {
+  name?: string;
+  description?: string;
+}
+
 export interface WorkspaceTemplateLockNode {
   nodeId: string;
   alias: string;
@@ -164,6 +178,12 @@ export interface WorkspaceTemplateLockNode {
   /** Direct parent node ids. Parents precede children in `nodes`. */
   parents: string[];
   fragmentDigest: `v1-sha256:${string}`;
+  /**
+   * What this template says it is called and what it says it does — sanitized,
+   * self-asserted, and unverified. It may head a card as a title; it is never
+   * identity, which stays `pin.url`.
+   */
+  presentation?: WorkspaceTemplatePresentation;
   /** Exact excluded authority suggestions proven by this node's pinned manifest. */
   suggestions: {
     trust?: { digest: `v1-sha256:${string}`; value: unknown };

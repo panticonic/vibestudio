@@ -27,6 +27,34 @@ await handle.cdp.reload();
 await openExternal("https://docs.example.com");
 ```
 
+For ordinary eval calls, omit `authority.requests` and let the run adapt to the
+authority already admitted for the agent. If the workflow deliberately uses an
+exact per-run allowlist, `handle.cdp.page()` requires this exact request (the
+capability is `panel.inspect`, not `cdp.page`):
+
+```ts
+eval({
+  code: `const page = await scope.panel.cdp.page(); return await page.title();`,
+  authority: {
+    effects: "read-write",
+    requests: [
+      {
+        capability: "panel.inspect",
+        resource: { kind: "exact", key: "panel.inspect" },
+      },
+    ],
+  },
+});
+```
+
+`timeoutMs` is a top-level eval option alongside `authority`; it is never a
+field inside the authority object. Eval has no default wall-clock deadline; do
+not add one to ordinary panel creation, readiness, or CDP work. Use it only when
+the task itself has a real deadline or is deliberately probing potentially
+non-settling behavior. A supplied `requests` array is exhaustive, so do not
+guess capability names. Omit it unless intentional attenuation is part of the
+task.
+
 `handle.cdp.page()` returns the canonical Playwright-style page driven by our
 workerd-native CDP client (`@workspace/cdp-client`). It is the single
 browser-automation surface; there is no second browser client or compatibility
@@ -40,6 +68,12 @@ counterparts reject instead of bypassing the panel lifecycle. Use
 `await handle.reload()` for the current workspace build or
 `await handle.rebuild()` after source changes; both return a
 `PanelObservation`, while the original `handle` remains the handle.
+
+For bulk navigation or imported browser tabs that should remain unloaded until
+the user visits them, use `createPanelSlot(url)` instead. It commits the durable
+browser slot and returns without focusing or waiting for the document; use the
+returned handle's `observe()` or `cdp.page()` when materialization is actually
+needed.
 
 ## Ownership and lifetime contract
 
@@ -86,7 +120,7 @@ delete scope.page;
 ```
 
 Reuse one handle per workflow and one CDP page per runtime incarnation.
-Repeated `openPanel()` calls create duplicate panels, and repeated
+Repeated `openPanel()` calls without the same `operationId` create distinct panels, and repeated
 `handle.cdp.page()` calls within an unchanged incarnation create duplicate CDP
 connections. After an incarnation replacement, reacquiring through the same
 handle is required; there is no second page-acquisition API.

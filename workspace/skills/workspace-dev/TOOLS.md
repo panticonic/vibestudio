@@ -7,7 +7,7 @@ Your working directory is the **context folder** — an isolated copy of the wor
 - All file paths are **relative to your working directory** (e.g., `panels/my-app/index.tsx`)
 - **NEVER** use host absolute paths (e.g., `/home/.../workspace/panels/...`). Runtime `fs.*` accepts context-root absolute paths like `/panels/my-app/index.tsx`, but prefer `panels/my-app/index.tsx` in examples and source edits.
 - **NEVER** use `Bash` for git operations, file listing, or file creation — use the structured tools
-- In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`, `db`, `help` (and, in agent eval, `chat`) are **injected free variables** — do **not** import them. Raw service catalog calls always work as `rpc.call("<svc>.<method>", [args])`; `services.<svc>` is convenience sugar and may be an ergonomic runtime client when the name collides (`services.workers` is `workers`). For workspace/npm **packages**, use a **static import** (`import { createProject } from "@workspace-skills/workspace-dev"`). Dynamic `await import(...)` may work in some builds, but it bypasses the loader's static dependency planning and is not the supported pattern.
+- In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`, `db`, `help` (and, in agent eval, `chat`) are **injected free variables** — do **not** import them. Raw service catalog calls always work as `rpc.call("<svc>.<method>", [args])`; `services.<svc>` is convenience sugar and may be an ergonomic runtime client when the name collides (`services.workers` is `workers`). For workspace/npm **packages**, use a **static import** (`import { createProjects } from "@workspace-skills/workspace-dev"`). Dynamic `await import(...)` may work in some builds, but it bypasses the loader's static dependency planning and is not the supported pattern.
 
 ---
 
@@ -121,7 +121,7 @@ previous runnable artifact.
 Follow-up `edit`/`write` changes remain context-local until you commit the
 complete chain and choose to publish it.
 
-Do **not** use `createProject` for a context-local temporary repo that might
+Do **not** use `createProjects` for a context-local temporary repo that might
 never be published. A repo path is established by writing any file inside it:
 `write`/`edit` to `projects/tmp-name/note.md` is enough. You may leave that work
 on the context's working head, commit the local chain as a context event, or
@@ -149,15 +149,24 @@ shown in the skill index, such as `read("packages/data-model/SKILL.md")`.
 
 ### Usage
 
+When building related units — a panel and its backing DO store, for example —
+create them together with `createProjects` so the user sees one consolidated
+approval prompt instead of separate prompts for each:
+
 ```
 eval({ code: `
-  import { createProject } from "@workspace-skills/workspace-dev";
-  return await createProject({ projectType: "panel", name: "my-app", title: "My App" });
+  import { createProjects } from "@workspace-skills/workspace-dev";
+  return await createProjects([
+    { projectType: "worker", name: "task-board-store", title: "Task Board Store" },
+    { projectType: "panel", name: "task-board", title: "Task Board" },
+  ]);
 `
 })
 ```
 
-**`createProject(params)` parameters:**
+Even for a single project, use `createProjects` with a one-element array.
+
+**`createProjects(projects)` parameters (per project):**
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `projectType` | string | Yes | One of: `panel`, `package`, `skill`, `project`, `worker` |
@@ -168,7 +177,9 @@ For an isolated generated name, append a lowercase base-36 suffix such as
 `` `todo-list-${Date.now().toString(36)}` ``. Do not append a raw ISO timestamp:
 its uppercase `T`/`Z`, colons, and periods are not valid repository identity.
 
-The successful result includes `{ created, files, preflight, publication }`.
+`createProjects` returns an array of results, one per project.
+Each result includes
+`{ created, files, preflight, publication }`.
 `preflight` is the mutation-free proof that the complete planned repository
 passed the canonical manifest and source checks. Both fresh scaffolds and forks
 must pass it; there is no legacy-fork bypass.
@@ -214,8 +225,10 @@ If protected publication fails after commit, the helper throws
 - `vcsError.code`, message, and original typed data; and
 - `retry.commandIdPolicy`.
 
-Do not rerun `createProject`, because the repository and commit already exist.
-Use the receipt-driven recovery helper:
+Do not rerun `createProjects`, because the repositories and commit already exist.
+First branch on `retry.commandIdPolicy`. For
+`reuse-identical-only-if-outcome-uncertain` or
+`reobserve-status-and-use-new-command`, use the receipt-driven recovery helper:
 
 ```ts
 import { recoverProjectPublication } from "@workspace-skills/workspace-dev";
@@ -225,6 +238,10 @@ return await recoverProjectPublication(scaffoldError);
 It calls `vcs.status`, refuses if the context is not clean at the exact recorded
 commit, reuses the original command only for an identical uncertain external
 effect, and otherwise uses a fresh command against the newly observed main.
+For `repair-source-and-recommit`, do not call the recovery helper: consume every
+`BuildGateFailed` diagnostic, edit the existing repository, rebuild the exact
+context, commit a new event, and publish it from fresh status. The helper rejects
+this policy explicitly because retrying source-invalid bytes cannot succeed.
 `ScaffoldPublicationRecoveryError.errorData` says whether another recovery call
 is safe; it never recreates files or commits. A malformed or mismatched
 publication receipt records `stop-integrity-investigation` and is never
@@ -264,22 +281,35 @@ to import `./index.ts`, use its directory or a distinct filename such as
 
 ### Panel APIs
 
-`openPanel`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@workspace/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
+`createPanelSlot`/`openPanel`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@workspace/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. To change a panel's state from eval, use the returned `PanelHandle.stateArgs.set/get`; do not resolve the internal `workspace.state` service yourself. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
 
-| API                              | Description                                                                                           |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `openPanel(source, opts?)`       | Open any panel — URLs become browser panels, source paths open workspace panels (eval too)            |
-| `buildPanelLink(source, opts)`   | Build a URL for panel navigation (panel/component code — not in eval)                                 |
-| `panel.focusPanel(panelId)`      | Focus an existing panel by ID (panel/component code — not in eval)                                    |
-| `panel.switchContext(id, opts?)` | Explicitly move this panel to an already-created workspace branch; state args cannot select a context |
+| API                              | Description                                                                                                                                                            |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createPanelSlot(source, opts?)` | Commit an unloaded panel and return its durable handle without allocating a presentation lease or waiting for application readiness                                    |
+| `openPanel(source, opts?)`       | Open any panel — URLs become browser panels, source paths open workspace panels (eval too); readiness is observed until ready, failed, stopped, or caller cancellation |
+| `buildPanelLink(source, opts)`   | Build a URL for panel navigation (panel/component code — not in eval)                                                                                                  |
+| `panel.focusPanel(panelId)`      | Focus an existing panel by ID (panel/component code — not in eval)                                                                                                     |
+| `panel.switchContext(id, opts?)` | Explicitly move this panel to an already-created workspace branch; state args cannot select a context                                                                  |
 
 `await openPanel(...)` returns only after the exact runtime attempt is
 application boot-ready; resolve/build/host/boot failures reject with
 `PanelOperationError` and structured provenance. The underlying tree slot is
 committed immediately and its build/host/boot lifecycle continues
 asynchronously, so a broken panel cannot block owner seeding or unrelated tree
-operations; the public promise observes that lifecycle and has a finite
-90-second readiness deadline. `openPanel(source)` creates a new panel for
+operations; the public promise observes that lifecycle without inventing a
+wall-clock failure. Pass an `AbortSignal` when the caller owns cancellation. Use
+`createPanelSlot(...)` when the operation's authoritative result is the
+committed navigation receipt and observe the returned handle separately if
+readiness matters. Pass a stable `operationId` whenever the surrounding
+workflow may retry so creation resolves to the same durable slot.
+The retry identity also includes `source`, `contextId`, `parentId`, and `ref`;
+an exact retry resumes the existing slot while a logically different open gets
+a different identity. Do not combine `operationId` with `slug`. All
+readiness-bearing handle methods accept caller cancellation: pass `{ signal }`
+to `snapshot`, `reload`, and `rebuild`, or include `signal` in the existing
+options for `navigate` and `focus`.
+
+`openPanel(source)` creates a new panel for
 main/pushed code. To run code from the current context branch, pass
 `ref: \`ctx:${ctx.contextId}\``explicitly (and usually`contextId: ctx.contextId`for matching storage).`contextId` alone only selects
 the panel's filesystem/storage context; it does not select code.

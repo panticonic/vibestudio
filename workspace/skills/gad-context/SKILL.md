@@ -76,9 +76,9 @@ Current implemented hardening:
 - `trajectory_turns.opened_at` is no longer silently overwritten by duplicate
   opens.
 - Presence envelopes project into `channel_roster`.
-- `gad.query` accepts read-only CTEs and still rejects write CTEs, but it is a
-  schema-level escape hatch after bounded inspectors have found the exact table
-  or artifact you need.
+- The typed `gad` client exposes bounded status, lineage, channel, and integrity
+  inspectors. There is no raw SQL `gad.query` escape hatch on the portable
+  runtime surface; use the narrowest typed inspector that answers the question.
 - Stored values are content-addressed; semantic event, application, work-unit,
   change, and decision identities are validated by the canonical VCS
   graph integrity checker.

@@ -29,7 +29,12 @@ type ComparisonEntry = {
  * are deliberately reviewed through the ordinary VCS compare/integrate
  * protocol, so this surface never creates a template-specific decision path.
  */
-export function TemplateReviewPanel({ review, compare, integrate, onCompleted }: TemplateReviewPanelProps) {
+export function TemplateReviewPanel({
+  review,
+  compare,
+  integrate,
+  onCompleted,
+}: TemplateReviewPanelProps) {
   const [comparisons, setComparisons] = useState<ComparisonEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState<string | null>(null);
@@ -45,7 +50,9 @@ export function TemplateReviewPanel({ review, compare, integrate, onCompleted }:
       setComparisons(next);
       return next;
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Couldn't load these incoming changes.");
+      setError(
+        failure instanceof Error ? failure.message : "Couldn't load these incoming changes."
+      );
       return null;
     } finally {
       setLoading(false);
@@ -56,11 +63,7 @@ export function TemplateReviewPanel({ review, compare, integrate, onCompleted }:
     void refresh();
   }, [refresh]);
 
-  const decide = async (
-    entry: ComparisonEntry,
-    changeId: string,
-    kind: "adopted" | "declined"
-  ) => {
+  const decide = async (entry: ComparisonEntry, changeId: string, kind: "adopted" | "declined") => {
     setActing(changeId);
     setError(null);
     try {
@@ -77,33 +80,66 @@ export function TemplateReviewPanel({ review, compare, integrate, onCompleted }:
         expectedWorkingHead: entry.comparison.target,
         decision,
       });
-      const next = await refresh();
-      if (next?.every((candidate) => candidate.comparison.resolution.complete)) {
-        await onCompleted?.();
-      }
+      await refresh();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Couldn't record that review decision.");
+      setError(
+        failure instanceof Error ? failure.message : "Couldn't record that review decision."
+      );
     } finally {
       setActing(null);
     }
   };
+
+  const finish = async () => {
+    setActing("finish");
+    setError(null);
+    try {
+      await onCompleted?.();
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : "Couldn't finish this template operation."
+      );
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const complete =
+    comparisons !== null &&
+    comparisons.length > 0 &&
+    comparisons.every((entry) => entry.comparison.resolution.complete);
 
   return (
     <Card size="1" mt="2" aria-label="Incoming template changes">
       <Flex direction="column" gap="2">
         <Flex align="center" justify="between" gap="2" wrap="wrap">
           <Box>
-            <Text as="div" size="2" weight="medium">Review incoming changes</Text>
-            <Text as="div" size="1" color="gray">Choose how each change should affect this workspace.</Text>
+            <Text as="div" size="2" weight="medium">
+              Review incoming changes
+            </Text>
+            <Text as="div" size="1" color="gray">
+              Choose how each change should affect this workspace.
+            </Text>
           </Box>
-          <Button size="1" variant="soft" disabled={loading || acting !== null} onClick={() => void refresh()}>
+          <Button
+            size="1"
+            variant="soft"
+            disabled={loading || acting !== null}
+            onClick={() => void refresh()}
+          >
             {loading ? <Spinner /> : "Refresh review"}
           </Button>
         </Flex>
-        {error ? <Text role="alert" size="1" color="red">{error}</Text> : null}
+        {error ? (
+          <Text role="alert" size="1" color="red">
+            {error}
+          </Text>
+        ) : null}
         {comparisons?.map((entry) => (
           <Flex key={entry.item.deltaId} direction="column" gap="2">
-            <Text size="1" weight="medium">{entry.item.repoPath}</Text>
+            <Text size="1" weight="medium">
+              {entry.item.repoPath}
+            </Text>
             {entry.comparison.changes.map((change) => {
               const disposition = change.disposition;
               const applicability =
@@ -121,26 +157,58 @@ export function TemplateReviewPanel({ review, compare, integrate, onCompleted }:
                         {applicability ?? disposition.status}
                       </Badge>
                       {applicable ? (
-                        <Button size="1" disabled={acting !== null} onClick={() => void decide(entry, change.changeId, "adopted")}>
+                        <Button
+                          size="1"
+                          disabled={acting !== null}
+                          onClick={() => void decide(entry, change.changeId, "adopted")}
+                        >
                           {acting === change.changeId ? "Applying…" : "Use this change"}
                         </Button>
                       ) : null}
                       {actionable && !blocked ? (
-                        <Button size="1" variant="soft" disabled={acting !== null} onClick={() => void decide(entry, change.changeId, "declined")}>
+                        <Button
+                          size="1"
+                          variant="soft"
+                          disabled={acting !== null}
+                          onClick={() => void decide(entry, change.changeId, "declined")}
+                        >
                           Keep workspace version
                         </Button>
                       ) : null}
                     </Flex>
-                    {conflicting ? <Text size="1" color="gray">This needs a merge before it can be used. Keep the workspace version, or resolve the merge through the VCS workflow and refresh.</Text> : null}
-                    {blocked ? <Text size="1" color="gray">Resolve its earlier incoming changes first, then refresh this review.</Text> : null}
+                    {conflicting ? (
+                      <Text size="1" color="gray">
+                        This needs a merge before it can be used. Keep the workspace version, or
+                        resolve the merge through the VCS workflow and refresh.
+                      </Text>
+                    ) : null}
+                    {blocked ? (
+                      <Text size="1" color="gray">
+                        Resolve its earlier incoming changes first, then refresh this review.
+                      </Text>
+                    ) : null}
                   </Flex>
                 </Card>
               );
             })}
-            {entry.comparison.changes.length === 0 ? <Text size="1" color="gray">No effective changes remain for this part.</Text> : null}
+            {entry.comparison.changes.length === 0 ? (
+              <Text size="1" color="gray">
+                No effective changes remain for this part.
+              </Text>
+            ) : null}
           </Flex>
         ))}
-        {comparisons?.every((entry) => entry.comparison.resolution.complete) ? <Text size="1" color="green">All incoming changes have been accounted for. The template update can now finish.</Text> : null}
+        {complete ? (
+          <Flex align="center" justify="between" gap="2" wrap="wrap">
+            <Text size="1" color="green">
+              All incoming changes have been accounted for. The template operation is ready to
+              finish.
+            </Text>
+            <Button disabled={acting !== null} onClick={() => void finish()}>
+              {acting === "finish" ? "Finishing…" : "Finish template operation"}
+            </Button>
+          </Flex>
+        ) : null}
       </Flex>
     </Card>
   );

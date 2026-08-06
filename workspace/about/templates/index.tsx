@@ -13,15 +13,18 @@ import {
 } from "@radix-ui/themes";
 import { ReloadIcon } from "@radix-ui/react-icons";
 import {
-  type TemplateExactPin,
   type TemplateOperation,
-  type TemplateInspection,
   type TemplateStatusRow,
 } from "@vibestudio/service-schemas/templates";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { credentials, extensions, rpc } from "@workspace/runtime";
-import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
+import { createTemplateManagementClient } from "@workspace/template-management";
+import {
+  TemplateAddDialog,
+  useTemplateManagementController,
+  type TemplateManagementController,
+} from "@workspace/template-management/react";
 import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/ui";
 import {
   filterTemplateCatalog,
@@ -39,65 +42,9 @@ import {
   templateVersion,
 } from "./presentation";
 
-const TEMPLATE_COMPOSER = "@workspace-extensions/template-composer";
-type TemplateLocator =
-  | { catalogId: string; registryCommit: string; registrySnapshot: string }
-  | { url: string; credential?: string };
-
-function templateComposerCall<T>(method: string, args: unknown[] = []): Promise<T> {
-  return extensions.invoke(TEMPLATE_COMPOSER, method, args) as Promise<T>;
-}
-
-const templates = {
-  status: () => templateComposerCall<TemplateStatusRow[]>("status"),
-  catalog: (options?: { refresh?: boolean }) =>
-    templateComposerCall<TemplateCatalogSnapshot>("catalog", options ? [options] : []),
-  check: () =>
-    templateComposerCall<
-      Array<{
-        alias: string;
-      }>
-    >("check"),
-  inspect: (locator: TemplateLocator) =>
-    templateComposerCall<TemplateInspection>("inspect", [locator]),
-  add: (input: {
-    commandId: string;
-    pin: TemplateExactPin;
-    choices?: Record<string, "keep" | "take" | "skip">;
-  }) => templateComposerCall<TemplateOperation>("add", [input]),
-  pull: (input: { commandId: string; alias: string }) =>
-    templateComposerCall<TemplateOperation>("pull", [input]),
-  remove: (input: { commandId: string; alias: string }) =>
-    templateComposerCall<TemplateOperation>("remove", [input]),
-  suggest: (input: { commandId: string; alias: string }) =>
-    templateComposerCall<TemplateOperation>("suggest", [input]),
-  operations: () =>
-    templateComposerCall<
-      Array<{
-        operationId: string;
-        kind: "add" | "pull" | "remove" | "recompose" | "adopt-bootstrap";
-        contextId: string;
-        state: "pending" | "reviewing";
-        fingerprint: string;
-        review?: NonNullable<TemplateOperation["review"]>;
-      }>
-    >("operations"),
-  resume: (input: { operationId: string }) =>
-    templateComposerCall<TemplateOperation>("resume", [input]),
-  cancel: (input: { operationId: string }) =>
-    templateComposerCall<{ operationId: string; state: "cancelled" }>("cancel", [input]),
-  decideSuggestion: (input: {
-    commandId: string;
-    alias: string;
-    section: "trust" | "providers";
-    decision: "accept" | "decline";
-  }) =>
-    templateComposerCall<{
-      operationId: string;
-      state: "accepted" | "declined";
-      section: "trust" | "providers";
-    }>("decideSuggestion", [input]),
-};
+const templates = createTemplateManagementClient((extension, method, args) =>
+  extensions.invoke(extension, method, args)
+);
 const vcs = createTypedServiceClient("vcs", vcsMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
@@ -130,7 +77,7 @@ function AboutTemplateReview({
   onCompleted,
 }: {
   review: NonNullable<TemplateStatusRow["review"]>;
-  onCompleted: () => void;
+  onCompleted: () => void | Promise<void>;
 }) {
   const compare = useCallback<TemplateReviewPanelProps["compare"]>(
     async (item) => {
@@ -168,42 +115,37 @@ function AboutTemplateReview({
 function TemplateRow({
   row,
   direct,
-  onRefresh,
-  onNotice,
+  controller,
   onDecideSuggestion,
+  onResume,
 }: {
   row: TemplateStatusRow;
   direct: boolean;
-  onRefresh: () => Promise<void>;
-  onNotice: (text: string) => void;
+  controller: TemplateManagementController;
   onDecideSuggestion: (
     alias: string,
     section: "trust" | "providers",
     decision: "accept" | "decline"
   ) => Promise<void>;
+  onResume: (operationId: string) => Promise<boolean>;
 }) {
-  const [busy, setBusy] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const presentation = templateStatePresentation(row);
   const actions = templateRelationshipActions(direct);
   const run = async (action: string, task: () => Promise<TemplateOperation>) => {
-    setBusy(action);
-    try {
-      const operation = await task();
-      onNotice(
+    await controller.execute({
+      key: `relationship:${row.alias}`,
+      task,
+      success: (operation) =>
         operationNotice(
           operation,
           "The operation is approved and ready for review.",
           `The ${row.alias} template ${action} is complete.`
-        )
-      );
-      await onRefresh();
-    } catch {
-      onNotice(`Couldn't ${action} the ${row.alias} template. Nothing was changed.`);
-    } finally {
-      setBusy(null);
-    }
+        ),
+      failure: () => `Couldn't ${action} the ${row.alias} template. Nothing was changed.`,
+    });
   };
+  const busy = controller.isBusy(`relationship:${row.alias}`);
   return (
     <Card size="2">
       <Flex align="start" justify="between" gap="3" wrap="wrap">
@@ -219,6 +161,15 @@ function TemplateRow({
               {row.ownedParts} {row.ownedParts === 1 ? "part" : "parts"}
             </Text>
           </Flex>
+          {/* §7.7 lists a template by version, origin, and parts. The origin
+              URL is the identity — there is no publisher identity in this
+              system — so leaving it off left the alias, which the workspace
+              chose, standing in for where the code actually came from. The
+              commit is deliberately absent: no digest appears on any surface a
+              person reads (§7.6.3). */}
+          <Text as="div" size="1" color="gray" mt="1" style={{ overflowWrap: "anywhere" }}>
+            {row.url}
+          </Text>
           {row.error ? (
             <Text as="div" size="1" color="red" mt="2">
               {row.error}
@@ -245,7 +196,7 @@ function TemplateRow({
                 <Flex gap="1">
                   <Button
                     size="1"
-                    disabled={busy !== null}
+                    disabled={controller.isBusy(`suggestion:${row.alias}:${suggestion.section}`)}
                     onClick={() => void onDecideSuggestion(row.alias, suggestion.section, "accept")}
                   >
                     Accept
@@ -253,7 +204,7 @@ function TemplateRow({
                   <Button
                     size="1"
                     variant="soft"
-                    disabled={busy !== null}
+                    disabled={controller.isBusy(`suggestion:${row.alias}:${suggestion.section}`)}
                     onClick={() =>
                       void onDecideSuggestion(row.alias, suggestion.section, "decline")
                     }
@@ -269,7 +220,7 @@ function TemplateRow({
           {row.blocker?.nextAction === "connect-credential" && row.blocker.credential ? (
             <Button
               size="1"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() =>
                 void run("connect", async () => {
                   await credentials.requestCredentialInput(
@@ -282,15 +233,15 @@ function TemplateRow({
                 })
               }
             >
-              {busy === "connect" ? "Connecting…" : "Connect account"}
+              {busy ? "Connecting…" : "Connect account"}
             </Button>
           ) : null}
           {actions.check ? (
             <Button
               size="1"
               variant="soft"
-              disabled={busy !== null}
-              onClick={() => void onRefresh()}
+              disabled={busy || controller.loading}
+              onClick={() => void controller.refresh()}
             >
               <ReloadIcon /> Check for updates
             </Button>
@@ -299,7 +250,7 @@ function TemplateRow({
             <Button
               size="1"
               variant="soft"
-              disabled={busy !== null || !row.review.approvalGranted}
+              disabled={busy || !row.review.approvalGranted}
               onClick={() => setReviewOpen((open) => !open)}
             >
               {row.review.approvalGranted
@@ -312,35 +263,35 @@ function TemplateRow({
           {actions.update && !row.review?.items.length ? (
             <Button
               size="1"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() =>
                 void run("update", () =>
                   templates.pull({ commandId: commandId(), alias: row.alias })
                 )
               }
             >
-              {busy === "update" ? "Asking…" : "Update"}
+              {busy ? "Asking…" : "Update"}
             </Button>
           ) : null}
           {actions.remove ? (
             <Button
               size="1"
               variant="soft"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() =>
                 void run("remove", () =>
                   templates.remove({ commandId: commandId(), alias: row.alias })
                 )
               }
             >
-              {busy === "remove" ? "Asking…" : "Remove"}
+              {busy ? "Asking…" : "Remove"}
             </Button>
           ) : null}
           {actions.suggest ? (
             <Button
               size="1"
               variant="ghost"
-              disabled={busy !== null}
+              disabled={busy}
               onClick={() =>
                 void run("suggest changes to", () =>
                   templates.suggest({ commandId: commandId(), alias: row.alias })
@@ -355,9 +306,8 @@ function TemplateRow({
       {reviewOpen && row.review?.approvalGranted ? (
         <AboutTemplateReview
           review={row.review}
-          onCompleted={() => {
-            setReviewOpen(false);
-            void onRefresh();
+          onCompleted={async () => {
+            if (await onResume(row.review!.operationId)) setReviewOpen(false);
           }}
         />
       ) : null}
@@ -366,144 +316,34 @@ function TemplateRow({
 }
 
 function TemplatesPage() {
-  const [rows, setRows] = useState<TemplateStatusRow[]>([]);
-  const [operations, setOperations] = useState<Awaited<ReturnType<typeof templates.operations>>>(
-    []
-  );
-  const [catalog, setCatalog] = useState<TemplateCatalogSnapshot | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState<string | null>(null);
+  const controller = useTemplateManagementController(templates);
+  const { rows, operations, catalog, loading, notice, error } = controller;
   const [query, setQuery] = useState("");
   const [url, setUrl] = useState("");
   const [credential, setCredential] = useState("");
-  const [addDraft, setAddDraft] = useState<{
-    locator: TemplateLocator;
-    name: string;
-    inspection: TemplateInspection;
-    choices: Record<string, "keep" | "take" | "skip">;
-  } | null>(null);
-
-  const refresh = useCallback(async (refreshCatalog = false) => {
-    setLoading(true);
-    try {
-      const [status, pendingOperations] = await Promise.all([
-        templates.status(),
-        templates.operations(),
-      ]);
-      setOperations(pendingOperations);
-      let catalogFailed = false;
-      try {
-        setCatalog(await templates.catalog(refreshCatalog ? { refresh: true } : undefined));
-      } catch {
-        catalogFailed = true;
-        setCatalog(null);
-        setNotice(
-          "The verified template registry is unavailable. Connected templates remain usable."
-        );
-      }
-      let updates: Awaited<ReturnType<typeof templates.check>> = [];
-      try {
-        updates = await templates.check();
-      } catch {
-        // Update discovery is passive. A transient remote failure must not
-        // hide the exact locally tracked relationships.
-      }
-      const updateAliases = new Set(updates.map((candidate) => candidate.alias));
-      setRows(
-        status.map((row) =>
-          row.state === "current" && updateAliases.has(row.alias)
-            ? { ...row, state: "update-available" as const }
-            : row
-        )
-      );
-      if (!refreshCatalog && !catalogFailed) setNotice(null);
-    } catch {
-      setNotice("Couldn't load templates. Nothing was changed.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
-    void refresh(false);
-  }, [refresh]);
+    void controller.refresh();
+  }, [controller.refresh]);
 
   const visibleCatalog = useMemo(
     () => filterTemplateCatalog(catalog?.entries ?? [], query),
     [catalog, query]
   );
 
-  const prepareAdd = async (locator: TemplateLocator, name: string) => {
-    try {
-      const inspection = await templates.inspect(locator);
-      if (inspection.conflicts.length > 0) {
-        setAddDraft({ locator, name, inspection, choices: {} });
-        return;
-      }
-      await add(locator, name, {}, inspection.pin);
-    } catch {
-      setNotice(`Couldn't inspect the ${name} template. Nothing was changed.`);
-    }
-  };
-
-  const add = async (
-    locator: TemplateLocator,
-    name: string,
-    choices: Record<string, "keep" | "take" | "skip">,
-    pin: TemplateExactPin
-  ) => {
-    try {
-      const operation = await templates.add({
-        commandId: commandId(),
-        pin,
-        ...(Object.keys(choices).length ? { choices } : {}),
-      });
-      setNotice(
-        operationNotice(
-          operation,
-          `The ${name} template is approved and ready for review.`,
-          `The ${name} template is already connected.`
-        )
-      );
-      await refresh();
-      setAddDraft(null);
-      if ("url" in locator) {
-        setUrl("");
-        setCredential("");
-      }
-    } catch {
-      setNotice(`Couldn't add the ${name} template. Nothing was changed.`);
-    }
-  };
-
-  const addUrl = () => {
-    if (!isTemplateHttpUrl(url)) {
-      setNotice("Enter a full HTTP(S) template address.");
-      return;
-    }
-    void prepareAdd(
-      {
-        url: url.trim(),
-        ...(credential.trim() ? { credential: credential.trim() } : {}),
-      },
-      "selected"
-    );
-  };
-
-  const resume = async (operationId: string) => {
-    try {
-      const operation = await templates.resume({ operationId });
-      setNotice(
+  const resume = async (operationId: string): Promise<boolean> => {
+    const result = await controller.execute({
+      key: `operation:${operationId}`,
+      task: () => templates.resume({ operationId }),
+      success: (operation) =>
         operationNotice(
           operation,
           "The template operation is ready to continue.",
           "The template operation is complete."
-        )
-      );
-      await refresh();
-    } catch {
-      setNotice("Couldn't resume this template operation. Nothing was changed.");
-    }
+        ),
+      failure: () => "Couldn't resume this template operation. Nothing was changed.",
+    });
+    return result !== null;
   };
 
   const decideSuggestion = async (
@@ -511,30 +351,28 @@ function TemplatesPage() {
     section: "trust" | "providers",
     decision: "accept" | "decline"
   ) => {
-    try {
-      await templates.decideSuggestion({
-        commandId: commandId(),
-        alias,
-        section,
-        decision,
-      });
-      setNotice(
-        `${section === "trust" ? "Trust" : "Provider"} suggestion ${decision === "accept" ? "accepted" : "declined"}.`
-      );
-      await refresh();
-    } catch {
-      setNotice("Couldn't record this template suggestion decision. Nothing was changed.");
-    }
+    await controller.execute({
+      key: `suggestion:${alias}:${section}`,
+      task: () =>
+        templates.decideSuggestion({
+          commandId: commandId(),
+          alias,
+          section,
+          decision,
+        }),
+      success: () =>
+        `${section === "trust" ? "Trust" : "Provider"} suggestion ${decision === "accept" ? "accepted" : "declined"}.`,
+      failure: () => "Couldn't record this template suggestion decision. Nothing was changed.",
+    });
   };
 
   const cancel = async (operationId: string) => {
-    try {
-      await templates.cancel({ operationId });
-      setNotice("Template operation cancelled. Its unpublished context was discarded.");
-      await refresh();
-    } catch {
-      setNotice("Couldn't cancel this template operation. Nothing was changed.");
-    }
+    await controller.execute({
+      key: `operation:${operationId}`,
+      task: () => templates.cancel({ operationId }),
+      success: () => "Template operation cancelled. Its unpublished context was discarded.",
+      failure: () => "Couldn't cancel this template operation. Nothing was changed.",
+    });
   };
 
   return (
@@ -547,6 +385,11 @@ function TemplatesPage() {
           {notice ? (
             <Callout.Root color="blue">
               <Callout.Text>{notice}</Callout.Text>
+            </Callout.Root>
+          ) : null}
+          {error ? (
+            <Callout.Root color="red">
+              <Callout.Text>{error}</Callout.Text>
             </Callout.Root>
           ) : null}
           {operations.length > 0 ? (
@@ -569,6 +412,7 @@ function TemplatesPage() {
                             <Button
                               size="1"
                               variant="soft"
+                              disabled={controller.isBusy(`operation:${operation.operationId}`)}
                               onClick={() => void resume(operation.operationId)}
                             >
                               Resume
@@ -578,6 +422,7 @@ function TemplatesPage() {
                             size="1"
                             variant="soft"
                             color="red"
+                            disabled={controller.isBusy(`operation:${operation.operationId}`)}
                             onClick={() => void cancel(operation.operationId)}
                           >
                             Cancel
@@ -587,7 +432,9 @@ function TemplatesPage() {
                       {operation.review ? (
                         <AboutTemplateReview
                           review={operation.review}
-                          onCompleted={() => void resume(operation.operationId)}
+                          onCompleted={async () => {
+                            await resume(operation.operationId);
+                          }}
                         />
                       ) : null}
                     </Flex>
@@ -614,84 +461,27 @@ function TemplatesPage() {
                   key={row.nodeId}
                   row={row}
                   direct={row.direct}
-                  onRefresh={refresh}
-                  onNotice={setNotice}
+                  controller={controller}
                   onDecideSuggestion={decideSuggestion}
+                  onResume={resume}
                 />
               ))}
             </Flex>
           </Section>
           <Separator size="4" />
           <Section title="Browse templates">
-            {addDraft ? (
-              <Callout.Root color="orange">
-                <Callout.Text>
-                  <Flex direction="column" gap="2">
-                    <Text weight="medium">
-                      Choose what to do with overlapping parts from the {addDraft.name} template.
-                    </Text>
-                    {addDraft.inspection.conflicts.map((conflict) => (
-                      <Box key={conflict.repoPath}>
-                        <Text as="div" size="2">
-                          {conflict.repoPath} is included by {conflict.claimants.join(" and ")}.
-                        </Text>
-                        <Flex gap="2" mt="1" wrap="wrap">
-                          {(["keep", "take", "skip"] as const).map((choice) => (
-                            <Button
-                              key={choice}
-                              size="1"
-                              variant={
-                                addDraft.choices[conflict.repoPath] === choice ? "solid" : "soft"
-                              }
-                              onClick={() =>
-                                setAddDraft({
-                                  ...addDraft,
-                                  choices: { ...addDraft.choices, [conflict.repoPath]: choice },
-                                })
-                              }
-                            >
-                              {choice === "keep"
-                                ? "Keep yours"
-                                : choice === "take"
-                                  ? "Take template"
-                                  : "Skip"}
-                            </Button>
-                          ))}
-                        </Flex>
-                      </Box>
-                    ))}
-                    <Flex gap="2">
-                      <Button
-                        size="1"
-                        disabled={addDraft.inspection.conflicts.some(
-                          (conflict) => !addDraft.choices[conflict.repoPath]
-                        )}
-                        onClick={() =>
-                          void add(
-                            addDraft.locator,
-                            addDraft.name,
-                            addDraft.choices,
-                            addDraft.inspection.pin
-                          )
-                        }
-                      >
-                        Add template
-                      </Button>
-                      <Button size="1" variant="soft" onClick={() => setAddDraft(null)}>
-                        Not now
-                      </Button>
-                    </Flex>
-                  </Flex>
-                </Callout.Text>
-              </Callout.Root>
-            ) : null}
             <Flex align="center" justify="between" gap="2" wrap="wrap">
               <Text size="1" color={catalog?.stale ? "orange" : "gray"}>
                 {catalog
                   ? `Registry ${catalog.revision}${catalog.stale ? " · cached" : ""}`
                   : "No verified registry is cached"}
               </Text>
-              <Button size="1" variant="soft" disabled={loading} onClick={() => void refresh(true)}>
+              <Button
+                size="1"
+                variant="soft"
+                disabled={loading}
+                onClick={() => void controller.refresh({ refreshCatalog: true })}
+              >
                 <ReloadIcon /> Refresh catalog
               </Button>
             </Flex>
@@ -713,21 +503,22 @@ function TemplatesPage() {
                         {entry.description}
                       </Text>
                     </Box>
-                    <Button
-                      size="1"
-                      onClick={() =>
-                        void prepareAdd(
-                          {
-                            catalogId: entry.id,
-                            registryCommit: catalog!.coordinates.commit,
-                            registrySnapshot: catalog!.coordinates.snapshot,
-                          },
-                          entry.name
-                        )
-                      }
-                    >
-                      Add
-                    </Button>
+                    <TemplateAddDialog
+                      client={templates}
+                      request={{ catalogId: entry.id }}
+                      triggerLabel="Add"
+                      disabled={controller.anyBusy}
+                      onCompleted={async (operation) => {
+                        await controller.complete(
+                          operation,
+                          operationNotice(
+                            operation,
+                            `The ${entry.name} template is ready for review.`,
+                            `The ${entry.name} template is connected.`
+                          )
+                        );
+                      }}
+                    />
                   </Flex>
                 </Card>
               ))}
@@ -754,9 +545,25 @@ function TemplatesPage() {
                     aria-label="Logical Git credential"
                     style={{ flex: "1 1 220px" }}
                   />
-                  <Button size="1" disabled={!url.trim()} onClick={addUrl}>
-                    Add address
-                  </Button>
+                  <TemplateAddDialog
+                    client={templates}
+                    request={{
+                      url: url.trim(),
+                      ...(credential.trim() ? { credential: credential.trim() } : {}),
+                    }}
+                    triggerLabel="Add address"
+                    disabled={controller.anyBusy || !isTemplateHttpUrl(url)}
+                    onCompleted={async (operation) => {
+                      const outcome = operationNotice(
+                        operation,
+                        "The selected template is ready for review.",
+                        "The selected template is connected."
+                      );
+                      await controller.complete(operation, outcome);
+                      setUrl("");
+                      setCredential("");
+                    }}
+                  />
                 </Flex>
               </Flex>
             </Card>

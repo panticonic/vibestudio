@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  onboardingInteraction,
-  resolveOnboardingSelection,
-  resolveTemplateSelection,
-  templateCatalogInteraction,
-  templateUrlInteraction,
-} from "./routing.js";
+import { onboardingInteraction, resolveOnboardingSelection } from "./routing.js";
 
 describe("onboarding selection routing", () => {
   it("resolves a stable capability id to its owner workflow", () => {
@@ -32,9 +26,7 @@ describe("onboarding selection routing", () => {
 
   it("routes browser migration to its cohesive first-party workflow", () => {
     expect(
-      resolveOnboardingSelection(
-        onboardingInteraction("migration.browser-environment", "setup")
-      )
+      resolveOnboardingSelection(onboardingInteraction("migration.browser-environment", "setup"))
     ).toEqual(
       expect.objectContaining({
         target: { via: "panel", path: "about/browser-import-inspector" },
@@ -52,41 +44,12 @@ describe("onboarding selection routing", () => {
     );
   });
 
-  it("routes mobile installation through the verified template catalog", () => {
-    expect(
-      resolveOnboardingSelection(onboardingInteraction("connection.device", "install"))
-    ).toEqual(
-      expect.objectContaining({
-        action: "install",
-        ownerSkillPath: "skills/phone-setup/SKILL.md",
-        target: { via: "template-catalog", templateId: "mobile" },
-      })
-    );
-  });
-
-  it("routes catalog and pasted addresses by typed template interactions", () => {
-    const catalog = templateCatalogInteraction(
-      "news-agent-and-panel",
-      "a".repeat(40),
-      `v1-sha256:${"b".repeat(64)}`
-    );
-    expect(resolveTemplateSelection(catalog)).toEqual({
-      target: { via: "template-composer" },
-      interaction: catalog,
-    });
-    expect(resolveTemplateSelection(templateUrlInteraction("https://example.test/template.git"))).toEqual({
-      target: { via: "template-composer" },
-      interaction: templateUrlInteraction("https://example.test/template.git"),
-    });
+  it("does not invent a template route for a base capability", () => {
     expect(() =>
-      resolveTemplateSelection({
-        ...templateCatalogInteraction(
-          "retired",
-          "a".repeat(40),
-          `v1-sha256:${"b".repeat(64)}`
-        ),
-        registryCommit: "",
+      resolveOnboardingSelection({
+        ...onboardingInteraction("connection.device", "setup"),
+        action: "install" as never,
       })
-    ).toThrow("Template add selection is invalid");
+    ).toThrow("connection.device does not offer the install action");
   });
 });

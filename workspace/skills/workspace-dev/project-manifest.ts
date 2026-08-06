@@ -13,6 +13,10 @@ export type ProjectType = (typeof PROJECT_TYPES)[number];
 
 export interface ProjectPreflightReport {
   ok: true;
+  /** Mutation-free validation of the planned repository, before an exact-state build exists. */
+  scope: "planned-repository";
+  /** Semantic build/authority validation is performed by the protected publication gate. */
+  semanticBuildGate: "pending-publication";
   projectType: ProjectType;
   packageName: string | null;
   entry: string | null;
@@ -85,6 +89,15 @@ const PACKAGE_SCOPES: Record<Exclude<ProjectType, "project">, string> = {
   worker: "@workspace-workers",
 };
 
+const EXECUTABLE_BASELINE_AUTHORITY = [
+  {
+    capability: "context.boundary",
+    resource: { kind: "prefix", prefix: "context" },
+    tier: "critical",
+    evidence: "bounded-dynamic",
+  },
+] as const;
+
 function assertProjectName(name: string): void {
   if (!/^[a-z][a-z0-9-]*$/.test(name)) {
     throw new Error(
@@ -133,7 +146,7 @@ export function buildProjectManifest(input: BuildProjectManifestInput): Record<s
       title: input.title,
       entry: input.entry,
       ...(input.exposeModules ? { exposeModules: [...input.exposeModules] } : {}),
-      authority: { requests: [], provides: [] },
+      authority: { requests: EXECUTABLE_BASELINE_AUTHORITY, provides: [] },
       ...(input.template ? { template: input.template } : {}),
       ...(input.durableClasses
         ? {
@@ -239,6 +252,8 @@ export function preflightProjectFiles(input: {
   if (input.projectType === "project") {
     return {
       ok: true,
+      scope: "planned-repository",
+      semanticBuildGate: "pending-publication",
       projectType: input.projectType,
       packageName: null,
       entry: null,
@@ -280,7 +295,7 @@ export function preflightProjectFiles(input: {
       vibestudio["authority"],
       `${expectedName} vibestudio.authority`
     ).requests.length;
-    checked.push("executable entry", "strict authority manifest");
+    checked.push("executable entry", "authority manifest syntax");
   } else if (manifest["exports"] === undefined) {
     throw new Error(`${input.projectType} package.json must declare exports`);
   }
@@ -372,6 +387,8 @@ export function preflightProjectFiles(input: {
 
   return {
     ok: true,
+    scope: "planned-repository",
+    semanticBuildGate: "pending-publication",
     projectType: input.projectType,
     packageName: expectedName,
     entry,

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  templateAddPreparationSchema,
+  templateAddRequestSchema,
   templateAuthoringInspectionSchema,
   templateInspectionSchema,
   templateLocatorSchema,
@@ -222,5 +224,34 @@ describe("exact template selection contracts", () => {
         },
       ]).success
     ).toBe(false);
+  });
+
+  it("prepares a human catalog choice without asking callers to reconstruct registry coordinates", () => {
+    expect(templateAddRequestSchema.parse({ catalogId: "github", refreshCatalog: true })).toEqual({
+      catalogId: "github",
+      refreshCatalog: true,
+    });
+    expect(
+      templatesMethods.prepareAdd.args.safeParse([
+        { catalogId: "github", registryCommit: "1".repeat(40) },
+      ]).success
+    ).toBe(false);
+    expect(
+      templateAddPreparationSchema.parse({
+        name: "GitHub",
+        description: "GitHub workspace integration",
+        inspection: {
+          pin,
+          fingerprint: `v1-sha256:${"b".repeat(64)}`,
+          roots: [],
+          templates: [],
+          addedParts: ["extensions/github"],
+          retainedParts: [],
+          orphanedParts: [],
+          conflicts: [],
+          excludedSuggestions: [],
+        },
+      }).inspection.pin
+    ).toEqual(pin);
   });
 });

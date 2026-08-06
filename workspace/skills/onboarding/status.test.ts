@@ -132,18 +132,39 @@ describe("onboarding status adapters", () => {
     );
   });
 
-  it("discovers optional owner skills before calling their status code", async () => {
+  it("reports a missing shipped owner as unavailable before calling its status code", async () => {
     const google = vi.fn();
     const deps = dependencies({
       google,
       hasSkill: vi.fn(async (path) => path !== "skills/google-workspace/SKILL.md"),
     });
     await expect(createStatusAdapters(deps)["google-workspace"]!()).resolves.toEqual({
-      state: "not-installed",
-      summary: "Google Workspace is not installed in this workspace.",
+      state: "unavailable",
+      summary:
+        "Google Workspace is unavailable because its base capability owner could not be loaded.",
+      attention: "blocking",
+      rawStage: "owner-unavailable",
+    });
+    expect(google).not.toHaveBeenCalled();
+  });
+
+  it("queries the Local Models extension without inventing a skill owner", async () => {
+    const hasSkill = vi.fn(async () => false);
+    const defaults = dependencies({ hasSkill });
+    const localModelsStatus = vi.fn(defaults.localModelsStatus);
+    const localModelsList = vi.fn(defaults.localModelsList);
+    const adapter = createStatusAdapters(
+      dependencies({ localModelsStatus, localModelsList, hasSkill })
+    )["local-models"]!;
+
+    await expect(adapter()).resolves.toEqual({
+      state: "using-defaults",
+      summary: "Cloud models remain available; no local model is installed.",
       attention: "none",
       rawStage: "not-installed",
     });
-    expect(google).not.toHaveBeenCalled();
+    expect(localModelsStatus).toHaveBeenCalledOnce();
+    expect(localModelsList).toHaveBeenCalledOnce();
+    expect(hasSkill).not.toHaveBeenCalled();
   });
 });

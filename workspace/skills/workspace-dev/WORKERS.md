@@ -47,12 +47,20 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `hosts` | value |  | Portable owner-scoped attached-host access for development sessions. |
 | `runtime` | value |  | Portable typed runtime lifecycle and supervision client for the current workspace context. |
 | `workspace` | namespace | `getInfo`, `getActive`, `getConfig`, `validateConfig`, `setInitPanels`, `setConfigField`, `applyPreparedConfig`, `getAgentsMd`, `listSkills`, `readSkill`, `sourceTree`, `ensureContextFolder`, `findUnitForPath`, `recurring`, `heartbeats`, `projects` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
-| `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready. It defaults under the caller and focused; use parentId:null for a root or focus:false for background creation. The slot commits before readiness, so on PanelOperationError inspect failure.provenance.panelId instead of blindly retrying. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
+| `createPanelSlot` | value |  | Commit a panel and promptly return its durable handle without focusing while build and boot continue in the background. Pass operationId for retry-stable identity; use handle.observe() when readiness matters. |
+| `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready, with no fixed readiness deadline. Pass options.signal for caller-owned cancellation and operationId for retry-stable identity. It defaults under the caller and focused; use parentId:null for a root or focus:false to suppress presentation. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
 | `getPanelHandle` | value |  | Alias for runtime.panelTree.get(id, kind?). |
-| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate` | Runtime property, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
+| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate`, `navigateHistory` | Runtime property, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'roots', ownerUserId } }) or page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
 | `handleRpcPost` | value |  |  |
 | `destroy` | value |  |  |
 <!-- END GENERATED: worker-runtime-surface -->
+
+Readiness-bearing panel operations are also materialization requests. The
+portable runtime reuses the idempotent host-lease transition after eviction;
+`observe()` remains read-only. Programmatic workers prefer a headless CDP host,
+while a native desktop focus bridge keeps UI presentation on the desktop.
+Reconnect grace does not preserve readiness, and mobile-held or failed host
+states reject immediately with structured host failures.
 
 Existing panel handles are non-owned; do not call `handle.navigate`,
 `handle.reload`, or `handle.close` unless requested. Use
@@ -271,9 +279,25 @@ agent eval. The eval `db` is private to that agent's EvalDO; it is good for
 scratch analysis and resumable diagnostics, but it is not an application
 database for panels, apps, workers, or other agents.
 
+When building a panel with a DO store, create both together with
+`createProjects` so the user sees one approval prompt:
+
+```ts
+eval({ code: `
+  import { createProjects } from "@workspace-skills/workspace-dev";
+  scope.created = await createProjects([
+    { projectType: "worker", name: "todo-store", title: "Todo Store" },
+    { projectType: "panel", name: "todo-app", title: "Todo App" },
+  ]);
+  return scope.created;
+`
+})
+```
+
 Canonical shape:
 
-1. Create `workers/<store>` with a `DurableObjectBase` subclass.
+1. Create `workers/<store>` with a `DurableObjectBase` subclass (or create it
+   together with its panel via `createProjects`).
 2. Store durable rows in the DO's SQLite database through `this.sql`.
 3. Expose narrow app methods with explicit
    `@rpc({ principals, effect: { kind: "open" }, tier, sensitivity })`
@@ -617,9 +641,21 @@ Every executable package authority manifest contains both `requests` and
 the unit may exercise; `provides` names protected resources owned by the unit.
 Each provided definition supplies the user-facing title/action, tier,
 sensitivity, resource type, reviewed `presentation.domain` /
-`presentation.verb`, and allowed grant scopes. The domain and verb come from
-the shared authority vocabulary; userland providers cannot declare the Safety
-controls domain.
+`presentation.verb`, `notability`, and allowed grant scopes. The domain and verb
+come from the shared authority vocabulary; userland providers cannot declare the
+Safety controls domain.
+
+`notability` is required and answers one question: would a reasonable
+non-technical person, told a part can do this, want to know before adding it?
+Answer `"headline"` if so, `"everyday"` if this is ordinary machinery of being a
+part here. It decides what a user reads first on every install and creation
+review, so the honest answer is the useful one — marking everything headline
+makes every part read like a threat, and the platform will promote a `critical`
+or `destructive` definition to headline regardless of what you write.
+
+Your declaration is a ceiling and a vocabulary, never a licence. The platform may
+make a request more contextual than you asked for — `admin` and `destructive`
+capabilities always ask at concrete use — and never less.
 
 Bind a Durable Object receiver to a provided unit-local name:
 

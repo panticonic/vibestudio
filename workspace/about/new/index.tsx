@@ -90,9 +90,11 @@ function NewPanelPage() {
   const [promptInput, setPromptInput] = useState("");
   const [filter, setFilter] = useState("");
   const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
   const lastFetchStartedAtRef = useRef(0);
   const navigationStartedRef = useRef(false);
+  const lastNavigationRef = useRef<{ path: string; href: string } | null>(null);
 
   const fetchData = useCallback((force = false): Promise<void> => {
     if (!force && fetchInFlightRef.current) return fetchInFlightRef.current;
@@ -118,20 +120,35 @@ function NewPanelPage() {
 
   useEffect(() => {
     void fetchData();
-    return panel.onFocus(() => {
+    const offFocus = panel.onFocus(() => {
       // Initial focus commonly arrives while the mount request is still in
       // flight. Revalidate genuinely returning launchers, but do not issue the
       // same source-tree RPC twice during startup.
       if (Date.now() - lastFetchStartedAtRef.current > 2_000) void fetchData();
     });
+    const offNavigationError = panel.onChildCreationError(({ url, error }) => {
+      const target = lastNavigationRef.current;
+      if (!target || !url.includes(`/${target.path}/`)) return;
+      navigationStartedRef.current = false;
+      setPendingPath(null);
+      setNavigationError(error);
+    });
+    return () => {
+      offFocus();
+      offNavigationError();
+    };
   }, [fetchData]);
 
   const beginNavigation = useCallback((path: string, href: string) => {
     if (navigationStartedRef.current) return;
     navigationStartedRef.current = true;
+    lastNavigationRef.current = { path, href };
     setPendingPath(path);
-    // Give both compact/mobile and desktop renderers one paint to expose the
-    // pending state before the host starts its managed navigation.
+    setNavigationError(null);
+    // Keep the anchor href for normal browser affordances, but let the trusted
+    // host translate the managed URL into a panel navigation. Failures arrive
+    // through panel.onChildCreationError; handling that event clears the
+    // pending state instead of leaving this launcher permanently disabled.
     requestAnimationFrame(() => window.location.assign(href));
   }, []);
 
@@ -200,6 +217,25 @@ function NewPanelPage() {
         </Section>
       ) : (
         <Box>
+          {navigationError ? (
+            <Section>
+              <Flex direction="column" gap="2" align="start">
+                <Text color="red" size="2">
+                  Couldn&apos;t open the panel: {navigationError}
+                </Text>
+                <Button
+                  variant="soft"
+                  color="red"
+                  onClick={() => {
+                    const target = lastNavigationRef.current;
+                    if (target) beginNavigation(target.path, target.href);
+                  }}
+                >
+                  Try again
+                </Button>
+              </Flex>
+            </Section>
+          ) : null}
           <Flex align="center" justify="between" gap="3" mb="3">
             <Heading size="3">Panels</Heading>
             <TextField.Root

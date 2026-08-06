@@ -39,11 +39,23 @@ function file(path: string, bytes: Uint8Array): ExactSnapshotFile {
 function snapshot(
   exact: WorkspaceTemplatePin,
   dependencies: readonly WorkspaceTemplateDeclaration[],
-  repoPath: string
+  repoPath: string,
+  presentation?: { name?: string; description?: string }
 ): ExactGitSnapshot {
   const manifest = new TextEncoder().encode(
     [
       `systemEpoch: ${epoch}`,
+      ...(presentation === undefined
+        ? []
+        : [
+            "template:",
+            ...(presentation.name === undefined
+              ? []
+              : [`  name: ${JSON.stringify(presentation.name)}`]),
+            ...(presentation.description === undefined
+              ? []
+              : [`  description: ${JSON.stringify(presentation.description)}`]),
+          ]),
       ...(dependencies.length === 0
         ? []
         : [
@@ -176,6 +188,60 @@ describe("resolveTemplateComposition", () => {
     expect(
       added.nodes.find((node) => node.pin.url === normalizeTemplateGitUrl(newsUrl))?.pin.commit
     ).toBe(news.commit);
+  });
+
+  it("carries what a template calls itself into the lock, and out of the fragment", async () => {
+    // The name is the only text a template gets to assert about itself, and it
+    // belongs to the pin that asserted it — not to the configuration a
+    // dependent inherits, which is why the fragment must not carry it.
+    const news = pin(newsUrl, "b");
+    const plan = await resolveTemplateComposition({
+      roots: [{ url: newsUrl }],
+      expectedSystemEpoch: epoch,
+      ports: ports(
+        [news],
+        new Map([
+          [
+            normalizeTemplateGitUrl(newsUrl),
+            snapshot(news, [], "panels/news", {
+              name: "News",
+              description: "Read and discuss personalized news briefings.",
+            }),
+          ],
+        ])
+      ),
+    });
+
+    expect(plan.lock!.nodes[0]!.presentation).toEqual({
+      name: "News",
+      description: "Read and discuss personalized news briefings.",
+    });
+    expect(plan.nodes[0]!.fragment).not.toHaveProperty("template");
+  });
+
+  it("keeps a hostile self-given name out of workspace state entirely", async () => {
+    const news = pin(newsUrl, "b");
+    const plan = await resolveTemplateComposition({
+      roots: [{ url: newsUrl }],
+      expectedSystemEpoch: epoch,
+      ports: ports(
+        [news],
+        new Map([
+          [
+            normalizeTemplateGitUrl(newsUrl),
+            snapshot(news, [], "panels/news", {
+              // An interpunct forges the header's own field separator; the
+              // description is longer than the one line it is given.
+              name: "News \u00B7 github.com/vibestudio",
+              description: "x".repeat(201),
+            }),
+          ],
+        ])
+      ),
+    });
+
+    // Nothing partial survives: a repaired hostile string is still its author's.
+    expect(plan.lock!.nodes[0]!.presentation).toBeUndefined();
   });
 
   it("derives one stable alias from the URL even when a URL is both root and dependency", async () => {

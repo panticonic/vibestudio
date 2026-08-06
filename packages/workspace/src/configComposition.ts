@@ -78,9 +78,7 @@ export function parseWorkspaceConfigTopLayer(content: string): Manifest {
 }
 
 export function parseWorkspaceConfigFragment(content: string, nodeId: string): FragmentManifest {
-  return WorkspaceConfigFragmentSchema.parse(
-    parseMapping(content, `meta/templates/${nodeId}.yml`)
-  );
+  return WorkspaceConfigFragmentSchema.parse(parseMapping(content, `meta/templates/${nodeId}.yml`));
 }
 
 function declarationKey(section: string, value: Record<string, unknown>): string {
@@ -157,9 +155,7 @@ export function projectWorkspaceConfigMutationToTop(
       const topValues = Array.isArray(projected[section])
         ? (projected[section] as Array<Record<string, unknown>>)
         : [];
-      const byKey = new Map(
-        topValues.map((value) => [declarationKey(section, value), value])
-      );
+      const byKey = new Map(topValues.map((value) => [declarationKey(section, value), value]));
       const beforeByKey = new Map(
         (Array.isArray(before) ? before : []).map((value) => [
           declarationKey(section, value as Record<string, unknown>),
@@ -281,10 +277,7 @@ function layerArraySection(
 ): unknown[] | undefined {
   const topValues = (top[section] as unknown[] | undefined) ?? [];
   const topByKey = new Map(
-    topValues.map((value) => [
-      declarationKey(section, value as Record<string, unknown>),
-      value,
-    ])
+    topValues.map((value) => [declarationKey(section, value as Record<string, unknown>), value])
   );
   const inherited = new Map<string, OwnedValue<unknown>>();
   for (const layer of layers) {
@@ -313,9 +306,7 @@ function layerArraySection(
   for (const key of [...inherited.keys()]) {
     if (disabled.has(inheritedAddress(section, key))) inherited.delete(key);
   }
-  const merged = new Map<string, unknown>(
-    [...inherited].map(([key, owned]) => [key, owned.value])
-  );
+  const merged = new Map<string, unknown>([...inherited].map(([key, owned]) => [key, owned.value]));
   for (const [key, value] of topByKey) merged.set(key, value);
   return merged.size > 0 ? [...merged.values()] : undefined;
 }

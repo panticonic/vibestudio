@@ -5,28 +5,71 @@ panels, workers, Durable Objects, and server-side eval.
 
 ## The completion contract
 
-Panel operations have one meaning:
+Readiness-waiting panel operations have one meaning:
 
-- `await openPanel(...)`, `focus()`, `navigate()`, `reload()`, and `rebuild()`
+- `await createPanelSlot(...)` commits creation and returns the durable handle
+  without requesting a presentation lease or waiting for build or boot. The
+  panel remains unloaded until a consumer explicitly presents or inspects it.
+  It is the receipt-oriented primitive for
+  navigation workflows whose caller may have a shorter lifetime than the
+  panel build. Its `CreatePanelSlotOptions` deliberately has no `focus` or
+  readiness-affecting option.
+- `await openPanel(...)`, `focus()`, `navigate()`, `reload()`, `rebuild()`, and
+  `snapshot()`
   return only after the exact selected runtime attempt is application
-  **boot-ready**.
+  **boot-ready**. `focus: false` only suppresses presentation; `openPanel`
+  still waits for readiness. The wait has no fixed deadline; `options.signal`
+  is the caller-owned cancellation boundary.
 - They never treat a lease, a registered WebContents/CDP target, `about:blank`,
   or a successfully generated HTML shell as application success.
 - A resolve, build, host, navigation, bundle, or entry failure rejects with
   `PanelOperationError`. Do not infer success from a panel id or an empty
   snapshot.
-- `snapshot()` first enforces the same readiness contract and then returns a
-  capture tied to the attempt it read.
+- `snapshot()` then returns a capture tied to the attempt it read.
 
 Internally, creation has two deliberate boundaries. The durable tree slot is
 committed and becomes observable immediately; build preparation, host
 assignment, navigation, and application boot then advance that slot through the
 canonical phases. This prevents a slow or broken initial panel from blocking
 tree discovery, owner seeding, or creation of unrelated panels. The public
-`openPanel(...)` promise still waits for its own attempt to reach `ready` and
-has a finite 90-second readiness deadline. A terminal failure or deadline
-rejects with the last phase, host evidence, diagnostic id, and full attempt
-provenance—never with an apparently successful blank handle.
+`createPanelSlot(...)` exposes the committed boundary; `openPanel(...)`
+composes it with the readiness wait and still waits for its own attempt to
+reach `ready`. Readiness is observed immediately and then polled through the
+canonical `observeSlot` path; a ready observation resolves without waiting for
+anything else, and failed/stopped observations reject immediately. Browser observations
+also require the same runtime incarnation to remain ready across one short
+refresh.
+
+Execution activation is not presentation. Code-panel creation explicitly
+seals the reserved runtime entity after committing the slot so it cannot be
+stranded in `preparing`, but that transition does not allocate a renderer.
+Current-entity reconciliation only advances a lease that already exists; it
+never turns an unloaded slot into a resident one.
+
+Readiness-bearing operations also ensure presentation before they wait. This
+uses the idempotent `panelRuntime.ensureSlot` transition for programmatic
+runtimes, preferring the headless CDP host and falling back to a CDP-capable
+desktop host. A native desktop focus bridge owns its local lease instead, so a
+UI focus request does not move the panel to headless merely to satisfy an
+observation. `unload()` releases the presentation lease but preserves the
+durable slot and runtime entity; the next `focus()`, `openPanel()` wait,
+navigation, reload, rebuild, snapshot, or CDP operation can materialize it
+again. `observe()` itself is read-only and therefore reports `assigning-host`
+or `loading` after eviction rather than silently reacquiring resources.
+
+The state combinations are intentional: a committed slot may have no lease;
+a leased host may have no view while it is materializing; and a reconnecting
+lease may still exist for routing while its old ready sample is suppressed.
+None of those states is ready. A mobile lease is a valid visible presentation
+but cannot satisfy programmatic inspection, so readiness-bearing programmatic
+operations fail immediately with `host_unavailable`. Host materialization
+failures are reported as terminal host failures, not left as an unbounded
+pending wait; a later ensure can retry the failed host incarnation.
+Terminal build, host, load, and boot states reject immediately with host
+evidence, diagnostic id, and full attempt provenance—never with an apparently
+successful blank handle. Preparation has no renderer and is not inferred from
+elapsed time; activation is the explicit transition that allows a host to
+materialize the real renderer.
 
 This is intentionally stricter than browser “load” state. The generated panel
 bootstrap reports `loading → booting → ready` and reports entry errors,
@@ -65,8 +108,16 @@ panelTree.path(id): Promise<PanelRuntimeTreePath | null>
 panelTree.search(input): Promise<PanelRuntimeTreeSearchPage>
 panelTree.parent(id): PanelHandle | null
 panelTree.navigate(id, source, opts?): Promise<PanelObservation>
+createPanelSlot(source, opts?): Promise<PanelHandle>
 openPanel(source, opts?): Promise<PanelHandle>
 ```
+
+When creation may be redelivered, pass the same non-empty `operationId` on
+every attempt. Its durable identity includes `source`, `contextId`, `parentId`,
+and `ref`, so reusing an operation id for a different logical open cannot alias
+the original slot. An exact retry resumes the committed slot, including after
+an ambiguous transport failure. `slug` and `operationId` are mutually
+exclusive because each defines stable slot identity.
 
 `self()` and `get()` are synchronous handle factories; they do no I/O.
 Use bounded `rootGroups()`, `page()`, `path()`, and `search()` reads for large
@@ -74,7 +125,16 @@ histories. There are deliberately no whole-tree or whole-sibling convenience
 reads. Continue from `nextCursor` only while the page revision is unchanged;
 restart the group from its first page after a revision change. The scalar fields
 `id`, `title`, `source`, `kind`, and `parentId` are the handle’s last observed
-descriptor. Use `observe()` whenever correctness depends on live runtime state.
+descriptor. `search({ query })` matches indexed titles, source paths, manifest
+descriptions/dependencies, tags, and keywords; it includes committed slots even
+when their runtime is not ready. Use `observe()` whenever correctness depends
+on live runtime state.
+
+Root groups are attribution bands, not access-control boundaries. A root whose
+`ownerUserId` is the current user appears as **Your panels**; an ownerless root
+appears as **Workspace**; other member ids appear under that member. Children
+remain attached to their parent regardless of who created them. All groups are
+workspace-visible unless an independent authority policy says otherwise.
 
 ```ts
 let cursor: string | undefined;
@@ -108,8 +168,11 @@ When `contextId` is omitted, panel reservation mints a fresh context and
 atomically records it as a lifecycle child of the verified creator's context.
 The creator may inspect, automate, rebuild, or close that panel without a
 foreign-context approval, and destroying the creator context recursively
-retires the panel context. Ownership comes from the authenticated bridge caller;
-there is no caller-supplied owner/parent field.
+retires the panel context. When an installed extension performs the creation,
+the extension remains the lifecycle deputy while the host-verified root
+initiator owns the new context and supplies its human attribution. Ownership
+never comes from extension input, and there is no caller-supplied owner/parent
+field.
 
 Passing an explicit `contextId` deliberately shares that existing semantic
 context and does not re-parent it. This is the right form for context-local code
@@ -176,8 +239,9 @@ build key match the server attempt. This prevents an old ready renderer from
 acknowledging a newer rebuild while the host is still switching views.
 
 Every inspecting renderer host must implement the canonical
-`panelObservation` host command. Desktop and headless execute the same bounded
-page probe for `document.readyState`, the current URL, and
+`panelObservation` host command. Desktop and headless publish the same canonical
+`PanelHostObservation` value (including the nested `view` and `boot` states)
+and execute the same bounded page probe for `document.readyState`, the current URL, and
 `globalThis.__vibestudioPanelBoot`, then parse the result through the same
 shared contract. Target registration, successful navigation, an empty DOM, or
 the existence of a browser view is never a readiness substitute. A missing
@@ -241,10 +305,10 @@ compile error, or throwing entry module.
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `observe()`                                     | Current exact attempt, phase, host state, provenance, and structured failure                                                   |
 | `diagnose()`                                    | One bounded packet containing `observation`, historical console/lifecycle records, and a document when ready                   |
-| `snapshot()`                                    | Boot-ready document capture with `panelId`, `attemptId`, `runtimeEntityId`, `buildKey`, and `capturedAt`                       |
+| `snapshot(opts?)`                               | Boot-ready document capture with `panelId`, `attemptId`, `runtimeEntityId`, `buildKey`, and `capturedAt`                       |
 | `navigate(source, opts?)`                       | Transactionally prepare a new source/ref/context attempt, activate it, and wait for ready                                      |
-| `rebuild()`                                     | Transactionally prepare a new immutable attempt for the current source/ref without adding a history entry, then wait for ready |
-| `reload()`                                      | Reload the current view and wait for its boot handshake                                                                        |
+| `rebuild(opts?)`                                | Transactionally prepare a new immutable attempt for the current source/ref without adding a history entry, then wait for ready |
+| `reload(opts?)`                                 | Reload the current view and wait for its boot handshake                                                                        |
 | `focus(opts?)`                                  | Assign/present the panel and wait for ready                                                                                    |
 | `children()` / `parent()`                       | Tree relationships                                                                                                             |
 | `stateArgs.get()` / `stateArgs.set()`           | Validated host-owned application state args                                                                                    |
@@ -260,6 +324,11 @@ handle for `observe()`, `snapshot()`, and later lifecycle operations:
 const observation = await handle.rebuild();
 const capture = await handle.snapshot();
 ```
+
+All readiness-bearing methods accept `{ signal?: AbortSignal }`; `navigate()`
+and `focus()` include it in their existing options object. Cancellation stops
+the caller's wait. It does not roll back a durable creation or destroy a panel
+whose commit may already have succeeded.
 
 `navigate()` and `rebuild()` are atomic replacements: the new runtime and build
 are prepared before the current history entry is replaced. A preparation

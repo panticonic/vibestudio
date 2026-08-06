@@ -615,24 +615,27 @@ export const AgentHealthInspectionSchema = z
   .strict();
 export type AgentHealthInspection = z.infer<typeof AgentHealthInspectionSchema>;
 
-export const ChannelMessageTypeDefinitionSchema = z
+const AgenticStoredValueRefSchema = z
+  .object({
+    protocol: z.literal("vibestudio.blob-ref.v1"),
+    digest: z.string().min(1),
+    size: z.number().int().nonnegative(),
+    encoding: z.enum(["json", "text"]),
+    originalBytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * GAD's durable message-type projection is storage-form data. Reference-class
+ * event fields stay as blob refs inside the append transaction; PubSub owns
+ * hydration and semantic validation before callers can observe a definition.
+ */
+export const StoredChannelMessageTypeDefinitionSchema = z
   .object({
     typeId: z.string(),
     displayMode: z.enum(["inline", "row"]),
-    source: z.union([
-      z.object({ type: z.literal("code"), code: z.string() }).strict(),
-      z.object({ type: z.literal("file"), path: z.string() }).strict(),
-      z
-        .object({
-          protocol: z.literal("vibestudio.blob-ref.v1"),
-          digest: z.string().min(1),
-          size: z.number().int().nonnegative(),
-          encoding: z.enum(["json", "text"]),
-          originalBytes: z.number().int().nonnegative(),
-        })
-        .strict(),
-    ]),
-    imports: z.record(z.string()).optional(),
+    source: AgenticStoredValueRefSchema,
+    imports: AgenticStoredValueRefSchema.optional(),
     stateSchema: GadJsonRecordSchema.optional(),
     updateSchema: GadJsonRecordSchema.optional(),
     registeredBy: GadJsonRecordSchema.optional(),
@@ -640,14 +643,16 @@ export const ChannelMessageTypeDefinitionSchema = z
     clearedAtSeq: z.number().int().nonnegative().optional(),
   })
   .strict();
-export type ChannelMessageTypeDefinition = z.infer<typeof ChannelMessageTypeDefinitionSchema>;
+export type StoredChannelMessageTypeDefinition = z.infer<
+  typeof StoredChannelMessageTypeDefinitionSchema
+>;
 
-export const RegistryMutationInputSchema = z.discriminatedUnion("kind", [
+export const StoredRegistryMutationInputSchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("upsertMessageType"),
       typeId: z.string(),
-      row: ChannelMessageTypeDefinitionSchema.omit({
+      row: StoredChannelMessageTypeDefinitionSchema.omit({
         typeId: true,
         updatedAtSeq: true,
         clearedAtSeq: true,
@@ -656,7 +661,7 @@ export const RegistryMutationInputSchema = z.discriminatedUnion("kind", [
     .strict(),
   z.object({ kind: z.literal("clearMessageType"), typeId: z.string() }).strict(),
 ]);
-export type RegistryMutationInput = z.infer<typeof RegistryMutationInputSchema>;
+export type StoredRegistryMutationInput = z.infer<typeof StoredRegistryMutationInputSchema>;
 
 const ChannelEnvelopeAppendInputSchema = channelEnvelopeSchema
   .omit({
@@ -860,15 +865,17 @@ export const gadMethods = defineServiceMethods({
     access: writeAccess,
   },
   listMessageTypes: {
-    description: "List active custom message-type definitions for a channel.",
+    description:
+      "List active stored custom message-type definitions for a channel. Reference-class fields are hydrated and validated by PubSub before semantic use.",
     args: z.tuple([z.object({ channelId: z.string() }).strict()]),
-    returns: z.array(ChannelMessageTypeDefinitionSchema),
+    returns: z.array(StoredChannelMessageTypeDefinitionSchema),
     access: readAccess,
   },
   getMessageType: {
-    description: "Get one custom message-type definition from a channel registry.",
+    description:
+      "Get one stored custom message-type definition from a channel registry. PubSub owns its hydration boundary.",
     args: z.tuple([z.object({ channelId: z.string(), typeId: z.string() }).strict()]),
-    returns: ChannelMessageTypeDefinitionSchema.nullable(),
+    returns: StoredChannelMessageTypeDefinitionSchema.nullable(),
     access: readAccess,
   },
   getChannelEnvelope: {

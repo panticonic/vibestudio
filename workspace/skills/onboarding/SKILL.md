@@ -13,30 +13,28 @@ checklist item.
 
 Use the chat panel's `client_eval` tool to statically import
 `composeOnboardingSnapshot` from `@workspace-skills/onboarding`, then return
-`await composeOnboardingSnapshot()` with no arguments. Also read the cached
-verified `TemplateCatalogSnapshot` through the templates skill. Client eval
-runs the base-owned composer inside the inviting panel, the shared boundary
-that can reach workspace owners and the redacted Electron host read.
+`await composeOnboardingSnapshot()` with no arguments. Client eval runs the
+base-owned composer inside the inviting panel, the shared boundary that can
+reach workspace owners and the redacted Electron host read.
 
 Render the returned array with `inline_ui` from
-`skills/onboarding/SetupHub.tsx`, passing `{ snapshot, templateCatalog }`. The composer reads
+`skills/onboarding/SetupHub.tsx`, passing `{ snapshot }`. The composer reads
 Google, GitHub, model settings, agent defaults, local models, browser imports,
 and web search directly from their owners. It composes device/workspace topology
 from `hubControl.listDevices` and `hubControl.listWorkspaces`, plus the
-client-local route mode. A failed optional read becomes an honest `unknown` row
-and does not suppress the rest. When Google Workspace, GitHub, local-model, or
-mobile/phone-setup owners are absent, their rows are explicitly **Available to
-install**. Their install buttons bind to the exact registry commit and snapshot
-shown in `templateCatalog`; without a verified catalog they route to catalog
-refresh, never to a guessed URL or version. Installing the mobile template
-changes the Devices row back to the ordinary phone setup and pairing workflow.
+client-local route mode. A failed read becomes an honest `unknown` row and does
+not suppress the rest. These owners currently ship in the base workspace. If
+one cannot be discovered, that row is **Unavailable** because the shipped base
+capability is broken or incomplete; onboarding never offers a template as a
+substitute.
 
 The opening message is short. The inline setup overview is the first-screen
 information architecture. Do not load or publish an onboarding action bar.
 
 ## Capability selections
 
-The component sends readable text and typed message metadata:
+For agent-owned selections, the component sends readable text and typed message
+metadata.
 
 ```ts
 {
@@ -52,19 +50,21 @@ The component sends readable text and typed message metadata:
 Resolve the structured interaction through `client_eval`: statically import
 `executeOnboardingSelection` from `@workspace-skills/onboarding` and pass the
 complete `interaction` object; never route from its readable label. The
-checked-in function validates the catalog and performs About, workspace-panel,
+checked-in function validates the selection and performs About, workspace-panel,
 and shell navigation in the inviting client.
 
 - `owner-skill`: read `route.ownerSkillPath` and use that owner workflow.
 - `model-settings`: use the model-settings provider/default workflow.
 - `conversation`: explain or begin using the ready capability.
-- `template-catalog`: resolve `target.templateId` against the verified catalog
-  snapshot shown to the user, then pass that entry's exact, commit-bound
-  interaction through `executeTemplateSelection` and the templates skill. Do
-  not synthesize a URL or version and do not invoke an absent owner skill.
 
-Navigation routes return `handled: true`. Owner/model/conversation routes
-return `handled: false` with the authoritative target. Unknown IDs and
+Client-owned panel navigation focuses the destination and waits for its exact
+application readiness before returning `handled: true` with the committed
+`panelId` and `readiness: "ready"`. If the slot was committed but readiness
+failed, the result is `readiness: "unconfirmed"` with the structured failure;
+do not repeat the open because that panel slot is already committed.
+shell navigation returns `handled: true`. Owner/model/conversation routes
+return `handled: false` with the authoritative target. An unconfirmed result
+also includes the structured failure. Unknown IDs and
 unsupported actions are errors. Do not fall back to matching button prose.
 `client_eval` owns only the client-affine snapshot and selection boundary.
 After an `owner-skill` handoff, use ordinary server-side `eval` for owner
@@ -84,27 +84,15 @@ Refresh, workflow success, failure, and cancellation likewise produce a new
 snapshot. Inline props must not contain credential material, browser samples,
 device IDs, pairing links, profile paths, or private topology.
 
-## Templates from the catalog
+## Templates
 
-When the user asks to add a template, render
-`skills/onboarding/TemplateCatalog.tsx` with `inline_ui`. Its cards send typed
-template interactions; route the complete interaction through
-`executeTemplateSelection` from `@workspace-skills/onboarding`. Never infer a
-template action from a button label or resolve a template in the client.
-
-Use the [templates skill](../templates/SKILL.md) for the userland composer flow:
-inspect first, explain what would change in plain language, and then call the
-template-composer extension so its approval card decides. The inline component
-must receive a `TemplateCatalogSnapshot` previously read from that extension;
-it never imports catalog data. After the card resolves, render a
-new catalog or status observation; do not mutate the earlier card.
-
-Capabilities owned by optional templates are advertised as installable, not
-ready or configurable. After a successful install, refresh the snapshot:
-runtime owner-skill discovery changes the same row into its ordinary setup or
-use workflow. The optional set for this release is `examples`,
-`google-workspace`, `github`, `local-models`, `mobile`, `news`, and
-`spectrolite`; everything else is base.
+Onboarding reflects the capabilities actually composed into the current
+workspace. It does not hard-code planned template ids or advertise future
+extractions. Template discovery, preparation, review, and installation belong
+to the Templates surface and template composer, which may show only entries
+from a verified deployed catalog. If a future optional template is installed,
+ordinary runtime owner discovery can expose its setup workflow without adding
+a second catalog or installation path to onboarding.
 
 ## Product rules
 

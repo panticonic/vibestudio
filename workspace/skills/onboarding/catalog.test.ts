@@ -43,9 +43,22 @@ describe("onboarding catalog", () => {
     }
   });
 
+  it("describes only capabilities shipped in the base workspace", () => {
+    expect(JSON.stringify(onboardingCatalog)).not.toContain('"via":"template"');
+    expect(JSON.stringify(onboardingCatalog)).not.toContain('"install"');
+  });
+
   it("uses the concise browser import label", () => {
-    expect(onboardingCatalog.find((entry) => entry.id === "migration.browser-environment")?.title).toBe(
-      "Browser import"
+    expect(
+      onboardingCatalog.find((entry) => entry.id === "migration.browser-environment")?.title
+    ).toBe("Browser import");
+  });
+
+  it("routes Local Models through its shipped panel instead of a nonexistent skill", () => {
+    const localModels = onboardingCatalog.find(
+      (entry) => entry.id === "configuration.local-models"
     );
+    expect(localModels?.ownerSkillPath).toBeUndefined();
+    expect(localModels?.actions?.setup).toEqual({ via: "panel", path: "panels/local-models" });
   });
 });

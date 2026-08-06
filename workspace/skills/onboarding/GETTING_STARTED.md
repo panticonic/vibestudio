@@ -12,11 +12,10 @@ Use `client_eval` to statically import `composeOnboardingSnapshot` from
 composer inside the inviting chat panel, where direct owner APIs and the
 redacted Electron host topology read are both reachable.
 
-Read the cached verified template catalog through the templates skill and
-render `{ snapshot, templateCatalog }` with the base-owned setup hub. Do not
-recreate either catalog in prose. In a non-panel client, summarize blocking,
-attention, and installable states concisely and mention that all other
-configuration is optional.
+Render `{ snapshot }` with the base-owned setup hub. In a non-panel client,
+summarize blocking and attention states concisely and mention that all other
+configuration is optional. A missing owner for a capability shipped in base is
+unavailable, not installable.
 
 ## Handle a choice
 
@@ -26,6 +25,12 @@ statically import `executeOnboardingSelection` from
 follow an unhandled owner target. The function performs validated About, panel,
 and shell navigation. This is the only selection route; the visible sentence
 is for people and transcript replay, not dispatch.
+
+Panel navigation focuses the destination and waits for application readiness.
+It includes the committed `panelId` and reports `readiness: "ready"`. An
+`unconfirmed` result means the slot was committed but readiness failed; it
+includes the structured failure, so do not retry the open while readiness is
+uncertain.
 
 Owner workflows remain authoritative:
 
@@ -38,15 +43,11 @@ Owner workflows remain authoritative:
 - Credential inspection/revocation and agent grants open their distinct About
   pages.
 
-Template catalog selections are a separate typed route. Render
-`TemplateCatalog.tsx`, then pass its complete interaction through
-`executeTemplateSelection`. Follow the [templates skill](../templates/SKILL.md):
-it inspects before add and uses the ordinary protected-publication approval card. The client does
-not look up versions or install anything itself. Pass the cached verified
-`TemplateCatalogSnapshot` from the userland template composer as the component's
-`catalog` prop; catalog selections carry that snapshot's exact registry commit
-and snapshot digest. Missing optional owners route to this same verified
-selection flow; they are never shown as ready and never invoke a missing skill.
+Onboarding does not advertise planned template extractions or offer template
+installation. The separate Templates workflow owns verified catalog refresh,
+exact selection, inspection, conflict choices, approval, and operation
+recovery. Until a template is deployed in that catalog, it does not exist as an
+installable product capability.
 
 After any check or workflow outcome, call the composer through `client_eval`
 again and render a new observation. A Google/GitHub check passes the selected

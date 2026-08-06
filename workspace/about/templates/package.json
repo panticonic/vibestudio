@@ -82,7 +82,7 @@
     "@vibestudio/shared": "workspace:*",
     "@workspace/about-shared": "workspace:*",
     "@workspace/runtime": "workspace:*",
-    "@workspace/template-registry": "workspace:*",
+    "@workspace/template-management": "workspace:*",
     "@radix-ui/themes": "^3.2.1",
     "@radix-ui/react-icons": "^1.3.2",
     "react": "^19.2.0"

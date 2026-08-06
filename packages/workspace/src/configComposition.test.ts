@@ -9,8 +9,7 @@ import {
   type WorkspaceConfigFragmentLayer,
 } from "./configComposition.js";
 
-const top = (extra = "") =>
-  parseWorkspaceConfigTopLayer(`systemEpoch: 57\n${extra}`);
+const top = (extra = "") => parseWorkspaceConfigTopLayer(`systemEpoch: 57\n${extra}`);
 
 function layer(
   nodeId: string,
@@ -36,12 +35,7 @@ describe("workspace template manifest composition", () => {
       top(),
       [
         layer("t-a", "base", "extensions:\n  - source: extensions/chat\n    ref: v1\n"),
-        layer(
-          "t-b",
-          "child",
-          "extensions:\n  - source: extensions/chat\n    ref: v2\n",
-          ["t-a"]
-        ),
+        layer("t-b", "child", "extensions:\n  - source: extensions/chat\n    ref: v2\n", ["t-a"]),
       ],
       "ws"
     );
@@ -92,10 +86,7 @@ describe("workspace template manifest composition", () => {
 
   it("rejects template trust and provider grants at the fragment boundary", () => {
     expect(() =>
-      parseWorkspaceConfigFragment(
-        "systemEpoch: 57\ntrust:\n  chromeApps: [apps/shell]\n",
-        "t-a"
-      )
+      parseWorkspaceConfigFragment("systemEpoch: 57\ntrust:\n  chromeApps: [apps/shell]\n", "t-a")
     ).toThrow();
     expect(() =>
       parseWorkspaceConfigFragment(
@@ -139,9 +130,7 @@ describe("workspace template manifest composition", () => {
       ),
     };
     const projected = projectWorkspaceConfigMutationToTop(workspaceTop, current, next);
-    expect(projected.extensions).toEqual([
-      { source: "extensions/chat", ref: "feature" },
-    ]);
+    expect(projected.extensions).toEqual([{ source: "extensions/chat", ref: "feature" }]);
     expect(composeWorkspaceConfig(projected, layers, "ws")).toEqual(next);
   });
 
