@@ -62,14 +62,25 @@ export function declaredMethodCapabilityDependencies(matrix) {
   for (const [service, entry] of Object.entries(matrix)) {
     for (const [method, methodCensus] of Object.entries(entry.methods ?? {})) {
       const declaration = methodCensus?.authority ?? methodCensus;
-      if (!declaration || declaration.inherits === true) continue;
       const required = new Set();
-      for (const additional of declaration.additional ?? []) {
+      for (const approval of methodCensus?.access?.approval ?? []) {
+        if (
+          typeof approval?.capability === "string" &&
+          (approval.tier === "gated" || approval.tier === "critical")
+        ) {
+          required.add(approval.capability);
+        }
+      }
+      for (const additional of declaration && declaration.inherits !== true
+        ? (declaration.additional ?? [])
+        : []) {
         if (typeof additional?.capability === "string" && includesCode(additional.requirement)) {
           required.add(additional.capability);
         }
       }
-      for (const leaf of declaration.prepared?.leaves ?? []) {
+      for (const leaf of declaration && declaration.inherits !== true
+        ? (declaration.prepared?.leaves ?? [])
+        : []) {
         const admitsCode =
           leaf?.requirement?.kind === "selected"
             ? leaf.requirement.principals?.includes("code")
@@ -428,10 +439,7 @@ export function inferExtensionContextCapabilities(source, hostCapabilities) {
  * explicit manifest. Keeping the syntactic recognition here gives checkout
  * audits and exact-state builds one inference implementation.
  */
-export function inferUnitTransportCapabilities(
-  source,
-  { hostCapabilities, serviceMethods }
-) {
+export function inferUnitTransportCapabilities(source, { hostCapabilities, serviceMethods }) {
   const capabilities = new Set(["context.boundary"]);
 
   for (const capability of inferExtensionContextCapabilities(source, hostCapabilities)) {

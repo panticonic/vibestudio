@@ -26,6 +26,7 @@ const OPEN_EXTERNAL_ACCESS: MethodAccessDescriptor = {
     {
       when: "caller is panel/app/worker/do",
       capability: EXTERNAL_OPEN_CAPABILITY,
+      tier: "gated",
       operation: { kind: "browser", verb: "Open external browser" },
       grantScopes: ["once", "session", "version"],
       reason: "Opening URLs in the system browser from code requires user consent.",

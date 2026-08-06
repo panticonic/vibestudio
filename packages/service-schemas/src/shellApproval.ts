@@ -22,7 +22,11 @@ import type {
 import type { AuthorityRequirement, InvocationSnapshot } from "@vibestudio/rpc";
 import { APPROVAL_DECISIONS } from "@vibestudio/shared/approvalContract";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  fixedPreparedAuthorityRequirement,
+} from "@vibestudio/shared/typedServiceClient";
+import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/authorityDomains";
 import type { AuthorityRowDiff } from "@vibestudio/shared/authority/authorityRowDiff";
 import { authorityRowSchema } from "./authority.js";
@@ -842,16 +846,53 @@ export const workspaceCreationReviewStateSchema = z.discriminatedUnion("status",
 
 export type WorkspaceCreationReviewState = z.infer<typeof workspaceCreationReviewStateSchema>;
 
+export const SHELL_APPROVAL_READ_AUTHORITY_RESOLVER = "shellApproval.presenter.read" as const;
+export const SHELL_APPROVAL_DECIDE_AUTHORITY_RESOLVER = "shellApproval.presenter.decide" as const;
+export const SHELL_APPROVAL_INPUT_AUTHORITY_RESOLVER =
+  "shellApproval.presenter.protected-input" as const;
+
+function presenterAuthority(capability: string, resolver: string) {
+  return {
+    requirement: requirementForPrincipals(["user", "host", "code"], capability),
+    resource: { kind: "literal" as const, key: capability },
+    prepared: {
+      resolver,
+      leaves: [
+        {
+          capability,
+          requirement: fixedPreparedAuthorityRequirement(
+            requirementForPrincipals(["code"], capability)
+          ),
+          tier: "gated" as const,
+        },
+      ],
+    },
+  };
+}
+
+const approvalReadAuthority = presenterAuthority(
+  "approvals.read",
+  SHELL_APPROVAL_READ_AUTHORITY_RESOLVER
+);
+const approvalDecisionAuthority = presenterAuthority(
+  "approvals.decide",
+  SHELL_APPROVAL_DECIDE_AUTHORITY_RESOLVER
+);
+const protectedInputAuthority = presenterAuthority(
+  "protected-input.submit",
+  SHELL_APPROVAL_INPUT_AUTHORITY_RESOLVER
+);
+
 export const shellApprovalMethods = defineServiceMethods({
   resolve: {
     capability: "approvals.decide",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
     },
     presentation: {
       title: "Respond to a workspace request",
@@ -867,17 +908,19 @@ export const shellApprovalMethods = defineServiceMethods({
       "Record the user's decision (once/session/version/deny/dismiss) on a pending approval, resolving its queued request.",
     args: z.tuple([z.string(), z.enum(APPROVAL_DECISIONS)]),
     returns: z.void(),
+    authority: approvalDecisionAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", "once"] }],
   },
   resolveMissionReview: {
     capability: "approvals.decide",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
-      rationale: "G5: trusted approval plumbing resolving an exact queued mission closure",
+      rationale:
+        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
     },
     presentation: {
       title: "Respond to an automation plan",
@@ -904,6 +947,7 @@ export const shellApprovalMethods = defineServiceMethods({
       ]),
     ]),
     returns: z.void(),
+    authority: approvalDecisionAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { decision: "dismiss" }] }],
   },
@@ -919,11 +963,12 @@ export const shellApprovalMethods = defineServiceMethods({
   resolveInstallReview: {
     capability: "approvals.decide",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
-      rationale: "G5: trusted approval plumbing resolving an exact queued install review",
+      rationale:
+        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
     },
     presentation: {
       title: "Add or update parts of this workspace",
@@ -942,18 +987,19 @@ export const shellApprovalMethods = defineServiceMethods({
     // that knows the answer was given, so it is the one that has to be able to
     // say what happened — including that nothing did.
     returns: installReviewResolutionSchema,
+    authority: approvalDecisionAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { decision: "cancel" }] }],
   },
   resolveBootstrap: {
     capability: "approvals.decide",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared approvals.decide leaf",
     },
     presentation: {
       title: "Approve initial workspace access",
@@ -976,18 +1022,19 @@ export const shellApprovalMethods = defineServiceMethods({
         })
         .strict()
     ),
+    authority: approvalDecisionAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: [["approval-123"], "deny"] }],
   },
   submitClientConfig: {
     capability: "protected-input.submit",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.control",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
     },
     presentation: {
       title: "Submit account-provider settings",
@@ -1003,18 +1050,19 @@ export const shellApprovalMethods = defineServiceMethods({
       "Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request.",
     args: z.tuple([z.string(), shellApprovalValuesSchema]),
     returns: z.void(),
+    authority: protectedInputAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { clientId: "abc", clientSecret: "shh" }] }],
   },
   submitCredentialInput: {
     capability: "protected-input.submit",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.control",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
     },
     presentation: {
       title: "Submit account details",
@@ -1030,18 +1078,19 @@ export const shellApprovalMethods = defineServiceMethods({
       "Submit the user-entered credential/secret field values for a pending approval, fulfilling its credential-input request.",
     args: z.tuple([z.string(), shellApprovalValuesSchema]),
     returns: z.void(),
+    authority: protectedInputAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { token: "secret-value" }] }],
   },
   submitSecretInput: {
     capability: "protected-input.submit",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.control",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared protected-input.submit leaf",
     },
     presentation: {
       title: "Submit a protected value",
@@ -1057,18 +1106,19 @@ export const shellApprovalMethods = defineServiceMethods({
       "Submit the user-entered secret field values for a pending secret-input approval, fulfilling its feedback-form request.",
     args: z.tuple([z.string(), shellApprovalValuesSchema]),
     returns: z.void(),
+    authority: protectedInputAuthority,
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", { value: "secret-value" }] }],
   },
   listPending: {
     capability: "approvals.read",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
       rationale:
-        "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
+        "The transport is open; non-chrome presenters receive one prepared approvals.read leaf",
     },
     presentation: {
       title: "View requests awaiting your decision",
@@ -1084,16 +1134,18 @@ export const shellApprovalMethods = defineServiceMethods({
       "List the approvals currently awaiting a decision, used to rehydrate the consent approval bar on mount.",
     args: z.tuple([]),
     returns: z.array(pendingApprovalSchema),
+    authority: approvalReadAuthority,
     access: LIST_PENDING_ACCESS,
   },
   getWorkspaceCreationReviewState: {
     capability: "approvals.read",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "shellApproval.read",
-      rationale: "G5: host infrastructure plumbing; semantic startup-review preparation state",
+      rationale:
+        "The transport is open; non-chrome presenters receive one prepared approvals.read leaf",
     },
     presentation: {
       title: "View requests awaiting your decision",
@@ -1109,6 +1161,7 @@ export const shellApprovalMethods = defineServiceMethods({
       "Return the host-owned preparation state for the workspace creation review without waiting for a human decision.",
     args: z.tuple([]),
     returns: workspaceCreationReviewStateSchema,
+    authority: approvalReadAuthority,
     access: LIST_PENDING_ACCESS,
   },
 });

@@ -4,6 +4,11 @@ import type {
   PendingApproval,
   PendingUnitInstallReviewApproval,
 } from "@vibestudio/shared/approvals";
+import {
+  SHELL_APPROVAL_DECIDE_AUTHORITY_RESOLVER,
+  SHELL_APPROVAL_READ_AUTHORITY_RESOLVER,
+  shellApprovalMethods,
+} from "@vibestudio/service-schemas/shellApproval";
 import { createApprovalQueue } from "./approvalQueue.js";
 import { createShellApprovalService } from "./shellApprovalService.js";
 import { createPushMetrics } from "./pushMetrics.js";
@@ -55,6 +60,46 @@ function startupApproval(id = "startup-1"): PendingUnitInstallReviewApproval {
 }
 
 describe("shellApprovalService", () => {
+  it("keeps trusted presenters independent of their own approval grants", async () => {
+    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const service = createShellApprovalService({
+      approvalQueue,
+      hasAppCapability: (callerId, capability) =>
+        callerId === "app:apps/shell:desktop" && capability === "panel-hosting",
+    });
+    const trusted = createVerifiedCaller("app:apps/shell:desktop", "app", {
+      callerId: "app:apps/shell:desktop",
+      callerKind: "app",
+      repoPath: "apps/shell",
+      effectiveVersion: "v1",
+      requested: [],
+    });
+    const ordinary = createVerifiedCaller("app:apps/terminal-browser:terminal", "app", {
+      callerId: "app:apps/terminal-browser:terminal",
+      callerKind: "app",
+      repoPath: "apps/terminal-browser",
+      effectiveVersion: "v1",
+      requested: [],
+    });
+
+    expect(shellApprovalMethods.listPending.tier.tier).toBe("open");
+    expect(shellApprovalMethods.resolve.tier.tier).toBe("open");
+    expect(
+      await service.authorityPreparation?.[SHELL_APPROVAL_READ_AUTHORITY_RESOLVER]?.(
+        { caller: trusted },
+        []
+      )
+    ).toMatchObject({ selections: [] });
+    expect(
+      await service.authorityPreparation?.[SHELL_APPROVAL_DECIDE_AUTHORITY_RESOLVER]?.(
+        { caller: ordinary },
+        []
+      )
+    ).toMatchObject({
+      selections: [{ capability: "approvals.decide", resourceKey: "approvals.decide" }],
+    });
+  });
+
   it("returns the host-owned creation review preparation state", async () => {
     const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
     const service = createShellApprovalService({

@@ -16,7 +16,10 @@ function sourceTreeContains(directory, pattern) {
     const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
     if (entry.isDirectory()) {
       if (sourceTreeContains(child, pattern)) return true;
-    } else if (/\.(?:ts|tsx|js|jsx)$/.test(entry.name) && pattern.test(fs.readFileSync(child, "utf8"))) {
+    } else if (
+      /\.(?:ts|tsx|js|jsx)$/.test(entry.name) &&
+      pattern.test(fs.readFileSync(child, "utf8"))
+    ) {
       return true;
     }
   }
@@ -181,7 +184,10 @@ describe("declared host-method capability dependencies", () => {
         if (!entry.isDirectory()) continue;
         const unitDirectory = new URL(`${entry.name}/`, directory);
         const manifestUrl = new URL("package.json", unitDirectory);
-        if (!fs.existsSync(manifestUrl) || !sourceTreeContains(unitDirectory, /\bbuildPanelLink\b/)) {
+        if (
+          !fs.existsSync(manifestUrl) ||
+          !sourceTreeContains(unitDirectory, /\bbuildPanelLink\b/)
+        ) {
           continue;
         }
         const manifest = JSON.parse(fs.readFileSync(manifestUrl, "utf8"));
@@ -265,5 +271,24 @@ describe("declared host-method capability dependencies", () => {
       },
     });
     assert.deepEqual([...(dependencies.get("service:runtime.create") ?? [])], ["context.boundary"]);
+  });
+
+  it("adds schema-owned conditional approval effects for handler-mediated authority", () => {
+    const dependencies = declaredMethodCapabilityDependencies({
+      credentials: {
+        methods: {
+          resolveCredential: {
+            authority: { inherits: true },
+            access: {
+              approval: [{ capability: "credential.use", tier: "gated" }],
+            },
+          },
+        },
+      },
+    });
+    assert.deepEqual(
+      [...(dependencies.get("service:credentials.resolveCredential") ?? [])],
+      ["credential.use"]
+    );
   });
 });

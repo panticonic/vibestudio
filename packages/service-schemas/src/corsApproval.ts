@@ -23,6 +23,7 @@ const AUTHORIZE_ACCESS: MethodAccessDescriptor = {
   approval: [
     {
       capability: CORS_RESPONSE_CAPABILITY,
+      tier: "gated",
       operation: { kind: "network", verb: "Read cross-origin response" },
       grantScopes: ["once", "session", "version"],
       reason: "Reading CORS-protected responses from another origin requires user consent.",

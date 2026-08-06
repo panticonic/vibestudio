@@ -81,6 +81,8 @@ export interface AccessRestriction {
 export interface AccessApproval {
   when?: string;
   capability?: string;
+  /** Reviewed tier for a receiver-owned conditional effect. */
+  tier?: "gated" | "critical";
   operation: { kind: string; verb: string; groupKeyTemplate?: string };
   grantScopes?: string[];
   severity?: "standard" | "severe";

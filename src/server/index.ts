@@ -2966,6 +2966,8 @@ async function main() {
       approvalQueue,
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
       workspaceCreationReviewState: () => workspaceCreationReviewState,
+      hasAppCapability: (callerId, capability) =>
+        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     })
   );
   const { BrowserPermissionGrantProjection, createBrowserPermissionsService } =

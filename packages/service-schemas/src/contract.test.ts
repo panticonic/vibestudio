@@ -497,4 +497,12 @@ describe("service schema contracts", () => {
       `Methods missing \`access.sensitivity\` (add read|write|admin|destructive): ${missing.join(", ")}`
     ).toEqual([]);
   });
+
+  it("declares the exact credential-use effect on every credential mediation entrypoint", () => {
+    for (const method of ["resolveCredential", "proxyFetch", "proxyGitHttp"] as const) {
+      expect(credentialsMethods[method].access?.approval).toContainEqual(
+        expect.objectContaining({ capability: "credential.use", tier: "gated" })
+      );
+    }
+  });
 });

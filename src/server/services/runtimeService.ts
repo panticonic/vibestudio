@@ -53,7 +53,7 @@ import {
 } from "@vibestudio/shared/runtime/entitySpec";
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import { isAuthorizedChrome, isInteractiveChrome } from "./chromeTrust.js";
 import {
   prepareContextBoundarySelection,
   type ContextBoundaryAction,
@@ -1081,7 +1081,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     caller: VerifiedCaller,
     input: RuntimeExecutionRecoveryRequest
   ): Promise<RuntimeExecutionRecoveryResult> {
-    requireTrustedRuntimeHost(caller, "recoverExecution");
+    if (!isInteractiveChrome(caller, { hasAppCapability: deps.hasAppCapability })) {
+      throw new Error("runtime.recoverExecution is restricted to interactive trusted chrome");
+    }
     const previous = recoveryChains.get(input.entityId);
     const run = () => {
       const attemptCount = ++recoveryAttemptCount;

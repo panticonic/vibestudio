@@ -137,6 +137,7 @@ interface BuildDepsOptions {
   onPanelExecutionActivated?: Parameters<
     typeof createRuntimeService
   >[0]["onPanelExecutionActivated"];
+  hasAppCapability?: Parameters<typeof createRuntimeService>[0]["hasAppCapability"];
   faultAbortAgentVessel?: Parameters<typeof createRuntimeService>[0]["faultAbortAgentVessel"];
 }
 
@@ -284,6 +285,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     onContextRemoved: opts.onContextRemoved,
     onPanelExecutionActivated: opts.onPanelExecutionActivated,
     setEntityTitle: opts.setEntityTitle,
+    hasAppCapability: opts.hasAppCapability,
     faultAbortAgentVessel: opts.faultAbortAgentVessel,
     semanticContexts,
   });
@@ -2834,6 +2836,39 @@ describe("runtimeService.cloneContext", () => {
 });
 
 describe("runtimeService execution recovery", () => {
+  it("admits the trusted shell app without a self-referential recovery grant", async () => {
+    const { service, dispatch } = await buildDeps({
+      hasAppCapability: (callerId, capability) =>
+        callerId === "app:apps/shell:desktop" && capability === "panel-hosting",
+    });
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({ contextId: "ctx-recovery" }),
+    ])) as { id: string };
+
+    await expect(
+      dispatch(appCaller(), "recoverExecution", [
+        {
+          entityId: handle.id,
+          expectedExecutionDigest: sealedExecution.executionDigest,
+          strategy: "restore-exact",
+        },
+      ])
+    ).resolves.toMatchObject({ entityId: handle.id, strategy: "restore-exact" });
+  });
+
+  it("rejects an ordinary installed app even though recovery transport is open", async () => {
+    const { service } = await buildDeps({ hasAppCapability: () => false });
+    await expect(
+      service.handler({ caller: appCaller("app:apps/untrusted:desktop") }, "recoverExecution", [
+        {
+          entityId: "do:workers/agent:AgentDO:missing",
+          expectedExecutionDigest: sealedExecution.executionDigest,
+          strategy: "restore-exact",
+        },
+      ])
+    ).rejects.toThrow(/interactive trusted chrome/);
+  });
+
   it("restores only the expected sealed incarnation", async () => {
     const { service, recoverExactExecution, restartDurableObjectIncarnation } = await buildDeps();
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [

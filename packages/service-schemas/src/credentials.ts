@@ -97,7 +97,8 @@ const DELETE_CLIENT_CONFIG_ACCESS: MethodAccessDescriptor = {
   approval: [
     {
       when: "caller is a userland runtime (panel/app/worker/do)",
-      capability: "client-config-delete",
+      capability: "account-providers.delete",
+      tier: "critical",
       operation: { kind: "credential", verb: "Disable client configuration" },
       reason: "Disabling a client config breaks new connections and refreshes for that provider.",
     },
@@ -111,6 +112,8 @@ const RESOLVE_CREDENTIAL_ACCESS: MethodAccessDescriptor = {
   approval: [
     {
       when: "caller is not already granted use of the matched credential",
+      capability: "credential.use",
+      tier: "gated",
       operation: { kind: "credential", verb: "Use credential" },
       grantScopes: ["once", "session", "version"],
       reason: "Handing a stored credential to an agent for use requires the user to authorize it.",
@@ -131,6 +134,17 @@ const FORWARD_OAUTH_CALLBACK_ACCESS: MethodAccessDescriptor = {
 /** Egress: forwards an outbound request through the credential-injecting proxy. */
 const PROXY_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
+  approval: [
+    {
+      when: "the request selects a stored credential the caller is not already allowed to use",
+      capability: "credential.use",
+      tier: "gated",
+      operation: { kind: "credential", verb: "Use credential" },
+      grantScopes: ["once", "session", "version"],
+      reason:
+        "Injecting a stored credential into an outbound request requires authorization for that exact credential and use context.",
+    },
+  ],
 };
 
 export const IdentifierSchema = z

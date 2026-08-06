@@ -11,14 +11,25 @@
 
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
+import {
+  SHELL_APPROVAL_DECIDE_AUTHORITY_RESOLVER,
+  SHELL_APPROVAL_INPUT_AUTHORITY_RESOLVER,
+  SHELL_APPROVAL_READ_AUTHORITY_RESOLVER,
+  shellApprovalMethods,
+} from "@vibestudio/service-schemas/shellApproval";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
+import {
+  fixedPreparedAuthoritySelection,
+  preparedAuthorityState,
+} from "@vibestudio/shared/serviceDefinition";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 /**
  * The surface a resolution arrived from (WP5 §5). Derived from the transport
@@ -64,6 +75,7 @@ export function createShellApprovalService(deps: {
   metrics?: PushMetrics;
   deviceLabelFor?: (deviceId: string) => string | undefined;
   workspaceCreationReviewState?: () => WorkspaceCreationReviewState;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
 }): ServiceDefinition {
   const { approvalQueue } = deps;
   const metrics = deps.metrics ?? pushMetrics;
@@ -71,12 +83,28 @@ export function createShellApprovalService(deps: {
   const workspaceCreationReviewState =
     deps.workspaceCreationReviewState ?? (() => ({ status: "resolved" as const }));
   const serviceName = "shellApproval";
+  const preparePresenter = (capability: string) => (ctx: ServiceContext) => {
+    if (
+      isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability }) ||
+      (!ctx.caller.code && !ctx.caller.executionSession)
+    ) {
+      return preparedAuthorityState([]);
+    }
+    return preparedAuthorityState([
+      fixedPreparedAuthoritySelection({ capability, resourceKey: capability }),
+    ]);
+  };
 
   return {
     name: "shellApproval",
     description: "Shell-owned consent approval queue",
     authority: { principals: ["user", "code", "host"] },
     methods: shellApprovalMethods,
+    authorityPreparation: {
+      [SHELL_APPROVAL_READ_AUTHORITY_RESOLVER]: preparePresenter("approvals.read"),
+      [SHELL_APPROVAL_DECIDE_AUTHORITY_RESOLVER]: preparePresenter("approvals.decide"),
+      [SHELL_APPROVAL_INPUT_AUTHORITY_RESOLVER]: preparePresenter("protected-input.submit"),
+    },
     handler: defineServiceHandler(serviceName, shellApprovalMethods, {
       resolve: async (ctx, [approvalId, decision]) => {
         const pending = approvalQueue

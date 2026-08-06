@@ -80,6 +80,24 @@ for (const [method, capability] of methodCapabilities) {
 }
 for (const [serviceName, service] of Object.entries(matrix)) {
   for (const [methodName, method] of Object.entries(service.methods)) {
+    for (const approval of method.access?.approval ?? []) {
+      if (approval.capability === undefined) continue;
+      if (typeof approval.capability !== "string" || approval.capability.length === 0) {
+        throw new Error(
+          `${serviceName}.${methodName} has an invalid conditional approval capability`
+        );
+      }
+      if (approval.tier !== "gated" && approval.tier !== "critical") {
+        throw new Error(
+          `${serviceName}.${methodName} conditional ${approval.capability} approval has no reviewed tier`
+        );
+      }
+      recordCapabilityTier(
+        approval.capability,
+        approval.tier,
+        `${serviceName}.${methodName} conditional ${approval.capability} approval`
+      );
+    }
     for (const leaf of method.authority?.prepared?.leaves ?? []) {
       if (leaf.capability === undefined) continue;
       if (typeof leaf.capability !== "string" || leaf.capability.length === 0) {

@@ -607,6 +607,7 @@ export const runtimeMethods = defineServiceMethods({
         {
           when: "launching into another, already-existing context than the caller",
           capability: "context.boundary",
+          tier: "gated",
           operation: { kind: "runtime", verb: "Create runtime entity" },
           reason: "launching code into another agent or panel's existing context requires approval",
         },
@@ -713,12 +714,12 @@ export const runtimeMethods = defineServiceMethods({
   recoverExecution: {
     capability: "runtime.execution.recover",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "supervision",
       family: "runtime.recovery",
       rationale:
-        "Explicit user recovery of one exact unavailable Durable Object incarnation; expected-digest matching prevents stale actions",
+        "Exact recovery is restricted by the receiver to interactive trusted chrome; expected-digest matching prevents stale actions",
     },
     presentation: {
       title: "Recover a runtime execution",
@@ -732,7 +733,7 @@ export const runtimeMethods = defineServiceMethods({
       "Recover one unavailable Durable Object execution. restore-exact never changes its sealed identity; replace-incarnation atomically selects code from the entity's current semantic context while preserving its durable storage.",
     args: z.tuple([RuntimeExecutionRecoveryRequestSchema]),
     returns: RuntimeExecutionRecoveryResultSchema,
-    authority: { principals: ["user", "host"] },
+    authority: { principals: ["user", "host", "code"] },
     agentFacing: false,
     access: { sensitivity: "write" },
   },
@@ -926,6 +927,7 @@ export const runtimeMethods = defineServiceMethods({
         {
           when: "cloning another, already-existing context than the caller",
           capability: "context.boundary",
+          tier: "gated",
           operation: { kind: "runtime", verb: "Clone context" },
           reason: "cloning another agent or panel's existing context state requires approval",
         },
@@ -966,6 +968,7 @@ export const runtimeMethods = defineServiceMethods({
         {
           when: "destroying another agent or panel's existing context (not one you own)",
           capability: "context.boundary",
+          tier: "critical",
           operation: { kind: "runtime", verb: "Destroy context" },
           reason: "destroying another agent or panel's existing context requires approval",
         },
