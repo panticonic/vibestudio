@@ -322,18 +322,15 @@ downstream. If opening a newly published panel blocks all later VCS/filesystem
 calls, treat that as build-settlement head-of-line blocking, not as an agent
 prompt or validator problem.
 
-Repository fixtures are also complete authority fixtures. The runner derives
-two repository-qualified rules from the same declared ownership: gated
-`workspace-main-advance` for
-`workspace-source-change:<repoPath>:main`, and critical
-`workspace-repo-delete` for `workspace-repo-delete:<repoPath>`. A seeded
-fixture receives exact rules; a task-created/derived fixture receives section
-prefixes because its owned basename is intentionally chosen during the task.
-The cleanup context inherits the same resident test policy, so teardown uses
-the ordinary protected VCS path without an interactive card or a privileged
-cleanup API. Any prompt outside that scope is an immediate
-`EUNEXPECTEDTESTPROMPT` harness failure; an unattended test must never leave a
-real approval card waiting.
+Repository fixtures are also complete authority fixtures. The runner grants
+gated `workspace-main-advance` to the immutable atomic
+`workspace-source-change:publication:<id>` transaction. The fixture reconciler
+then enforces the declared repository ownership and counteracts any unexpected
+publication. Critical cleanup authority remains repository-qualified as
+`workspace-repo-delete:<repoPath>`: exact for a seeded fixture and section-wide
+for an as-yet-unnamed created/derived fixture. The cleanup context inherits the
+same resident test policy, so teardown uses the ordinary protected VCS path
+without an interactive card or a privileged cleanup API.
 
 Repository fixtures automatically claim the suite scheduler resource
 `vcs:protected-main`. Their task contexts and local working heads are isolated,

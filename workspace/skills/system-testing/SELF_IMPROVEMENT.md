@@ -348,16 +348,15 @@ fresh status. If a failure appears on the state-triggered post-publication build
 inspect the build event buffer before repairing source:
 
 For fixture-backed tests, publication and teardown authority come from the
-same fixture ownership. The runner emits paired rules for
-`workspace-source-change:<repoPath>:main` (`workspace-main-advance`) and
-`workspace-repo-delete:<repoPath>` (`workspace-repo-delete`): exact rules for a
-seeded repository, or section-prefix rules when the task owns one
-as-yet-unnamed created/derived repository. The latter is critical authority,
-but it is not a harness bypass—the cleanup context carries the same resident
-test policy and exercises the ordinary protected VCS path. Do not duplicate
-either rule in a scenario prompt or case policy. A request outside the fixture
-scope must fail immediately as an unexpected test prompt instead of entering
-the interactive approval queue.
+same fixture ownership. Main advancement authorizes the immutable atomic
+`workspace-source-change:publication:<id>` transaction; repository ownership
+is enforced by fixture reconciliation, which rejects and counteracts every
+published repository outside the declared fixture. Deletion remains qualified
+as `workspace-repo-delete:<repoPath>`: exact for a seeded repository, or a
+section prefix when the task owns one as-yet-unnamed created/derived
+repository. The cleanup context carries the same resident test policy and
+exercises the ordinary protected VCS path. Do not duplicate either rule in a
+scenario prompt or case policy.
 The originating VCS abort signal also owns the protected authority wait. When
 an eval deadline fires, acquisition, semantic publication, and the held EvalDO
 request must unwind together. If the tool reports a timeout while the EvalDO

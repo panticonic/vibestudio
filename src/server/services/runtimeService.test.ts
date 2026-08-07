@@ -478,6 +478,52 @@ describe("runtimeService system-test agent execution policy", () => {
       })
     );
   });
+
+  it("preserves an explicit model selected by a test-owned Pi child", async () => {
+    const prepareDurableObject = vi.fn(async () => ({
+      targetId: "target:child-agent",
+      effectiveVersion: "ev-agent",
+      ...sealedExecution,
+    }));
+    const { internal } = await buildDeps({ prepareDurableObject });
+    const caller = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:parent",
+      "do",
+      null,
+      null,
+      null,
+      null,
+      systemTestCasePolicy()
+    );
+
+    await internal.createEntity(
+      caller,
+      doCreateSpec({
+        key: "subagent:explicit-model",
+        contextId: "ctx-system-test-child",
+        agentChannelId: "task-explicit-model",
+        stateArgs: {
+          agentConfig: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            thinkingLevel: "minimal",
+            approvalLevel: 0,
+          },
+        },
+      })
+    );
+
+    expect(prepareDurableObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateArgs: {
+          agentConfig: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            thinkingLevel: "minimal",
+            approvalLevel: 2,
+          },
+        },
+      })
+    );
+  });
 });
 
 describe("runtimeService.forkSemanticContext", () => {

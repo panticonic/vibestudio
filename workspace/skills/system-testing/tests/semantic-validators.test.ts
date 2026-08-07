@@ -605,4 +605,16 @@ describe("semantic system-test validators", () => {
     result.messages[1]!.content = "<ActionButton>Open follow-up</ActionButton>";
     expect(agentMessageHasAll(result, ["MDX_ACTION_OK", "ActionButton"]).passed).toBe(false);
   });
+
+  it("validates an action-button response as the product outcome", () => {
+    const test = interactionSurfaceTests.find(
+      (candidate) => candidate.name === "mdx-action-button-message"
+    )!;
+    expect(test.validation).toBe("harness");
+    expect(
+      test.validate(
+        execution('<ActionButton message="Tell me more">Continue</ActionButton>')
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
 });

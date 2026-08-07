@@ -120,9 +120,9 @@ export interface TestCase {
    * section, or seeds a buildable panel and expects exactly one derived panel.
    * Cleanup derives identities only from the task's exact first-parent work and
    * touches protected main only when a task event is reachable from it.
-   * The runner derives a repository-qualified `workspace-main-advance`
-   * authority rule from this same scope; unexpected publication outside the
-   * fixture remains an immediate test-policy failure.
+   * The runner authorizes the immutable publication transaction. Fixture
+   * reconciliation remains the repository-scope boundary: it rejects and
+   * counteracts publication outside the declared fixture.
    *
    * The runner also derives the shared `vcs:protected-main` scheduler resource
    * from this fixture. Task contexts are isolated, but publication and cleanup

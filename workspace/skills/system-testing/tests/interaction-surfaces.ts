@@ -312,7 +312,8 @@ export const interactionSurfaceTests: TestCase[] = [
     description: "Send a clickable follow-up action",
     category: "interaction-surfaces",
     prompt: "Send me a clickable follow-up action in the message.",
-    validate: (result) => agentMessageHasAll(result, ["MDX_ACTION_OK", "ActionButton"]),
+    validation: "harness",
+    validate: (result) => agentMessageHasAll(result, ["ActionButton"]),
   },
   {
     name: "inline-ui-transcript-event",

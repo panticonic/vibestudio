@@ -480,8 +480,8 @@ describe("HeadlessRunner", () => {
               ruleId: "fixture-publication",
               capability: { kind: "exact", key: "workspace-main-advance" },
               resource: {
-                kind: "exact",
-                key: `workspace-source-change:projects/${repoName}:main`,
+                kind: "prefix",
+                prefix: "workspace-source-change:publication:",
               },
               tier: "gated",
               decision: "once",
@@ -553,7 +553,7 @@ describe("HeadlessRunner", () => {
               capability: { kind: "exact", key: "workspace-main-advance" },
               resource: {
                 kind: "prefix",
-                prefix: "workspace-source-change:panels/",
+                prefix: "workspace-source-change:publication:",
               },
               tier: "gated",
               decision: "once",

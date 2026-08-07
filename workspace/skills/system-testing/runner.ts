@@ -108,21 +108,19 @@ function fixturePublicationAuthority(
   fixture: (WorkspaceRepoFixtureSpec & { repoName: string | null }) | null
 ): AgentExecutionTestPolicySpec["authority"] {
   if (!fixture) return [];
-  const resource =
-    fixture.kind === "created-repository" || fixture.kind === "buildable-panel-with-derived"
-      ? {
-          kind: "prefix" as const,
-          prefix: `workspace-source-change:${fixture.section}/`,
-        }
-      : {
-          kind: "exact" as const,
-          key: `workspace-source-change:${fixture.section}/${fixture.repoName}:main`,
-        };
   return [
     {
       ruleId: "fixture-publication",
       capability: { kind: "exact", key: "workspace-main-advance" },
-      resource,
+      // Main advancement authorizes one immutable, atomic publication rather
+      // than one repository ref. The fixture still owns and verifies the
+      // repository scope: setup gives the case an isolated task context and
+      // teardown rejects/counteracts every publication outside its declared
+      // repository fixture.
+      resource: {
+        kind: "prefix" as const,
+        prefix: "workspace-source-change:publication:",
+      },
       tier: "gated",
       decision: "once",
     },
