@@ -291,6 +291,12 @@ export type WorkspaceServiceDecl = {
   /** Verb phrase completing "Allow X to …" — e.g. "send and receive messages". */
   action: string;
   description?: string;
+  /**
+   * Whether this service envelope belongs in the primary install summary.
+   * Optional while authoring so an incomplete declaration can still reach the
+   * build system and receive an actionable diagnostic.
+   */
+  notability?: "headline" | "everyday";
   presentation: {
     domain: "files" | "sharing" | "accounts" | "web" | "automation" | "people" | "computer";
     verb: "see" | "act" | "manage";

@@ -35,6 +35,7 @@ describe("workspace_service tool", () => {
     expect(
       Value.Check(tool.parameters, {
         operation: "upsert",
+        source: "workers/todo-store",
         name: "todo-store",
         title: "Todo store",
         action: "read todos",
@@ -67,6 +68,7 @@ describe("workspace_service tool", () => {
       title: "Todo store",
       action: "read and update todos",
       description: "Keep shared todos for this workspace.",
+      notability: "everyday",
       presentation: { domain: "automation", verb: "manage" },
       protocols: ["example.todos.v1"],
       principals: ["user", "code"],
@@ -82,6 +84,7 @@ describe("workspace_service tool", () => {
       }),
       expect.objectContaining({
         name: "todo-store",
+        notability: "everyday",
         protocols: ["example.todos.v1"],
         durableObject: { className: "TodoStore" },
       }),
@@ -115,6 +118,7 @@ describe("workspace_service tool", () => {
         title: "Todo store",
         action: "read todos",
         description: "Read todos.",
+        notability: "everyday",
         presentation: { domain: "automation", verb: "see" },
         protocols: ["example.todos.v1"],
         principals: ["code"],

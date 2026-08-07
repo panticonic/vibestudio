@@ -308,7 +308,10 @@ export function createBuildUnitChangeApprovalProvider(deps: {
       } satisfies Parameters<typeof prepareUnitInstallReview>[1];
       let transaction: UnitInstallAcceptanceTransaction;
       try {
-        transaction = prepareUnitInstallReview(deps, acceptanceInput);
+        transaction = prepareUnitInstallReview(
+          { ...deps, presentationFor: deps.describeCapability },
+          acceptanceInput
+        );
       } catch (error) {
         selectionLease?.failed();
         throw error;

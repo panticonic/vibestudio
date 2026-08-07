@@ -83,6 +83,7 @@ describe("authority request presentation", () => {
           title: "Team Notes",
           action: "share team notes",
           description: "Shares notes with the team",
+          notability: "everyday",
           presentation: { domain: "sharing", verb: "act" },
           source: "services/notes",
         },
@@ -104,6 +105,16 @@ describe("authority request presentation", () => {
     ]);
     expect(result.diff.unchanged.map(({ capability }) => capability)).toEqual(["push.send"]);
     expect(result.requests).toEqual(requests);
+    expect(
+      createCapabilityPresentationResolver(() => [
+        {
+          name: "notes",
+          action: "share team notes",
+          notability: "everyday",
+          presentation: { domain: "sharing", verb: "act" },
+        },
+      ])("workspace-service:notes").notability
+    ).toBe("everyday");
   });
 
   it("presents a tier change distinctly without inventing added or removed authority", () => {

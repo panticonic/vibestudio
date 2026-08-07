@@ -252,6 +252,7 @@ const WorkspaceServiceSchema = z.union([
       title: z.string().optional(),
       action: z.string().min(1),
       description: z.string().optional(),
+      notability: z.enum(["headline", "everyday"]).optional(),
       presentation: WorkspaceServicePresentationSchema,
       protocols: z.array(z.string()).optional(),
       authority: z
@@ -269,6 +270,7 @@ const WorkspaceServiceSchema = z.union([
       title: z.string().optional(),
       action: z.string().min(1),
       description: z.string().optional(),
+      notability: z.enum(["headline", "everyday"]).optional(),
       presentation: WorkspaceServicePresentationSchema,
       protocols: z.array(z.string()).optional(),
       authority: z

@@ -8,9 +8,12 @@ import { HOST_SEMANTIC_CAPABILITY_COPY, type EditableCapabilityCopy } from "./ho
 import { authorityRow, type AuthorityRow } from "./authority/authorityRows.js";
 import { diffAuthorityRows, type AuthorityRowDiff } from "./authority/authorityRowDiff.js";
 import type { AuthorityDomainId, AuthorityVerb } from "./authority/authorityDomains.js";
+import type { CapabilityNotability } from "./authority/capabilityNotability.js";
 
 export interface CapabilityPresentation extends EditableCapabilityCopy {
   authorityCategory?: { domain: AuthorityDomainId; verb: AuthorityVerb; declaredBy?: string };
+  /** Receiver-owned classification for dynamic workspace-service envelopes. */
+  notability?: CapabilityNotability;
 }
 
 export type CapabilityRequesterKind =
@@ -145,6 +148,7 @@ export function createCapabilityPresentationResolver(
     action?: string;
     description?: string;
     presentation?: { domain: AuthorityDomainId; verb: AuthorityVerb };
+    notability?: CapabilityNotability;
     source?: string;
   }[],
   userlandCapabilities: () => readonly {
@@ -221,6 +225,7 @@ export function createCapabilityPresentationResolver(
       title: `${title[0]!.toUpperCase()}${title.slice(1)}`,
       action,
       description,
+      ...(service.notability ? { notability: service.notability } : {}),
       ...(service.presentation
         ? {
             authorityCategory: {

@@ -17,6 +17,7 @@
 import { getDomain } from "tldts";
 import type { ReviewedUnit } from "../approvals.js";
 import type { UnitAuthorityRequest } from "../authorityManifest.js";
+import type { CapabilityPresentationResolver } from "../authorityPresentation.js";
 import {
   installPartLabel,
   installReviewRows,
@@ -36,6 +37,7 @@ export interface ReviewedUnitPartInput {
   /** Rows the user had already cleared for the previous version (§7.3). */
   previouslyCleared?: ReadonlySet<string>;
   userlandDefinitions?: UserlandDefinitions;
+  presentationFor?: CapabilityPresentationResolver;
   origin: InstallReviewOrigin;
   change?: InstallReviewPart["change"];
   section?: "template" | "repair";
@@ -88,6 +90,7 @@ export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPar
     ...(input.previousRequests === undefined ? {} : { previousRequests: input.previousRequests }),
     behaviors: behaviorsOf(unit, surfaces),
     ...(input.userlandDefinitions ? { userlandDefinitions: input.userlandDefinitions } : {}),
+    ...(input.presentationFor ? { presentationFor: input.presentationFor } : {}),
     ...(input.previouslyCleared ? { previouslyCleared: input.previouslyCleared } : {}),
     ...(input.section ? { section: input.section } : {}),
   });

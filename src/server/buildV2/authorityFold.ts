@@ -324,9 +324,21 @@ export async function authorityDiagnosticsForProgram(input: {
     return resolved;
   };
 
+  const unreviewedServiceDeclarations = new Set<string>();
   for (const fact of facts) {
     const resolved = await serviceResults(fact);
     for (const { service } of resolved) {
+      if (
+        service.binding.notability === undefined &&
+        !unreviewedServiceDeclarations.has(service.binding.name)
+      ) {
+        unreviewedServiceDeclarations.add(service.binding.name);
+        addDiagnostic(
+          fact,
+          `Workspace service '${service.binding.name}' has no reviewed notability classification.`,
+          `Add notability: "headline" or notability: "everyday" to the '${service.binding.name}' service declaration in meta/vibestudio.yml. Headline means a reasonable non-technical person would want to know before adding the caller; everyday means ordinary workspace machinery.`
+        );
+      }
       if (fact.kind === "resolution") {
         const operation = operationResource(service, fact.objectKeys);
         if (operation.unbounded) {

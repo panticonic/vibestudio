@@ -13,6 +13,7 @@
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -30,11 +31,14 @@ const { HOST_SEMANTIC_CAPABILITY_COPY } = await import(
 );
 
 const capabilities = new Map();
-const note = (capability, source) => {
+const note = (capability, source, declared) => {
   if (typeof capability !== "string" || !capability) return;
   // A prefix family is classified by its own key; the reviewed list matches by
   // prefix, so asking about the bare prefix is the right question.
-  if (!capabilities.has(capability)) capabilities.set(capability, source);
+  const existing = capabilities.get(capability);
+  if (!existing || (existing.declared === undefined && declared !== undefined)) {
+    capabilities.set(capability, { source, declared });
+  }
 };
 
 for (const capability of Object.keys(HOST_CAPABILITY_CATEGORIES)) {
@@ -71,14 +75,33 @@ function visitPackageManifests(directory) {
 
 visitPackageManifests(path.join(root, "workspace"));
 
+// Dynamic workspace-service envelopes are authored by the workspace, so their
+// review classification belongs beside the service's action and presentation.
+// This is the same declaration the live build and install review consume.
+const workspaceConfigPath = path.join(root, "workspace/meta/vibestudio.yml");
+const workspaceConfig = parseYaml(fs.readFileSync(workspaceConfigPath, "utf8"));
+for (const service of workspaceConfig.services ?? []) {
+  note(
+    `workspace-service:${service.name}`,
+    `${path.relative(root, workspaceConfigPath)} services.${service.name}.notability`,
+    service.notability
+  );
+}
+
 const missing = [];
-for (const [capability, source] of capabilities) {
+for (const [capability, { source, declared }] of capabilities) {
   // A direct userland receiver reference is classified by its provider's
-  // authority definition in the same reviewed install set. Workspace-service
-  // envelopes are different: shipped consumers name them directly, so every
-  // shipped name must receive an explicit platform review here.
+  // authority definition in the same reviewed install set. Dynamic workspace
+  // service envelopes are classified by the live declaration loaded above;
+  // product-owned envelopes remain in the static reviewed list.
   if (capability.startsWith("userland:") || capability === "workspace-service:") continue;
-  if (reviewedCapabilityNotability(capability) === null) missing.push({ capability, source });
+  if (
+    declared !== "headline" &&
+    declared !== "everyday" &&
+    reviewedCapabilityNotability(capability) === null
+  ) {
+    missing.push({ capability, source });
+  }
 }
 
 if (missing.length > 0) {
@@ -88,11 +111,13 @@ if (missing.length > 0) {
   }
   console.error(
     `\n${missing.length} capabilit${missing.length === 1 ? "y is" : "ies are"} unclassified. ` +
-      "Add each to REVIEWED_NOTABILITY in packages/shared/src/authority/capabilityNotability.ts.\n" +
+      "Classify dynamic workspace services in meta/vibestudio.yml; classify host-owned capabilities in REVIEWED_NOTABILITY.\n" +
       "headline: a reasonable non-technical person, told a part can do this, would want to know " +
       "before adding it.\neveryday: the ordinary machinery of being a part here."
   );
   process.exitCode = 1;
 } else {
-  console.log(`Every one of ${capabilities.size} reviewed capabilities carries a notability value.`);
+  console.log(
+    `Every one of ${capabilities.size} reviewed capabilities carries a notability value.`
+  );
 }

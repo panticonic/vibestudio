@@ -1034,6 +1034,7 @@ async function main() {
   const approvalQueue = createApprovalQueue({
     eventService,
     installReviewSelections,
+    presentationFor: describeCapability,
     recordProvenance: async (record) => {
       await workspaceChildHub.appendApproval(record);
     },
@@ -1150,7 +1151,11 @@ async function main() {
     let transaction: ReturnType<typeof prepareUnitInstallReview>;
     try {
       transaction = prepareUnitInstallReview(
-        { admissionStore: unitAdmissionStore, grantStore: capabilityGrantStore },
+        {
+          admissionStore: unitAdmissionStore,
+          grantStore: capabilityGrantStore,
+          presentationFor: describeCapability,
+        },
         { units: admissible, origin }
       );
     } catch (error) {

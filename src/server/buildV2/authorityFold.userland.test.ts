@@ -45,6 +45,7 @@ const binding = {
   protocols: ["example.notes.v1"],
   source: "workers/notes",
   action: "manage notes",
+  notability: "everyday" as const,
   presentation: { domain: "files" as const, verb: "manage" as const },
   principals: ["code" as const],
   target: { kind: "durable-object" as const, className: "NotesDO", defaultObjectKey: "main" },
@@ -76,6 +77,37 @@ const catalog = {
 };
 
 describe("userland authority fold", () => {
+  it("reports an actionable diagnostic when a consumed service lacks review metadata", async () => {
+    const { root, program } = programFor(`
+      declare const workers: { resolveService(query: string): Promise<unknown> };
+      export const notes = workers.resolveService("example.notes.v1");
+    `);
+    const { notability: _notability, ...unreviewedBinding } = binding;
+    const environment = createExactWorkspaceAuthorityEnvironment({
+      stateHash: "state:exact",
+      services: [unreviewedBinding],
+      resolveCatalog: async () => catalog,
+    });
+
+    const diagnostics = await authorityDiagnosticsForProgram({
+      program,
+      sourceRoot: root,
+      unitRelativePath: ".",
+      units: [{ name: "consumer", relativePath: "." }],
+      manifest: { authority: { requests: [], provides: [] } },
+      environment,
+    });
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("has no reviewed notability classification"),
+          suggestion: expect.stringContaining("meta/vibestudio.yml"),
+        }),
+      ])
+    );
+  });
+
   it("does not charge an empty package for unrelated workspace source", async () => {
     const { root, program } = programForFiles({
       "packages/empty/index.ts": "export {};",

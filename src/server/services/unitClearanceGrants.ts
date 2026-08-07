@@ -9,6 +9,7 @@ import {
   installRowKey,
   type UserlandDefinitions,
 } from "@vibestudio/shared/authority/unitInstallReview";
+import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import type { UnitAdmissionOrigin } from "./unitAdmissionStore.js";
 
@@ -49,6 +50,7 @@ export interface MintUnitClearanceInput {
   issuedBy: string;
   /** Receiver definitions carried by the same operation, for §6.1 classification. */
   userlandDefinitions?: UserlandDefinitions;
+  presentationFor?: CapabilityPresentationResolver;
   now?: number;
 }
 
@@ -95,7 +97,7 @@ export function mintUnitClearanceGrants(input: MintUnitClearanceInput): Authorit
     for (const unit of input.units) {
       const subject = codePrincipal(unit);
       const requested = new Set(unit.clearedRowKeys ?? null);
-      const clearable = clearableRequests(unit.authority, definitions);
+      const clearable = clearableRequests(unit.authority, definitions, input.presentationFor);
       for (const { request, key } of clearable) {
         if (unit.clearedRowKeys !== undefined && !requested.has(key)) continue;
         issued.push(
@@ -154,11 +156,13 @@ export function retireUnitClearanceGrants(input: {
  */
 export function clearableRequests(
   authority: UnitAuthorityManifest,
-  userlandDefinitions?: UserlandDefinitions
+  userlandDefinitions?: UserlandDefinitions,
+  presentationFor?: CapabilityPresentationResolver
 ): Array<{ request: UnitAuthorityRequest; key: string }> {
   const { notableRows, everydayRows } = installReviewRows({
     requests: authority.requests,
     ...(userlandDefinitions ? { userlandDefinitions } : {}),
+    ...(presentationFor ? { presentationFor } : {}),
   });
   const clearableKeys = new Set(
     [...notableRows, ...everydayRows].filter((row) => row.selectable).map((row) => row.key)

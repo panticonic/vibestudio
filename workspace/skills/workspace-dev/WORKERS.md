@@ -227,6 +227,11 @@ singletonObjects:
 services:
   - source: workers/my-store
     name: my-store
+    title: My store
+    action: read or update stored items
+    description: Keep shared application data in this workspace.
+    notability: everyday
+    presentation: { domain: automation, verb: manage }
     protocols: [example.my-store.v1]
     authority:
       principals: [user, code]
@@ -252,6 +257,11 @@ routes:
 services:
   - source: workers/my-api
     name: my-api
+    title: My API
+    action: use the workspace API
+    description: Run workspace-local API operations.
+    notability: everyday
+    presentation: { domain: automation, verb: act }
     protocols: [example.my-api.v1]
     authority:
       principals: [user, code]

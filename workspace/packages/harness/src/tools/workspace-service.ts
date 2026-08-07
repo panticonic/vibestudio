@@ -42,6 +42,10 @@ const workspaceServiceSchema = Type.Union(
           description: 'User-facing verb phrase completing "Allow … to …".',
         }),
         description: Type.String({ description: "Plain-language purpose of the service." }),
+        notability: Type.Union([Type.Literal("headline"), Type.Literal("everyday")], {
+          description:
+            "Use headline when a non-technical person would want to know before adding a caller; everyday for ordinary workspace machinery.",
+        }),
         presentation: Type.Object(
           {
             domain: Type.Union(
@@ -142,6 +146,7 @@ export type WorkspaceServiceToolInput =
       title: string;
       action: string;
       description: string;
+      notability: "headline" | "everyday";
       presentation: {
         domain: "files" | "sharing" | "accounts" | "web" | "automation" | "people" | "computer";
         verb: "see" | "act" | "manage";
@@ -165,6 +170,7 @@ interface ServiceDeclaration {
   title?: string;
   action?: string;
   description?: string;
+  notability?: "headline" | "everyday";
   presentation: {
     domain: "files" | "sharing" | "accounts" | "web" | "automation" | "people" | "computer";
     verb: "see" | "act" | "manage";
@@ -283,6 +289,7 @@ export function createWorkspaceServiceTool(
           title: command.title,
           action: command.action,
           description: command.description,
+          notability: command.notability,
           presentation: { ...command.presentation },
           protocols: [...command.protocols],
           authority: { principals: [...command.principals] },

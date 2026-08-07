@@ -358,6 +358,34 @@ describe("building rows from a declaration", () => {
     ).toBe("asks-when-needed");
   });
 
+  it("uses a workspace service declaration for review and notability", () => {
+    const { notableRows, everydayRows } = installReviewRows({
+      requests: [request("workspace-service:notes")],
+      presentationFor: (capability) => ({
+        group: "runtime",
+        title: "Team notes",
+        action: "manage team notes",
+        description: `Review ${capability}`,
+        authorityCategory: { domain: "files", verb: "manage", declaredBy: "workers/notes" },
+        notability: "everyday",
+      }),
+    });
+
+    expect(notableRows).toEqual([]);
+    expect(everydayRows).toEqual([
+      expect.objectContaining({
+        notability: "everyday",
+        timing: "on-add",
+        selectable: true,
+        row: expect.objectContaining({
+          capability: "workspace-service:notes",
+          action: "manage team notes",
+          provenance: { source: "receiver" },
+        }),
+      }),
+    ]);
+  });
+
   it("contributes behavioral facts no capability row states", () => {
     const { notableRows } = installReviewRows({
       requests: [],

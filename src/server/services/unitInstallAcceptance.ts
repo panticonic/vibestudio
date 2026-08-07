@@ -1,5 +1,6 @@
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { UserlandDefinitions } from "@vibestudio/shared/authority/unitInstallReview";
+import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   heldClearanceRowKeys,
@@ -71,6 +72,7 @@ export interface UnitInstallAcceptanceDeps {
   /** The human whose decision this was, for Permissions and audit. */
   decidedBy?: () => string;
   issuedBy?: () => string;
+  presentationFor?: CapabilityPresentationResolver;
 }
 
 export interface UnitInstallAcceptanceTransaction {
@@ -145,6 +147,7 @@ export function prepareUnitInstallReview(
         decidedBy: deps.decidedBy?.() ?? "user:workspace",
         issuedBy: deps.issuedBy?.() ?? "host:vibestudio",
         userlandDefinitions: reviewedUserlandDefinitions(input.units.map((unit) => unit.identity)),
+        ...(deps.presentationFor ? { presentationFor: deps.presentationFor } : {}),
       });
       issuedGrantIds = issued.flatMap((grant) => (grant.id ? [grant.id] : []));
       if (previous.length > 0) {

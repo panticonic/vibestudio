@@ -81,8 +81,9 @@ order after editing a provider:
    `singletonObjects` row as one schema-validated semantic edit. Do not splice
    either YAML list with generic `edit`/`write`; a singleton is launchable
    infrastructure, not a discoverable service by itself. Supply the required
-   `presentation` object from the tool schema so authority prompts can describe
-   the service consistently; a `sharing` domain also requires `substanceKind`.
+   `presentation` and `notability` values from the tool schema so authority
+   prompts can describe and prioritize the service consistently; a `sharing`
+   domain also requires `substanceKind`.
 2. Call the agent tool `docs_search` for the new service name or protocol. If the
    row is absent, stop: the declaration is missing or invalid in the current
    context. Re-read the relevant YAML and repair it. Do not start eval and do not
@@ -107,7 +108,8 @@ proof that the current semantic context can build and describe the declaration;
 absence is a concrete authoring diagnostic, not eventual success to wait for.
 
 - Declare a service with `workspace_service`, supplying a stable protocol,
-  source, user-facing title/action/description, principals, and transport.
+  source, user-facing title/action/description, reviewed `notability`,
+  principals, and transport.
 - Use the agent tools `docs_search` / `docs_open` to inspect the live
   caller-visible contract before starting an eval. These are tool names, not
   `@workspace/runtime` exports. Inside eval, consume the result through the
@@ -210,6 +212,11 @@ singletonObjects:
 services:
   - source: workers/local-greeting
     name: local-greeting
+    title: Local greeting
+    action: read local greetings
+    description: Read greetings stored in this workspace.
+    notability: everyday
+    presentation: { domain: automation, verb: see }
     protocols: [example.local-greeting.v1]
     authority:
       principals: [code]

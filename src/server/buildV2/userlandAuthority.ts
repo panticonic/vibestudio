@@ -26,6 +26,7 @@ export interface ExactWorkspaceServiceBinding {
   title?: string;
   action: string;
   description?: string;
+  notability?: WorkspaceServiceDecl["notability"];
   presentation: WorkspaceServiceDecl["presentation"];
   principals: readonly PrincipalKind[];
   target:
@@ -354,6 +355,7 @@ export function exactServiceBindingFromDeclarations(
     ...(service.title ? { title: service.title } : {}),
     action: service.action,
     ...(service.description ? { description: service.description } : {}),
+    ...(service.notability ? { notability: service.notability } : {}),
     presentation: { ...service.presentation },
     principals: [...service.authority.principals].sort() as PrincipalKind[],
     target,

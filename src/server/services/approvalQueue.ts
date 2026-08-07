@@ -12,6 +12,7 @@ import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
 import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
+import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import type { TemplateInstallResolution } from "@vibestudio/shared/authority/unitInstallReview";
 import type {
   InstallReviewLanding,
@@ -198,7 +199,8 @@ function installReviewParts(
    * removed template's parts still hold (§U2, §7.7). A request that already
    * knows the answer may still say so, and wins.
    */
-  historicalOriginFor?: (repoPath: string) => string | null
+  historicalOriginFor?: (repoPath: string) => string | null,
+  presentationFor?: CapabilityPresentationResolver
 ): InstallReviewPart[] {
   // One review can coalesce several producers — declared extensions and the ones
   // a host target requires, apps staged by more than one reconcile pass — and
@@ -233,6 +235,7 @@ function installReviewParts(
       identityKey: req.identityKeys?.get(repoPath) ?? `${repoPath}@${unit.ev ?? ""}`,
       origin: req.origins?.get(repoPath) ?? unresolvedOrigin(),
       userlandDefinitions,
+      ...(presentationFor ? { presentationFor } : {}),
       ...(previousRequests === undefined ? {} : { previousRequests }),
       ...(previouslyCleared ? { previouslyCleared } : {}),
       ...(section ? { section } : {}),
@@ -716,6 +719,8 @@ export function createApprovalQueue(deps: {
    * the honest failure.
    */
   originallyInstalledFrom?: (repoPath: string) => string | null;
+  /** Exact workspace-owned review metadata for dynamic service envelopes. */
+  presentationFor?: CapabilityPresentationResolver;
 }): ApprovalQueueWithListeners {
   const { eventService } = deps;
   const resolveTitle = deps.resolveTitle ?? (() => undefined);
@@ -1246,7 +1251,7 @@ export function createApprovalQueue(deps: {
       } satisfies PendingBrowserPermissionApproval;
     }
     if (req.kind === "unit-install-review") {
-      const parts = installReviewParts(req, deps.originallyInstalledFrom);
+      const parts = installReviewParts(req, deps.originallyInstalledFrom, deps.presentationFor);
       const approval = {
         ...base,
         kind: "unit-install-review",

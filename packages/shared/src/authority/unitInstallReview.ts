@@ -26,6 +26,7 @@ import { capabilityNotability, reviewedCapabilityNotability } from "./capability
 import type { CapabilityNotability } from "./capabilityNotability.js";
 import { capabilityClearancePolicy } from "./capabilityClearance.js";
 import type { UnitAuthorityRequest, UserlandCapabilityDefinition } from "../authorityManifest.js";
+import type { CapabilityPresentationResolver } from "../authorityPresentation.js";
 
 /** The four kinds of executable unit a review can present. */
 export type InstallPartKind = "panel" | "worker" | "app" | "extension";
@@ -174,6 +175,8 @@ export interface InstallReviewRowsInput {
   /** Behavioral facts the review contributes itself; always headline (§10). */
   behaviors?: readonly InstallBehaviorFact[];
   userlandDefinitions?: UserlandDefinitions;
+  /** Exact workspace declarations for dynamic service envelopes. */
+  presentationFor?: CapabilityPresentationResolver;
   /**
    * Rows the user had already cleared for the previous version. An update
    * re-mints exactly this ∩ the new manifest ∩ current policy, so a permission
@@ -215,6 +218,7 @@ export function installReviewRows(input: InstallReviewRowsInput): InstallReviewR
       request,
       key,
       userlandDefinitions: input.userlandDefinitions,
+      presentationFor: input.presentationFor,
       change: !isUpdate
         ? undefined
         : !previous
@@ -242,6 +246,7 @@ export function installReviewRows(input: InstallReviewRowsInput): InstallReviewR
       request,
       key,
       userlandDefinitions: input.userlandDefinitions,
+      presentationFor: input.presentationFor,
       change: "removed",
       selectedByDefault: false,
       removed: true,
@@ -270,20 +275,34 @@ function buildPermissionRow(input: {
   request: UnitAuthorityRequest;
   key: string;
   userlandDefinitions: UserlandDefinitions | undefined;
+  presentationFor: CapabilityPresentationResolver | undefined;
   change: InstallRowChange | undefined;
   selectedByDefault: boolean;
   removed?: boolean;
 }): InstallReviewPermissionRow {
   const { request } = input;
   const definition = input.userlandDefinitions?.get(request.capability);
+  const declaredPresentation = input.presentationFor?.(request.capability);
+  const declaredServiceReview =
+    request.capability.startsWith("workspace-service:") &&
+    declaredPresentation?.notability !== undefined
+      ? declaredPresentation
+      : undefined;
   const row = authorityRow({
     capability: request.capability,
     resource: request.resource,
     tier: request.tier,
     statement: "declared",
-    provenance: { source: definition ? "receiver" : "manifest" },
+    provenance: { source: definition || declaredServiceReview ? "receiver" : "manifest" },
     degradeUnknown: true,
-    ...(definition ? { category: definition.presentation, reviewedAction: definition.action } : {}),
+    ...(definition
+      ? { category: definition.presentation, reviewedAction: definition.action }
+      : declaredServiceReview?.authorityCategory
+        ? {
+            category: declaredServiceReview.authorityCategory,
+            reviewedAction: declaredServiceReview.action,
+          }
+        : {}),
     ...(input.change === "added"
       ? { flags: { newInDiff: true } }
       : input.change === "removed"
@@ -294,7 +313,9 @@ function buildPermissionRow(input: {
   // hidden: contextual for clearance, headline for display (§6.1, §10).
   const reviewed =
     row.unrecognized !== true &&
-    (definition !== undefined || reviewedCapabilityNotability(request.capability) !== null);
+    (definition !== undefined ||
+      declaredServiceReview !== undefined ||
+      reviewedCapabilityNotability(request.capability) !== null);
   const policy = capabilityClearancePolicy({
     capability: request.capability,
     resource: request.resource,
@@ -327,7 +348,11 @@ function buildPermissionRow(input: {
     : capabilityNotability({
         capability: request.capability,
         tier: request.tier,
-        ...(definition ? { declared: definition.notability } : {}),
+        ...(definition
+          ? { declared: definition.notability }
+          : declaredServiceReview
+            ? { declared: declaredServiceReview.notability }
+            : {}),
       });
   const selectable = timing === "on-add" && input.removed !== true;
   return {
