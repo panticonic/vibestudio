@@ -1165,7 +1165,7 @@ function repairLeakedJsonEnvelopeSuffix(code: string): string {
 
 /** Repair an unmatched call parenthesis at a line-ending semicolon. */
 function repairMissingCallParensBeforeSemicolon(code: string): string {
-  return code
+  const lineRepaired = code
     .split("\n")
     .map((line) => {
       const semicolon = line.match(/^(.*);(\s*(?:\/\/.*)?)$/u);
@@ -1206,6 +1206,90 @@ function repairMissingCallParensBeforeSemicolon(code: string): string {
       return `${body}${")".repeat(parens)};${semicolon[2] ?? ""}`;
     })
     .join("\n");
+
+  // The same model slip often spans several lines, so the opening call and
+  // the statement-ending semicolon are not visible to the line-local repair
+  // above. Track delimiters across code state and close only a top-level
+  // statement whose braces/brackets are balanced. The repaired program still
+  // has to pass the real compiler before it can execute.
+  type Mode = "code" | "single" | "double" | "template" | "line-comment" | "block-comment";
+  let mode: Mode = "code";
+  let escaped = false;
+  let parens = 0;
+  let braces = 0;
+  let brackets = 0;
+  let lineStart = 0;
+  let output = "";
+  for (let index = 0; index < lineRepaired.length; index += 1) {
+    const char = lineRepaired[index]!;
+    const next = lineRepaired[index + 1];
+    if (mode === "line-comment") {
+      output += char;
+      if (char === "\n" || char === "\r") {
+        mode = "code";
+        lineStart = index + 1;
+      }
+      continue;
+    }
+    if (mode === "block-comment") {
+      output += char;
+      if (char === "*" && next === "/") {
+        output += next;
+        index += 1;
+        mode = "code";
+      }
+      continue;
+    }
+    if (mode !== "code") {
+      output += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (
+        (mode === "single" && char === "'") ||
+        (mode === "double" && char === '"') ||
+        (mode === "template" && char === "`")
+      ) {
+        mode = "code";
+      }
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      output += "//";
+      index += 1;
+      mode = "line-comment";
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      output += "/*";
+      index += 1;
+      mode = "block-comment";
+      continue;
+    }
+    if (char === "'") mode = "single";
+    else if (char === '"') mode = "double";
+    else if (char === "`") mode = "template";
+    else if (char === "(") parens += 1;
+    else if (char === ")") parens = Math.max(0, parens - 1);
+    else if (char === "{") braces += 1;
+    else if (char === "}") braces = Math.max(0, braces - 1);
+    else if (char === "[") brackets += 1;
+    else if (char === "]") brackets = Math.max(0, brackets - 1);
+
+    if (
+      char === ";" &&
+      parens >= 1 &&
+      parens <= 3 &&
+      braces === 0 &&
+      brackets === 0 &&
+      !/^\s*(?:for|while|if|switch|catch|with)\s*\(/u.test(lineRepaired.slice(lineStart, index))
+    ) {
+      output += ")".repeat(parens);
+      parens = 0;
+    }
+    output += char;
+    if (char === "\n" || char === "\r") lineStart = index + 1;
+  }
+  return output;
 }
 
 function isPromise(value: unknown): value is Promise<unknown> {

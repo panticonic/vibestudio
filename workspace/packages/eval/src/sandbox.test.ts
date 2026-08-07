@@ -298,6 +298,26 @@ describe("executeSandbox", () => {
     expect(result).toMatchObject({ success: true, returnValue: 1 });
   });
 
+  it("repairs a missing outer call parenthesis after a multiline nested expression", async () => {
+    const result = await executeSandbox(
+      `const page = { evaluate: (fn: () => unknown) => fn() };
+       const data = await page.evaluate(() => [{title: "List"}].map((list, listIndex) => ({
+         title: list.title,
+         position: listIndex,
+         cards: [{title: "Card"}].map((card, cardIndex) => {
+           return {title: card.title, position: cardIndex};
+         })
+       }));
+       return data;`,
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      returnValue: [{ title: "List", position: 0, cards: [{ title: "Card", position: 0 }] }],
+    });
+  });
+
   it("does not treat parentheses inside a regular-expression literal as unmatched calls", async () => {
     const result = await executeSandbox('const value = /\\(/.test("("); return value;', {
       syntax: "typescript",
