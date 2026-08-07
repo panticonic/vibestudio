@@ -286,8 +286,9 @@ export async function collectWorkspaceRpcCatalog(
     rpcSchemas?: Readonly<Record<string, ServiceMethodSchemas>>;
   }
 ): Promise<WorkspaceRpcMethodDoc[]> {
+  const absoluteWorkerSourcePath = path.resolve(workerSourcePath);
   const methods: WorkspaceRpcMethodDoc[] = [];
-  const files = sourceFiles(workerSourcePath);
+  const files = sourceFiles(absoluteWorkerSourcePath);
   const sources = files.map((file) => ({ fileName: file, content: fs.readFileSync(file, "utf8") }));
   usingTypeScriptProject(sources, (project) => {
     for (const file of files) {
@@ -301,7 +302,7 @@ export async function collectWorkspaceRpcCatalog(
             const name = methodName(member);
             if (!decorator || !name) continue;
             const description = methodDescription(member);
-            const label = `${path.relative(workerSourcePath, file)}:${name}`;
+            const label = `${path.relative(absoluteWorkerSourcePath, file)}:${name}`;
             let access: WorkspaceRpcMethodDoc["access"];
             let effect: WorkspaceRpcMethodDoc["effect"];
             let handleProduction: { capability: string } | undefined;
