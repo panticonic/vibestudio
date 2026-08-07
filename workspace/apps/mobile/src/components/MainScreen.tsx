@@ -1691,8 +1691,8 @@ export function MainScreen() {
       if (!shellClient) return;
       void shellClient.panels
         .reportView(runtimeEntityId, connectionId, observation)
-        .then(() => {
-          if (hostConfig?.protocol === "http") {
+        .then((result) => {
+          if (result === "reported" && hostConfig?.protocol === "http") {
             console.log(`[MainScreen] Reported panel boot for ${panelId}`, {
               phase: observation.boot.phase,
               runtimeEntityId,

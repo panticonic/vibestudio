@@ -385,7 +385,7 @@ Authority principals: `host`, `user`
 | `panelRuntime.ensureSlot` | Ensure that the current runtime entity for a slot has a presentation host lease. |
 | `panelRuntime.unloadSlot` | Release the active presentation lease for a panel slot while preserving its runtime entity and topology. |
 | `panelRuntime.release` | Release the lease for a panel entity held by the given connection id. No-op unless the connection matches the current holder. |
-| `panelRuntime.reportView` | Report the current page and boot observation for a leased panel from a host without an inspection transport. |
+| `panelRuntime.reportView` | Report the current page and boot observation for a leased panel from a host without an inspection transport. Returns stale when the lease was superseded before publication. |
 
 ## `permissions`
 

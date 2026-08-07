@@ -160,6 +160,8 @@ export const panelRuntimeAcquireResultSchema = z.union([
     .strict(),
 ]) satisfies z.ZodType<PanelRuntimeAcquireResult, z.ZodTypeDef, unknown>;
 
+export const panelRuntimeViewReportResultSchema = z.enum(["reported", "stale"]);
+
 export const panelRuntimeMethods = defineServiceMethods({
   registerClient: {
     tier: {
@@ -345,9 +347,9 @@ export const panelRuntimeMethods = defineServiceMethods({
         "P-panels: a lease-owning host reports the current panel boot state; ownership is verified server-side and no authority is widened.",
     },
     description:
-      "Report the current page and boot observation for a leased panel from a host without an inspection transport.",
+      "Report the current page and boot observation for a leased panel from a host without an inspection transport. Returns stale when the lease was superseded before publication.",
     args: z.tuple([panelEntityIdSchema, z.string().min(1), panelHostViewReportSchema]),
-    returns: z.void(),
+    returns: panelRuntimeViewReportResultSchema,
     access: LEASE_ACCESS,
   },
   reportOwnView: {
@@ -359,9 +361,10 @@ export const panelRuntimeMethods = defineServiceMethods({
       rationale:
         "A panel principal publishes its own bootstrap transition; the active lease identity is derived server-side.",
     },
-    description: "Publish the calling panel runtime's current page and bootstrap observation.",
+    description:
+      "Publish the calling panel runtime's current page and bootstrap observation. Returns stale when its lease has already ended.",
     args: z.tuple([panelHostViewReportSchema]),
-    returns: z.void(),
+    returns: panelRuntimeViewReportResultSchema,
     authority: { principals: ["code"] },
     access: LEASE_ACCESS,
   },

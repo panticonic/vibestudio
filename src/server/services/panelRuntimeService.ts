@@ -43,17 +43,13 @@ export function createPanelRuntimeService(deps: {
     if (phase === "ready" || phase === "failed") return;
     const observation = await deps.observeHostSlot(slotId);
     if (!observation) return;
-    // reportView validates that the host result still belongs to the exact
-    // lease incarnation after the asynchronous host round-trip.
-    try {
-      deps.coordinator.reportView(
-        current.lease.runtimeEntityId,
-        current.lease.connectionId,
-        observation
-      );
-    } catch {
-      // A concurrent replacement won. Its own transition is already visible.
-    }
+    // Publication is a compare-and-set against the exact lease incarnation.
+    // A concurrent replacement simply wins and makes this snapshot stale.
+    deps.coordinator.reportView(
+      current.lease.runtimeEntityId,
+      current.lease.connectionId,
+      observation
+    );
   };
   const assertOwnsClientSession = (callerId: string, clientSessionId: string) => {
     if (deps.coordinator.ownsClientSession(clientSessionId, callerId)) return;
@@ -201,11 +197,12 @@ export function createPanelRuntimeService(deps: {
       reportView: (ctx, [panelId, connectionId, observation]) => {
         const lease = deps.coordinator.getLease(panelId);
         if (!lease || lease.connectionId !== connectionId) {
-          throw new Error(`Panel runtime view report has no matching lease: ${panelId}`);
+          return "stale" as const;
         }
         assertOwnsClientSession(ctx.caller.runtime.id, lease.clientSessionId);
-        deps.coordinator.reportView(panelId, connectionId, observation);
-        return undefined;
+        return deps.coordinator.reportView(panelId, connectionId, observation)
+          ? ("reported" as const)
+          : ("stale" as const);
       },
       reportOwnView: (ctx, [observation]) => {
         if (ctx.caller.runtime.kind !== "panel") {
@@ -213,9 +210,10 @@ export function createPanelRuntimeService(deps: {
         }
         const runtimeEntityId = ctx.caller.runtime.id;
         const lease = deps.coordinator.getLease(runtimeEntityId);
-        if (!lease) throw new Error(`Panel runtime ${runtimeEntityId} has no active lease`);
-        deps.coordinator.reportView(runtimeEntityId, lease.connectionId, observation);
-        return undefined;
+        if (!lease) return "stale" as const;
+        return deps.coordinator.reportView(runtimeEntityId, lease.connectionId, observation)
+          ? ("reported" as const)
+          : ("stale" as const);
       },
     }),
   };

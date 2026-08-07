@@ -248,13 +248,13 @@ describe("PanelRuntimeCoordinator", () => {
       observation: { boot: { phase: "ready" } },
     });
 
-    expect(() =>
+    expect(
       coordinator.reportView("panel:nav-mobile-held", "stale-connection", {
         url: "http://127.0.0.1/",
         loading: false,
         boot: { phase: "ready" },
       })
-    ).toThrow(/does not match the active lease/);
+    ).toBe(false);
 
     coordinator.takeOver("panel:nav-mobile-held", {
       slotId: "panel:tree/slot-mobile",

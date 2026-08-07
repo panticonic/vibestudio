@@ -177,6 +177,61 @@ describe("panelRuntimeService", () => {
     );
   });
 
+  it("treats a view report for a superseded lease as a stale transition", async () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    const service = createPanelRuntimeService({
+      coordinator,
+      currentEntityForSlot,
+      observeHostSlot,
+    });
+    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
+    await service.handler(desktopCtx, "registerClient", [
+      {
+        clientSessionId: "desktop-session",
+        hostConnectionId: "desktop-host",
+        label: "Desktop",
+        platform: "desktop",
+      },
+    ]);
+    await service.handler(desktopCtx, "acquire", [
+      "panel:nav-a",
+      {
+        slotId: "panel:tree/slot-a",
+        clientSessionId: "desktop-session",
+        connectionId: "replacement-runtime",
+      },
+    ]);
+
+    await expect(
+      service.handler(desktopCtx, "reportView", [
+        "panel:nav-a",
+        "superseded-runtime",
+        {
+          url: "http://127.0.0.1/panels/chat/",
+          loading: false,
+          boot: { phase: "ready" },
+        },
+      ])
+    ).resolves.toBe("stale");
+    expect(coordinator.reportedViewForSlot("panel:tree/slot-a")).toBeNull();
+
+    await expect(
+      service.handler(desktopCtx, "reportView", [
+        "panel:nav-a",
+        "replacement-runtime",
+        {
+          url: "http://127.0.0.1/panels/chat/",
+          loading: false,
+          boot: { phase: "ready" },
+        },
+      ])
+    ).resolves.toBe("reported");
+    expect(coordinator.reportedViewForSlot("panel:tree/slot-a")).toMatchObject({
+      lease: { connectionId: "replacement-runtime" },
+      observation: { boot: { phase: "ready" } },
+    });
+  });
+
   it("reads and caches the active desktop host observation on demand", async () => {
     const coordinator = new PanelRuntimeCoordinator();
     const hostObservation = {

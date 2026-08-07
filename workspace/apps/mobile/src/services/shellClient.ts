@@ -629,8 +629,8 @@ class MobilePanels implements PanelHost {
     runtimeEntityId: PanelEntityId,
     connectionId: string,
     observation: PanelPageObservation
-  ): Promise<void> {
-    await this.panelRuntime.reportView(runtimeEntityId, connectionId, {
+  ): Promise<"reported" | "stale"> {
+    return this.panelRuntime.reportView(runtimeEntityId, connectionId, {
       url: observation.view.url,
       loading: observation.view.loading,
       boot: observation.boot,

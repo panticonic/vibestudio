@@ -241,18 +241,18 @@ export class PanelRuntimeCoordinator {
     runtimeEntityId: string,
     connectionId: string,
     input: { url: string; loading: boolean; boot: PanelBootObservation }
-  ): void {
+  ): boolean {
     const entityId = asPanelEntityId(runtimeEntityId);
     const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) {
-      throw new Error(`Panel runtime view report does not match the active lease: ${entityId}`);
+      return false;
     }
     const previous = this.reportedViews.get(entityId);
     if (
       previous?.connectionId === connectionId &&
       samePageObservation(previous.observation, input)
     ) {
-      return;
+      return true;
     }
     this.reportedViews.set(entityId, {
       connectionId,
@@ -264,6 +264,7 @@ export class PanelRuntimeCoordinator {
     this.nextVersion();
     this.nextSlotObservationVersion(lease.slotId);
     this.emitSlotObservationChanged(lease.slotId);
+    return true;
   }
 
   reportedViewForSlot(

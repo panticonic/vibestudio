@@ -53,9 +53,8 @@ export function createRuntime(deps: RuntimeDeps) {
         },
       ])
       .catch(() => {
-        // Lease replacement/navigation tears down this document. A report
-        // racing that teardown belongs to the retired incarnation and is
-        // intentionally ignored by the coordinator's identity check.
+        // Navigation can tear down the transport before the server returns
+        // its reported/stale result. There is nothing left to notify here.
       });
   };
   const initialBoot = globalThis.__vibestudioPanelBoot;
