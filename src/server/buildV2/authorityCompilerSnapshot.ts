@@ -2,11 +2,11 @@ import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as crypto from "node:crypto";
 import * as ts from "typescript/unstable/ast";
+import { createScanner } from "typescript/unstable/ast/scanner";
 import type {
   CompilerOptions,
   Program,
   Project,
-  Symbol as TypeScriptSymbol,
 } from "typescript/unstable/sync";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
@@ -44,6 +44,7 @@ export interface AuthorityCompilerSnapshot {
     sourceLoadMs: number;
     programMs: number;
     maxProgramMs: number;
+    importGraphMs: number;
     analyzerMs: number;
     compositionMs: number;
     native: {
@@ -133,7 +134,49 @@ async function packageInfo(
   return { name: unit.name, dir, packageJson };
 }
 
-function moduleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLikeNode[] {
+interface SourceToken {
+  kind: ts.SyntaxKind;
+  start: number;
+  text: string;
+}
+
+function moduleSpecifierScan(source: string): {
+  positions: number[];
+  requiresNodeResolution: boolean;
+} {
+  const scanner = createScanner(true, undefined, source);
+  const previous: SourceToken[] = [];
+  const positions: number[] = [];
+  let requiresNodeResolution = false;
+  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFile; kind = scanner.scan()) {
+    const token = { kind, start: scanner.getTokenStart(), text: scanner.getTokenText() };
+    if (
+      kind === ts.SyntaxKind.StringLiteral ||
+      kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral
+    ) {
+      const one = previous.at(-1);
+      const two = previous.at(-2);
+      const requireCall =
+        one?.kind === ts.SyntaxKind.OpenParenToken &&
+        (two?.kind === ts.SyntaxKind.Identifier || two?.kind === ts.SyntaxKind.RequireKeyword) &&
+        two.text === "require";
+      if (
+        one?.kind === ts.SyntaxKind.ImportKeyword ||
+        one?.kind === ts.SyntaxKind.FromKeyword ||
+        (one?.kind === ts.SyntaxKind.OpenParenToken &&
+          (two?.kind === ts.SyntaxKind.ImportKeyword || requireCall))
+      ) {
+        positions.push(token.start + 1);
+        if (requireCall) requiresNodeResolution = true;
+      }
+    }
+    previous.push(token);
+    if (previous.length > 2) previous.shift();
+  }
+  return { positions, requiresNodeResolution };
+}
+
+function astModuleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLikeNode[] {
   const result: ts.StringLiteralLikeNode[] = [];
   const visit = (node: ts.Node): void => {
     if (
@@ -164,24 +207,30 @@ function moduleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLikeNode[]
   return result;
 }
 
-function sourceFiles(program: Program): ts.SourceFile[] {
-  return program.getSourceFileNames().flatMap((fileName) => {
-    const sourceFile = program.getSourceFile(fileName);
-    return sourceFile ? [sourceFile] : [];
-  });
-}
-
-function symbolDeclarations(project: Project, symbol: TypeScriptSymbol | undefined): ts.Node[] {
-  return (
-    symbol?.declarations.flatMap((handle) => {
-      const declaration = handle.resolve(project);
-      return declaration ? [declaration] : [];
-    }) ?? []
-  );
+async function programSourceContents(
+  program: Program,
+  overlays: ReadonlyMap<string, string>
+): Promise<Map<string, string>> {
+  const files = program
+    .getSourceFileNames()
+    .map((fileName) => path.resolve(fileName))
+    .filter((file) => !file.startsWith("/@typescript/lib/"));
+  const contents = new Map<string, string>();
+  const concurrency = 32;
+  for (let offset = 0; offset < files.length; offset += concurrency) {
+    await Promise.all(
+      files.slice(offset, offset + concurrency).map(async (file) => {
+        const overlay = overlays.get(file);
+        contents.set(file, overlay ?? (await fsp.readFile(file, "utf8")));
+      })
+    );
+  }
+  return contents;
 }
 
 function resolvedImportGraphs(
   project: Project,
+  contentsByFile: ReadonlyMap<string, string>,
   workspaceFiles: ReadonlySet<string>
 ): {
   workspace: Map<string, ReadonlySet<string>>;
@@ -190,16 +239,18 @@ function resolvedImportGraphs(
   const checker = project.checker;
   const workspace = new Map<string, ReadonlySet<string>>();
   const all = new Map<string, ReadonlySet<string>>();
-  for (const sourceFile of sourceFiles(project.program)) {
-    const source = path.resolve(sourceFile.fileName);
+  for (const [source, content] of contentsByFile) {
     const imports = new Set<string>();
     const workspaceImports = new Set<string>();
-    const specifiers = moduleSpecifiers(sourceFile);
-    const symbols = checker.getSymbolAtLocation(specifiers);
-    for (let index = 0; index < specifiers.length; index += 1) {
-      const symbol = symbols[index];
-      for (const declaration of symbolDeclarations(project, symbol)) {
-        const target = path.resolve(declaration.getSourceFile().fileName);
+    const scan = moduleSpecifierScan(content);
+    const symbols = checker.getSymbolAtPosition(source, scan.positions);
+    if (scan.requiresNodeResolution) {
+      const sourceFile = project.program.getSourceFile(source);
+      if (sourceFile) symbols.push(...checker.getSymbolAtLocation(astModuleSpecifiers(sourceFile)));
+    }
+    for (const symbol of symbols) {
+      for (const declaration of symbol?.declarations ?? []) {
+        const target = path.resolve(declaration.path);
         imports.add(target);
         if (workspaceFiles.has(target)) workspaceImports.add(target);
       }
@@ -230,21 +281,20 @@ async function nearestPackageManifest(file: string): Promise<string | null> {
 }
 
 async function compilerDependencies(
-  program: Program,
   reachable: ReadonlySet<string>,
   sourceRoot: string,
   configFiles: readonly string[],
+  contentsByFile: ReadonlyMap<string, string>,
   cache: Map<string, readonly AuthorityCompilerDependency[]>
 ): Promise<AuthorityCompilerDependency[]> {
   const contents = new Map<string, string>();
-  for (const sourceFile of sourceFiles(program)) {
-    const file = path.resolve(sourceFile.fileName);
+  for (const [file, source] of contentsByFile) {
     if (!reachable.has(file) || isWithin(sourceRoot, file) || file.startsWith("/@typescript/lib/"))
       continue;
     let dependencies = cache.get(file);
     if (!dependencies) {
       const discovered: AuthorityCompilerDependency[] = [
-        { path: file, contentHash: contentHash(sourceFile.text) },
+        { path: file, contentHash: contentHash(source) },
       ];
       const manifest = await nearestPackageManifest(file);
       if (manifest && !isWithin(sourceRoot, manifest)) {
@@ -407,6 +457,7 @@ export async function createAuthorityCompilerSnapshot(
 
   let programMs = 0;
   let maxProgramMs = 0;
+  let importGraphMs = 0;
   let analyzerMs = 0;
   let compositionMs = 0;
   const native = {
@@ -447,17 +498,17 @@ export async function createAuthorityCompilerSnapshot(
       const groupProgramMs = Date.now() - programStartedAt;
       programMs += groupProgramMs;
       maxProgramMs = Math.max(maxProgramMs, groupProgramMs);
+      const importGraphStartedAt = Date.now();
+      const groupContents = await programSourceContents(program, contentsByFile);
       const groupWorkspaceFiles = new Set(
-        sourceFiles(program)
-          .map((sourceFile) => path.resolve(sourceFile.fileName))
-          .filter((file) => isWithin(sourceRoot, file))
+        [...groupContents.keys()].filter((file) => isWithin(sourceRoot, file))
       );
-      const importGraphs = resolvedImportGraphs(project, groupWorkspaceFiles);
+      const importGraphs = resolvedImportGraphs(project, groupContents, groupWorkspaceFiles);
+      importGraphMs += Date.now() - importGraphStartedAt;
       const groupImports = importGraphs.workspace;
       const allImports = importGraphs.all;
       const externalFiles = new Set(
-        sourceFiles(program)
-          .map((sourceFile) => path.resolve(sourceFile.fileName))
+        [...groupContents.keys()]
           .filter((file) => !isWithin(sourceRoot, file) && !file.startsWith("/@typescript/lib/"))
       );
       const importedTargets = new Set([...allImports.values()].flatMap((imports) => [...imports]));
@@ -486,10 +537,10 @@ export async function createAuthorityCompilerSnapshot(
         dependenciesByConsumer.set(
           consumer.name,
           await compilerDependencies(
-            program,
             compilerReachable,
             sourceRoot,
             [...group.configFiles],
+            groupContents,
             dependencyCache
           )
         );
@@ -510,6 +561,14 @@ export async function createAuthorityCompilerSnapshot(
     factsByConsumer,
     dependenciesByConsumer,
     importsByFile,
-    timings: { sourceLoadMs, programMs, maxProgramMs, analyzerMs, compositionMs, native },
+    timings: {
+      sourceLoadMs,
+      programMs,
+      maxProgramMs,
+      importGraphMs,
+      analyzerMs,
+      compositionMs,
+      native,
+    },
   };
 }

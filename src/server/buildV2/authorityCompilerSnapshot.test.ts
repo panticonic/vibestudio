@@ -183,6 +183,41 @@ describe("AuthorityCompilerSnapshot", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["static import", `import "@workspace/dependency";`],
+    ["re-export", `export * from "@workspace/dependency";`],
+    ["import equals", `import dependency = require("@workspace/dependency"); void dependency;`],
+    ["dynamic import", `void import("@workspace/dependency");`],
+  ])("composes facts reachable through a %s", async (_label, statement) => {
+    const fixture = workspace();
+    fixture.add("@workspace/dependency", "packages/dependency", {
+      "index.ts": `${runtimeDeclarations}
+        export async function dependency() {
+          const service = await workers.resolveService("dependency.v1");
+          return rpc.call(service.targetId, "reachable");
+        }
+      `,
+    });
+    fixture.add(
+      "@workspace/consumer",
+      "workers/consumer",
+      { "index.ts": statement },
+      { "@workspace/dependency": "workspace:*" }
+    );
+
+    const snapshot = await createAuthorityCompilerSnapshot({
+      sourceRoot: fixture.root,
+      units: fixture.units,
+      nodeModulesPaths: [],
+    });
+
+    expect(
+      snapshot.factsByConsumer
+        .get("@workspace/consumer")
+        ?.some((fact) => fact.origin.unitName === "@workspace/dependency")
+    ).toBe(true);
+  });
+
   it("excludes reachable trusted runtime dispatch plumbing from consumer facts", async () => {
     const fixture = workspace();
     fixture.add("@workspace/runtime", "packages/runtime", {

@@ -702,6 +702,7 @@ export async function initBuildSystemV2(
           let sourceLoadMs = 0;
           let programMs = 0;
           let maxProgramMs = 0;
+          let importGraphMs = 0;
           let analyzerMs = 0;
           let compositionMs = 0;
           let nativeCompiler: AuthorityCompilerSnapshot["timings"]["native"] | null = null;
@@ -749,6 +750,7 @@ export async function initBuildSystemV2(
               sourceLoadMs = compilerSnapshot.timings.sourceLoadMs;
               programMs = compilerSnapshot.timings.programMs;
               maxProgramMs = compilerSnapshot.timings.maxProgramMs;
+              importGraphMs = compilerSnapshot.timings.importGraphMs;
               analyzerMs = compilerSnapshot.timings.analyzerMs;
               compositionMs = compilerSnapshot.timings.compositionMs;
               nativeCompiler = compilerSnapshot.timings.native;
@@ -839,6 +841,7 @@ export async function initBuildSystemV2(
               sourceLoadMs,
               programMs,
               maxProgramMs,
+              importGraphMs,
               analyzerMs,
               compositionMs,
               nativeCompiler,
