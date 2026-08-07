@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { selectedWorkspacePath } from "@vibestudio/shared/connect";
 import {
   attachedHostChildAcceptanceSchema,
   attachedHostApprovalChallengeSchema,
@@ -16,6 +15,7 @@ import {
 } from "@vibestudio/service-schemas/attachedHosts";
 import { loadCliCredentials, type CliCredentials } from "../../cli/credentialStore.js";
 import { RpcClient } from "../../cli/rpcClient.js";
+import { revokeRemoteDevice } from "../../cli/remoteClient.js";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { AttachedHostBootstrapPort, AttachedHostRoutePort } from "./attachedHostController.js";
 import { AttachedHostEndpoint } from "./attachedHostProtocol.js";
@@ -36,39 +36,16 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
 
   constructor(
     private readonly credentialFile: string,
-    private readonly childGatewayUrl: string,
     private readonly operations: {
       load: typeof loadCliCredentials;
-      createClient: (
-        credentials: CliCredentials,
-        childGatewayUrl: string
-      ) => Pick<RpcClient, "call" | "close">;
-      revoke: (
-        credentials: CliCredentials,
-        childGatewayUrl: string
-      ) => Promise<{ revoked: boolean }>;
+      createClient: (credentials: CliCredentials) => Pick<RpcClient, "call" | "close">;
+      revoke: typeof revokeRemoteDevice;
       exists: typeof fs.existsSync;
       unlink: typeof fs.unlinkSync;
     } = {
       load: loadCliCredentials,
-      createClient: (credentials, childGatewayUrl) =>
-        new RpcClient({
-          url: workspaceGatewayEndpoint(childGatewayUrl, credentials.workspaceName),
-          deviceId: credentials.deviceId,
-          refreshToken: credentials.refreshToken,
-        }),
-      revoke: async (credentials, childGatewayUrl) => {
-        const rpc = new RpcClient({
-          url: childGatewayUrl,
-          deviceId: credentials.deviceId,
-          refreshToken: credentials.refreshToken,
-        });
-        try {
-          return await rpc.call<{ revoked: boolean }>("hubControl.retireCurrentDevice", []);
-        } finally {
-          await rpc.close();
-        }
-      },
+      createClient: (credentials) => new RpcClient(credentials),
+      revoke: revokeRemoteDevice,
       exists: fs.existsSync,
       unlink: fs.unlinkSync,
     }
@@ -105,7 +82,14 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     const credentials = this.loadCredentials();
     const client = this.client;
     this.client = null;
-    const result = await this.operations.revoke(credentials, this.childGatewayUrl);
+    let result: Awaited<ReturnType<typeof revokeRemoteDevice>>;
+    try {
+      // Server-side revocation is the security boundary. Closing the bootstrap
+      // transport is cleanup and must not be allowed to prevent the revocation.
+      result = await this.operations.revoke(credentials, credentials.deviceId);
+    } finally {
+      await client?.close().catch(() => undefined);
+    }
     if (!result.revoked) {
       throw transportError(
         "EATTACHED_BOOTSTRAP",
@@ -116,7 +100,6 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     this.revoked = true;
     this.credentials = null;
     if (this.operations.exists(this.credentialFile)) this.operations.unlink(this.credentialFile);
-    void client?.close().catch(() => undefined);
   }
 
   async verifyRevoked(): Promise<boolean> {
@@ -131,10 +114,7 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
 
   private rpc(): Pick<RpcClient, "call" | "close"> {
     this.assertUsable();
-    return (this.client ??= this.operations.createClient(
-      this.loadCredentials(),
-      this.childGatewayUrl
-    ));
+    return (this.client ??= this.operations.createClient(this.loadCredentials()));
   }
 
   private loadCredentials(): CliCredentials {
@@ -174,21 +154,13 @@ export function createAttachedHostPublicationPorts(input: {
   route: AttachedHostRoutePort;
 } {
   return {
-    bootstrap: new CliAttachedHostBootstrapPort(input.credentialFile, input.childGatewayUrl),
+    bootstrap: new CliAttachedHostBootstrapPort(input.credentialFile),
     route: new HttpAttachedHostRoutePort({
       gatewayUrl: input.childGatewayUrl,
       childGenerationId: input.childGenerationId,
       endpoint: input.parentEndpoint,
     }),
   };
-}
-
-export function workspaceGatewayEndpoint(gatewayUrl: string, workspaceName: string): string {
-  const endpoint = new URL(gatewayUrl);
-  endpoint.pathname = selectedWorkspacePath(workspaceName);
-  endpoint.search = "";
-  endpoint.hash = "";
-  return endpoint.toString().replace(/\/$/u, "");
 }
 
 /**

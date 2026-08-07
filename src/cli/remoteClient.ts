@@ -57,11 +57,37 @@ async function withControl<T>(
     refreshToken: creds.refreshToken,
     ...(local ? {} : { pairing: creds.controlPairing }),
   });
+  let result: T | undefined;
+  let operationError: unknown;
+  let operationFailed = false;
   try {
-    return await operation(controlClient(rpc));
-  } finally {
-    await rpc.close();
+    result = await operation(controlClient(rpc));
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
   }
+  let closeError: unknown;
+  try {
+    await rpc.close();
+  } catch (error) {
+    closeError = error;
+  }
+  if (operationFailed) {
+    if (closeError !== undefined) {
+      throw new AggregateError(
+        [operationError, closeError],
+        "Remote operation failed and its control connection could not be closed"
+      );
+    }
+    throw operationError;
+  }
+  if (closeError !== undefined) {
+    console.warn(
+      "[remoteClient] Control operation completed but connection cleanup failed:",
+      closeError
+    );
+  }
+  return result as T;
 }
 
 export async function pairRemoteServer(options: PairOptions): Promise<DeviceCredential> {

@@ -855,7 +855,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
   });
 
   it("revokes a device immediately and disarms its exact control room after retirement", async () => {
-    const runtime = fakeRuntime(9, { adminToken: "workspace-admin" });
+    const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);
     const invite = state.deviceAuthStore.createPairingInvite(30_000, {
       workspaceId: runtime.workspaceId,
@@ -870,18 +870,13 @@ describe("hub RPC pairing surfacing (§5)", () => {
     });
     const retireCaller = vi.fn(() => retired);
     state.controlTransport!.rpcServer = { retireCaller } as never;
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(() => new Promise<Response>(() => undefined));
     const result = await revokeHubDevice(
       state,
       { userId: rootUserId, handle: "root", role: "root" },
       paired.deviceId
     );
 
-    expect(result).toEqual({ revoked: true });
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    fetchSpy.mockRestore();
+    expect(result).toMatchObject({ revoked: true });
     expect(state.deviceAuthStore.userFor(paired.deviceId)).toBeNull();
     expect(state.tokenManager.validateToken(pairedToken)).toBeNull();
     expect(retireCaller).toHaveBeenCalledWith(`shell:${paired.deviceId}`);

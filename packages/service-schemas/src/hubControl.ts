@@ -551,31 +551,6 @@ export const hubControlMethods = defineServiceMethods({
     returns: z.object({ serverId: z.string(), devices: z.array(HubDeviceSchema) }),
     access: readAccess,
   },
-  retireCurrentDevice: {
-    capability: "devices.revoke",
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "identity",
-      family: "hubControl.retire-self",
-      rationale:
-        "Retires only the authenticated caller's own device authority and cannot affect another principal.",
-    },
-    presentation: {
-      title: "Disconnect this device",
-      action: "disconnect this device",
-      description: "Allows this device to retire its own connection.",
-      group: "accounts",
-      authorityCategory: {
-        domain: "people",
-        verb: "manage",
-      },
-    },
-    description: "Irreversibly retire the authenticated caller's own device credential.",
-    args: z.tuple([]),
-    returns: z.object({ revoked: z.boolean() }),
-    access: destructiveAccess,
-  },
   revokeDevice: {
     capability: "devices.revoke",
     tier: {
@@ -595,10 +570,9 @@ export const hubControlMethods = defineServiceMethods({
         verb: "manage",
       },
     },
-    description:
-      "Revoke a device immediately; transports and child sessions retire after authority is removed.",
+    description: "Revoke a device and close all of its child sessions.",
     args: z.tuple([z.string().min(1)]),
-    returns: z.object({ revoked: z.boolean() }),
+    returns: z.object({ revoked: z.boolean(), closedSessions: z.number() }),
     access: destructiveAccess,
   },
   revokeUser: {

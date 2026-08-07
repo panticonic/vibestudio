@@ -77,9 +77,7 @@ export function createAttachedHostsService(deps: AttachedHostsServiceDeps): Serv
   };
 }
 
-function requireBootstrapDeviceUser(ctx: {
-  caller: { subject?: { userId: string } };
-}): string {
+function requireBootstrapDeviceUser(ctx: { caller: { subject?: { userId: string } } }): string {
   const userId = ctx.caller.subject?.userId;
   if (!userId) {
     throw serviceError(

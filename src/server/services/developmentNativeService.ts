@@ -244,7 +244,7 @@ export function createDevelopmentNativeService(deps: {
             });
           }
           const artifactSource = await deps.executor.resolveClientArtifactSource(run, plan);
-          const pairingDeepLink = await deps.isolatedExecutor!.mintClientInvite(run.runId, receipt);
+          const pairingDeepLink = await deps.isolatedExecutor!.mintClientInvite(run);
           const launch = deps.clientExecutors.launch({
             runId: run.runId,
             binding: plan.clientExecutor,
@@ -271,8 +271,7 @@ export function createDevelopmentNativeService(deps: {
             },
           });
           const child = await deps.isolatedExecutor!.waitForClientAttestation(
-            run.runId,
-            receipt,
+            run,
             launch.requestId
           );
           deps.clientExecutors.acceptManagedChildAttestation(child);
@@ -288,9 +287,10 @@ export function createDevelopmentNativeService(deps: {
           };
         }
         if (deps.attachedHostPublisher && deps.attachedHostParentId) {
-          const ports = deps.isolatedExecutor!.takeAttachmentPorts(run.runId, receipt);
+          const ports = deps.isolatedExecutor!.takeAttachmentPorts(run);
           const publication = await deps.attachedHostPublisher.attach({
-            run: { ...run, instance: receipt },
+            run,
+            instance: receipt,
             parentHostId: deps.attachedHostParentId,
             authorityCeiling: initiatingAttachedHostCeiling(
               run,
@@ -298,7 +298,7 @@ export function createDevelopmentNativeService(deps: {
             ),
             ...ports,
           });
-          deps.isolatedExecutor!.retireManagementChannel(run.runId, receipt);
+          deps.isolatedExecutor!.retireManagementChannel(run);
           attachedHost = {
             sessionId: publication.attachedHostSessionId,
             childGenerationId: publication.childGenerationId,
@@ -548,8 +548,7 @@ function semanticIngress(ctx: ServiceContext): NativeDevelopmentSemanticIngress 
 
 function needsClientExecutor(target: DevelopmentRun["target"]): boolean {
   return (
-    target.kind === "client-device" ||
-    (target.kind === "isolated-host" && target.includeClient)
+    target.kind === "client-device" || (target.kind === "isolated-host" && target.includeClient)
   );
 }
 

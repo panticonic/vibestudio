@@ -30,7 +30,7 @@ describe("hubControlHostService", () => {
         return { userId: "user-1", handle: "alice", workspace: "main", pairing };
       }
       if (method === "listDevices") return { serverId: pairing.serverId, devices };
-      if (method === "revokeDevice") return { revoked: true };
+      if (method === "revokeDevice") return { revoked: true, closedSessions: 0 };
       throw new Error(`Unexpected method ${method}`);
     });
     const service = createHubControlHostService({
@@ -48,6 +48,7 @@ describe("hubControlHostService", () => {
     });
     await expect(service.handler(shellCtx, "revokeDevice", ["device-1"])).resolves.toEqual({
       revoked: true,
+      closedSessions: 0,
     });
 
     expect(call).toHaveBeenNthCalledWith(1, "hubControl", "pairDevice", [

@@ -177,6 +177,7 @@ describe("AttachedHostController", () => {
     const f = fixture();
     const published = await f.controller.attach({
       run: RUN,
+      instance: INSTANCE,
       parentHostId: "server-parent",
       authorityCeiling: CEILING,
       bootstrap: f.bootstrap,
@@ -234,12 +235,13 @@ describe("AttachedHostController", () => {
     ).toThrow(expect.objectContaining({ code: "EATTACHED_OWNER" }));
   });
 
-  it("refuses a run without an exact ready instance before using bootstrap", async () => {
+  it("refuses a foreign instance generation before using bootstrap", async () => {
     const f = fixture();
     const exchange = vi.spyOn(f.bootstrap, "exchange");
     await expect(
       f.controller.attach({
-        run: { ...RUN, instance: { ...INSTANCE, state: "registered" } },
+        run: RUN,
+        instance: { ...INSTANCE, generationId: "fedcba9876543210fedcba9876543210" },
         parentHostId: "server-parent",
         authorityCeiling: CEILING,
         bootstrap: f.bootstrap,
@@ -253,6 +255,7 @@ describe("AttachedHostController", () => {
     const f = fixture();
     await f.controller.attach({
       run: RUN,
+      instance: INSTANCE,
       parentHostId: "server-parent",
       authorityCeiling: CEILING,
       bootstrap: f.bootstrap,
@@ -268,6 +271,7 @@ describe("AttachedHostController", () => {
     const f = fixture();
     await f.controller.attach({
       run: RUN,
+      instance: INSTANCE,
       parentHostId: "server-parent",
       authorityCeiling: CEILING,
       bootstrap: f.bootstrap,
@@ -285,6 +289,7 @@ describe("AttachedHostController", () => {
     const f = fixture();
     await f.controller.attach({
       run: RUN,
+      instance: INSTANCE,
       parentHostId: "server-parent",
       authorityCeiling: CEILING,
       bootstrap: f.bootstrap,

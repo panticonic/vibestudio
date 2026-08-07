@@ -252,7 +252,9 @@ describe("attached-host HTTP routed connectivity", () => {
       deviceId: "device-bootstrap",
       refreshToken: "refresh-bootstrap",
     } as CliCredentials;
+    const events: string[] = [];
     const call = vi.fn(async (method: string, args: unknown[]) => {
+      events.push(method);
       if (method === "attachedHosts.bootstrapExchange") {
         return child.acceptChild(args[0] as never);
       }
@@ -262,21 +264,23 @@ describe("attached-host HTTP routed connectivity", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const close = vi.fn(() => new Promise<void>(() => undefined));
-    const revoke = vi.fn(async () => ({ revoked: true }));
-    const port = new CliAttachedHostBootstrapPort(
-      "/private/bootstrap.json",
-      "http://127.0.0.1:4242",
-      {
-        load: () => credentials,
-        createClient: () => ({ call, close }) as never,
-        revoke: revoke as never,
-        exists: () => exists,
-        unlink: () => {
-          exists = false;
-        },
-      }
-    );
+    const close = vi.fn(async () => {
+      events.push("close");
+      throw new Error("bootstrap transport already closed");
+    });
+    const revoke = vi.fn(async () => {
+      events.push("revoke");
+      return { revoked: true, closedSessions: 0 };
+    });
+    const port = new CliAttachedHostBootstrapPort("/private/bootstrap.json", {
+      load: () => credentials,
+      createClient: () => ({ call, close }) as never,
+      revoke: revoke as never,
+      exists: () => exists,
+      unlink: () => {
+        exists = false;
+      },
+    });
     const acceptance = await port.exchange(hello);
     await port.confirm(parent.confirmParent(acceptance));
     await port.revoke();
@@ -285,7 +289,13 @@ describe("attached-host HTTP routed connectivity", () => {
       code: "EATTACHED_BOOTSTRAP_REVOKED",
     });
     expect(close).toHaveBeenCalledOnce();
-    expect(revoke).toHaveBeenCalledWith(credentials, "http://127.0.0.1:4242");
+    expect(revoke).toHaveBeenCalledWith(credentials, credentials.deviceId);
+    expect(events).toEqual([
+      "attachedHosts.bootstrapExchange",
+      "attachedHosts.bootstrapConfirm",
+      "revoke",
+      "close",
+    ]);
     expect(exists).toBe(false);
   });
 

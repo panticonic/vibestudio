@@ -30,7 +30,6 @@ import type {
   PreparedDevelopmentBuild,
 } from "./developmentExecutor.js";
 import type { AttachedHostBootstrapPort, AttachedHostRoutePort } from "./attachedHostController.js";
-import { workspaceGatewayEndpoint } from "./attachedHostTransport.js";
 
 const REDACT = /(?:token|password|secret|authorization|cookie|private[_-]?key)\s*[=:]\s*[^\s]+/giu;
 const PROCESS_MARKER = "development-process.json";
@@ -345,35 +344,27 @@ export class IsolatedDevelopmentHostExecutor {
     return { ...recorded, state: "stopped", stoppedAt };
   }
 
-  async mintClientInvite(
-    runId: string,
-    instance: DevelopmentInstance,
-    ttlMs = 5 * 60_000
-  ): Promise<string> {
-    const active = this.requireManagedHost(runId, instance);
+  async mintClientInvite(run: DevelopmentRun, ttlMs = 5 * 60_000): Promise<string> {
+    const active = this.requireManagedHost(run);
     return active.manager.mintClientInvite(ttlMs);
   }
 
   async waitForClientAttestation(
-    runId: string,
-    instance: DevelopmentInstance,
+    run: DevelopmentRun,
     requestId: string,
     timeoutMs = 5 * 60_000
   ): Promise<{ requestId: string; childRuntimeId: string; attestedAt: number }> {
-    const active = this.requireManagedHost(runId, instance);
+    const active = this.requireManagedHost(run);
     return active.manager.waitForClientAttestation(requestId, timeoutMs, () =>
-      this.assertExactActive(runId, instance, active)
+      this.assertExactActive(run, active)
     );
   }
 
-  takeAttachmentPorts(
-    runId: string,
-    instance: DevelopmentInstance
-  ): {
+  takeAttachmentPorts(run: DevelopmentRun): {
     bootstrap: AttachedHostBootstrapPort;
     route: AttachedHostRoutePort;
   } {
-    const active = this.requireManagedHost(runId, instance);
+    const active = this.requireManagedHost(run);
     if (!active.attachmentPorts) {
       throw Object.assign(new Error("Attached-host publication transport is unavailable"), {
         code: "EATTACHED_ROUTE",
@@ -382,9 +373,9 @@ export class IsolatedDevelopmentHostExecutor {
     return active.attachmentPorts;
   }
 
-  retireManagementChannel(runId: string, instance: DevelopmentInstance): void {
-    const active = this.active.get(runId);
-    this.assertExactActive(runId, instance, active);
+  retireManagementChannel(run: DevelopmentRun): void {
+    const active = this.active.get(run.runId);
+    this.assertExactActive(run, active);
     if (active) {
       active.manager = null;
       active.attachmentPorts = null;
@@ -510,11 +501,10 @@ export class IsolatedDevelopmentHostExecutor {
   }
 
   private requireManagedHost(
-    runId: string,
-    instance: DevelopmentInstance
+    run: DevelopmentRun
   ): ActiveIsolatedHost & { manager: IsolatedDevelopmentManager } {
-    const active = this.active.get(runId);
-    this.assertExactActive(runId, instance, active);
+    const active = this.active.get(run.runId);
+    this.assertExactActive(run, active);
     if (!active?.ready || !active.manager) {
       throw Object.assign(new Error("Exact isolated management channel is not ready"), {
         code: "ESTATE",
@@ -523,15 +513,12 @@ export class IsolatedDevelopmentHostExecutor {
     return active as ActiveIsolatedHost & { manager: IsolatedDevelopmentManager };
   }
 
-  private assertExactActive(
-    runId: string,
-    instance: DevelopmentInstance,
-    active: ActiveIsolatedHost | undefined
-  ): void {
+  private assertExactActive(run: DevelopmentRun, active: ActiveIsolatedHost | undefined): void {
     if (
+      !run.instance ||
       !active ||
-      active.instance.id !== instance.instanceId ||
-      active.instance.generationId !== instance.generationId
+      active.instance.id !== run.instance.instanceId ||
+      active.instance.generationId !== run.instance.generationId
     ) {
       throw Object.assign(new Error("Exact isolated instance generation is not active"), {
         code: "EOWNERSHIP",
@@ -662,11 +649,7 @@ async function createIsolatedDevelopmentManager(input: {
       code: "ECLI_BOOTSTRAP",
     });
   }
-  const client = new RpcClient({
-    url: workspaceGatewayEndpoint(input.childGatewayUrl, credentials.workspaceName),
-    deviceId: credentials.deviceId,
-    refreshToken: credentials.refreshToken,
-  });
+  const client = new RpcClient(credentials);
   try {
     await client.call("developmentClientExecutor.bindIsolatedManager", [
       { instanceId: input.instance.id, generationId: input.instance.generationId },

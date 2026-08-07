@@ -544,7 +544,8 @@ async function closeDeviceSessionsAcrossChildren(
       typeof entry.ready["adminToken"] === "string" ? entry.ready["adminToken"] : null;
     if (!adminToken) continue;
     try {
-      const response = await fetchImpl(
+      const response = await fetchWithTimeout(
+        fetchImpl,
         `http://127.0.0.1:${entry.port}/_r/s/sessions/close-device`,
         {
           method: "POST",
@@ -563,6 +564,29 @@ async function closeDeviceSessionsAcrossChildren(
     }
   }
   return closed;
+}
+
+const DEVICE_SESSION_CLOSE_TIMEOUT_MS = 5_000;
+
+async function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  input: string,
+  init: RequestInit
+): Promise<Response> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const request = fetchImpl(input, { ...init, signal: controller.signal });
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`Request timed out after ${DEVICE_SESSION_CLOSE_TIMEOUT_MS}ms`));
+    }, DEVICE_SESSION_CLOSE_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([request, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function closeUserSessionsInRuntime(
@@ -1235,7 +1259,7 @@ export async function revokeHubDevice(
   state: HubRuntimeState,
   subject: HubSubject,
   deviceId: string
-): Promise<{ revoked: boolean }> {
+): Promise<{ revoked: boolean; closedSessions: number }> {
   const device = state.identityDb.getDevice(deviceId);
   if (!device) throw new Error("Unknown device");
   if (device.userId !== subject.userId) requireRole(subject, "admin");
@@ -1244,18 +1268,15 @@ export async function revokeHubDevice(
   if (revoked) {
     state.tokenManager.revokeToken(shellCallerId(deviceId));
     retireDeviceControlReach(state, deviceId, controlRoom);
-    void closeDeviceSessionsAcrossChildren(state, deviceId).catch((error) => {
-      console.warn(`[Hub] retiring sessions for revoked device "${deviceId}" failed:`, error);
-    });
   }
-  return { revoked };
+  const closedSessions = revoked ? await closeDeviceSessionsAcrossChildren(state, deviceId) : 0;
+  return { revoked, closedSessions };
 }
 
 /** One semantic hub-control dispatcher for the hub-owned RPC ingress. */
 async function executeHubControl(
   state: HubRuntimeState,
   subject: HubSubject,
-  callerId: string,
   method: string,
   args: unknown[],
   respond: (result: unknown) => void
@@ -1687,13 +1708,6 @@ async function executeHubControl(
     });
     return;
   }
-  if (method === "retireCurrentDevice") {
-    if (!callerId.startsWith(SHELL_CALLER_PREFIX)) {
-      throw new Error("Only an authenticated device can retire itself");
-    }
-    respond(await revokeHubDevice(state, subject, callerId.slice(SHELL_CALLER_PREFIX.length)));
-    return;
-  }
   if (method === "revokeDevice") {
     const deviceId = typeof args[0] === "string" ? args[0] : "";
     respond(await revokeHubDevice(state, subject, deviceId));
@@ -1716,7 +1730,7 @@ function createDirectHubControlService(state: HubRuntimeState): ServiceDefinitio
     const definition = hubControlMethods[method];
     let responded = false;
     let result: unknown;
-    await executeHubControl(state, subject, ctx.caller.runtime.id, method, args, (value) => {
+    await executeHubControl(state, subject, method, args, (value) => {
       responded = true;
       result = definition.returns?.parse(value) ?? value;
     });

@@ -46,6 +46,7 @@ export interface AttachedHostPublicationInput {
     DevelopmentRun,
     "runId" | "ownerRuntimeId" | "ownerRuntimeKind" | "ownerUserId" | "target" | "instance"
   >;
+  instance: DevelopmentInstance;
   parentHostId: string;
   authorityCeiling: readonly CapabilityScope[];
   bootstrap: AttachedHostBootstrapPort;
@@ -94,11 +95,11 @@ export class AttachedHostController implements AttachedHostPublisher {
   ) {}
 
   async attach(input: AttachedHostPublicationInput): Promise<AttachedHostPublication> {
-    const instance = requireAttachableInstance(input.run);
+    assertAttachableRun(input.run, input.instance);
     const facts: AttachedHostSessionFacts = {
       parentHostId: input.parentHostId,
-      childHostId: required(instance.serverId, "ready child server id"),
-      childGenerationId: instance.generationId,
+      childHostId: required(input.instance.serverId, "ready child server id"),
+      childGenerationId: input.instance.generationId,
       developmentRunId: input.run.runId,
       initiatingRuntimeId: input.run.ownerRuntimeId,
       initiatingRuntimeKind: input.run.ownerRuntimeKind,
@@ -134,13 +135,13 @@ export class AttachedHostController implements AttachedHostPublisher {
     }
     this.routes.set(hello.sessionId, {
       route: input.route,
-      generationId: instance.generationId,
+      generationId: input.instance.generationId,
     });
     const record = this.parent.sessionRecord(hello.sessionId);
     if (!record) throw attachedError("EATTACHED_SESSION", "Attached-host session was not recorded");
     return {
       attachedHostSessionId: hello.sessionId,
-      childGenerationId: instance.generationId,
+      childGenerationId: input.instance.generationId,
       authorityCeilingDigest: record.transcript.authorityCeilingDigest,
       expiresAt: record.transcript.expiresAt,
     };
@@ -322,19 +323,24 @@ function assertOwner(
   }
 }
 
-function requireAttachableInstance(
-  run: AttachedHostPublicationInput["run"]
-): DevelopmentInstance {
+function assertAttachableRun(
+  run: AttachedHostPublicationInput["run"],
+  instance: DevelopmentInstance
+): void {
   if (run.target.kind !== "isolated-host") {
     throw attachedError("EATTACHED_TARGET", "Only an isolated development host can be attached");
   }
-  if (!run.instance || run.instance.state !== "ready") {
+  if (
+    instance.state !== "ready" ||
+    !run.instance ||
+    run.instance.instanceId !== instance.instanceId ||
+    run.instance.generationId !== instance.generationId
+  ) {
     throw attachedError(
       "EATTACHED_GENERATION",
       "Attachment requires the run's exact ready child generation"
     );
   }
-  return run.instance;
 }
 
 function required(value: string | null, label: string): string {
