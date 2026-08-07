@@ -492,6 +492,47 @@ describe("internal storage DOs under workerd", () => {
     await expect(doDispatch.dispatch(ref, "getBookmarks", "/")).resolves.toEqual([]);
   }, 30_000);
 
+  it("resets and restores internal DO storage through a graceful workerd stop", async () => {
+    // BrowserDataDO writes are host-capability attested, which requires the
+    // installed product identity; synthesize one for this process the same way
+    // a packaged build ships it.
+    if (!process.env["VIBESTUDIO_APP_ROOT"]) {
+      const appRoot = mkdtempSync(join(tmpdir(), "vibestudio-host-root-"));
+      const { mkdirSync, writeFileSync } = await import("node:fs");
+      mkdirSync(join(appRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(appRoot, "dist", "host-build-fingerprint.json"),
+        JSON.stringify({ fingerprint: "ab".repeat(32) })
+      );
+      process.env["VIBESTUDIO_APP_ROOT"] = appRoot;
+    }
+    const harness = await createWorkerdHarness();
+    manager = harness.manager;
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+    ]);
+    const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
+    const ref = {
+      source: INTERNAL_DO_SOURCE,
+      className: "BrowserDataDO",
+      objectKey: "resettable-browser-environment",
+    };
+
+    await doDispatch.dispatch(ref, "addBookmark", { title: "keep me", url: "https://example.com" });
+    expect((await doDispatch.dispatch(ref, "getBookmarks", "/")) as unknown[]).toHaveLength(1);
+
+    // Internal quiesce is a graceful workerd stop (no per-facet abort exists);
+    // the next dispatch lazily restarts workerd against fresh storage.
+    const reset = await manager.resetDOStorage(ref, "exercise internal maintenance");
+    expect((await doDispatch.dispatch(ref, "getBookmarks", "/")) as unknown[]).toHaveLength(0);
+    expect(await manager.listDOStorageBackups(ref)).toEqual([
+      expect.objectContaining({ operationId: reset.operationId }),
+    ]);
+
+    await manager.restoreDOStorageBackup(ref, reset.operationId, "restore the bookmark");
+    expect((await doDispatch.dispatch(ref, "getBookmarks", "/")) as unknown[]).toHaveLength(1);
+  }, 60_000);
+
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
   // the unbounded eval design: real workerd does NOT cap a DO `fetch` handler
   // the way it caps a regular Worker (~30s). Held 35s here and returned cleanly,

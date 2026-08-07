@@ -88,6 +88,19 @@ const WorkerSourceSchema = z
   })
   .strict();
 
+/**
+ * Internal (framework-owned) DO storage is host-managed: its schema evolves
+ * through in-repo migrations, and its reset/restore path is the manager-level
+ * journaled maintenance flow, never the userland workers API.
+ */
+function assertUserlandStorageMaintenanceTarget(source: string): void {
+  if (source === INTERNAL_DO_SOURCE) {
+    throw new Error(
+      `Storage maintenance for internal source "${source}" is host-managed and not exposed to userland callers`
+    );
+  }
+}
+
 export function createWorkerService(deps: {
   buildSystem: BuildSystemV2;
   workspaceDecls: WorkspaceDeclarations;
@@ -499,6 +512,7 @@ export function createWorkerService(deps: {
         };
       },
       resetStorage: async (ctx, [target, intent]) => {
+        assertUserlandStorageMaintenanceTarget(target.source);
         await resolveDurableObjectForCaller(ctx, target.source, target.className);
         const objectKey = resolvedDurableObjectKey(
           ctx,
@@ -515,6 +529,7 @@ export function createWorkerService(deps: {
         );
       },
       listStorageBackups: async (ctx, [target]) => {
+        assertUserlandStorageMaintenanceTarget(target.source);
         await resolveDurableObjectForCaller(ctx, target.source, target.className);
         const objectKey = resolvedDurableObjectKey(
           ctx,
@@ -532,6 +547,7 @@ export function createWorkerService(deps: {
         });
       },
       restoreStorageBackup: async (ctx, [target, operationId, intent]) => {
+        assertUserlandStorageMaintenanceTarget(target.source);
         await resolveDurableObjectForCaller(ctx, target.source, target.className);
         const objectKey = resolvedDurableObjectKey(
           ctx,

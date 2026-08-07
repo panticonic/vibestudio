@@ -459,6 +459,10 @@ type ResolvedWorkerdManagerDeps = WorkerdManagerDeps;
 type WorkerdRestartRequest =
   | { kind: "planned" }
   | { kind: "crash"; reason: string; alreadyExited: boolean }
+  /** Graceful prepare + stop with NO restart; workerd returns lazily on the
+   *  next ensureWorkerdRunning. Used by internal-DO storage maintenance, whose
+   *  only guaranteed file-handle-release boundary is the process itself. */
+  | { kind: "stop"; reason: string }
   | { kind: "stop-if-idle" };
 
 type GenerationTransitionState = "preparing" | "stopping" | "reaping" | "starting";
@@ -472,7 +476,7 @@ type GenerationTransitionState = "preparing" | "stopping" | "reaping" | "startin
  */
 interface GenerationTransition {
   correlationId: string;
-  kind: "planned" | "crash" | "stop-if-idle";
+  kind: "planned" | "crash" | "stop" | "stop-if-idle";
   state: GenerationTransitionState;
   reason: string;
   alreadyExited: boolean;
@@ -584,6 +588,9 @@ export class WorkerdManager {
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
   private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
   private readonly doMaintenanceRecovery: Promise<void>;
+  /** A graceful `stop` ran with live services: the next start owes a
+   *  crash-style restart-ready so released lifecycle leases resume. */
+  private resumeLifecycleAfterStop = false;
 
   constructor(deps: WorkerdManagerDeps) {
     this.deps = deps;
@@ -2028,8 +2035,8 @@ export class WorkerdManager {
       if (artifact.role === "wasm") wasmModules[artifact.path] = artifact.content;
     }
 
-    // Service-level token shared by all instances of this source:className —
-    // matches the old `do-service:*` workerd bearer (NOT an entity id).
+    // Service-level token shared by all instances of this source:className;
+    // `do-service:*` is a bearer identity, not an entity id.
     const serviceCallerId = `do-service:${serviceKey}`;
     const serviceToken = this.ensureWorkerBearer(serviceCallerId);
     // Keep the egress attribution registered for this class identity.
@@ -2044,18 +2051,6 @@ export class WorkerdManager {
       GATEWAY_URL: this.deps.getServerUrl(),
       WORKSPACE_ID: this.deps.workspaceId,
     };
-    const schemaRow = this.doSchemaDescriptorDb
-      .prepare(
-        `SELECT descriptor_json FROM do_schema_descriptors
-         WHERE source = ? AND effective_version = ? AND class_name = ?`
-      )
-      .get(source, buildResult.metadata.ev, className) as { descriptor_json: string } | undefined;
-    if (schemaRow) {
-      const descriptor = JSON.parse(
-        schemaRow.descriptor_json
-      ) as DurableObjectPublishedSchemaDescriptor;
-      env["VIBESTUDIO_SCHEMA_FINGERPRINT"] = descriptor.freshSchemaFingerprint;
-    }
     if (process.env["VIBESTUDIO_TEST_MODE"]) {
       env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
     }
@@ -2499,7 +2494,11 @@ export class WorkerdManager {
 
   private preemptPreparingTransition(reason: string): void {
     const transition = this.activeTransition;
-    if (transition && transition.kind === "planned" && transition.state === "preparing") {
+    if (
+      transition &&
+      (transition.kind === "planned" || transition.kind === "stop") &&
+      transition.state === "preparing"
+    ) {
       transition.prepAbort.abort(
         new Error(`crash recovery preempted graceful workerd prepare: ${reason}`)
       );
@@ -2532,13 +2531,36 @@ export class WorkerdManager {
   private startGenerationTransition(): GenerationTransition {
     const requests = this.consumeQueuedRequests();
     const crash = [...requests].reverse().find((request) => request.kind === "crash");
+    const hasPlanned = requests.some((request) => request.kind === "planned");
+    const stop = [...requests]
+      .reverse()
+      .find((request): request is { kind: "stop"; reason: string } => request.kind === "stop");
     const onlyStopIfIdle =
       requests.length > 0 && requests.every((request) => request.kind === "stop-if-idle");
+    // Severity order: crash > planned > stop > stop-if-idle. A planned restart
+    // queued alongside a stop wins — the maintenance caller's file-lock
+    // verification, not the process state, is its correctness arbiter.
     const transition: GenerationTransition = {
       correlationId: crypto.randomUUID(),
-      kind: crash ? "crash" : onlyStopIfIdle ? "stop-if-idle" : "planned",
+      kind: crash
+        ? "crash"
+        : hasPlanned
+          ? "planned"
+          : stop
+            ? "stop"
+            : onlyStopIfIdle
+              ? "stop-if-idle"
+              : "planned",
       state: "preparing",
-      reason: crash ? crash.reason : onlyStopIfIdle ? "idle" : "planned-restart",
+      reason: crash
+        ? crash.reason
+        : hasPlanned
+          ? "planned-restart"
+          : stop
+            ? stop.reason
+            : onlyStopIfIdle
+              ? "idle"
+              : "planned-restart",
       alreadyExited: crash?.alreadyExited ?? false,
       prepAbort: new AbortController(),
       covered: this.requestedEpoch,
@@ -2609,9 +2631,9 @@ export class WorkerdManager {
       return;
     }
 
-    // ── preparing (planned only; prep hooks may dispatch into workerd) ──
+    // ── preparing (planned/stop; prep hooks may dispatch into workerd) ──
     let prepDegraded = false;
-    if (transition.kind === "planned" && hadRunningProcess) {
+    if ((transition.kind === "planned" || transition.kind === "stop") && hadRunningProcess) {
       transition.state = "preparing";
       const outcome = await this.emitRestartBegin(
         {
@@ -2663,10 +2685,24 @@ export class WorkerdManager {
     }
     transition.state = "reaping";
     await this.stopWorkerd(
-      transition.kind === "crash" ? `unresponsive-sandbox:${transition.reason}` : "planned-restart"
+      transition.kind === "crash"
+        ? `unresponsive-sandbox:${transition.reason}`
+        : transition.kind === "stop"
+          ? transition.reason
+          : "planned-restart"
     );
 
     if (this.shuttingDown) return;
+
+    // ── stop: the caller wants the process boundary, not a replacement.
+    // ensureWorkerdRunning restarts lazily on the next dispatch. Entities the
+    // prepare released are resumed only by a restart-ready event, so a stop
+    // taken with live services obligates the NEXT successful start to emit a
+    // crash-style ready (reconstruct leases from durable state).
+    if (transition.kind === "stop") {
+      if (hadRunningProcess) this.resumeLifecycleAfterStop = true;
+      return;
+    }
 
     if (
       this.instances.size === 0 &&
@@ -2691,12 +2727,16 @@ export class WorkerdManager {
         this.bootGeneration = nextGeneration;
         this.pendingBootGeneration = null;
         this.writeBootGeneration(this.bootGeneration);
-        if (crashStyle || hadRunningProcess) {
+        const owedStopRecovery = this.resumeLifecycleAfterStop;
+        this.resumeLifecycleAfterStop = false;
+        if (crashStyle || hadRunningProcess || owedStopRecovery) {
           await this.emitRestartReady({
             correlationId: transition.correlationId,
             generation: this.bootGeneration,
             previousGeneration,
-            reason: crashStyle ? "crash" : "planned",
+            // A start owing stop recovery has no prepared epoch of its own:
+            // crash-style ready is the durable-state reconstruction path.
+            reason: crashStyle || owedStopRecovery ? "crash" : "planned",
           });
         }
         return;
@@ -3656,10 +3696,26 @@ export class WorkerdManager {
         `${identity} fresh schema changed without a schemaVersion bump (v${candidate.version})`
       );
     }
+    if (candidate.baseline.version < previous.baseline.version) {
+      failures.push(
+        `${identity} production baseline decreased from v${previous.baseline.version} to v${candidate.baseline.version}; ` +
+          `re-supporting an older shape requires restoring its migrations, not rewinding the baseline`
+      );
+    }
+    if (candidate.baseline.version > previous.version) {
+      failures.push(
+        `${identity} production baseline v${candidate.baseline.version} exceeds the installed schema v${previous.version}; ` +
+          `this would strand every deployed database — migrate or reset them before raising the baseline this far`
+      );
+    }
     const candidateMigrations = new Map(
       candidate.migrations.map((migration) => [migration.version, migration])
     );
     for (const retained of previous.migrations) {
+      // A raised baseline retires migrations at or below it (the engine treats
+      // their ledger rows as permanent history); only still-supported
+      // migrations must survive verbatim.
+      if (retained.version <= candidate.baseline.version) continue;
       const next = candidateMigrations.get(retained.version);
       if (
         !next ||
@@ -3954,21 +4010,39 @@ export class WorkerdManager {
     );
   }
 
+  /** On-disk location of one DO's storage files (`<hash>.…` under `dir`). */
+  private durableObjectStorageLocation(ref: DORef): { dir: string; hash: string } {
+    if (isInternalDOSource(ref.source)) {
+      // Internal classes get one workerd namespace each:
+      // workerd-do/<uniqueKey>/<objectIdHash>.sqlite (+ namespace metadata.sqlite,
+      // which is workerd-owned and never matched by the hash prefix).
+      const uniqueKey = `${ref.source.replace(/\//g, "_")}:${ref.className}`;
+      return {
+        dir: path.join(stateLayout(this.deps.statePath).databases.workerdDoDir, uniqueKey),
+        hash: computeWorkerdObjectIdHash(uniqueKey, ref.objectKey),
+      };
+    }
+    return { dir: this.universalDoStorageDir(), hash: this.universalHostHash(ref) };
+  }
+
   private async quiesceDurableObjectStorage(ref: DORef): Promise<void> {
     if (isInternalDOSource(ref.source)) {
-      throw new Error(
-        `Storage maintenance is not supported for internal DO source "${ref.source}"`
-      );
-    }
-    if (this.process && this.process.exitCode === null && this.port) {
+      // Internal DOs are plain workerd classes with no per-facet abort: the
+      // only guaranteed file-handle-release boundary is the process itself.
+      // Graceful stop, no restart; the maintenance fence keeps THIS object
+      // from reactivating when other traffic lazily restarts workerd, and the
+      // lock-acquiring verification below stays the correctness arbiter.
+      if (this.process && this.process.exitCode === null) {
+        await this.restartWorkerd({ kind: "stop", reason: "do-storage-maintenance" });
+      }
+    } else if (this.process && this.process.exitCode === null && this.port) {
       await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
     }
     // Release proof, not an assumption: open every database read-write and run
     // integrity_check. The open must acquire SQLite's file lock (it fails if
     // workerd still holds the facet's connection) and recovers any residual
     // WAL, so the files a subsequent copy reads are locked-free and coherent.
-    const storageDir = this.universalDoStorageDir();
-    const hash = this.universalHostHash(ref);
+    const { dir: storageDir, hash } = this.durableObjectStorageLocation(ref);
     const files = (await fs.promises.readdir(storageDir).catch(() => [] as string[])).filter(
       (file) => file.startsWith(`${hash}.`) && file.endsWith(".sqlite")
     );
@@ -4008,8 +4082,7 @@ export class WorkerdManager {
     intent: string,
     createdAt: number
   ): Promise<void> {
-    const storageDir = this.universalDoStorageDir();
-    const hash = this.universalHostHash(ref);
+    const { dir: storageDir, hash } = this.durableObjectStorageLocation(ref);
     const backupDir = this.durableObjectBackupDir(operationId);
     await fs.promises.mkdir(backupDir, { recursive: true });
     const existing = await fs.promises.readdir(backupDir).catch(() => [] as string[]);
@@ -4063,8 +4136,8 @@ export class WorkerdManager {
     ) {
       throw new Error(`Backup ${backupOperationId} does not belong to the exact requested target`);
     }
-    await this.destroyDO(ref);
-    const storageDir = this.universalDoStorageDir();
+    await this.destroyDurableObjectStorageFiles(ref);
+    const { dir: storageDir } = this.durableObjectStorageLocation(ref);
     await fs.promises.mkdir(storageDir, { recursive: true });
     for (const file of manifest.files ?? []) {
       await fs.promises.copyFile(path.join(backupDir, file), path.join(storageDir, file));
@@ -4100,7 +4173,7 @@ export class WorkerdManager {
         row.step = "verified";
       }
       if (row.step === "verified") {
-        if (row.kind === "reset") await this.destroyDO(ref);
+        if (row.kind === "reset") await this.destroyDurableObjectStorageFiles(ref);
         else await this.restoreDurableObjectFiles(ref, assertPresent(row.backupOperationId));
         this.updateDurableObjectMaintenance(row.operationId, "replaced");
         row.step = "replaced";
@@ -4111,6 +4184,19 @@ export class WorkerdManager {
         .prepare(`SELECT 1 AS open FROM do_maintenance WHERE operation_id = ? AND status = 'open'`)
         .get(row.operationId);
       if (!stillOpen) releaseDurableObjectRelaySeal(row.targetId, row.operationId);
+      // An internal-DO quiesce stops the whole workerd process. Bring it back
+      // before the operation resolves so unrelated services never depend on a
+      // later caller happening to trigger the lazy restart.
+      if (
+        isInternalDOSource(ref.source) &&
+        !this.shuttingDown &&
+        !(this.process && this.process.exitCode === null) &&
+        (this.instances.size > 0 || this.doServices.size > 0)
+      ) {
+        await this.ensureWorkerdRunning().catch((error) => {
+          log.warn("workerd restart after internal DO storage maintenance failed", error);
+        });
+      }
     }
   }
 
@@ -4300,8 +4386,14 @@ export class WorkerdManager {
     if (isInternalDOSource(ref.source)) {
       throw new Error(`destroyDO is not supported for internal DO source "${ref.source}"`);
     }
-    const dir = this.universalDoStorageDir();
-    const hash = this.universalHostHash(ref);
+    await this.destroyDurableObjectStorageFiles(ref);
+  }
+
+  /** Delete one exact object's storage files. Maintenance-path primitive:
+   *  callers own quiesce and fencing; internal refs are reachable only through
+   *  the journaled maintenance flow, never the userland destroy surface. */
+  private async destroyDurableObjectStorageFiles(ref: DORef): Promise<void> {
+    const { dir, hash } = this.durableObjectStorageLocation(ref);
     const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
     await Promise.all(
       files

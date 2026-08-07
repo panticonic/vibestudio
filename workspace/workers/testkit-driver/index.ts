@@ -37,6 +37,11 @@ const MAX_BUFFERED_EVENTS = 2_000;
 const SESSION_IDLE_LIMIT_MS = 10 * 60_000;
 
 export class TestkitDriverDO extends DurableObjectBase {
+  static override schemaVersion = 1;
+
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "testkit-driver-v1" } as const;
+  }
   private readonly sessions = new Map<string, DriverSession>();
   private sessionCounter = 0;
 
@@ -68,7 +73,12 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Open a raw CDP session to a panel. Approval-gated via panelCdp. */
-  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async cdpOpen(panelId: string): Promise<{ sessionId: string }> {
     this.reapIdleSessions();
     const connection = await this.connectToPanel(panelId);
@@ -84,7 +94,12 @@ export class TestkitDriverDO extends DurableObjectBase {
     return { sessionId };
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async cdpSend(
     sessionId: string,
     method: string,
@@ -96,7 +111,12 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Start buffering a CDP event stream for cursor-based draining. */
-  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async cdpSubscribe(sessionId: string, eventMethod: string): Promise<void> {
     const session = this.session(sessionId);
     if (session.subscriptions.has(eventMethod)) return;
@@ -110,7 +130,12 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Drain buffered events after `cursor`; returns the new cursor. */
-  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async cdpDrainEvents(
     sessionId: string,
     cursor = 0
@@ -120,7 +145,12 @@ export class TestkitDriverDO extends DurableObjectBase {
     return { events, cursor: events.length > 0 ? events[events.length - 1]!.seq : cursor };
   }
 
-  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
   async cdpClose(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -134,7 +164,12 @@ export class TestkitDriverDO extends DurableObjectBase {
    * the compact ref returns. For profile-around-an-action flows the caller
    * uses cdpOpen + Profiler.* commands via cdpSend instead.
    */
-  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async profilePanel(
     panelId: string,
     opts?: { durationMs?: number; samplingIntervalUs?: number }
@@ -144,7 +179,9 @@ export class TestkitDriverDO extends DurableObjectBase {
     try {
       await connection.send("Profiler.enable");
       if (opts?.samplingIntervalUs) {
-        await connection.send("Profiler.setSamplingInterval", { interval: opts.samplingIntervalUs });
+        await connection.send("Profiler.setSamplingInterval", {
+          interval: opts.samplingIntervalUs,
+        });
       }
       await connection.send("Profiler.start");
       await new Promise((resolve) => setTimeout(resolve, opts?.durationMs ?? 5_000));
@@ -160,7 +197,12 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Heap snapshot of a panel; artifact to context fs, compact ref returned. */
-  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async heapSnapshot(panelId: string): Promise<ProfileRef> {
     const connection = await this.connectToPanel(panelId);
     const startedAt = Date.now();
@@ -188,7 +230,12 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Liveness probe for ensureWorker-style readiness checks. */
-  @rpc({ principals: ["host", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
   async ping(): Promise<{ ok: true; sessions: number }> {
     return { ok: true, sessions: this.sessions.size };
   }
@@ -197,7 +244,7 @@ export class TestkitDriverDO extends DurableObjectBase {
 export default {
   async fetch(_request: Request) {
     return new Response(
-      "Testkit driver Durable Object.\nUsed by @workspace/testkit for workspace-panel CDP automation and profiling.\nResolve via workers.resolveService(\"vibestudio.testkit-driver.v1\").",
+      'Testkit driver Durable Object.\nUsed by @workspace/testkit for workspace-panel CDP automation and profiling.\nResolve via workers.resolveService("vibestudio.testkit-driver.v1").',
       { headers: { "Content-Type": "text/plain" } }
     );
   },

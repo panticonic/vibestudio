@@ -400,9 +400,12 @@ describe("WorkerdManager", () => {
   it("resumes after replacement failure and retains only the five newest backups", async () => {
     const mgr = new WorkerdManager(createMockDeps());
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "retained" };
-    const originalDestroy = mgr.destroyDO.bind(mgr);
+    const internals = mgr as unknown as {
+      destroyDurableObjectStorageFiles(target: typeof ref): Promise<void>;
+    };
+    const originalDestroy = internals.destroyDurableObjectStorageFiles.bind(mgr);
     let failDestroy = true;
-    mgr.destroyDO = async (target) => {
+    internals.destroyDurableObjectStorageFiles = async (target) => {
       if (failDestroy) throw new Error("injected replacement failure");
       await originalDestroy(target);
     };

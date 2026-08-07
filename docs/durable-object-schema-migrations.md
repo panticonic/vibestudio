@@ -29,11 +29,10 @@ lifecycle behavior remains in their respective bases.
   migration. A missing step is a deployment error and fails closed.
 - The version immediately before the earliest retained migration is the oldest
   supported production baseline. When no migrations exist, only the current
-  version can be adopted as the baseline. Earlier pre-production epochs are
-  rejected without mutation rather than reset or represented by fictional
-  no-op migrations.
-- The complete upgrade, migration ledger, legacy downgrade guard, and final
-  schema validation run in one synchronous Durable Object storage transaction.
+  version can be the baseline. Earlier versions are rejected without mutation
+  rather than reset or represented by fictional no-op migrations.
+- The complete upgrade, migration ledger, and final schema validation run in
+  one synchronous Durable Object storage transaction.
   A thrown exception or interrupted activation leaves the previous version
   intact, so the next activation retries from the last commit.
 - A schema newer than the running code is rejected. Rollbacks must deploy code
@@ -44,26 +43,24 @@ lifecycle behavior remains in their respective bases.
   repaired by rerunning `createTables()`. Repairing a deployed malformed shape
   requires a new version and an explicit migration.
 
-The canonical migration ledger is `_vibestudio_schema_migrations`. The legacy
-`state.schema_version` value remains as a mirrored downgrade guard so an older
-runtime cannot mistake a migrated database for a fresh one. The two records
-must agree. Existing databases are adopted once at their exact stamped version;
-adoption itself does not transform data. The first ledger row records the
-declared baseline identity (`adopted:<baseline-name>` or
-`fresh-install:<baseline-name>`).
+The schema identity table records both the current `version` and the
+`installed_version` at which this engine created the database. The canonical
+migration ledger is `_vibestudio_schema_migrations` and contains only migration
+steps that actually ran. A fresh database therefore has an empty ledger. There
+is no version mirror in application state and no inference, restamping, or
+admission path for databases created before this contract.
 
 Migration and baseline definitions are part of the durable history. Keep their
-versions and names stable after deployment. The first baseline row may begin at
-any adopted version; every ledger row is contiguous, and rows **above the
-current production baseline** must match the running definitions exactly.
+versions and names stable after deployment. Ledger rows begin immediately after
+`installed_version`, remain contiguous through the current version, and rows
+**above the current production baseline** must match the running definitions
+exactly.
 Rows at or below the baseline are permanent history from an older support
 window: raising `schemaProductionBaseline()` retires the migration definitions
 at or below it, and their already-written ledger rows remain valid without a
 matching definition. Raising the baseline therefore never bricks a database
 that migrated under the previous window — but a database still _below_ the new
-baseline is rejected intact as unsupported. Generic
-`fresh-install`/`legacy-baseline` rows emitted by the first migration-engine
-release remain readable, but new writes use the declared baseline name.
+baseline is rejected intact as unsupported.
 
 ## Writing a migration
 
@@ -153,8 +150,8 @@ upgrades.
 
 Every version bump must demonstrate:
 
-1. A fresh database creates the final schema and records its named production
-   baseline identity.
+1. A fresh database creates the final schema, records its `installed_version`,
+   and has an empty migration ledger.
 2. The oldest supported predecessor upgrades while preserving representative
    rows, generic `state` values, and unrelated schema objects.
 3. Every migration step and its stable name appear in the ledger.
@@ -173,24 +170,20 @@ Every version bump must demonstrate:
 
 Host-side JSON persistence follows the same contract through
 `versionedJsonStore`: one authoritative configurable version field, ordered
-named migrations, exact decoding at the current version, and an optional named
-admission migration for a recognized unversioned predecessor. Migration and
-encoder output may not contain the authoritative version field. The helper
-applies all steps in memory, decodes the final exact shape, and performs one
-atomic write only after validation succeeds. Malformed, future, unknown, or
-partially retired shapes fail without overwriting the original file.
+exact decoding at the current version, and atomic writes. Encoder output may
+not contain the authoritative version field. Malformed, unversioned, or
+different-version files fail without overwriting the original file; there is
+no admission or conversion path.
 
 ## Production transition boundary
 
-Versions created before this contract were development epochs and their
-historical transformations were not retained. We do not invent
-unsafe conversions for those unknown shapes. The first activation under this
-contract adopts an existing database at its exact stamped version. A database
-older than the earliest explicitly supported migration is rejected rather than
-erased.
+This contract is an intentional breaking cutover. Databases created by an
+earlier schema helper—or containing only application tables, old stamps, or
+partial framework metadata—are unsupported and fail closed without mutation.
+They must be reset explicitly. The engine contains no old fingerprint parser,
+conversion shim, compatibility row name, or state-version fallback.
 
-Before declaring persistent-state compatibility generally available, choose
-and publish an oldest supported version for every Durable Object class, add
-migration fixtures captured from each supported release, and make those
-fixtures a deployment gate. From that release onward, all migration definitions
-and fixtures are permanent compatibility assets.
+Compatibility begins only with databases created by this engine. From the
+first such release onward, choose and publish the support baseline for every
+Durable Object class and retain the migration definitions and captured fixtures
+needed for that support window.

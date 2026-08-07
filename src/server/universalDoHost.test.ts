@@ -414,6 +414,68 @@ export default { fetch() { return new Response("v2"); } };`;
     ).resolves.toEqual([expect.stringContaining("different from a fresh v2 install")]);
   }, 30_000);
 
+  it("lets a raised baseline retire migrations while refusing rewinds and stranding", async () => {
+    active = await createHarness({ "workers/board": doBuild("workers/board", "ev-1") });
+    const { manager } = active;
+    const source = "workers/board";
+    const descriptor = (
+      overrides: Partial<
+        import("./workerdManager.js").DurableObjectPublishedSchemaDescriptor
+      >
+    ): import("./workerdManager.js").DurableObjectPublishedSchemaDescriptor => ({
+      className: "BoardDO",
+      version: 2,
+      freshSchemaFingerprint: "fp-v2",
+      baseline: { version: 1, name: "board-v1" },
+      migrations: [{ version: 2, name: "m2", definitionDigest: "d2" }],
+      fixtureObjectKeys: ["rep"],
+      ...overrides,
+    });
+
+    expect(
+      manager.validateAndStageDurableObjectSchemas("state:base", [
+        { source, effectiveVersion: "ev-1", descriptor: descriptor({}) },
+      ])
+    ).toEqual([]);
+    manager.commitDurableObjectSchemas("state:base");
+
+    // Raising the baseline to the installed version retires migration v2:
+    // dropping it (with its digest) is allowed, not "removed, renamed, or edited".
+    expect(
+      manager.validateAndStageDurableObjectSchemas("state:raise", [
+        {
+          source,
+          effectiveVersion: "ev-2",
+          descriptor: descriptor({ baseline: { version: 2, name: "board-v2" }, migrations: [] }),
+        },
+      ])
+    ).toEqual([]);
+    manager.commitDurableObjectSchemas("state:raise");
+
+    // Rewinding the baseline is refused even with the old migration restored.
+    expect(
+      manager.validateAndStageDurableObjectSchemas("state:rewind", [
+        { source, effectiveVersion: "ev-3", descriptor: descriptor({}) },
+      ])
+    ).toEqual([expect.stringContaining("production baseline decreased")]);
+
+    // Raising the baseline beyond the installed version strands deployed data.
+    expect(
+      manager.validateAndStageDurableObjectSchemas("state:strand", [
+        {
+          source,
+          effectiveVersion: "ev-4",
+          descriptor: descriptor({
+            version: 3,
+            freshSchemaFingerprint: "fp-v3",
+            baseline: { version: 3, name: "board-v3" },
+            migrations: [],
+          }),
+        },
+      ])
+    ).toContainEqual(expect.stringContaining("exceeds the installed schema v2"));
+  }, 30_000);
+
   ledgerTest(
     "execution.ensure-durable-object",
     async () => {

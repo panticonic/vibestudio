@@ -537,7 +537,10 @@ and prove both upgraded and fresh schemas converge. A publication after the
 first installed version rejects a schema-version bump unless
 `schemaMigrationFixtureObjectKeys()` names at least one exact existing object.
 Those real SQLite files are retained with restrictive permissions and replayed
-in a disposable workerd facet, so choose bounded data without secrets.
+in a disposable workerd facet, so choose bounded data without secrets. Capture
+briefly fences and retires the live object — concurrent calls receive a
+structured `DO_MAINTENANCE_IN_PROGRESS` refusal during the copy — so pick
+representative objects that tolerate a short publication-time pause.
 
 Schema refusals are structured service failures:
 

@@ -1,12 +1,11 @@
 # Durable Object schema ergonomics plan
 
-Status: substantially implemented 2026-08-07. Userland publication diagnostics,
-including captured representative fixture replay, are implemented. Per-class
-legacy adoption fixtures for every internal product DO and internal-DO
-reset/restore remain rollout follow-ups rather than being represented by a
-synthetic compatibility path. Successor synthesis of two analyses of a
-disposable Durable Object schema-evolution experiment. Verified against the
-code on `workspace-templates`.
+Status: implemented 2026-08-07. Userland publication diagnostics, captured
+representative fixture replay, and internal-DO reset/restore are implemented.
+The migration engine is an intentional breaking cutover: storage created by
+the previous helper is unsupported and must be reset. Successor synthesis of
+two analyses of a disposable Durable Object schema-evolution experiment.
+Verified against the code on `workspace-templates`.
 
 ## The incident, precisely
 
@@ -29,7 +28,7 @@ Each was checked against the current tree; line numbers are from
 `workspace-templates`.
 
 1. **Schema refusal escapes the error boundary in both DO bases.**
-   `installExactDurableObjectSchema` throws on any mismatch
+   the former exact-schema installer threw on any mismatch
    (`packages/durable/src/schema.ts:65`). Both bases call `ensureReady()`
    _before_ their try/catch that produces structured error envelopes:
    `packages/durable/src/index.ts:517` and
@@ -140,7 +139,7 @@ session into a self-describing error.
    transport 500.
 2. **Typed schema errors, layered.** The neutral engine has no runtime
    identity — it knows `className`, versions, and the refusal reason, not
-   `source`/`objectKey`. So the split is: `installExactDurableObjectSchema`
+   `source`/`objectKey`. So the split is: the neutral schema installer
    (and later the migration engine) throws a `DurableObjectSchemaError`
    carrying `errorKind: "service"`, a code, `className`,
    `persistedVersion`/`targetVersion`, and `reason`; the shared dispatch
@@ -196,35 +195,21 @@ explicitly temporary state.
 ### Phase 2 — Implement the migration engine as specified
 
 Implement `docs/durable-object-schema-migrations.md` in
-`@vibestudio/durable/schema`, replacing `installExactDurableObjectSchema`'s
-reject-only behavior for the versioned path:
+`@vibestudio/durable/schema`, replacing the old reject-only helper:
 
 - `schemaMigrations()` / `schemaProductionBaseline()` on both bases (thin
   delegation; the engine lives once in the neutral package).
 - Fresh databases create the final schema only; existing databases run the
   contiguous migration chain in one `transactionSync`, each step preceded by
-  its `validateSource`; ledger rows in `_vibestudio_schema_migrations`;
-  mirrored `state.schema_version` downgrade guard; all the fail-closed cases
-  in the doc's "Required review and tests" section become the engine's test
-  suite.
-- **Close the fingerprint hole here**: the recorded shape must include
-  indexes (and stay a complete normalized fingerprint — tables, indexes,
-  views, triggers, virtual-table declarations), because post-migration
-  validation compares against it. This changes the stored `shape_json` for
-  existing databases. **Restamping must not launder drift** — and the
-  expected complete shape has to come from somewhere. At Phase 2 there is no
-  scratch-schema probe yet (that is Phase 4 machinery), and the class's
-  declarations are just table names, so the honest Phase 2 contract is:
-  restamp requires (a) the database matches its _old_-format
-  (table/view/trigger) fingerprint exactly, and (b) the class's
-  `validateSchema()` passes — which the migration doc already obligates to
-  check required columns, **indexes**, constraints, and virtual-table
-  definitions, making it the code-owned statement of expected shape. Both
-  run inside the adoption transaction; failure of either leaves the old
-  stamp intact and fails closed. Residual gap: a class with a lax
-  `validateSchema()` can restamp unvalidated as-found objects into its
-  recorded shape; Phase 4's scratch fingerprint cross-checks recorded shapes
-  against fresh-install shapes and surfaces exactly those cases.
+  its `validateSource`; ledger rows in `_vibestudio_schema_migrations`; all the
+  fail-closed cases in the doc's "Required review and tests" section become
+  the engine's test suite.
+- **Close the fingerprint hole here**: the recorded shape includes indexes
+  and remains a complete normalized fingerprint—tables, indexes, views,
+  triggers, and virtual-table declarations—because post-migration validation
+  compares against it. The new metadata format records its engine install
+  version. Any database lacking that complete format is rejected intact; no
+  old fingerprint is parsed or restamped.
 - **Ownership stays declared; the fingerprint is the record, not the
   definition.** A fingerprint cannot classify a schema object it has never
   seen — lazily created framework tables (`_vibestudio_direct_rpc_nonces`
@@ -235,17 +220,10 @@ reject-only behavior for the versioned path:
   `requiredTables()`/`schemaTables`); what changes is that _validation of
   owned objects_ comes from the complete fingerprint rather than from bare
   table-existence checks.
-- **Rollout inventory — this engine ships into live data, not a greenfield.**
-  `WorkspaceDO` is at `schemaVersion = 29` with real persisted product state
-  (`packages/builtin/src/workspace-state/WorkspaceDO.ts:417`), and every
-  other `DurableObjectBase` subclass — internal product DOs and workspace
-  workers alike — crosses the adoption boundary on its first activation
-  under the engine. Before Phase 2 merges: enumerate every subclass in both
-  bases, declare each class's production baseline
-  (`schemaProductionBaseline()` = its current version and a name), and add
-  an adoption test per class against a copy of its real current on-disk
-  shape (the WorkspaceDO test fixture duplication noted in the repo's test
-  fixtures is the seed of exactly this). No class adopts implicitly.
+- **Rollout is a clean cutover.** Every `DurableObjectBase` subclass declares
+  its production baseline, but pre-engine product and workspace-worker storage
+  is deliberately unsupported. It fails closed and is reset; no class imports
+  or converts it implicitly.
 
 ### Phase 3 — The missing verb: `workers.resetStorage`
 
@@ -390,11 +368,8 @@ engine:
 - **Lazily created non-owned objects**: a framework table appearing after
   stamping (e.g. `_vibestudio_direct_rpc_nonces`) neither trips validation
   nor gets swept.
-- **Legacy fingerprint adoption**: a healthy pre-index-fingerprint database
-  restamps; one with missing or unexpected indexes fails closed.
-- **Multiple historical shapes sharing one version number** (pre-production
-  epochs): each is rejected intact by the baseline/adoption rules, never
-  guessed at.
+- **Pre-engine storage**: old stamps, incomplete framework metadata, and
+  unversioned application tables are rejected intact and never guessed at.
 - **Reset lifecycle**: reset racing an in-flight RPC; crash injected between
   retire/copy/delete with successful resumption; backup listing and
   retention sweep.

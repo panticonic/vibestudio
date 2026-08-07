@@ -41,7 +41,12 @@ Permanent versioned migration fixtures live separately under
 Storage maintenance (reset/restore) is a journaled, fenced operation recorded
 in `<statePath>/.databases/do-maintenance.db`. While an operation's journal
 row is open, host dispatch to that one object is refused with
-`DO_MAINTENANCE_IN_PROGRESS`. Steps are resumed from the journal's step
+`DO_MAINTENANCE_IN_PROGRESS`. Userland objects quiesce per facet; internal
+(framework) objects have no per-facet abort, so their quiesce is a graceful
+whole-workerd stop — the operation restarts workerd before it resolves, and
+the fence keeps only the maintained object from reactivating in between.
+Internal-DO maintenance is host-level only (`WorkerdManager.resetDOStorage`);
+the userland `workers.*` surface refuses internal sources. Steps are resumed from the journal's step
 cursor: at host start, and again on the next `resetStorage`/`restoreStorageBackup`
 call for the same target — so retrying the API call is the recovery path for
 an operation interrupted by a crash or failure. An operation that keeps
