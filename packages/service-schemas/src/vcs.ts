@@ -7,7 +7,6 @@ import {
   SEMANTIC_VCS_MAX_PATH_UTF8_BYTES,
   semanticVcsPathAdmission,
 } from "@vibestudio/shared/vcs/pathAdmission";
-import { VCS_ATOMIC_IMPORT_MAX_DESCRIPTOR_BYTES } from "@vibestudio/vcs-path-policy";
 import { DigestSchema } from "./blobstore.js";
 import { buildDiagnosticSchema } from "./build.js";
 
@@ -69,12 +68,6 @@ const canonicalSnapshot = z
   .describe("Canonical commitment to the complete admitted external file set.");
 const cursor = z.string().min(1);
 const pageLimit = z.number().int().positive().max(500).default(100);
-/** One import is admitted and persisted atomically by one bounded descriptor. */
-export const VCS_IMPORT_MAX_DESCRIPTOR_BYTES = VCS_ATOMIC_IMPORT_MAX_DESCRIPTOR_BYTES;
-
-export const vcsImportDescriptorByteLength = (input: unknown): number =>
-  new TextEncoder().encode(JSON.stringify(input)).byteLength;
-
 const canonicalRepoPath = z
   .string()
   .min(1)
@@ -927,12 +920,6 @@ export const vcsRegisterExternalDeltaInputSchema = z
         }
       }
     }
-    if (vcsImportDescriptorByteLength(input) > VCS_IMPORT_MAX_DESCRIPTOR_BYTES) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "External delta descriptor exceeds the atomic import byte limit",
-      });
-    }
   });
 export type VcsRegisterExternalDeltaInput = z.infer<typeof vcsRegisterExternalDeltaInputSchema>;
 
@@ -1042,15 +1029,6 @@ export const vcsImportSnapshotInputSchema = z
         code: z.ZodIssueCode.custom,
         path: ["repositories"],
         message: "Snapshot repositories must be strictly ordered by canonical path",
-      });
-    }
-    const descriptorBytes = vcsImportDescriptorByteLength(input);
-    if (descriptorBytes > VCS_IMPORT_MAX_DESCRIPTOR_BYTES) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          `A snapshot import descriptor is ${descriptorBytes} UTF-8 bytes; maximum is ` +
-          VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
       });
     }
   });

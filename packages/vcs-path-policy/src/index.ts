@@ -4,12 +4,9 @@ export const CONTEXT_BINDING_FILE = ".vibestudio-context.json";
 export const SEMANTIC_VCS_MAX_PATH_UTF8_BYTES = 512;
 export const SEMANTIC_VCS_MAX_PATH_SEGMENT_UTF8_BYTES = 255;
 /** One snapshot descriptor is admitted and persisted atomically. */
-export const VCS_ATOMIC_IMPORT_MAX_DESCRIPTOR_BYTES = 512 * 1024;
-
 const RESERVED_DIRECTORIES: ReadonlySet<string> = new Set([".git", ".gad"]);
 const RESERVED_FILES: ReadonlySet<string> = new Set([
   ".env",
-  ".npmrc",
   ".secrets.yml",
   "firebase-service-account.json",
   CONTEXT_BINDING_FILE,

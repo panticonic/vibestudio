@@ -1,25 +1,17 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as YAML from "yaml";
 import { printPairHelp, runPairServer } from "./cli/lib/pair-server.mjs";
+import { cliConfigRoot } from "./cli/lib/config-paths.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const projectPath = process.env.VIBESTUDIO_DOGFOOD_PROJECT || "projects/vibestudio";
 
 export function platformDefault() {
-  const home = os.homedir();
-  switch (process.platform) {
-    case "win32":
-      return path.join(process.env.APPDATA ?? path.join(home, "AppData", "Roaming"), "vibestudio");
-    case "darwin":
-      return path.join(home, "Library", "Application Support", "vibestudio");
-    default:
-      return path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "vibestudio");
-  }
+  return cliConfigRoot();
 }
 
 export function workspaceDir(name) {
@@ -68,12 +60,11 @@ function copyWorkspaceTemplate(wsDir) {
   const existingProject = path.join(sourceRoot, projectPath);
   const heldProject = path.join(wsDir, ".dogfood-project-sync");
   if (fs.existsSync(heldProject)) {
-    throw new Error(`Interrupted dogfood source sync left ${heldProject}; recover or remove it first`);
+    throw new Error(
+      `Interrupted dogfood source sync left ${heldProject}; recover or remove it first`
+    );
   }
-  if (
-    fs.existsSync(existingProject) &&
-    !fs.existsSync(path.join(existingProject, ".git"))
-  ) {
+  if (fs.existsSync(existingProject) && !fs.existsSync(path.join(existingProject, ".git"))) {
     throw new Error(`${existingProject} exists but is not a git repo`);
   }
 
@@ -161,19 +152,10 @@ function writeDogfoodRemoteConfig(wsDir, remoteUrl) {
   }
   const configPath = path.join(wsDir, "source", "meta", "vibestudio.yml");
   const config = YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {};
-  if (!remoteUrl) {
-    const repository = config.git?.remotes?.[section]?.[repoKey];
-    if (!repository || typeof repository !== "object" || !("origin" in repository)) return;
-    delete repository.origin;
-    if (Object.keys(repository).length === 0) delete config.git.remotes[section][repoKey];
-    if (Object.keys(config.git.remotes[section]).length === 0) delete config.git.remotes[section];
-    if (Object.keys(config.git.remotes).length === 0) delete config.git.remotes;
-    if (Object.keys(config.git).length === 0) delete config.git;
-    const tmpPath = `${configPath}.tmp`;
-    fs.writeFileSync(tmpPath, YAML.stringify(config), "utf8");
-    fs.renameSync(tmpPath, configPath);
-    return;
-  }
+  // No override means the copied workspace template remains authoritative.
+  // In particular, keep its reviewed HTTPS remote declaration while the
+  // dogfood project's local clone continues to source bytes from this checkout.
+  if (!remoteUrl) return;
   config.git ??= {};
   config.git.remotes ??= {};
   config.git.remotes[section] ??= {};

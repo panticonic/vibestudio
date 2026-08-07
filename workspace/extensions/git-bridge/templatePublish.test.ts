@@ -384,6 +384,7 @@ describe("TemplatePublishEngine", () => {
     expect(consumer.files.map((file) => file.path)).toEqual([
       "meta/template-authoring-provenance.json",
       "meta/template.yml",
+      "panels/news/.npmrc",
       "panels/news/index.ts",
     ]);
     expect(state.trees.get(result.commit)?.map((entry) => entry.path)).toContain(

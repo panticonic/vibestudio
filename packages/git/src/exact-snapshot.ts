@@ -4,10 +4,7 @@ import {
   sha256Hex,
   type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
-import {
-  VCS_ATOMIC_IMPORT_MAX_DESCRIPTOR_BYTES,
-  semanticVcsPathAdmission,
-} from "@vibestudio/vcs-path-policy";
+import { semanticVcsPathAdmission } from "@vibestudio/vcs-path-policy";
 import { GitClient, type GitCommitTreeEntry } from "./client.js";
 
 export interface SnapshotContentSink {
@@ -31,14 +28,14 @@ export interface ExactGitSnapshot {
 
 /**
  * How a commit that tracks platform-reserved paths (`.git`, `.gad`, `.env`,
- * `.npmrc`, …) is treated.
+ * `.secrets.yml`, …) is treated.
  *
  * `reject` refuses the whole import, so a repository whose content is being
  * adopted wholesale can never silently lose files. `exclude` omits them from
  * the admitted set and the canonical digest; it exists for sources that are
- * only ever partially vendored, where a root `.npmrc` is an ordinary and
- * unavoidable fact of the source repository rather than content the workspace
- * was ever going to represent. Discovery and acquisition of one source must
+ * only ever partially vendored, where a reserved root file can be an ordinary
+ * fact of the source repository rather than content the workspace was ever
+ * going to represent. Discovery and acquisition of one source must
  * always agree, or its snapshot digest is not reproducible.
  */
 export type ReservedPathPolicy = "reject" | "exclude";
@@ -52,7 +49,6 @@ interface ReadExactGitSnapshotOptions {
   expectedSnapshot?: string;
   /** Optional monorepo subtree; returned paths are relative to it. */
   subdir?: string;
-  maxDescriptorBytes?: number;
   /** Defaults to `reject`. */
   reservedPaths?: ReservedPathPolicy;
 }
@@ -148,12 +144,6 @@ function naturalPartsCompare(left: string, right: string): number {
     if (lexical !== 0) return lexical;
   }
   return compareUtf16CodeUnits(left, right);
-}
-
-function descriptorBytes(files: readonly ExactSnapshotFile[]): number {
-  return new TextEncoder().encode(
-    JSON.stringify(files.map(({ path, contentHash, mode }) => ({ path, contentHash, mode })))
-  ).byteLength;
 }
 
 function selectSubtree(
@@ -284,13 +274,6 @@ export async function readExactGitSnapshot(
     options.sink,
     options.reservedPaths ?? "reject"
   );
-  const maximum = options.maxDescriptorBytes ?? VCS_ATOMIC_IMPORT_MAX_DESCRIPTOR_BYTES;
-  const bytes = descriptorBytes(admitted.files);
-  if (bytes > maximum) {
-    throw new Error(
-      `Cannot import ${options.label}: snapshot descriptor is ${bytes} UTF-8 bytes; maximum is ${maximum}`
-    );
-  }
   if (options.expectedSnapshot && admitted.snapshot !== options.expectedSnapshot) {
     throw new Error(
       `Cannot import ${options.label}: canonical snapshot mismatch ` +
@@ -340,7 +323,6 @@ export async function acquireExactGitSnapshot(
     sink: options.sink,
     ...(options.expectedSnapshot ? { expectedSnapshot: options.expectedSnapshot } : {}),
     ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.maxDescriptorBytes ? { maxDescriptorBytes: options.maxDescriptorBytes } : {}),
     ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
 }
@@ -373,7 +355,6 @@ export async function discoverExactGitSnapshot(
     label: options.label,
     sink: options.sink,
     ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.maxDescriptorBytes ? { maxDescriptorBytes: options.maxDescriptorBytes } : {}),
     ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
 }
@@ -403,7 +384,6 @@ export async function discoverDefaultGitSnapshot(
     label: options.label,
     sink: options.sink,
     ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.maxDescriptorBytes ? { maxDescriptorBytes: options.maxDescriptorBytes } : {}),
     ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
   return { ...snapshot, ref };
@@ -455,7 +435,6 @@ export async function discoverTrackedGitSnapshot(
     label: options.label,
     sink: options.sink,
     ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.maxDescriptorBytes ? { maxDescriptorBytes: options.maxDescriptorBytes } : {}),
     ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
   return { ...snapshot, ref };

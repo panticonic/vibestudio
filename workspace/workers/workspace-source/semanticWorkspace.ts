@@ -6,10 +6,8 @@ import {
   sha256Hex,
 } from "@vibestudio/content-addressing";
 import {
-  VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
   parseVcsSemanticRequest,
   vcsProvenanceEdgeSchema,
-  vcsImportDescriptorByteLength,
   vcsTrajectoryRequestRefSchema,
   vcsTrajectorySenderRefSchema,
   type VcsBlameInput,
@@ -4183,18 +4181,12 @@ export class SemanticWorkspace {
     this.importExistingFiles(input, root);
   }
 
-  /**
-   * Collect the exact replacement basis while charging it to the same byte
-   * budget as the incoming descriptor. A replacement cannot hide unbounded
-   * delete work behind a tiny input; new imports pay for every authored file
-   * directly in their descriptor.
-   */
+  /** Collect the exact replacement basis through the manifest's bounded paging API. */
   private importExistingFiles(
     input: VcsImportSnapshotInput,
     root: string
   ): Map<string, Map<string, PlacedFileState>> {
     const byRepository = new Map<string, Map<string, PlacedFileState>>();
-    let admittedBytes = vcsImportDescriptorByteLength(input);
     for (const { input: repositoryInput, repositoryId } of importedRepositories(input)) {
       if (!repositoryInput.repositoryId) continue;
       const existing = this.deps.store.facts.member(root, repositoryId);
@@ -4223,21 +4215,6 @@ export class SemanticWorkspace {
             throw new SemanticVcsError(
               "IntegrityFailure",
               `Repository ${repositoryId} manifest references an absent file ${entry.fileId}`
-            );
-          }
-          admittedBytes += vcsImportDescriptorByteLength({
-            repositoryId,
-            path: entry.path,
-            state: point.state,
-          });
-          if (admittedBytes > VCS_IMPORT_MAX_DESCRIPTOR_BYTES) {
-            throw new SemanticVcsError(
-              "ScopeTooLarge",
-              `Snapshot import descriptor and replacement basis exceed ${VCS_IMPORT_MAX_DESCRIPTOR_BYTES} UTF-8 bytes`,
-              {
-                scope: "import descriptor and replacement basis",
-                maximum: VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
-              }
             );
           }
           files.set(entry.path, point.state);

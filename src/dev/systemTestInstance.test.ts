@@ -38,6 +38,20 @@ describe("self-provisioning system-test instance", () => {
       explicitInstance: true,
       command: ["doctor", "--json"],
     });
+    expect(
+      parseSystemTestLauncherArgs([
+        "--instance",
+        "self-development",
+        "--bootstrap-workspace",
+        "dogfood-system-test",
+        "doctor",
+      ])
+    ).toEqual({
+      instanceId: "self-development",
+      explicitInstance: true,
+      bootstrapWorkspace: "dogfood-system-test",
+      command: ["doctor"],
+    });
     expect(parseSystemTestLauncherArgs(["list"])).toEqual({
       instanceId: "system-test",
       explicitInstance: false,
@@ -45,6 +59,14 @@ describe("self-provisioning system-test instance", () => {
     });
     expect(() =>
       parseSystemTestLauncherArgs(["--instance", "a", "--instance=b", "doctor"])
+    ).toThrow(/only be specified once/u);
+    expect(() =>
+      parseSystemTestLauncherArgs([
+        "--bootstrap-workspace=a",
+        "--bootstrap-workspace",
+        "b",
+        "doctor",
+      ])
     ).toThrow(/only be specified once/u);
   });
 

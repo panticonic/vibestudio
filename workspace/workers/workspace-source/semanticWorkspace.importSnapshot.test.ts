@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { canonicalSnapshotDigest, sha256Hex } from "@vibestudio/content-addressing";
 import {
-  VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
   vcsInspectResultSchema,
   vcsNeighborsResultSchema,
   type VcsProvenanceEdge,
@@ -2249,12 +2248,13 @@ describe("SemanticWorkspace snapshot import", () => {
     acknowledgeMaterialization(semantic, committed);
     const expandedEvent = (committed.result as { event: { eventId: string } }).event.eventId;
 
-    await expect(
-      semantic.dispatch("importSnapshot", {
+    const replaced = await completeImport(
+      semantic,
+      {
         ingress,
         input: {
           contextId: "context:test",
-          commandId: "command:replace-over-import-bound",
+          commandId: "command:replace-large-workspace",
           expectedWorkingHead: { kind: "event", eventId: expandedEvent },
           source: {
             kind: "filesystem",
@@ -2269,16 +2269,12 @@ describe("SemanticWorkspace snapshot import", () => {
             },
           ],
         },
-      })
-    ).rejects.toMatchObject({
-      code: "ScopeTooLarge",
-      detail: {
-        scope: "import descriptor and replacement basis",
-        maximum: VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
       },
-    });
+      new Map()
+    );
+    expect(replaced.eventId).not.toBe(expandedEvent);
     expect(store.pendingEffects()).toEqual([]);
-  }, 30_000);
+  }, 60_000);
 
   it("walks imports larger than SQLite's compound-select ceiling through bounded pages", async () => {
     const { semantic, initial } = await authorityFixture();

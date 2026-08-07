@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  VCS_IMPORT_MAX_DESCRIPTOR_BYTES,
   assertVcsSemanticReferenceContract,
   createVcsError,
   createVcsMethodError,
@@ -580,7 +579,7 @@ describe("honest external snapshot imports", () => {
     }
   });
 
-  it("rejects ambiguous, non-canonical, or impossibly large snapshot descriptors", () => {
+  it("rejects ambiguous or non-canonical snapshot descriptors", () => {
     const file = snapshot.repositories[0].files[0];
     expect(
       vcsImportSnapshotInputSchema.safeParse({
@@ -605,19 +604,13 @@ describe("honest external snapshot imports", () => {
         ],
       }).success
     ).toBe(false);
-    expect(
-      vcsImportSnapshotInputSchema.safeParse({
-        ...snapshot,
-        intentSummary: "x".repeat(VCS_IMPORT_MAX_DESCRIPTOR_BYTES),
-      }).success
-    ).toBe(false);
   });
 
-  it("bounds atomic imports by their canonical descriptor, not arbitrary item counts", () => {
+  it("does not impose a whole-import byte or item ceiling", () => {
     const file = snapshot.repositories[0].files[0];
-    const repositories = Array.from({ length: 102 }, (_, repositoryIndex) => ({
+    const repositories = Array.from({ length: 300 }, (_, repositoryIndex) => ({
       repoPath: `packages/r${String(repositoryIndex).padStart(3, "0")}`,
-      files: Array.from({ length: 17 }, (_, fileIndex) => ({
+      files: Array.from({ length: 30 }, (_, fileIndex) => ({
         ...file,
         path: `f${String(fileIndex).padStart(3, "0")}.ts`,
       })),
@@ -631,9 +624,7 @@ describe("honest external snapshot imports", () => {
       },
       repositories,
     };
-    expect(new TextEncoder().encode(JSON.stringify(input)).byteLength).toBeLessThan(
-      VCS_IMPORT_MAX_DESCRIPTOR_BYTES
-    );
+    expect(new TextEncoder().encode(JSON.stringify(input)).byteLength).toBeGreaterThan(512 * 1024);
     expect(vcsImportSnapshotInputSchema.safeParse(input).success).toBe(true);
   });
 

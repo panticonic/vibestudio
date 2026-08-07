@@ -7,11 +7,11 @@ const TEMPLATE_NODE_ID_HEX_LENGTH = 12;
 /**
  * A template repository is only ever partially vendored: `enumerateRepoFiles`
  * takes container-section subtrees and ignores everything else. Refusing an
- * entire template because its root carries an ordinary `.npmrc` — which every
- * pnpm monorepo needs — would reject most realistic templates, so reserved
- * paths are excluded from the admitted set instead. Template discovery and
- * template acquisition MUST both use this constant, or the pin's snapshot
- * digest stops being reproducible between the two.
+ * entire template because its root carries a platform-reserved file would
+ * reject otherwise useful partial sources, so reserved paths are excluded from
+ * the admitted set instead. Template discovery and template acquisition MUST
+ * both use this constant, or the pin's snapshot digest stops being reproducible
+ * between the two.
  */
 export const TEMPLATE_RESERVED_PATH_POLICY = "exclude" as const;
 

@@ -36,8 +36,7 @@ local-only remote is represented by an opaque digest, not its machine path.
 
 The normalized snapshot also stores the complete sorted IDs of every repository
 the snapshot targeted, including an identical re-import that authors no content
-change. Work-unit inspection returns that exact `targetRepositoryIds` vector;
-the import descriptor budget makes a count/preview pair unnecessary.
+change. Work-unit inspection returns that exact `targetRepositoryIds` vector.
 `imports-repository` neighbors expose the same relation as typed walkable edges.
 Do not infer targets from authored-change previews, which are independently
 bounded and may be empty.
@@ -48,23 +47,22 @@ the complete source-level repository/file facts; it does not accept intrinsic
 content claims, a caller root, a raw host path, or perform a hidden filesystem
 read.
 
-One import is deliberately small enough for one atomic semantic transaction:
-the complete canonical serialized request descriptor is at most 512 KiB, each
-path component is at most 255 UTF-8 bytes, and each complete file path is at
-most 512 UTF-8 bytes. Repository and file counts have no second arbitrary cap;
-every item already consumes the one descriptor budget. Repositories and files
-must arrive in strict canonical path order. When replacing repositories, their
-exact existing basis consumes the same budget, so a small request cannot trigger
-an unbounded deletion plan. There is no upload session, chunk assembler, or
-partial import state. A larger descriptor or replacement basis is refused.
+One import remains one atomic semantic transaction regardless of repository or
+file count. Repositories and files must arrive in strict canonical path order;
+manifest reads use bounded pages internally so database query limits do not leak
+into the public contract. Each path component is at most 255 UTF-8 bytes and a
+complete file path is at most 512 UTF-8 bytes because those are path-identity
+constraints, not operation-capacity policy. There is no descriptor-size or item-count
+ceiling, upload session, chunk assembler, or partial visible import state.
 
 Every path crosses one shared admission predicate at schema ingress, semantic
 resume, external adapters, host scans, and materialization. `.git`, `.gad`, the
 materializer's context-binding file, and exact credential-bearing filenames
-such as `.env` and `.npmrc` cannot enter semantic state: common project tools
-consume those exact names automatically, so materializing them can disclose
-credentials or alter host builds. Templates such as `.env.example` remain
-ordinary source. Ordinary project content such as `dist/`, `out/`,
+such as `.env` cannot enter semantic state: common project tools consume those
+exact names automatically, so materializing them can disclose credentials.
+Project configuration such as `.npmrc` remains ordinary tracked source; secrets
+belong in the credential store, not repository configuration. Templates such as
+`.env.example` also remain ordinary source. Ordinary project content such as `dist/`, `out/`,
 `release/`, `coverage/`, `.cache/`, `node_modules/`, logs, archives, and
 environment templates is not excluded merely by convention.
 

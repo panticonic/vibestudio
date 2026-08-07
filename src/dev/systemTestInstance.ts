@@ -20,6 +20,7 @@ const STOP_TIMEOUT_MS = 30_000;
 type LauncherArgs = {
   instanceId: string;
   explicitInstance: boolean;
+  bootstrapWorkspace?: string;
   command: string[];
 };
 
@@ -40,6 +41,7 @@ export type EnsuredSystemTestInstance = {
 
 export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherArgs {
   let instanceId: string | undefined;
+  let bootstrapWorkspace: string | undefined;
   const command: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -58,11 +60,26 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
       if (!instanceId) throw new Error("--instance requires an id");
       continue;
     }
+    if (arg === "--bootstrap-workspace") {
+      const value = argv[index + 1];
+      if (!value) throw new Error("--bootstrap-workspace requires a name");
+      if (bootstrapWorkspace) throw new Error("--bootstrap-workspace may only be specified once");
+      bootstrapWorkspace = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--bootstrap-workspace=")) {
+      if (bootstrapWorkspace) throw new Error("--bootstrap-workspace may only be specified once");
+      bootstrapWorkspace = arg.slice("--bootstrap-workspace=".length);
+      if (!bootstrapWorkspace) throw new Error("--bootstrap-workspace requires a name");
+      continue;
+    }
     command.push(arg);
   }
   return {
     instanceId: instanceId ?? DEFAULT_SYSTEM_TEST_INSTANCE,
     explicitInstance: instanceId !== undefined,
+    ...(bootstrapWorkspace ? { bootstrapWorkspace } : {}),
     command,
   };
 }
@@ -131,13 +148,26 @@ function resolveRunning(repoRoot: string, instanceId: string): DevInstanceRecord
   }
 }
 
-function spawnEphemeralInstance(repoRoot: string, instanceId: string, outputFile: string): void {
+function spawnManagedInstance(
+  repoRoot: string,
+  instanceId: string,
+  outputFile: string,
+  bootstrapWorkspace?: string
+): void {
   fs.mkdirSync(path.dirname(outputFile), { recursive: true, mode: 0o700 });
   const output = fs.openSync(outputFile, "a", 0o600);
   try {
     const child = spawn(
       process.execPath,
-      [tsxCli, "src/dev/runInstance.ts", "server", "--ephemeral", "--instance", instanceId],
+      [
+        tsxCli,
+        "src/dev/runInstance.ts",
+        "server",
+        ...(bootstrapWorkspace ? [] : ["--ephemeral"]),
+        "--instance",
+        instanceId,
+        ...(bootstrapWorkspace ? ["--bootstrap-workspace", bootstrapWorkspace] : []),
+      ],
       {
         cwd: repoRoot,
         env: process.env,
@@ -197,7 +227,11 @@ function startupFailure(instanceId: string, logFile: string, reason: string): Er
 export async function ensureSystemTestInstance(
   repoRootInput: string,
   instanceId: string,
-  options: { explicitInstance?: boolean; startupTimeoutMs?: number } = {}
+  options: {
+    explicitInstance?: boolean;
+    startupTimeoutMs?: number;
+    bootstrapWorkspace?: string;
+  } = {}
 ): Promise<EnsuredSystemTestInstance> {
   const repoRoot = canonicalRepoRoot(repoRootInput);
   let instance = resolveRunning(repoRoot, instanceId);
@@ -205,7 +239,7 @@ export async function ensureSystemTestInstance(
   let outputFile: string | undefined;
   if (!instance) {
     outputFile = logPath(repoRoot, instanceId);
-    spawnEphemeralInstance(repoRoot, instanceId, outputFile);
+    spawnManagedInstance(repoRoot, instanceId, outputFile, options.bootstrapWorkspace);
     created = true;
     try {
       instance = await waitForRegistration(
@@ -250,6 +284,13 @@ export async function ensureSystemTestInstance(
       instanceId,
       outputFile ?? logPath(repoRoot, instanceId),
       "the server did not provide an automatically pairable development invite"
+    );
+  }
+  if (options.bootstrapWorkspace && ready.workspaceName !== options.bootstrapWorkspace) {
+    throw new Error(
+      `System-test instance ${JSON.stringify(instanceId)} is attached to workspace ` +
+        `${JSON.stringify(ready.workspaceName)}, not requested bootstrap workspace ` +
+        `${JSON.stringify(options.bootstrapWorkspace)}`
     );
   }
   return { instance, ready, created, managed, ...(outputFile ? { logFile: outputFile } : {}) };

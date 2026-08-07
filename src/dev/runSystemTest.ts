@@ -83,6 +83,7 @@ async function main(): Promise<void> {
   }
   const ensured = await ensureSystemTestInstance(repoRoot, parsed.instanceId, {
     explicitInstance: parsed.explicitInstance,
+    ...(parsed.bootstrapWorkspace ? { bootstrapWorkspace: parsed.bootstrapWorkspace } : {}),
   });
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = ensured.instance.root;
   process.env["VIBESTUDIO_INSTANCE"] = ensured.instance.id;

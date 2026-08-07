@@ -112,7 +112,7 @@ describe("reserved path policy", () => {
   const sink = {
     put: async (bytes: Uint8Array) => ({ digest: sha256Hex(bytes), size: bytes.byteLength }),
   };
-  const withReserved = () => [blob("index.ts", "code"), blob(".npmrc", "registry=...")];
+  const withReserved = () => [blob("index.ts", "code"), blob(".env", "TOKEN=secret")];
 
   it("rejects a commit tracking reserved paths by default", async () => {
     await expect(
