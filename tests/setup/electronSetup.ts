@@ -230,8 +230,13 @@ function initializeUnitGitRepos(sourceRoot: string): void {
   }
 }
 
-export function createManagedTestWorkspace(projectRoot?: string): string {
-  const resolvedProjectRoot = projectRoot ?? path.resolve(__dirname, "../..");
+export function createManagedTestWorkspace(
+  options: {
+    projectRoot?: string;
+    configureSource?: (sourceRoot: string) => void;
+  } = {}
+): string {
+  const resolvedProjectRoot = options.projectRoot ?? path.resolve(__dirname, "../..");
   const templateDir = getWorkspaceTemplateDir(resolvedProjectRoot);
   const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-e2e-"));
   const env = getTestEnv(testRoot);
@@ -268,6 +273,10 @@ export function createManagedTestWorkspace(projectRoot?: string): string {
     }
   }
 
+  // Source customization belongs to workspace creation, before unit commits
+  // and semantic-state discovery. Mutating the copied source afterward can
+  // manufacture a state that has no canonical content-store tree.
+  options.configureSource?.(sourceRoot);
   initializeUnitGitRepos(sourceRoot);
 
   for (const dir of WORKSPACE_STATE_DIRS) {
@@ -320,7 +329,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   } = options;
 
   const projectRoot = path.resolve(__dirname, "../..");
-  const workspacePath = workspace ?? createManagedTestWorkspace(projectRoot);
+  const workspacePath = workspace ?? createManagedTestWorkspace({ projectRoot });
   const workspaceInfo = getWorkspaceInfo(workspacePath);
   const ownsWorkspace = workspace === undefined;
 

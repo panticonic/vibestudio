@@ -40,8 +40,8 @@ import {
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
-function configureInitialPanel(workspacePath: string, source: string): void {
-  const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
+function configureInitialPanel(sourceRoot: string, source: string): void {
+  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = [{ source }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
@@ -50,19 +50,22 @@ function configureInitialPanel(workspacePath: string, source: string): void {
 /** Find the hosted-shell WebContents (the one rendering pane surfaces / tree). */
 async function findShellWebContentsId(app: ElectronApplication): Promise<number> {
   const id = await app.evaluate(async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const isShell = (await contents.executeJavaScript(
-          `Boolean(document.querySelector('[data-pane-id]') && document.querySelector('[data-panel-tree-row]'))`,
-          true
-        )) as boolean;
-        if (isShell) return contents.id;
-      } catch {
-        // Non-DOM webContents.
+    const testApi = (
+      globalThis as {
+        __testApi?: {
+          getHostViewDebugInfo(): { hostedShellUrl: string | null };
+        };
       }
-    }
-    return -1;
+    ).__testApi;
+    if (!testApi) throw new Error("Test API not available");
+    const hostedShellUrl = testApi.getHostViewDebugInfo().hostedShellUrl;
+    if (!hostedShellUrl) return -1;
+    return (
+      webContents
+        .getAllWebContents()
+        .find((contents) => !contents.isDestroyed() && contents.getURL() === hostedShellUrl)?.id ??
+      -1
+    );
   });
   if (id < 0) throw new Error("Hosted shell WebContents not found");
   return id;
@@ -230,8 +233,9 @@ const POLL = { timeout: 60_000, intervals: [250, 500, 1_000] };
 test.describe("Multi-column panel layout", () => {
   test("native slots track panes across open-beside, drags, parking, close, and keyboard", async () => {
     test.setTimeout(600_000);
-    const workspacePath = createManagedTestWorkspace();
-    configureInitialPanel(workspacePath, "about/about");
+    const workspacePath = createManagedTestWorkspace({
+      configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/about"),
+    });
     let testApp: TestApp | null = null;
     try {
       testApp = await launchTestApp({

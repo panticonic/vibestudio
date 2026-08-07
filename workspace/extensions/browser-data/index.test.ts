@@ -228,8 +228,16 @@ function makeContext(callerKind: string | null = "shell", callerId = "shell") {
       }
       if (method === "panelRuntime.ensureSlot") return { status: "assigned", lease: null };
       if (method === "panelRuntime.observeSlot") {
+        const panelId = String(args[0]);
+        const slot = slots.get(panelId) ?? { entityId: `entity:${panelId}` };
         return {
-          lease: { holderLabel: "Test", platform: "headless", supportsCdp: true },
+          version: { epoch: "test", counter: 1 },
+          lease: {
+            runtimeEntityId: slot.entityId,
+            holderLabel: "Test",
+            platform: "headless",
+            supportsCdp: true,
+          },
           observation: {
             view: { url: "http://panel.test/", loading: false },
             boot: { phase: "ready", updatedAt: 1 },
@@ -614,11 +622,7 @@ describe("@workspace-extensions/browser-data", () => {
     expect(result.skipped.map((entry) => entry.reason)).toEqual([
       expect.stringContaining("Could not create Window 1"),
     ]);
-    expect(rpcCall).toHaveBeenCalledWith(
-      "main",
-      "workspace-state.slot.close",
-      expect.any(String)
-    );
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.slot.close", expect.any(String));
     expect(orchestrationMocks.launchCollectionTask).not.toHaveBeenCalled();
   });
 

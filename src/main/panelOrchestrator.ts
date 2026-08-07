@@ -885,9 +885,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     if (options.seedInitialPanels !== false) {
       const initialPanels = this.deps.workspaceConfig?.initPanels ?? [];
       for (const [index, initial] of initialPanels.entries()) {
-        const existing = this.registry
-          .getRootPanels()
-          .some((panel) => getPanelSource(panel) === initial.source);
+        // The registry is only a bounded local mirror and is empty at the
+        // beginning of a warm launch. Ask durable query state before seeding;
+        // otherwise each process creates another copy of the manifest root.
+        const existing =
+          this.registry.getRootPanels().some((panel) => getPanelSource(panel) === initial.source) ||
+          (await this.shellCore.hasRootPanelSource(initial.source));
         if (existing) continue;
         await this.createViaProductRuntime(
           { surface: "code", source: initial.source },

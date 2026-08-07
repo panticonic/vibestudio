@@ -157,7 +157,7 @@ async function waitForRunning(url, shellToken, events) {
   while (Date.now() < deadline) {
     const before = events.checkpoint();
     const units = await rpc(url, shellToken, "runtime.supervision.list", [{ kind: "app" }]);
-    const remoteCli = units.find((unit) => unit.source === REMOTE_CLI);
+    const remoteCli = units.find((unit) => unit.identity?.entityId === REMOTE_CLI);
     if (remoteCli?.status === "running") return remoteCli;
     if (remoteCli?.status === "error") {
       const logs = await rpc(url, shellToken, "runtime.supervision.logs", [
@@ -227,7 +227,7 @@ async function waitForLogLine(url, shellToken, events, needle) {
   while (Date.now() < deadline) {
     const before = events.checkpoint();
     const units = await rpc(url, shellToken, "runtime.supervision.list", [{ kind: "app" }]);
-    const remoteCli = units.find((unit) => unit.source === REMOTE_CLI);
+    const remoteCli = units.find((unit) => unit.identity?.entityId === REMOTE_CLI);
     lastLogs = remoteCli
       ? await rpc(url, shellToken, "runtime.supervision.logs", [remoteCli.identity, { limit: 200 }])
       : [];
@@ -301,7 +301,7 @@ async function main() {
     const gate = await launchTerminalWithGate(url, shellToken, events);
     const running = await waitForRunning(url, shellToken, events);
     await waitForLogLine(url, shellToken, events, `Connected as ${REMOTE_CLI}`);
-    await waitForLogLine(url, shellToken, events, "Workspace units:");
+    await waitForLogLine(url, shellToken, events, "Running executable units:");
     console.log(
       `[terminal-smoke] ${REMOTE_CLI} ${running.status} build=${String(running.activeBundleKey).slice(0, 12)} approvals=${gate.approvalsResolved}`
     );

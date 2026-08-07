@@ -147,8 +147,12 @@ function createRpcCall() {
       case "panelTree.observe":
         return readyObservation(String(args[0]));
       case "panelRuntime.observeSlot":
+        const observedPanelId = String(args[0]);
+        const observedEntityKey = observedPanelId.replace(/^panel:tree\//, "");
         return {
+          version: { epoch: "test", counter: 1 },
           lease: {
+            runtimeEntityId: `panel:nav-${observedEntityKey}-entity`,
             holderLabel: "Test host",
             platform: "headless",
             supportsCdp: true,

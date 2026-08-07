@@ -84,4 +84,19 @@ describe("BootstrapWorkspaceSource execution identity", () => {
       "Bootstrap workspace source changed while its provider was being built"
     );
   });
+
+  it("excludes repository metadata from the workspace content identity", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bootstrap-workspace-source-"));
+    temporaryRoots.push(root);
+    await fs.mkdir(path.join(root, "packages", "example", ".git"), { recursive: true });
+    await fs.writeFile(path.join(root, "packages", "example", "package.json"), "{}\n");
+    await fs.writeFile(path.join(root, "packages", "example", ".git", "HEAD"), "ref: main\n");
+    const source = new BootstrapWorkspaceSource("workspace:test", root);
+    const snapshot = await source.seal();
+
+    await fs.writeFile(path.join(root, "packages", "example", ".git", "HEAD"), "ref: other\n");
+
+    await expect(snapshot.assertUnchanged()).resolves.toBeUndefined();
+    await expect(source.ensureFresh()).resolves.toEqual({ stateHash: snapshot.stateHash });
+  });
 });

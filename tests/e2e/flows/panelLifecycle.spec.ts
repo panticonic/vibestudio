@@ -64,7 +64,7 @@ async function getDurablePanelTree(
     const groups: RootGroup[] = [];
     let groupCursor: string | undefined;
     do {
-      const page = (await testApi.rpcCall("panelTree", "rootGroups", [
+      const page = (await testApi.rpcCall("workspace-state", "panelTree.rootGroups", [
         { cursor: groupCursor, limit: 200 },
       ])) as RootGroupsPage;
       groups.push(...page.groups);
@@ -79,7 +79,7 @@ async function getDurablePanelTree(
     ): Promise<void> => {
       let cursor: string | undefined;
       do {
-        const page = (await testApi.rpcCall("panelTree", "page", [
+        const page = (await testApi.rpcCall("workspace-state", "panelTree.page", [
           { group, cursor, limit: 200 },
         ])) as TreePage;
         for (const node of page.nodes) {

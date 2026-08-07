@@ -175,6 +175,9 @@ function createWorkspaceMemory() {
         parentSlotId: slot.parent_slot_id,
         ownerUserId: slot.owner_user_id,
         title: slotRow(slot).current_entity_title ?? slot.slot_id,
+        source:
+          historyRows(slot.slot_id).find((entry) => entry.entry_key === slot.current_entry_key)
+            ?.source ?? "",
         createdAt: slot.created_at,
         childCount: [...slots.values()].filter(
           (child) => child.closed_at === null && child.parent_slot_id === slot.slot_id
@@ -501,6 +504,17 @@ function makeManagerDeps(workspacePath: string) {
 }
 
 describe("PanelManager", () => {
+  it("queries durable roots by source without depending on the local registry mirror", async () => {
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    await manager.create("panels/existing", { isRoot: true, addAsRoot: true });
+
+    await expect(manager.hasRootPanelSource("panels/existing")).resolves.toBe(true);
+    await expect(manager.hasRootPanelSource("panels/missing")).resolves.toBe(false);
+    expect(mem.state.slots.size).toBe(1);
+  });
+
   const tempDirs: string[] = [];
 
   afterEach(() => {
@@ -1375,7 +1389,9 @@ describe("PanelManager", () => {
     );
     const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
 
-    const failure = await manager.replaceCurrentSnapshot(created.panelId, {}).catch((error) => error);
+    const failure = await manager
+      .replaceCurrentSnapshot(created.panelId, {})
+      .catch((error) => error);
     expect(failure).toBeInstanceOf(PanelNavigationCommitError);
     expect(failure.errors).toEqual([
       expect.objectContaining({ message: "semantic navigation failed" }),

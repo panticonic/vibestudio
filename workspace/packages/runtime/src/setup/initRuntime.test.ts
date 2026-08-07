@@ -441,7 +441,9 @@ describe("initRuntime", () => {
                                 ? { status: "assigned" }
                                 : message.method === "panelRuntime.observeSlot"
                                   ? {
+                                      version: { epoch: "test", counter: 1 },
                                       lease: {
+                                        runtimeEntityId: "panel:nav-parent-entity",
                                         holderLabel: "test",
                                         platform: "headless",
                                         supportsCdp: false,

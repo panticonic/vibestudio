@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
@@ -119,11 +120,13 @@ async function seedOpenAiCodexCredential(workspaceDir: string): Promise<void> {
   });
 }
 
-async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Promise<string> {
-  const sourceRoot = path.join(workspaceDir, "source");
+function configureWorkspaceSourceForApproval(
+  sourceRoot: string,
+  initialPromptOverride?: string
+): string {
   const extensionDir = path.join(sourceRoot, "extensions", "e2e-approval");
-  await fs.mkdir(extensionDir, { recursive: true });
-  await fs.writeFile(
+  fsSync.mkdirSync(extensionDir, { recursive: true });
+  fsSync.writeFileSync(
     path.join(extensionDir, "package.json"),
     JSON.stringify(
       {
@@ -143,7 +146,7 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
     ),
     "utf8"
   );
-  await fs.writeFile(
+  fsSync.writeFileSync(
     path.join(extensionDir, "index.ts"),
     [
       "export async function activate() {",
@@ -156,7 +159,7 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
     "utf8"
   );
   const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
-  const config = (YAML.parse(await fs.readFile(configPath, "utf8")) ?? {}) as {
+  const config = (YAML.parse(fsSync.readFileSync(configPath, "utf8")) ?? {}) as {
     defaultAgentConfig?: { model?: string };
     extensions?: unknown[];
     initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
@@ -178,19 +181,11 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
   if (typeof initialPrompt !== "string" || initialPrompt.trim().length === 0) {
     throw new Error("Expected the shipped initial chat panel to declare a non-empty initialPrompt");
   }
-  await fs.writeFile(configPath, YAML.stringify(config), "utf8");
-  return initialPrompt;
-}
-
-async function setInitialChatPrompt(workspaceDir: string, prompt: string): Promise<void> {
-  const configPath = path.join(workspaceDir, "source", "meta", "vibestudio.yml");
-  const config = (YAML.parse(await fs.readFile(configPath, "utf8")) ?? {}) as {
-    initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
-  };
-  const initialChat = config.initPanels?.find((panel) => panel.source === "panels/chat");
-  if (!initialChat) throw new Error("Expected an initial chat panel in the workspace config");
-  initialChat.stateArgs = { ...initialChat.stateArgs, initialPrompt: prompt };
-  await fs.writeFile(configPath, YAML.stringify(config), "utf8");
+  if (initialPromptOverride !== undefined) {
+    initialChat.stateArgs = { ...initialChat.stateArgs, initialPrompt: initialPromptOverride };
+  }
+  fsSync.writeFileSync(configPath, YAML.stringify(config), "utf8");
+  return initialPromptOverride ?? initialPrompt;
 }
 
 async function listPendingApprovals(testApp: TestApp): Promise<PendingApproval[]> {
@@ -1233,13 +1228,17 @@ function isOpenAiCredentialApproval(approval: PendingApproval): boolean {
   );
 }
 
-async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<void> {
+async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promise<string[]> {
+  const observedInstallReviews = new Set<string>();
   let startupState: "approval" | "ready" | "waiting" = "waiting";
   try {
     await expect
       .poll(
         async () => {
           const pending = await listPendingApprovals(testApp);
+          for (const approval of pending.filter(isUnitBatchApproval)) {
+            observedInstallReviews.add(describeApproval(approval));
+          }
           if (pending.some(isElectronHostAppApproval) && (await shellHasApprovalUi(testApp))) {
             startupState = "approval";
             return startupState;
@@ -1299,11 +1298,14 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
   const drainDeadline = Date.now() + 120_000;
   while (Date.now() < drainDeadline) {
     const pending = await listPendingApprovals(testApp);
-    // Install reviews are partitioned by runnable host target. This fixture
-    // answers the desktop review; mobile and terminal reviews remain for those
-    // clients because their landing receipts cannot exist on this host.
-    const pendingDesktopReviews = pending.filter(isElectronHostAppApproval);
-    const pendingUnitBatchCount = pendingDesktopReviews.length;
+    // Once the hosted shell is live it owns every workspace install review,
+    // including shared and deferred host-target batches. Leaving those cards
+    // pending keeps panel/agent capabilities behind the creation-review gate.
+    const pendingInstallReviews = pending.filter(isUnitBatchApproval);
+    for (const approval of pendingInstallReviews) {
+      observedInstallReviews.add(describeApproval(approval));
+    }
+    const pendingUnitBatchCount = pendingInstallReviews.length;
     const pendingCredentialCount = pending.filter(isOpenAiCredentialApproval).length;
     const pendingTargetCount = pendingUnitBatchCount + pendingCredentialCount;
     if (pendingTargetCount === 0) break;
@@ -1323,7 +1325,7 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
       // startup transition.
       await approvePendingWorkspaceCreationReview(
         testApp.app,
-        pendingDesktopReviews.map(({ approvalId }) => approvalId)
+        pendingInstallReviews.map(({ approvalId }) => approvalId)
       );
     }
     if (pendingCredentialCount > 0) {
@@ -1356,8 +1358,7 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
         async () => {
           const next = await listPendingApprovals(testApp);
           return (
-            next.filter(isElectronHostAppApproval).length +
-            next.filter(isOpenAiCredentialApproval).length
+            next.filter(isUnitBatchApproval).length + next.filter(isOpenAiCredentialApproval).length
           );
         },
         { timeout: 10_000, intervals: [500, 1000, 2000] }
@@ -1366,13 +1367,10 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
   }
 
   await expect
-    .poll(
-      async () => (await listPendingApprovals(testApp)).filter(isElectronHostAppApproval).length,
-      {
-        timeout: 30_000,
-        intervals: [500, 1000, 2000],
-      }
-    )
+    .poll(async () => (await listPendingApprovals(testApp)).filter(isUnitBatchApproval).length, {
+      timeout: 30_000,
+      intervals: [500, 1000, 2000],
+    })
     .toBe(0);
   await expect
     .poll(
@@ -1380,6 +1378,7 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
       { timeout: 30_000, intervals: [500, 1000, 2000] }
     )
     .toBe(0);
+  return [...observedInstallReviews];
 }
 
 /**
@@ -1393,8 +1392,7 @@ async function reachHostedShellAndDrainStartupApprovals(testApp: TestApp): Promi
 async function approveInitialChatServiceApprovals(testApp: TestApp): Promise<void> {
   const targetCapabilities = new Set(["workspace-service:models", "workspace-service:channel"]);
   const deadline = Date.now() + 120_000;
-  let sawApproval = false;
-  let lastTargetSeenAt = 0;
+  let lastTargetSeenAt = Date.now();
   const clickedApprovalIds = new Set<string>();
 
   while (Date.now() < deadline) {
@@ -1417,7 +1415,6 @@ async function approveInitialChatServiceApprovals(testApp: TestApp): Promise<voi
         !clickedApprovalIds.has(approval.approvalId)
     );
     if (targets.length > 0) {
-      sawApproval = true;
       lastTargetSeenAt = Date.now();
       try {
         await expect
@@ -1438,7 +1435,10 @@ async function approveInitialChatServiceApprovals(testApp: TestApp): Promise<voi
       }
       continue;
     }
-    if (sawApproval && Date.now() - lastTargetSeenAt >= 10_000) return;
+    // Install-review trust may already cover these exact service versions, in
+    // which case no per-use card is expected. A bounded quiet queue is the
+    // contract; the completion poll below continues draining any late card.
+    if (Date.now() - lastTargetSeenAt >= 10_000) return;
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
@@ -1499,9 +1499,13 @@ test.describe("Desktop Startup Approvals", () => {
   });
 
   test("launch gate starts shell, then in-app approvals unblock initial chats", async () => {
-    workspaceDir = createManagedTestWorkspace();
+    let configuredInitialPrompt = "";
+    workspaceDir = createManagedTestWorkspace({
+      configureSource: (sourceRoot) => {
+        configuredInitialPrompt = configureWorkspaceSourceForApproval(sourceRoot);
+      },
+    });
     await seedOpenAiCodexCredential(workspaceDir);
-    const configuredInitialPrompt = await makeWorkspaceExtensionRequireApproval(workspaceDir);
 
     testApp = await launchTestApp({
       workspace: workspaceDir,
@@ -1511,12 +1515,14 @@ test.describe("Desktop Startup Approvals", () => {
     await reachHostedShellAndDrainStartupApprovals(testApp);
     await approveInitialChatServiceApprovals(testApp);
 
+    let lastCompletion: StartupAgentCompletionState | null = null;
     try {
       await expect
         .poll(
           async () => {
             await approvePendingChatServiceApprovalIfPresent(testApp!);
             const state = await collectStartupAgentCompletion(testApp!, configuredInitialPrompt);
+            lastCompletion = state;
             const failures = state.channels.flatMap((channel) => channel.failures);
             if (failures.length > 0) {
               throw new Error(`Initial agent turn failed: ${failures.join("; ")}`);
@@ -1551,17 +1557,38 @@ test.describe("Desktop Startup Approvals", () => {
         .toBe(true);
     } catch (error) {
       await attachStartupDiagnostics(testApp);
-      throw error;
+      const [pending, panels] = await Promise.all([
+        listPendingApprovals(testApp).catch(() => []),
+        getPanelTree(testApp.app).catch(() => []),
+      ]);
+      throw new Error(
+        `Initial chat did not complete: ${JSON.stringify({
+          completion: lastCompletion,
+          pending: pending.map((approval) => ({
+            approvalId: approval.approvalId,
+            kind: approval.kind,
+            capability: approval.capability,
+            title: approval.title,
+          })),
+          panels: panels.map((panel) => ({
+            id: panel.id,
+            title: panel.title,
+            snapshot: panel.snapshot,
+          })),
+        })}\n${error instanceof Error ? error.message : String(error)}`
+      );
     }
   });
 
   test("an ongoing agent chat pauses for scoped network authority and resumes the same turn", async () => {
-    workspaceDir = createManagedTestWorkspace();
-    await seedOpenAiCodexCredential(workspaceDir);
-    await makeWorkspaceExtensionRequireApproval(workspaceDir);
     const prompt =
       "Read skills/onboarding/SKILL.md first. Then run a short sandbox eval that fetches https://example.com and tell me the page title.";
-    await setInitialChatPrompt(workspaceDir, prompt);
+    workspaceDir = createManagedTestWorkspace({
+      configureSource: (sourceRoot) => {
+        configureWorkspaceSourceForApproval(sourceRoot, prompt);
+      },
+    });
+    await seedOpenAiCodexCredential(workspaceDir);
 
     testApp = await launchTestApp({
       workspace: workspaceDir,
@@ -1674,61 +1701,25 @@ test.describe("Desktop Startup Approvals", () => {
   });
 
   test("persisted startup trust survives a same-workspace warm launch with scoped app RPC", async () => {
-    workspaceDir = createManagedTestWorkspace();
-    await makeWorkspaceExtensionRequireApproval(workspaceDir);
-
     // Keep this lifecycle test independent of model credentials and agent
     // execution: it targets the app/extension startup grant and exact shell
     // incarnation restored on the second process.
-    const configPath = path.join(workspaceDir, "source", "meta", "vibestudio.yml");
-    const config = (YAML.parse(await fs.readFile(configPath, "utf8")) ?? {}) as {
-      initPanels?: unknown[];
-    };
-    config.initPanels = [];
-    await fs.writeFile(configPath, YAML.stringify(config), "utf8");
+    workspaceDir = createManagedTestWorkspace({
+      configureSource: (sourceRoot) => {
+        configureWorkspaceSourceForApproval(sourceRoot);
+        const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
+        const config = (YAML.parse(fsSync.readFileSync(configPath, "utf8")) ?? {}) as {
+          initPanels?: unknown[];
+        };
+        config.initPanels = [];
+        fsSync.writeFileSync(configPath, YAML.stringify(config), "utf8");
+      },
+    });
 
     testApp = await launchTestApp({ workspace: workspaceDir, launchTimeout: 240_000 });
     try {
-      let firstLaunchState: "approval" | "ready" | "waiting" = "waiting";
-      await expect
-        .poll(
-          async () => {
-            const pending = await listPendingApprovals(testApp!);
-            if (pending.some(isElectronHostAppApproval) && (await shellHasApprovalUi(testApp!))) {
-              firstLaunchState = "approval";
-            } else if (await hostedShellHasChrome(testApp!)) {
-              firstLaunchState = "ready";
-            } else {
-              firstLaunchState = "waiting";
-            }
-            return firstLaunchState;
-          },
-          { timeout: 90_000, intervals: [500, 1000, 2000] }
-        )
-        .not.toBe("waiting");
-      expect(firstLaunchState).toBe("approval");
-      expect(
-        await clickShellButton(
-          testApp,
-          /^(Start|Add to workspace|Add template|Update|Use the new version|Trust and start|Approve and start)$/
-        )
-      ).toBe(true);
-      await expect
-        .poll(() => hostedShellHasChrome(testApp!), {
-          timeout: 180_000,
-          intervals: [500, 1000, 2000, 5000],
-        })
-        .toBe(true);
-      // The launch-gate decision covers the desktop target, including its shell
-      // and deferred extensions. It must not produce another desktop review for
-      // the same exact versions; other host targets remain independently gated.
-      await expect
-        .poll(
-          async () =>
-            (await listPendingApprovals(testApp!)).filter(isElectronHostAppApproval).length,
-          { timeout: 30_000, intervals: [500, 1000, 2000] }
-        )
-        .toBe(0);
+      const firstLaunchReviews = await reachHostedShellAndDrainStartupApprovals(testApp);
+      expect(firstLaunchReviews.length).toBeGreaterThan(0);
       expect(await callHostedShellService(testApp, "app.getInfo")).toMatchObject({
         connectionMode: "local",
         connectionStatus: "connected",
@@ -1748,7 +1739,7 @@ test.describe("Desktop Startup Approvals", () => {
         .poll(
           async () => {
             const pending = await listPendingApprovals(testApp!);
-            const unitApprovals = pending.filter(isElectronHostAppApproval).map(describeApproval);
+            const unitApprovals = pending.filter(isUnitBatchApproval).map(describeApproval);
             if (unitApprovals.length > 0) {
               secondLaunchApprovalObservations.push(...unitApprovals);
             }
@@ -1763,18 +1754,14 @@ test.describe("Desktop Startup Approvals", () => {
 
       expect(secondLaunchApprovalObservations).toEqual([]);
       expect(
-        (await listPendingApprovals(testApp))
-          .filter(isElectronHostAppApproval)
-          .map(describeApproval)
+        (await listPendingApprovals(testApp)).filter(isUnitBatchApproval).map(describeApproval)
       ).toEqual([]);
       expect(await callHostedShellService(testApp, "app.getInfo")).toMatchObject({
         connectionMode: "local",
         connectionStatus: "connected",
       });
       expect(
-        (await listPendingApprovals(testApp))
-          .filter(isElectronHostAppApproval)
-          .map(describeApproval)
+        (await listPendingApprovals(testApp)).filter(isUnitBatchApproval).map(describeApproval)
       ).toEqual([]);
       const authorityFailureLines = testApp
         .getOutput()

@@ -155,6 +155,9 @@ function createOrchestrator(
     refreshPanel: vi.fn(async (panelId: string) => registry.getPanel(panelId) ?? null),
     syncEntityCachesFromRegistry: vi.fn(() => {}),
     loadViewState: vi.fn(async () => ({ collapsedIds: [] })),
+    hasRootPanelSource: vi.fn(async (source: string) =>
+      registry.getRootPanels().some((panel) => getCurrentSnapshot(panel).source === source)
+    ),
   };
   let orchestratorRef: PanelOrchestrator | null = null;
   let leaseVersionCounter = 0;
@@ -1353,7 +1356,7 @@ describe("PanelOrchestrator.initializePanelTree", () => {
       undefined
     );
     expect(panelView.createViewForPanel).toHaveBeenCalledTimes(2);
-    expect(shellCore.loadViewState).not.toHaveBeenCalled();
+    expect(shellCore.hasRootPanelSource).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a headless renderer passive without hydrating the tree", async () => {

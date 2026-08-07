@@ -84,6 +84,18 @@ export interface TestApi {
     }
   ): Promise<{ id: string; title: string }>;
 
+  /** Navigate an existing panel through the host-owned product runtime. */
+  navigatePanel(
+    panelId: string,
+    source: string,
+    options?: {
+      contextId?: string;
+      env?: Record<string, string>;
+      ref?: string;
+      stateArgs?: Record<string, unknown>;
+    }
+  ): Promise<{ id: string; title: string } | null>;
+
   /** Create an external browser panel through its dedicated lifecycle. */
   createBrowserPanel(
     parentId: string,
@@ -277,6 +289,10 @@ export function setupTestApi(
         { focus: options?.focus !== false },
         hostedShellCaller()
       );
+    },
+
+    async navigatePanel(panelId, source, options) {
+      return panelOrchestrator.navigatePanel(panelId, source, options, hostedShellCaller());
     },
 
     async closePanel(id) {
@@ -504,10 +520,20 @@ export function setupTestApi(
       if (!wc || wc.isDestroyed()) throw new Error(`Panel WebContents not available: ${panelId}`);
       const rect = (await wc.executeJavaScript(
         `
-          (() => {
+          (async () => {
             const node = document.querySelector(${JSON.stringify(selector)});
             if (!(node instanceof HTMLElement)) return false;
+            node.scrollIntoView({ block: "center", inline: "center" });
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             const rect = node.getBoundingClientRect();
+            if (
+              rect.width <= 0 ||
+              rect.height <= 0 ||
+              rect.right <= 0 ||
+              rect.bottom <= 0 ||
+              rect.left >= window.innerWidth ||
+              rect.top >= window.innerHeight
+            ) return false;
             return {
               x: Math.round(rect.left + rect.width / 2),
               y: Math.round(rect.top + rect.height / 2),

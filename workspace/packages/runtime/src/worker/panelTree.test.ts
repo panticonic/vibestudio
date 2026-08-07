@@ -80,9 +80,16 @@ function workspaceDetailFor(panelId: string, source = "panels/a") {
   };
 }
 
-function readyRuntimeSlot() {
+function readyRuntimeSlot(panelId: string) {
+  const entityKey = panelId.replace(/^panel:tree\//, "");
   return {
-    lease: { holderLabel: "Headless", platform: "headless", supportsCdp: true },
+    version: { epoch: "test", counter: 1 },
+    lease: {
+      runtimeEntityId: `panel:nav-${entityKey}-current-entity`,
+      holderLabel: "Headless",
+      platform: "headless",
+      supportsCdp: true,
+    },
     observation: {
       view: { url: "http://panel.test/", loading: false },
       boot: { phase: "ready", updatedAt: 1 },
@@ -224,7 +231,8 @@ describe("worker panelTree handles", () => {
         });
       if (body.method === "workspace-state.panelTree.detail")
         return respond(init, workspaceDetailFor("panel:tree/slot-a"));
-      if (body.method === "panelRuntime.observeSlot") return respond(init, readyRuntimeSlot());
+      if (body.method === "panelRuntime.observeSlot")
+        return respond(init, readyRuntimeSlot(String(body.args[0])));
       return respond(init, null);
     }) as typeof fetch;
 
@@ -265,7 +273,8 @@ describe("worker panelTree handles", () => {
         });
       if (body.method === "workspace-state.panelTree.detail")
         return respond(init, workspaceDetailFor("panel:tree/slot-a"));
-      if (body.method === "panelRuntime.observeSlot") return respond(init, readyRuntimeSlot());
+      if (body.method === "panelRuntime.observeSlot")
+        return respond(init, readyRuntimeSlot(String(body.args[0])));
       return respond(init, { loaded: true });
     }) as typeof fetch;
 
@@ -377,7 +386,8 @@ describe("worker panelTree handles", () => {
       }
       if (body.method === "panelRuntime.ensureSlot")
         return respond(init, { status: "assigned", lease: null });
-      if (body.method === "panelRuntime.observeSlot") return respond(init, readyRuntimeSlot());
+      if (body.method === "panelRuntime.observeSlot")
+        return respond(init, readyRuntimeSlot(String(body.args[0])));
       return respond(init, "ok");
     }) as typeof fetch;
 
@@ -456,7 +466,8 @@ describe("worker panelTree handles", () => {
       }
       if (body.method === "panelRuntime.ensureSlot")
         return respond(init, { status: "assigned", lease: null });
-      if (body.method === "panelRuntime.observeSlot") return respond(init, readyRuntimeSlot());
+      if (body.method === "panelRuntime.observeSlot")
+        return respond(init, readyRuntimeSlot(String(body.args[0])));
       return respond(init, null);
     }) as typeof fetch;
 
@@ -507,7 +518,8 @@ describe("worker panelTree handles", () => {
         });
       if (body.method === "workspace-state.panelTree.detail")
         return respond(init, workspaceDetailFor("panel:tree/parent-slot", "panels/parent"));
-      if (body.method === "panelRuntime.observeSlot") return respond(init, readyRuntimeSlot());
+      if (body.method === "panelRuntime.observeSlot")
+        return respond(init, readyRuntimeSlot(String(body.args[0])));
       if (body.method === "build.getPanelMetadata") return respond(init, { title: "Parent" });
       if (body.method === "runtime.createEntity") {
         const spec = body.args[0] as { key: string };

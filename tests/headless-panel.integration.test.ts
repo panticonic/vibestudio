@@ -19,6 +19,8 @@ import {
   rpcWebSocketAdmissionUrl,
 } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
+import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -46,10 +48,22 @@ interface BrowserPanelHandle {
   title: string;
   kind: "browser" | "workspace";
   runtimeEntityId: string;
+}
+
+interface RuntimeSlotObservation {
+  lease: {
+    runtimeEntityId: string;
+  } | null;
   observation: {
-    phase: string;
-    failure?: { message?: string } | null;
-  };
+    view: {
+      url: string;
+      loading: boolean;
+    };
+    boot: {
+      phase: "unavailable" | "loading" | "booting" | "ready" | "failed";
+      message?: string;
+    };
+  } | null;
 }
 
 interface CdpEndpoint {
@@ -139,6 +153,7 @@ maybeDescribe("headless browser panel integration", () => {
 
     const ready = await waitForReadyFile(readyFile, serverProc, () => serverOutput);
     const shell = await issueShellToken(ready);
+    await approveStartupInstallReviews(ready, shell.shellToken);
     shellConnection = await connectRpcWebSocket({
       gatewayUrl: ready.gatewayUrl,
       token: shell.shellToken,
@@ -166,21 +181,28 @@ maybeDescribe("headless browser panel integration", () => {
       clientLabel: "Vitest Worker Sandbox",
     });
 
-    const panel = await workerConnection.rpc.call<BrowserPanelHandle>("main", "panelTree.create", [
-      { surface: "external", url: `${fixture.baseUrl}/first` },
-      { focus: true },
-    ]);
+    const panel = await openBrowserPanelFromWorker(workerConnection, `${fixture.baseUrl}/first`);
     expect(panel.kind).toBe("browser");
 
-    await waitForPanelReady(workerConnection, panel, serverOutput);
+    await workerConnection.rpc.call("main", "panelRuntime.ensureSlot", [
+      panel.id,
+      panel.runtimeEntityId,
+    ]);
+
+    await waitForPanelReady(
+      workerConnection,
+      panel.id,
+      panel.runtimeEntityId,
+      `${fixture.baseUrl}/first`,
+      serverOutput
+    );
 
     await shellConnection.rpc.call("main", "shellPresence.heartbeat", []);
     const endpoint = await callWithCapabilityApprovals(
       ready,
       shell.shellToken,
       new Set(["panel.inspect", "context.boundary"]),
-      () =>
-        workerConnection!.rpc.call<CdpEndpoint>("main", "panelCdp.getCdpEndpoint", [panel.id])
+      () => workerConnection!.rpc.call<CdpEndpoint>("main", "panelCdp.getCdpEndpoint", [panel.id])
     );
 
     cdpClient = await CdpClient.connect(endpoint);
@@ -215,10 +237,7 @@ maybeDescribe("headless browser panel integration", () => {
     expect(hostScreenshot.width).toBeGreaterThan(0);
     expect(hostScreenshot.height).toBeGreaterThan(0);
 
-    await workerConnection.rpc.call("main", "panelCdp.navigate", [
-      panel.id,
-      `${fixture.baseUrl}/second`,
-    ]);
+    await cdpClient.send("Page.navigate", { url: `${fixture.baseUrl}/second` });
     await expect(
       waitForEval(cdpClient, "document.title", "Next Headless Integration")
     ).resolves.toBe("Next Headless Integration");
@@ -247,8 +266,58 @@ maybeDescribe("headless browser panel integration", () => {
     if (!lease) throw new Error("Expected panel runtime lease");
     expect(lease.supportsCdp).toBe(true);
     expect(lease.hostConnectionId).toMatch(/^headless-/);
-  }, 240_000);
+  }, 360_000);
 });
+
+async function approveStartupInstallReviews(
+  ready: ReadyPayload,
+  shellToken: string
+): Promise<void> {
+  const deadline = Date.now() + 180_000;
+  const resolved = new Set<string>();
+  for (;;) {
+    const pending = await rpc<PendingUnitInstallReviewApproval[]>(
+      ready,
+      shellToken,
+      "shellApproval.listPending",
+      []
+    );
+    const reviews = pending.filter((approval) => approval.kind === "unit-install-review");
+    let resolvedThisPass = false;
+    for (const approval of reviews) {
+      if (resolved.has(approval.approvalId)) continue;
+      await rpc(ready, shellToken, "shellApproval.resolveInstallReview", [
+        approval.approvalId,
+        defaultAcceptance(approval.mode, approval.parts),
+      ]);
+      resolved.add(approval.approvalId);
+      resolvedThisPass = true;
+    }
+    const state = await rpc<{ status: string }>(
+      ready,
+      shellToken,
+      "shellApproval.getWorkspaceCreationReviewState",
+      []
+    );
+    if (reviews.length === 0 && (state.status === "resolved" || state.status === "not-required")) {
+      return;
+    }
+    // A landing RPC can legitimately consume most of the cold-start budget.
+    // Always take one authoritative post-landing snapshot before enforcing the
+    // deadline; the pre-resolution pending list is stale by construction.
+    if (resolvedThisPass) continue;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Workspace startup install reviews did not settle: ${JSON.stringify({
+          state,
+          pendingReviewIds: reviews.map((review) => review.approvalId),
+          resolvedReviewIds: [...resolved],
+        })}`
+      );
+    }
+    await delay(100);
+  }
+}
 
 function findHeadlessHostEntry(): string | null {
   const candidates = [
@@ -439,11 +508,15 @@ async function callWithCapabilityApprovals<T>(
     }
     const decision = approval.allowedDecisions?.[0];
     if (!decision) {
-      throw new Error(`Expected capability card exposed no grant decision: ${JSON.stringify(approval)}`);
+      throw new Error(
+        `Expected capability card exposed no grant decision: ${JSON.stringify(approval)}`
+      );
     }
     await rpc(ready, shellToken, "shellApproval.resolve", [approval.approvalId, decision]);
   }
-  throw new Error("Capability call still required approval after every expected grant was resolved");
+  throw new Error(
+    "Capability call still required approval after every expected grant was resolved"
+  );
 }
 
 interface RpcWsConnection {
@@ -458,33 +531,123 @@ interface RpcWsConnection {
 
 async function waitForPanelReady(
   connection: RpcWsConnection,
-  panel: BrowserPanelHandle,
+  panelId: string,
+  runtimeEntityId: string,
+  expectedUrl: string,
   serverOutput: string
 ): Promise<void> {
-  let observation = panel.observation;
   const deadline = Date.now() + 90_000;
-  while (observation.phase !== "ready") {
-    if (observation.phase === "failed") {
+  for (;;) {
+    const runtime = await connection.rpc.call<RuntimeSlotObservation>(
+      "main",
+      "panelRuntime.observeSlot",
+      [panelId]
+    );
+    const exactObservation =
+      runtime.lease?.runtimeEntityId === runtimeEntityId ? runtime.observation : null;
+    if (exactObservation?.view.loading === false && exactObservation.view.url === expectedUrl) {
+      return;
+    }
+    if (exactObservation?.boot.phase === "failed") {
       const leases = await connection.rpc.call("main", "panelRuntime.getSnapshot", []);
       const hostLogs = await shellConnection!.rpc.call("main", "serverLog.query", [
         { contains: "HeadlessHost", limit: 100 },
       ]);
       throw new Error(
-        `Expected headless host to load panel: ${JSON.stringify(observation)}\nLeases: ${JSON.stringify(leases)}\nHeadless host logs: ${JSON.stringify(hostLogs)}\n${serverOutput}`
+        `Expected headless host to load panel: ${JSON.stringify(runtime)}\nLeases: ${JSON.stringify(leases)}\nHeadless host logs: ${JSON.stringify(hostLogs)}\n${serverOutput}`
       );
     }
     if (Date.now() >= deadline) {
       throw new Error(
-        `Headless panel did not become ready: ${JSON.stringify(observation)}\n${serverOutput}`
+        `Headless panel did not become ready: ${JSON.stringify(runtime)}\n${serverOutput}`
       );
     }
     await delay(100);
-    observation = await connection.rpc.call<BrowserPanelHandle["observation"]>(
-      "main",
-      "panelTree.observe",
-      [panel.id]
-    );
   }
+}
+
+async function openBrowserPanelFromWorker(
+  connection: RpcWsConnection,
+  url: string
+): Promise<BrowserPanelHandle> {
+  await shellConnection?.rpc.call("main", "shellPresence.heartbeat", []);
+  const runId = `headless-panel-open-${randomUUID()}`;
+  await connection.rpc.call("main", "eval.start", [
+    {
+      runId,
+      source: {
+        kind: "inline",
+        code: `const panel = await createPanelSlot(${JSON.stringify(url)}); const observation = await panel.observe(); return { id: panel.id, title: panel.title, kind: panel.kind, runtimeEntityId: observation.runtimeEntityId };`,
+      },
+      authority: {
+        approvals: "prompt",
+        requests: [
+          {
+            capability: "workspace.runtime-state.manage",
+            resource: { kind: "prefix", prefix: "" },
+          },
+          {
+            capability: "context.boundary",
+            resource: { kind: "prefix", prefix: "context/" },
+          },
+        ],
+      },
+      timeoutMs: 90_000,
+    },
+  ]);
+
+  const deadline = Date.now() + 90_000;
+  let lastSnapshot: unknown = null;
+  while (Date.now() < deadline) {
+    const snapshot = await connection.rpc.call<{
+      status: string;
+      result?: { success: boolean; returnValue?: unknown; error?: string };
+      activity?: unknown;
+      checkpoint?: unknown;
+    }>("main", "eval.get", [{ runId }]);
+    lastSnapshot = snapshot;
+    if (
+      snapshot.activity &&
+      (snapshot.activity as { kind?: string }).kind === "authority-pending"
+    ) {
+      await shellConnection?.rpc.call("main", "shellPresence.heartbeat", []);
+      const pending = await shellConnection?.rpc.call<
+        Array<{
+          approvalId: string;
+          kind: string;
+          capability?: string;
+          allowedDecisions?: string[];
+        }>
+      >("main", "shellApproval.listPending", []);
+      const approval = pending?.find(
+        (entry) =>
+          entry.kind === "capability" &&
+          (entry.capability === "workspace.runtime-state.manage" ||
+            entry.capability === "context.boundary")
+      );
+      const decision = approval?.allowedDecisions?.[0];
+      if (approval && decision) {
+        await shellConnection?.rpc.call("main", "shellApproval.resolve", [
+          approval.approvalId,
+          decision,
+        ]);
+      }
+    }
+    if (snapshot.status === "done") {
+      if (!snapshot.result?.success) {
+        throw new Error(`Worker panel open failed: ${snapshot.result?.error ?? "unknown error"}`);
+      }
+      return snapshot.result.returnValue as BrowserPanelHandle;
+    }
+    if (snapshot.status === "cancelled" || snapshot.status === "approval-route-lost") {
+      throw new Error(`Worker panel open ended in ${snapshot.status}`);
+    }
+    await delay(50);
+  }
+  const pending = await shellConnection?.rpc.call("main", "shellApproval.listPending", []);
+  throw new Error(
+    `Worker panel open did not settle: snapshot=${JSON.stringify(lastSnapshot)} pending=${JSON.stringify(pending)}`
+  );
 }
 
 async function connectRpcWebSocket(options: {

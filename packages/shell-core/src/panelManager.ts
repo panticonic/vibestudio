@@ -314,6 +314,31 @@ export class PanelManager {
     };
   }
 
+  /** Whether durable query state already contains a root for this source. */
+  async hasRootPanelSource(source: string): Promise<boolean> {
+    let groupCursor: string | undefined;
+    do {
+      const groups = await this.workspaceState.getPanelTreeRootGroups({
+        cursor: groupCursor,
+        limit: 200,
+      });
+      for (const group of groups.groups) {
+        let nodeCursor: string | undefined;
+        do {
+          const page = await this.workspaceState.getPanelTreePage({
+            group: { kind: "roots", ownerUserId: group.ownerUserId },
+            cursor: nodeCursor,
+            limit: 200,
+          });
+          if (page.nodes.some((node) => node.source === source)) return true;
+          nodeCursor = page.nextCursor ?? undefined;
+        } while (nodeCursor);
+      }
+      groupCursor = groups.nextCursor ?? undefined;
+    } while (groupCursor);
+    return false;
+  }
+
   // ===========================================================================
   // Create
   // ===========================================================================

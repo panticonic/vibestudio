@@ -38,8 +38,8 @@ type PendingApproval = {
   }>;
 };
 
-function replaceInitPanels(workspacePath: string, stateArgs: Record<string, unknown>): void {
-  const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
+function replaceInitPanels(sourceRoot: string, stateArgs: Record<string, unknown>): void {
+  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = [
     {
@@ -71,8 +71,8 @@ function initializeVaultGitRepo(repo: string): void {
   });
 }
 
-function initializeDefaultVaultRepo(workspacePath: string): void {
-  const repo = path.join(workspacePath, "source", "projects", "default");
+function initializeDefaultVaultRepo(sourceRoot: string): void {
+  const repo = path.join(sourceRoot, "projects", "default");
   fs.writeFileSync(
     path.join(repo, "E2E.mdx"),
     [
@@ -125,8 +125,8 @@ function initializeDefaultVaultRepo(workspacePath: string): void {
   );
 }
 
-function initializeSecondVaultRepo(workspacePath: string): void {
-  const repo = path.join(workspacePath, "source", "projects", "second");
+function initializeSecondVaultRepo(sourceRoot: string): void {
+  const repo = path.join(sourceRoot, "projects", "second");
   fs.mkdirSync(repo, { recursive: true });
   fs.writeFileSync(
     path.join(repo, "Second.mdx"),
@@ -144,8 +144,8 @@ function initializeSecondVaultRepo(workspacePath: string): void {
   initializeVaultGitRepo(repo);
 }
 
-function initializeLargeVaultRepo(workspacePath: string): void {
-  const repo = path.join(workspacePath, "source", "projects", "default");
+function initializeLargeVaultRepo(sourceRoot: string): void {
+  const repo = path.join(sourceRoot, "projects", "default");
   for (const entry of fs.readdirSync(repo)) {
     if (entry !== ".git") fs.rmSync(path.join(repo, entry), { recursive: true, force: true });
   }
@@ -191,6 +191,18 @@ function initializeLargeVaultRepo(workspacePath: string): void {
   }
 }
 
+function createSpectroliteWorkspace(
+  stateArgs: Record<string, unknown>,
+  configureVault: (sourceRoot: string) => void = initializeDefaultVaultRepo
+): string {
+  return createManagedTestWorkspace({
+    configureSource: (sourceRoot) => {
+      configureVault(sourceRoot);
+      replaceInitPanels(sourceRoot, stateArgs);
+    },
+  });
+}
+
 function flattenPanels(nodes: Array<Record<string, any>>): Array<Record<string, any>> {
   const out: Array<Record<string, any>> = [];
   for (const node of nodes) {
@@ -216,7 +228,9 @@ async function listPendingApprovals(app: ElectronApplication): Promise<PendingAp
     approvalId: approval.approvalId,
     kind: approval.kind,
     allowedDecisions: Array.isArray(approval.allowedDecisions)
-      ? approval.allowedDecisions.filter((decision): decision is string => typeof decision === "string")
+      ? approval.allowedDecisions.filter(
+          (decision): decision is string => typeof decision === "string"
+        )
       : undefined,
     options: Array.isArray(approval.options)
       ? approval.options.map((option) => ({
@@ -489,33 +503,36 @@ async function ensureMobileShellStackMode(app: ElectronApplication): Promise<voi
     const result = await app
       .evaluate(async ({ webContents }) => {
         const labels = ["Close panel tree", "Switch to breadcrumb navigation"];
-        for (const contents of webContents.getAllWebContents()) {
-          if (contents.isDestroyed()) continue;
-          try {
-            const result = await contents.executeJavaScript(
-              `(() => {
-                const shell = Boolean(
-                  document.querySelector('[data-shell-top-chrome="titlebar"]') ||
-                  document.querySelector('[aria-label="Menu"]') ||
-                  document.querySelector('[data-native-panel-slot-id]')
-                );
-                if (!shell) return { shell: false, clicked: false, alreadyStack: false };
-                const button = Array.from(document.querySelectorAll("[aria-label]"))
-                  .find((node) => ${JSON.stringify(labels)}.includes(node.getAttribute("aria-label") ?? ""));
-                if (!(button instanceof HTMLElement)) {
-                  return { shell: true, clicked: false, alreadyStack: true };
-                }
-                button.click();
-                return { shell: true, clicked: true, alreadyStack: false };
-              })()`,
-              true
-            );
-            if (result.clicked || result.alreadyStack) return result;
-          } catch {
-            // The hosted shell can replace its document while adopting the workspace.
+        const testApi = (
+          globalThis as {
+            __testApi?: {
+              getHostViewDebugInfo(): { hostedShellUrl: string | null };
+            };
           }
+        ).__testApi;
+        const hostedShellUrl = testApi?.getHostViewDebugInfo().hostedShellUrl;
+        if (!hostedShellUrl) return { shell: false, clicked: false, alreadyStack: false };
+        const contents = webContents
+          .getAllWebContents()
+          .find((candidate) => !candidate.isDestroyed() && candidate.getURL() === hostedShellUrl);
+        if (!contents) return { shell: false, clicked: false, alreadyStack: false };
+        try {
+          return await contents.executeJavaScript(
+            `(() => {
+              const button = Array.from(document.querySelectorAll("[aria-label]"))
+                .find((node) => ${JSON.stringify(labels)}.includes(node.getAttribute("aria-label") ?? ""));
+              if (!(button instanceof HTMLElement)) {
+                return { shell: true, clicked: false, alreadyStack: true };
+              }
+              button.click();
+              return { shell: true, clicked: true, alreadyStack: false };
+            })()`,
+            true
+          );
+        } catch {
+          // The hosted shell can replace its document while adopting the workspace.
+          return { shell: false, clicked: false, alreadyStack: false };
         }
-        return { shell: false, clicked: false, alreadyStack: false };
       })
       .catch(() => ({ shell: false, clicked: false, alreadyStack: false }));
     if (result.clicked || result.alreadyStack) return;
@@ -797,9 +814,7 @@ test.describe("Spectrolite", () => {
   });
 
   test("opens a preselected vault and renders the requested document", async () => {
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
+    workspacePath = createSpectroliteWorkspace({
       repoRoot: "/projects/default",
       openPath: "E2E.mdx",
     });
@@ -819,13 +834,16 @@ test.describe("Spectrolite", () => {
   });
 
   test("switches a dirty document to a second vault", async () => {
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    initializeSecondVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
-      repoRoot: "/projects/default",
-      openPath: "E2E.mdx",
-    });
+    workspacePath = createSpectroliteWorkspace(
+      {
+        repoRoot: "/projects/default",
+        openPath: "E2E.mdx",
+      },
+      (sourceRoot) => {
+        initializeDefaultVaultRepo(sourceRoot);
+        initializeSecondVaultRepo(sourceRoot);
+      }
+    );
     testApp = await launchSpectroliteTestApp(workspacePath);
     let panelId = await waitForSpectrolitePanel(testApp);
     const originalPanelId = panelId;
@@ -881,9 +899,7 @@ test.describe("Spectrolite", () => {
   });
 
   test("lets the user pick the default vault from first-run state", async () => {
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {});
+    workspacePath = createSpectroliteWorkspace({});
 
     testApp = await launchSpectroliteTestApp(workspacePath);
     let panelId = await waitForSpectrolitePanel(testApp);
@@ -948,9 +964,7 @@ test.describe("Spectrolite", () => {
     // diagnostic failure path alive long enough to report the actual agent
     // error instead of letting the outer test timeout close Electron first.
     test.setTimeout(240000);
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
+    workspacePath = createSpectroliteWorkspace({
       repoRoot: "/projects/default",
       openPath: "E2E.mdx",
     });
@@ -1200,16 +1214,14 @@ test.describe("Spectrolite", () => {
   });
 
   test("recovers from an empty vault by creating a starter note", async () => {
-    workspacePath = createManagedTestWorkspace();
-    const repo = path.join(workspacePath, "source", "projects", "empty");
-    fs.mkdirSync(repo, { recursive: true });
-    // Semantic repository discovery is derived from owned file paths. Keep one
-    // non-note path so this is a real, discoverable repository while remaining
-    // an empty vault from Spectrolite's `.mdx` perspective.
-    fs.writeFileSync(path.join(repo, ".gitkeep"), "", "utf8");
-    initializeVaultGitRepo(repo);
-    replaceInitPanels(workspacePath, {
-      repoRoot: "/projects/empty",
+    workspacePath = createSpectroliteWorkspace({ repoRoot: "/projects/empty" }, (sourceRoot) => {
+      const repo = path.join(sourceRoot, "projects", "empty");
+      fs.mkdirSync(repo, { recursive: true });
+      // Semantic repository discovery is derived from owned file paths. Keep one
+      // non-note path so this is a real, discoverable repository while remaining
+      // an empty vault from Spectrolite's `.mdx` perspective.
+      fs.writeFileSync(path.join(repo, ".gitkeep"), "", "utf8");
+      initializeVaultGitRepo(repo);
     });
 
     testApp = await launchSpectroliteTestApp(workspacePath);
@@ -1253,9 +1265,7 @@ test.describe("Spectrolite", () => {
 
   // external write conflicts and missing files — pending: co-edit reconcile + suggestion-card e2e
   test.fixme("surfaces external write conflicts and missing active files", async () => {
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
+    workspacePath = createSpectroliteWorkspace({
       repoRoot: "/projects/default",
       openPath: "E2E.mdx",
     });
@@ -1378,9 +1388,7 @@ test.describe("Spectrolite", () => {
   });
 
   test("auto-saves edits and shows the publish bar", async () => {
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
+    workspacePath = createSpectroliteWorkspace({
       repoRoot: "/projects/default",
       openPath: "E2E.mdx",
     });
@@ -1411,9 +1419,7 @@ test.describe("Spectrolite", () => {
   });
 
   test("auto-saves an edit", async () => {
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
+    workspacePath = createSpectroliteWorkspace({
       repoRoot: "/projects/default",
       openPath: "E2E.mdx",
     });
@@ -1444,9 +1450,7 @@ test.describe("Spectrolite", () => {
   });
 
   test("shows backlinks and keeps the editor usable around failing live JSX", async () => {
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
+    workspacePath = createSpectroliteWorkspace({
       repoRoot: "/projects/default",
       openPath: "E2E.mdx",
     });
@@ -1473,12 +1477,13 @@ test.describe("Spectrolite", () => {
 
   test("keeps discovery and backlinks responsive in a large vault", async () => {
     test.setTimeout(480000);
-    workspacePath = createManagedTestWorkspace();
-    initializeLargeVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
-      repoRoot: "/projects/default",
-      openPath: "Hub.mdx",
-    });
+    workspacePath = createSpectroliteWorkspace(
+      {
+        repoRoot: "/projects/default",
+        openPath: "Hub.mdx",
+      },
+      initializeLargeVaultRepo
+    );
 
     testApp = await launchSpectroliteTestApp(workspacePath);
     const panelId = await waitForSpectrolitePanel(testApp);
@@ -1566,9 +1571,7 @@ test.describe("Spectrolite", () => {
   });
 
   test("keeps core controls usable in a mobile-sized viewport", async () => {
-    workspacePath = createManagedTestWorkspace();
-    initializeDefaultVaultRepo(workspacePath);
-    replaceInitPanels(workspacePath, {
+    workspacePath = createSpectroliteWorkspace({
       repoRoot: "/projects/default",
       openPath: "E2E.mdx",
     });

@@ -22,7 +22,7 @@ await esbuild.build({
   target: "es2022",
   sourcemap: true,
   outfile: path.join(outDir, "inputJig.js"),
-  loader: { ".css": "css", ".png": "file" },
+  loader: { ".css": "css", ".png": "file", ".svg": "file" },
   plugins: [
     {
       name: "dedupe-react",

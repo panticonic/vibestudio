@@ -23,8 +23,8 @@ import {
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
-function configureInitialPanel(workspacePath: string, source: string): void {
-  const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
+function configureInitialPanel(sourceRoot: string, source: string): void {
+  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
   config.initPanels = [{ source }];
   fs.writeFileSync(configPath, YAML.stringify(config), "utf8");
@@ -72,12 +72,15 @@ async function navigatePanel(
       const testApi = (
         globalThis as {
           __testApi?: {
-            rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+            navigatePanel: (
+              panelId: string,
+              source: string
+            ) => Promise<{ id: string; title: string } | null>;
           };
         }
       ).__testApi;
       if (!testApi) throw new Error("Test API not available");
-      await testApi.rpcCall("panelTree", "navigate", [request.panelId, request.source, {}]);
+      await testApi.navigatePanel(request.panelId, request.source);
     },
     { panelId, source }
   );
@@ -126,8 +129,9 @@ async function severePanelDiagnostics(
 test.describe("Panel navigation convergence", () => {
   test("same-panel navigation converges without leaked failures or stuck build state", async () => {
     test.setTimeout(240_000);
-    const workspacePath = createManagedTestWorkspace();
-    configureInitialPanel(workspacePath, "about/new");
+    const workspacePath = createManagedTestWorkspace({
+      configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/new"),
+    });
     let testApp: TestApp | null = null;
     try {
       testApp = await launchTestApp({

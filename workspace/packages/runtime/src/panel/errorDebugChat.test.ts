@@ -142,7 +142,13 @@ function createRpcCall() {
         };
       case "panelRuntime.observeSlot":
         return {
-          lease: { holderLabel: "test", platform: "headless", supportsCdp: false },
+          version: { epoch: "test", counter: 1 },
+          lease: {
+            runtimeEntityId: runtimeEntity.id,
+            holderLabel: "test",
+            platform: "headless",
+            supportsCdp: false,
+          },
           observation: {
             view: { url: "http://test/panels/chat", loading: false },
             boot: { phase: "ready", updatedAt: 1 },
@@ -173,8 +179,8 @@ describe("panel error diagnostic chat launcher", () => {
     const { _initPanelHandleBridge } = await import("./handle.js");
     const { openPanelErrorDiagnosticChat } = await import("./errorDebugChat.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
-        selfId: "panel:tree/spectrolite",
-        selfRpcTargetId: "panel:nav-spectrolite-entity",
+      selfId: "panel:tree/spectrolite",
+      selfRpcTargetId: "panel:nav-spectrolite-entity",
     });
 
     const result = await openPanelErrorDiagnosticChat(

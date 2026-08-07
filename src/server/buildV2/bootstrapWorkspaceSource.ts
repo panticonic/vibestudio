@@ -140,6 +140,11 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
       const entries = await fs.readdir(directory, { withFileTypes: true });
       entries.sort((left, right) => left.name.localeCompare(right.name));
       for (const entry of entries) {
+        // Repository metadata describes the checkout, not workspace content.
+        // Semantic source imports address committed files and never publish
+        // nested .git databases; including them here gives the bootstrap build
+        // a state hash that the canonical content store can never resolve.
+        if (entry.isDirectory() && entry.name === ".git") continue;
         const relativePath = normalizeRelativePath(
           relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
         );

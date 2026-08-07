@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { envelopeFromMessage } from "@vibestudio/rpc";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
+import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
@@ -74,21 +76,26 @@ maybeDescribe("image-service extension server smoke", () => {
       // Extensions are declared in meta/vibestudio.yml; the startup reconcile raises
       // one joint approval. Approve it as the shell would, then wait for the
       // onInvoke image service to have an active build.
-      const approvalId = await waitForUnitBatchApproval(ready, shellToken);
-      await rpc(ready, shellToken, "shellApproval.resolve", [approvalId, "once"]);
+      const approvalIds = await approveInstallReviewsUntilExtensionAvailable(
+        ready,
+        shellToken,
+        "@workspace-extensions/image-service"
+      );
       const provenance = await rpc<Array<{ approvalId: string; workspaceId: string }>>(
         ready,
         shellToken,
         "governance.list",
         [{ filter: { recordKind: "approval" } }]
       );
-      expect(provenance).toContainEqual(
-        expect.objectContaining({
-          approvalId,
-          workspaceId: ready.workspaces[0]!.workspaceId,
-        })
-      );
-      await waitForExtensionAvailable(ready, shellToken, "@workspace-extensions/image-service");
+      expect(approvalIds.length).toBeGreaterThan(0);
+      for (const approvalId of approvalIds) {
+        expect(provenance).toContainEqual(
+          expect.objectContaining({
+            approvalId,
+            workspaceId: ready.workspaces[0]!.workspaceId,
+          })
+        );
+      }
 
       await expect(
         rpc(ready, shellToken, "extensions.invoke", [
@@ -104,23 +111,51 @@ maybeDescribe("image-service extension server smoke", () => {
         { cause: error }
       );
     }
-  }, 120_000);
+  }, 240_000);
 });
 
-async function waitForUnitBatchApproval(ready: ReadyPayload, shellToken: string): Promise<string> {
-  const deadline = Date.now() + 20_000;
+async function approveInstallReviewsUntilExtensionAvailable(
+  ready: ReadyPayload,
+  shellToken: string,
+  name: string
+): Promise<string[]> {
+  const deadline = Date.now() + 120_000;
+  const resolvedApprovalIds: string[] = [];
   while (Date.now() < deadline) {
-    const pending = await rpc<Array<{ approvalId: string; kind: string }>>(
+    const extensions = await rpc<Array<{ name: string; status: string; lastError: string | null }>>(
+      ready,
+      shellToken,
+      "build.listUnits",
+      []
+    );
+    const extension = extensions.find((entry) => entry.name === name);
+    if (extension?.status === "available" || extension?.status === "ready") {
+      return resolvedApprovalIds;
+    }
+    if (extension?.status === "error") throw new Error(`${name} failed: ${extension.lastError}`);
+
+    const pending = await rpc<PendingUnitInstallReviewApproval[]>(
       ready,
       shellToken,
       "shellApproval.listPending",
       []
     );
-    const batch = pending.find((p) => p.kind === "unit-install-review");
-    if (batch) return batch.approvalId;
+    for (const approval of pending.filter(
+      (candidate) => candidate.kind === "unit-install-review"
+    )) {
+      if (resolvedApprovalIds.includes(approval.approvalId)) continue;
+      await rpc(
+        ready,
+        shellToken,
+        "shellApproval.resolveInstallReview",
+        [approval.approvalId, defaultAcceptance(approval.mode, approval.parts)],
+        { timeoutMs: 180_000 }
+      );
+      resolvedApprovalIds.push(approval.approvalId);
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error("unit-install-review approval never appeared");
+  throw new Error(`${name} never acquired an active build`);
 }
 
 async function waitForExtensionRunning(
@@ -132,39 +167,19 @@ async function waitForExtensionRunning(
   // above the cold sequential reconcile time; subsequent invocations are fast.
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
-    const extensions = await rpc<Array<{ name: string; status: string; lastError: string | null }>>(
-      ready,
-      shellToken,
-      "extensions.list",
-      []
-    );
-    const entry = extensions.find((e) => e.name === name);
+    const extensions = await rpc<
+      Array<{
+        identity: { kind: string; entityId: string };
+        status: string;
+        lastError: string | null;
+      }>
+    >(ready, shellToken, "runtime.supervision.list", [{ kind: "extension" }]);
+    const entry = extensions.find((extension) => extension.identity.entityId === name);
     if (entry?.status === "running") return;
     if (entry?.status === "error") throw new Error(`${name} failed: ${entry.lastError}`);
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`${name} never reached running state`);
-}
-
-async function waitForExtensionAvailable(
-  ready: ReadyPayload,
-  shellToken: string,
-  name: string
-): Promise<void> {
-  const deadline = Date.now() + 90_000;
-  while (Date.now() < deadline) {
-    const extensions = await rpc<Array<{ name: string; status: string; lastError: string | null }>>(
-      ready,
-      shellToken,
-      "extensions.list",
-      []
-    );
-    const entry = extensions.find((extension) => extension.name === name);
-    if (entry?.status === "available" || entry?.status === "running") return;
-    if (entry?.status === "error") throw new Error(`${name} failed: ${entry.lastError}`);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`${name} never acquired an active build`);
 }
 
 async function waitForReadyFile(
@@ -225,7 +240,8 @@ async function issueShellToken(ready: ReadyPayload): Promise<string> {
     ready,
     paired.shellToken,
     "hubControl.routeWorkspace",
-    [{ workspaceId: workspace.workspaceId }]
+    [{ workspaceId: workspace.workspaceId }],
+    { timeoutMs: 180_000 }
   );
   if (typeof route.serverUrl !== "string") throw new Error("workspace route had no server URL");
   ready.gatewayUrl = route.serverUrl;
@@ -247,7 +263,8 @@ async function rpc<T = unknown>(
   ready: ReadyPayload,
   shellToken: string,
   method: string,
-  args: unknown[]
+  args: unknown[],
+  options: { timeoutMs?: number } = {}
 ): Promise<T> {
   let response: Response;
   try {
@@ -271,7 +288,7 @@ async function rpc<T = unknown>(
           },
         })
       ),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
     });
   } catch (error) {
     throw new Error(`RPC ${method} did not respond`, { cause: error });
