@@ -568,7 +568,7 @@ export const cdpGadDiagnosticTests: TestCase[] = [
           /elapsedMs/u,
           /taskDurationMs/u,
           /requestCount/u,
-          /longTasks/iu,
+          /longTasks(?:\?\.)?\.count|"longTasks"\s*:\s*\{\s*"count"/u,
           /state:\s*clicked/iu,
         ]
       ),

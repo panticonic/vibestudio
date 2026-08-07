@@ -58,8 +58,9 @@ The report is deliberately bounded and JSON-safe:
 - `runtime` contains task/script/layout/style deltas, heap, DOM nodes, and
   document counts from Chromium's Performance domain.
 - `page` contains navigation/paint observations, session layout shift,
-  interaction latency, and long tasks. These are lab observations for the
-  measured session, not field Core Web Vitals.
+  interaction latency, and `longTasks: { count, totalDurationMs, maxDurationMs }`.
+  These are lab observations for the measured session, not field Core Web
+  Vitals.
 - `network` contains transfer/cache/failure totals, type aggregates, and only
   the slowest requested records.
 - `coverage` contains aggregate used/unused JS and the largest unused scripts.
