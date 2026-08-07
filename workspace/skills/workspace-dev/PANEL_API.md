@@ -34,11 +34,9 @@ canonical phases. This prevents a slow or broken initial panel from blocking
 tree discovery, owner seeding, or creation of unrelated panels. The public
 `createPanelSlot(...)` exposes the committed boundary; `openPanel(...)`
 composes it with the readiness wait and still waits for its own attempt to
-reach `ready`. Readiness is observed immediately and then polled through the
-canonical `observeSlot` path; a ready observation resolves without waiting for
-anything else, and failed/stopped observations reject immediately. Browser observations
-also require the same runtime incarnation to remain ready across one short
-refresh.
+reach `ready`. Readiness is observed once and then follows that exact
+server-minted attempt through `awaitAttempt`; a ready observation resolves
+without another sample, and failed/stopped observations reject immediately.
 
 Execution activation is not presentation. Code-panel creation explicitly
 seals the reserved runtime entity after committing the slot so it cannot be
@@ -54,13 +52,13 @@ UI focus request does not move the panel to headless merely to satisfy an
 observation. `unload()` releases the presentation lease but preserves the
 durable slot and runtime entity; the next `focus()`, `openPanel()` wait,
 navigation, reload, rebuild, snapshot, or CDP operation can materialize it
-again. `observe()` itself is read-only and therefore reports `assigning-host`
-or `loading` after eviction rather than silently reacquiring resources.
+again. `observe()` itself is read-only and therefore reports the current
+attempt and route without silently reacquiring resources.
 
 The state combinations are intentional: a committed slot may have no lease;
 a leased host may have no view while it is materializing; and a reconnecting
-lease may still exist for routing while its old ready sample is suppressed.
-None of those states is ready. A mobile lease is a valid visible presentation
+lease may be temporarily unreachable while its attempt remains durably ready.
+A mobile lease is a valid visible presentation
 but cannot satisfy programmatic inspection, so readiness-bearing programmatic
 operations fail immediately with `host_unavailable`. Host materialization
 failures are reported as terminal host failures, not left as an unbounded
@@ -208,10 +206,8 @@ Use omission for an isolated panel world; use an explicit id only when sharing
 is part of the design.
 
 When parentage is implicit, the server resolves the caller's runtime lineage to
-an open tree slot under a finite five-second deadline. A stalled lineage read
-fails as `parent_resolution_timeout` with recovery guidance. Pass
-`parentId: null` for an owned root or an explicit open slot id when that is the
-intended topology.
+an open tree slot. Pass `parentId: null` for an owned root or an explicit open
+slot id when that is the intended topology.
 
 ## One observation model
 
@@ -227,43 +223,45 @@ interface PanelObservation {
   contextId: string;
   requestedRef: string;
   runtimeEntityId: string | null;
-  attemptId: string; // runtimeEntityId@buildKey
+  attemptId: string; // opaque coordinator-minted identity
+  attemptRef: { epoch: string; attemptId: string };
   effectiveVersion: string | null;
   buildKey: string | null;
-  phase:
-    | "resolving"
-    | "building"
-    | "assigning-host"
-    | "loading"
-    | "booting"
-    | "ready"
-    | "failed"
-    | "stopped";
+  phase: "pending" | "loading" | "booting" | "ready" | "failed" | "stopped";
   failure?: PanelRuntimeFailure;
   host?: {
     holderLabel?: string;
     platform?: "desktop" | "headless" | "mobile";
     supportsInspection?: boolean;
+    reachable?: boolean;
     view: { exists: boolean; url?: string; loading?: boolean };
-    boot: {
-      phase: "unavailable" | "loading" | "booting" | "ready" | "failed";
-      runtimeEntityId?: string | null;
-      source?: string | null;
-      contextId?: string | null;
-      effectiveVersion?: string | null;
-      buildKey?: string | null;
-      message?: string;
-      errorName?: string;
-      stack?: string;
-    };
+    boot:
+      | { kind: "unavailable" }
+      | {
+          kind: "observed";
+          observation: {
+            phase: "loading" | "booting" | "ready" | "failed";
+            runtimeEntityId?: string | null;
+            source?: string | null;
+            contextId?: string | null;
+            effectiveVersion?: string | null;
+            buildKey?: string | null;
+            message?: string;
+            errorName?: string;
+            stack?: string;
+            failureStage?: "config" | "bundle-load" | "entry";
+          };
+        };
   };
   updatedAt: number;
 }
 ```
 
-A host boot state counts only when its runtime entity, source, context, and
-build key match the server attempt. This prevents an old ready renderer from
-acknowledging a newer rebuild while the host is still switching views.
+Boot phase belongs to the attempt while `host.reachable` belongs to its current
+transport route. A reconnect can therefore flip reachability without erasing
+an already-ready attempt or waking exact-attempt waiters. Every new
+materialization receives a fresh attempt, even when it presents the same
+runtime entity and build key.
 
 Every inspecting renderer host must implement the canonical
 `panelObservation` host command. Desktop and headless publish the same canonical
@@ -299,7 +297,7 @@ interface PanelRuntimeFailure {
     | "navigation_failed"
     | "asset_unavailable"
     | "entry_threw"
-    | "runtime_handshake_timeout"
+    | "boot_stalled"
     | "render_crashed"
     | "panel_not_found"
     | "unknown_failure";

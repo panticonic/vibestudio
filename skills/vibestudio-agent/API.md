@@ -378,8 +378,10 @@ Authority principals: `host`, `user`
 | `panelRuntime.registerClient` | Register (or refresh) a panel-hosting client session so it can be assigned runtime leases. |
 | `panelRuntime.unregisterClient` | Unregister a client session by id, releasing any leases it held and reassigning default CDP hosts as needed. |
 | `panelRuntime.getSnapshot` | Get the current lease snapshot (version + all active panel runtime leases). |
-| `panelRuntime.observeSlot` | Observe the active runtime lease and latest host report for one panel slot. |
-| `panelRuntime.awaitSlotChange` | Wait until a panel slot's lease or host observation advances beyond a known version. |
+| `panelRuntime.observeSlot` | Observe the canonical attempt, route, and build axes for one panel slot. |
+| `panelRuntime.getAttempt` | Resolve one exact coordinator-minted panel attempt reference. |
+| `panelRuntime.awaitAttempt` | Wait until an exact panel attempt advances beyond a known revision. |
+| `panelRuntime.awaitSlot` | Wait until any axis of a panel slot observation advances beyond a version. |
 | `panelRuntime.acquire` | Acquire the runtime lease for a panel entity. Succeeds for the current holder or an unleased entity; otherwise returns acquired:false with the existing lease. |
 | `panelRuntime.takeOver` | Forcibly take over a panel entity's runtime lease, revoking and closing any conflicting holder's connection. |
 | `panelRuntime.ensureSlot` | Ensure that the current runtime entity for a slot has a presentation host lease. |
