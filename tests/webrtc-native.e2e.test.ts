@@ -176,6 +176,7 @@ function makeServer(databasePath: string): {
       tokenManager,
       dispatcher,
       entityCache,
+      ensureUserlandDoReady: async () => undefined,
       userSubjectSource: createUserSubjectSource({
         deviceAuthStore,
         userStore,

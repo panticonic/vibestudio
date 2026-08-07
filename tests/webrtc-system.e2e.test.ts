@@ -133,6 +133,7 @@ function makeServer(
     tokenManager,
     dispatcher,
     entityCache: new EntityCache(),
+    ensureUserlandDoReady: async () => undefined,
     redeemPairingCredential: createHubCredentialRedeemer({
       deviceAuthStore,
       tokenManager,
