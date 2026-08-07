@@ -101,7 +101,7 @@ describe("dogfood server supervisor", () => {
     expect(dogfoodMeta.gitRemoteUrl).toBe(remoteUrl);
   });
 
-  it("does not publish the local host checkout as a workspace Git upstream", () => {
+  it("preserves the reviewed template upstream without publishing the local checkout", () => {
     const configRoot = tmpRoot();
     vi.stubEnv("XDG_CONFIG_HOME", configRoot);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -110,7 +110,18 @@ describe("dogfood server supervisor", () => {
     const workspaceConfig = YAML.parse(
       fs.readFileSync(path.join(wsDir, "source", "meta", "vibestudio.yml"), "utf8")
     );
-    expect(workspaceConfig.git?.remotes?.projects?.vibestudio?.origin).toBeUndefined();
+    expect(workspaceConfig.git.remotes.projects.vibestudio.origin).toEqual({
+      url: "https://github.com/panticonic/vibestudio",
+      branch: "main",
+    });
+    expect(workspaceConfig.git.upstreams.projects.vibestudio).toEqual({
+      remote: "origin",
+      branch: "main",
+      autoPush: false,
+    });
+    expect(workspaceConfig.git.remotes.projects.vibestudio.origin.url).not.toBe(
+      gitConfig(path.join(wsDir, "source", "projects", "vibestudio"), "remote.origin.url")
+    );
     const dogfoodMeta = JSON.parse(
       fs.readFileSync(path.join(wsDir, "source", "meta", "dogfood.json"), "utf8")
     );
