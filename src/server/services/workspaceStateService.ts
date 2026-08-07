@@ -159,6 +159,16 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     handler: defineServiceHandler("workspace-state", workspaceStateMethods, {
       "panelTree.rootGroups": (_ctx, [input]) =>
         dispatch<WorkspacePanelTreeRootGroupPage>("panelTreeRootGroups", [input]),
+      "panelTree.rootsForCaller": (ctx, [input]) =>
+        dispatch<WorkspacePanelTreePage>("panelTreePage", [
+          {
+            group: {
+              kind: "roots",
+              ownerUserId: ctx.caller.subject?.userId ?? null,
+            },
+            ...input,
+          },
+        ]),
       "panelTree.page": (_ctx, [input]) =>
         dispatch<WorkspacePanelTreePage>("panelTreePage", [input]),
       "panelTree.path": (_ctx, [slotId]) =>

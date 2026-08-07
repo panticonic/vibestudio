@@ -55,6 +55,12 @@ perspective:
   choose the target panel, and read `await target.stateArgs.get()` to find its
   `channelName`/`channelId` before running channel diagnostics.
 
+  Start root discovery with `await panelTree.roots({ limit: 100 })`; the host
+  derives the current verified owner. Do not call the advanced
+  `panelTree.page({ group: { kind: "roots" } })` form: an explicit root group
+  requires an `ownerUserId`. Cross-owner access remains available through
+  `rootOwners()` plus `rootsForOwner(ownerUserId, ...)`.
+
 For perspective-heavy investigations, use `inline_ui` to render a small panel
 tree or channel-health dashboard so the user can see and choose the same target
 you are inspecting.

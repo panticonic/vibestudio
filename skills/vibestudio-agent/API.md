@@ -619,8 +619,9 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `workspace-state.panelTree.rootGroups` | Keyset-page the owner groups that currently contain open root panels. |
-| `workspace-state.panelTree.page` | Read one bounded, newest-first sibling page. group is required and must be {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}. |
+| `workspace-state.panelTree.rootGroups` | Low-level owner-band census; this returns owners and counts, not panels. Runtime eval should use panelTree.rootOwners(). |
+| `workspace-state.panelTree.rootsForCaller` | Low-level transport behind runtime panelTree.roots(); read one bounded root-panel page scoped to the verified caller subject. |
+| `workspace-state.panelTree.page` | Advanced exact-group sibling page. Runtime eval should prefer roots(), rootsForOwner(), or children(); direct calls require {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}. |
 | `workspace-state.panelTree.path` | Read the bounded root-to-slot path for one open panel. |
 | `workspace-state.panelTree.detail` | Read the current runtime detail for one open panel without its siblings/history. |
 | `workspace-state.panelTree.search` | Keyset-page full-text title matches with their ancestor breadcrumbs. |

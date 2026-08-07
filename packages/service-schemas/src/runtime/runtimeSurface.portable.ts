@@ -349,8 +349,9 @@ export const NOTIFICATIONS_MEMBERS = ["show", "dismiss"];
 export const PANEL_TREE_MEMBERS = [
   "self",
   "get",
-  "rootGroups",
+  "rootOwners",
   "roots",
+  "rootsForOwner",
   "children",
   "page",
   "path",
@@ -439,10 +440,10 @@ export const PANEL_TREE_METHOD_CATALOG = {
       maxItems: 2,
     },
   },
-  rootGroups: {
-    signature: "rootGroups(input?: PanelTreeRootGroupPageInput): Promise<PanelTreeRootGroupPage>",
+  rootOwners: {
+    signature: "rootOwners(input?: PanelTreePageWindow): Promise<PanelRuntimeTreeRootOwnerPage>",
     description:
-      "Return a bounded page object. Iterate result.groups; the return value itself is not iterable.",
+      "List visible root ownership bands for intentional cross-owner inspection. Iterate result.owners; the return value itself is not iterable.",
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -458,7 +459,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
       type: "object",
       properties: {
         revision: { type: "number" },
-        groups: {
+        owners: {
           type: "array",
           items: {
             type: "object",
@@ -472,19 +473,35 @@ export const PANEL_TREE_METHOD_CATALOG = {
         },
         nextCursor: { type: ["string", "null"] },
       },
-      required: ["revision", "groups", "nextCursor"],
+      required: ["revision", "owners", "nextCursor"],
       additionalProperties: false,
     },
   },
   roots: {
-    signature:
-      "roots(ownerUserId: string | null, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>",
+    signature: "roots(input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>",
     description:
-      "Read one bounded root-panel page for an owner returned by rootGroups(). This is the ergonomic roots traversal; no group discriminator is needed.",
+      "Read one bounded root-panel page for the current verified human subject. Ownership is host-derived; no owner id is accepted.",
     argsSchema: {
       type: "array",
       prefixItems: [
-        { type: ["string", "null"], description: "ownerUserId from rootGroups().groups." },
+        {
+          type: "object",
+          properties: { cursor: { type: "string" }, limit: { type: "number" } },
+          additionalProperties: false,
+        },
+      ],
+      maxItems: 1,
+    },
+  },
+  rootsForOwner: {
+    signature:
+      "rootsForOwner(ownerUserId: string | null, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>",
+    description:
+      "Read one bounded root-panel page for an ownership band returned by rootOwners(). Cross-owner workspace visibility is unchanged.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        { type: ["string", "null"], description: "ownerUserId from rootOwners().owners." },
         {
           type: "object",
           properties: { cursor: { type: "string" }, limit: { type: "number" } },
@@ -517,7 +534,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
   page: {
     signature: "page(input: PanelTreePageInput): Promise<PanelRuntimeTreePage>",
     description:
-      "Advanced sibling-page primitive. Prefer roots(ownerUserId, input?) or children(parentSlotId, input?). Direct calls require group: {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}.",
+      "Advanced sibling-page primitive. Prefer roots(input?), rootsForOwner(ownerUserId, input?), or children(parentSlotId, input?). Direct calls require group: {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}.",
     argsSchema: {
       type: "array",
       prefixItems: [

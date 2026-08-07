@@ -130,11 +130,20 @@ describe("runtime surface schemaRef parity", () => {
     expect(PANEL_TREE_METHOD_CATALOG.page.argsSchema).not.toEqual(
       expect.objectContaining({ rootGroup: expect.anything() })
     );
-    expect(PANEL_TREE_METHOD_CATALOG.rootGroups.returnsSchema).toMatchObject({
-      required: expect.arrayContaining(["groups", "nextCursor"]),
+    expect(PANEL_TREE_METHOD_CATALOG.rootOwners.returnsSchema).toMatchObject({
+      required: expect.arrayContaining(["owners", "nextCursor"]),
       properties: {
-        groups: { type: "array", items: { required: ["ownerUserId", "rootCount"] } },
+        owners: { type: "array", items: { required: ["ownerUserId", "rootCount"] } },
       },
+    });
+    expect(PANEL_TREE_METHOD_CATALOG.roots).toMatchObject({
+      signature: expect.stringContaining("roots(input?: PanelTreePageWindow)"),
+      description: expect.stringContaining("current verified human subject"),
+      argsSchema: { type: "array", maxItems: 1 },
+    });
+    expect(PANEL_TREE_METHOD_CATALOG.rootsForOwner).toMatchObject({
+      signature: expect.stringContaining("rootsForOwner(ownerUserId"),
+      description: expect.stringContaining("Cross-owner workspace visibility is unchanged"),
     });
     expect(PANEL_TREE_METHOD_CATALOG.page.returnsSchema).toMatchObject({
       required: expect.arrayContaining(["entries", "nextCursor"]),

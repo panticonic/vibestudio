@@ -338,11 +338,11 @@ describe("buildCatalog", () => {
       },
     });
 
-    expect(byId(projected, "runtime:workerRuntime.panelTree.rootGroups")).toMatchObject({
-      description: expect.stringContaining("Iterate result.groups"),
+    expect(byId(projected, "runtime:workerRuntime.panelTree.rootOwners")).toMatchObject({
+      description: expect.stringContaining("Iterate result.owners"),
       returnsSchema: {
-        required: expect.arrayContaining(["groups", "nextCursor"]),
-        properties: { groups: { type: "array" } },
+        required: expect.arrayContaining(["owners", "nextCursor"]),
+        properties: { owners: { type: "array" } },
       },
     });
     expect(byId(projected, "runtime:workerRuntime.panelTree.page")).toMatchObject({

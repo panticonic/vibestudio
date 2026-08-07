@@ -1105,6 +1105,31 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
+      "panelTree.rootsForCaller": {
+        capability: "workspace.runtime-state.inspect",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Inspect running workspace services",
+          action:
+            "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          description: "Read the current structure and status of running workspace services",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "see",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.inspect",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       "panelTree.page": {
         capability: "workspace.runtime-state.inspect",
         tier: "open",

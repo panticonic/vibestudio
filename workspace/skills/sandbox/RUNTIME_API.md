@@ -63,7 +63,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `createPanelSlot` | value |  | Commit a panel under the caller and promptly return its durable handle without focusing or waiting for activation, build, or boot. Server reconciliation owns activation after commit and recovers it across transient failure or restart. Pass operationId for retry-stable identity across exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. Use handle.observe() when current lifecycle state matters. |
 | `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready, with no fixed readiness deadline. Pass options.signal for caller-owned cancellation and operationId for retry-stable exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. It defaults under the caller and focused; use parentId:null for a root or focus:false to suppress presentation. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
 | `getPanelHandle` | value |  |  |
-| `panelTree` | namespace | `self`, `get`, `rootGroups`, `roots`, `children`, `page`, `path`, `search`, `parent`, `navigate`, `navigateHistory` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. Use rootGroups() then roots(ownerUserId), or children(parentSlotId); each returns a bounded page with entries. page(...) is the advanced discriminated-group primitive. search(...) returns hits containing entry.node and entry.handle. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
+| `panelTree` | namespace | `self`, `get`, `rootOwners`, `roots`, `rootsForOwner`, `children`, `page`, `path`, `search`, `parent`, `navigate`, `navigateHistory` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. Use roots(input?) for the current human subject, rootOwners() then rootsForOwner(ownerUserId) for cross-owner inspection, or children(parentSlotId); each returns a bounded page with entries. page(...) is the advanced discriminated-group primitive. search(...) returns hits containing entry.node and entry.handle. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
 | `Rpc` | value |  | RPC helpers namespace export. |
 | `z` | value |  | Zod export. |
 | `defineContract` | value |  |  |
@@ -378,12 +378,14 @@ const created = await openPanel("https://example.com", { focus: true });
 const same = panelTree.get(created.id);
 const parent = panelTree.self().parent();
 const parentObservation = parent ? await parent.observe() : null;
-const rootGroupPage = await panelTree.rootGroups({ limit: 100 });
-for (const group of rootGroupPage.groups) {
-  const roots = await panelTree.roots(group.ownerUserId, { limit: 100 });
-  console.log(roots.entries.map(({ handle }) => handle.title));
+const roots = await panelTree.roots({ limit: 100 }); // current human subject
+console.log(roots.entries.map(({ handle }) => handle.title));
+const rootOwnerPage = await panelTree.rootOwners({ limit: 100 });
+for (const owner of rootOwnerPage.owners) {
+  const ownedRoots = await panelTree.rootsForOwner(owner.ownerUserId, { limit: 100 });
+  console.log(ownedRoots.entries.map(({ handle }) => handle.title));
 }
-const roots = await panelTree.roots(null, { limit: 100 });
+const workspaceRoots = await panelTree.rootsForOwner(null, { limit: 100 });
 const children = await panelTree.children(created.id, { limit: 100 });
 const existing = (await panelTree.search({ query: "spectrolite", limit: 20 })).hits.find(
   ({ entry }) => entry.handle.source === "panels/spectrolite"

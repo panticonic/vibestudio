@@ -165,8 +165,9 @@ export function getPanelHandle(
 export const panelTree: PanelTreeApi = {
   self: () => getRuntime().panelTree.self(),
   get: (id, kind) => getRuntime().panelTree.get(id, kind),
-  rootGroups: (input) => getRuntime().panelTree.rootGroups(input),
-  roots: (ownerUserId, input) => getRuntime().panelTree.roots(ownerUserId, input),
+  rootOwners: (input) => getRuntime().panelTree.rootOwners(input),
+  roots: (input) => getRuntime().panelTree.roots(input),
+  rootsForOwner: (ownerUserId, input) => getRuntime().panelTree.rootsForOwner(ownerUserId, input),
   children: (parentSlotId, input) => getRuntime().panelTree.children(parentSlotId, input),
   page: (input) => getRuntime().panelTree.page(input),
   path: (id) => getRuntime().panelTree.path(id),

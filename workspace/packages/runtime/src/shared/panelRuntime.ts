@@ -7,7 +7,6 @@ import type {
   PanelTreePageWindow,
   PanelTreePath,
   PanelTreeRootGroupPage,
-  PanelTreeRootGroupPageInput,
   PanelTreeSearchInput,
   PanelTreeSearchPage,
 } from "@vibestudio/shared/panel/treeIndex";
@@ -130,8 +129,12 @@ export interface OpenPanelOptions extends CreatePanelSlotOptions {
 export interface PanelRuntimeTree {
   self(): PanelHandle;
   get(id: string, kind?: "workspace" | "browser"): PanelHandle;
-  rootGroups(input?: PanelTreeRootGroupPageInput): Promise<PanelTreeRootGroupPage>;
-  roots(ownerUserId: string | null, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>;
+  rootOwners(input?: PanelTreePageWindow): Promise<PanelRuntimeTreeRootOwnerPage>;
+  roots(input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>;
+  rootsForOwner(
+    ownerUserId: string | null,
+    input?: PanelTreePageWindow
+  ): Promise<PanelRuntimeTreePage>;
   children(parentSlotId: string, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>;
   page(input: PanelTreePageInput): Promise<PanelRuntimeTreePage>;
   path(id: string): Promise<PanelRuntimeTreePath | null>;
@@ -154,6 +157,12 @@ export interface PanelRuntimeTreePage {
   revision: number;
   group: PanelTreePageInput["group"];
   entries: PanelRuntimeTreeEntry[];
+  nextCursor: string | null;
+}
+
+export interface PanelRuntimeTreeRootOwnerPage {
+  revision: number;
+  owners: Array<{ ownerUserId: string | null; rootCount: number }>;
   nextCursor: string | null;
 }
 
@@ -241,6 +250,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     try {
       const read = {
         rootGroups: () => workspaceState.getPanelTreeRootGroups(args[0] as never),
+        rootsForCaller: () => callState("panelTree.rootsForCaller", args),
         page: () => workspaceState.getPanelTreePage(args[0] as never),
         path: () => workspaceState.getPanelTreePath(asPanelSlotId(String(args[0]))),
         detail: () => workspaceState.getPanelDetail(asPanelSlotId(String(args[0]))),
@@ -1176,6 +1186,15 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
 
   const readPage = async (input: PanelTreePageInput): Promise<PanelRuntimeTreePage> => {
     const page = await callPanelState<PanelTreePage>("page", [input]);
+    return hydratePage(page);
+  };
+
+  const readCurrentRoots = async (input: PanelTreePageWindow): Promise<PanelRuntimeTreePage> => {
+    const page = await callPanelState<PanelTreePage>("rootsForCaller", [input]);
+    return hydratePage(page);
+  };
+
+  const hydratePage = (page: PanelTreePage): PanelRuntimeTreePage => {
     return {
       revision: page.revision,
       group: page.group,
@@ -1213,10 +1232,18 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       const metadata = metadataForId(id, kind ? { kind } : {});
       return fromMetadata(metadata);
     },
-    rootGroups(input = {}) {
-      return callPanelState<PanelTreeRootGroupPage>("rootGroups", [input]);
+    async rootOwners(input = {}) {
+      const page = await callPanelState<PanelTreeRootGroupPage>("rootGroups", [input]);
+      return {
+        revision: page.revision,
+        owners: page.groups,
+        nextCursor: page.nextCursor,
+      };
     },
-    roots(ownerUserId, input = {}) {
+    roots(input = {}) {
+      return readCurrentRoots(input);
+    },
+    rootsForOwner(ownerUserId, input = {}) {
       return readPage({ group: { kind: "roots", ownerUserId }, ...input });
     },
     children(parentSlotId, input = {}) {

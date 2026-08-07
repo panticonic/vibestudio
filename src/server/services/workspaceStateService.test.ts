@@ -7,7 +7,11 @@ import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
 import { createWorkspaceStateService, type SlotStateChange } from "./workspaceStateService.js";
 
 interface MockHandlerCtx {
-  caller: { runtime: { kind: string; id: string }; hostOriginated?: true };
+  caller: {
+    runtime: { kind: string; id: string };
+    hostOriginated?: true;
+    subject?: { userId: string };
+  };
 }
 
 function makeCtx(): MockHandlerCtx {
@@ -117,6 +121,26 @@ describe("workspaceStateService — title mirror hooks", () => {
     expect(svc.methods["slot.create"]?.authority).toMatchObject({
       principals: expect.arrayContaining(["host", "user", "code"]),
     });
+  });
+
+  it("derives current roots from the verified caller instead of caller input", async () => {
+    const { svc, calls } = makeService({});
+    const ctx = makeCtx();
+    ctx.caller.subject = { userId: "usr-current" };
+
+    await svc.handler(ctx as never, "panelTree.rootsForCaller", [{ limit: 50 }]);
+
+    expect(calls).toEqual([
+      {
+        method: "panelTreePage",
+        args: [
+          {
+            group: { kind: "roots", ownerUserId: "usr-current" },
+            limit: 50,
+          },
+        ],
+      },
+    ]);
   });
 
   it("exposes lifecycle lease methods to DO callers", async () => {
@@ -395,6 +419,7 @@ describe("workspaceStateService — slot-state change hook", () => {
 
   const reads: Array<[method: string, args: unknown[]]> = [
     ["panelTree.rootGroups", [{}]],
+    ["panelTree.rootsForCaller", [{ limit: 50 }]],
     ["panelTree.page", [{ group: { kind: "roots", ownerUserId: null }, limit: 50 }]],
     ["panelTree.path", ["s1"]],
     ["panelTree.detail", ["s1"]],

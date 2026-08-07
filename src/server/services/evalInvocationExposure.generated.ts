@@ -11984,6 +11984,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:workspace-state.panelTree.rootsForCaller",
+    rpcPlane: "host-service",
+    capability: "service:workspace-state.panelTree.rootsForCaller",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "workspace-state",
+    method: "panelTree.rootsForCaller",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:workspace-state.panelTree.rootsForCaller",
+    },
+  },
+  {
     id: "host:workspace-state.panelTree.search",
     rpcPlane: "host-service",
     capability: "service:workspace-state.panelTree.search",
@@ -13827,6 +13840,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "workspace-state",
+    method: "panelTree.rootsForCaller",
+  },
+  {
+    service: "workspace-state",
     method: "panelTree.search",
   },
   {
@@ -14775,6 +14792,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:workspace-state.panelTree.page",
   "service:workspace-state.panelTree.path",
   "service:workspace-state.panelTree.rootGroups",
+  "service:workspace-state.panelTree.rootsForCaller",
   "service:workspace-state.panelTree.search",
   "service:workspace-state.slot.close",
   "service:workspace-state.slot.closeCleanupAck",

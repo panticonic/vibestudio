@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:3049e173f9bbbedecce3b40e8a83300fc1db54720419b513f5b5c556927c66e7",
+  "censusDigest": "sha256:f16fd105193925d7e9ea1c7d13c50ad8c5025c89da06ab783c0394f9d7be78b5",
   "decisions": {
     "host:panelRuntime.awaitAttempt": {
       "review": "exact-panel-attempt-readiness-read",
@@ -81,6 +81,10 @@
     "host:workspace-state.panelTree.page": {
       "review": "bounded-panel-sibling-read",
       "change": "Adds an open, read-only keyset page over one exact panel sibling group. The query is capped at 200 rows, returns only tree-list metadata, and performs no runtime or workspace mutation."
+    },
+    "host:workspace-state.panelTree.rootsForCaller": {
+      "review": "caller-subject-bounded-panel-root-read",
+      "change": "Adds an open, read-only keyset page over roots owned by the server-verified caller subject, or the ownerless workspace band for subjectless infrastructure. The request is capped at 200 rows, accepts no owner identity, returns only tree-list metadata, and leaves the existing cross-owner root discovery and explicit owner query path unchanged."
     },
     "host:workspace-state.panelTree.rootGroups": {
       "review": "bounded-panel-root-group-read",

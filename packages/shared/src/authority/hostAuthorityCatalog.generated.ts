@@ -6444,6 +6444,27 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "workspace-state.panelTree.rootsForCaller": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Bounded durable root projection scoped by the server-verified subject instead of a caller-supplied owner id",
+    },
+    capability: "workspace.runtime-state.inspect",
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
+  },
   "workspace-state.panelTree.search": {
     tier: {
       tier: "open",

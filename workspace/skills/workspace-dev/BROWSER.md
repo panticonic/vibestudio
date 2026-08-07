@@ -103,8 +103,10 @@ target. The boundary is exact:
   same handle. More generally, if a lifecycle result has a different
   `runtimeEntityId`, replace the page.
 
-Use bounded `panelTree.page`/`panelTree.search` or addressed `panelTree.get`
-for existing panels. Existing handles
+Use bounded `panelTree.roots`/`panelTree.children`/`panelTree.search` or
+addressed `panelTree.get` for existing panels. Use `rootOwners()` and
+`rootsForOwner(ownerUserId)` when explicitly inspecting another ownership
+band. Existing handles
 are non-owned: do not call `handle.navigate`, `handle.reload`, or
 `handle.close` on them unless requested. Do not call `handle.cdp.navigate(url)`
 or `page.goto(url)` on the current chat panel, a parent chat panel, or another

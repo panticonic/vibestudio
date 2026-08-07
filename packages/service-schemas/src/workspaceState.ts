@@ -233,7 +233,7 @@ export const PanelTreePageSchema = z
   })
   .strict();
 
-export const PanelTreeRootGroupsInputSchema = z
+export const PanelTreePageWindowSchema = z
   .object({
     cursor: z.string().optional(),
     limit: z.number().int().positive().max(200).optional(),
@@ -306,11 +306,31 @@ export const workspaceStateMethods = defineServiceMethods({
       rationale:
         "Bounded durable ownership census over the builtin slot topology used to select an exact account forest",
     },
-    args: z.tuple([PanelTreeRootGroupsInputSchema]),
-    description: "Keyset-page the owner groups that currently contain open root panels.",
+    args: z.tuple([PanelTreePageWindowSchema]),
+    description:
+      "Low-level owner-band census; this returns owners and counts, not panels. Runtime eval should use panelTree.rootOwners().",
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: PanelTreeRootGroupsSchema,
+  },
+  "panelTree.rootsForCaller": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Bounded durable root projection scoped by the server-verified subject instead of a caller-supplied owner id",
+    },
+    args: z.tuple([PanelTreePageWindowSchema]),
+    description:
+      "Low-level transport behind runtime panelTree.roots(); read one bounded root-panel page scoped to the verified caller subject.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: PanelTreePageSchema,
   },
   "panelTree.page": {
     agentFacing: false,
@@ -326,7 +346,7 @@ export const workspaceStateMethods = defineServiceMethods({
     },
     args: z.tuple([PanelTreePageInputSchema]),
     description:
-      "Read one bounded, newest-first sibling page. group is required and must be {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}.",
+      "Advanced exact-group sibling page. Runtime eval should prefer roots(), rootsForOwner(), or children(); direct calls require {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}.",
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: PanelTreePageSchema,

@@ -393,8 +393,8 @@ describe("PanelHandle", () => {
       parentRpcTargetId: "panel:parent-entity",
     });
 
-    const groups = await panelTree.rootGroups({ limit: 200 });
-    const roots = await panelTree.roots(groups.groups[0]!.ownerUserId, { limit: 200 });
+    const owners = await panelTree.rootOwners({ limit: 200 });
+    const roots = await panelTree.rootsForOwner(owners.owners[0]!.ownerUserId, { limit: 200 });
     const children = await panelTree.children("parent-1", { limit: 50 });
     const self = panelTree.self();
     const parent = self.parent();

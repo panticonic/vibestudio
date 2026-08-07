@@ -25,12 +25,7 @@ export const panelLifecycle = suite("panel-lifecycle", {
     // root fixture this query needs instead of assuming launcher state exists.
     const root = await openPanel(TARGET_PANEL_SOURCE, { parentId: null, focus: false });
     t.defer(() => root.close().then(() => undefined));
-    const groups = await panelTree.rootGroups({ limit: 1 });
-    expect(groups.groups.length, "owner group count").toBeGreaterThanOrEqual(1);
-    const page = await panelTree.page({
-      group: { kind: "roots", ownerUserId: groups.groups[0]!.ownerUserId },
-      limit: 1,
-    });
+    const page = await panelTree.roots({ limit: 1 });
     expect(page.entries.length, "panel count").toBeGreaterThanOrEqual(1);
     expect(typeof page.entries[0]!.node.slotId, "panel id").toBe("string");
     expect(typeof page.entries[0]!.node.title, "panel title").toBe("string");

@@ -331,6 +331,25 @@ function runtimeHarness(
             nextCursor: null,
           } as T;
         }
+        case "workspace-state.panelTree.rootsForCaller":
+          return {
+            revision: 17,
+            group: { kind: "roots", ownerUserId: "usr-current" },
+            nodes: [
+              {
+                slotId: "current-root",
+                title: "Current root",
+                source: "panels/current",
+                kind: "workspace",
+                parentSlotId: null,
+                ownerUserId: "usr-current",
+                contextId: "ctx:current",
+                createdAt: 1,
+                childCount: 0,
+              },
+            ],
+            nextCursor: null,
+          } as T;
         case "workspace-state.panelTree.path":
           return {
             revision: 17,
@@ -867,6 +886,23 @@ describe("panel runtime topology composition", () => {
       revision: 17,
       entries: [{ handle: { id: "root" } }],
     });
+  });
+
+  it("reads the current caller's roots without exposing an ownership key", async () => {
+    const { runtime, call } = runtimeHarness();
+
+    await expect(runtime.panelTree.roots({ limit: 25 })).resolves.toMatchObject({
+      group: { kind: "roots", ownerUserId: "usr-current" },
+      entries: [{ handle: { id: "current-root" } }],
+    });
+    expect(call).toHaveBeenCalledWith("main", "workspace-state.panelTree.rootsForCaller", [
+      { limit: 25 },
+    ]);
+
+    await runtime.panelTree.rootsForOwner("usr-other", { limit: 10 });
+    expect(call).toHaveBeenCalledWith("main", "workspace-state.panelTree.page", [
+      { group: { kind: "roots", ownerUserId: "usr-other" }, limit: 10 },
+    ]);
   });
 
   it("renames an arbitrary slot directly on the builtin topology owner", async () => {

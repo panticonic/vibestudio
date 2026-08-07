@@ -88,10 +88,7 @@ For a collection or any recursive container, traverse only the needed sibling
 groups with a bounded work queue:
 
 ```ts
-const firstPage = await panelTree.page({
-  group: { kind: "children", parentSlotId: collectionRootId },
-  limit: 100,
-});
+const firstPage = await panelTree.children(collectionRootId, { limit: 100 });
 const browserTargets = firstPage.entries
   .map(({ handle }) => handle)
   .filter((handle) => handle.kind === "browser");
@@ -155,8 +152,8 @@ Browser handles and CDP pages are live objects tied to the panel runtime; they
 cannot be persisted (the eval `scope` is server-side in your `EvalDO`, and a
 panel/component's own state is lost on re-mount or panel reload). What you can
 persist is the panel **id** (a string). Re-acquire a handle from a known id with
-`getPanelHandle` (or rediscover via bounded `panelTree.page()`/`search()`) from panel/component
-code, then reconnect the CDP page:
+`getPanelHandle` (or rediscover via bounded `panelTree.roots()`/`children()`/
+`search()`) from panel/component code, then reconnect the CDP page:
 
 ```tsx
 import { getPanelHandle } from "@workspace/runtime";

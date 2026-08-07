@@ -107,8 +107,9 @@ try {
 ```ts
 panelTree.self(): PanelHandle
 panelTree.get(id): PanelHandle
-panelTree.rootGroups(input?): Promise<PanelTreeRootGroupPage>
-panelTree.roots(ownerUserId, input?): Promise<PanelRuntimeTreePage>
+panelTree.roots(input?): Promise<PanelRuntimeTreePage>
+panelTree.rootOwners(input?): Promise<PanelRuntimeTreeRootOwnerPage>
+panelTree.rootsForOwner(ownerUserId, input?): Promise<PanelRuntimeTreePage>
 panelTree.children(parentSlotId, input?): Promise<PanelRuntimeTreePage>
 panelTree.page(input): Promise<PanelRuntimeTreePage>
 panelTree.path(id): Promise<PanelRuntimeTreePath | null>
@@ -122,9 +123,9 @@ openPanel(source, opts?): Promise<PanelHandle>
 The bounded discovery methods return page objects, not bare arrays:
 
 ```ts
-type PanelTreeRootGroupPage = {
+type PanelRuntimeTreeRootOwnerPage = {
   revision: number;
-  groups: Array<{ ownerUserId: string | null; rootCount: number }>;
+  owners: Array<{ ownerUserId: string | null; rootCount: number }>;
   nextCursor: string | null;
 };
 
@@ -154,10 +155,15 @@ an ambiguous transport failure. `slug` and `operationId` are mutually
 exclusive because each defines stable slot identity.
 
 `self()` and `get()` are synchronous handle factories; they do no I/O.
-Use bounded `rootGroups()`, `roots()`, `children()`, `path()`, and `search()`
-reads for large histories. `page()` remains available when constructing a
-discriminated sibling group directly. There are deliberately no whole-tree or
-whole-sibling reads. Continue from `nextCursor` only while the page revision is unchanged;
+Use `roots({ limit })` for the current verified caller's root panels. Ownership
+is derived by the host; do not manufacture an `ownerUserId`. Cross-owner
+workspace visibility is unchanged: use `rootOwners()` followed by
+`rootsForOwner(ownerUserId, input?)` when the task spans another member's or
+the ownerless workspace ownership band. Use bounded `children()`, `path()`,
+and `search()` reads for addressed
+navigation. `page()` remains available when constructing a discriminated
+sibling group directly. There are deliberately no whole-tree or whole-sibling
+reads. Continue from `nextCursor` only while the page revision is unchanged;
 restart the group from its first page after a revision change. The scalar fields
 `id`, `title`, `source`, `kind`, and `parentId` are the handle’s last observed
 descriptor. `search({ query })` matches indexed titles, source paths, manifest

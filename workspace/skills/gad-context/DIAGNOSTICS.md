@@ -22,8 +22,10 @@ when one exists.
 
 When the user asks about a visible panel:
 
-1. Inspect the visible panel tree with bounded `panelTree.page()` or
-   `panelTree.search()` reads.
+1. Inspect the visible panel tree with bounded `panelTree.roots({ limit })`,
+   `panelTree.children(...)`, or `panelTree.search()` reads. The roots helper
+   derives the current verified owner; do not construct a root `page()` group
+   without an explicit `ownerUserId`.
 2. Pick the target panel from the user's perspective.
 3. Read `await target.stateArgs.get()` and extract `channelName` or `channelId`.
 4. Run `gad.inspectAgentHealth({ channelId })`, `gad.inspectTurnState({ channelId })`,
