@@ -90,6 +90,9 @@ describe("agent orchestration validators", () => {
   const fixtureFanout = agentOrchestrationTests.find(
     ({ name }) => name === "cheap-subagent-fixture-fanout"
   )!;
+  const subagentDiff = agentOrchestrationTests.find(
+    ({ name }) => name === "subagent-diff-inspection"
+  )!;
 
   it("accepts the documented short shell extension name", () => {
     const execution = terminalExecution(
@@ -104,6 +107,40 @@ describe("agent orchestration validators", () => {
       passed: false,
       reason: expect.stringContaining("shell extension"),
     });
+  });
+
+  it("accepts a successful bounded subagent diff followed by deliberate discard", () => {
+    const execution = {
+      duration: 1,
+      messages: [
+        { kind: "message", senderId: "user", complete: true, content: "prompt" },
+        completedTool(
+          "spawn-diff",
+          "spawn_subagent",
+          { agentKind: "pi", config: fixtureLaunchConfig },
+          {},
+          { runId: "diff-child", agentKind: "pi", launchConfig: fixtureLaunchConfig }
+        ),
+        completedTool("inspect-diff", "inspect_subagent", {
+          runId: "diff-child",
+          query: "diff",
+          limit: 10,
+        }),
+        completedTool("close-diff", "close_subagent", {
+          runId: "diff-child",
+          discard: true,
+        }),
+        {
+          kind: "message",
+          senderId: "agent",
+          complete: true,
+          content:
+            "The bounded parent-relative diff succeeded; the child was closed and discarded.",
+        },
+      ],
+    } as TestExecutionResult;
+
+    expect(subagentDiff.validate(execution)).toEqual({ passed: true });
   });
 
   it("accepts a report that follows the requested Claude evidence contract", () => {

@@ -91,6 +91,57 @@ function hasStructuredVerificationProof(value: unknown): boolean {
 
 const FIXTURE_GENERATOR_MODEL = "openai-codex:gpt-5.3-codex-spark";
 
+function validateSubagentDiffInspection(result: TestExecutionResult) {
+  const calls = getToolCalls(result);
+  const spawn = calls.find(
+    (call) =>
+      call.name === "spawn_subagent" && call.arguments?.["agentKind"] === "pi" && isSuccessful(call)
+  );
+  if (!spawn) {
+    return { passed: false, reason: "Expected one completed Pi subagent run" };
+  }
+  const config = spawn.arguments?.["config"];
+  if (
+    !config ||
+    typeof config !== "object" ||
+    (config as Record<string, unknown>)["model"] !== FIXTURE_GENERATOR_MODEL ||
+    (config as Record<string, unknown>)["thinkingLevel"] !== "minimal"
+  ) {
+    return {
+      passed: false,
+      reason: "Expected the diff fixture child to use the cheap Spark model at minimal thinking",
+    };
+  }
+  const diff = calls.find(
+    (call) =>
+      call.name === "inspect_subagent" && call.arguments?.["query"] === "diff" && isSuccessful(call)
+  );
+  if (!diff) {
+    return {
+      passed: false,
+      reason: "Expected one successful bounded parent-relative subagent diff inspection",
+    };
+  }
+  const close = calls.find(
+    (call) =>
+      call.name === "close_subagent" && call.arguments?.["discard"] === true && isSuccessful(call)
+  );
+  if (!close) {
+    return {
+      passed: false,
+      reason: "Expected the unmerged diff fixture child to be closed with discard:true",
+    };
+  }
+  const final = findLastAgentMessage(result);
+  if (!/diff/iu.test(final) || !/clos(?:e|ed)|discard/iu.test(final)) {
+    return {
+      passed: false,
+      reason: "Final response must report the successful diff inspection and cleanup",
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
 function validateCheapFixtureFanout(result: TestExecutionResult) {
   const calls = getToolCalls(result);
   const spawns = calls.filter((call) => call.name === "spawn_subagent" && isSuccessful(call));
@@ -362,6 +413,20 @@ function validateTerminalRoundtrip(result: TestExecutionResult) {
 }
 
 export const agentOrchestrationTests: TestCase[] = [
+  {
+    name: "subagent-diff-inspection",
+    description:
+      "A committed child change is inspected through the bounded parent-relative semantic diff",
+    category: "agent-orchestration",
+    workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
+    prompt: [
+      "Spawn exactly one fresh Pi subagent with agentKind:'pi' and config { model:'openai-codex:gpt-5.3-codex-spark', thinkingLevel:'minimal' }.",
+      "Ask it to add a small deterministic typed export in src/subagent-diff-fixture.ts, commit that child work, and complete with the file and commit evidence.",
+      "After the child completes, call inspect_subagent once with its runId, query:'diff', and limit:10. Do not merge the fixture; close the child with discard:true after the diff succeeds.",
+      "Report that the bounded diff succeeded and that the child was closed and discarded.",
+    ].join(" "),
+    validate: validateSubagentDiffInspection,
+  },
   {
     name: "cheap-subagent-fixture-fanout",
     description:

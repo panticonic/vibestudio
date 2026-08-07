@@ -2594,6 +2594,15 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
   it("recovers a missing subagent row from the parent invocation card for inspect", async () => {
     const probe = await makeSubagentSpawnProbe();
     probe.seedSubagentStartedInParentChannelForTest("inv-recovered");
+    probe.respondToVcs(
+      "status",
+      semanticStatus(
+        "ctx-inv-recovered",
+        "event:recovered",
+        { kind: "event", eventId: "event:recovered" },
+        true
+      )
+    );
 
     const out = await probe.inspectSubagentForTest("inv-recovered", "status");
 
@@ -2653,8 +2662,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         args: [
           {
             target: parentHead,
-            sourceEventId: "event:child",
-            view: "changes",
+            source: { kind: "event", eventId: "event:child" },
             limit: 20,
           },
         ],
@@ -2777,6 +2785,10 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     );
     probe.respondToVcs("merge", {
       ...integration,
+      commandId: "command:integration",
+      changeCount: 0,
+      incorporatedChangeCount: 1,
+      decisionIds: ["decision:1"],
       outcomes: [],
       resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
       intents: [],
@@ -2905,11 +2917,15 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       semanticComparison(integrated, sourceEventId, [conflicting], true)
     );
     probe.respondToVcs("merge", {
+      commandId: "command:partial",
       contextId: "ctx-1",
       workUnitId: "work:partial",
       applicationId: integrated.applicationId,
+      changeCount: 0,
       changeIds: [],
+      incorporatedChangeCount: 1,
       incorporatedChangeIds: ["change:applicable"],
+      decisionIds: ["decision:partial"],
       workingHead: integrated,
       decisionId: "decision:partial",
       outcomes: [],

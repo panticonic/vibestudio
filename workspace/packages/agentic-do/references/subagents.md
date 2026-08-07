@@ -13,6 +13,21 @@ Subagents are supervised child agents with their own task channel and semantic w
 7. If the helper returns `needs-decision`, inspect the returned conflicts. Author any truthful combined state with ordinary parent edit tools, then call `merge_subagent` again with coordinate resolutions.
 8. Close only after the helper reports completion. `close_subagent` performs a fresh compare and requires `resolution.complete && resolution.concluded`; it never trusts the cached run label.
 
+## Inspecting child state
+
+`inspect_subagent({ runId, query: "diff", limit: 50 })` returns a bounded
+semantic comparison of the parent's current working head against the child's
+committed event. The tool derives both exact VCS references; callers do not
+provide source or target identifiers. If the child has additional uncommitted
+work, the comparison still covers only its committed event and the result's
+`workingCounts` and note make that distinction explicit. Continue a large
+comparison with the returned opaque `nextCursor`.
+
+Use `query: "status"` for lifecycle and clean/dirty state, `query: "log"` for
+bounded committed history, a workspace-relative path for one child file, and
+`query: "runtime"` only for external-engine process diagnostics. Use
+`read_subagent` for the child's conversation rather than polling inspection.
+
 ## Merge protocol
 
 The helper returns `protocol: "vibestudio.subagent-merge.v1"`. Its bounded status union includes:

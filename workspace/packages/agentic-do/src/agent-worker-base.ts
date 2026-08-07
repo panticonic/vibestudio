@@ -579,7 +579,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "inspect_subagent",
         label: "inspect_subagent",
         description:
-          "Inspect a subagent. Use 'status', bounded parent-relative 'diff'/'log', or a file path for semantic workspace state. Use 'runtime' for bounded process/log diagnostics from an external engine such as Claude. Use read_subagent for what the child said.",
+          "Inspect a subagent. Use 'status', bounded parent-relative 'diff'/'log', or a file path for semantic workspace state. 'diff' compares the parent's current working head with the child's committed event and reports any additional uncommitted child counts separately. Use 'runtime' for bounded process/log diagnostics from an external engine such as Claude. Use read_subagent for what the child said.",
         parameters: {
           type: "object",
           properties: {

@@ -58,6 +58,7 @@ import {
   type SubagentProgressUpdate,
 } from "@workspace/agentic-protocol";
 import { sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   createDeferredEvalExecutor,
   evalAuthorityInputSchema,
@@ -93,16 +94,12 @@ import {
   type AgentInspectionMethod,
 } from "@vibestudio/shared/agentInspection";
 
-import type {
-  VcsCompareResult,
-  VcsMergeInput,
-  VcsMergeResult,
-  VcsInspectResult,
-  VcsListFilesResult,
-  VcsNeighborsResult,
-  VcsReadFileResult,
-  VcsStateNodeRef,
-  VcsStatusResult,
+import {
+  vcsMethods,
+  type VcsMergeInput,
+  type VcsMergeResult,
+  type VcsNeighborsResult,
+  type VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
 import { toCredentialConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
@@ -243,6 +240,12 @@ function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
     (left.kind === "event"
       ? right.kind === "event" && left.eventId === right.eventId
       : right.kind === "application" && left.applicationId === right.applicationId)
+  );
+}
+
+function createSubagentVcsClient(rpcClient: RpcClient) {
+  return createTypedServiceClient("vcs", vcsMethods, (_service, method, args) =>
+    rpcClient.call("main", `vcs.${method}`, args)
   );
 }
 
@@ -6126,9 +6129,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         integration: run.integration,
       });
     }
-    const callVcs = <T>(method: string, input: unknown): Promise<T> =>
-      this.rpc.call<T>("main", `vcs.${method}`, [input]);
-    const status = await callVcs<VcsStatusResult>("status", { contextId: run.childContextId });
+    const vcs = createSubagentVcsClient(this.rpc);
+    const status = await vcs.status({ contextId: run.childContextId });
     let result: unknown;
     if (q === "status") {
       result = status;
@@ -6136,13 +6138,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (!run.parentContextId) {
         throw new Error(`subagent ${run.runId} has no parent context for a relative diff`);
       }
-      const parentStatus = await callVcs<VcsStatusResult>("status", {
+      const parentStatus = await vcs.status({
         contextId: run.parentContextId,
       });
-      const comparison = await callVcs<VcsCompareResult>("compare", {
+      const comparison = await vcs.compare({
         target: parentStatus.workingHead,
-        sourceEventId: status.committed.eventId,
-        view: "changes",
+        source: { kind: "event", eventId: status.committed.eventId },
         limit: page.limit,
         ...(page.cursor ? { cursor: page.cursor } : {}),
       });
@@ -6164,7 +6165,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           : "Comparison includes committed work only; workingCounts reports additional uncommitted semantic work.",
       };
     } else if (q === "log") {
-      result = await callVcs("history", {
+      result = await vcs.history({
         root: status.committed,
         direction: "past",
         limit: page.limit,
@@ -6177,7 +6178,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       >();
       let neighborCursor: string | undefined;
       do {
-        const page = await callVcs<VcsNeighborsResult>("neighbors", {
+        const page = await vcs.neighbors({
           root: status.workingHead,
           limit: 500,
           ...(neighborCursor ? { cursor: neighborCursor } : {}),
@@ -6200,7 +6201,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         path: string;
       }> = [];
       for (const repository of repositoryRefs.values()) {
-        const inspected = await callVcs<VcsInspectResult>("inspect", {
+        const inspected = await vcs.inspect({
           node: repository,
           edgeLimit: 1,
         });
@@ -6210,7 +6211,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         const repoPath = inspected.node.value.repoPath;
         let fileCursor: string | undefined;
         do {
-          const listed = await callVcs<VcsListFilesResult>("listFiles", {
+          const listed = await vcs.listFiles({
             state: status.workingHead,
             repositoryId: repository.repositoryId,
             limit: 500,
@@ -6243,7 +6244,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       const file = matches[0];
       result = file
-        ? await callVcs<VcsReadFileResult>("readFile", {
+        ? await vcs.readFile({
             state: status.workingHead,
             repositoryId: file.repositoryId,
             file: { kind: "id", fileId: file.fileId },
@@ -6284,11 +6285,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       throw new Error(`subagent ${run.runId} has no recoverable parent context`);
     }
 
-    const callVcs = <T>(method: string, input: unknown): Promise<T> =>
-      toolRpc.call<T>("main", `vcs.${method}`, [input]);
+    const vcs = createSubagentVcsClient(toolRpc);
     const [targetStatus, sourceStatus] = await Promise.all([
-      callVcs<VcsStatusResult>("status", { contextId: run.parentContextId }),
-      callVcs<VcsStatusResult>("status", { contextId: run.childContextId }),
+      vcs.status({ contextId: run.parentContextId }),
+      vcs.status({ contextId: run.childContextId }),
     ]);
     if (!sourceStatus.clean) {
       this.subagentRuns.setIntegration(run.runId, "needs-decision");
@@ -6312,7 +6312,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     let workingHead = initialWorkingHead;
     const merges: VcsMergeResult[] = [];
     const composed = new Map<string, VcsMergeResult["composed"][number]>();
-    let comparison = await callVcs<VcsCompareResult>("compare", {
+    let comparison = await vcs.compare({
       target: workingHead,
       source: { kind: "event", eventId: sourceEventId },
       limit: 500,
@@ -6327,7 +6327,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         comparison.counts.adopt + comparison.counts.composed + comparison.counts.convergent;
       if (mergeableCount === 0 && comparison.resolution.concluded) break;
       const previousHead = workingHead;
-      const merge = await callVcs<VcsMergeResult>("merge", {
+      const merge = await vcs.merge({
         commandId: subagentVcsCommandId("merge", run, {
           expectedWorkingHead:
             previousHead.kind === "event" ? previousHead.eventId : previousHead.applicationId,
@@ -6344,7 +6344,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         composed.set(`${entry.coordinate.kind}:${entry.coordinate.id}`, entry);
       }
       workingHead = merge.workingHead;
-      comparison = await callVcs<VcsCompareResult>("compare", {
+      comparison = await vcs.compare({
         target: workingHead,
         source: { kind: "event", eventId: sourceEventId },
         limit: 500,
@@ -6357,7 +6357,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     );
     let conflictCursor = comparison.nextCursor;
     while (conflictCursor) {
-      const page = await callVcs<VcsCompareResult>("compare", {
+      const page = await vcs.compare({
         target: workingHead,
         source: { kind: "event", eventId: sourceEventId },
         limit: 500,
@@ -6505,11 +6505,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           { runId: run.runId }
         );
       }
-      const callVcs = <T>(method: string, input: unknown): Promise<T> =>
-        toolRpc.call<T>("main", `vcs.${method}`, [input]);
+      const vcs = createSubagentVcsClient(toolRpc);
       const [targetStatus, sourceStatus] = await Promise.all([
-        callVcs<VcsStatusResult>("status", { contextId: run.parentContextId }),
-        callVcs<VcsStatusResult>("status", { contextId: run.childContextId }),
+        vcs.status({ contextId: run.parentContextId }),
+        vcs.status({ contextId: run.childContextId }),
       ]);
       if (!sourceStatus.clean || sourceStatus.committed.kind !== "event") {
         throw this.subagentClosePrecondition(
@@ -6519,7 +6518,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           { runId: run.runId, childContextId: run.childContextId }
         );
       }
-      const comparison = await callVcs<VcsCompareResult>("compare", {
+      const comparison = await vcs.compare({
         target: targetStatus.workingHead,
         source: { kind: "event", eventId: sourceStatus.committed.eventId },
         limit: 1,
