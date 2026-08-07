@@ -1118,15 +1118,15 @@ export class HeadlessSession {
       const evaluate = () => {
         if (finished) return;
         const observation = observer.observe(this.turnSnapshot());
-        if (observation.terminal?.kind === "failed") {
-          fail(observation.terminal.reason);
-          return;
-        }
         if (completion === "response" && observation.response) {
           succeed(observation.response);
           return;
         }
-        if (completion === "settled" && observation.terminal?.kind === "succeeded") {
+        if (completion === "response" && observation.terminal?.kind === "failed") {
+          fail(observation.terminal.reason);
+          return;
+        }
+        if (completion === "settled" && observation.terminal) {
           if (debounceTimer === undefined) {
             debounceTimer = setTimeout(() => {
               debounceTimer = undefined;

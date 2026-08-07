@@ -1075,6 +1075,65 @@ describe("HeadlessSession", () => {
     vi.useRealTimers();
   });
 
+  it("waitForIdle does not publish a transient closed failure before fallback projection settles", async () => {
+    vi.useFakeTimers();
+    const session = HeadlessSession.create({ config: createConfig() });
+    const turnId = brandId<TurnId>("turn-transient-fallback-close");
+    const failureMessage = {
+      id: "diagnostic:transient-failed-primary",
+      senderId: "agent-1",
+      content: "Codex error: usage limit",
+      contentType: "diagnostic",
+      kind: "system" as const,
+      complete: true,
+      error: "Codex error: usage limit",
+    } satisfies ChatMessage;
+    const successMessage = {
+      id: "transient-close-fallback-success",
+      senderId: "agent-1",
+      content: "fallback succeeded",
+      kind: "message" as const,
+      complete: true,
+    } satisfies ChatMessage;
+    (session as any)._channelId = "ch-1";
+    (session as any)._channelView = {
+      ...(session as any)._channelView,
+      turns: {
+        [turnId]: {
+          turnId,
+          actor: { kind: "agent", id: "agent-1" },
+          status: "open",
+          openedAt: "2026-05-27T00:00:00.000Z",
+        },
+      },
+    };
+
+    const wait = session.waitForIdle({ debounce: 5, timeoutMs: 1_000 });
+    (session as any)._chatMessages = new Map([[failureMessage.id, failureMessage]]);
+    (session as any)._chatMessageOrder = [failureMessage.id];
+    (session as any)._channelView.turns[turnId] = {
+      ...(session as any)._channelView.turns[turnId],
+      status: "closed",
+      closedAt: "2026-05-27T00:00:01.000Z",
+    };
+    (session as any).notifyListeners();
+
+    let settled = false;
+    void wait.finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(4);
+    expect(settled).toBe(false);
+
+    (session as any)._chatMessages.set(successMessage.id, successMessage);
+    (session as any)._chatMessageOrder.push(successMessage.id);
+    (session as any).notifyListeners();
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(wait).resolves.toBe(successMessage);
+    vi.useRealTimers();
+  });
+
   it("waitForIdle does not terminalize an attempt failure before its turn projection arrives", async () => {
     vi.useFakeTimers();
     const session = HeadlessSession.create({ config: createConfig() });
