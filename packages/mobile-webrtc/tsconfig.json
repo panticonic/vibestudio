@@ -11,7 +11,6 @@
     "forceConsistentCasingInFileNames": true,
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
-    "baseUrl": ".",
     "paths": {
       "@vibestudio/rpc": ["../rpc/src/index.ts"],
       "@vibestudio/rpc/*": ["../rpc/src/*"]

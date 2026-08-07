@@ -10,7 +10,7 @@
     "pod-install": "cd ios && pod install",
     "clean": "react-native clean",
     "lint": "eslint ../../workspace/apps/mobile",
-    "type-check": "tsc --noEmit",
+    "type-check": "node --max-old-space-size=4096 ../../node_modules/typescript/bin/tsc --noEmit",
     "test": "jest"
   },
   "dependencies": {

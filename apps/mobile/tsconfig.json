@@ -19,7 +19,6 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
-    "baseUrl": ".",
     "paths": {
       "@vibestudio/shared/*": ["../../packages/shared/src/*"],
       "@vibestudio/service-schemas/*": ["../../packages/service-schemas/src/*"],

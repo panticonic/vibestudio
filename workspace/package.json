@@ -7,7 +7,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "type-check": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc --project tsconfig.json && node --max-old-space-size=4096 node_modules/typescript/bin/tsc --project tsconfig.integration.json && node --max-old-space-size=4096 node_modules/typescript/bin/tsc --project tsconfig.integration.mobile.json",
+    "type-check": "../node_modules/typescript-native/bin/tsc --project tsconfig.json && ../node_modules/typescript-native/bin/tsc --project tsconfig.integration.json && ../node_modules/typescript-native/bin/tsc --project tsconfig.integration.mobile.json",
     "test": "node ../node_modules/vitest/vitest.mjs run --root .. --config vitest.userland.config.ts"
   },
   "devDependencies": {

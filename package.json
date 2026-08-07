@@ -73,11 +73,11 @@
     "format:check": "prettier --check 'src/**/*.{ts,tsx,css,html,json}'",
     "quality:check": "pnpm type-check && pnpm lint && pnpm format:check && pnpm check:host-boundary && pnpm check:no-single-user && pnpm check:vcs-skill-release && pnpm check:unit-authority && pnpm check:product-seed-records && pnpm check:execution-root-providers",
     "type-check": "pnpm type-check:host && pnpm type-check:userland && pnpm type-check:mobile",
-    "type-check:host": "tsc --noEmit && pnpm type-check:workerd-programs",
-    "type-check:workerd-programs": "tsc -p src/server/workerdPrograms/tsconfig.json",
+    "type-check:host": "node_modules/typescript-native/bin/tsc --noEmit && pnpm type-check:workerd-programs",
+    "type-check:workerd-programs": "node_modules/typescript-native/bin/tsc -p src/server/workerdPrograms/tsconfig.json",
     "type-check:userland": "pnpm --dir workspace type-check",
     "type-check:mobile": "pnpm --dir apps/mobile type-check",
-    "type-check:watch": "tsc --noEmit --watch --preserveWatchOutput",
+    "type-check:watch": "node_modules/typescript-native/bin/tsc --noEmit --watch --preserveWatchOutput",
     "test": "pnpm run check:runtime-docs && pnpm run check:agent-docs && pnpm run check:vcs-skill-release && pnpm run check:unit-authority && pnpm run check:product-seed-records && pnpm run check:execution-root-providers && node scripts/check-runtime-foundation-evidence.mjs --start host userland && pnpm run test:host && pnpm run test:browser && pnpm run test:userland && pnpm run check:ledger-evidence && pnpm run test:mobile",
     "test:host": "vitest run --config vitest.host.config.ts",
     "test:userland": "pnpm --dir workspace test",
@@ -154,6 +154,7 @@
     "prettier": "^3.6.2",
     "tsx": "^4.21.0",
     "typescript-eslint": "^8.46.4",
+    "typescript-native": "npm:typescript@7.0.2",
     "vitest": "^3.2.2"
   },
   "dependencies": {

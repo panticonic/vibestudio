@@ -14,7 +14,6 @@
     "declaration": true,
     "declarationMap": true,
     "composite": true,
-    "baseUrl": ".",
     "paths": {
       "@workspace/cdp-client": ["../cdp-client/index.d.ts"]
     }

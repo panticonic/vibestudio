@@ -4,7 +4,6 @@
     "lib": ["ES2022"],
     "jsx": "preserve",
     "rootDir": "./src",
-    "baseUrl": ".",
     "paths": {},
     "noEmit": true,
     "types": ["node"]
