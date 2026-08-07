@@ -42,36 +42,53 @@ function isTerminalKind(kind: SubagentProgressEntry["kind"]): boolean {
   return kind in TERMINAL_STATUS;
 }
 
+type ToolActivityItem = Extract<SubagentActivityItem, { kind: "tool" }>;
+
 /**
- * Locate the open call a terminal update closes. `callId` is authoritative;
- * without one (updates relayed by an emitter predating correlation) fall back
- * to the most recent still-running call of the same tool, then to the most
- * recent still-running call at all. The fallback can mis-pair concurrent calls
- * to the same tool, which is strictly better than the previous behaviour of
- * never pairing anything.
+ * Index active calls while folding the feed. Correlated updates are direct map
+ * lookups; legacy uncorrelated updates use append-only per-tool and global
+ * stacks whose settled tails are discarded lazily. Every call enters and
+ * leaves each stack at most once, so a complete fold is linear in feed size.
  */
-function findOpenCall(
-  items: SubagentActivityItem[],
-  entry: SubagentProgressEntry
-): Extract<SubagentActivityItem, { kind: "tool" }> | null {
-  const open: Array<Extract<SubagentActivityItem, { kind: "tool" }>> = [];
-  for (const item of items) {
-    if (item.kind === "tool" && item.payload.execution.status === "running") open.push(item);
-  }
-  if (entry.callId) {
-    const byId = open.find((item) => item.payload.transportCallId === entry.callId);
-    if (byId) return byId;
-    // A correlated update with no open match belongs to a call whose start we
-    // never saw (feed windowing) — don't let it close an unrelated call.
-    return null;
-  }
-  if (entry.tool) {
-    for (let i = open.length - 1; i >= 0; i -= 1) {
-      const candidate = open[i]!;
-      if (candidate.payload.name === entry.tool) return candidate;
+function createOpenCallIndex() {
+  const byId = new Map<string, ToolActivityItem>();
+  const byTool = new Map<string, ToolActivityItem[]>();
+  const all: ToolActivityItem[] = [];
+  const runningTail = (stack: ToolActivityItem[] | undefined): ToolActivityItem | null => {
+    while (stack?.length) {
+      const candidate = stack[stack.length - 1]!;
+      if (candidate.payload.execution.status === "running") return candidate;
+      stack.pop();
     }
-  }
-  return open.length > 0 ? open[open.length - 1]! : null;
+    return null;
+  };
+
+  return {
+    add(item: ToolActivityItem): void {
+      const callId = item.payload.transportCallId;
+      if (callId) byId.set(callId, item);
+      const toolCalls = byTool.get(item.payload.name);
+      if (toolCalls) toolCalls.push(item);
+      else byTool.set(item.payload.name, [item]);
+      all.push(item);
+    },
+    find(entry: SubagentProgressEntry): ToolActivityItem | null {
+      if (entry.callId) {
+        // A correlated update with no open match belongs to a call whose start
+        // was outside the feed window. Never let it close an unrelated call.
+        return byId.get(entry.callId) ?? null;
+      }
+      if (entry.tool) {
+        const matching = runningTail(byTool.get(entry.tool));
+        if (matching) return matching;
+      }
+      return runningTail(all);
+    },
+    settle(item: ToolActivityItem): void {
+      const callId = item.payload.transportCallId;
+      if (callId) byId.delete(callId);
+    },
+  };
 }
 
 function startedItem(
@@ -130,6 +147,7 @@ export function consolidateSubagentActivity(
   feed: readonly SubagentProgressEntry[]
 ): SubagentActivityItem[] {
   const items: SubagentActivityItem[] = [];
+  const openCalls = createOpenCallIndex();
 
   feed.forEach((entry, index) => {
     if (entry.kind === "title-changed") return;
@@ -157,19 +175,21 @@ export function consolidateSubagentActivity(
     }
 
     if (entry.kind === "tool-started") {
-      items.push(startedItem(entry, index));
+      const item = startedItem(entry, index);
+      items.push(item);
+      openCalls.add(item);
       return;
     }
 
     if (entry.kind === "tool-progress") {
       // Progress refines the call in place; it is never its own row.
-      const open = findOpenCall(items, entry);
+      const open = openCalls.find(entry);
       if (open && entry.text) open.payload.execution.description = entry.text;
       return;
     }
 
     if (isTerminalKind(entry.kind)) {
-      const open = findOpenCall(items, entry);
+      const open = openCalls.find(entry);
       const status = TERMINAL_STATUS[entry.kind]!;
       if (!open) {
         items.push(orphanTerminalItem(entry, index));
@@ -183,6 +203,7 @@ export function consolidateSubagentActivity(
       // otherwise the name already on the started item is the good one.
       if (entry.tool && open.payload.name === "tool") open.payload.name = entry.tool;
       if (entry.text) open.payload.execution.description = entry.text;
+      openCalls.settle(open);
     }
   });
 

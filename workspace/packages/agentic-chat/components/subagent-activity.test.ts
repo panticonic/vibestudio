@@ -69,6 +69,55 @@ describe("consolidateSubagentActivity", () => {
     expect(call.payload.execution.status).toBe("complete");
   });
 
+  it("settles legacy calls in most-recent matching-tool order", () => {
+    const items = consolidateSubagentActivity([
+      entry({ kind: "tool-started", tool: "Read", messageSeq: 1 }),
+      entry({ kind: "tool-started", tool: "Grep", messageSeq: 2 }),
+      entry({ kind: "tool-started", tool: "Read", messageSeq: 3 }),
+      entry({ kind: "tool-completed", tool: "Read", messageSeq: 4 }),
+      entry({ kind: "tool-failed", tool: "Read", messageSeq: 5 }),
+      entry({ kind: "tool-completed", tool: "Grep", messageSeq: 6 }),
+    ]);
+
+    const calls = items.filter(
+      (item): item is Extract<(typeof items)[number], { kind: "tool" }> => item.kind === "tool"
+    );
+    expect(calls.map((call) => call.payload.execution.status)).toEqual([
+      "error",
+      "complete",
+      "complete",
+    ]);
+  });
+
+  it("folds large correlated feeds without rescanning prior activity", () => {
+    const feed: SubagentProgressEntry[] = [];
+    for (let index = 0; index < 10_000; index += 1) {
+      feed.push(
+        entry({
+          kind: "tool-started",
+          tool: index % 2 === 0 ? "Read" : "Grep",
+          callId: `call-${index}`,
+          messageSeq: index * 2 + 1,
+        }),
+        entry({
+          kind: "tool-completed",
+          callId: `call-${index}`,
+          messageSeq: index * 2 + 2,
+        })
+      );
+    }
+
+    const items = consolidateSubagentActivity(feed);
+
+    expect(items).toHaveLength(10_000);
+    expect(countToolCalls(items)).toBe(10_000);
+    expect(
+      items.every(
+        (item) => item.kind === "tool" && item.payload.execution.status === "complete"
+      )
+    ).toBe(true);
+  });
+
   it("renders a terminal whose start was never seen rather than dropping it", () => {
     const items = consolidateSubagentActivity([
       entry({ kind: "tool-completed", tool: "Grep", callId: "orphan", messageSeq: 9 }),
