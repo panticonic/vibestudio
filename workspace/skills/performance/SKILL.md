@@ -30,23 +30,30 @@ return await scope.page.profile(
 );
 ```
 
-For a cold HTTP-cache load, navigate the existing page to its current URL and
-disable Chromium's cache only for the measured operation:
+For a workspace panel presentation reload, keep the page connection and invoke
+the panel lifecycle through its handle. The host reloads the owned page in
+place, so the profile includes the real presentation navigation without
+discarding the CDP session:
 
 ```ts
-return await scope.page.profile(
+const handle = panelTree.get(panelId);
+const page = await handle.cdp.page();
+
+return await page.profile(
   async () => {
-    await scope.page.goto(scope.page.url());
-    await scope.page.waitForLoadState("networkidle");
+    await handle.reload();
+    await page.waitForLoadState("networkidle");
   },
-  { label: "cold panel load", disableCache: true }
+  { label: "panel presentation reload", disableCache: true }
 );
 ```
 
-`disableCache` does not clear application memory, Durable Object state, service
-workers, or server build caches. Restart or reset only the layer the experiment
-actually calls cold. Query strings and fragments are removed from retained
-network and coverage URLs so reports do not echo tokens.
+Use `page.goto(page.url())` only when the subject is a browser page rather than
+a workspace panel lifecycle. `disableCache` makes the measured navigation cold
+at Chromium's HTTP-cache layer; it does not clear application memory, Durable
+Object state, service workers, or server build caches. Restart or reset only
+the layer the experiment actually calls cold. Query strings and fragments are
+removed from retained network and coverage URLs so reports do not echo tokens.
 
 Use `javascriptCoverage: true` in a separate attribution run. Precise coverage
 adds profiler overhead, so never compare its elapsed or CPU durations with a
