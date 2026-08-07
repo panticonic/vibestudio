@@ -1093,10 +1093,23 @@ describe("SemanticWorkspace snapshot import", () => {
     const repositoryId = imported.importedRepositoryIds[0]!;
     store.forkContext("context:test", "context:target");
     const root = store.stateRoot({ kind: "event", eventId: imported.eventId });
+    const repository = store.facts.member(root, repositoryId);
+    if (!repository || repository.presence !== "present") {
+      throw new Error("missing imported repository");
+    }
+    const manifestFiles = store.facts.pageManifest(repository.fileManifestId, {
+      limit: files.length,
+    });
+    if (manifestFiles.next !== null || manifestFiles.values.length !== files.length) {
+      throw new Error("incomplete imported manifest");
+    }
+    const fileIdByPath = new Map(
+      manifestFiles.values.map((entry) => [entry.path, entry.fileId] as const)
+    );
     const fileIds = files.map((file) => {
-      const point = store.facts.fileAtPath(root, repositoryId, file.descriptor.path);
-      if (!point || point.state.presence !== "placed") throw new Error("missing imported file");
-      return point.state.fileId;
+      const fileId = fileIdByPath.get(file.descriptor.path);
+      if (!fileId) throw new Error("missing imported file");
+      return fileId;
     });
 
     let sourceHead:
