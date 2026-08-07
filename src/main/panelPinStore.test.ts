@@ -22,26 +22,28 @@ describe("PanelPinStore", () => {
     expect(store.has("panel:tree/a")).toBe(false);
   });
 
-  it("toggles and persists across a reload (round-trip)", () => {
+  it("toggles and persists across a reload (round-trip)", async () => {
     const file = tempFile();
     const store = new PanelPinStore(file);
     expect(store.toggle("panel:tree/a")).toBe(true);
     expect(store.toggle("panel:tree/b")).toBe(true);
     expect(store.has("panel:tree/a")).toBe(true);
+    await store.flush();
 
     // A fresh instance reads the persisted file synchronously.
     const reloaded = new PanelPinStore(file);
     expect(new Set(reloaded.list())).toEqual(new Set(["panel:tree/a", "panel:tree/b"]));
   });
 
-  it("toggle returns the new state and removes on second toggle", () => {
+  it("toggle returns the new state and removes on second toggle", async () => {
     const store = new PanelPinStore(tempFile());
     expect(store.toggle("panel:tree/a")).toBe(true);
     expect(store.toggle("panel:tree/a")).toBe(false);
     expect(store.has("panel:tree/a")).toBe(false);
+    await store.flush();
   });
 
-  it("prune drops ids no longer in the tree and persists", () => {
+  it("prune drops ids no longer in the tree and persists", async () => {
     const file = tempFile();
     const store = new PanelPinStore(file);
     store.toggle("panel:tree/keep");
@@ -50,6 +52,7 @@ describe("PanelPinStore", () => {
     store.prune(["panel:tree/keep"]);
     expect(store.has("panel:tree/keep")).toBe(true);
     expect(store.has("panel:tree/gone")).toBe(false);
+    await store.flush();
 
     // Persisted: a reload reflects the prune.
     const reloaded = new PanelPinStore(file);

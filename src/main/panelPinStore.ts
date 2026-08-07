@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync } from "fs";
+import { rename, writeFile } from "node:fs/promises";
 import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("PanelPinStore");
@@ -31,6 +32,8 @@ export interface PanelPinStoreApi {
  */
 export class PanelPinStore implements PanelPinStoreApi {
   private readonly pinned = new Set<string>();
+  private pendingPayload: string | null = null;
+  private writeDrain: Promise<void> | null = null;
 
   constructor(private readonly filePath: string) {
     try {
@@ -92,14 +95,34 @@ export class PanelPinStore implements PanelPinStoreApi {
 
   private persist(): void {
     const payload: PanelPinStoreFile = { version: 1, pinnedPanelIds: [...this.pinned] };
-    try {
-      writeFileSync(this.filePath, JSON.stringify(payload), "utf8");
-    } catch (error) {
-      log.warn(
-        `Failed to write pin store at ${this.filePath}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+    this.pendingPayload = JSON.stringify(payload);
+    if (this.writeDrain) return;
+    this.writeDrain = this.drainWrites().finally(() => {
+      this.writeDrain = null;
+      if (this.pendingPayload !== null) this.persist();
+    });
+  }
+
+  /** Resolve after every pin mutation accepted so far is durably written. */
+  async flush(): Promise<void> {
+    await this.writeDrain;
+  }
+
+  private async drainWrites(): Promise<void> {
+    while (this.pendingPayload !== null) {
+      const payload = this.pendingPayload;
+      this.pendingPayload = null;
+      const temporaryPath = `${this.filePath}.tmp`;
+      try {
+        await writeFile(temporaryPath, payload, "utf8");
+        await rename(temporaryPath, this.filePath);
+      } catch (error) {
+        log.warn(
+          `Failed to write pin store at ${this.filePath}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     }
   }
 }

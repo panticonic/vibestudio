@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync } from "fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import * as path from "path";
 import { createDevLogger } from "@vibestudio/dev-log";
 
@@ -29,6 +30,9 @@ export interface PanelLayoutStoreApi {
  * Never synced; never written to the workspace DO (design decision D6).
  */
 export class PanelLayoutStore implements PanelLayoutStoreApi {
+  private readonly pendingWrites = new Map<string, string>();
+  private readonly writeDrains = new Map<string, Promise<void>>();
+
   constructor(private readonly dir: string) {}
 
   private filePath(workspaceId: string, accountUserId: string): string {
@@ -65,15 +69,50 @@ export class PanelLayoutStore implements PanelLayoutStoreApi {
   set(workspaceId: string, accountUserId: string, layout: unknown): void {
     const filePath = this.filePath(workspaceId, accountUserId);
     const payload: PanelLayoutStoreFile = { version: 1, layout };
+    this.pendingWrites.set(filePath, JSON.stringify(payload));
+    this.ensureWriteDrain(filePath);
+  }
+
+  /** Resolve after every layout accepted so far is durably written. */
+  async flush(): Promise<void> {
+    await Promise.all(this.writeDrains.values());
+  }
+
+  private ensureWriteDrain(filePath: string): void {
+    if (this.writeDrains.has(filePath)) return;
+    const drain = this.drainWrites(filePath).finally(() => {
+      this.writeDrains.delete(filePath);
+      if (this.pendingWrites.has(filePath)) this.ensureWriteDrain(filePath);
+    });
+    this.writeDrains.set(filePath, drain);
+  }
+
+  private async drainWrites(filePath: string): Promise<void> {
     try {
-      mkdirSync(this.dir, { recursive: true });
-      writeFileSync(filePath, JSON.stringify(payload), "utf8");
+      await mkdir(this.dir, { recursive: true });
     } catch (error) {
       log.warn(
-        `Failed to write layout store at ${filePath}: ${
+        `Failed to create layout store directory ${this.dir}: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
+      this.pendingWrites.delete(filePath);
+      return;
+    }
+    while (this.pendingWrites.has(filePath)) {
+      const payload = this.pendingWrites.get(filePath)!;
+      this.pendingWrites.delete(filePath);
+      const temporaryPath = `${filePath}.tmp`;
+      try {
+        await writeFile(temporaryPath, payload, "utf8");
+        await rename(temporaryPath, filePath);
+      } catch (error) {
+        log.warn(
+          `Failed to write layout store at ${filePath}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     }
   }
 }
