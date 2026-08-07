@@ -104,7 +104,16 @@ function nextBriefingRunAt(now: number, intervalMs: number, atMinutes?: number):
 }
 
 export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
+  // Version 8 is the first supported production shape. Earlier experimental
+  // layouts have no proven lossless translation and are rejected intact.
   static override schemaVersion = NEWS_AGENT_SCHEMA_BASELINE;
+
+  protected override schemaProductionBaseline() {
+    return {
+      version: NEWS_AGENT_SCHEMA_BASELINE,
+      name: "news-agent-v8",
+    } as const;
+  }
 
   private readonly syncEngine: NewsSyncEngine;
   private readonly scheduler: RecurringScheduler;

@@ -49,6 +49,10 @@ class TestNewsAgentWorker extends NewsAgentWorker {
     return this["scheduler"];
   }
 
+  schemaProductionBaselineForTest() {
+    return this.schemaProductionBaseline();
+  }
+
   loopTools(channelId = "ch-1") {
     return this.getLoopTools(channelId).map((tool) => tool.name);
   }
@@ -230,6 +234,15 @@ async function addExampleFeed(
 }
 
 describe("NewsAgentWorker", () => {
+  it("declares version 8 as its production schema baseline", async () => {
+    const worker = await makeWorker();
+    expect(NewsAgentWorker.schemaVersion).toBe(8);
+    expect(worker.schemaProductionBaselineForTest()).toEqual({
+      version: 8,
+      name: "news-agent-v8",
+    });
+  });
+
   it("keeps every channel-scoped news operation off the direct RPC plane", async () => {
     const worker = await makeWorker();
     for (const method of [
