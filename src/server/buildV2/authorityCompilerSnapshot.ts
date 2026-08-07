@@ -3,11 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as crypto from "node:crypto";
 import * as ts from "typescript/unstable/ast";
 import { createScanner } from "typescript/unstable/ast/scanner";
-import type {
-  CompilerOptions,
-  Program,
-  Project,
-} from "typescript/unstable/sync";
+import type { CompilerOptions, Program, Project } from "typescript/unstable/sync";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
   TypeCheckService,
@@ -508,8 +504,9 @@ export async function createAuthorityCompilerSnapshot(
       const groupImports = importGraphs.workspace;
       const allImports = importGraphs.all;
       const externalFiles = new Set(
-        [...groupContents.keys()]
-          .filter((file) => !isWithin(sourceRoot, file) && !file.startsWith("/@typescript/lib/"))
+        [...groupContents.keys()].filter(
+          (file) => !isWithin(sourceRoot, file) && !file.startsWith("/@typescript/lib/")
+        )
       );
       const importedTargets = new Set([...allImports.values()].flatMap((imports) => [...imports]));
       const ambientExternalFiles = new Set(
