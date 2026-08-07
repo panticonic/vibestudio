@@ -41,6 +41,11 @@ export default defineConfig({
     // per-test budget makes otherwise-fast dynamic-import tests fail under
     // CPU contention even though they pass immediately in isolation.
     testTimeout: 30_000,
+    // Unbounded host-core parallelism oversubscribes the SQLite-heavy semantic
+    // suites and can keep a worker from servicing Vitest's own RPC heartbeat.
+    // Eight workers retain broad parallel coverage without turning machine
+    // core count into a liveness dependency.
+    maxWorkers: 8,
     include: [
       "workspace/**/*.test.ts",
       "workspace/**/*.test.tsx",
