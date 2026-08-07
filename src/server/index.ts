@@ -5917,6 +5917,12 @@ async function main() {
         [entity.id]
       )) as string | null;
       if (!slotId) throw new Error(`Panel entity is not current in an open slot: ${entity.id}`);
+      const cdpBridge = container.get<import("./cdpBridge.js").CdpBridge>("cdpBridge");
+      if (cdpBridge) {
+        const { reloadRegisteredPanelPresentation } =
+          await import("./reloadPanelPresentation.js");
+        if (await reloadRegisteredPanelPresentation(cdpBridge, slotId)) return;
+      }
       panelRuntimeCoordinator.unloadSlot(slotId);
       const assigned = panelRuntimeCoordinator.ensureDefaultCdpHostForSlot(slotId, entity.id);
       if (!assigned.assigned && assigned.reason !== "already_held") {
