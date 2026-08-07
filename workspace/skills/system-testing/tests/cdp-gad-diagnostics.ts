@@ -11,10 +11,7 @@ import {
   classifyBuiltInToolFailure,
   isUnexpectedToolFailure,
 } from "../tool-failure-classification.js";
-import {
-  panelControlAuthorityPolicy,
-  PANEL_AUTOMATION_RESOURCE,
-} from "../panel-authority.js";
+import { panelControlAuthorityPolicy, PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
 
 interface ToolFailureLike {
   name: string;
@@ -554,6 +551,28 @@ function formatToolFailure(failure: ToolFailureLike): string {
 }
 
 export const cdpGadDiagnosticTests: TestCase[] = [
+  {
+    name: "cdp-page-performance-profile",
+    description: "Profile a browser interaction with the canonical bounded CDP report",
+    category: "cdp-gad-diagnostics",
+    authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-performance-page"),
+    resources: [PANEL_AUTOMATION_RESOURCE],
+    prompt:
+      "Read skills/performance/SKILL.md, then profile one deterministic click on a tiny disposable browser page with the canonical page.profile API. Await a visible State: clicked completion inside the measured action, do not enable JavaScript coverage for this latency run, and return the visible status plus report version, elapsedMs, runtime taskDurationMs, network requestCount, and page long-task count. Close every temporary page and panel you own, then report what the measured evidence actually showed.",
+    validate: (result) =>
+      checked(
+        result,
+        [/profil/iu, /elapsed/iu, /runtime|task/iu, /network/iu, /state:\s*clicked/iu],
+        [
+          /\.profile\s*\(/u,
+          /elapsedMs/u,
+          /taskDurationMs/u,
+          /requestCount/u,
+          /longTasks/iu,
+          /state:\s*clicked/iu,
+        ]
+      ),
+  },
   {
     name: "cdp-page-click-type-evaluate",
     description: "Automate a browser page with the canonical CDP client",

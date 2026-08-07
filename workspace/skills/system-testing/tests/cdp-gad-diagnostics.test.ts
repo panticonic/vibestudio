@@ -79,6 +79,9 @@ function withSuccessfulImageRead(result: TestExecutionResult): TestExecutionResu
 const clickTest = cdpGadDiagnosticTests.find(
   (test) => test.name === "cdp-page-click-type-evaluate"
 )!;
+const profileTest = cdpGadDiagnosticTests.find(
+  (test) => test.name === "cdp-page-performance-profile"
+)!;
 const stateArgsTest = cdpGadDiagnosticTests.find(
   (test) => test.name === "panel-stateargs-cdp-roundtrip"
 )!;
@@ -98,6 +101,74 @@ const STATE_FINAL =
   "The panel state was visible in the inspected automation snapshot after the change.";
 
 describe("cdp-gad diagnostics validators", () => {
+  it("accepts a bounded profile only when the eval evidence contains every requested layer", () => {
+    const result = profileTest.validate(
+      executionWithInvocation(
+        "The profiled click reached State: clicked. Elapsed time, runtime task work, and network activity were measured in the bounded report.",
+        {
+          id: "call-profile",
+          name: "eval",
+          arguments: {
+            code: "return await page.profile(async () => { await button.click(); await page.getByText('State: clicked').waitFor(); });",
+          },
+          execution: {
+            status: "complete",
+            terminalOutcome: "success",
+            result: {
+              details: {
+                returnValue: {
+                  status: "State: clicked",
+                  version: 1,
+                  elapsedMs: 18,
+                  runtime: { taskDurationMs: 5 },
+                  network: { requestCount: 0 },
+                  page: { longTasks: { count: 0 } },
+                },
+              },
+            },
+          },
+        }
+      )
+    );
+
+    expect(result).toEqual({ passed: true });
+  });
+
+  it("rejects a profile claim without the bounded network evidence", () => {
+    const result = profileTest.validate(
+      executionWithInvocation(
+        "The profiled click reached State: clicked. Elapsed time and runtime task work were measured; network profiling succeeded.",
+        {
+          id: "call-profile",
+          name: "eval",
+          arguments: {
+            code: "return await page.profile(async () => { await button.click(); await page.getByText('State: clicked').waitFor(); });",
+          },
+          execution: {
+            status: "complete",
+            terminalOutcome: "success",
+            result: {
+              details: {
+                returnValue: {
+                  status: "State: clicked",
+                  version: 1,
+                  elapsedMs: 18,
+                  runtime: { taskDurationMs: 5 },
+                  page: { longTasks: { count: 0 } },
+                },
+              },
+            },
+          },
+        }
+      )
+    );
+
+    expect(result).toMatchObject({
+      passed: false,
+      reason: expect.stringContaining("omitted requested diagnostic evidence"),
+    });
+  });
+
   it("accepts a successful browser action only after the screenshot is read as image content", () => {
     const result = clickTest.validate(
       withSuccessfulImageRead(
