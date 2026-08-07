@@ -4178,7 +4178,22 @@ export class SemanticWorkspace {
 
   private assertImportRepositoryTargets(input: VcsImportSnapshotInput): void {
     const root = this.deps.store.stateRoot(asState(input.expectedWorkingHead));
-    this.importExistingFiles(input, root);
+    for (const { input: repositoryInput, repositoryId } of importedRepositories(input)) {
+      if (!repositoryInput.repositoryId) continue;
+      const existing = this.deps.store.facts.member(root, repositoryId);
+      if (!existing || existing.presence !== "present") {
+        throw new SemanticVcsError(
+          "InvalidReference",
+          `Snapshot replacement requires a present repository ${repositoryId}`
+        );
+      }
+      if (existing.repoPath !== repositoryInput.repoPath) {
+        throw new SemanticVcsError(
+          "InvalidReference",
+          `Snapshot import cannot move repository ${repositoryId}; use vcs.move first`
+        );
+      }
+    }
   }
 
   /** Collect the exact replacement basis through the manifest's bounded paging API. */
@@ -4203,24 +4218,35 @@ export class SemanticWorkspace {
         );
       }
       const files = new Map<string, PlacedFileState>();
+      const entries: Array<{ path: string; fileId: string }> = [];
       let afterPath: string | undefined;
       do {
         const page = this.deps.store.facts.pageManifest(existing.fileManifestId, {
           ...(afterPath ? { afterPath } : {}),
           limit: 500,
         });
-        for (const entry of page.values) {
-          const point = this.deps.store.facts.file(root, entry.fileId);
-          if (!point || point.state.presence !== "placed") {
-            throw new SemanticVcsError(
-              "IntegrityFailure",
-              `Repository ${repositoryId} manifest references an absent file ${entry.fileId}`
-            );
-          }
-          files.set(entry.path, point.state);
-        }
+        entries.push(...page.values);
         afterPath = page.next ?? undefined;
       } while (afterPath !== undefined);
+      const states = this.deps.store.facts.fileStatesAt(
+        root,
+        entries.map((entry) => entry.fileId)
+      );
+      for (const entry of entries) {
+        const state = states.get(entry.fileId);
+        if (
+          !state ||
+          state.presence !== "placed" ||
+          state.repositoryId !== repositoryId ||
+          state.path !== entry.path
+        ) {
+          throw new SemanticVcsError(
+            "IntegrityFailure",
+            `Repository ${repositoryId} manifest references an absent file ${entry.fileId}`
+          );
+        }
+        files.set(entry.path, state);
+      }
       byRepository.set(repositoryId, files);
     }
     return byRepository;

@@ -30,7 +30,11 @@ import {
   type WorkspaceFactRoot,
   type WorkspaceRepositoryMember,
 } from "@workspace/vcs-engine";
-import { execBatchedInsert, execBatchedInsertReturning } from "./sqlBatch.js";
+import {
+  DURABLE_OBJECT_SQL_MAX_BOUND_PARAMETERS,
+  execBatchedInsert,
+  execBatchedInsertReturning,
+} from "./sqlBatch.js";
 
 type Row = Record<string, unknown>;
 const text = (row: Row, key: string): string => String(row[key]);
@@ -271,6 +275,78 @@ export class SemanticWorkspaceFacts {
     return { repository, state };
   }
 
+  /** Resolve many file coordinates against one immutable root.
+   *
+   * Atomic imports and replacements already page their repository manifest,
+   * then need the corresponding aggregate file states. Sharing authenticated
+   * radix nodes and batching the immutable state rows keeps that bounded walk
+   * from degenerating into one independent SQL traversal per file. */
+  fileStatesAt(
+    workspaceFactRootId: string,
+    fileIds: readonly string[]
+  ): Map<string, WorkspaceFileState> {
+    const root = this.root(workspaceFactRootId);
+    const nodes = new Map<string, PersistentRadixNode | null>();
+    const readNode = (
+      kind: string,
+      route: PersistentRadixRouteStrategy,
+      nodeId: string,
+      prefix: string
+    ) => {
+      const cacheKey = `${kind}\0${route}\0${nodeId}\0${prefix}`;
+      if (nodes.has(cacheKey)) return nodes.get(cacheKey) ?? null;
+      const node = this.node(kind, route, nodeId, prefix);
+      nodes.set(cacheKey, node);
+      return node;
+    };
+    const stateIdByFileId = new Map<string, string>();
+    for (const fileId of fileIds) {
+      const entry = workspaceFactFileEntryAt({ root, fileId, readNode });
+      if (entry) stateIdByFileId.set(fileId, entry.fileStateId);
+    }
+    const stateById = this.fileStatesByStateId([...stateIdByFileId.values()]);
+    const states = new Map<string, WorkspaceFileState>();
+    for (const [fileId, stateId] of stateIdByFileId) {
+      const state = stateById.get(stateId);
+      if (!state || state.fileId !== fileId) {
+        throw new SemanticWorkspaceFactsError(
+          "MissingState",
+          `Workspace file index references an unrealized state for ${fileId}`,
+          [workspaceFactRootId, fileId, stateId]
+        );
+      }
+      states.set(fileId, state);
+    }
+    return states;
+  }
+
+  private fileStatesByStateId(fileStateIds: readonly string[]): Map<string, WorkspaceFileState> {
+    const stateIds = [...new Set(fileStateIds)];
+    const stateById = new Map<string, WorkspaceFileState>();
+    for (
+      let offset = 0;
+      offset < stateIds.length;
+      offset += DURABLE_OBJECT_SQL_MAX_BOUND_PARAMETERS
+    ) {
+      const batch = stateIds.slice(offset, offset + DURABLE_OBJECT_SQL_MAX_BOUND_PARAMETERS);
+      const rows = this.sql
+        .exec(
+          `SELECT file_state_id, file_id, presence, repository_id, path, content_hash,
+                  mode, content_kind, byte_length, coordinate_extent,
+                  prior_file_state_id, tombstone_change_id
+             FROM vcs_file_states
+            WHERE file_state_id IN (${batch.map(() => "?").join(", ")})`,
+          ...batch
+        )
+        .toArray() as Row[];
+      for (const row of rows) {
+        const state = this.fileStateFromRow(row);
+        stateById.set(state.fileStateId, state);
+      }
+    }
+    return stateById;
+  }
+
   fileAtPath(
     workspaceFactRootId: string,
     repositoryId: string,
@@ -347,8 +423,33 @@ export class SemanticWorkspaceFacts {
       ]);
     }
     const basis = this.root(changeSet.basisWorkspaceFactRootId);
+    // One atomic proof commonly touches many coordinates in the same radix
+    // branches. Nodes are immutable and content-addressed, so authenticate each
+    // distinct read once for this composition instead of repeating the same
+    // SQLite reads for every point lookup.
+    const persistedNodes = new Map<string, PersistentRadixNode | null>();
+    const transientNodes = new Map<string, PersistentRadixNode>();
+    const readNode = (
+      kind: string,
+      route: PersistentRadixRouteStrategy,
+      nodeId: string,
+      prefix: string
+    ) => {
+      const transient = transientNodes.get(nodeId);
+      if (transient) return transient;
+      const cacheKey = `${kind}\0${route}\0${nodeId}\0${prefix}`;
+      if (persistedNodes.has(cacheKey)) return persistedNodes.get(cacheKey) ?? null;
+      const node = this.node(kind, route, nodeId, prefix);
+      persistedNodes.set(cacheKey, node);
+      return node;
+    };
     for (const update of changeSet.repositoryUpdates) {
-      const observed = this.member(basis.workspaceFactRootId, update.repositoryId);
+      const entry = workspaceFactRepositoryEntryAt({
+        root: basis,
+        repositoryId: update.repositoryId,
+        readNode,
+      });
+      const observed = entry ? this.memberByStateId(entry.repositoryStateId) : null;
       if (canonicalJson(observed) !== canonicalJson(update.expected)) {
         throw new SemanticWorkspaceFactsError(
           "ExpectedMemberMismatch",
@@ -357,8 +458,26 @@ export class SemanticWorkspaceFacts {
         );
       }
     }
-    for (const update of changeSet.fileUpdates) {
-      const observed = this.file(basis.workspaceFactRootId, update.fileId)?.state ?? null;
+    const indexedFileUpdates = changeSet.fileUpdates.map((update) => ({
+      update,
+      entry: workspaceFactFileEntryAt({
+        root: basis,
+        fileId: update.fileId,
+        readNode,
+      }),
+    }));
+    const observedFileStates = this.fileStatesByStateId(
+      indexedFileUpdates.flatMap(({ entry }) => (entry ? [entry.fileStateId] : []))
+    );
+    for (const { update, entry } of indexedFileUpdates) {
+      const observed = entry ? (observedFileStates.get(entry.fileStateId) ?? null) : null;
+      if (observed && observed.fileId !== update.fileId) {
+        throw new SemanticWorkspaceFactsError(
+          "IndexMismatch",
+          `Workspace file index points ${update.fileId} at state for ${observed.fileId}`,
+          [basis.workspaceFactRootId, update.fileId, entry?.fileStateId ?? "absent"]
+        );
+      }
       if (canonicalJson(observed) !== canonicalJson(update.expected)) {
         throw new SemanticWorkspaceFactsError(
           "ExpectedMemberMismatch",
@@ -368,13 +487,6 @@ export class SemanticWorkspaceFacts {
       }
     }
 
-    const transientNodes = new Map<string, PersistentRadixNode>();
-    const readNode = (
-      kind: string,
-      route: PersistentRadixRouteStrategy,
-      nodeId: string,
-      prefix: string
-    ) => transientNodes.get(nodeId) ?? this.node(kind, route, nodeId, prefix);
     const manifestProofs: FileManifestMutationProof[] = [];
     for (const update of changeSet.manifestUpdates) {
       let manifest: PersistentFileManifest;
@@ -692,6 +804,10 @@ export class SemanticWorkspaceFacts {
       )
       .toArray()[0] as Row | undefined;
     if (!row) return null;
+    return this.fileStateFromRow(row);
+  }
+
+  private fileStateFromRow(row: Row): WorkspaceFileState {
     const state: WorkspaceFileState =
       text(row, "presence") === "placed"
         ? {
