@@ -120,6 +120,7 @@ const fullSurface = vi.hoisted(() => ({
   props: null as {
     approval?: { approvalId?: string };
     actionPending?: boolean;
+    decisionError?: string | null;
     emit?: (intent: unknown) => void;
     onClose?: () => void;
   } | null,
@@ -670,7 +671,10 @@ describe("ConsentApprovalBar coordinator", () => {
       });
     });
     expect(shellClient.resolveInstallReview).toHaveBeenCalledWith("first", resolution);
-    await waitFor(() => expect(fullSurface.props?.actionPending).toBe(true));
+    // Recording the answer and waiting for its landing receipt are different
+    // phases. The decided review leaves immediately; a long reconciliation
+    // must not pin it on screen as "Saving…".
+    await waitFor(() => expect(screen.queryByTestId("full-surface")).toBeNull());
 
     // The queue removes a decided review immediately. Its RPC remains open
     // until publication landing is known, so the next review can legitimately
@@ -701,6 +705,29 @@ describe("ConsentApprovalBar coordinator", () => {
       finishSecond?.();
       await Promise.resolve();
     });
+  });
+
+  it("restores an install review when recording its decision fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    shellClient.resolveInstallReview.mockRejectedValueOnce(new Error("review write blocked"));
+    shellClient.listPending.mockResolvedValueOnce([installReviewApproval("startup")]);
+    mountBar();
+    await waitFor(() => expect(fullSurface.props?.approval?.approvalId).toBe("startup"));
+
+    act(() => {
+      fullSurface.props?.emit?.({
+        type: "resolve-install-review",
+        approvalId: "startup",
+        resolution: { decision: "install", allowNow: [] },
+      });
+    });
+
+    await waitFor(() => {
+      expect(fullSurface.props?.approval?.approvalId).toBe("startup");
+      expect(fullSurface.props?.decisionError).toBe("review write blocked");
+      expect(fullSurface.props?.actionPending).toBe(false);
+    });
+    errorSpy.mockRestore();
   });
 
   it("keeps a same-agent follow-up visible across a briefly empty queue", async () => {
@@ -833,12 +860,12 @@ describe("ConsentApprovalBar coordinator", () => {
     await resolveWith(acceptedOutcome);
     await screen.findByText("News added");
 
-    // The next approval is never behind this line: the surface is still up
-    // beside it while it is on screen, and dismissing decides nothing.
-    expect(screen.getByTestId("full-surface")).toBeTruthy();
+    // The answered review is already gone; this confirmation is independent
+    // queue chrome, and dismissing it decides nothing.
+    expect(screen.queryByTestId("full-surface")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("News added")).toBeNull();
-    expect(screen.getByTestId("full-surface")).toBeTruthy();
+    expect(screen.queryByTestId("full-surface")).toBeNull();
     expect(shellClient.resolve).not.toHaveBeenCalled();
   });
 

@@ -377,12 +377,34 @@ export function ConsentApprovalBar() {
     if (current?.kind !== "unit-install-review") return;
     const approval = current;
     setInstallResult(null);
-    runApprovalAction(approval, async () => {
-      const outcome = await shellApproval.resolveInstallReview(approval.approvalId, resolution);
-      setInstallResult(outcome);
-    });
+    // Answering is the end of the review, not the beginning of a loading
+    // screen. The server deliberately keeps this RPC open after recording the
+    // decision so it can return the later landing receipt; leaving the decided
+    // approval in local state for that whole interval made startup reconciliation
+    // look like a very slow save. Retire it immediately, exactly as the standard
+    // approval path does, and restore the same snapshot only if the decision
+    // itself fails.
+    setPendingAccess((items) => items.filter((item) => item.approvalId !== approval.approvalId));
+    runApprovalAction(
+      approval,
+      async () => {
+        const outcome = await shellApproval.resolveInstallReview(approval.approvalId, resolution);
+        setInstallResult(outcome);
+      },
+      () => {
+        setPendingAccess((items) =>
+          items.some((item) => item.approvalId === approval.approvalId)
+            ? items
+            : [approval, ...items]
+        );
+      }
+    );
   };
-  const runApprovalAction = (approval: PendingApproval, action: () => Promise<unknown>) => {
+  const runApprovalAction = (
+    approval: PendingApproval,
+    action: () => Promise<unknown>,
+    onError?: () => void
+  ) => {
     if (submittingApprovalIdsRef.current.has(approval.approvalId)) return;
     submittingApprovalIdsRef.current.add(approval.approvalId);
     setDecisionError(null);
@@ -390,6 +412,7 @@ export function ConsentApprovalBar() {
     void action()
       .catch((err: unknown) => {
         console.error("[ConsentApprovalBar] approval action failed:", err);
+        onError?.();
         setDecisionError({
           approvalId: approval.approvalId,
           message: err instanceof Error ? err.message : String(err),
