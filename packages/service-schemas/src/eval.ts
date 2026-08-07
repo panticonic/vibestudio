@@ -42,8 +42,6 @@ export const evalLifecycleFailureCodes = {
   runtimeGenerationLost: "runtime_generation_lost",
   /** cancelled: the caller's own opt-in deadline elapsed. */
   deadlineExceeded: "eval_deadline_exceeded",
-  /** cancelled: the host-owned liveness lease expired without observable progress. */
-  livenessStalled: "eval_liveness_stalled",
   /** cancelled: explicit owner/user cancellation. */
   cancelled: "eval_cancelled",
 } as const;
@@ -181,9 +179,7 @@ export const evalStartInputSchema = z
       .int()
       .positive()
       .optional()
-      .describe(
-        "Optional whole-run wall-clock deadline in milliseconds. Independent of the host-owned renewable liveness lease."
-      ),
+      .describe("Optional whole-run wall-clock deadline in milliseconds. Omit for no deadline."),
     /**
      * Per-run attenuation. This can only narrow the authority already admitted
      * by receiver declarations, sealed code, live grants, and relationships.
@@ -280,14 +276,6 @@ export const evalRunStatusSchema = z
     progress: z.unknown().optional(),
     /** Latest host-owned execution checkpoint (for example the outbound RPC currently awaited). */
     checkpoint: z.unknown().optional(),
-    /** Renewable inactivity lease currently owned by this run. */
-    liveness: z
-      .object({
-        expiresAt: z.number().int().nonnegative().optional(),
-        suspended: z.enum(["authority", "outbound-rpc"]).optional(),
-      })
-      .strict()
-      .optional(),
     /** Observable lifecycle state, distinct from execution/result status. */
     activity: z
       .discriminatedUnion("kind", [

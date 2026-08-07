@@ -68,7 +68,7 @@ const evalCommonSchema = {
     Type.Integer({
       minimum: 1,
       description:
-        "Optional whole-cell wall-clock deadline. Eval also has a host-owned renewable liveness lease; use timeoutMs only when the task itself has a fixed end-to-end bound.",
+        "Optional whole-cell wall-clock deadline. Omit it unless the task itself has a fixed end-to-end bound.",
     })
   ),
   reset: Type.Optional(

@@ -34,13 +34,6 @@ import { EvalKernelLeaseCoordinator, type EvalKernelLease } from "./evalKernelLe
  */
 const DEFAULT_EVAL_LIVENESS_PROBE_MS = 5_000;
 
-/**
- * Every admitted eval has a finite inactivity lease, not a blanket lifetime.
- * Observable progress renews it, and explicitly owned authority waits suspend
- * it. An optional caller deadline remains the independent whole-run bound.
- */
-export const DEFAULT_EVAL_LIVENESS_LEASE_MS = 2 * 60 * 1_000;
-
 /** One quick retry absorbs a transient transport blip before recovery. */
 const PROBE_REJECTION_RETRY_MS = 250;
 
@@ -59,7 +52,7 @@ interface ActiveEvalRun {
 }
 
 type LivenessObservation =
-  | { kind: "live"; terminal: boolean; expiresAt?: number; suspended?: boolean }
+  | { kind: "live"; terminal: boolean }
   | { kind: "unresponsive" }
   | { kind: "rejected"; error: unknown };
 
@@ -117,19 +110,6 @@ async function observeRunLiveness(
         status === "cancelled" ||
         status === "approval-route-lost" ||
         status === "unknown",
-      ...(() => {
-        const liveness = (
-          outcome.snapshot as {
-            liveness?: { expiresAt?: unknown; suspended?: unknown };
-          } | null
-        )?.liveness;
-        return {
-          ...(typeof liveness?.expiresAt === "number" ? { expiresAt: liveness.expiresAt } : {}),
-          ...(liveness?.suspended === "authority" || liveness?.suspended === "outbound-rpc"
-            ? { suspended: true }
-            : {}),
-        };
-      })(),
     };
   } finally {
     if (probeTimer !== undefined) clearTimeout(probeTimer);
@@ -137,75 +117,42 @@ async function observeRunLiveness(
 }
 
 /**
- * Isolate liveness supervisor for one renewable execution lease.
+ * Isolate liveness supervisor for one explicitly timed run.
  *
  * A synchronous CPU loop can prevent the EvalDO's own AbortSignal timer from
- * firing, so at the durable lease edge the host probes the canonical run. A
- * renewed lease schedules the next edge; an expired lease gets one bounded
- * cooperative-drain interval before process recovery. Probes are side-effect-free.
+ * firing, so after the caller's deadline the host probes the canonical run.
+ * Probes are side-effect-free and exist only to enforce that opt-in deadline.
  *
- * A live response alone does not renew the lease: only changed progress in
- * EvalDO does. Disposal is event-driven by terminal status or admission close.
+ * A live response does not disarm supervision because the isolate may wedge
+ * during post-abort cleanup. Disposal is terminal status or admission close.
  */
 async function superviseIsolateLiveness(input: {
   doDispatch: HeldDoDispatcher;
   evalDoRef: { source: string; className: string; objectKey: string };
   runId: string;
-  livenessLeaseMs: number;
+  timeoutMs: number;
   livenessProbeMs: number;
   recoverUnresponsiveSandbox: (input: EvalSandboxRecoveryInput) => Promise<void>;
   signal: AbortSignal;
 }): Promise<void> {
-  const { doDispatch, evalDoRef, runId, livenessLeaseMs, livenessProbeMs, signal } = input;
-  let nextCheckMs = livenessLeaseMs;
+  const { doDispatch, evalDoRef, runId, timeoutMs, livenessProbeMs, signal } = input;
+  await supervisorDelay(timeoutMs, signal);
   let retriedRejection = false;
   while (!signal.aborted) {
-    await supervisorDelay(nextCheckMs, signal);
-    if (signal.aborted) return;
     const observation = await observeRunLiveness(doDispatch, evalDoRef, runId, livenessProbeMs);
     if (signal.aborted) return;
     if (observation.kind === "live") {
       if (observation.terminal) return;
       retriedRejection = false;
-      if (observation.suspended && observation.expiresAt === undefined) {
-        // An external authority or service owns this wait. Recheck only as the
-        // existing crash-recovery backstop; completion resumes the EvalDO lease
-        // and normal terminal push remains the primary continuation.
-        nextCheckMs = livenessLeaseMs;
-        continue;
-      }
-      const remaining = (observation.expiresAt ?? 0) - Date.now();
-      if (remaining > 0) {
-        nextCheckMs = remaining;
-        continue;
-      }
-      // The EvalDO's cooperative abort gets one bounded drain interval. If the
-      // same expired lease is still running afterwards, the isolate is wedged.
       await supervisorDelay(livenessProbeMs, signal);
-      if (signal.aborted) return;
-      const drained = await observeRunLiveness(doDispatch, evalDoRef, runId, livenessProbeMs);
-      if (drained.kind === "live" && drained.terminal) return;
-      if (
-        drained.kind === "live" &&
-        typeof drained.expiresAt === "number" &&
-        drained.expiresAt > Date.now()
-      ) {
-        nextCheckMs = drained.expiresAt - Date.now();
-        continue;
-      }
-      await input.recoverUnresponsiveSandbox({
-        runId,
-        timeoutMs: livenessLeaseMs,
-        evalDoRef,
-      });
-      return;
+      continue;
     }
     if (observation.kind === "rejected" && !retriedRejection) {
       retriedRejection = true;
-      nextCheckMs = Math.min(PROBE_REJECTION_RETRY_MS, livenessProbeMs);
+      await supervisorDelay(Math.min(PROBE_REJECTION_RETRY_MS, livenessProbeMs), signal);
       continue;
     }
-    await input.recoverUnresponsiveSandbox({ runId, timeoutMs: livenessLeaseMs, evalDoRef });
+    await input.recoverUnresponsiveSandbox({ runId, timeoutMs, evalDoRef });
     return;
   }
 }
@@ -945,7 +892,6 @@ export function createEvalService(deps: {
         agentInvocationId: ctx.causalParent?.invocationId,
         parent,
         timeoutMs,
-        livenessLeaseMs: DEFAULT_EVAL_LIVENESS_LEASE_MS,
         readOnly: executionSession.eval.authorityManifest.effects === "read-only",
         authorityManifestDigest,
         intentDigest: runDigest,
@@ -1062,17 +1008,12 @@ export function createEvalService(deps: {
             snapshot,
           };
         }
-        const livenessLeaseMs = assembledArgs["livenessLeaseMs"];
-        const explicitTimeoutMs = assembledArgs["timeoutMs"];
+        const timeoutMs = assembledArgs["timeoutMs"];
         if (
-          typeof livenessLeaseMs === "number" &&
+          typeof timeoutMs === "number" &&
           deps.recoverUnresponsiveSandbox &&
           !runSupervisions.has(activeKey)
         ) {
-          const initialLivenessMs =
-            typeof explicitTimeoutMs === "number"
-              ? Math.min(livenessLeaseMs, explicitTimeoutMs)
-              : livenessLeaseMs;
           const recoverUnresponsiveSandbox = deps.recoverUnresponsiveSandbox;
           const controller = new AbortController();
           const supervision = { dispose: () => controller.abort() };
@@ -1083,7 +1024,7 @@ export function createEvalService(deps: {
             doDispatch: deps.doDispatch,
             evalDoRef,
             runId,
-            livenessLeaseMs: initialLivenessMs,
+            timeoutMs,
             livenessProbeMs: deps.livenessProbeMs ?? DEFAULT_EVAL_LIVENESS_PROBE_MS,
             recoverUnresponsiveSandbox,
             signal: controller.signal,

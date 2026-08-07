@@ -56,8 +56,6 @@ export const evalEngineRunArgsSchema = z
       .optional(),
     runId: z.string().min(1).optional(),
     timeoutMs: z.number().int().positive().optional(),
-    /** Host-owned inactivity lease. Never accepted from the public eval surface. */
-    livenessLeaseMs: z.number().int().positive().max(10 * 60 * 1_000).optional(),
     readOnly: z.boolean().optional(),
     authorityManifestDigest: z
       .string()

@@ -1286,9 +1286,7 @@ describe("createEvalService — explicit timeout process watchdog", () => {
         resultReceiver: { kind: "caller" },
       }),
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-
-    expect(recoverUnresponsiveSandbox).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(recoverUnresponsiveSandbox).toHaveBeenCalledOnce());
     expect(recoverUnresponsiveSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "inv-watchdog", timeoutMs: 5 })
     );

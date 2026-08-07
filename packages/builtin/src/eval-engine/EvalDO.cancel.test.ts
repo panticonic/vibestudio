@@ -674,11 +674,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).toThrow(/256 KiB/);
   });
 
-  it("renews liveness only when observable progress changes and persists exact RPC state", async () => {
+  it("deduplicates checkpoint events while persisting exact current RPC state", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
-    seedPendingRun(sql, "run-liveness");
-    const renew = vi.fn();
-    priv<Map<string, () => void>>(instance, "runLeaseRenewals").set("run-liveness", renew);
+    seedPendingRun(sql, "run-checkpoint");
 
     const record = priv<(runId: string, checkpoint: Record<string, unknown>) => void>(
       instance,
@@ -688,28 +686,27 @@ describe("EvalDO cancellation + forced recovery", () => {
       instance,
       "completeRunCheckpoint"
     );
-    record.call(instance, "run-liveness", {
+    record.call(instance, "run-checkpoint", {
       stage: "outbound-rpc",
       state: "waiting",
       targetId: "main",
       method: "panel.observe",
     });
-    complete.call(instance, "run-liveness", {
+    complete.call(instance, "run-checkpoint", {
       stage: "outbound-rpc",
       state: "completed",
       targetId: "main",
       method: "panel.observe",
     });
-    // Repeating the same polling operation updates current diagnostics but is
-    // not a new observable checkpoint and therefore cannot renew the lease.
-    record.call(instance, "run-liveness", {
+    // Repeating the same polling operation updates current diagnostics without
+    // manufacturing another durable checkpoint event.
+    record.call(instance, "run-checkpoint", {
       stage: "outbound-rpc",
       state: "waiting",
       targetId: "main",
       method: "panel.observe",
     });
-    expect(renew).toHaveBeenCalledTimes(1);
-    expect(instance.getRun("run-liveness")).toMatchObject({
+    expect(instance.getRun("run-checkpoint")).toMatchObject({
       checkpoint: {
         stage: "outbound-rpc",
         state: "waiting",
@@ -718,14 +715,13 @@ describe("EvalDO cancellation + forced recovery", () => {
       },
     });
 
-    const report = priv<(runId: string, progress: unknown) => void>(instance, "persistRunProgress");
-    report.call(instance, "run-liveness", { phase: "building" });
-    report.call(instance, "run-liveness", { phase: "building" });
-    report.call(instance, "run-liveness", { phase: "connected" });
-    expect(renew).toHaveBeenCalledTimes(3);
+    const checkpointEvents = instance
+      .getRunEvents("run-checkpoint", 0, 100)
+      .events.filter((event) => event.kind === "checkpoint");
+    expect(checkpointEvents).toHaveLength(1);
   });
 
-  it("suspends guest inactivity while an outbound service owns the awaited RPC", async () => {
+  it("records exact RPC state while an outbound service owns the awaited work", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "rpc-over-lease");
     sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'rpc-over-lease'`);
@@ -739,12 +735,6 @@ describe("EvalDO cancellation + forced recovery", () => {
           release = resolve;
         })
     );
-    const pause = vi.fn();
-    const resume = vi.fn();
-    priv<Map<string, { pause: (reason: string) => void; resume: (reason: string) => void }>>(
-      instance,
-      "runLeaseSuspensionControls"
-    ).set("rpc-over-lease", { pause, resume });
     const execution = priv<
       (input: { runId: string; contextId: string }) => {
         rpc: { call: (...args: unknown[]) => Promise<unknown> };
@@ -755,8 +745,6 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
 
     const pending = execution.rpc.call("main", "panel.observe", []);
-    expect(pause).toHaveBeenCalledWith("outbound-rpc");
-    expect(resume).not.toHaveBeenCalled();
     expect(instance.getRun("rpc-over-lease")).toMatchObject({
       checkpoint: {
         stage: "outbound-rpc",
@@ -768,7 +756,6 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     release();
     await pending;
-    expect(resume).toHaveBeenCalledWith("outbound-rpc");
     expect(instance.getRun("rpc-over-lease")).toMatchObject({
       checkpoint: { stage: "outbound-rpc", state: "completed" },
     });
@@ -883,12 +870,6 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance, sql } = await createTestDO(EvalDO);
     seedPendingRun(sql, "authority-concurrent");
     sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'authority-concurrent'`);
-    const pause = vi.fn();
-    const resume = vi.fn();
-    priv<Map<string, { pause: (reason: string) => void; resume: (reason: string) => void }>>(
-      instance,
-      "runLeaseSuspensionControls"
-    ).set("authority-concurrent", { pause, resume });
 
     instance.appendAuthorityEvent("authority-concurrent", "authority-requested", {
       snapshotDigest: "snapshot-a",
@@ -902,17 +883,14 @@ describe("EvalDO cancellation + forced recovery", () => {
       snapshotDigest: "snapshot-b",
       capability: "service:models.generate",
     });
-    expect(pause).toHaveBeenCalledTimes(2);
     instance.appendAuthorityEvent("authority-concurrent", "authority-decided", {
       snapshotDigest: "already-granted-snapshot",
       decision: "allow",
     });
-    expect(resume).not.toHaveBeenCalled();
     instance.appendAuthorityEvent("authority-concurrent", "authority-decided", {
       snapshotDigest: "snapshot-b",
       decision: "allow",
     });
-    expect(resume).toHaveBeenCalledTimes(1);
 
     expect(instance.getRun("authority-concurrent")).toMatchObject({
       status: "running",
@@ -926,41 +904,43 @@ describe("EvalDO cancellation + forced recovery", () => {
       snapshotDigest: "snapshot-a",
       decision: "allow",
     });
-    expect(resume).toHaveBeenCalledTimes(2);
     expect(instance.getRun("authority-concurrent")).toMatchObject({
       status: "running",
       activity: { kind: "executing" },
     });
   });
 
-  it("suspends the inactivity lease while external authority owns the wait", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
-    seedPendingRun(sql, "authority-over-lease", {
-      code: "return 1",
-      contextId: "ctx",
-      livenessLeaseMs: 50,
-    });
-    setPriv(instance, "runLocked", async () => {
-      instance.appendAuthorityEvent("authority-over-lease", "authority-requested", {
-        acquisitionId: "approval-1",
+  it("leaves a run without an explicit deadline unbounded", async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    try {
+      const { instance, sql } = await createTestDO(EvalDO);
+      seedPendingRun(sql, "unbounded-run");
+      let observedSignal: AbortSignal | undefined;
+      const started = new Promise<void>((resolveStarted) => {
+        setPriv(instance, "runLocked", async (_args: unknown, signal?: AbortSignal) => {
+          observedSignal = signal;
+          resolveStarted();
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          return { success: true, console: "", returnValue: 1 };
+        });
       });
-      await new Promise((resolve) => setTimeout(resolve, 75));
-      expect(instance.getRun("authority-over-lease")).toMatchObject({
-        status: "running",
-        activity: { kind: "authority-pending" },
-        liveness: { suspended: "authority" },
-      });
-      instance.appendAuthorityEvent("authority-over-lease", "authority-decided", {
-        acquisitionId: "approval-1",
-        decision: "allow",
-      });
-      return { success: true, console: "", returnValue: 1 };
-    });
-
-    await expect(instance.executeRun("authority-over-lease")).resolves.toMatchObject({
-      success: true,
-      returnValue: 1,
-    });
+      const execution = instance.executeRun("unbounded-run");
+      await started;
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1_000);
+      expect(observedSignal?.aborted).toBe(false);
+      expect(instance.getRun("unbounded-run")).toMatchObject({ status: "running" });
+      expect(
+        sql.exec(`SELECT deadline_at FROM runs WHERE run_id = 'unbounded-run'`).toArray()[0]
+      ).toMatchObject({ deadline_at: null });
+      release();
+      await expect(execution).resolves.toMatchObject({ success: true, returnValue: 1 });
+    } finally {
+      release?.();
+      vi.useRealTimers();
+    }
   });
 
   it("serves getRun through a concurrent fetch while executeRun is held", async () => {
@@ -2213,6 +2193,77 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(rpcA.call).not.toHaveBeenCalled();
     expect(rpcB.call).toHaveBeenCalledWith("main", "panel.rebuild", [], undefined);
     expect(loadLibraryModule).toHaveBeenCalledOnce();
+  });
+
+  it("routes runtime clients retained by a cell-A module through cell B's execution", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const rpcA = { call: vi.fn(async () => "cell-a") };
+    const rpcB = { call: vi.fn(async () => "cell-b") };
+    const openA = vi.fn(async () => ({ openedBy: "cell-a" }));
+    const openB = vi.fn(async () => ({ openedBy: "cell-b" }));
+    const executionA = {
+      contextId: "ctx",
+      rpc: rpcA,
+      externalOpen: { openExternal: openA },
+    };
+    const executionB = {
+      contextId: "ctx",
+      rpc: rpcB,
+      externalOpen: { openExternal: openB },
+    };
+    const support = {
+      createPanelRuntime: () => ({}),
+      createHostedRuntime: (host: Record<string, unknown>) => ({
+        rpc: host["rpc"],
+        fs: host["fs"],
+        openExternal: host["openExternal"],
+      }),
+      createRuntimeSelfHandle: () => ({}),
+      createGatewayFetch: () => () => undefined,
+      createRpcFs: (rpc: { call: (...args: unknown[]) => Promise<unknown> }) => ({
+        exists: () => rpc.call("main", "fs.exists", ["workers/vibe-board-agent"]),
+      }),
+      createRuntimeParentHandle: () => null,
+      createWorkerdClient: () => ({}),
+    };
+    const runtime = priv<
+      (
+        support: unknown,
+        execution: unknown,
+        gatewayToken: string,
+        parent: null
+      ) => {
+        fs: { exists(): Promise<unknown> };
+        openExternal(url: string): Promise<unknown>;
+      }
+    >(instance, "createRunHostedRuntime").call(
+      instance,
+      support,
+      executionA,
+      "gateway-token",
+      null
+    );
+
+    expect(() => runtime.fs.exists()).toThrow(/actively executing/);
+    const activeExecution = priv<{
+      run<T>(store: unknown, callback: () => T): T;
+    }>(instance, "activeEvalExecution");
+    await expect(activeExecution.run(executionB, () => runtime.fs.exists())).resolves.toBe(
+      "cell-b"
+    );
+    await expect(
+      activeExecution.run(executionB, () => runtime.openExternal("https://example.test"))
+    ).resolves.toEqual({ openedBy: "cell-b" });
+
+    expect(rpcA.call).not.toHaveBeenCalled();
+    expect(openA).not.toHaveBeenCalled();
+    expect(rpcB.call).toHaveBeenCalledWith(
+      "main",
+      "fs.exists",
+      ["workers/vibe-board-agent"],
+      undefined
+    );
+    expect(openB).toHaveBeenCalledWith("https://example.test", undefined);
   });
 
   it("runLocked endows isolate modules and threads abort into eval outbound rpc.call", async () => {
