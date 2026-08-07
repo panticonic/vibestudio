@@ -3842,9 +3842,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
         `SELECT log_id AS trajectory_id,
                 head AS branch_id,
                 owner_json,
-                seq,
-                hash AS head_event_hash,
-                envelope_id AS head_event_id,
+                current_seq AS seq,
+                current_hash AS head_event_hash,
+                current_envelope_id AS head_event_id,
                 parent_head AS parent_branch_id,
                 created_at,
                 created_at AS updated_at
@@ -3904,7 +3904,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
                 payload_kind,
                 payload_ref_json,
                 annotations_json,
-                created_at
+                appended_at AS created_at
            FROM log_events
           WHERE log_id IN (
             SELECT log_id FROM log_heads WHERE log_kind = 'channel'

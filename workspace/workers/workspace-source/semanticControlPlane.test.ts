@@ -893,6 +893,49 @@ describe("appendLogEvent core (§3.2)", () => {
       })
     ).resolves.toMatchObject({ headSeq: 2 });
   });
+
+  it("projects repository-browser rows from the canonical unified-log columns", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await appendTrajectoryEvents(call, {
+      trajectoryId: "trajectory-browser",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "trajectory-browser-event",
+          event: event("turn.opened", {
+            turnId: "turn-browser" as never,
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+          }),
+        },
+      ],
+    });
+    await call("appendChannelEnvelope", {
+      channelId: "channel-browser",
+      envelopeId: "channel-browser-envelope",
+      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      payloadKind: "custom.kind",
+      payload: { value: 1 },
+      publishedAt: "2026-05-20T12:00:01.000Z",
+    });
+
+    await expect(call<any[]>("listTrajectoryBranches", { limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        trajectory_id: "trajectory-browser",
+        branch_id: "main",
+        seq: 1,
+        head_event_id: "trajectory-browser-event",
+      }),
+    ]);
+    await expect(call<any[]>("listChannelEnvelopes", { limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        channel_id: "channel-browser",
+        seq: 1,
+        envelope_id: "channel-browser-envelope",
+        created_at: "2026-05-20T12:00:01.000Z",
+      }),
+    ]);
+  });
 });
 
 describe("trajectory projection invariants", () => {
