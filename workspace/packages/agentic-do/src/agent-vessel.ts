@@ -556,6 +556,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   private readonly localTools = new Map<string, Map<string, AgentTool>>();
   /** Deferred evals are child resources of the channel that started them. */
   private readonly deferredEvalRuns = new Map<string, Set<string>>();
+  private readonly deferredEvalBackstopWarnings = new Set<string>();
   private readonly deltaBuffers = new Map<string, { events: AgenticEvent[]; timer: unknown }>();
   private readonly channelClients = new Map<string, ChannelClient>();
   private readonly channelConfigCache = new Map<
@@ -2538,6 +2539,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         createdAt: row.createdAt,
         attempt: row.attempts + 1,
         payload: {
+          // Once eval.start is durably acknowledged, ANY claim of the row is
+          // structurally the eval.get delivery-loss backstop — the parked-row
+          // alarm arrives with an ordinary "hint" trigger, so keying on the
+          // trigger would label the production backstop path as healthy work.
+          claimSource:
+            row.descriptor.kind === "local_tool" &&
+            row.descriptor.tool === "eval" &&
+            (row.descriptor as { deferredEvalStarted?: boolean }).deferredEvalStarted === true
+              ? "redrive-backstop"
+              : (input.trigger ?? "unknown"),
           laneKey:
             row.kind === "publish_envelope" ||
             row.kind === "channel_call" ||
@@ -2555,7 +2566,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         );
         if (channelId) {
           this.traceHotPath(channelId, "effect.claimed", {
-            source: input.trigger ?? "unknown",
+            source: String(
+              (claim.payload as { claimSource?: unknown } | null)?.claimSource ?? "unknown"
+            ),
             itemId: claim.itemId,
             generation: claim.generation,
           });
@@ -4477,11 +4490,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const executeDeferred = createDeferredEvalExecutor(
       <T>(method: string, callArgs: unknown[]) => scopedRpc.call<T>("main", method, callArgs),
       {
-        onBackstopError: (err) =>
+        onBackstopError: (err) => {
+          if (this.deferredEvalBackstopWarnings.has(runId)) return;
+          this.deferredEvalBackstopWarnings.add(runId);
           console.warn(
             `[AgentVessel] eval.get backstop for ${runId} failed (run parked; push/redrive covers it):`,
             err instanceof Error ? err.message : err
-          ),
+          );
+        },
       }
     );
     let settlement;
@@ -4507,6 +4523,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.driver.markDeferredEvalStarted(channelId, runId);
     if (!settlement.deferred) {
       this.forgetDeferredEval(channelId, runId);
+      // eval.start returned the result inline — no push channel was exercised,
+      // so this must not inflate the push side of the push-vs-backstop ratio.
+      this.traceHotPath(channelId, "deferred-eval.completed", { source: "inline" });
       return this.deferredEvalSettlement(invocationId, settlement.result);
     }
     return { deferred: true, reason: "external-result" };
@@ -4533,14 +4552,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     } catch (error) {
       // EvalDO unreachable: leave the run parked; the terminal push or the
       // next redrive recovers it. An outage must never settle the invocation.
-      console.warn(
-        `[AgentVessel] eval.get recovery for started run ${runId} failed (run stays parked):`,
-        error instanceof Error ? error.message : error
-      );
+      if (!this.deferredEvalBackstopWarnings.has(runId)) {
+        this.deferredEvalBackstopWarnings.add(runId);
+        console.warn(
+          `[AgentVessel] eval.get recovery for started run ${runId} failed (run stays parked):`,
+          error instanceof Error ? error.message : error
+        );
+      }
       return { deferred: true, reason: "external-result" };
     }
     if (snapshot.status === "unknown") {
       this.forgetDeferredEval(channelId, runId);
+      this.traceHotPath(channelId, "deferred-eval.completed", { source: "backstop-poll" });
       return this.deferredEvalSettlement(invocationId, {
         success: false,
         console: "",
@@ -4554,10 +4577,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (snapshot.status === "done" || snapshot.status === "approval-route-lost") {
       if (!snapshot.result) throw new Error(`eval: terminal run ${runId} has no result`);
       this.forgetDeferredEval(channelId, runId);
+      this.traceHotPath(channelId, "deferred-eval.completed", { source: "backstop-poll" });
       return this.deferredEvalSettlement(invocationId, snapshot.result);
     }
     if (snapshot.status === "cancelled") {
       this.forgetDeferredEval(channelId, runId);
+      this.traceHotPath(channelId, "deferred-eval.completed", { source: "backstop-poll" });
       if (snapshot.result) {
         return this.deferredEvalSettlement(invocationId, snapshot.result);
       }
@@ -4619,6 +4644,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   private forgetDeferredEval(channelId: string, runId: string): void {
+    this.deferredEvalBackstopWarnings.delete(runId);
     const runs = this.deferredEvalRuns.get(channelId);
     if (!runs) return;
     runs.delete(runId);
@@ -4831,7 +4857,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
                 : {}),
             }
           );
-    await this.driver.deliverEffectOutcome(
+    const delivered = await this.driver.deliverEffectOutcome(
       payload.runId,
       {
         kind: "tool",
@@ -4844,6 +4870,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       },
       { channelId: payload.channelId }
     );
+    if (delivered) {
+      this.traceHotPath(payload.channelId, "deferred-eval.completed", { source: "direct-push" });
+    }
   }
 
   // ── Custom message recovery (CardManager read path) ─────────────────────
@@ -6366,7 +6395,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       attempt += 1;
     }
 
-    const conflicts = comparison.coordinates.filter((coordinate) => coordinate.status === "conflict");
+    const conflicts = comparison.coordinates.filter(
+      (coordinate) => coordinate.status === "conflict"
+    );
     let conflictCursor = comparison.nextCursor;
     while (conflictCursor) {
       const page = await callVcs<VcsCompareResult>("compare", {

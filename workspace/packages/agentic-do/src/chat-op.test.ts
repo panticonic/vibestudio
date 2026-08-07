@@ -179,6 +179,40 @@ class TestVessel extends AgentVesselBase {
     );
   }
 
+  hotPathTraceSourcesForTest(phase: string, channelId = CHANNEL): string[] {
+    return (
+      this.sql
+        .exec(
+          `SELECT source FROM agent_hot_path_trace
+            WHERE channel_id = ? AND phase = ?
+            ORDER BY sequence`,
+          channelId,
+          phase
+        )
+        .toArray() as Array<Record<string, unknown>>
+    ).map((row) => String(row["source"]));
+  }
+
+  seedDeferredEvalForTest(runId: string, started: boolean): void {
+    this.driver.outbox.insert(
+      logIdForChannel(CHANNEL),
+      {
+        kind: "local_tool",
+        effectId: runId,
+        channelId: CHANNEL,
+        idempotencyKey: runId,
+        invocationId: runId,
+        turnId: `turn:${runId}`,
+        invocationSeq: 1,
+        executionMode: "parallel",
+        tool: "eval",
+        args: {},
+      } as never,
+      null
+    );
+    if (started) this.driver.markDeferredEvalStarted(CHANNEL, runId);
+  }
+
   nextAlarmScheduleForTest(): { wakeAt: number } | null {
     return this.nextAgentAlarmSchedule();
   }
@@ -698,6 +732,36 @@ describe("AgentVesselBase hot-path trace retention", () => {
 
     instance.writeHotPathTracesForTest(1);
     expect(instance.hotPathTraceCountForTest()).toBe(500);
+  });
+
+  it("labels only a previously-started eval recovery claim as the redrive backstop", async () => {
+    const { instance: redrive } = await createTestDO(TestVessel, TEST_AGENT_ENV);
+    redrive.seedDeferredEvalForTest("eval:redrive", true);
+    // The parked-row alarm delivers through the ordinary work-ready hint, so
+    // the label must key on the durable started flag, not the trigger.
+    expect(
+      redrive.claimReadyWork("agent-effect", {
+        workerId: "test-worker",
+        now: Date.now(),
+        limit: 1,
+        trigger: "hint",
+      })
+    ).toHaveLength(1);
+    expect(redrive.hotPathTraceSourcesForTest("effect.claimed")).toEqual([
+      "redrive-backstop",
+    ]);
+
+    const { instance: healthy } = await createTestDO(TestVessel, TEST_AGENT_ENV);
+    healthy.seedDeferredEvalForTest("eval:first-dispatch", false);
+    expect(
+      healthy.claimReadyWork("agent-effect", {
+        workerId: "test-worker",
+        now: Date.now(),
+        limit: 1,
+        trigger: "hint",
+      })
+    ).toHaveLength(1);
+    expect(healthy.hotPathTraceSourcesForTest("effect.claimed")).toEqual(["hint"]);
   });
 });
 
