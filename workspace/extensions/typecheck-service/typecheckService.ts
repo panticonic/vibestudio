@@ -509,6 +509,7 @@ export const typeCheckRpcMethods = {
  * next call.
  */
 export function clearTypeCheckCache(): void {
+  for (const service of typeCheckServiceCache.values()) service.dispose();
   typeCheckServiceCache.clear();
   nodeModulesPathCache.clear();
 }

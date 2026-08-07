@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import ts from "typescript";
+import { transformSync } from "esbuild";
 import {
   isRetryableSystemTestStatusReadFailure,
   settleSystemTestDoctor,
@@ -282,18 +282,23 @@ describe("system-test durable driver lifecycle", () => {
       ...args: string[]
     ) => (...args: unknown[]) => Promise<unknown>;
     const run = async (failure: "release" | "retire") => {
-      const source = ts.transpile(
-        systemTestRunCode(`st_retry_${failure}`, {
-          names: ["probe"],
-          all: false,
-          concurrency: 1,
-        }),
-        {
-          module: ts.ModuleKind.ESNext,
-          target: ts.ScriptTarget.ES2022,
-        }
+      const generated = systemTestRunCode(`st_retry_${failure}`, {
+        names: ["probe"],
+        all: false,
+        concurrency: 1,
+      });
+      const source = transformSync(`async function __generatedRun() {\n${generated}\n}`, {
+        format: "esm",
+        target: "es2022",
+        loader: "ts",
+      }).code;
+      const execute = new AsyncFunction(
+        "services",
+        "rpc",
+        "ctx",
+        "scope",
+        `${source}\nreturn __generatedRun();`
       );
-      const execute = new AsyncFunction("services", "rpc", "ctx", "scope", source);
       let releaseAttempts = 0;
       let retirementAttempts = 0;
       const driver = { id: "do:driver", targetId: "do:driver" };

@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { usingTypeScriptProject } from "@vibestudio/typecheck";
 import { analyzeWorkspaceServiceCalls } from "./userlandAuthorityAnalyzer.js";
 
 function analyze(
@@ -11,20 +11,15 @@ function analyze(
 ) {
   const root = mkdtempSync(join(tmpdir(), "vibestudio-authority-facts-"));
   const file = join(root, "index.ts");
-  writeFileSync(file, source);
-  const program = ts.createProgram([file], {
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.ESNext,
-    strict: true,
-    skipLibCheck: true,
-  });
-  return analyzeWorkspaceServiceCalls({
-    program,
-    sourceRoot: root,
-    unitRelativePath: ".",
-    units: [{ name: "consumer", relativePath: "." }],
-    executableModules,
-  });
+  return usingTypeScriptProject([{ fileName: file, content: source }], (project) =>
+    analyzeWorkspaceServiceCalls({
+      project,
+      sourceRoot: root,
+      unitRelativePath: ".",
+      units: [{ name: "consumer", relativePath: "." }],
+      executableModules,
+    })
+  );
 }
 
 describe("userland authority facts", () => {

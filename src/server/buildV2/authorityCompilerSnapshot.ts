@@ -1,7 +1,13 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as crypto from "node:crypto";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import type {
+  CompilerOptions,
+  Program,
+  Project,
+  Symbol as TypeScriptSymbol,
+} from "typescript/unstable/sync";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
   TypeCheckService,
@@ -80,7 +86,7 @@ function canonicalCompilerValue(value: unknown, sourceRoot: string): unknown {
   return value;
 }
 
-function compilerFingerprint(options: Readonly<ts.CompilerOptions>, sourceRoot: string): string {
+function compilerFingerprint(options: Readonly<CompilerOptions>, sourceRoot: string): string {
   return sha256Canonical({ version: 1, options: canonicalCompilerValue(options, sourceRoot) });
 }
 
@@ -102,50 +108,66 @@ async function packageInfo(
   return { name: unit.name, dir, packageJson };
 }
 
-function moduleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLike[] {
-  const result: ts.StringLiteralLike[] = [];
+function moduleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLikeNode[] {
+  const result: ts.StringLiteralLikeNode[] = [];
   const visit = (node: ts.Node): void => {
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
+      ts.isStringLiteralLikeNode(node.moduleSpecifier)
     ) {
       result.push(node.moduleSpecifier);
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference) &&
       node.moduleReference.expression &&
-      ts.isStringLiteralLike(node.moduleReference.expression)
+      ts.isStringLiteralLikeNode(node.moduleReference.expression)
     ) {
       result.push(node.moduleReference.expression);
     } else if (
       ts.isCallExpression(node) &&
       node.arguments[0] &&
-      ts.isStringLiteralLike(node.arguments[0]) &&
+      ts.isStringLiteralLikeNode(node.arguments[0]) &&
       (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
         (ts.isIdentifier(node.expression) && node.expression.text === "require"))
     ) {
       result.push(node.arguments[0]);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return result;
 }
 
+function sourceFiles(program: Program): ts.SourceFile[] {
+  return program.getSourceFileNames().flatMap((fileName) => {
+    const sourceFile = program.getSourceFile(fileName);
+    return sourceFile ? [sourceFile] : [];
+  });
+}
+
+function symbolDeclarations(project: Project, symbol: TypeScriptSymbol | undefined): ts.Node[] {
+  return (
+    symbol?.declarations.flatMap((handle) => {
+      const declaration = handle.resolve(project);
+      return declaration ? [declaration] : [];
+    }) ?? []
+  );
+}
+
 function resolvedWorkspaceImports(
-  program: ts.Program,
+  project: Project,
   workspaceFiles: ReadonlySet<string>
 ): Map<string, ReadonlySet<string>> {
-  const checker = program.getTypeChecker();
+  const checker = project.checker;
   const graph = new Map<string, ReadonlySet<string>>();
-  for (const sourceFile of program.getSourceFiles()) {
+  for (const sourceFile of sourceFiles(project.program)) {
     const source = path.resolve(sourceFile.fileName);
     if (!workspaceFiles.has(source)) continue;
     const imports = new Set<string>();
     for (const specifier of moduleSpecifiers(sourceFile)) {
       const symbol = checker.getSymbolAtLocation(specifier);
-      for (const declaration of symbol?.declarations ?? []) {
+      for (const declaration of symbolDeclarations(project, symbol)) {
         const target = path.resolve(declaration.getSourceFile().fileName);
         if (workspaceFiles.has(target)) imports.add(target);
       }
@@ -155,15 +177,15 @@ function resolvedWorkspaceImports(
   return graph;
 }
 
-function resolvedImports(program: ts.Program): Map<string, ReadonlySet<string>> {
-  const checker = program.getTypeChecker();
+function resolvedImports(project: Project): Map<string, ReadonlySet<string>> {
+  const checker = project.checker;
   const graph = new Map<string, ReadonlySet<string>>();
-  for (const sourceFile of program.getSourceFiles()) {
+  for (const sourceFile of sourceFiles(project.program)) {
     const source = path.resolve(sourceFile.fileName);
     const imports = new Set<string>();
     for (const specifier of moduleSpecifiers(sourceFile)) {
       const symbol = checker.getSymbolAtLocation(specifier);
-      for (const declaration of symbol?.declarations ?? []) {
+      for (const declaration of symbolDeclarations(project, symbol)) {
         imports.add(path.resolve(declaration.getSourceFile().fileName));
       }
     }
@@ -192,14 +214,14 @@ async function nearestPackageManifest(file: string): Promise<string | null> {
 }
 
 async function compilerDependencies(
-  program: ts.Program,
+  program: Program,
   reachable: ReadonlySet<string>,
   sourceRoot: string,
   configFiles: readonly string[],
   cache: Map<string, readonly AuthorityCompilerDependency[]>
 ): Promise<AuthorityCompilerDependency[]> {
   const contents = new Map<string, string>();
-  for (const sourceFile of program.getSourceFiles()) {
+  for (const sourceFile of sourceFiles(program)) {
     const file = path.resolve(sourceFile.fileName);
     if (!reachable.has(file) || isWithin(sourceRoot, file) || file.startsWith("/@typescript/lib/"))
       continue;
@@ -309,13 +331,19 @@ export async function createAuthorityCompilerSnapshot(
     disableTsconfigDiscovery: true,
   });
   const defaultOptions = defaultService.getEffectiveCompilerOptions();
+  defaultService.dispose();
   const consumers = input.consumerNames
     ? input.units.filter((unit) => input.consumerNames?.has(unit.name))
     : input.units;
   const profiles = await Promise.all(
     consumers.map(async (unit) => {
       if (!(await hasOwnTsconfig(sourceRoot, unit))) {
-        return { unit, options: defaultOptions, configFiles: [] as readonly string[] };
+        return {
+          unit,
+          options: defaultOptions,
+          configFiles: [] as readonly string[],
+          tsconfigPath: null,
+        };
       }
       const unitDir = path.resolve(sourceRoot, unit.relativePath);
       const service = new TypeCheckService({
@@ -324,19 +352,25 @@ export async function createAuthorityCompilerSnapshot(
         nodeModulesPaths: [...input.nodeModulesPaths],
         tsconfigSearchBoundary: unitDir,
       });
-      return {
-        unit,
-        options: service.getEffectiveCompilerOptions(),
-        configFiles: service.getCompilerOptionDependencies(),
-      };
+      try {
+        return {
+          unit,
+          options: service.getEffectiveCompilerOptions(),
+          configFiles: service.getCompilerOptionDependencies(),
+          tsconfigPath: path.join(unitDir, "tsconfig.json"),
+        };
+      } finally {
+        service.dispose();
+      }
     })
   );
   const grouped = new Map<
     string,
     {
-      options: Readonly<ts.CompilerOptions>;
+      options: Readonly<CompilerOptions>;
       units: AuthorityCompilerSnapshotUnit[];
       configFiles: Set<string>;
+      tsconfigPath: string | null;
     }
   >();
   for (const profile of profiles) {
@@ -350,6 +384,7 @@ export async function createAuthorityCompilerSnapshot(
         options: profile.options,
         units: [profile.unit],
         configFiles: new Set(profile.configFiles),
+        tsconfigPath: profile.tsconfigPath,
       });
     }
   }
@@ -367,8 +402,9 @@ export async function createAuthorityCompilerSnapshot(
       panelPath: sourceRoot,
       workspaceContext,
       nodeModulesPaths: [...input.nodeModulesPaths],
-      compilerOptions: { ...group.options },
-      disableTsconfigDiscovery: true,
+      ...(group.tsconfigPath
+        ? { tsconfigPath: group.tsconfigPath }
+        : { disableTsconfigDiscovery: true }),
     });
     for (const unit of group.units) {
       for (const file of rootsByUnit.get(unit.name) ?? []) {
@@ -376,63 +412,64 @@ export async function createAuthorityCompilerSnapshot(
         if (content !== undefined) service.updateFile(file, content);
       }
     }
-    const programStartedAt = Date.now();
-    const program = service.getProgram();
-    if (!program)
-      throw new Error(`Authority compiler group ${fingerprint} could not obtain a Program`);
-    const groupProgramMs = Date.now() - programStartedAt;
-    programMs += groupProgramMs;
-    maxProgramMs = Math.max(maxProgramMs, groupProgramMs);
-    const groupWorkspaceFiles = new Set(
-      program
-        .getSourceFiles()
-        .map((sourceFile) => path.resolve(sourceFile.fileName))
-        .filter((file) => isWithin(sourceRoot, file))
-    );
-    const groupImports = resolvedWorkspaceImports(program, groupWorkspaceFiles);
-    const allImports = resolvedImports(program);
-    const externalFiles = new Set(
-      program
-        .getSourceFiles()
-        .map((sourceFile) => path.resolve(sourceFile.fileName))
-        .filter((file) => !isWithin(sourceRoot, file) && !file.startsWith("/@typescript/lib/"))
-    );
-    const importedTargets = new Set([...allImports.values()].flatMap((imports) => [...imports]));
-    const ambientExternalFiles = new Set(
-      [...externalFiles].filter((file) => !importedTargets.has(file))
-    );
-    const dependencyCache = new Map<string, readonly AuthorityCompilerDependency[]>();
-    for (const [file, imports] of groupImports) importsByFile.set(file, imports);
-    const analyzerStartedAt = Date.now();
-    const allFacts = analyzeWorkspaceServiceCalls({
-      program,
-      sourceRoot,
-      unitRelativePath: `.authority-compiler-group/${fingerprint}`,
-      units: input.units,
-    });
-    analyzerMs += Date.now() - analyzerStartedAt;
-    const compositionStartedAt = Date.now();
-    for (const consumer of group.units) {
-      const reachable = reachableFiles(rootsByUnit.get(consumer.name) ?? [], groupImports);
-      factsByConsumer.set(
-        consumer.name,
-        factsForConsumer(allFacts, reachable, sourceRoot, consumer.name)
+    try {
+      const programStartedAt = Date.now();
+      const project = service.getProject();
+      const program = project.program;
+      const groupProgramMs = Date.now() - programStartedAt;
+      programMs += groupProgramMs;
+      maxProgramMs = Math.max(maxProgramMs, groupProgramMs);
+      const groupWorkspaceFiles = new Set(
+        sourceFiles(program)
+          .map((sourceFile) => path.resolve(sourceFile.fileName))
+          .filter((file) => isWithin(sourceRoot, file))
       );
-      const compilerReachable = reachableFiles(rootsByUnit.get(consumer.name) ?? [], allImports);
-      for (const ambient of ambientExternalFiles) compilerReachable.add(ambient);
-      dependenciesByConsumer.set(
-        consumer.name,
-        await compilerDependencies(
-          program,
-          compilerReachable,
-          sourceRoot,
-          [...group.configFiles],
-          dependencyCache
-        )
+      const groupImports = resolvedWorkspaceImports(project, groupWorkspaceFiles);
+      const allImports = resolvedImports(project);
+      const externalFiles = new Set(
+        sourceFiles(program)
+          .map((sourceFile) => path.resolve(sourceFile.fileName))
+          .filter((file) => !isWithin(sourceRoot, file) && !file.startsWith("/@typescript/lib/"))
       );
+      const importedTargets = new Set([...allImports.values()].flatMap((imports) => [...imports]));
+      const ambientExternalFiles = new Set(
+        [...externalFiles].filter((file) => !importedTargets.has(file))
+      );
+      const dependencyCache = new Map<string, readonly AuthorityCompilerDependency[]>();
+      for (const [file, imports] of groupImports) importsByFile.set(file, imports);
+      const analyzerStartedAt = Date.now();
+      const allFacts = analyzeWorkspaceServiceCalls({
+        project,
+        sourceRoot,
+        unitRelativePath: `.authority-compiler-group/${fingerprint}`,
+        units: input.units,
+      });
+      analyzerMs += Date.now() - analyzerStartedAt;
+      const compositionStartedAt = Date.now();
+      for (const consumer of group.units) {
+        const reachable = reachableFiles(rootsByUnit.get(consumer.name) ?? [], groupImports);
+        factsByConsumer.set(
+          consumer.name,
+          factsForConsumer(allFacts, reachable, sourceRoot, consumer.name)
+        );
+        const compilerReachable = reachableFiles(rootsByUnit.get(consumer.name) ?? [], allImports);
+        for (const ambient of ambientExternalFiles) compilerReachable.add(ambient);
+        dependenciesByConsumer.set(
+          consumer.name,
+          await compilerDependencies(
+            program,
+            compilerReachable,
+            sourceRoot,
+            [...group.configFiles],
+            dependencyCache
+          )
+        );
+      }
+      compositionMs += Date.now() - compositionStartedAt;
+      groups.push({ fingerprint, units: group.units });
+    } finally {
+      service.dispose();
     }
-    compositionMs += Date.now() - compositionStartedAt;
-    groups.push({ fingerprint, units: group.units });
   }
 
   return {

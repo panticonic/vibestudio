@@ -1,4 +1,15 @@
-import ts from "typescript";
+import * as path from "node:path";
+import * as ts from "typescript/unstable/ast";
+import { TypeScriptSyntaxService } from "@vibestudio/typecheck";
+
+const syntaxRoot = path.resolve(".vibestudio-authority-syntax");
+let syntaxService;
+
+/** Parse repeated authority folds through one incremental native TS 7 project. */
+function sourceFilesFor(source) {
+  syntaxService ??= new TypeScriptSyntaxService(syntaxRoot);
+  return syntaxService.analyze(source, (sourceFiles) => [...sourceFiles]);
+}
 
 const EXTENSION_CONTEXT_FACADES = {
   extensions: "extensions",
@@ -139,15 +150,7 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
   // The package source fold can contain both .ts and .tsx files. Parse both
   // ways and union the result: generic arrow functions such as `async <T>` are
   // ambiguous in TSX, while JSX is ambiguous in TS.
-  const sourceFiles = [ts.ScriptKind.TS, ts.ScriptKind.TSX].map((scriptKind) =>
-    ts.createSourceFile(
-      scriptKind === ts.ScriptKind.TS ? "authority-source.ts" : "authority-source.tsx",
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      scriptKind
-    )
-  );
+  const sourceFiles = sourceFilesFor(source);
   const wrapperMethodArguments = new Map();
 
   const registerWrapper = (name, fn) => {
@@ -169,7 +172,7 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
           if (index !== undefined) methodIndexes.add(index);
         }
       }
-      ts.forEachChild(node, inspect);
+      node.forEachChild(inspect);
     };
     inspect(fn.body);
     if (methodIndexes.size > 0) wrapperMethodArguments.set(name, methodIndexes);
@@ -186,12 +189,12 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
     ) {
       registerWrapper(node.name.text, node.initializer);
     }
-    ts.forEachChild(node, discoverWrappers);
+    node.forEachChild(discoverWrappers);
   };
   for (const sourceFile of sourceFiles) discoverWrappers(sourceFile);
 
   const addLiteral = (argument) => {
-    if (!argument || !ts.isStringLiteralLike(argument)) return;
+    if (!argument || !ts.isStringLiteralLikeNode(argument)) return;
     const capability = `rpc:${argument.text}`;
     if (directCapabilities.has(capability)) capabilities.add(capability);
   };
@@ -207,7 +210,7 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
         addLiteral(node.arguments[index]);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   for (const sourceFile of sourceFiles) visit(sourceFile);
   return capabilities;
@@ -226,17 +229,7 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
  */
 export function inferEventsClientCapabilities(source, serviceMethods) {
   const capabilities = new Set();
-  const sourceFiles = [ts.ScriptKind.TS, ts.ScriptKind.TSX].map((scriptKind) =>
-    ts.createSourceFile(
-      scriptKind === ts.ScriptKind.TS
-        ? "events-authority-source.ts"
-        : "events-authority-source.tsx",
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      scriptKind
-    )
-  );
+  const sourceFiles = sourceFilesFor(source);
   const visit = (node) => {
     if (
       ts.isNewExpression(node) &&
@@ -245,14 +238,14 @@ export function inferEventsClientCapabilities(source, serviceMethods) {
     ) {
       const selectedService = node.arguments?.[2];
       const service =
-        selectedService && ts.isStringLiteralLike(selectedService)
+        selectedService && ts.isStringLiteralLikeNode(selectedService)
           ? selectedService.text
           : "events";
       for (const method of serviceMethods.get(service) ?? []) {
         capabilities.add(`service:${service}.${method}`);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   for (const sourceFile of sourceFiles) visit(sourceFile);
   return capabilities;
@@ -267,14 +260,7 @@ export function inferEventsClientCapabilities(source, serviceMethods) {
  */
 export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
   const capabilities = new Set();
-  for (const scriptKind of [ts.ScriptKind.TS, ts.ScriptKind.TSX]) {
-    const parsed = ts.createSourceFile(
-      scriptKind === ts.ScriptKind.TS ? "typed-clients.ts" : "typed-clients.tsx",
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      scriptKind
-    );
+  for (const parsed of sourceFilesFor(source)) {
     const clients = new Map();
     const collect = (node) => {
       if (
@@ -286,9 +272,10 @@ export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
         node.initializer.expression.text === "createTypedServiceClient"
       ) {
         const service = node.initializer.arguments[0];
-        if (service && ts.isStringLiteralLike(service)) clients.set(node.name.text, service.text);
+        if (service && ts.isStringLiteralLikeNode(service))
+          clients.set(node.name.text, service.text);
       }
-      ts.forEachChild(node, collect);
+      node.forEachChild(collect);
     };
     collect(parsed);
 
@@ -304,7 +291,7 @@ export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
           if (hostCapabilities.has(capability)) capabilities.add(capability);
         }
       }
-      ts.forEachChild(node, inspect);
+      node.forEachChild(inspect);
     };
     inspect(parsed);
   }
@@ -319,32 +306,25 @@ export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
  */
 export function inferWorkspaceServiceCapabilities(source, serviceSelectors) {
   const capabilities = new Set();
-  for (const scriptKind of [ts.ScriptKind.TS, ts.ScriptKind.TSX]) {
-    const parsed = ts.createSourceFile(
-      scriptKind === ts.ScriptKind.TS ? "workspace-services.ts" : "workspace-services.tsx",
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      scriptKind
-    );
+  for (const parsed of sourceFilesFor(source)) {
     const literalBindings = new Map();
     const collect = (node) => {
       if (
         ts.isVariableDeclaration(node) &&
         ts.isIdentifier(node.name) &&
         node.initializer &&
-        ts.isStringLiteralLike(node.initializer)
+        ts.isStringLiteralLikeNode(node.initializer)
       ) {
         const values = literalBindings.get(node.name.text) ?? new Set();
         values.add(node.initializer.text);
         literalBindings.set(node.name.text, values);
       }
-      ts.forEachChild(node, collect);
+      node.forEachChild(collect);
     };
     collect(parsed);
 
     const addSelector = (argument) => {
-      const selectors = ts.isStringLiteralLike(argument)
+      const selectors = ts.isStringLiteralLikeNode(argument)
         ? [argument.text]
         : ts.isIdentifier(argument)
           ? [...(literalBindings.get(argument.text) ?? [])]
@@ -385,7 +365,7 @@ export function inferWorkspaceServiceCapabilities(source, serviceSelectors) {
           addServiceName(HOSTED_RUNTIME_WORKSPACE_SERVICE_FACADES[node.expression.expression.text]);
         }
       }
-      ts.forEachChild(node, inspect);
+      node.forEachChild(inspect);
     };
     inspect(parsed);
   }
@@ -401,18 +381,10 @@ export function inferWorkspaceServiceCapabilities(source, serviceSelectors) {
 export function inferWorkspacePackageReferences(source, workspacePackageNames) {
   const known = new Set(workspacePackageNames);
   const references = new Set();
-  const sourceFiles = [ts.ScriptKind.TS, ts.ScriptKind.TSX].map((scriptKind) =>
-    ts.createSourceFile(
-      scriptKind === ts.ScriptKind.TS ? "package-references.ts" : "package-references.tsx",
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      scriptKind
-    )
-  );
+  const sourceFiles = sourceFilesFor(source);
 
   const addSpecifier = (specifier) => {
-    if (!specifier || !ts.isStringLiteralLike(specifier)) return;
+    if (!specifier || !ts.isStringLiteralLikeNode(specifier)) return;
     const parts = specifier.text.split("/");
     const packageName = specifier.text.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
     if (known.has(packageName)) references.add(packageName);
@@ -430,7 +402,7 @@ export function inferWorkspacePackageReferences(source, workspacePackageNames) {
     ) {
       addSpecifier(node.arguments[0]);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   for (const sourceFile of sourceFiles) visit(sourceFile);
   return references;

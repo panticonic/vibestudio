@@ -35,7 +35,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import { parse } from "@babel/parser";
 
 const DEFAULT_ROOT = process.cwd();
 
@@ -80,31 +80,58 @@ export function resolvesIntoAnyRoot(absFile, specifier, roots) {
   return roots.some((root) => resolved === root.slice(0, -1) || resolved.startsWith(root));
 }
 
-/**
- * Extract the module specifier from a node if it is an import/export
- * declaration, a dynamic `import(...)`, or a `require(...)` call. Returns
- * `{ specifier, literalNode }` or null.
- */
-export function getImportSpecifier(node) {
-  if (
-    (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-    node.moduleSpecifier &&
-    ts.isStringLiteral(node.moduleSpecifier)
-  ) {
-    return { specifier: node.moduleSpecifier.text, literalNode: node.moduleSpecifier };
+function moduleReferences(text, absFile) {
+  const plugins = ["decorators-legacy", "importAttributes", "explicitResourceManagement"];
+  if (/\.[cm]?tsx?$/u.test(absFile)) {
+    plugins.push(["typescript", { dts: absFile.endsWith(".d.ts") }]);
   }
-  if (
-    ts.isCallExpression(node) &&
-    node.arguments.length >= 1 &&
-    ts.isStringLiteralLike(node.arguments[0])
-  ) {
-    const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
-    const isRequire = ts.isIdentifier(node.expression) && node.expression.text === "require";
-    if (isDynamicImport || isRequire) {
-      return { specifier: node.arguments[0].text, literalNode: node.arguments[0] };
+  if (/\.(?:tsx|jsx|js)$/u.test(absFile)) plugins.push("jsx");
+  let ast;
+  try {
+    ast = parse(text, {
+      sourceType: "unambiguous",
+      plugins,
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+      createImportExpressions: true,
+    });
+  } catch (error) {
+    throw new Error(`Could not inspect imports in ${absFile}`, { cause: error });
+  }
+  const references = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
     }
-  }
-  return null;
+    if (!value || typeof value !== "object" || typeof value.type !== "string") return;
+    let source;
+    if (
+      value.type === "ImportDeclaration" ||
+      value.type === "ExportNamedDeclaration" ||
+      value.type === "ExportAllDeclaration"
+    ) {
+      source = value.source;
+    } else if (value.type === "ImportExpression") {
+      source = value.source;
+    } else if (
+      value.type === "CallExpression" &&
+      (value.callee?.type === "Import" ||
+        (value.callee?.type === "Identifier" && value.callee.name === "require"))
+    ) {
+      source = value.arguments?.[0];
+    }
+    if (source?.type === "StringLiteral") {
+      references.push({ specifier: source.value, line: source.loc?.start.line ?? 1 });
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (!["loc", "extra", "leadingComments", "innerComments", "trailingComments"].includes(key)) {
+        visit(child);
+      }
+    }
+  };
+  visit(ast.program);
+  return references;
 }
 
 /**
@@ -120,76 +147,41 @@ export function collectFindings({
 }) {
   const workspaceRoot = path.join(root, "workspace") + path.sep;
   const relFile = path.relative(root, absFile).split(path.sep).join("/");
-  const sourceFile = ts.createSourceFile(
-    absFile,
-    text,
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true
-  );
   const findings = [];
-  const lineOf = (node) =>
-    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-
-  const visit = (node) => {
-    const imported = getImportSpecifier(node);
-    if (imported) {
-      const { specifier } = imported;
-      const crossesWorkspaceBoundary =
-        isWorkspaceImportScope(specifier) ||
-        [...workspacePackageNames].some(
-          (packageName) => specifier === packageName || specifier.startsWith(`${packageName}/`)
-        ) ||
-        Boolean(resolveImport?.(specifier, absFile)) ||
-        (specifier.startsWith(".") && resolvesIntoWorkspace(absFile, specifier, workspaceRoot));
-      if (crossesWorkspaceBoundary) {
-        findings.push({
-          file: relFile,
-          line: lineOf(node),
-          specifier,
-          category: "import-violation",
-        });
-      }
+  for (const { specifier, line } of moduleReferences(text, absFile)) {
+    const crossesWorkspaceBoundary =
+      isWorkspaceImportScope(specifier) ||
+      [...workspacePackageNames].some(
+        (packageName) => specifier === packageName || specifier.startsWith(`${packageName}/`)
+      ) ||
+      Boolean(resolveImport?.(specifier, absFile)) ||
+      (specifier.startsWith(".") && resolvesIntoWorkspace(absFile, specifier, workspaceRoot));
+    if (crossesWorkspaceBoundary) {
+      findings.push({
+        file: relFile,
+        line,
+        specifier,
+        category: "import-violation",
+      });
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
+  }
   return findings;
 }
 
 export function collectWorkspaceFindings({ text, absFile, root = DEFAULT_ROOT }) {
   const relFile = path.relative(root, absFile).split(path.sep).join("/");
-  const hostPrivateRoots = HOST_PRIVATE_IMPORT_ROOTS.map(
-    (dir) => path.join(root, dir) + path.sep
-  );
-  const sourceFile = ts.createSourceFile(
-    absFile,
-    text,
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true
-  );
+  const hostPrivateRoots = HOST_PRIVATE_IMPORT_ROOTS.map((dir) => path.join(root, dir) + path.sep);
   const findings = [];
-  const lineOf = (node) =>
-    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
-
-  const visit = (node) => {
-    const imported = getImportSpecifier(node);
-    if (imported) {
-      const { specifier } = imported;
-      if (
-        specifier.startsWith(".") &&
-        resolvesIntoAnyRoot(absFile, specifier, hostPrivateRoots)
-      ) {
-        findings.push({
-          file: relFile,
-          line: lineOf(node),
-          specifier,
-          category: "workspace-host-import",
-        });
-      }
+  for (const { specifier, line } of moduleReferences(text, absFile)) {
+    if (specifier.startsWith(".") && resolvesIntoAnyRoot(absFile, specifier, hostPrivateRoots)) {
+      findings.push({
+        file: relFile,
+        line,
+        specifier,
+        category: "workspace-host-import",
+      });
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
+  }
   return findings;
 }
 

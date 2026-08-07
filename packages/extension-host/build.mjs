@@ -39,9 +39,7 @@ const require = __createRequire(import.meta.url);
   },
   // electron is never bundled: process-adapter loads it lazily via createRequire
   // only inside Electron, so it stays a runtime-optional require in both modes.
-  external: PUBLISH
-    ? ["electron"]
-    : ["@vibestudio/extension", "@vibestudio/process-adapter"],
+  external: PUBLISH ? ["electron"] : ["@vibestudio/extension", "@vibestudio/process-adapter"],
 });
 
 if (PUBLISH) {
@@ -51,10 +49,14 @@ if (PUBLISH) {
   // publish bundle ships runtime JS, not types). Use the project's
   // tsconfig.build.json with --emitDeclarationOnly so tsc doesn't double-write
   // the JavaScript that esbuild already produced.
-  const tscBin = path.join(path.dirname(require.resolve("typescript/package.json")), "lib", "tsc.js");
+  const tscBin = path.join(
+    path.dirname(require.resolve("typescript/package.json")),
+    "lib",
+    "tsc.js"
+  );
   execFileSync(
     process.execPath,
     [tscBin, "--project", "tsconfig.build.json", "--emitDeclarationOnly"],
-    { stdio: "inherit", cwd: path.dirname(new URL(import.meta.url).pathname) },
+    { stdio: "inherit", cwd: path.dirname(new URL(import.meta.url).pathname) }
   );
 }

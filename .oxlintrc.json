@@ -1,0 +1,43 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript"],
+  "categories": {
+    "correctness": "off"
+  },
+  "ignorePatterns": [
+    "node_modules",
+    "dist",
+    "apps/mobile/*.config.js",
+    "apps/mobile/index.js",
+    "workspace/apps/mobile/src/polyfills/*.js",
+    "src/server/services/relaySeam.integration.test.ts"
+  ],
+  "options": {
+    "typeAware": true
+  },
+  "rules": {
+    "eslint/no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_"
+      }
+    ],
+    "typescript/no-dynamic-delete": "warn",
+    "typescript/no-non-null-assertion": "warn",
+    "eslint/no-empty": [
+      "error",
+      {
+        "allowEmptyCatch": false
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts"],
+      "rules": {
+        "typescript/no-non-null-assertion": "off"
+      }
+    }
+  ]
+}

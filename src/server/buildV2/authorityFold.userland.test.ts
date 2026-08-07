@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { TypeCheckService } from "@vibestudio/typecheck";
 import { authorityDiagnosticsForProgram } from "./authorityFold.js";
 import { createExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
 
@@ -10,33 +10,42 @@ function programFor(source: string) {
   const root = mkdtempSync(join(tmpdir(), "vibestudio-authority-fold-"));
   const file = join(root, "index.ts");
   writeFileSync(file, source);
+  const service = new TypeCheckService({
+    panelPath: root,
+    workspaceContext: null,
+    disableTsconfigDiscovery: true,
+  });
+  service.updateFile(file, source);
+  services.push(service);
   return {
     root,
-    program: ts.createProgram([file], {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      strict: true,
-      skipLibCheck: true,
-    }),
+    project: service.getProject(),
   };
 }
 
+const services: TypeCheckService[] = [];
+afterEach(() => {
+  for (const service of services.splice(0)) service.dispose();
+});
+
 function programForFiles(files: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), "vibestudio-authority-fold-deps-"));
-  const paths = Object.entries(files).map(([relative, source]) => {
+  const sources = Object.entries(files).map(([relative, source]) => {
     const file = join(root, relative);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, source);
-    return file;
+    return { file, source };
   });
+  const service = new TypeCheckService({
+    panelPath: root,
+    workspaceContext: null,
+    disableTsconfigDiscovery: true,
+  });
+  for (const source of sources) service.updateFile(source.file, source.source);
+  services.push(service);
   return {
     root,
-    program: ts.createProgram(paths, {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      strict: true,
-      skipLibCheck: true,
-    }),
+    project: service.getProject(),
   };
 }
 
@@ -78,7 +87,7 @@ const catalog = {
 
 describe("userland authority fold", () => {
   it("reports an actionable diagnostic when a consumed service lacks review metadata", async () => {
-    const { root, program } = programFor(`
+    const { root, project } = programFor(`
       declare const workers: { resolveService(query: string): Promise<unknown> };
       export const notes = workers.resolveService("example.notes.v1");
     `);
@@ -90,7 +99,7 @@ describe("userland authority fold", () => {
     });
 
     const diagnostics = await authorityDiagnosticsForProgram({
-      program,
+      project,
       sourceRoot: root,
       unitRelativePath: ".",
       units: [{ name: "consumer", relativePath: "." }],
@@ -109,7 +118,7 @@ describe("userland authority fold", () => {
   });
 
   it("does not charge an empty package for unrelated workspace source", async () => {
-    const { root, program } = programForFiles({
+    const { root, project } = programForFiles({
       "packages/empty/index.ts": "export {};",
       "packages/unrelated/index.ts": `
         export const method = "workspace-state.slot.commitPreparedNavigation";
@@ -117,7 +126,7 @@ describe("userland authority fold", () => {
     });
 
     const diagnostics = await authorityDiagnosticsForProgram({
-      program,
+      project,
       sourceRoot: root,
       unitRelativePath: "packages/empty",
       units: [
@@ -131,12 +140,12 @@ describe("userland authority fold", () => {
   });
 
   it("still charges a library for an explicit context-bearing host call", async () => {
-    const { root, program } = programFor(
+    const { root, project } = programFor(
       `export const method = "workspace-state.slot.commitPreparedNavigation";`
     );
 
     const diagnostics = await authorityDiagnosticsForProgram({
-      program,
+      project,
       sourceRoot: root,
       unitRelativePath: ".",
       units: [{ name: "@workspace/library", relativePath: "." }],
@@ -153,7 +162,7 @@ describe("userland authority fold", () => {
   });
 
   it("does not treat trusted runtime dispatch plumbing as consumer service intent", async () => {
-    const { root, program } = programFor("export const entry = true;");
+    const { root, project } = programFor("export const entry = true;");
     const environment = createExactWorkspaceAuthorityEnvironment({
       stateHash: "state:exact",
       services: [binding],
@@ -161,7 +170,7 @@ describe("userland authority fold", () => {
     });
 
     const diagnostics = await authorityDiagnosticsForProgram({
-      program,
+      project,
       sourceRoot: root,
       unitRelativePath: ".",
       units: [{ name: "consumer", relativePath: "." }],
@@ -201,7 +210,7 @@ describe("userland authority fold", () => {
   });
 
   it("does not treat reachable trusted runtime source as consumer service intent", async () => {
-    const { root, program } = programForFiles({
+    const { root, project } = programForFiles({
       "index.ts": `import { runtimeClient } from "./runtime/workerd"; export const client = runtimeClient;`,
       "runtime/workerd.ts": `
         declare const workers: {
@@ -217,7 +226,7 @@ describe("userland authority fold", () => {
     });
 
     const diagnostics = await authorityDiagnosticsForProgram({
-      program,
+      project,
       sourceRoot: root,
       unitRelativePath: ".",
       units: [
@@ -253,7 +262,7 @@ describe("userland authority fold", () => {
   });
 
   it("requires service admission and the sealed provider method capability", async () => {
-    const { root, program } = programFor(`
+    const { root, project } = programFor(`
       declare const workers: { resolveService(query: string, objectKey?: string | null): Promise<{ targetId: string }> };
       declare const rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
       async function run() {
@@ -267,7 +276,7 @@ describe("userland authority fold", () => {
       resolveCatalog: async () => catalog,
     });
     const diagnostics = await authorityDiagnosticsForProgram({
-      program,
+      project,
       sourceRoot: root,
       unitRelativePath: ".",
       units: [{ name: "consumer", relativePath: "." }],
@@ -283,7 +292,7 @@ describe("userland authority fold", () => {
   });
 
   it("accepts an exact service target and provider-bound capability family", async () => {
-    const { root, program } = programFor(`
+    const { root, project } = programFor(`
       declare const workers: { resolveService(query: string, objectKey?: string | null): Promise<{ targetId: string }> };
       declare const rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
       async function run() {
@@ -297,7 +306,7 @@ describe("userland authority fold", () => {
       resolveCatalog: async () => catalog,
     });
     const diagnostics = await authorityDiagnosticsForProgram({
-      program,
+      project,
       sourceRoot: root,
       unitRelativePath: ".",
       units: [{ name: "consumer", relativePath: "." }],
@@ -332,7 +341,7 @@ describe("userland authority fold", () => {
   });
 
   it("requires dependency-origin effects to name the explicit package endowment", async () => {
-    const { root, program } = programForFiles({
+    const { root, project } = programForFiles({
       "index.ts": "export const entry = true;",
       "dep/index.ts": `
         declare const workers: { resolveService(query: string): Promise<{ targetId: string }> };
@@ -349,7 +358,7 @@ describe("userland authority fold", () => {
       resolveCatalog: async () => catalog,
     });
     const diagnostics = await authorityDiagnosticsForProgram({
-      program,
+      project,
       sourceRoot: root,
       unitRelativePath: ".",
       units: [

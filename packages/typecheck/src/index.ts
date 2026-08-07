@@ -34,6 +34,12 @@ export {
   type QuickInfo,
 } from "./service.js";
 
+export {
+  usingTypeScriptProject,
+  TypeScriptSyntaxService,
+  type TypeScriptProjectSource,
+} from "./project.js";
+
 // Workspace package discovery — used by TypeCheckService to map package
 // names to source directories. Also exports the shared `parseWorkspaceImport`
 // and `resolveExportSubpath` helpers that the esbuild panel builder consumes
@@ -73,9 +79,8 @@ export {
   GLOBAL_TYPE_DEFINITIONS,
 } from "./lib/index.js";
 
-// Bundled TypeScript lib files — Monaco editor and TypeCheckService both
-// use these to provide ES2022+ / DOM / esnext.disposable types without
-// reading from typescript/lib/ at runtime.
+// Bundled TypeScript lib files for Monaco. Native server projects read the
+// platform compiler package's standard libraries directly.
 export { TS_LIB_FILES } from "./lib/typescript-libs.js";
 
 // Type definition loader — walks node_modules and reads `.d.ts` files for

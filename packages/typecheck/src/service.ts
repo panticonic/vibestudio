@@ -1,34 +1,35 @@
 /**
- * TypeScript type checking service for Vibestudio projects.
+ * Native TypeScript project service for Vibestudio source graphs.
  *
- * Runs TypeScript's language service against on-disk sources with:
- *   - Workspace-package discovery (pnpm-workspace.yaml → name→dir map)
- *   - Automatic tsconfig.json loading + merging
- *   - Disk-aware module resolution (standard TS resolver sees node_modules,
- *     pnpm symlinks, package.json exports, etc. — no custom interception)
- *
- * Two escape hatches remain:
- *   1. `resolveWorkspaceModule` maps package names to source directories via
- *      the workspace context map. Needed for panels that aren't pnpm members
- *      (they have no local node_modules to walk) and as an optimisation for
- *      workspace packages so we go straight to source without a node_modules
- *      detour.
- *   2. Everything else flows through `ts.resolveModuleName` with a disk-aware
- *      module resolution host.
+ * TypeScript 7 owns project construction, module resolution, incremental
+ * snapshots, diagnostics, and editor semantics. Vibestudio contributes only a
+ * filesystem projection: unsaved source overlays plus workspace/external
+ * package mounts for materialized graphs that intentionally have no local
+ * node_modules tree.
  */
 
-import * as ts from "typescript";
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { createRequire } from "node:module";
+import {
+  API,
+  CompletionItemKind,
+  DiagnosticCategory,
+  type CompilerOptions,
+  type Diagnostic,
+  type Program,
+  type Project,
+  type Snapshot,
+} from "typescript/unstable/sync";
+import type { FileSystemEntries } from "typescript/unstable/fs";
 import {
   discoverWorkspaceContext,
-  resolveExportSubpath,
-  WORKSPACE_CONDITIONS,
   type WorkspaceContext,
+  type WorkspacePackageInfo,
 } from "./lib/index.js";
-import { TS_LIB_FILES } from "./lib/typescript-libs.js";
 
-/** Shared diagnostic shape (position + severity only). */
+const require = createRequire(import.meta.url);
+
 export interface BaseDiagnostic {
   file: string;
   line: number;
@@ -39,13 +40,11 @@ export interface BaseDiagnostic {
   severity: "error" | "warning" | "info";
 }
 
-/** Full diagnostic — adds the TypeScript code and category. */
 export interface TypeCheckDiagnostic extends BaseDiagnostic {
   code: number;
-  category: ts.DiagnosticCategory;
+  category: DiagnosticCategory;
 }
 
-/** Result of a type-check run. */
 export interface TypeCheckResult {
   panelPath: string;
   diagnostics: TypeCheckDiagnostic[];
@@ -53,844 +52,560 @@ export interface TypeCheckResult {
   checkedFiles: string[];
 }
 
-/** Hover / quick-info result. */
 export interface QuickInfo {
   displayParts: string;
   documentation?: string;
   tags?: { name: string; text?: string }[];
 }
 
-/**
- * Configuration for the TypeCheckService.
- */
+export interface CompletionInfo {
+  entries: readonly { name: string; kind: string }[];
+}
+
+export interface DefinitionInfo {
+  fileName: string;
+  textSpan: { start: number; length: number };
+  name: string;
+}
+
 export interface TypeCheckServiceConfig {
-  /** Root path of the panel/package being checked. Also the cwd for tsconfig
-   *  discovery and module resolution. */
+  /** Root path and compiler working directory for the checked unit. */
   panelPath: string;
-  /** Additional node_modules roots to search before falling back to TS's
-   *  normal ancestor walk. Useful for isolated build/typecheck caches. */
+  /** External dependency roots projected as node_modules ancestors. */
   nodeModulesPaths?: string[];
-  /** Override TypeScript compiler options. Merged on top of defaults + any
-   *  loaded tsconfig.json. `noEmit` is always forced to true. */
-  compilerOptions?: ts.CompilerOptions;
-  /** Skip suggestion diagnostics for a faster check (errors + warnings only). */
-  skipSuggestions?: boolean;
-  /** Pre-discovered workspace context. When omitted, we walk up from
-   *  `panelPath` looking for a pnpm-workspace.yaml. Pass `null` to skip
-   *  discovery entirely (unresolved workspace imports fall through to
-   *  standard TS resolution). */
+  /** Pre-discovered workspace package projection. */
   workspaceContext?: WorkspaceContext | null;
-  /** Opt out of automatic tsconfig.json discovery — useful for hermetic tests. */
+  /** Skip suggestion diagnostics. */
+  skipSuggestions?: boolean;
+  /** Do not discover a parent tsconfig.json. */
   disableTsconfigDiscovery?: boolean;
-  /**
-   * Inclusive upper boundary for parent tsconfig discovery. Build previews set
-   * this to the exact unit root so an absent unit config cannot silently adopt
-   * unrelated workspace-wide include/options state.
-   */
+  /** Inclusive upper boundary for parent tsconfig discovery. */
   tsconfigSearchBoundary?: string;
+  /** Use this exact source tsconfig instead of discovery. */
+  tsconfigPath?: string;
+}
+
+interface OverlayFile {
+  content: string;
 }
 
 /**
- * TypeScript type checking service.
+ * Stateful TypeScript 7 project backed by one native compiler process.
+ *
+ * Callers may update several files before asking a question. The next query
+ * publishes one immutable native snapshot containing the whole batch.
  */
 export class TypeCheckService {
-  private languageService: ts.LanguageService;
-  private files = new Map<string, { content: string; version: number }>();
-  private config: TypeCheckServiceConfig;
-  /** Workspace context (monorepo root + package map) for source-based resolution */
-  private workspaceContext: WorkspaceContext | null = null;
-  /** Cache of disk file existence checks */
-  private diskFileExistsCache = new Map<string, boolean>();
-  /** Cached merged compiler options (defaults + tsconfig + overrides) */
-  private cachedCompilerOptions: ts.CompilerOptions | null = null;
-  /** Whether we've already attempted to load tsconfig.json */
-  private tsconfigOptionsLoaded = false;
-  /** Cached compilerOptions loaded from tsconfig.json (if any) */
-  private tsconfigOptionsCache: ts.CompilerOptions | null = null;
-  /** Exact config files read while resolving the effective compiler options. */
-  private compilerOptionDependencies = new Set<string>();
-  /** TypeScript module resolution cache for ts.resolveModuleName */
-  private tsResolutionCache: ts.ModuleResolutionCache | null = null;
+  private readonly config: TypeCheckServiceConfig;
+  private readonly panelPath: string;
+  private readonly configFilePath: string;
+  private readonly workspaceContext: WorkspaceContext | null;
+  private readonly nodeModulesPaths: readonly string[];
+  private readonly files = new Map<string, OverlayFile>();
+  private readonly compilerOptionDependencies = new Set<string>();
+  private readonly createdFiles = new Set<string>();
+  private readonly changedFiles = new Set<string>();
+  private readonly deletedFiles = new Set<string>();
+  private readonly api: API;
+  private snapshot: Snapshot | null = null;
+  private project: Project | null = null;
+  private sourceConfigPath: string | null = null;
+  private configContent = "";
+  private opened = false;
+  private disposed = false;
 
   constructor(config: TypeCheckServiceConfig) {
     this.config = config;
+    this.panelPath = path.resolve(config.panelPath);
+    this.configFilePath = path.join(this.panelPath, ".vibestudio-typecheck.tsconfig.json");
+    this.nodeModulesPaths = (config.nodeModulesPaths ?? []).map((root) => path.resolve(root));
+    this.workspaceContext =
+      config.workspaceContext === null
+        ? null
+        : (config.workspaceContext ?? discoverWorkspaceContext(this.panelPath));
+    this.sourceConfigPath = this.resolveSourceConfig();
+    if (this.sourceConfigPath) this.collectConfigDependencies(this.sourceConfigPath);
 
-    // `null` = explicitly skip discovery. `undefined` = auto-discover.
-    if (config.workspaceContext === null) {
-      this.workspaceContext = null;
-    } else if (config.workspaceContext) {
-      this.workspaceContext = config.workspaceContext;
-    } else {
-      this.workspaceContext = discoverWorkspaceContext(config.panelPath);
-    }
-
-    this.addBundledLibFiles();
-    this.languageService = this.createLanguageService();
+    this.api = new API({
+      cwd: this.panelPath,
+      fs: {
+        readFile: (fileName) => this.readProjectedFile(fileName),
+        fileExists: (fileName) => this.projectedFileExists(fileName),
+        directoryExists: (directoryName) => this.projectedDirectoryExists(directoryName),
+        getAccessibleEntries: (directoryName) => this.getProjectedEntries(directoryName),
+        realpath: (fileName) => this.projectedRealpath(fileName),
+      },
+    });
   }
-
-  /**
-   * Return the exact compiler options used by this service after defaults,
-   * tsconfig discovery, caller overrides, and check-only normalization.
-   *
-   * Snapshot-style callers use this to group consumers by compiler semantics
-   * without constructing a TypeScript Program for every consumer.
-   */
-  getEffectiveCompilerOptions(): Readonly<ts.CompilerOptions> {
-    return { ...this.getCompilerOptions() };
-  }
-
-  /** Config files whose contents contributed to the effective compiler options. */
-  getCompilerOptionDependencies(): readonly string[] {
-    this.getCompilerOptions();
-    return [...this.compilerOptionDependencies].sort();
-  }
-
-  /**
-   * Register the bundled `lib.*.d.ts` files into the virtual file map so
-   * TypeScript's language service can find them via `getScriptSnapshot`.
-   */
-  private addBundledLibFiles(): void {
-    for (const [libName, content] of Object.entries(TS_LIB_FILES)) {
-      this.files.set(`/@typescript/lib/${libName}`, { content, version: 1 });
-    }
-  }
-
-  // ===========================================================================
-  // File registration
-  // ===========================================================================
 
   updateFile(filePath: string, content: string): void {
-    const existing = this.files.get(filePath);
-    this.files.set(filePath, {
-      content,
-      version: (existing?.version ?? 0) + 1,
-    });
-    this.invalidateTsResolutionCache();
+    this.assertActive();
+    const absolute = path.resolve(filePath);
+    const existing = this.files.get(absolute);
+    if (existing?.content === content) return;
+    this.files.set(absolute, { content });
+    this.deletedFiles.delete(absolute);
+    if (existing) this.changedFiles.add(absolute);
+    else this.createdFiles.add(absolute);
   }
 
   removeFile(filePath: string): void {
-    this.files.delete(filePath);
-    this.invalidateTsResolutionCache();
+    this.assertActive();
+    const absolute = path.resolve(filePath);
+    if (!this.files.delete(absolute)) return;
+    if (!this.createdFiles.delete(absolute)) this.deletedFiles.add(absolute);
+    this.changedFiles.delete(absolute);
   }
 
   hasFile(filePath: string): boolean {
-    return this.files.has(filePath);
+    return this.files.has(path.resolve(filePath));
   }
 
-  /**
-   * Paths of files we'd ask TypeScript to check when no specific file is
-   * requested. Excludes the bundled lib stubs.
-   */
   getFileNames(): string[] {
-    return [...this.files.keys()].filter((p) => !p.startsWith("/@typescript/lib/"));
+    return [...this.files.keys()];
   }
 
-  // ===========================================================================
-  // Diagnostics
-  // ===========================================================================
+  getEffectiveCompilerOptions(): Readonly<CompilerOptions> {
+    return { ...this.ensureProject().compilerOptions };
+  }
+
+  getCompilerOptionDependencies(): readonly string[] {
+    return [...this.compilerOptionDependencies].sort();
+  }
 
   check(filePath?: string): TypeCheckResult {
-    const diagnostics = filePath ? this.getFileDiagnostics(filePath) : this.getAllDiagnostics();
-
-    return {
-      panelPath: this.config.panelPath,
-      diagnostics,
-      timestamp: Date.now(),
-      checkedFiles: filePath ? [filePath] : this.getFileNames(),
-    };
-  }
-
-  private getFileDiagnostics(filePath: string): TypeCheckDiagnostic[] {
-    const syntactic = this.languageService.getSyntacticDiagnostics(filePath);
-    const semantic = this.languageService.getSemanticDiagnostics(filePath);
-
-    const result = [
-      ...syntactic.map((d) => this.convertDiagnostic(d, "error")),
-      ...semantic.map((d) => this.convertDiagnostic(d)),
+    const project = this.ensureProject();
+    const document = filePath ? path.resolve(filePath) : undefined;
+    const diagnostics: Diagnostic[] = [
+      ...project.program.getConfigFileParsingDiagnostics(),
+      ...project.program.getProgramDiagnostics(),
+      ...project.program.getGlobalDiagnostics(),
+      ...project.program.getSyntacticDiagnostics(document),
+      ...project.program.getSemanticDiagnostics(document),
     ];
-
     if (!this.config.skipSuggestions) {
-      const suggestion = this.languageService.getSuggestionDiagnostics(filePath);
-      result.push(...suggestion.map((d) => this.convertDiagnostic(d, "info")));
-    }
-
-    return result;
-  }
-
-  private getAllDiagnostics(): TypeCheckDiagnostic[] {
-    const diagnostics: TypeCheckDiagnostic[] = [];
-    for (const fileName of this.getFileNames()) {
-      diagnostics.push(...this.getFileDiagnostics(fileName));
-    }
-    return diagnostics;
-  }
-
-  private convertDiagnostic(
-    diagnostic: ts.Diagnostic,
-    forceSeverity?: "error" | "warning" | "info"
-  ): TypeCheckDiagnostic {
-    const severity = forceSeverity ?? this.categoryToSeverity(diagnostic.category);
-    const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
-
-    let file = "";
-    let line = 1;
-    let column = 1;
-    let endLine: number | undefined;
-    let endColumn: number | undefined;
-
-    if (diagnostic.file && diagnostic.start !== undefined) {
-      file = diagnostic.file.fileName;
-      const startPos = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
-      line = startPos.line + 1;
-      column = startPos.character + 1;
-
-      if (diagnostic.length !== undefined) {
-        const endPos = diagnostic.file.getLineAndCharacterOfPosition(
-          diagnostic.start + diagnostic.length
-        );
-        endLine = endPos.line + 1;
-        endColumn = endPos.character + 1;
-      }
+      diagnostics.push(...project.program.getSuggestionDiagnostics(document));
     }
 
     return {
-      file,
-      line,
-      column,
-      endLine,
-      endColumn,
-      message,
-      code: diagnostic.code,
-      severity,
-      category: diagnostic.category,
+      panelPath: this.panelPath,
+      diagnostics: diagnostics.map((diagnostic) => this.convertDiagnostic(diagnostic)),
+      timestamp: Date.now(),
+      checkedFiles: document ? [document] : this.getFileNames(),
     };
   }
-
-  private categoryToSeverity(category: ts.DiagnosticCategory): "error" | "warning" | "info" {
-    switch (category) {
-      case ts.DiagnosticCategory.Error:
-        return "error";
-      case ts.DiagnosticCategory.Warning:
-        return "warning";
-      default:
-        return "info";
-    }
-  }
-
-  // ===========================================================================
-  // Editor operations (hover, completions, definition)
-  // ===========================================================================
 
   getQuickInfo(filePath: string, line: number, column: number): QuickInfo | null {
-    const position = this.getPosition(filePath, line, column);
+    const project = this.ensureProject();
+    const position = this.getPosition(project, filePath, line, column);
     if (position === undefined) return null;
-
-    const info = this.languageService.getQuickInfoAtPosition(filePath, position);
-    if (!info) return null;
-
+    const absolute = path.resolve(filePath);
+    const symbol = project.checker.getSymbolAtPosition(absolute, position);
+    const type = project.checker.getTypeAtPosition(absolute, position);
+    if (!symbol && !type) return null;
+    const documentation = symbol?.getDocumentationComment(project.checker) || undefined;
+    const tags = symbol?.getJsDocTags(project.checker).map((tag) => ({
+      name: tag.name,
+      ...(tag.text ? { text: tag.text } : {}),
+    }));
     return {
-      displayParts: ts.displayPartsToString(info.displayParts),
-      documentation: info.documentation ? ts.displayPartsToString(info.documentation) : undefined,
-      tags: info.tags?.map((t) => ({
-        name: t.name,
-        text: t.text ? ts.displayPartsToString(t.text) : undefined,
-      })),
+      displayParts: type ? project.checker.typeToString(type) : (symbol?.name ?? ""),
+      ...(documentation ? { documentation } : {}),
+      ...(tags && tags.length > 0 ? { tags } : {}),
     };
   }
 
-  getCompletions(filePath: string, line: number, column: number): ts.CompletionInfo | undefined {
-    const position = this.getPosition(filePath, line, column);
+  getCompletions(filePath: string, line: number, column: number): CompletionInfo | undefined {
+    const project = this.ensureProject();
+    const position = this.getPosition(project, filePath, line, column);
     if (position === undefined) return undefined;
-    return this.languageService.getCompletionsAtPosition(filePath, position, undefined);
+    const completions = project.checker.getCompletionsAtPosition(path.resolve(filePath), position);
+    if (!completions) return undefined;
+    return {
+      entries: completions.entries.map((entry) => ({
+        name: entry.name,
+        kind:
+          entry.kind === undefined
+            ? "unknown"
+            : (CompletionItemKind[entry.kind] ?? "unknown").toLowerCase(),
+      })),
+    };
   }
 
   getDefinition(
     filePath: string,
     line: number,
     column: number
-  ): readonly ts.DefinitionInfo[] | undefined {
-    const position = this.getPosition(filePath, line, column);
+  ): readonly DefinitionInfo[] | undefined {
+    const project = this.ensureProject();
+    const position = this.getPosition(project, filePath, line, column);
     if (position === undefined) return undefined;
-    return this.languageService.getDefinitionAtPosition(filePath, position);
+    const symbol = project.checker.getSymbolAtPosition(path.resolve(filePath), position);
+    if (!symbol) return undefined;
+    const definitions = symbol.declarations.map((handle) => {
+      const node = handle.resolve(project);
+      const start = node?.getStart() ?? 0;
+      const end = node?.end ?? start;
+      return {
+        fileName: handle.path,
+        textSpan: { start, length: Math.max(0, end - start) },
+        name: symbol.name,
+      };
+    });
+    return definitions.length > 0 ? definitions : undefined;
   }
 
-  getProgram(): ts.Program | undefined {
-    return this.languageService.getProgram();
+  getProgram(): Program {
+    return this.ensureProject().program;
   }
 
   /**
-   * Convert line/column (1-based) to offset position. Reuses the source file
-   * from the language service's program when available to avoid redundant
-   * AST parsing.
+   * Return the complete native semantic project. Compiler-API consumers need
+   * this rather than a detached Program because symbols and node handles are
+   * intentionally scoped to the immutable project snapshot.
    */
-  private getPosition(filePath: string, line: number, column: number): number | undefined {
-    const program = this.languageService.getProgram();
-    const sourceFile = program?.getSourceFile(filePath);
+  getProject(): Project {
+    return this.ensureProject();
+  }
 
-    if (sourceFile) {
-      try {
-        return sourceFile.getPositionOfLineAndCharacter(line - 1, column - 1);
-      } catch {
-        return undefined;
-      }
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.snapshot?.dispose();
+    this.snapshot = null;
+    this.project = null;
+    this.api.close();
+  }
+
+  private ensureProject(): Project {
+    this.assertActive();
+    this.synchronizeGeneratedConfig();
+    if (
+      this.project &&
+      this.createdFiles.size === 0 &&
+      this.changedFiles.size === 0 &&
+      this.deletedFiles.size === 0
+    ) {
+      return this.project;
     }
 
-    const file = this.files.get(filePath);
-    if (!file) return undefined;
+    const previous = this.snapshot;
+    const fileChanges = {
+      ...(this.createdFiles.size > 0 ? { created: [...this.createdFiles] } : {}),
+      ...(this.changedFiles.size > 0 ? { changed: [...this.changedFiles] } : {}),
+      ...(this.deletedFiles.size > 0 ? { deleted: [...this.deletedFiles] } : {}),
+    };
+    this.snapshot = this.api.updateSnapshot({
+      ...(!this.opened ? { openProjects: [this.configFilePath] } : {}),
+      ...(this.opened && Object.keys(fileChanges).length > 0 ? { fileChanges } : {}),
+    });
+    this.opened = true;
+    this.project =
+      this.snapshot.getProject(this.configFilePath) ?? this.snapshot.getProjects()[0] ?? null;
+    previous?.dispose();
+    this.createdFiles.clear();
+    this.changedFiles.clear();
+    this.deletedFiles.clear();
+    if (!this.project) {
+      throw new Error(`TypeScript 7 did not create a project for ${this.configFilePath}`);
+    }
+    return this.project;
+  }
 
-    const tempSourceFile = ts.createSourceFile(
-      filePath,
-      file.content,
-      ts.ScriptTarget.Latest,
-      true
-    );
+  private synchronizeGeneratedConfig(): void {
+    const compilerOptions = this.sourceConfigPath
+      ? {
+          noEmit: true,
+          skipLibCheck: true,
+          composite: false,
+          incremental: false,
+          declaration: false,
+          declarationMap: false,
+          emitDeclarationOnly: false,
+          rootDir: path.parse(this.panelPath).root,
+          rootDirs: [],
+          paths: {},
+        }
+      : {
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          jsx: "react-jsx",
+          lib: [
+            "ES2022",
+            "ES2023.Array",
+            "ES2023.Collection",
+            "ES2023.Intl",
+            "ESNext.Disposable",
+            "ES2025.Iterator",
+            "ES2024.Promise",
+            "DOM",
+            "DOM.Iterable",
+          ],
+          strict: true,
+          esModuleInterop: true,
+          allowSyntheticDefaultImports: true,
+          resolveJsonModule: true,
+          isolatedModules: true,
+          allowJs: true,
+          checkJs: false,
+          noEmit: true,
+          skipLibCheck: true,
+        };
+    const content = `${JSON.stringify(
+      {
+        ...(this.sourceConfigPath ? { extends: this.sourceConfigPath } : {}),
+        compilerOptions,
+        files: this.getFileNames(),
+      },
+      null,
+      2
+    )}\n`;
+    if (content === this.configContent) return;
+    const existed = this.configContent.length > 0;
+    this.configContent = content;
+    if (existed) this.changedFiles.add(this.configFilePath);
+    else this.createdFiles.add(this.configFilePath);
+  }
+
+  private convertDiagnostic(diagnostic: Diagnostic): TypeCheckDiagnostic {
+    const fileName = diagnostic.fileName ? path.resolve(diagnostic.fileName) : "";
+    const sourceFile = fileName ? this.project?.program.getSourceFile(fileName) : undefined;
+    const start = sourceFile?.getLineAndCharacterOfPosition(diagnostic.pos);
+    const end = sourceFile?.getLineAndCharacterOfPosition(diagnostic.end);
+    return {
+      file: fileName,
+      line: (start?.line ?? 0) + 1,
+      column: (start?.character ?? 0) + 1,
+      ...(end ? { endLine: end.line + 1, endColumn: end.character + 1 } : {}),
+      message: diagnostic.text,
+      code: diagnostic.code,
+      category: diagnostic.category,
+      severity: this.categoryToSeverity(diagnostic.category),
+    };
+  }
+
+  private categoryToSeverity(category: DiagnosticCategory): "error" | "warning" | "info" {
+    if (category === DiagnosticCategory.Error) return "error";
+    if (category === DiagnosticCategory.Warning) return "warning";
+    return "info";
+  }
+
+  private getPosition(
+    project: Project,
+    filePath: string,
+    line: number,
+    column: number
+  ): number | undefined {
+    const sourceFile = project.program.getSourceFile(path.resolve(filePath));
+    if (!sourceFile) return undefined;
     try {
-      return tempSourceFile.getPositionOfLineAndCharacter(line - 1, column - 1);
+      return sourceFile.getPositionOfLineAndCharacter(line - 1, column - 1);
     } catch {
       return undefined;
     }
   }
 
-  // ===========================================================================
-  // Language service host
-  // ===========================================================================
-
-  private createLanguageService(): ts.LanguageService {
-    const self = this;
-
-    const host: ts.LanguageServiceHost = {
-      getCompilationSettings: () => this.getCompilerOptions(),
-      getScriptFileNames: () => [...this.files.keys()],
-      getScriptVersion: (fileName) => String(this.files.get(fileName)?.version ?? 0),
-      getScriptSnapshot: (fileName) => {
-        const file = this.files.get(fileName);
-        if (file) return ts.ScriptSnapshot.fromString(file.content);
-        if (this.isVirtualPath(fileName)) return undefined;
-        if (this.diskFileExists(fileName)) {
-          try {
-            return ts.ScriptSnapshot.fromString(fs.readFileSync(fileName, "utf-8"));
-          } catch {
-            return undefined;
-          }
-        }
-        return undefined;
-      },
-      getCurrentDirectory: () => this.config.panelPath,
-      getDefaultLibFileName: () => "/@typescript/lib/lib.es5.d.ts",
-      fileExists: (filePath) => {
-        if (this.files.has(filePath)) return true;
-        if (this.isVirtualPath(filePath)) return false;
-        return this.diskFileExists(filePath);
-      },
-      readFile: (filePath) => {
-        const file = this.files.get(filePath);
-        if (file) return file.content;
-        if (this.isVirtualPath(filePath)) return undefined;
-        if (this.diskFileExists(filePath)) {
-          try {
-            return fs.readFileSync(filePath, "utf-8");
-          } catch {
-            return undefined;
-          }
-        }
-        return undefined;
-      },
-      directoryExists: (dirPath) => {
-        if (this.isVirtualPath(dirPath)) return false;
-        try {
-          return fs.statSync(dirPath).isDirectory();
-        } catch {
-          return false;
-        }
-      },
-      getDirectories: (dirPath) => {
-        if (this.isVirtualPath(dirPath)) return [];
-        try {
-          return fs
-            .readdirSync(dirPath, { withFileTypes: true })
-            .filter((e) => e.isDirectory())
-            .map((e) => e.name);
-        } catch {
-          return [];
-        }
-      },
-      realpath: (p) => {
-        try {
-          return fs.realpathSync(p);
-        } catch {
-          return p;
-        }
-      },
-
-      resolveModuleNameLiterals(
-        moduleLiterals: readonly ts.StringLiteralLike[],
-        containingFile: string,
-        _redirectedReference: ts.ResolvedProjectReference | undefined,
-        options: ts.CompilerOptions
-      ): readonly ts.ResolvedModuleWithFailedLookupLocations[] {
-        return moduleLiterals.map(({ text: moduleName }) =>
-          self.resolveModuleName(moduleName, containingFile, options)
-        );
-      },
-    };
-
-    return ts.createLanguageService(host);
-  }
-
-  /**
-   * Paths under `/@typescript/lib/` are synthesized for bundled lib files and
-   * must not fall through to disk (the names don't correspond to real paths).
-   */
-  private isVirtualPath(filePath: string): boolean {
-    return filePath.startsWith("/@typescript/");
-  }
-
-  // ===========================================================================
-  // Module resolution
-  // ===========================================================================
-
-  /**
-   * Resolve a module specifier. Two steps:
-   *   1. Look the name up in the workspace context map. This is a shortcut for
-   *      workspace packages (source-based, no `node_modules/` detour) and the
-   *      only way panels — which have no local `node_modules` — can find their
-   *      workspace deps.
-   *   2. Fall through to standard TypeScript resolution with a disk-aware host
-   *      so the compiler walks `node_modules/`, follows symlinks, and reads
-   *      `package.json` exports on its own.
-   */
-  private resolveModuleName(
-    moduleName: string,
-    containingFile: string,
-    options: ts.CompilerOptions
-  ): ts.ResolvedModuleWithFailedLookupLocations {
-    if (this.workspaceContext) {
-      const fromContext = this.resolveFromWorkspaceContext(moduleName);
-      if (fromContext) return fromContext;
+  private resolveSourceConfig(): string | null {
+    if (this.config.disableTsconfigDiscovery) return null;
+    if (this.config.tsconfigPath) {
+      const explicit = path.resolve(this.config.tsconfigPath);
+      return fs.existsSync(explicit) ? explicit : null;
     }
-
-    const fromNodeModulesPaths = this.resolveFromNodeModulesPaths(moduleName);
-    if (fromNodeModulesPaths) return fromNodeModulesPaths;
-
-    return ts.resolveModuleName(
-      moduleName,
-      containingFile,
-      options,
-      this.createDiskAwareModuleHost(),
-      this.getTsResolutionCache()
-    );
-  }
-
-  /**
-   * `ts.ModuleResolutionHost` that reads from disk (with caching) and routes
-   * virtual lib paths through the in-memory file map. Used by the standard
-   * fallback resolution path.
-   */
-  private createDiskAwareModuleHost(): ts.ModuleResolutionHost {
-    return {
-      fileExists: (p) => {
-        if (this.files.has(p)) return true;
-        if (this.isVirtualPath(p)) return false;
-        return this.diskFileExists(p);
-      },
-      readFile: (p) => {
-        const file = this.files.get(p);
-        if (file) return file.content;
-        if (this.isVirtualPath(p)) return undefined;
-        try {
-          return fs.readFileSync(p, "utf-8");
-        } catch {
-          return undefined;
-        }
-      },
-      directoryExists: (p) => {
-        if (this.isVirtualPath(p)) return false;
-        try {
-          return fs.statSync(p).isDirectory();
-        } catch {
-          return false;
-        }
-      },
-      getDirectories: (p) => {
-        if (this.isVirtualPath(p)) return [];
-        try {
-          return fs
-            .readdirSync(p, { withFileTypes: true })
-            .filter((e) => e.isDirectory())
-            .map((e) => e.name);
-        } catch {
-          return [];
-        }
-      },
-      realpath: (p) => {
-        try {
-          return fs.realpathSync(p);
-        } catch {
-          return p;
-        }
-      },
-    };
-  }
-
-  /**
-   * Resolve a module name against the workspace package map.
-   *
-   * Tries progressively shorter prefixes so subpath imports like
-   * `@scope/foo/sub` match package `@scope/foo` with subpath `./sub`.
-   */
-  private resolveFromWorkspaceContext(
-    moduleName: string
-  ): ts.ResolvedModuleWithFailedLookupLocations | null {
-    const ctx = this.workspaceContext;
-    if (!ctx) return null;
-
-    const parts = moduleName.split("/");
-    const minParts = moduleName.startsWith("@") ? 2 : 1;
-    for (let i = parts.length; i >= minParts; i--) {
-      const pkgName = parts.slice(0, i).join("/");
-      const info = ctx.packages.get(pkgName);
-      if (!info) continue;
-
-      const subpath = i < parts.length ? parts.slice(i).join("/") : null;
-      return this.resolvePackageSubpath(info.dir, info.packageJson, subpath);
-    }
-    return null;
-  }
-
-  /**
-   * Resolve bare package imports against explicit node_modules roots. This is
-   * used for isolated external-dependency caches that are not on the normal
-   * parent-directory node_modules walk.
-   */
-  private resolveFromNodeModulesPaths(
-    moduleName: string
-  ): ts.ResolvedModuleWithFailedLookupLocations | null {
-    if (moduleName.startsWith(".") || path.isAbsolute(moduleName)) return null;
-
-    const parts = moduleName.split("/");
-    const packageName = moduleName.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
-    const subpath =
-      parts.length > (moduleName.startsWith("@") ? 2 : 1)
-        ? parts.slice(moduleName.startsWith("@") ? 2 : 1).join("/")
-        : null;
-
-    for (const nodeModulesPath of this.config.nodeModulesPaths ?? []) {
-      const resolved = this.resolveFromNodeModulesRoot(nodeModulesPath, packageName, subpath);
-      // A runtime package can resolve successfully to JavaScript while keeping
-      // its declarations in DefinitelyTyped (React is the common example).
-      // TypeScript's normal node_modules resolver consults @types in that case;
-      // our explicit isolated-root resolver must preserve the same behavior.
-      // Keep the original subpath so `react/jsx-runtime` maps to
-      // `@types/react/jsx-runtime`, rather than incorrectly using its index.
-      if (!packageName.startsWith("@types/")) {
-        const typesName = `@types/${packageName.replace("@", "").replace("/", "__")}`;
-        const fromTypes = this.resolveFromNodeModulesRoot(nodeModulesPath, typesName, subpath);
-        if (fromTypes) return fromTypes;
-      }
-
-      // No separate declaration package exists. Returning the runtime result
-      // retains TypeScript's useful "implicitly has an any type" diagnostic.
-      if (resolved) return resolved;
-    }
-
-    return null;
-  }
-
-  private resolveFromNodeModulesRoot(
-    nodeModulesPath: string,
-    packageName: string,
-    subpath: string | null
-  ): ts.ResolvedModuleWithFailedLookupLocations | null {
-    const packageDir = path.join(nodeModulesPath, packageName);
-    if (!this.diskFileExists(path.join(packageDir, "package.json"))) return null;
-
-    try {
-      const packageJson = JSON.parse(
-        fs.readFileSync(path.join(packageDir, "package.json"), "utf-8")
-      ) as {
-        exports?: unknown;
-        types?: string;
-        typings?: string;
-        main?: string;
-        module?: string;
-      };
-      return this.resolvePackageSubpath(packageDir, packageJson, subpath);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Resolve a (subpath?) inside a known package directory using
-   * package.json exports, then types/module/main, then index.{ts,tsx,d.ts}.
-   */
-  private resolvePackageSubpath(
-    packageDir: string,
-    packageJson: {
-      exports?: unknown;
-      types?: string;
-      typings?: string;
-      main?: string;
-      module?: string;
-    },
-    subpath: string | null
-  ): ts.ResolvedModuleWithFailedLookupLocations | null {
-    let resolvedFile: string | null = null;
-
-    if (packageJson.exports && typeof packageJson.exports === "object") {
-      const exportKey = subpath ? `./${subpath}` : ".";
-      const target = resolveExportSubpath(
-        packageJson.exports as Record<string, unknown>,
-        exportKey,
-        WORKSPACE_CONDITIONS
-      );
-      if (target) {
-        resolvedFile = path.join(packageDir, target);
-      }
-    }
-
-    if (!resolvedFile && !subpath) {
-      const candidates = [
-        packageJson.types,
-        packageJson.typings,
-        packageJson.module,
-        packageJson.main,
-      ];
-      for (const candidate of candidates) {
-        if (candidate) {
-          resolvedFile = path.join(packageDir, candidate);
-          break;
-        }
-      }
-      if (!resolvedFile) {
-        for (const ext of [".ts", ".tsx", ".d.ts"]) {
-          const indexPath = path.join(packageDir, `index${ext}`);
-          if (this.diskFileExists(indexPath)) {
-            resolvedFile = indexPath;
-            break;
-          }
-        }
-      }
-      if (!resolvedFile) {
-        // Some packages put their entry in src/
-        for (const ext of [".ts", ".tsx", ".d.ts"]) {
-          const indexPath = path.join(packageDir, "src", `index${ext}`);
-          if (this.diskFileExists(indexPath)) {
-            resolvedFile = indexPath;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!resolvedFile && subpath) {
-      // Subpath import that didn't match exports — try direct file lookup.
-      for (const ext of [".ts", ".tsx", ".d.ts", ".js"]) {
-        const candidate = path.join(packageDir, `${subpath}${ext}`);
-        if (this.diskFileExists(candidate)) {
-          resolvedFile = candidate;
-          break;
-        }
-      }
-      if (!resolvedFile) {
-        for (const ext of [".ts", ".tsx", ".d.ts"]) {
-          const candidate = path.join(packageDir, subpath, `index${ext}`);
-          if (this.diskFileExists(candidate)) {
-            resolvedFile = candidate;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!resolvedFile || !this.diskFileExists(resolvedFile)) return null;
-
-    return {
-      resolvedModule: {
-        resolvedFileName: resolvedFile,
-        isExternalLibraryImport: false,
-        extension: this.getExtensionForPath(resolvedFile),
-      },
-    };
-  }
-
-  private getExtensionForPath(filePath: string): ts.Extension {
-    if (filePath.endsWith(".tsx")) return ts.Extension.Tsx;
-    if (filePath.endsWith(".d.ts")) return ts.Extension.Dts;
-    if (filePath.endsWith(".ts")) return ts.Extension.Ts;
-    if (filePath.endsWith(".jsx")) return ts.Extension.Jsx;
-    if (filePath.endsWith(".js")) return ts.Extension.Js;
-    return ts.Extension.Ts;
-  }
-
-  /** Cached disk file existence check. */
-  private diskFileExists(filePath: string): boolean {
-    const cached = this.diskFileExistsCache.get(filePath);
-    if (cached !== undefined) return cached;
-    const exists = fs.existsSync(filePath);
-    this.diskFileExistsCache.set(filePath, exists);
-    return exists;
-  }
-
-  // ===========================================================================
-  // Compiler options
-  // ===========================================================================
-
-  /**
-   * Merged compiler options.
-   *
-   * Resolution order (highest priority first):
-   *   1. Forced overrides (noEmit, skipLibCheck)
-   *   2. Caller-supplied `compilerOptions`
-   *   3. Options loaded from the target's tsconfig.json (auto-detected)
-   *   4. Hardcoded defaults
-   */
-  private getCompilerOptions(): ts.CompilerOptions {
-    if (this.cachedCompilerOptions) return this.cachedCompilerOptions;
-    const merged: ts.CompilerOptions = {
-      ...this.getDefaultCompilerOptions(),
-      ...this.loadTsconfigCompilerOptions(),
-      ...this.config.compilerOptions,
-      noEmit: true,
-      skipLibCheck: this.config.compilerOptions?.skipLibCheck ?? true,
-    };
-    this.cachedCompilerOptions = merged;
-    return merged;
-  }
-
-  /**
-   * Hardcoded fallback options — used when no tsconfig.json is found.
-   * Tuned for the modern Vibestudio code shape (ESM, ES2023+, JSX, disposable
-   * resources).
-   */
-  private getDefaultCompilerOptions(): ts.CompilerOptions {
-    return {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      jsx: ts.JsxEmit.ReactJSX,
-      lib: [
-        "lib.es2022.d.ts",
-        "lib.es2023.array.d.ts",
-        "lib.es2023.collection.d.ts",
-        "lib.es2023.intl.d.ts",
-        "lib.esnext.disposable.d.ts",
-        "lib.esnext.iterator.d.ts",
-        "lib.esnext.promise.d.ts",
-        "lib.dom.d.ts",
-        "lib.dom.iterable.d.ts",
-      ],
-      strict: true,
-      esModuleInterop: true,
-      allowSyntheticDefaultImports: true,
-      resolveJsonModule: true,
-      isolatedModules: true,
-    };
-  }
-
-  /**
-   * Look for a tsconfig.json in `panelPath`, walking up to two levels so a
-   * workspace package without its own tsconfig picks up the monorepo's
-   * settings. Handles `extends` chains via TypeScript's own config parser.
-   */
-  private loadTsconfigCompilerOptions(): ts.CompilerOptions {
-    if (this.config.disableTsconfigDiscovery) return {};
-    if (this.tsconfigOptionsLoaded) return this.tsconfigOptionsCache ?? {};
-    this.tsconfigOptionsLoaded = true;
-
-    const candidates: string[] = [];
-    let dir = this.config.panelPath;
     const boundary = this.config.tsconfigSearchBoundary
       ? path.resolve(this.config.tsconfigSearchBoundary)
       : null;
-    for (let i = 0; i < 3; i++) {
-      candidates.push(path.join(dir, "tsconfig.json"));
-      if (boundary && path.resolve(dir) === boundary) break;
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
+    let directory = this.panelPath;
+    for (let level = 0; level < 3; level++) {
+      const candidate = path.join(directory, "tsconfig.json");
+      if (fs.existsSync(candidate)) return candidate;
+      if (boundary && directory === boundary) break;
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
       if (boundary) {
-        const relativeToBoundary = path.relative(boundary, parent);
-        if (relativeToBoundary === ".." || relativeToBoundary.startsWith(`..${path.sep}`)) break;
+        const relative = path.relative(boundary, parent);
+        if (relative === ".." || relative.startsWith(`..${path.sep}`)) break;
       }
-      dir = parent;
+      directory = parent;
     }
+    return null;
+  }
 
-    let configPath: string | null = null;
-    for (const candidate of candidates) {
-      if (this.diskFileExists(candidate)) {
-        configPath = candidate;
-        break;
-      }
-    }
-    if (!configPath) {
-      this.tsconfigOptionsCache = {};
-      return {};
-    }
-
+  private collectConfigDependencies(configPath: string): void {
+    const absolute = path.resolve(configPath);
+    if (this.compilerOptionDependencies.has(absolute)) return;
+    this.compilerOptionDependencies.add(absolute);
+    let source: string;
     try {
-      this.compilerOptionDependencies.add(path.resolve(configPath));
-      const readResult = ts.readConfigFile(configPath, (p) => {
-        try {
-          this.compilerOptionDependencies.add(path.resolve(p));
-          return fs.readFileSync(p, "utf-8");
-        } catch {
-          return undefined;
-        }
-      });
-      if (readResult.error || !readResult.config) {
-        this.tsconfigOptionsCache = {};
-        return {};
-      }
-      const parseHost: ts.ParseConfigHost = {
-        ...ts.sys,
-        readFile: (p) => {
-          this.compilerOptionDependencies.add(path.resolve(p));
-          return ts.sys.readFile(p);
-        },
-      };
-      const parsed = ts.parseJsonConfigFileContent(
-        readResult.config,
-        parseHost,
-        path.dirname(configPath)
-      );
-      const options: ts.CompilerOptions = { ...parsed.options };
-
-      // Strip path-mapping config — we resolve workspace packages ourselves
-      // and project paths often point at dist/ which doesn't exist here.
-      delete options.paths;
-      delete options.baseUrl;
-      // Drop output-related fields to stay in pure check mode.
-      delete options.outDir;
-      delete options.outFile;
-      delete options.declaration;
-      delete options.declarationMap;
-      delete options.sourceMap;
-      delete options.composite;
-      delete options.tsBuildInfoFile;
-      // `rootDir` would otherwise constrain which files can be checked.
-      delete options.rootDir;
-      delete options.rootDirs;
-
-      this.tsconfigOptionsCache = options;
-      return options;
+      source = fs.readFileSync(absolute, "utf8");
     } catch {
-      this.tsconfigOptionsCache = {};
-      return {};
+      return;
+    }
+    const specifier = source.match(/"extends"\s*:\s*"([^"]+)"/u)?.[1];
+    if (!specifier) return;
+    try {
+      const resolved =
+        specifier.startsWith(".") || path.isAbsolute(specifier)
+          ? path.resolve(path.dirname(absolute), specifier)
+          : require.resolve(specifier, { paths: [path.dirname(absolute)] });
+      const candidate = fs.existsSync(resolved) ? resolved : `${resolved}.json`;
+      if (fs.existsSync(candidate)) this.collectConfigDependencies(candidate);
+    } catch {
+      // Native TypeScript will report an unresolved extends entry as a config diagnostic.
     }
   }
 
-  private getTsResolutionCache(): ts.ModuleResolutionCache {
-    if (!this.tsResolutionCache) {
-      this.tsResolutionCache = ts.createModuleResolutionCache(
-        this.config.panelPath,
-        (fileName) => fileName,
-        this.getCompilerOptions()
-      );
+  private readProjectedFile(fileName: string): string | null | undefined {
+    const absolute = path.resolve(fileName);
+    if (absolute === this.configFilePath) return this.configContent;
+    const overlay = this.files.get(absolute);
+    if (overlay) return overlay.content;
+    for (const candidate of this.packageProjectionCandidates(absolute)) {
+      try {
+        if (fs.statSync(candidate).isFile()) return fs.readFileSync(candidate, "utf8");
+      } catch {
+        // Try the next projection, then the real filesystem fallback.
+      }
     }
-    return this.tsResolutionCache;
+    return undefined;
   }
 
-  private invalidateTsResolutionCache(): void {
-    this.tsResolutionCache = null;
+  private projectedFileExists(fileName: string): boolean | undefined {
+    const absolute = path.resolve(fileName);
+    if (absolute === this.configFilePath || this.files.has(absolute)) return true;
+    for (const candidate of this.packageProjectionCandidates(absolute)) {
+      try {
+        if (fs.statSync(candidate).isFile()) return true;
+      } catch {
+        // Continue.
+      }
+    }
+    return undefined;
+  }
+
+  private projectedDirectoryExists(directoryName: string): boolean | undefined {
+    const absolute = path.resolve(directoryName);
+    if (this.hasVirtualDirectory(absolute)) return true;
+    for (const candidate of this.packageProjectionCandidates(absolute)) {
+      try {
+        if (fs.statSync(candidate).isDirectory()) return true;
+      } catch {
+        // Continue.
+      }
+    }
+    return undefined;
+  }
+
+  private getProjectedEntries(directoryName: string): FileSystemEntries | undefined {
+    const absolute = path.resolve(directoryName);
+    const files = new Set<string>();
+    const directories = new Set<string>();
+    for (const virtualFile of [this.configFilePath, ...this.files.keys()]) {
+      if (path.dirname(virtualFile) === absolute) files.add(path.basename(virtualFile));
+      else if (this.isWithin(absolute, virtualFile)) {
+        const relative = path.relative(absolute, virtualFile);
+        const first = relative.split(path.sep)[0];
+        if (first) directories.add(first);
+      }
+    }
+    for (const candidate of this.packageProjectionCandidates(absolute)) {
+      try {
+        for (const entry of fs.readdirSync(candidate, { withFileTypes: true })) {
+          if (entry.isDirectory()) directories.add(entry.name);
+          else if (entry.isFile()) files.add(entry.name);
+        }
+      } catch {
+        // Continue.
+      }
+    }
+    this.addWorkspaceEntryNames(absolute, directories);
+    return files.size > 0 || directories.size > 0
+      ? { files: [...files].sort(), directories: [...directories].sort() }
+      : undefined;
+  }
+
+  private projectedRealpath(fileName: string): string | undefined {
+    const absolute = path.resolve(fileName);
+    if (absolute === this.configFilePath || this.files.has(absolute)) return absolute;
+    for (const candidate of this.packageProjectionCandidates(absolute)) {
+      try {
+        return fs.realpathSync(candidate);
+      } catch {
+        // Continue.
+      }
+    }
+    return undefined;
+  }
+
+  private packageProjectionCandidates(candidate: string): string[] {
+    const marker = `${path.sep}node_modules${path.sep}`;
+    const markerIndex = candidate.lastIndexOf(marker);
+    if (markerIndex < 0) return [];
+    const packagePath = candidate.slice(markerIndex + marker.length);
+    const result: string[] = [];
+    const workspace = this.workspacePackageProjection(packagePath);
+    if (workspace) result.push(workspace);
+    for (const root of this.nodeModulesPaths) result.push(path.join(root, packagePath));
+    return result;
+  }
+
+  private workspacePackageProjection(packagePath: string): string | null {
+    const parts = packagePath.split(path.sep);
+    const packageName = parts[0]?.startsWith("@") ? parts.slice(0, 2).join("/") : (parts[0] ?? "");
+    if (!packageName) return null;
+    const info = this.workspaceContext?.packages.get(packageName);
+    if (!info) return null;
+    const consumed = packageName.startsWith("@") ? 2 : 1;
+    return path.join(info.dir, ...parts.slice(consumed));
+  }
+
+  private addWorkspaceEntryNames(directory: string, entries: Set<string>): void {
+    const suffix = this.nodeModulesSuffix(directory);
+    if (suffix === null || !this.workspaceContext) return;
+    const parts = suffix ? suffix.split(path.sep) : [];
+    for (const info of this.workspaceContext.packages.values()) {
+      const nameParts = info.name.split("/");
+      if (parts.length === 0) entries.add(nameParts[0]!);
+      else if (parts.length === 1 && parts[0]?.startsWith("@") && nameParts[0] === parts[0]) {
+        if (nameParts[1]) entries.add(nameParts[1]);
+      }
+    }
+  }
+
+  private nodeModulesSuffix(candidate: string): string | null {
+    const terminal = `${path.sep}node_modules`;
+    if (candidate.endsWith(terminal)) return "";
+    const marker = `${terminal}${path.sep}`;
+    const index = candidate.lastIndexOf(marker);
+    return index < 0 ? null : candidate.slice(index + marker.length);
+  }
+
+  private hasVirtualDirectory(directory: string): boolean {
+    if (directory === this.panelPath) return true;
+    for (const file of [this.configFilePath, ...this.files.keys()]) {
+      if (this.isWithin(directory, file)) return true;
+    }
+    const suffix = this.nodeModulesSuffix(directory);
+    if (suffix === null) return false;
+    if (suffix === "") return this.nodeModulesPaths.length > 0 || Boolean(this.workspaceContext);
+    return this.packageProjectionCandidates(directory).some((candidate) => {
+      try {
+        return fs.statSync(candidate).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  private isWithin(root: string, candidate: string): boolean {
+    const relative = path.relative(root, candidate);
+    return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
+  }
+
+  private assertActive(): void {
+    if (this.disposed) throw new Error("TypeCheckService has been disposed");
   }
 }
+
+export type { CompilerOptions, Program, Project } from "typescript/unstable/sync";
+export type { WorkspacePackageInfo };

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import ts from "typescript";
+import { parse } from "@babel/parser";
 
 const TEST_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 const CENSUS_IDS = new Set(["host-authority", "direct-authority", "bootstrap"]);
@@ -36,30 +36,36 @@ function repositoryFiles(root) {
 }
 
 function exportedNames(source, fileName) {
-  const scriptKind = fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKind
-  );
+  const sourceFile = parse(source, {
+    sourceType: "unambiguous",
+    plugins: [
+      ["typescript", { dts: fileName.endsWith(".d.ts") }],
+      ...(fileName.endsWith("x") ? ["jsx"] : []),
+      "decorators-legacy",
+      "importAttributes",
+      "explicitResourceManagement",
+    ],
+  }).program;
   const names = new Set();
-  for (const statement of sourceFile.statements) {
-    const exported = statement.modifiers?.some(
-      (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword
-    );
-    if (exported && "name" in statement && statement.name && ts.isIdentifier(statement.name)) {
-      names.add(statement.name.text);
+  for (const statement of sourceFile.body) {
+    if (statement.type !== "ExportNamedDeclaration") continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.exported.type === "Identifier") names.add(specifier.exported.name);
+      else names.add(specifier.exported.value);
     }
-    if (ts.isExportDeclaration(statement) && statement.exportClause) {
-      if (ts.isNamedExports(statement.exportClause)) {
-        for (const element of statement.exportClause.elements) names.add(element.name.text);
-      }
-    }
-    if (exported && ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+    const declaration = statement.declaration;
+    if (!declaration) continue;
+    if (
+      (declaration.type === "FunctionDeclaration" ||
+        declaration.type === "ClassDeclaration" ||
+        declaration.type === "TSTypeAliasDeclaration" ||
+        declaration.type === "TSInterfaceDeclaration") &&
+      declaration.id
+    ) {
+      names.add(declaration.id.name);
+    } else if (declaration.type === "VariableDeclaration") {
+      for (const item of declaration.declarations) {
+        if (item.id.type === "Identifier") names.add(item.id.name);
       }
     }
   }

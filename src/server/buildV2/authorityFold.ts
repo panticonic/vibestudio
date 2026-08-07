@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type ts from "typescript";
+import type { Project } from "typescript/unstable/sync";
 import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
@@ -82,7 +82,7 @@ function semanticCapabilities(transportCapabilities: ReadonlySet<string>): Set<s
 }
 
 function sourceClosure(
-  program: ts.Program,
+  project: Project,
   sourceRoot: string,
   unitRelativePath: string,
   units: readonly AuthorityFoldUnit[],
@@ -92,8 +92,12 @@ function sourceClosure(
     .map((unit) => ({ unit, root: `${path.resolve(sourceRoot, unit.relativePath)}${path.sep}` }))
     .sort((left, right) => right.root.length - left.root.length);
   const consumerRoot = path.resolve(sourceRoot, unitRelativePath);
-  const consumerSource = program
-    .getSourceFiles()
+  const consumerSource = project.program
+    .getSourceFileNames()
+    .flatMap((fileName) => {
+      const sourceFile = project.program.getSourceFile(fileName);
+      return sourceFile ? [sourceFile] : [];
+    })
     .filter((sourceFile) => {
       if (sourceFile.isDeclarationFile) return false;
       const file = path.resolve(sourceFile.fileName);
@@ -121,7 +125,7 @@ function sourceClosure(
  * diagnostic only: it never edits the manifest and never creates a grant.
  */
 export async function authorityDiagnosticsForProgram(input: {
-  program: ts.Program;
+  project: Project;
   sourceRoot: string;
   unitRelativePath: string;
   units: readonly AuthorityFoldUnit[];
@@ -150,7 +154,7 @@ export async function authorityDiagnosticsForProgram(input: {
   }
 
   const source = sourceClosure(
-    input.program,
+    input.project,
     input.sourceRoot,
     input.unitRelativePath,
     input.units,
@@ -182,7 +186,7 @@ export async function authorityDiagnosticsForProgram(input: {
 
   const facts = consumerAuthorityFacts(
     analyzeWorkspaceServiceCalls({
-      program: input.program,
+      project: input.project,
       sourceRoot: input.sourceRoot,
       unitRelativePath: input.unitRelativePath,
       units: input.units,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { usingTypeScriptProject } from "@vibestudio/typecheck";
 
 const ROOTS = [
   "workspace/packages/harness/src",
@@ -100,7 +101,7 @@ function hasValidTerminalPayloadSignal(node: ts.Node, kind: TerminalKind): boole
         return;
       }
     }
-    ts.forEachChild(current, visit);
+    current.forEachChild(visit);
   }
 
   visit(node);
@@ -113,16 +114,14 @@ describe("invocation terminal event literals", () => {
   // suite can exceed Vitest's 5s default.
   it("carry a typed terminal outcome matching their exact event kind", () => {
     const misses: string[] = [];
-    for (const root of ROOTS) {
-      for (const file of tsFiles(join(process.cwd(), root))) {
-        const source = readFileSync(file, "utf8");
-        const sourceFile = ts.createSourceFile(
-          file,
-          source,
-          ts.ScriptTarget.Latest,
-          true,
-          file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-        );
+    const sources = ROOTS.flatMap((root) => tsFiles(join(process.cwd(), root))).map((fileName) => ({
+      fileName,
+      content: readFileSync(fileName, "utf8"),
+    }));
+    usingTypeScriptProject(sources, (project) => {
+      for (const { fileName: file, content: source } of sources) {
+        const sourceFile = project.program.getSourceFile(file);
+        if (!sourceFile) throw new Error(`TypeScript did not parse ${file}`);
 
         function visit(node: ts.Node): void {
           if (ts.isObjectLiteralExpression(node)) {
@@ -140,12 +139,12 @@ describe("invocation terminal event literals", () => {
               }
             }
           }
-          ts.forEachChild(node, visit);
+          node.forEachChild(visit);
         }
 
         visit(sourceFile);
       }
-    }
+    });
 
     expect(misses).toEqual([]);
   }, 30_000);

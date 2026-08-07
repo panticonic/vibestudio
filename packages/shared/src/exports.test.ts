@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { parse, type ParserPlugin } from "@babel/parser";
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 const SOURCE_ROOTS = ["src", "packages", "apps", "workspace", "scripts", "tests"];
@@ -24,11 +24,56 @@ function sourceFiles(dir: string): string[] {
 function sharedImports(file: string): string[] {
   const text = fs.readFileSync(file, "utf8");
   if (!text.includes("@vibestudio/shared/")) return [];
-  return ts
-    .preProcessFile(text, true, true)
-    .importedFiles.map((reference) => reference.fileName)
-    .filter((specifier) => specifier.startsWith("@vibestudio/shared/"))
-    .map((specifier) => `./${specifier.slice("@vibestudio/shared/".length)}`);
+  const extension = path.extname(file);
+  const plugins: ParserPlugin[] = [
+    "decorators-legacy",
+    "importAttributes",
+    "explicitResourceManagement",
+  ];
+  if ([".ts", ".tsx", ".mts"].includes(extension)) plugins.push("typescript");
+  if (extension === ".tsx" || extension === ".js") plugins.push("jsx");
+  let ast: ReturnType<typeof parse>;
+  try {
+    ast = parse(text, { sourceType: "unambiguous", errorRecovery: true, plugins });
+  } catch (error) {
+    throw new Error(`Could not inspect imports in ${path.relative(ROOT, file)}`, { cause: error });
+  }
+  const imports = new Set<string>();
+  const visit = (value: unknown, parent?: Record<string, unknown>, parentKey?: string): void => {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child, parent, parentKey);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    const parentType = parent?.["type"];
+    const moduleReference =
+      ((parentType === "ImportDeclaration" ||
+        parentType === "ExportNamedDeclaration" ||
+        parentType === "ExportAllDeclaration") &&
+        parentKey === "source") ||
+      (parentType === "TSImportType" && parentKey === "argument") ||
+      (parentType === "ImportExpression" && parentKey === "source") ||
+      (parentType === "CallExpression" &&
+        parentKey === "arguments" &&
+        ((parent?.["callee"] as { type?: string } | undefined)?.type === "Import" ||
+          ((parent?.["callee"] as { type?: string; name?: string } | undefined)?.type ===
+            "Identifier" &&
+            (parent?.["callee"] as { name?: string } | undefined)?.name === "require")));
+    if (
+      moduleReference &&
+      record["type"] === "StringLiteral" &&
+      typeof record["value"] === "string" &&
+      record["value"].startsWith("@vibestudio/shared/")
+    ) {
+      imports.add(`./${record["value"].slice("@vibestudio/shared/".length)}`);
+    }
+    for (const [key, child] of Object.entries(record)) {
+      if (key !== "loc" && key !== "start" && key !== "end") visit(child, record, key);
+    }
+  };
+  visit(ast.program);
+  return [...imports];
 }
 
 function exportedTarget(subpath: string, exportsMap: Record<string, string>): string | undefined {

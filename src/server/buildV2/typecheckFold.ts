@@ -40,43 +40,6 @@ async function readPackageJson(dir: string): Promise<WorkspacePackageInfo["packa
   }
 }
 
-/** Create the exact TypeScript program used by the report fold. */
-export async function typecheckProgramForUnit(
-  unitRelativePath: string,
-  sourceRoot: string,
-  internalDeps: TypecheckUnitDep[],
-  nodeModulesPaths: string[]
-): Promise<import("typescript").Program> {
-  const { TypeCheckService, createDiskFileSource, loadSourceFiles } =
-    await import("@vibestudio/typecheck");
-  const unitDir = path.join(sourceRoot, unitRelativePath);
-  const packages = new Map<string, WorkspacePackageInfo>();
-  for (const dep of internalDeps) {
-    const dir = path.join(sourceRoot, dep.relativePath);
-    const packageJson = await readPackageJson(dir);
-    const name = packageJson?.name ?? dep.name;
-    if (!name) continue;
-    packages.set(name, {
-      name,
-      dir,
-      packageJson: packageJson ?? ({ name } as WorkspacePackageInfo["packageJson"]),
-    });
-  }
-  const service = new TypeCheckService({
-    panelPath: unitDir,
-    workspaceContext: { monorepoRoot: sourceRoot, packages },
-    nodeModulesPaths,
-    tsconfigSearchBoundary: unitDir,
-  });
-  const files = await loadSourceFiles(createDiskFileSource(unitDir), ".");
-  for (const [relPath, content] of files) {
-    service.updateFile(path.resolve(unitDir, relPath), content);
-  }
-  const program = service.getProgram();
-  if (!program) throw new Error("Typecheck could not obtain the exact TypeScript program");
-  return program;
-}
-
 function toBuildDiagnostic(
   d: TypeCheckDiagnostic,
   sourceRoot: string,
@@ -138,6 +101,7 @@ export async function typecheckUnit(
   }
 ): Promise<BuildDiagnostic[]> {
   const unitDir = path.join(sourceRoot, unitRelativePath);
+  let service: import("@vibestudio/typecheck").TypeCheckService | undefined;
   try {
     const { TypeCheckService, createDiskFileSource, loadSourceFiles } =
       await import("@vibestudio/typecheck");
@@ -154,7 +118,7 @@ export async function typecheckUnit(
       });
     }
     const workspaceContext: WorkspaceContext = { monorepoRoot: sourceRoot, packages };
-    const service = new TypeCheckService({
+    service = new TypeCheckService({
       panelPath: unitDir,
       workspaceContext,
       nodeModulesPaths,
@@ -172,40 +136,28 @@ export async function typecheckUnit(
       .filter((d) => d.severity === "error" || d.severity === "warning")
       .map((d) => toBuildDiagnostic(d, sourceRoot, unitRelativePath));
     if (authority) {
-      const program = service.getProgram();
-      if (!program) {
+      try {
+        diagnostics.push(
+          ...(await authorityDiagnosticsForProgram({
+            project: service.getProject(),
+            sourceRoot,
+            unitRelativePath,
+            units: internalDeps,
+            manifest: authority.manifest,
+            environment: authority.environment,
+            workspaceId: authority.workspaceId,
+            executableModules: authority.executableModules,
+          }))
+        );
+      } catch (error) {
         diagnostics.push({
           source: "authority",
           severity: "error",
           file: `${unitRelativePath}/package.json`,
           line: 1,
           column: 1,
-          message: "Authority analysis could not obtain the exact TypeScript program.",
+          message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
         });
-      } else {
-        try {
-          diagnostics.push(
-            ...(await authorityDiagnosticsForProgram({
-              program,
-              sourceRoot,
-              unitRelativePath,
-              units: internalDeps,
-              manifest: authority.manifest,
-              environment: authority.environment,
-              workspaceId: authority.workspaceId,
-              executableModules: authority.executableModules,
-            }))
-          );
-        } catch (error) {
-          diagnostics.push({
-            source: "authority",
-            severity: "error",
-            file: `${unitRelativePath}/package.json`,
-            line: 1,
-            column: 1,
-            message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
-          });
-        }
       }
     }
     return diagnostics;
@@ -222,5 +174,7 @@ export async function typecheckUnit(
         message: `Typecheck could not complete: ${message}`,
       },
     ];
+  } finally {
+    service?.dispose();
   }
 }

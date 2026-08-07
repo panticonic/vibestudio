@@ -12,13 +12,15 @@
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
 // TypeScript lib files needed for panel development
 const LIBS = [
   "lib.es5.d.ts",
-  // TS 5 standard and legacy decorator globals. lib.es5 references both, but
+  // Standard and legacy decorator globals. lib.es5 references both, but
   // the hermetic language-service host can only resolve files bundled here.
   "lib.decorators.d.ts",
   "lib.decorators.legacy.d.ts",
@@ -75,8 +77,8 @@ const LIBS = [
   // ESNext — bundle the bits we actually need so `using`/`await using`,
   // iterator helpers, and Promise.withResolvers type-check correctly.
   "lib.esnext.disposable.d.ts",
-  "lib.esnext.iterator.d.ts",
-  "lib.esnext.promise.d.ts",
+  "lib.es2025.iterator.d.ts",
+  "lib.es2024.promise.d.ts",
   "lib.dom.d.ts",
   "lib.dom.iterable.d.ts",
   "lib.dom.asynciterable.d.ts",
@@ -84,19 +86,15 @@ const LIBS = [
 
 // Find TypeScript lib directory
 function findTsLibPath(): string {
-  // Try to find typescript in node_modules
-  const candidates = [
-    path.resolve(__dirname, "../node_modules/typescript/lib"),
-    path.resolve(__dirname, "../../../node_modules/typescript/lib"),
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
+  const nativePackage = `@typescript/typescript-${process.platform}-${process.arch}`;
+  try {
+    return path.join(path.dirname(require.resolve(`${nativePackage}/package.json`)), "lib");
+  } catch (error) {
+    throw new Error(
+      `Could not find the TypeScript 7 native standard library package ${nativePackage}`,
+      { cause: error }
+    );
   }
-
-  throw new Error("Could not find TypeScript lib directory. Make sure typescript is installed.");
 }
 
 function sanitizeName(libName: string): string {

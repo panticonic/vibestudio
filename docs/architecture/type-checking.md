@@ -1,58 +1,56 @@
 # Type-checking architecture
 
-The host repository uses TypeScript 7's native compiler for command-line type
-checking. The complete host graph remains one authoritative TypeScript program:
-all production and test files under `src/` and `packages/` are checked together
-according to the root `tsconfig.json`.
+Vibestudio has one TypeScript generation: stable TypeScript 7. The root host,
+workerd entry programs, workspace packages, React Native app, package builds,
+editor service, build diagnostics, and authority analyzers all resolve the same
+exact `typescript@7.0.2` dependency.
 
-## Why two TypeScript packages are installed
+## Command-line checks
 
-The root keeps both compiler generations during the TypeScript 7 ecosystem
-transition:
+- `pnpm type-check:host` checks the complete host graph and the separate
+  workerd-entry graph with TypeScript 7's native `tsc`.
+- `pnpm type-check:watch` uses the native compiler's watch mode.
+- `pnpm type-check` adds the userland and React Native graphs.
+- Package scripts invoke the normal `typescript/bin/tsc` entry point. There is
+  no compiler alias or fallback generation.
 
-- `typescript` is TypeScript 5.9. It remains available to ESLint and tools that
-  consume the JavaScript compiler API. The current `typescript-eslint` release
-  declares support for TypeScript versions below 6.
-- `typescript-native` is an npm alias for stable `typescript@7.0.2`. Type-check
-  scripts invoke its native `tsc` executable directly.
+The React Native config declares its Node, React, and React Native ambient type
+sets explicitly. This makes its environment reproducible instead of depending
+on TypeScript 5's incidental type-package discovery.
 
-The alias avoids replacing the compiler API underneath ESLint while still using
-the native compiler for the performance-sensitive validation path. Remove the
-TypeScript 5.9 installation once all compiler-API consumers declare TypeScript 7
-support; at that point the alias can become the normal `typescript` dependency.
+## Runtime compiler API
 
-## Commands
+`@vibestudio/typecheck` owns native TypeScript 7 project lifetimes. A
+`TypeCheckService` maintains unsaved file overlays and workspace package mounts,
+then publishes immutable native snapshots for diagnostics, completion, quick
+information, definitions, and semantic analysis. Module resolution remains the
+compiler's responsibility; Vibestudio only projects materialized workspace and
+external package roots into its filesystem view.
 
-- `pnpm type-check:host` checks the complete host graph and the separate workerd
-  entry program graph with the native compiler.
-- `pnpm type-check:watch` watches the complete host graph with the native
-  compiler.
-- `pnpm type-check` additionally runs userland with the native compiler and the
-  mobile check with TypeScript 5.9.
+Compiler-API consumers receive a native `Project`, not a detached legacy
+`Program`. Symbols expose project-scoped node handles, so authority analysis
+resolves declarations inside the same immutable snapshot. Services are disposed
+at their build, test, or analysis boundary, which also terminates the native
+compiler child and prevents the host-process heap growth caused by the old
+JavaScript language service.
 
-The root and workerd configs use explicit relative path targets. TypeScript 7
-removed `baseUrl`, and explicit paths make the resolution base unambiguous to
-both compiler generations.
+Syntax-only repository folds use `TypeScriptSyntaxService`. It reuses one native
+project during a synchronous scan and releases it on the next event-loop turn.
+Simple module-export and host-boundary censuses use the existing Babel syntax
+parser; they do not construct a semantic compiler project.
 
-## Remaining TypeScript 5 consumers
+## Linting
 
-Production build and authority analysis still use the TypeScript 5 compiler API.
-The native TypeScript 7 API cannot yet replace the required surface: the
-typecheck service depends on language-service definitions and quick info,
-custom compiler hosts, module resolution, and virtual `createProgram` flows that
-the stable native package does not expose. Recreating those operations or
-keeping parallel analyzers would be a feature-loss compatibility layer, so the
-runtime stays on its one existing compiler implementation until the native API
-offers the complete contract.
+Oxlint replaces ESLint and `typescript-eslint`. Type-aware operation is backed by
+`oxlint-tsgolint@7.0.2001`, which matches TypeScript 7.0.2. The initial ruleset
+preserves the repository's explicit unused-variable, empty-block, dynamic-delete,
+and non-null-assertion policy without enabling thousands of new recommended-rule
+findings as an accidental part of the compiler migration.
 
-The React Native project also remains on TypeScript 5. Its deliberately
-DOM-free, Node-free ambient environment does not currently resolve equivalently
-under TypeScript 7; adding host libraries would weaken the boundary that the
-mobile project is intended to verify.
+## Browser standard libraries
 
-Do not split the host into overlapping compiler programs merely to reduce the
-JavaScript compiler's heap use. Source path aliases cause each program to reload
-and recheck much of the same transitive graph, increasing total validation time.
-If the native compiler regresses, compare diagnostics against TypeScript 5.9 and
-investigate the concrete compiler or type-level hotspot before changing project
-coverage.
+Monaco still receives standard-library declaration text as a generated bundle.
+`packages/typecheck/scripts/bundle-ts-libs.ts` reads those declarations from the
+platform-specific `@typescript/typescript-<platform>-<arch>` package installed by
+TypeScript 7. Server-side native projects read the compiler's standard libraries
+directly and do not consume the Monaco bundle.

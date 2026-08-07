@@ -7,12 +7,12 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "type-check": "../node_modules/typescript-native/bin/tsc --project tsconfig.json && ../node_modules/typescript-native/bin/tsc --project tsconfig.integration.json && ../node_modules/typescript-native/bin/tsc --project tsconfig.integration.mobile.json",
+    "type-check": "../node_modules/typescript/bin/tsc --project tsconfig.json && ../node_modules/typescript/bin/tsc --project tsconfig.integration.json && ../node_modules/typescript/bin/tsc --project tsconfig.integration.mobile.json",
     "test": "node ../node_modules/vitest/vitest.mjs run --root .. --config vitest.userland.config.ts"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "typescript": "^5.9.3",
+    "typescript": "7.0.2",
     "vitest": "^3.2.2"
   }
 }

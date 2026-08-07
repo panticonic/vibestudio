@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { TypeScriptSyntaxService } from "@vibestudio/typecheck";
 import { parse as parseYaml } from "yaml";
 import { PRODUCT_BUILTIN_CATALOG } from "../packages/shared/src/productBuiltinCatalog.node.generated.mjs";
 import {
@@ -12,6 +13,20 @@ import {
 } from "@vibestudio/shared/unitAuthorityInference";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const syntaxServices = new Map();
+function parseSource(file, source) {
+  const extension = file.endsWith("x") ? "tsx" : "ts";
+  let service = syntaxServices.get(extension);
+  if (!service) {
+    service = new TypeScriptSyntaxService(path.join(root, `.vibestudio-manifest-${extension}`), [
+      extension,
+    ]);
+    syntaxServices.set(extension, service);
+  }
+  const parsed = service.analyze(source, ([sourceFile]) => sourceFile);
+  if (!parsed) throw new Error(`TypeScript did not parse ${file}`);
+  return parsed;
+}
 const workspaceRoot = path.join(root, "workspace");
 const serverMatrix = JSON.parse(
   fs.readFileSync(
@@ -219,13 +234,7 @@ for (const row of authorityLedger.rows.filter(
  * its string-literal decisions and fails closed on any shape it cannot prove.
  */
 function loadReviewedMethodTiers(file) {
-  const source = ts.createSourceFile(
-    file,
-    fs.readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS
-  );
+  const source = parseSource(file, fs.readFileSync(file, "utf8"));
   let initializer;
   const unwrap = (node) => {
     let current = node;
@@ -250,14 +259,14 @@ function loadReviewedMethodTiers(file) {
     ) {
       initializer = value;
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
   if (!initializer) throw new Error("METHOD_TIERS must be a literal reviewed table");
 
   const result = new Map();
   for (const decision of initializer.properties) {
-    if (!ts.isPropertyAssignment(decision) || !ts.isStringLiteralLike(decision.name)) {
+    if (!ts.isPropertyAssignment(decision) || !ts.isStringLiteralLikeNode(decision.name)) {
       throw new Error("METHOD_TIERS contains a non-literal method decision");
     }
     if (!ts.isObjectLiteralExpression(decision.initializer)) {
@@ -272,7 +281,7 @@ function loadReviewedMethodTiers(file) {
     if (
       !tierProperty ||
       !ts.isPropertyAssignment(tierProperty) ||
-      !ts.isStringLiteralLike(tierProperty.initializer) ||
+      !ts.isStringLiteralLikeNode(tierProperty.initializer) ||
       !["open", "gated", "critical"].includes(tierProperty.initializer.text)
     ) {
       throw new Error(`METHOD_TIERS.${decision.name.text} has no literal reviewed tier`);
@@ -283,13 +292,7 @@ function loadReviewedMethodTiers(file) {
 }
 
 function loadReviewedMethodCapabilities(file) {
-  const source = ts.createSourceFile(
-    file,
-    fs.readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS
-  );
+  const source = parseSource(file, fs.readFileSync(file, "utf8"));
   const unwrap = (node) => {
     let current = node;
     while (
@@ -312,7 +315,7 @@ function loadReviewedMethodCapabilities(file) {
       ts.isObjectLiteralExpression(value)
     )
       initializer = value;
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
   if (!initializer) throw new Error("Host semantic capability GROUPS must be a literal table");
@@ -320,12 +323,12 @@ function loadReviewedMethodCapabilities(file) {
   for (const group of initializer.properties) {
     if (
       !ts.isPropertyAssignment(group) ||
-      !ts.isStringLiteralLike(group.name) ||
+      !ts.isStringLiteralLikeNode(group.name) ||
       !ts.isArrayLiteralExpression(group.initializer)
     )
       throw new Error("Host semantic capability GROUPS contains a non-literal entry");
     for (const methodNode of group.initializer.elements) {
-      if (!ts.isStringLiteralLike(methodNode)) {
+      if (!ts.isStringLiteralLikeNode(methodNode)) {
         throw new Error(`Host semantic capability ${group.name.text} has a non-literal method`);
       }
       if (result.has(methodNode.text)) {
@@ -517,13 +520,7 @@ function reachablePackageModules(pkg) {
     seen.add(absolute);
     const source = fs.readFileSync(absolute, "utf8");
     files.push({ file: absolute, source });
-    const parsed = ts.createSourceFile(
-      absolute,
-      source,
-      ts.ScriptTarget.Latest,
-      false,
-      absolute.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-    );
+    const parsed = parseSource(absolute, source);
     const specifiers = [];
     const inspect = (node) => {
       if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
@@ -534,11 +531,11 @@ function reachablePackageModules(pkg) {
         ts.isCallExpression(node) &&
         (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
           (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
-        ts.isStringLiteralLike(node.arguments[0])
+        ts.isStringLiteralLikeNode(node.arguments[0])
       ) {
         specifiers.push(node.arguments[0].text);
       }
-      ts.forEachChild(node, inspect);
+      node.forEachChild(inspect);
     };
     inspect(parsed);
     for (const specifier of specifiers) {

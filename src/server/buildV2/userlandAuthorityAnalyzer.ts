@@ -1,5 +1,12 @@
 import * as path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import {
+  SymbolFlags,
+  type Checker,
+  type Project,
+  type Symbol as TypeScriptSymbol,
+} from "typescript/unstable/sync";
+import { TypeCheckService } from "@vibestudio/typecheck";
 
 export type AbstractString =
   | { kind: "literals"; values: ReadonlySet<string> }
@@ -46,7 +53,7 @@ export interface AuthorityFoldUnit {
 }
 
 export interface AnalyzeWorkspaceServiceCallsInput {
-  program: ts.Program;
+  project: Project;
   sourceRoot: string;
   unitRelativePath: string;
   units: readonly AuthorityFoldUnit[];
@@ -85,27 +92,37 @@ function unionString(a: AbstractString, b: AbstractString): AbstractString {
   return { kind: "literals", values: new Set([...a.values, ...b.values]) };
 }
 
-function symbolKey(symbol: ts.Symbol | undefined): string | null {
+function declarationsOf(project: Project, symbol: TypeScriptSymbol | undefined): ts.Node[] {
+  return (
+    symbol?.declarations.flatMap((handle) => {
+      const declaration = handle.resolve(project);
+      return declaration ? [declaration] : [];
+    }) ?? []
+  );
+}
+
+function symbolKey(project: Project, symbol: TypeScriptSymbol | undefined): string | null {
   if (!symbol) return null;
-  const declaration = symbol.declarations?.[0];
-  return `${symbol.getName()}#${declaration?.getSourceFile().fileName ?? ""}:${declaration?.getStart() ?? -1}`;
+  const declaration = declarationsOf(project, symbol)[0];
+  return `${symbol.name}#${declaration?.getSourceFile().fileName ?? ""}:${declaration?.getStart() ?? -1}`;
 }
 
-function unalias(checker: ts.TypeChecker, symbol: ts.Symbol | undefined): ts.Symbol | undefined {
+function unalias(
+  checker: Checker,
+  symbol: TypeScriptSymbol | undefined
+): TypeScriptSymbol | undefined {
   if (!symbol) return undefined;
-  return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  return symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
 }
 
-function literalStrings(
-  checker: ts.TypeChecker,
-  expression: ts.Expression
-): ReadonlySet<string> | null {
+function literalStrings(checker: Checker, expression: ts.Expression): ReadonlySet<string> | null {
   const type = checker.getTypeAtLocation(expression);
-  const types = type.isUnion() ? type.types : [type];
+  if (!type) return null;
+  const types = type.isUnionType() ? (type.getTypes() ?? []) : [type];
   const values = new Set<string>();
   for (const member of types) {
-    if ((member.flags & ts.TypeFlags.StringLiteral) !== 0) {
-      values.add((member as ts.StringLiteralType).value);
+    if (member.isStringLiteralType()) {
+      values.add(String(member.value));
       continue;
     }
     return null;
@@ -122,7 +139,8 @@ function isRuntimeImportDeclaration(declaration: ts.Node): boolean {
   if (!ts.isImportDeclaration(importDeclaration)) return false;
   const specifier = importDeclaration.moduleSpecifier;
   return (
-    ts.isStringLiteralLike(specifier) && /(?:^|\/)(?:runtime|workerd)(?:\/|$)/u.test(specifier.text)
+    ts.isStringLiteralLikeNode(specifier) &&
+    /(?:^|\/)(?:runtime|workerd)(?:\/|$)/u.test(specifier.text)
   );
 }
 
@@ -135,22 +153,23 @@ function isWorkspaceServiceImportDeclaration(declaration: ts.Node): boolean {
   if (!ts.isImportDeclaration(importDeclaration)) return false;
   const specifier = importDeclaration.moduleSpecifier;
   return (
-    ts.isStringLiteralLike(specifier) &&
+    ts.isStringLiteralLikeNode(specifier) &&
     (/(?:^|\/)workspaceServiceRpc$/u.test(specifier.text) ||
       /(?:^|\/)pubsub(?:\/|$)/u.test(specifier.text))
   );
 }
 
 function isPublicNamespace(
-  checker: ts.TypeChecker,
+  project: Project,
+  checker: Checker,
   expression: ts.Expression,
   expectedName: "workers" | "rpc" | "runtime"
 ): boolean {
   const rawSymbol = checker.getSymbolAtLocation(expression);
-  if (rawSymbol?.declarations?.some(isRuntimeImportDeclaration)) return true;
+  if (declarationsOf(project, rawSymbol).some(isRuntimeImportDeclaration)) return true;
   const symbol = unalias(checker, rawSymbol);
-  if (!symbol || symbol.getName() !== expectedName) return false;
-  const declarations = symbol.declarations ?? [];
+  if (!symbol || symbol.name !== expectedName) return false;
+  const declarations = declarationsOf(project, symbol);
   if (declarations.some(isRuntimeImportDeclaration)) return true;
   // Ambient declarations are how exact build tests and generated type
   // surfaces describe the runtime bridge. A local object literal with the
@@ -161,7 +180,7 @@ function isPublicNamespace(
 }
 
 function propertyCall(
-  checker: ts.TypeChecker,
+  checker: Checker,
   call: ts.CallExpression,
   name: string
 ): ts.PropertyAccessExpression | null {
@@ -182,7 +201,7 @@ function isAwaitOrTransparent(expression: ts.Expression): ts.Expression {
   for (;;) {
     if (ts.isAwaitExpression(current)) current = current.expression;
     else if (ts.isParenthesizedExpression(current)) current = current.expression;
-    else if (ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
+    else if (ts.isAssertionExpression(current)) {
       current = current.expression;
     } else if (ts.isNonNullExpression(current)) current = current.expression;
     else return current;
@@ -231,7 +250,7 @@ function walkNodes(
     visit(node);
     if (!shouldDescend(node)) continue;
     const children: ts.Node[] = [];
-    ts.forEachChild(node, (child) => {
+    node.forEachChild((child) => {
       children.push(child);
     });
     for (let index = children.length - 1; index >= 0; index -= 1) {
@@ -241,13 +260,13 @@ function walkNodes(
 }
 
 function abstractString(
-  checker: ts.TypeChecker,
+  checker: Checker,
   expression: ts.Expression,
   resolve: (expression: ts.Expression, seen: Set<string>) => AbstractString,
   seen = new Set<string>()
 ): AbstractString {
   const current = isAwaitOrTransparent(expression);
-  if (ts.isStringLiteralLike(current)) {
+  if (ts.isStringLiteralLikeNode(current)) {
     return { kind: "literals", values: new Set([current.text]) };
   }
   const finite = literalStrings(checker, current);
@@ -263,15 +282,21 @@ function abstractString(
 export function analyzeWorkspaceServiceCalls(
   input: AnalyzeWorkspaceServiceCallsInput
 ): WorkspaceServiceCallFact[] {
-  const checker = input.program.getTypeChecker();
-  const sourceFiles = input.program.getSourceFiles().filter((sourceFile) => {
-    if (sourceFile.isDeclarationFile) return false;
-    const file = path.resolve(sourceFile.fileName);
-    return input.units.some((unit) => {
-      const root = `${path.resolve(input.sourceRoot, unit.relativePath)}${path.sep}`;
-      return file.startsWith(root);
+  const checker = input.project.checker;
+  const sourceFiles = input.project.program
+    .getSourceFileNames()
+    .flatMap((fileName) => {
+      const sourceFile = input.project.program.getSourceFile(fileName);
+      return sourceFile ? [sourceFile] : [];
+    })
+    .filter((sourceFile) => {
+      if (sourceFile.isDeclarationFile) return false;
+      const file = path.resolve(sourceFile.fileName);
+      return input.units.some((unit) => {
+        const root = `${path.resolve(input.sourceRoot, unit.relativePath)}${path.sep}`;
+        return file.startsWith(root);
+      });
     });
-  });
 
   const declarationInitializers = new Map<string, ts.Expression>();
   const declarationFunctions = new Map<string, ts.FunctionLikeDeclaration>();
@@ -279,7 +304,7 @@ export function analyzeWorkspaceServiceCalls(
     walkNodes(sourceFile, (node) => {
       if (ts.isVariableDeclaration(node) && node.initializer) {
         const symbol = checker.getSymbolAtLocation(node.name);
-        const key = symbolKey(unalias(checker, symbol));
+        const key = symbolKey(input.project, unalias(checker, symbol));
         if (key) declarationInitializers.set(key, node.initializer);
         if (
           ts.isIdentifier(node.name) &&
@@ -289,7 +314,7 @@ export function analyzeWorkspaceServiceCalls(
         }
       } else if (ts.isFunctionDeclaration(node) && node.name) {
         const symbol = checker.getSymbolAtLocation(node.name);
-        const key = symbolKey(unalias(checker, symbol));
+        const key = symbolKey(input.project, unalias(checker, symbol));
         if (key) declarationFunctions.set(key, node);
       }
     });
@@ -311,10 +336,10 @@ export function analyzeWorkspaceServiceCalls(
     if (!property || !RESOLVER_NAMES.has(property.name.text)) return false;
     const receiver = property.expression;
     return (
-      isPublicNamespace(checker, receiver, "workers") ||
+      isPublicNamespace(input.project, checker, receiver, "workers") ||
       (ts.isPropertyAccessExpression(receiver) &&
         receiver.name.text === "workers" &&
-        isPublicNamespace(checker, receiver.expression, "runtime"))
+        isPublicNamespace(input.project, checker, receiver.expression, "runtime"))
     );
   };
 
@@ -325,16 +350,21 @@ export function analyzeWorkspaceServiceCalls(
     if (
       name === "durableObjectService" &&
       ts.isPropertyAccessExpression(call.expression) &&
-      (isPublicNamespace(checker, call.expression.expression, "workers") ||
+      (isPublicNamespace(input.project, checker, call.expression.expression, "workers") ||
         (ts.isPropertyAccessExpression(call.expression.expression) &&
           call.expression.expression.name.text === "workers" &&
-          isPublicNamespace(checker, call.expression.expression.expression, "runtime")))
+          isPublicNamespace(
+            input.project,
+            checker,
+            call.expression.expression.expression,
+            "runtime"
+          )))
     ) {
       return true;
     }
     const rawSymbol = checker.getSymbolAtLocation(call.expression);
     if (
-      rawSymbol?.declarations?.some(
+      declarationsOf(input.project, rawSymbol).some(
         (declaration) =>
           isRuntimeImportDeclaration(declaration) ||
           isWorkspaceServiceImportDeclaration(declaration)
@@ -345,7 +375,7 @@ export function analyzeWorkspaceServiceCalls(
     const symbol = unalias(checker, rawSymbol);
     if (!symbol) return false;
     return (
-      symbol.declarations?.some(
+      declarationsOf(input.project, symbol).some(
         (declaration) =>
           isRuntimeImportDeclaration(declaration) ||
           isWorkspaceServiceImportDeclaration(declaration)
@@ -409,7 +439,7 @@ export function analyzeWorkspaceServiceCalls(
       }
       if (ts.isIdentifier(current.expression)) {
         const symbol = unalias(checker, checker.getSymbolAtLocation(current.expression));
-        const key = symbolKey(symbol);
+        const key = symbolKey(input.project, symbol);
         const fn = key ? declarationFunctions.get(key) : undefined;
         if (fn && fn.body && key && !functionVisiting.has(key)) {
           functionVisiting.add(key);
@@ -426,7 +456,7 @@ export function analyzeWorkspaceServiceCalls(
                   if (value) returns.push(value);
                 }
               },
-              (node) => node === fn.body || !ts.isFunctionLike(node)
+              (node) => node === fn.body || !ts.isFunctionLikeDeclaration(node)
             );
           } finally {
             functionVisiting.delete(key);
@@ -450,7 +480,7 @@ export function analyzeWorkspaceServiceCalls(
     }
     if (ts.isIdentifier(current)) {
       const symbol = unalias(checker, checker.getSymbolAtLocation(current));
-      const key = symbolKey(symbol);
+      const key = symbolKey(input.project, symbol);
       if (!key || seen.has(key) || serviceVisiting.has(key)) return null;
       const memo = serviceMemo.get(key);
       if (memo !== undefined) return memo;
@@ -478,7 +508,7 @@ export function analyzeWorkspaceServiceCalls(
     }
     if (ts.isIdentifier(current)) {
       const symbol = unalias(checker, checker.getSymbolAtLocation(current));
-      const key = symbolKey(symbol);
+      const key = symbolKey(input.project, symbol);
       if (!key || seen.has(key)) return { kind: "unknown" };
       const initializer = declarationInitializers.get(key);
       if (initializer)
@@ -495,7 +525,7 @@ export function analyzeWorkspaceServiceCalls(
       if (direct) return direct.id;
       if (!ts.isIdentifier(current)) return null;
       const symbol = unalias(checker, checker.getSymbolAtLocation(current));
-      const key = symbolKey(symbol);
+      const key = symbolKey(input.project, symbol);
       if (!key || seen.has(key)) return null;
       const initializer = declarationInitializers.get(key);
       return initializer ? producerFor(initializer, new Set([...seen, key])) : null;
@@ -528,7 +558,7 @@ export function analyzeWorkspaceServiceCalls(
           }
         : undefined);
     const methodValue = method
-      ? ts.isIdentifier(method) || ts.isStringLiteralLike(method)
+      ? ts.isIdentifier(method) || ts.isStringLiteralLikeNode(method)
         ? method.text
         : null
       : null;
@@ -610,62 +640,46 @@ export function analyzeWorkspaceServiceCalls(
     const virtualFile = path.isAbsolute(module.moduleId)
       ? module.moduleId
       : path.resolve(input.sourceRoot, module.moduleId);
-    const options: ts.CompilerOptions = {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      allowJs: true,
-      checkJs: false,
-      skipLibCheck: true,
-    };
-    const host = ts.createCompilerHost(options, true);
-    const originalGetSourceFile = host.getSourceFile.bind(host);
-    host.fileExists = (fileName) => fileName === virtualFile || ts.sys.fileExists(fileName);
-    host.readFile = (fileName) =>
-      fileName === virtualFile ? module.source : ts.sys.readFile(fileName);
-    host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) =>
-      fileName === virtualFile
-        ? ts.createSourceFile(
-            fileName,
-            module.source,
-            languageVersion,
-            true,
-            module.format === "tsx" || module.format === "jsx"
-              ? ts.ScriptKind.TSX
-              : module.format === "js" || module.format === "mjs" || module.format === "cjs"
-                ? ts.ScriptKind.JS
-                : ts.ScriptKind.TS
-          )
-        : originalGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
-    const externalProgram = ts.createProgram([virtualFile], options, host);
-    facts.push(
-      ...analyzeWorkspaceServiceCalls({
-        program: externalProgram,
-        sourceRoot: path.dirname(virtualFile),
-        unitRelativePath: ".",
-        units: [
-          {
-            name: module.package.kind === "external" ? module.package.name : "external-module",
-            relativePath: ".",
-            package:
-              module.package.kind === "external"
-                ? {
-                    kind: "external",
-                    name: module.package.name,
-                    versionOrEffectiveVersion: module.package.version,
-                    contentDigest: module.package.packageDigest,
-                  }
-                : module.package.kind === "workspace"
+    const service = new TypeCheckService({
+      panelPath: path.dirname(virtualFile),
+      workspaceContext: null,
+      disableTsconfigDiscovery: true,
+      skipSuggestions: true,
+    });
+    service.updateFile(virtualFile, module.source);
+    try {
+      facts.push(
+        ...analyzeWorkspaceServiceCalls({
+          project: service.getProject(),
+          sourceRoot: path.dirname(virtualFile),
+          unitRelativePath: ".",
+          units: [
+            {
+              name: module.package.kind === "external" ? module.package.name : "external-module",
+              relativePath: ".",
+              package:
+                module.package.kind === "external"
                   ? {
-                      kind: "workspace",
+                      kind: "external",
                       name: module.package.name,
-                      versionOrEffectiveVersion: module.package.effectiveVersion,
-                      contentDigest: module.contentDigest,
+                      versionOrEffectiveVersion: module.package.version,
+                      contentDigest: module.package.packageDigest,
                     }
-                  : undefined,
-          },
-        ],
-      })
-    );
+                  : module.package.kind === "workspace"
+                    ? {
+                        kind: "workspace",
+                        name: module.package.name,
+                        versionOrEffectiveVersion: module.package.effectiveVersion,
+                        contentDigest: module.contentDigest,
+                      }
+                    : undefined,
+            },
+          ],
+        })
+      );
+    } finally {
+      service.dispose();
+    }
   }
   return facts.sort((a, b) => a.id.localeCompare(b.id));
 }

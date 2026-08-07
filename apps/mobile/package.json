@@ -9,8 +9,8 @@
     "start": "react-native start",
     "pod-install": "cd ios && pod install",
     "clean": "react-native clean",
-    "lint": "eslint ../../workspace/apps/mobile",
-    "type-check": "node --max-old-space-size=4096 ../../node_modules/typescript/bin/tsc --noEmit",
+    "lint": "../../node_modules/oxlint/bin/oxlint ../../workspace/apps/mobile",
+    "type-check": "../../node_modules/typescript/bin/tsc --noEmit",
     "test": "jest"
   },
   "dependencies": {
@@ -64,7 +64,7 @@
     "babel-jest": "^29.7.0",
     "jest": "^29.7.0",
     "react-test-renderer": "19.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "7.0.2"
   },
   "jest": {
     "preset": "react-native",

@@ -19,6 +19,7 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
+    "types": ["node", "react", "react-native"],
     "paths": {
       "@vibestudio/shared/*": ["../../packages/shared/src/*"],
       "@vibestudio/service-schemas/*": ["../../packages/service-schemas/src/*"],
