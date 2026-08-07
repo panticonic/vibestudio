@@ -290,8 +290,7 @@ export function createDevelopmentNativeService(deps: {
         if (deps.attachedHostPublisher && deps.attachedHostParentId) {
           const ports = deps.isolatedExecutor!.takeAttachmentPorts(run.runId, receipt);
           const publication = await deps.attachedHostPublisher.attach({
-            run,
-            instance: receipt,
+            run: { ...run, instance: receipt },
             parentHostId: deps.attachedHostParentId,
             authorityCeiling: initiatingAttachedHostCeiling(
               run,
