@@ -46,24 +46,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "devices.read",
-          "resource": {
-            "kind": "exact",
-            "key": "devices.read"
-          },
-          "tier": "gated",
-          "evidence": "exact"
-        },
-        {
-          "capability": "workspaces.read",
-          "resource": {
-            "kind": "exact",
-            "key": "workspaces.read"
-          },
-          "tier": "gated",
-          "evidence": "exact"
-        },
-        {
           "capability": "approvals.decide",
           "resource": {
             "kind": "prefix",
@@ -116,6 +98,15 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "devices.read",
+          "resource": {
+            "kind": "exact",
+            "key": "devices.read"
+          },
+          "tier": "gated",
+          "evidence": "exact"
         },
         {
           "capability": "external.open",
@@ -188,6 +179,15 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspaces.read",
+          "resource": {
+            "kind": "exact",
+            "key": "workspaces.read"
+          },
+          "tier": "gated",
+          "evidence": "exact"
         }
       ]
     }

@@ -213,15 +213,6 @@
       ],
       "requests": [
         {
-          "capability": "credential.use",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
@@ -229,6 +220,15 @@
           },
           "tier": "critical",
           "evidence": "bounded-dynamic"
+        },
+        {
+          "capability": "credential.use",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "workspace-main-advance",

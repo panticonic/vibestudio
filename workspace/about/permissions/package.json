@@ -101,7 +101,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "workspace-service:models",
+          "capability": "workspace-service:missions",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -110,7 +110,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "workspace-service:missions",
+          "capability": "workspace-service:models",
           "resource": {
             "kind": "prefix",
             "prefix": ""
