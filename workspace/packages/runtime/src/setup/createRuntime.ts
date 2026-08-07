@@ -13,6 +13,7 @@ import { createPanelRuntime } from "../shared/panelRuntime.js";
 import type { RuntimeFs, ThemeAppearance } from "../types.js";
 import { _applyStateArgsFromHost, _initStateArgsRuntime } from "../panel/stateArgs.js";
 import { exposeAgentApi } from "../panel/agentApi.js";
+import { createPanelBootReporter } from "../panel/bootReporter.js";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelBootObservation } from "@vibestudio/shared/panel/observation";
 
@@ -39,30 +40,27 @@ export function createRuntime(deps: RuntimeDeps) {
   const base = createBaseRuntime({ ...deps, id: entityId });
   const shell = (globalThis as any).__vibestudioShell;
 
-  // Bootstrap readiness is a renderer-owned transition, not something the
-  // server should rediscover by repeatedly evaluating this page. Publish the
-  // initial state after the authenticated runtime route exists, then every
-  // subsequent transition emitted by the loader.
-  const reportBoot = (boot: PanelBootObservation): void => {
-    void base.rpc
-      .call("main", "panelRuntime.reportOwnView", [
-        {
-          url: globalThis.location?.href ?? "",
-          loading: globalThis.document?.readyState === "loading",
-          boot,
-        },
-      ])
-      .catch(() => {
-        // Navigation can tear down the transport before the server returns
-        // its reported/stale result. There is nothing left to notify here.
+  const bootReporter = createPanelBootReporter({
+    rpc: base.rpc,
+    observeView: (boot) => ({
+      url: globalThis.location?.href ?? "",
+      loading: globalThis.document?.readyState === "loading",
+      boot,
+    }),
+    onError: (error, observation) => {
+      console.warn("[panelRuntime] Failed to publish renderer boot evidence", {
+        phase: observation.boot.phase,
+        error: error instanceof Error ? error.message : String(error),
       });
-  };
-  const initialBoot = globalThis.__vibestudioPanelBoot;
-  if (initialBoot) reportBoot(initialBoot);
-  globalThis.addEventListener?.("vibestudio:panel-boot", (event) => {
-    const boot = (event as CustomEvent<PanelBootObservation>).detail;
-    if (boot) reportBoot(boot);
+    },
   });
+  const initialBoot = globalThis.__vibestudioPanelBoot;
+  if (initialBoot) bootReporter.publish(initialBoot);
+  const onPanelBoot = (event: Event): void => {
+    const boot = (event as CustomEvent<PanelBootObservation>).detail;
+    if (boot) bootReporter.publish(boot);
+  };
+  globalThis.addEventListener?.("vibestudio:panel-boot", onPanelBoot);
 
   _initStateArgsRuntime(slotId, (service, method, args) => base.rpc.call(service, method, args));
   exposeAgentApi(base.expose);
@@ -143,6 +141,11 @@ export function createRuntime(deps: RuntimeDeps) {
     expose: base.expose,
 
     contextId: base.contextId,
+    destroy: () => {
+      globalThis.removeEventListener?.("vibestudio:panel-boot", onPanelBoot);
+      bootReporter.dispose();
+      base.destroy();
+    },
   };
 }
 

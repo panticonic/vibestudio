@@ -56,6 +56,7 @@ function runtimeHarness(
     slotCreateError?: Error;
     replaceEntityOnAgentFailure?: boolean;
     disconnectAgentTarget?: boolean;
+    recoverStoppedRoute?: boolean;
     onCreateSlotTiming?: NonNullable<
       Parameters<typeof createPanelRuntime>[0]["onCreateSlotTiming"]
     >;
@@ -67,6 +68,8 @@ function runtimeHarness(
     ? (options.browserSource ?? "browser:data:text/html,<p>ready</p>")
     : "panels/new";
   let agentCalls = 0;
+  let ensureSlotCalls = 0;
+  let observeSlotCalls = 0;
   const call = vi.fn(
     async <T>(
       _target: string,
@@ -148,6 +151,10 @@ function runtimeHarness(
         case "workspace-state.panelTree.detail":
           return detail(String(args[0]), currentEntityId, currentSource) as T;
         case "panelRuntime.ensureSlot":
+          ensureSlotCalls += 1;
+          if (options.recoverStoppedRoute && ensureSlotCalls > 1) {
+            currentEntityId = "panel:nav-replacement";
+          }
           return {
             status: options.hostAvailable === false ? "unavailable" : "assigned",
             lease:
@@ -166,6 +173,7 @@ function runtimeHarness(
             },
           } as T;
         case "panelRuntime.observeSlot":
+          observeSlotCalls += 1;
           if (options.observeError) throw options.observeError;
           if (options.hostAvailable === false) {
             return {
@@ -194,6 +202,35 @@ function runtimeHarness(
                 platform: "headless" as const,
                 supportsCdp: true,
                 view: { url: "http://panel.test/", loading: true },
+              },
+            } as T;
+          }
+          if (options.recoverStoppedRoute) {
+            const replacement = currentEntityId === "panel:nav-replacement";
+            return {
+              version: { epoch: "test", counter: observeSlotCalls },
+              attempt: {
+                epoch: "test",
+                attemptId: replacement ? "attempt:panel:nav-replacement" : "attempt:panel:nav-new",
+                slotId: currentSlotId,
+                runtimeEntityId: currentEntityId,
+                phase: observeSlotCalls === 2 ? "stopped" : "ready",
+                ...(observeSlotCalls === 2 ? { stopReason: "host-lost" } : {}),
+                revision: 1,
+                reporter: observeSlotCalls === 2 ? "coordinator" : "renderer",
+                updatedAt: observeSlotCalls,
+              },
+              route: {
+                reachable: replacement,
+                ...(replacement
+                  ? {
+                      connectionId: "replacement-route",
+                      holderLabel: "Headless",
+                      platform: "headless" as const,
+                      supportsCdp: true,
+                      view: { url: "http://panel.test/", loading: false },
+                    }
+                  : {}),
               },
             } as T;
           }
@@ -544,9 +581,7 @@ describe("panel runtime topology composition", () => {
     });
 
     await vi.waitFor(() => {
-      expect(call.mock.calls.some((entry) => entry[1] === "panelRuntime.awaitAttempt")).toBe(
-        true
-      );
+      expect(call.mock.calls.some((entry) => entry[1] === "panelRuntime.awaitAttempt")).toBe(true);
     });
     controller.abort(new Error("observation complete"));
     await expect(opening).rejects.toThrow(/observation complete/);
@@ -593,6 +628,19 @@ describe("panel runtime topology composition", () => {
       .filter((entry) => entry[1] === "_agent.snapshot")
       .map((entry) => entry[0]);
     expect(snapshotTargets).toEqual(["panel:nav-new", "panel:nav-replacement"]);
+  });
+
+  it("actively rematerializes a durable slot when its ready route stops", async () => {
+    const { runtime, call } = runtimeHarness({ recoverStoppedRoute: true });
+
+    await expect(runtime.getPanelHandle("panel:tree/new").snapshot()).resolves.toMatchObject({
+      panelId: "panel:tree/new",
+      runtimeEntityId: "panel:nav-replacement",
+      document: { text: "snapshot:panel:nav-replacement" },
+    });
+    expect(call.mock.calls.filter((entry) => entry[1] === "panelRuntime.ensureSlot")).toHaveLength(
+      2
+    );
   });
 
   it("returns structured lifecycle evidence when the same ready runtime route is absent", async () => {

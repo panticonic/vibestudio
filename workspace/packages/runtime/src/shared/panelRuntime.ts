@@ -552,16 +552,12 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
             "panelRuntime.observeSlot",
             [initial.panelId]
           );
-          // A stopped attempt stays the slot's current attempt until its
-          // successor commits; re-adopting it would spin. Wait for the slot
-          // to actually change.
+          // Slot followers express active demand. If the durable lifecycle has
+          // no live attempt, re-enter canonical materialization instead of
+          // waiting for an event that nobody is now responsible for creating.
           if (!lifecycle.attempt || lifecycle.attempt.attemptId === abandonedAttemptId) {
-            await options.rpc.call(
-              "main",
-              "panelRuntime.awaitSlot",
-              [initial.panelId, lifecycle.version],
-              { signal }
-            );
+            attempt = await ensurePanelMaterialized(initial.panelId);
+            attemptRef = { epoch: attempt.epoch, attemptId: attempt.attemptId };
             continue;
           }
           attempt = lifecycle.attempt;
@@ -912,6 +908,27 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     ]);
     for (;;) {
       signal?.throwIfAborted();
+      if (!slot.attempt || slot.attempt.phase === "stopped") {
+        // A route waiter is also active presentation demand. Host loss/unload
+        // is terminal for the old attempt, but not for the durable slot: ask
+        // the coordinator to create/reassign the one canonical successor.
+        const replacement = await ensurePanelMaterialized(observation.panelId);
+        const readied = await waitUntilReady(
+          await observePanel(observation.panelId),
+          signal,
+          replacement
+        );
+        watchedAttemptId = readied.attemptId;
+        slot = await options.rpc.call<PanelSlotObservation>("main", "panelRuntime.observeSlot", [
+          observation.panelId,
+        ]);
+        continue;
+      }
+      if (slot.attempt.phase === "failed") {
+        // Preserve the coordinator's typed terminal evidence; awaiting slot
+        // churn here would hide the failure and can never create that churn.
+        await waitUntilReady(await observePanel(observation.panelId), signal, slot.attempt);
+      }
       if (slot.attempt && slot.attempt.attemptId !== watchedAttemptId) {
         // The slot advanced past the attempt we were routing to. Wait for the
         // replacement to become ready, then re-enter this loop: readiness

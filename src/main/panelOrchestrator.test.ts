@@ -200,6 +200,7 @@ function createOrchestrator(
       return { acquired: true, lease };
     }
     if (method === "getSnapshot") return { version: { epoch: "test", counter: 1 }, leases: [] };
+    if (method === "reportView") return "reported";
     return undefined;
   };
   const serverClient = {
@@ -452,7 +453,12 @@ describe("PanelOrchestrator.ensureLoaded", () => {
 
     const { orchestrator, panelView, cdpHost, serverClient } = createOrchestrator(registry);
     panelView.hasView.mockImplementation((panelId: string) => panelId === panel.id);
-    panelView.getWebContents.mockReturnValue({ id: 42, isDestroyed: () => false } as never);
+    panelView.getWebContents.mockReturnValue({
+      id: 42,
+      isDestroyed: () => false,
+      getURL: () => panel.artifacts.htmlPath,
+      isLoading: () => false,
+    } as never);
 
     await expect(orchestrator.ensureLoaded(panel.id)).resolves.toMatchObject({
       panelId: panel.id,
@@ -466,6 +472,15 @@ describe("PanelOrchestrator.ensureLoaded", () => {
       expect.objectContaining({
         slotId: panel.id,
         clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      }),
+    ]);
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "reportView", [
+      "panel:nav-panel:tree/panel-1",
+      expect.any(String),
+      expect.objectContaining({
+        url: panel.artifacts.htmlPath,
+        loading: false,
+        boot: { kind: "unavailable" },
       }),
     ]);
     expect(panelView.createViewForPanel).not.toHaveBeenCalled();

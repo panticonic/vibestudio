@@ -190,9 +190,14 @@ export class PanelRuntimeLeaseController {
       | undefined;
     if (!connection || !contents || contents.isDestroyed()) return;
     const boot = this.deps.cdpHost.getBootObservation
-      ? await this.deps.cdpHost
-          .getBootObservation(panelId)
-          .catch(() => ({ kind: "unavailable" as const }))
+      ? await this.deps.cdpHost.getBootObservation(panelId).catch((error: unknown) => {
+          log.warn(
+            `[reportPanelViewTransition] Boot probe failed for ${panelId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+          return { kind: "unavailable" as const };
+        })
       : ({ kind: "unavailable" } as const);
     if (this.connectionBySlot.get(panelId) !== connection) return;
     await this.panelRuntime.reportView(
@@ -370,6 +375,7 @@ export class PanelRuntimeLeaseController {
       });
       this.registerExistingCdpTarget(slotId);
       this.resources.track(slotId);
+      await this.reportPanelViewTransition(slotId);
       return;
     }
 
@@ -500,6 +506,7 @@ export class PanelRuntimeLeaseController {
       await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
       this.recordViewMutation();
       this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
+      await this.reportPanelViewTransition(panelId);
       this.resources.track(panelId);
       await this.resources.enforceCap(panelId);
     } finally {
@@ -568,6 +575,7 @@ export class PanelRuntimeLeaseController {
       if (options.refreshPresentedIdentity) {
         await this.convergePreparedPanelViewOnce(panelId, options);
       }
+      await this.reportPanelViewTransition(panelId);
       return;
     }
     const convergence = this.convergePreparedPanelViewOnce(panelId, options).finally(() => {
@@ -576,7 +584,8 @@ export class PanelRuntimeLeaseController {
       }
     });
     this.preparedViewConvergenceBySlot.set(panelId, convergence);
-    return convergence;
+    await convergence;
+    await this.reportPanelViewTransition(panelId);
   }
 
   private async convergePreparedPanelViewOnce(
@@ -640,7 +649,13 @@ export class PanelRuntimeLeaseController {
     const lease = this.connectionBySlot.get(panelId);
     this.clearLocalPanelRuntime(panelId);
     if (lease) {
-      void this.panelRuntime.release(lease.runtimeEntityId, lease.connectionId).catch(() => {});
+      void this.panelRuntime.release(lease.runtimeEntityId, lease.connectionId).catch((error) => {
+        log.warn(
+          `[releaseLocalPanelRuntime] Failed to release ${panelId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
     }
   }
 
@@ -670,7 +685,12 @@ export class PanelRuntimeLeaseController {
         },
       });
       return true;
-    } catch {
+    } catch (error) {
+      log.warn(
+        `[reportPanelMaterializationFailure] Failed to publish ${panelId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
       return false;
     }
   }
@@ -744,6 +764,7 @@ export class PanelRuntimeLeaseController {
     await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
     this.recordViewMutation();
     this.updateWorkspacePanelArtifacts(panelId, snapshot, panelUrl);
+    await this.reportPanelViewTransition(panelId);
   }
 
   private updateWorkspacePanelArtifacts(

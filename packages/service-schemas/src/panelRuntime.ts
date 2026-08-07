@@ -402,10 +402,10 @@ export const panelRuntimeMethods = defineServiceMethods({
       residency: "supervision",
       family: "panelRuntime.control",
       rationale:
-        "A panel principal publishes its own bootstrap transition; the active lease identity is derived server-side.",
+        "A panel principal publishes its own bootstrap transition only while its authenticated connection owns the exact active lease.",
     },
     description:
-      "Publish the calling panel runtime's current page and bootstrap observation. Returns stale when its lease has already ended.",
+      "Publish the calling panel runtime's current page and bootstrap observation. Returns stale unless its authenticated connection owns the exact active lease.",
     args: z.tuple([panelRendererViewReportSchema]),
     returns: panelRuntimeViewReportResultSchema,
     authority: { principals: ["code"] },

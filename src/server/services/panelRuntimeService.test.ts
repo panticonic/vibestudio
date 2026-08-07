@@ -5,6 +5,10 @@ import { createPanelRuntimeService } from "./panelRuntimeService.js";
 import type { PanelBootProbeResult } from "@vibestudio/shared/panel/observation";
 
 const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
+const rendererCtx = {
+  caller: createVerifiedCaller("panel:nav-a", "panel"),
+  connectionId: "route-a",
+};
 
 function setup(
   input: {
@@ -208,6 +212,27 @@ describe("panelRuntimeService attempt waits", () => {
       kind: "report",
       attempt: { phase: "ready", reporter: "host" },
     });
+  });
+
+  it("accepts renderer evidence only from the exact lease connection", async () => {
+    const { coordinator, service, attempt } = setup();
+    const report = {
+      url: "http://panel/",
+      loading: false,
+      boot: { kind: "observed" as const, observation: { phase: "ready" as const } },
+    };
+
+    await expect(
+      service.handler({ ...rendererCtx, connectionId: "old-route" }, "reportOwnView", [report])
+    ).resolves.toBe("stale");
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).toMatchObject({ kind: "report", attempt: { phase: "pending" } });
+
+    await expect(service.handler(rendererCtx, "reportOwnView", [report])).resolves.toBe("reported");
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).toMatchObject({ kind: "report", attempt: { phase: "ready", reporter: "renderer" } });
   });
 
   it("forwards typed host failures without synthesizing a renderer boot failure", async () => {

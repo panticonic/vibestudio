@@ -559,6 +559,20 @@ export class PanelRuntimeCoordinator {
       this.nextSlotObservationVersion(lease.slotId);
       this.emitSlotObservationChanged(lease.slotId);
     }
+    const current = this.attempts.get(attempt.attemptId);
+    if (current?.phase === "pending" && this.hasReachableRoute(current)) {
+      // A concrete host view means assignment and materialization have begun.
+      // From this point a missing loader boot record is itself observable
+      // no-progress and must converge on a typed terminal outcome. Previously
+      // supervision only began after a loading/booting report, so losing that
+      // first report left awaitAttempt parked on pending forever even though
+      // the target, document, and panel RPC route were all live.
+      //
+      // Do not reset an existing counter on identical host observations: a
+      // renderer that repeatedly reports the same pre-boot document is still
+      // making no progress.
+      this.startSupervisionIfAbsent(current);
+    }
     return true;
   }
 
@@ -986,7 +1000,13 @@ export class PanelRuntimeCoordinator {
     this.routeReachability.set(connectionId, true);
     const attemptId = this.routeBindings.get(connectionId);
     const attempt = attemptId ? this.attempts.get(attemptId) : undefined;
-    if (attempt && (attempt.phase === "loading" || attempt.phase === "booting")) {
+    if (attempt?.phase === "pending") {
+      // An authenticated panel-principal route cannot exist before native
+      // materialization has begun. Supervise even when the renderer's first
+      // boot report and the host's initial view report were both lost. This is
+      // the converse ordering of reportView's pending-attempt supervision.
+      this.startSupervisionIfAbsent(attempt);
+    } else if (attempt && (attempt.phase === "loading" || attempt.phase === "booting")) {
       this.ensureSupervision(attempt);
     }
     if (lease.expiresAt !== undefined) {
@@ -1314,6 +1334,11 @@ export class PanelRuntimeCoordinator {
       return;
     }
     this.resetSupervisionProgress(attempt);
+  }
+
+  private startSupervisionIfAbsent(attempt: PanelAttempt): void {
+    if (this.supervisionTimers.has(attempt.attemptId)) return;
+    this.startSupervision(attempt);
   }
 
   private hasReachableRoute(attempt: PanelAttempt): boolean {

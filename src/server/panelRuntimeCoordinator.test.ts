@@ -225,6 +225,81 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     ).toMatchObject({ kind: "report", attempt: { phase: "pending" } });
   });
 
+  it("terminates a materialized pending attempt when its first boot report is missing", async () => {
+    vi.useFakeTimers();
+    const { coordinator, attempt } = resident();
+    coordinator.reportView("panel:nav-a", "route-a", {
+      url: "http://panel/?buildKey=ready-build",
+      loading: false,
+      boot: { kind: "unavailable" },
+    });
+    coordinator.setAttemptProbe(async () => ({
+      url: "http://panel/?buildKey=ready-build",
+      loading: false,
+      boot: { kind: "unavailable" as const },
+    }));
+
+    await vi.advanceTimersByTimeAsync(12_100);
+
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).toMatchObject({
+      kind: "report",
+      attempt: {
+        phase: "failed",
+        failure: {
+          stage: "boot-stall",
+          code: "boot_stalled",
+          detail: "unobservable",
+        },
+      },
+    });
+  });
+
+  it("terminates a connected pending attempt even when every initial view report is missing", async () => {
+    vi.useFakeTimers();
+    const { coordinator, attempt } = resident();
+    coordinator.setAttemptProbe(async () => ({
+      url: "http://panel/?buildKey=ready-build",
+      loading: false,
+      boot: { kind: "unavailable" as const },
+    }));
+
+    coordinator.markConnected("panel:nav-a", "route-a");
+    await vi.advanceTimersByTimeAsync(12_100);
+
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).toMatchObject({
+      kind: "report",
+      attempt: { phase: "failed", failure: { code: "boot_stalled", detail: "unobservable" } },
+    });
+  });
+
+  it("does not reset pending supervision for identical host observations", async () => {
+    vi.useFakeTimers();
+    const { coordinator, attempt } = resident();
+    const unavailableView = {
+      url: "http://panel/?buildKey=ready-build",
+      loading: false,
+      boot: { kind: "unavailable" as const },
+    };
+    coordinator.reportView("panel:nav-a", "route-a", unavailableView);
+    coordinator.setAttemptProbe(async () => unavailableView);
+
+    for (let round = 0; round < 12; round += 1) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      coordinator.reportView("panel:nav-a", "route-a", unavailableView);
+    }
+
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).toMatchObject({
+      kind: "report",
+      attempt: { phase: "failed", failure: { code: "boot_stalled" } },
+    });
+  });
+
   it("stops a released materialization and mints a fresh attempt on reacquisition", () => {
     const { coordinator, attempt } = resident();
     coordinator.reportView("panel:nav-a", "route-a", {

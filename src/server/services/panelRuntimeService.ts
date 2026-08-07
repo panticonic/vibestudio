@@ -277,10 +277,15 @@ export function createPanelRuntimeService(deps: {
         }
         const runtimeEntityId = ctx.caller.runtime.id;
         const lease = deps.coordinator.getLease(runtimeEntityId);
-        if (!lease) return "stale" as const;
+        // Renderer evidence is valid only for the exact authenticated socket
+        // that owns this lease. Entity identity alone survives replacement and
+        // would let a late document mutate its successor's lifecycle.
+        if (!lease || !ctx.connectionId || ctx.connectionId !== lease.connectionId) {
+          return "stale" as const;
+        }
         return deps.coordinator.reportView(
           runtimeEntityId,
-          lease.connectionId,
+          ctx.connectionId,
           observation,
           "renderer"
         )
