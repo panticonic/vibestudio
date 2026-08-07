@@ -22,7 +22,6 @@ type NativeReceipt = z.infer<typeof nativeDevelopmentSessionReceiptSchema>;
 type TerminalSnapshot = z.infer<typeof nativeDevelopmentTerminalSnapshotSchema>;
 type PreparedBuild = z.infer<typeof preparedNativeBuildSchema>;
 
-const WORKSPACE_SOURCE_PROTOCOL = "vibestudio.workspace-source.v1";
 const TERMINAL_RUN_STATES = new Set<DevelopmentRun["state"]>([
   "succeeded",
   "stopped",
@@ -871,12 +870,11 @@ export class DevelopmentDO extends DurableObjectBase {
     repoPath: string;
     sourceState: DevelopmentSession["basis"]["parentWorkingHead"];
   } | null> {
-    const workspaceSource = await this.resolveWorkspaceSource();
-    const status = await this.rpc.call<VcsStatusResult>(workspaceSource, "vcsStatus", [
+    const status = await this.rpc.call<VcsStatusResult>("main", "vcs.status", [
       { contextId },
     ]);
     try {
-      const inspected = await this.rpc.call<VcsInspectResult>(workspaceSource, "vcsInspect", [
+      const inspected = await this.rpc.call<VcsInspectResult>("main", "vcs.inspect", [
         {
           node: { kind: "repository", state: status.workingHead, repositoryId },
           edgeLimit: 1,
@@ -897,19 +895,6 @@ export class DevelopmentDO extends DurableObjectBase {
       }
       throw error;
     }
-  }
-
-  private async resolveWorkspaceSource(): Promise<string> {
-    const resolved = await this.rpc.call<{
-      kind: "durable-object" | "worker";
-      targetId?: string;
-    }>("main", "workers.resolveService", [WORKSPACE_SOURCE_PROTOCOL]);
-    if (resolved.kind !== "durable-object" || !resolved.targetId) {
-      throw new Error(
-        `Workspace protocol ${WORKSPACE_SOURCE_PROTOCOL} must resolve to a Durable Object`
-      );
-    }
-    return resolved.targetId;
   }
 
   private async retireSessionEffects(session: DevelopmentSession): Promise<DevelopmentSession> {
