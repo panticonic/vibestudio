@@ -1004,10 +1004,10 @@ function repositorySeedFiles(
         content: [
           'import type { CSSProperties } from "react";',
           "",
-          "const style: CSSProperties = { minHeight: \"100vh\", display: \"grid\", placeContent: \"center\" };",
+          'const style: CSSProperties = { minHeight: "100vh", display: "grid", placeContent: "center" };',
           "",
           "export default function SystemTestPanelFixture() {",
-          '  return <main style={style}>Buildable system-test panel fixture</main>;',
+          "  return <main style={style}>Buildable system-test panel fixture</main>;",
           "}",
           "",
         ].join("\n"),

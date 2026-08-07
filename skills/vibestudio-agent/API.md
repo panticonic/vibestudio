@@ -446,7 +446,7 @@ Authority principals: `code`, `host`, `user`
 | `runtime.createContext` | Create a full logical semantic workspace context. When invoked by a context-scoped runtime, the new context is recorded as that exact runtime entity's lifecycle child, making ownership, initialization authority, and teardown walkable instead of leaving an ownerless context island. Root host callers create root contexts. The state machine initializes one exact committed event and event/application working head over the whole workspace; later semantic operations advance that working head atomically. Use vcs.status for compact ancestry and integration orientation, then page repository and work membership through focused VCS inspectors. |
 | `runtime.cloneContext` | Clone a context's durable state—every worker/DO store plus its exact committed event and event/application working head—into a fresh isolated context. Immutable semantic history and authored facts are shared by identity, not copied into a parallel snapshot history. Returns the new contextId and source-to-clone entity/context maps. With `recursive`, the whole lifecycle subtree is cloned (never following lineage edges); with `targetKey`, retry returns the same child. The caller performs per-entity rewiring such as fork-log re-rooting on the returned clones. |
 | `runtime.destroyContext` | Retire every entity in a context and delete its folder + VCS state. With `recursive` (the default when lifecycle children exist), post-order teardown of the LIFECYCLE subtree only — never crossing a lineage (fork) edge. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context. |
-| `runtime.forkSemanticContext` | Fork the caller runtime's semantic context into one exact owned child context without materializing a host checkout. |
+| `runtime.forkSemanticContext` | Fork one runtime's exact semantic context into one owned child context without materializing a host checkout. |
 | `runtime.dropSemanticContext` | Drop one exact semantic-only context and remove its generic lifecycle ownership record. |
 | `runtime.listOwnedContexts` | List the contexts owned by a context via the relationship registry. `kind` scopes to 'lifecycle' (subagent children) or 'lineage' (fork provenance); omit to list both. Returns { contexts: [...] }. |
 | `runtime.recordContextEdge` | Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead. |
@@ -620,7 +620,7 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `workspace-state.panelTree.rootGroups` | Keyset-page the owner groups that currently contain open root panels. |
-| `workspace-state.panelTree.page` | Read one bounded, newest-first sibling page. |
+| `workspace-state.panelTree.page` | Read one bounded, newest-first sibling page. group is required and must be {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}. |
 | `workspace-state.panelTree.path` | Read the bounded root-to-slot path for one open panel. |
 | `workspace-state.panelTree.detail` | Read the current runtime detail for one open panel without its siblings/history. |
 | `workspace-state.panelTree.search` | Keyset-page full-text title matches with their ancestor breadcrumbs. |

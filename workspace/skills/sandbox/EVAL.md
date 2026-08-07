@@ -50,8 +50,8 @@ perspective:
   ```
 
 - When the user points at "this panel", "the parent panel", or another visible
-  panel, inspect the visible tree with bounded `panelTree.page()` or
-  `panelTree.search()` reads,
+  panel, inspect the visible tree with bounded `panelTree.roots()`,
+  `panelTree.children()`, or `panelTree.search()` reads,
   choose the target panel, and read `await target.stateArgs.get()` to find its
   `channelName`/`channelId` before running channel diagnostics.
 
@@ -840,6 +840,27 @@ its exact arguments, return schema, and typed errors. Pass the
 name as a string; do not call `help(workers)`.
 
 ## Worker Management
+
+Durable Object schema failures are platform compatibility refusals, not guest
+JavaScript failures. Eval preserves their stable code and structured data:
+
+- `DO_SCHEMA_INCOMPATIBLE`: read `errorData.reason`, `persistedVersion`,
+  `targetVersion`, `source`, `className`, `objectKey`, and `safeActions`. Add the
+  missing retained `schemaMigrations()` step for real data and declare a
+  bounded, non-secret representative object in
+  `schemaMigrationFixtureObjectKeys()`. Protected publication captures that
+  installed SQLite shape and rejects migrations that do not converge with a
+  fresh install. Do not hide new fields in titles, labels, or unrelated rows.
+- `DO_SCHEMA_MIGRATION_FAILED`: the named migration threw; its transaction was
+  rolled back. Fix the migration before retrying.
+- `DO_MAINTENANCE_IN_PROGRESS`: reset, restore, or snapshot currently fences
+  the exact object. Wait for that operation to finish; do not resolve another
+  handle to route around the fence.
+
+For explicitly disposable state only, resolve the exact target, then use
+`workers.resetStorage(target, intent)`. The returned operation id names the
+automatic verified backup. Recovery uses `workers.listStorageBackups(target)`
+and `workers.restoreStorageBackup(target, operationId, intent)`.
 
 Launch, list, and retire regular workers with the typed `workers.create`,
 `workers.list`, and `workers.destroy` methods. They delegate to the canonical

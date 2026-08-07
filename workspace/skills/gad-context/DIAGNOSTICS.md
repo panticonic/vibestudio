@@ -37,6 +37,14 @@ part of the current public GAD schema. If an inspector points you to a specific
 artifact and SQL is still necessary, first discover the current schema with a
 bounded read and then query only the exact rows you need.
 
+If an invocation carries `DO_SCHEMA_INCOMPATIBLE` or
+`DO_SCHEMA_MIGRATION_FAILED`, the Durable Object rejected activation before
+guest code ran. Classify it as platform/schema compatibility and use its
+structured `reason`, versions, exact identity, migration name, and
+`safeActions`. `DO_MAINTENANCE_IN_PROGRESS` likewise names a host admission
+fence, not a guest failure. Do not diagnose these codes as GAD projection or
+`guest_execution_failed` incidents.
+
 ## Current Diagnostic APIs
 
 ### Publication Integrity

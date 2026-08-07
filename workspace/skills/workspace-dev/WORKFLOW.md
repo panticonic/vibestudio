@@ -3,7 +3,8 @@
 Use one runtime concept: `PanelHandle`. `openPanel(source, options)` opens both
 workspace panels and URLs and returns a handle. Opening a panel is a structural
 tree mutation and may prompt on first use for the requester entity and
-parent/root target. Use bounded `panelTree.page()`/`panelTree.search()` reads
+parent/root target. Use bounded `panelTree.roots()`/`panelTree.children()`/
+`panelTree.search()` reads
 to rediscover existing handles.
 
 ## Semantic workspace development
@@ -297,7 +298,8 @@ await scope.myApp.setMode("fixture");
 
 ## Managing child panels
 
-Use bounded `panelTree.rootGroups()` and `panelTree.page()` reads from agent
+Use bounded `panelTree.rootGroups()`, `panelTree.roots()`, and
+`panelTree.children()` reads from agent
 eval. Close stale children explicitly; do not materialize the entire tree.
 
 ```ts
@@ -305,19 +307,13 @@ import { panelTree } from "@workspace/runtime";
 
 const rootGroupPage = await panelTree.rootGroups({ limit: 100 });
 for (const group of rootGroupPage.groups) {
-  const roots = await panelTree.page({
-    group: { kind: "roots", ownerUserId: group.ownerUserId },
-    limit: 100,
-  });
+  const roots = await panelTree.roots(group.ownerUserId, { limit: 100 });
   for (const { node, handle } of roots.entries) {
     console.log(node.childCount, handle.id, handle.title);
   }
 }
 
-const page = await panelTree.page({
-  group: { kind: "children", parentSlotId: scope.myApp.id },
-  limit: 100,
-});
+const page = await panelTree.children(scope.myApp.id, { limit: 100 });
 for (const { handle } of page.entries) {
   console.log(handle.id, handle.kind, handle.source);
 }

@@ -101,6 +101,8 @@ try {
 panelTree.self(): PanelHandle
 panelTree.get(id): PanelHandle
 panelTree.rootGroups(input?): Promise<PanelTreeRootGroupPage>
+panelTree.roots(ownerUserId, input?): Promise<PanelRuntimeTreePage>
+panelTree.children(parentSlotId, input?): Promise<PanelRuntimeTreePage>
 panelTree.page(input): Promise<PanelRuntimeTreePage>
 panelTree.path(id): Promise<PanelRuntimeTreePath | null>
 panelTree.search(input): Promise<PanelRuntimeTreeSearchPage>
@@ -145,9 +147,10 @@ an ambiguous transport failure. `slug` and `operationId` are mutually
 exclusive because each defines stable slot identity.
 
 `self()` and `get()` are synchronous handle factories; they do no I/O.
-Use bounded `rootGroups()`, `page()`, `path()`, and `search()` reads for large
-histories. There are deliberately no whole-tree or whole-sibling convenience
-reads. Continue from `nextCursor` only while the page revision is unchanged;
+Use bounded `rootGroups()`, `roots()`, `children()`, `path()`, and `search()`
+reads for large histories. `page()` remains available when constructing a
+discriminated sibling group directly. There are deliberately no whole-tree or
+whole-sibling reads. Continue from `nextCursor` only while the page revision is unchanged;
 restart the group from its first page after a revision change. The scalar fields
 `id`, `title`, `source`, `kind`, and `parentId` are the handle’s last observed
 descriptor. `search({ query })` matches indexed titles, source paths, manifest
@@ -164,8 +167,7 @@ workspace-visible unless an independent authority policy says otherwise.
 ```ts
 let cursor: string | undefined;
 do {
-  const page = await panelTree.page({
-    group: { kind: "children", parentSlotId },
+  const page = await panelTree.children(parentSlotId, {
     ...(cursor ? { cursor } : {}),
     limit: 100,
   });

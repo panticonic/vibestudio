@@ -50,7 +50,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `createPanelSlot` | value |  | Commit a panel and promptly return its durable handle without focusing while build and boot continue in the background. Pass operationId for retry-stable identity; use handle.observe() when readiness matters. |
 | `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready, with no fixed readiness deadline. Pass options.signal for caller-owned cancellation and operationId for retry-stable identity. It defaults under the caller and focused; use parentId:null for a root or focus:false to suppress presentation. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
 | `getPanelHandle` | value |  | Alias for runtime.panelTree.get(id, kind?). |
-| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate`, `navigateHistory` | Runtime property, not workspace.panelTree. self/get are synchronous handle factories. rootGroups() returns a page object with groups; page(...) returns a page object with entries; search(...) returns a page object with hits, each containing entry.node and entry.handle. Traversal reads are bounded. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
+| `panelTree` | namespace | `self`, `get`, `rootGroups`, `roots`, `children`, `page`, `path`, `search`, `parent`, `navigate`, `navigateHistory` | Runtime property, not workspace.panelTree. self/get are synchronous handle factories. Use rootGroups() then roots(ownerUserId), or children(parentSlotId); each returns a bounded page with entries. page(...) is the advanced discriminated-group primitive. search(...) returns hits containing entry.node and entry.handle. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
 | `handleRpcPost` | value |  |  |
 | `destroy` | value |  |  |
 <!-- END GENERATED: worker-runtime-surface -->
@@ -458,6 +458,12 @@ through `workers.resolveService(...)` / `workers.resolveDurableObject(...)` and
 separate `rpc.call(...)` calls as shown above. This is the integration path: it
 uses workerd, the live declaration, the method's `@rpc` authority contract,
 and the object's persistent SQLite database.
+
+RPC exposure belongs to the exact active provider build, not merely to the
+source currently visible in the workspace. After adding or changing an exposed
+method, publish or activate that provider build before calling it. A
+`WORKSPACE_RPC_METHOD_UNDECLARED` failure reports the active build, its declared
+methods, and safe next actions; do not bypass it with raw addressing.
 
 Prefer `resolveService(...)` whenever a service exists. Raw
 `resolveDurableObject(...)` may address workspace worker DO classes, but

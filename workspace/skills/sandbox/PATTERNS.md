@@ -1,5 +1,25 @@
 # Common Patterns
 
+## Recover From a Durable Object Schema Refusal
+
+Treat `DO_SCHEMA_INCOMPATIBLE` as a schema-design signal. Inspect its structured
+`errorData`; do not infer the cause from prose and do not encode schema state in
+application data.
+
+1. For retained state, add the exact contiguous `schemaMigrations()` step,
+   source-shape validation, and at least one exact bounded object key in
+   `schemaMigrationFixtureObjectKeys()`. Publication captures and replays that
+   real object; a later version bump without it is rejected.
+2. For deliberately disposable state only, pass the exact resolved target to
+   `workers.resetStorage(target, intent)`. The operation fences new RPCs and
+   verifies a backup before deletion.
+3. List or restore that backup with `workers.listStorageBackups(target)` and
+   `workers.restoreStorageBackup(target, operationId, intent)`.
+
+`DO_SCHEMA_MIGRATION_FAILED` means the transaction rolled back; fix the named
+migration. `DO_MAINTENANCE_IN_PROGRESS` means the host fence is active; wait
+instead of creating a parallel path.
+
 Recipes for common tasks using the sandbox.
 
 ## Read a File and Display It

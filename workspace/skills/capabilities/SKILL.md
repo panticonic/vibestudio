@@ -33,6 +33,13 @@ only; editing or regenerating one is not capability approval. Workspace code adm
 comes from a human decision over the exact sealed version and manifest, not a generated
 static host catalog.
 
+`workers.resetStorage` and `workers.restoreStorageBackup` exercise the reviewed
+`workers.storage.reset` capability. They accept only one exact Durable Object
+source/class/object key, require an audit `intent`, and use the normal critical
+approval path. A resolved handle identifies the target but does not authorize
+replacement. `workers.listStorageBackups` is read-only discovery. Prefer a
+forward schema migration whenever the state is not explicitly disposable.
+
 ## Inspecting and changing live decisions
 
 Use the host permission inventory when someone asks what access is active across the
@@ -188,6 +195,10 @@ Provider receiver (`workers/local-greeting/index.ts`):
 import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 
 export class LocalGreetingDO extends DurableObjectBase {
+  protected schemaProductionBaseline() {
+    return { version: 1, name: "local-greeting-v1" } as const;
+  }
+
   protected createTables(): void {}
 
   @rpc({

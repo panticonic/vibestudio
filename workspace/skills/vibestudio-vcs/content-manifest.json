@@ -36,7 +36,7 @@
     },
     {
       "path": "references/external-snapshot-import.md",
-      "sha256": "5315445d90e05094b61529fcfbf2cef6d197e1f163f06894171364cc8d48af68"
+      "sha256": "4792e7623d38b951e4dea177f0a3ab76bba16dde890c3f9d5c503ac25d8ed47b"
     },
     {
       "path": "references/file-move-copy.md",
@@ -48,7 +48,7 @@
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "5f7d86b686f6cb450f8293864c2fc70c5cf4db9cc71e491661ffb513c58c0313"
+      "sha256": "8edb81c85005b0f5cf1cb80a436de9eb1e8c99bfb54310f29840bdf70088aab0"
     },
     {
       "path": "references/public-contract.md",
@@ -71,5 +71,5 @@
       "sha256": "d22ad51daf013c5d22dd9a08b52c995b53d0d8c49ba13354af8d289aa890dbc8"
     }
   ],
-  "packageDigest": "efe6f2c32160012fbe83bd55bb5e67fa7164b141b0e1712197da9f5262cbbe6f"
+  "packageDigest": "fd09574545a7b974bafe7b81e813fc09cfc77a18a4a286f7a4204e615f4e6bdd"
 }

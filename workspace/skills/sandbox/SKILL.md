@@ -13,19 +13,19 @@ panel.
 
 ## Files
 
-| Document                                           | Content                                                                                                                                     |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| [EVAL.md](EVAL.md)                                 | Eval tool — run code, explicit timeout/recovery, stream console, static imports, package loading                                            |
-| [INLINE_UI.md](INLINE_UI.md)                       | Inline UI — persistent interactive components in chat                                                                                       |
-| [ACTION_BAR.md](ACTION_BAR.md)                     | Action bar — file-backed compact UI pinned above chat history                                                                               |
-| [CUSTOM_MESSAGES.md](CUSTOM_MESSAGES.md)           | Custom message types — register a renderer, publish typed instances with reducer updates                                                    |
-| [MDX.md](MDX.md)                                   | Normal rich chat messages — callouts, badges, tables, ActionButton                                                                          |
-| [FEEDBACK.md](FEEDBACK.md)                         | Feedback forms — block until user responds                                                                                                  |
+| Document                                           | Content                                                                                                                                               |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [EVAL.md](EVAL.md)                                 | Eval tool — run code, explicit timeout/recovery, stream console, static imports, package loading                                                      |
+| [INLINE_UI.md](INLINE_UI.md)                       | Inline UI — persistent interactive components in chat                                                                                                 |
+| [ACTION_BAR.md](ACTION_BAR.md)                     | Action bar — file-backed compact UI pinned above chat history                                                                                         |
+| [CUSTOM_MESSAGES.md](CUSTOM_MESSAGES.md)           | Custom message types — register a renderer, publish typed instances with reducer updates                                                              |
+| [MDX.md](MDX.md)                                   | Normal rich chat messages — callouts, badges, tables, ActionButton                                                                                    |
+| [FEEDBACK.md](FEEDBACK.md)                         | Feedback forms — block until user responds                                                                                                            |
 | [RUNTIME_API.md](RUNTIME_API.md)                   | Full runtime API reference — fs, eval `db`, worker/DO app databases, workers, webhooks, ai, git, browser data, custom shared-resource approval grants |
-| [CHAT_API.md](CHAT_API.md)                         | Chat API — publish messages, call methods, interact with the conversation                                                                   |
-| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)     | Browser automation — Playwright-style page API via the workerd-native CDP client                                                            |
-| [PATTERNS.md](PATTERNS.md)                         | Common patterns and recipes                                                                                                                 |
-| [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity                                                                       |
+| [CHAT_API.md](CHAT_API.md)                         | Chat API — publish messages, call methods, interact with the conversation                                                                             |
+| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)     | Browser automation — Playwright-style page API via the workerd-native CDP client                                                                      |
+| [PATTERNS.md](PATTERNS.md)                         | Common patterns and recipes                                                                                                                           |
+| [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity                                                                                 |
 
 These links are workspace files. Open one with the `read` tool, for example
 `read({ path: "skills/sandbox/RUNTIME_API.md" })`. `docs_search` searches the
@@ -56,7 +56,7 @@ possible. The execution modes differ in presentation:
 
 Perspective matters. In agent eval, `panelTree.self()` is the EvalDO runtime,
 not the visible chat panel. Use `parent`/`getParent()` and
-bounded `panelTree.page()`/`panelTree.search()` when the user refers to a
+bounded `panelTree.roots()`/`panelTree.children()`/`panelTree.search()` when the user refers to a
 visible parent, sibling, or child panel, then read that panel's `stateArgs` to find its
 `channelName`/`channelId` before running GAD or channel diagnostics.
 
