@@ -11178,6 +11178,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:view.getPresentations",
+    rpcPlane: "host-service",
+    capability: "service:view.getPresentations",
+    authorityPrincipals: ["user", "code"],
+    owner: "view",
+    method: "getPresentations",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:view.getPresentations",
+    },
+  },
+  {
     id: "host:view.getThemeConfig",
     rpcPlane: "host-service",
     capability: "service:view.getThemeConfig",
@@ -14702,6 +14715,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:view.getFocusedPanelId",
   "service:view.getPanelLayout",
   "service:view.getPresentation",
+  "service:view.getPresentations",
   "service:view.getThemeConfig",
   "service:view.hideContentOverlay",
   "service:view.hideNativeShellOverlay",
