@@ -235,6 +235,45 @@ describe("TypeCheckService workspace resolution", () => {
     expect(errors).toHaveLength(0);
   });
 
+  it("loads Node ambient types from explicit dependency roots", () => {
+    const root = createTempDir("typecheck-service-node-types-");
+    const consumerDir = path.join(root, "workspace", "panels", "consumer");
+    const externalNodeModules = path.join(root, "external-deps", "node_modules");
+    writeFile(
+      path.join(externalNodeModules, "@types", "node", "package.json"),
+      JSON.stringify({ name: "@types/node", types: "index.d.ts" })
+    );
+    writeFile(
+      path.join(externalNodeModules, "@types", "node", "index.d.ts"),
+      [
+        "declare const process: { env: Record<string, string | undefined> };",
+        "declare const Buffer: { from(value: string): Uint8Array };",
+        'declare module "node:crypto" { export function createHash(name: string): unknown; }',
+      ].join("\n")
+    );
+    const sourceFile = path.join(consumerDir, "index.ts");
+    writeFile(
+      sourceFile,
+      [
+        'import { createHash } from "node:crypto";',
+        "const hash = createHash(process.env.ALGORITHM ?? 'sha256');",
+        "const bytes: Uint8Array = Buffer.from('ok');",
+        "void hash; void bytes;",
+      ].join("\n")
+    );
+
+    const service = new TypeCheckService({
+      panelPath: consumerDir,
+      nodeModulesPaths: [externalNodeModules],
+      skipSuggestions: true,
+      disableTsconfigDiscovery: true,
+      workspaceContext: null,
+    });
+    service.updateFile(sourceFile, fs.readFileSync(sourceFile, "utf8"));
+
+    expect(service.check(sourceFile).diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+  });
+
   it("prefers DefinitelyTyped declarations for JavaScript package subpaths", () => {
     const root = createTempDir("typecheck-service-definitely-typed-");
     const consumerDir = path.join(root, "workspace", "panels", "consumer");

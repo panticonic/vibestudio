@@ -18,6 +18,7 @@ export function createAuthorityService(deps: {
         return deps.acquisitions.awaitDecision({
           acquisitionId: input.acquisitionId,
           ownerRuntimeId: ctx.caller.runtime.id,
+          signal: ctx.signal,
         });
       },
       preflight: (ctx, [input]) =>

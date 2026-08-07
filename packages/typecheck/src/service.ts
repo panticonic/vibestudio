@@ -126,6 +126,7 @@ export class TypeCheckService {
   private readonly configFilePath: string;
   private readonly workspaceContext: WorkspaceContext | null;
   private readonly nodeModulesPaths: readonly string[];
+  private readonly hasNodeTypeDefinitions: boolean;
   private readonly files = new Map<string, OverlayFile>();
   private readonly compilerOptionDependencies = new Set<string>();
   private readonly createdFiles = new Set<string>();
@@ -144,6 +145,14 @@ export class TypeCheckService {
     this.panelPath = path.resolve(config.panelPath);
     this.configFilePath = path.join(this.panelPath, ".vibestudio-typecheck.tsconfig.json");
     this.nodeModulesPaths = (config.nodeModulesPaths ?? []).map((root) => path.resolve(root));
+    // The native compiler's automatic @types discovery does not cross the
+    // projected filesystem boundary. Opt into Node's ambient declarations when
+    // one of the explicitly supplied dependency roots actually provides them.
+    // This keeps hermetic browser projects closed-world while making a host
+    // package's Node imports type-check the same way as the repository tsconfig.
+    this.hasNodeTypeDefinitions = this.nodeModulesPaths.some((root) =>
+      fs.existsSync(path.join(root, "@types", "node", "package.json"))
+    );
     this.workspaceContext =
       config.workspaceContext === null
         ? null
@@ -445,6 +454,7 @@ export class TypeCheckService {
           allowJs: true,
           checkJs: false,
           skipLibCheck: true,
+          ...(this.hasNodeTypeDefinitions ? { types: ["node"] } : {}),
           ...this.config.compilerOptions,
           noEmit: true,
         };
