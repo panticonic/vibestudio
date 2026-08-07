@@ -25,7 +25,7 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "workspace"
     ),
     createPanelSlot: valueEntry(
-      "Commit a panel and promptly return its durable handle without focusing while build and boot continue in the background. Pass operationId for retry-stable identity; use handle.observe() when readiness matters.",
+      "Commit a panel and promptly return its durable handle without focusing or waiting for activation, build, or boot. Server reconciliation owns activation after commit and recovers it across transient failure or restart. Pass operationId for retry-stable identity; use handle.observe() when current lifecycle state matters.",
       CREATE_PANEL_SLOT_SIGNATURE
     ),
     openPanel: valueEntry(

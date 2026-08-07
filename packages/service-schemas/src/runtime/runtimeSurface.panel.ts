@@ -44,7 +44,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "workspace"
     ),
     createPanelSlot: valueEntry(
-      "Commit a panel under the caller and promptly return its durable handle without focusing while build and boot continue in the background. Pass operationId for retry-stable identity across exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. Use handle.observe() when readiness matters.",
+      "Commit a panel under the caller and promptly return its durable handle without focusing or waiting for activation, build, or boot. Server reconciliation owns activation after commit and recovers it across transient failure or restart. Pass operationId for retry-stable identity across exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. Use handle.observe() when current lifecycle state matters.",
       CREATE_PANEL_SLOT_SIGNATURE
     ),
     openPanel: valueEntry(

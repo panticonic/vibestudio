@@ -39,6 +39,7 @@ import type {
   PanelNavigateOptions,
   PanelWaitOptions,
 } from "../core/index.js";
+import type { RuntimeCodePanelEntityCreateSpec } from "@vibestudio/shared/runtime/entitySpec";
 import { createCdpAutomation, type CdpAutomation } from "../panel/cdpAutomation.js";
 import {
   createNonPanelRuntimeHandle,
@@ -173,7 +174,7 @@ export interface PanelRuntimeTreeSearchPage {
 
 export interface PanelRuntimeApi {
   panelTree: PanelRuntimeTree;
-  /** Commit an executable, unloaded slot without allocating a presentation lease. */
+  /** Commit a durable, unloaded slot without waiting for runtime activation. */
   createPanelSlot(source: string, options?: CreatePanelSlotOptions): Promise<PanelHandle>;
   /** Create, present, and wait for the selected runtime attempt to become ready. */
   openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle>;
@@ -208,7 +209,6 @@ export interface CreatePanelRuntimeOptions {
       | "runtime.createEntity"
       | "runtime.reserveEntity"
       | "workspace-state.slot.create"
-      | "runtime.activateReservedEntity"
       | "panel.updateTitle";
     durationMs: number;
     outcome: "ok" | "error";
@@ -1256,10 +1256,13 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     },
   };
 
-  const createPanelSlot = async (
+  const commitPanelSlot = async (
     source: string,
     openOptions?: CreatePanelSlotOptions
-  ): Promise<PanelHandle> => {
+  ): Promise<{
+    panelHandle: PanelHandle;
+    activationSpec?: RuntimeCodePanelEntityCreateSpec;
+  }> => {
     if (openOptions?.slug && openOptions.operationId) {
       throw new Error("Panel creation accepts either slug or operationId, not both");
     }
@@ -1307,7 +1310,6 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         | "runtime.createEntity"
         | "runtime.reserveEntity"
         | "workspace-state.slot.create"
-        | "runtime.activateReservedEntity"
         | "panel.updateTitle",
       operation: () => Promise<T>
     ): Promise<T> => {
@@ -1361,7 +1363,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       ...(contextId ? { contextId } : {}),
       stateArgs,
     };
-    let runtimeEntity = await timed(
+    const runtimeEntity = await timed(
       external ? "runtime.createEntity" : "runtime.reserveEntity",
       () =>
         external
@@ -1422,19 +1424,6 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       throw error;
     }
     try {
-      // A code panel is a two-phase publication: its stable entity coordinate
-      // is reserved first, then the slot commits that coordinate, and only then
-      // may the sealed execution become active. Drive that protocol here just
-      // as the host shell does. Slot observation remains crash recovery; it is
-      // not the success path and panel creation must not depend on a pub/sub
-      // notification being observed at exactly the right moment.
-      if (!external) {
-        runtimeEntity = await timed("runtime.activateReservedEntity", () =>
-          options.rpc.call<RuntimePanelEntity>("main", "runtime.activateReservedEntity", [
-            entitySpec,
-          ])
-        );
-      }
       const explicitTitle = normalizePanelTitle(openOptions?.title);
       const title =
         explicitTitle ??
@@ -1458,19 +1447,39 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         buildKey: runtimeEntity.buildKey ?? null,
       });
       options.onOpen?.({ source, id: panelHandle.id, kind: panelHandle.kind });
-      return panelHandle;
+      return {
+        panelHandle,
+        ...(!external ? { activationSpec: entitySpec as RuntimeCodePanelEntityCreateSpec } : {}),
+      };
     } catch (error) {
       return rethrowCommittedFailure(error);
     }
   };
 
+  const createPanelSlot = async (
+    source: string,
+    openOptions?: CreatePanelSlotOptions
+  ): Promise<PanelHandle> => (await commitPanelSlot(source, openOptions)).panelHandle;
+
   const openPanel = async (
     source: string,
     openOptions?: OpenPanelOptions
   ): Promise<PanelHandle> => {
-    const panelHandle = await createPanelSlot(source, openOptions);
+    const committed = await commitPanelSlot(source, openOptions);
+    const panelHandle = committed.panelHandle;
     let observation: PanelObservation | null = null;
     try {
+      // Slot creation is level-triggered: the server owns activation as soon as
+      // the durable slot points at a preparing entity. `openPanel` joins that
+      // same idempotent activation here because its stronger contract is
+      // boot-ready, while `createPanelSlot` deliberately returns at commit.
+      // Materialization follows activation because connection grants require
+      // the panel principal registered by that transition.
+      if (committed.activationSpec) {
+        await options.rpc.call<RuntimePanelEntity>("main", "runtime.activateReservedEntity", [
+          committed.activationSpec,
+        ]);
+      }
       let committedAttempt: PanelAttempt | undefined;
       if (openOptions?.focus !== false) {
         const anchorPanelId = requesterPanelId();
@@ -1480,19 +1489,14 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         };
         if (options.focusPanel) await options.focusPanel(panelHandle.id, focusOptions);
         else committedAttempt = await ensurePanelMaterialized(panelHandle.id);
-        observation = await waitUntilReady(
-          await observePanel(panelHandle.id),
-          openOptions?.signal,
-          committedAttempt
-        );
       } else {
         committedAttempt = await ensurePanelMaterialized(panelHandle.id);
-        observation = await waitUntilReady(
-          await observePanel(panelHandle.id),
-          openOptions?.signal,
-          committedAttempt
-        );
       }
+      observation = await waitUntilReady(
+        await observePanel(panelHandle.id),
+        openOptions?.signal,
+        committedAttempt
+      );
     } catch (error) {
       if (error instanceof PanelOperationError) throw error;
       const remoteFailure = panelFailureFromError(error);

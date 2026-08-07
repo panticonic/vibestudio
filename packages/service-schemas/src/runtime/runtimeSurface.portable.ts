@@ -667,7 +667,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides."
   ),
   createPanelSlot: valueEntry(
-    "Commit a workspace or browser panel slot and promptly return its durable handle without focusing or waiting for application boot. Pass a stable operationId when a workflow may retry: the same operation then resolves to the same durable slot. The returned handle can be observed for readiness.",
+    "Commit a workspace or browser panel slot and promptly return its durable handle without focusing or waiting for activation, build, or application boot. Server reconciliation owns code activation after commit and recovers it across transient failure or restart. Pass a stable operationId when a workflow may retry: the same operation then resolves to the same durable slot. The returned handle can be observed for current lifecycle state.",
     CREATE_PANEL_SLOT_SIGNATURE
   ),
   openPanel: valueEntry(

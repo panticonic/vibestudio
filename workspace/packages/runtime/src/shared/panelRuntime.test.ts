@@ -678,7 +678,7 @@ describe("panel runtime topology composition", () => {
     ).toEqual(["panel:nav-new", "panel:nav-replacement"]);
   });
 
-  it("activates a reserved code entity only after its durable slot commits", async () => {
+  it("returns a code slot at durable commit without waiting for activation", async () => {
     const onCreateSlotTiming = vi.fn();
     const { runtime, call } = runtimeHarness({ onCreateSlotTiming });
 
@@ -688,21 +688,31 @@ describe("panel runtime topology composition", () => {
     expect(methods.indexOf("runtime.reserveEntity")).toBeLessThan(
       methods.indexOf("workspace-state.slot.create")
     );
-    expect(methods.indexOf("workspace-state.slot.create")).toBeLessThan(
-      methods.indexOf("runtime.activateReservedEntity")
-    );
+    expect(methods).not.toContain("runtime.activateReservedEntity");
     expect(onCreateSlotTiming.mock.calls.map(([event]) => event.stage)).toEqual([
       "runtime.reserveEntity",
       "workspace-state.slot.create",
-      "runtime.activateReservedEntity",
       "panel.updateTitle",
     ]);
   });
 
-  it("surfaces post-commit activation failure without retiring the recoverable reservation", async () => {
+  it("does not make background activation failure part of the slot receipt", async () => {
     const { runtime, call } = runtimeHarness({ activateError: new Error("build unavailable") });
 
-    await expect(runtime.createPanelSlot("panels/new", { slug: "new" })).rejects.toMatchObject({
+    await expect(runtime.createPanelSlot("panels/new", { slug: "new" })).resolves.toMatchObject({
+      id: "panel:tree/new",
+      kind: "workspace",
+    });
+
+    const methods = call.mock.calls.map((entry) => entry[1]);
+    expect(methods).not.toContain("runtime.activateReservedEntity");
+    expect(methods).not.toContain("runtime.retireEntity");
+  });
+
+  it("joins activation for boot-ready open and preserves the committed slot on failure", async () => {
+    const { runtime, call } = runtimeHarness({ activateError: new Error("build unavailable") });
+
+    await expect(runtime.openPanel("panels/new", { slug: "new" })).rejects.toMatchObject({
       code: "PANEL_OPERATION_FAILED",
       failure: {
         stage: "runtime",
@@ -713,6 +723,17 @@ describe("panel runtime topology composition", () => {
     const methods = call.mock.calls.map((entry) => entry[1]);
     expect(methods).toContain("runtime.activateReservedEntity");
     expect(methods).not.toContain("runtime.retireEntity");
+  });
+
+  it("registers the panel principal before assigning a presentation host", async () => {
+    const { runtime, call } = runtimeHarness();
+
+    await runtime.openPanel("panels/new", { slug: "new", focus: false });
+
+    const methods = call.mock.calls.map((entry) => entry[1]);
+    expect(methods.indexOf("runtime.activateReservedEntity")).toBeLessThan(
+      methods.indexOf("panelRuntime.ensureSlot")
+    );
   });
 
   it("creates a deferred external browser slot without waiting for navigation", async () => {
