@@ -552,6 +552,31 @@ function formatToolFailure(failure: ToolFailureLike): string {
 
 export const cdpGadDiagnosticTests: TestCase[] = [
   {
+    name: "workspace-panel-reload-performance-profile",
+    description: "Profile a real workspace-panel reload without replacing its CDP lease",
+    category: "cdp-gad-diagnostics",
+    authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-performance-panel-reload"),
+    resources: [PANEL_AUTOMATION_RESOURCE],
+    prompt:
+      "Read skills/performance/SKILL.md, then open a small disposable workspace panel without focusing it. Acquire its canonical CDP page, capture the panel attempt id before the action, and use page.profile to measure handle.reload() while awaiting networkidle on the same page. Capture the attempt id afterward and return both ids plus report version, elapsedMs, navigation load timing, network requestCount, and page long-task count. The evidence must demonstrate a real reload rather than a no-op. Close the panel and page connection you own, then report what the profile showed.",
+    validate: (result) =>
+      checked(
+        result,
+        [/reload/iu, /profil/iu, /network|request/iu],
+        [
+          /openPanel\s*\(/u,
+          /\.cdp\.page\s*\(/u,
+          /\.profile\s*\(/u,
+          /\.reload\s*\(/u,
+          /beforeAttemptId/u,
+          /afterAttemptId/u,
+          /navigation/u,
+          /requestCount/u,
+          /longTasks(?:\?\.)?\.count|"longTasks"\s*:\s*\{\s*"count"/u,
+        ]
+      ),
+  },
+  {
     name: "cdp-page-performance-profile",
     description: "Profile a browser interaction with the canonical bounded CDP report",
     category: "cdp-gad-diagnostics",

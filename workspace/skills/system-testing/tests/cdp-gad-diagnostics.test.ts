@@ -82,6 +82,9 @@ const clickTest = cdpGadDiagnosticTests.find(
 const profileTest = cdpGadDiagnosticTests.find(
   (test) => test.name === "cdp-page-performance-profile"
 )!;
+const reloadProfileTest = cdpGadDiagnosticTests.find(
+  (test) => test.name === "workspace-panel-reload-performance-profile"
+)!;
 const stateArgsTest = cdpGadDiagnosticTests.find(
   (test) => test.name === "panel-stateargs-cdp-roundtrip"
 )!;
@@ -101,6 +104,75 @@ const STATE_FINAL =
   "The panel state was visible in the inspected automation snapshot after the change.";
 
 describe("cdp-gad diagnostics validators", () => {
+  it("accepts a profiled workspace reload with lifecycle and network evidence", () => {
+    const result = reloadProfileTest.validate(
+      executionWithInvocation(
+        "The workspace panel reload was profiled on the same attached page, and the network report confirms a real reload.",
+        {
+          id: "call-reload-profile",
+          name: "eval",
+          arguments: {
+            code: `
+              const handle = await openPanel("panels/testbench", { focus: false });
+              const beforeAttemptId = (await handle.snapshot()).attemptId;
+              const page = await handle.cdp.page();
+              const report = await page.profile(async () => {
+                await handle.reload();
+                await page.waitForLoadState("networkidle");
+              });
+              const afterAttemptId = (await handle.snapshot()).attemptId;
+              return { beforeAttemptId, afterAttemptId, version: report.version, elapsedMs: report.elapsedMs, navigation: report.page.navigation, requestCount: report.network.requestCount, longTasks: report.page.longTasks.count };
+            `,
+          },
+          execution: {
+            status: "complete",
+            terminalOutcome: "success",
+            result: {
+              details: {
+                returnValue: {
+                  beforeAttemptId: "attempt-1",
+                  afterAttemptId: "attempt-1",
+                  version: 1,
+                  elapsedMs: 232,
+                  navigation: { loadMs: 75 },
+                  requestCount: 18,
+                  longTasks: 0,
+                },
+              },
+            },
+          },
+        }
+      )
+    );
+
+    expect(result).toEqual({ passed: true });
+  });
+
+  it("rejects a workspace reload claim without a measured navigation", () => {
+    const result = reloadProfileTest.validate(
+      executionWithInvocation(
+        "The workspace panel reload was profiled and had network requests.",
+        {
+          id: "call-reload-profile",
+          name: "eval",
+          arguments: {
+            code: `
+              const handle = await openPanel("panels/testbench", { focus: false });
+              const beforeAttemptId = (await handle.snapshot()).attemptId;
+              const page = await handle.cdp.page();
+              const report = await page.profile(async () => { await handle.reload(); });
+              const afterAttemptId = (await handle.snapshot()).attemptId;
+              return { beforeAttemptId, afterAttemptId, requestCount: report.network.requestCount, longTasks: report.page.longTasks.count };
+            `,
+          },
+          execution: { status: "complete", terminalOutcome: "success" },
+        }
+      )
+    );
+
+    expect(result).toMatchObject({ passed: false });
+  });
+
   it("accepts a bounded profile only when the eval evidence contains every requested layer", () => {
     const result = profileTest.validate(
       executionWithInvocation(
