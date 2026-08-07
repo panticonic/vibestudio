@@ -171,9 +171,11 @@ function createMockRpc() {
             options?.signal?.addEventListener(
               "abort",
               () => {
-                if (streamController === controller) streamController = null;
                 removeListener();
-                controller.close();
+                if (streamController === controller) {
+                  streamController = null;
+                  controller.close();
+                }
               },
               { once: true }
             );
@@ -267,6 +269,12 @@ function createMockRpc() {
     );
   }
 
+  function closeSubscription(): void {
+    const controller = streamController;
+    streamController = null;
+    controller?.close();
+  }
+
   return {
     rpc,
     emit,
@@ -274,6 +282,7 @@ function createMockRpc() {
     removeListener,
     streamSignals,
     priorSignalStatesAtOpen,
+    closeSubscription,
   };
 }
 
@@ -1946,6 +1955,24 @@ describe("connectViaRpc", () => {
       expect(mock.rpc.stream).toHaveBeenCalledTimes(2);
       expect(mock.priorSignalStatesAtOpen[1]).toEqual([false]);
       expect(firstSignal.aborted).toBe(true);
+      await client.close();
+    });
+
+    it("recovers a terminated channel resource while the host transport remains connected", async () => {
+      const coordinator = createRecoveryCoordinator();
+      const mock = createMockRpc();
+      const client = connectViaRpc({
+        rpc: mock.rpc as any,
+        channel: CHANNEL,
+        recoveryCoordinator: coordinator,
+      });
+
+      await emitReplayAndReady(mock.emit, []);
+      await client.ready();
+      mock.closeSubscription();
+
+      await vi.waitFor(() => expect(mock.rpc.stream).toHaveBeenCalledTimes(2));
+      expect(mock.priorSignalStatesAtOpen[1]).toEqual([false]);
       await client.close();
     });
   });

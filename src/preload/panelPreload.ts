@@ -14,6 +14,8 @@ import type {
 } from "@vibestudio/rpc";
 import { createIpcTransport } from "./ipcTransport.js";
 
+type RecoveryKind = "resubscribe" | "cold-recover";
+
 // ID-based event listener pattern (contextBridge cannot serialize closures)
 let nextListenerId = 1;
 const activeListeners = new Map<
@@ -32,6 +34,13 @@ const vibestudioShell = {
   // bridge. Without these, getShellBridge() throws at panel startup (blank panel).
   postEnvelope: (envelope: RpcEnvelope) => rpcTransport.send(envelope),
   onEnvelope: (handler: (envelope: RpcEnvelope) => void) => rpcTransport.onMessage(handler),
+  onRecovery: (kind: RecoveryKind, handler: () => void | Promise<void>) => {
+    const listener = (_e: IpcRendererEvent, recoveredKind: RecoveryKind) => {
+      if (recoveredKind === kind) void handler();
+    };
+    ipcRenderer.on("vibestudio:rpc:recovery", listener);
+    return () => ipcRenderer.off("vibestudio:rpc:recovery", listener);
+  },
 
   // §1.6 upload hop (see @vibestudio/rpc bridgeStream.ts): streaming REQUEST bodies
   // cross the bridge as sequenced chunk messages; ipcDispatcher reassembles them

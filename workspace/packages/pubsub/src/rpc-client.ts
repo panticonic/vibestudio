@@ -264,7 +264,8 @@ export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMe
   recoveryCoordinator?: Pick<
     RecoveryCoordinator,
     "registerResubscribeHandler" | "registerColdRecoverHandler"
-  >;
+  > &
+    Partial<Pick<RecoveryCoordinator, "run">>;
 }
 
 export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadata>(
@@ -1618,6 +1619,13 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           rejectReady(failure);
           handleError(failure);
           for (const handler of disconnectHandlers) handler();
+          // A response-owned channel subscription can end even while its host
+          // transport remains usable (for example, after the channel's
+          // activation is replaced). Recover that resource from its durable
+          // cursor instead of waiting for an unrelated host reconnect signal.
+          if (acknowledged && !recovering) {
+            void opts.recoveryCoordinator?.run?.("resubscribe");
+          }
         }
         throw failure;
       }

@@ -2197,6 +2197,16 @@ app.on("ready", async () => {
           });
         },
         onRecovery: (kind) => {
+          // Panel sessions share the recovered host transport, but each panel
+          // owns its own durable subscriptions and replay cursors. Tell every
+          // live panel to replace those subscriptions and catch up; recovering
+          // only the shell leaves a long-lived panel half-connected.
+          for (const entry of panelRegistry?.listPanels() ?? []) {
+            const wc = applicationWindow.viewManager?.getWebContents(entry.panelId);
+            if (wc && !wc.isDestroyed()) {
+              wc.send("vibestudio:rpc:recovery", kind);
+            }
+          }
           void recoverShellStateFromServer(kind).catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
             log.warn(`[recovery] ${kind} failed: ${msg}`);

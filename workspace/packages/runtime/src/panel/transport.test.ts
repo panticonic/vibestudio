@@ -77,6 +77,17 @@ describe("createPanelTransport", () => {
     expect(handler).toHaveBeenCalledWith(inboundEnvelope);
   });
 
+  it("registers durable subscription recovery with the host bridge", () => {
+    const shell = makeShell();
+    g.__vibestudioShell = shell;
+
+    createPanelTransport();
+
+    expect(shell.onRecovery).toHaveBeenCalledTimes(2);
+    expect(shell.onRecovery).toHaveBeenNthCalledWith(1, "resubscribe", expect.any(Function));
+    expect(shell.onRecovery).toHaveBeenNthCalledWith(2, "cold-recover", expect.any(Function));
+  });
+
   it("sends panel event watches over the shell bridge", async () => {
     const serviceCall = vi.fn(async () => {});
     const shell = makeShell({ serviceCall });
