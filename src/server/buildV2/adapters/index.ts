@@ -9,6 +9,13 @@ const adapters = new Map<string, FrameworkAdapter>([
   ["svelte", svelteAdapter],
 ]);
 
+/** Every registered framework id. The wrapper-protocol fingerprint iterates
+ *  this list, so a newly registered adapter invalidates its builds by
+ *  construction rather than by someone remembering a second list. */
+export function adapterFrameworks(): string[] {
+  return [...adapters.keys()];
+}
+
 /**
  * Get the framework adapter for the given framework ID.
  * Throws if the framework is not registered.

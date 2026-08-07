@@ -10,9 +10,13 @@ import type {
   RuntimeLeaseVersion,
 } from "@vibestudio/shared/panel/panelLease";
 import {
-  PanelBootObservationSchema,
+  AwaitPanelAttemptResultSchema,
+  PanelAttemptFailureSchema,
+  PanelAttemptRefSchema,
+  PanelAttemptSchema,
+  PanelBootProbeResultSchema,
   PanelLifecycleResultSchema,
-  PanelPageObservationSchema,
+  PanelSlotObservationSchema,
 } from "@vibestudio/shared/panelContracts";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { SchemaCoversType } from "@vibestudio/shared/schemaTypeGuard";
@@ -81,9 +85,21 @@ export const panelHostViewReportSchema = z
   .object({
     url: z.string(),
     loading: z.boolean(),
-    boot: PanelBootObservationSchema,
+    boot: PanelBootProbeResultSchema,
+    // Host-originated typed failure (navigation, renderer crash). The boot
+    // record carries renderer-owned facts only; without this field a host can
+    // push readiness but must smuggle its own failures through the probe.
+    failure: z
+      .object({
+        reporter: z.enum(["build", "materialization", "host"]),
+        failure: PanelAttemptFailureSchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
+
+const panelRendererViewReportSchema = panelHostViewReportSchema.omit({ failure: true });
 
 export const runtimeLeaseVersionSchema = z
   .object({
@@ -110,13 +126,7 @@ export const panelRuntimeLeaseSchema = z
   })
   .strict() satisfies z.ZodType<PanelRuntimeLease, z.ZodTypeDef, unknown>;
 
-export const panelRuntimeSlotObservationSchema = z
-  .object({
-    version: runtimeLeaseVersionSchema,
-    lease: panelRuntimeLeaseSchema.nullable(),
-    observation: PanelPageObservationSchema.nullable(),
-  })
-  .strict();
+export const panelRuntimeSlotObservationSchema = PanelSlotObservationSchema;
 
 export const runtimeLeaseSnapshotSchema = z
   .object({
@@ -214,13 +224,46 @@ export const panelRuntimeMethods = defineServiceMethods({
       rationale:
         "Bounded observation of the active presentation lease and its host-reported boot state",
     },
-    description: "Observe the active runtime lease and latest host report for one panel slot.",
+    description: "Observe the canonical attempt, route, and build axes for one panel slot.",
     args: z.tuple([z.string().min(1)]),
     returns: panelRuntimeSlotObservationSchema,
     authority: USERLAND_READ_POLICY,
     access: READ_ACCESS,
   },
-  awaitSlotChange: {
+  getAttempt: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Resolves opaque attempt references without acquiring authority",
+    },
+    description: "Resolve one exact coordinator-minted panel attempt reference.",
+    args: z.tuple([PanelAttemptRefSchema]),
+    returns: AwaitPanelAttemptResultSchema,
+    authority: USERLAND_READ_POLICY,
+    access: READ_ACCESS,
+  },
+  awaitAttempt: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Waits on one exact panel boot lifecycle without acquiring authority",
+    },
+    description: "Wait until an exact panel attempt advances beyond a known revision.",
+    args: z.tuple([PanelAttemptRefSchema, z.number().int().nonnegative()]),
+    returns: AwaitPanelAttemptResultSchema,
+    progressSemantics: {
+      kind: "external-wait",
+      operation: "panel.boot",
+      resource: { arg: 0, kind: "panel-attempt" },
+    },
+    authority: USERLAND_READ_POLICY,
+    access: READ_ACCESS,
+  },
+  awaitSlot: {
     tier: {
       tier: "open",
       session: "family",
@@ -228,8 +271,7 @@ export const panelRuntimeMethods = defineServiceMethods({
       family: "panelRuntime.read",
       rationale: "Waits on the canonical panel observation stream without acquiring authority",
     },
-    description:
-      "Wait until a panel slot's lease or host observation advances beyond a known version.",
+    description: "Wait until any axis of a panel slot observation advances beyond a version.",
     args: z.tuple([z.string().min(1), runtimeLeaseVersionSchema]),
     returns: panelRuntimeSlotObservationSchema,
     authority: USERLAND_READ_POLICY,
@@ -278,6 +320,7 @@ export const panelRuntimeMethods = defineServiceMethods({
       .object({
         status: z.enum(["assigned", "already-held", "mobile-held", "unavailable"]),
         lease: panelRuntimeLeaseSchema.nullable(),
+        attempt: PanelAttemptSchema.nullable(),
       })
       .strict(),
     authority: { principals: ["host", "user", "code"] },
@@ -363,7 +406,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     },
     description:
       "Publish the calling panel runtime's current page and bootstrap observation. Returns stale when its lease has already ended.",
-    args: z.tuple([panelHostViewReportSchema]),
+    args: z.tuple([panelRendererViewReportSchema]),
     returns: panelRuntimeViewReportResultSchema,
     authority: { principals: ["code"] },
     access: LEASE_ACCESS,

@@ -1,12 +1,12 @@
 import { PanelHostObservationSchema } from "@vibestudio/shared/panelContracts";
 import type {
-  PanelBootObservation,
+  PanelBootProbeResult,
   PanelHostObservation,
 } from "@vibestudio/shared/panel/observation";
 
 export interface DesktopPanelObservationSource {
-  getBootObservation(panelId: string): Promise<PanelBootObservation>;
-  getPanelHostObservation(panelId: string, boot: PanelBootObservation): PanelHostObservation;
+  getBootObservation(panelId: string): Promise<PanelBootProbeResult>;
+  getPanelHostObservation(panelId: string, boot: PanelBootProbeResult): PanelHostObservation;
 }
 
 /**

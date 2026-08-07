@@ -22,6 +22,7 @@ import { shouldOpenPdfExternally } from "../services/mediaNavigation";
 import { VibestudioLogo } from "./VibestudioLogo";
 import type {
   PanelBootObservation,
+  PanelBootProbeResult,
   PanelPageObservation,
 } from "@vibestudio/shared/panel/observation";
 import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
@@ -427,7 +428,9 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
                 : null,
             url: typeof location.href === "string" ? location.href : "",
             loading: document.readyState === "loading",
-            boot: boot || globalThis.__vibestudioPanelBoot || { phase: "unavailable" },
+            boot: boot || globalThis.__vibestudioPanelBoot
+              ? { kind: "observed", observation: boot || globalThis.__vibestudioPanelBoot }
+              : { kind: "unavailable" },
           }));
         } catch (_) {}
       }
@@ -446,13 +449,7 @@ function parseBootObservation(value: unknown): PanelBootObservation | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const phase = record["phase"];
-  if (
-    phase !== "unavailable" &&
-    phase !== "loading" &&
-    phase !== "booting" &&
-    phase !== "ready" &&
-    phase !== "failed"
-  ) {
+  if (phase !== "loading" && phase !== "booting" && phase !== "ready" && phase !== "failed") {
     return null;
   }
   const error =
@@ -475,6 +472,15 @@ function parseBootObservation(value: unknown): PanelBootObservation | null {
     ...(typeof error?.["name"] === "string" ? { errorName: error["name"] } : {}),
     ...(typeof error?.["stack"] === "string" ? { stack: error["stack"] } : {}),
   };
+}
+
+function parseBootProbeResult(value: unknown): PanelBootProbeResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record["kind"] === "unavailable") return { kind: "unavailable" };
+  if (record["kind"] !== "observed") return null;
+  const observation = parseBootObservation(record["observation"]);
+  return observation ? { kind: "observed", observation } : null;
 }
 
 function hostAuthorityOf(url: string): string | null {
@@ -862,14 +868,15 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
           return;
         }
         if (message.__vibestudioPanelBoot) {
-          const boot = parseBootObservation(message.boot);
+          const boot = parseBootProbeResult(message.boot);
+          const bootObservation = boot?.kind === "observed" ? boot.observation : null;
           logDiagnostic("panel boot observation", {
-            phase: boot?.phase ?? null,
+            phase: bootObservation?.phase ?? null,
             runtimeEntityId: message.runtimeEntityId ?? null,
             connectionId: message.connectionId ?? null,
-            source: boot?.source ?? null,
-            contextId: boot?.contextId ?? null,
-            buildKey: boot?.buildKey ?? null,
+            source: bootObservation?.source ?? null,
+            contextId: bootObservation?.contextId ?? null,
+            buildKey: bootObservation?.buildKey ?? null,
           });
           if (
             boot &&

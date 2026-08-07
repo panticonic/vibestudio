@@ -10,11 +10,7 @@ import type {
   PanelTreeSearchInput,
   PanelTreeSearchPage,
 } from "@vibestudio/shared/panel/treeIndex";
-import {
-  browserUrlFromPanelSource,
-  isBrowserPanelSource,
-  isOpenPanelBrowserUrl,
-} from "@vibestudio/shared/panelChrome";
+import { isBrowserPanelSource, isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import {
   computePanelId,
@@ -29,7 +25,11 @@ import {
   PanelOperationError,
   rethrowPanelOperationError,
   type PanelDiagnosticPacket,
+  type AwaitPanelAttemptResult,
+  type PanelAttempt,
+  type PanelAttemptRef,
   type PanelObservation,
+  type PanelSlotObservation,
   type PanelSnapshotObservation,
 } from "@vibestudio/shared/panel/observation";
 import type {
@@ -97,36 +97,7 @@ interface EnsurePanelSlotResult {
     platform: "desktop" | "headless" | "mobile";
     supportsCdp: boolean;
   } | null;
-}
-
-/**
- * Does the loaded browser document belong to the requested navigation?
- *
- * Redirects are normal document loads, not foreign documents: http→https
- * upgrades, trailing-slash normalization, and in-site auth bounces all land on
- * the requested site with a different href. Matching the full href would keep
- * such a panel "loading" forever, so site-addressed sources match at host
- * granularity. Null-origin sources (data:, blob:, about:) carry no host and
- * still require the exact document — that is what excludes the pre-navigation
- * about:blank view.
- */
-function browserDocumentMatchesSource(viewUrl: string, source: string): boolean {
-  const requestedUrl = browserUrlFromPanelSource(source);
-  if (!requestedUrl || !viewUrl) return false;
-  let view: URL;
-  let requested: URL;
-  try {
-    view = new URL(viewUrl);
-    requested = new URL(requestedUrl);
-  } catch {
-    // Not every embedded URL is accepted by URL implementations identically.
-    // Exact equality is still safer than declaring an unrelated document ready.
-    return viewUrl === requestedUrl;
-  }
-  if (requested.hostname !== "") {
-    return view.hostname === requested.hostname;
-  }
-  return view.href === requested.href;
+  attempt: PanelAttempt | null;
 }
 
 export interface CreatePanelSlotOptions {
@@ -243,7 +214,6 @@ export interface CreatePanelRuntimeOptions {
 
 export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRuntimeApi {
   const metadataCache = new Map<string, PanelHandleMetadata>();
-  const observationVersions = new WeakMap<PanelObservation, { epoch: string; counter: number }>();
   const callState = <T>(method: string, args: unknown[]): Promise<T> =>
     callWorkspaceState<T>(options.rpc, method, args);
   const workspaceState = createRuntimeWorkspaceStateClient(options.rpc);
@@ -281,7 +251,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
   };
   const callView = <T>(method: string, args: unknown[]): Promise<T> =>
     options.rpc.call<T>("main", `view.${method}`, args);
-  const ensurePanelMaterialized = async (id: string): Promise<void> => {
+  const ensurePanelMaterialized = async (id: string): Promise<PanelAttempt> => {
     const detail = await callPanelState<WorkspacePanelDetail | null>("detail", [id]);
     if (!detail) throw new Error(`Unknown panel slot: ${id}`);
     const result = await options.rpc.call<EnsurePanelSlotResult>(
@@ -289,7 +259,9 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       "panelRuntime.ensureSlot",
       [id, detail.entity.id]
     );
-    if (result.status === "assigned" || result.status === "already-held") return;
+    if ((result.status === "assigned" || result.status === "already-held") && result.attempt) {
+      return result.attempt;
+    }
     const holder = result.lease?.holderLabel;
     throw new PanelOperationError(
       panelFailure({
@@ -302,7 +274,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         provenance: {
           panelId: id,
           runtimeEntityId: detail.entity.id,
-          attemptId: `${detail.entity.id}@${detail.entity.activeBuildKey ?? "pending"}`,
+          attemptId: result.attempt?.attemptId,
           source: detail.currentHistory.source,
           contextId: detail.currentHistory.context_id,
           requestedRef:
@@ -401,75 +373,47 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
   const observePanel = async (id: string): Promise<PanelObservation> => {
     const detail = await callPanelState<WorkspacePanelDetail | null>("detail", [id]);
     if (!detail) throw new Error(`Unknown panel slot: ${id}`);
-    const runtime = await options.rpc.call<{
-      version: { epoch: string; counter: number };
-      lease: {
-        runtimeEntityId: string;
-        holderLabel: string;
-        platform: "desktop" | "headless" | "mobile";
-        supportsCdp: boolean;
-      } | null;
-      observation: {
-        view: {
-          url: string;
-          loading: boolean;
-        };
-        boot: {
-          phase: "unavailable" | "loading" | "booting" | "ready" | "failed";
-          message?: string;
-          errorName?: string;
-          stack?: string;
-          updatedAt?: number;
-        };
-      } | null;
-    }>("main", "panelRuntime.observeSlot", [id]);
+    const runtime = await options.rpc.call<PanelSlotObservation>(
+      "main",
+      "panelRuntime.observeSlot",
+      [id]
+    );
     const storedOptions = detail.currentHistory.options
       ? (JSON.parse(detail.currentHistory.options) as { ref?: string })
       : {};
     const source = detail.currentHistory.source;
-    const exactRuntimeObservation =
-      runtime.lease?.runtimeEntityId === detail.entity.id ? runtime.observation : null;
-    const boot = exactRuntimeObservation?.boot;
-    // External browser panels do not execute Vibestudio's managed bootstrap,
-    // so their boot handshake is intentionally unavailable.  The browser
-    // document itself is the readiness contract for those panels; requiring a
-    // managed boot phase here leaves every data/http panel in an endless
-    // loading state even though its CDP target and document are usable.
-    const browserDocumentReady =
-      isBrowserPanelSource(source) &&
-      exactRuntimeObservation !== null &&
-      exactRuntimeObservation.view.loading === false &&
-      browserDocumentMatchesSource(exactRuntimeObservation.view.url, source);
-    const phase = !runtime.lease
-      ? ("assigning-host" as const)
-      : browserDocumentReady
-        ? ("ready" as const)
-        : !boot || boot.phase === "unavailable" || boot.phase === "loading"
-          ? ("loading" as const)
-          : boot.phase;
-    const updatedAt = boot?.updatedAt ?? Date.now();
+    const attempt = runtime.attempt?.runtimeEntityId === detail.entity.id ? runtime.attempt : null;
+    const phase = attempt?.phase ?? ("pending" as const);
+    const updatedAt = attempt?.updatedAt ?? Date.now();
     const requestedRef = storedOptions.ref ?? "latest";
     const failure =
-      phase === "failed"
+      phase === "failed" && attempt?.failure
         ? {
-            code: "entry_threw" as const,
-            stage: "boot" as const,
-            message: boot?.message ?? "Panel boot failed",
+            code: attempt.failure.code,
+            stage:
+              attempt.failure.stage === "build"
+                ? ("build" as const)
+                : attempt.failure.stage === "navigation"
+                  ? ("load" as const)
+                  : ("boot" as const),
+            message: attempt.failure.message ?? "Panel boot failed",
             provenance: {
               panelId: id,
               runtimeEntityId: detail.entity.id,
-              attemptId: `${detail.entity.id}@${detail.entity.activeBuildKey ?? "pending"}`,
+              attemptId: attempt.attemptId,
               source,
               contextId: detail.currentHistory.context_id,
               requestedRef,
               effectiveVersion: detail.entity.source.effectiveVersion,
               buildKey: detail.entity.activeBuildKey ?? null,
             },
-            diagnosticId: `panel-boot:${detail.entity.id}:${updatedAt}`,
+            diagnosticId: `panel-boot:${attempt.attemptId}`,
             occurredAt: updatedAt,
             details: {
-              ...(boot?.errorName ? { errorName: boot.errorName } : {}),
-              ...(boot?.stack ? { stack: boot.stack } : {}),
+              attemptFailureStage: attempt.failure.stage,
+              ...(attempt.failure.stack ? { stack: attempt.failure.stack } : {}),
+              ...(attempt.failure.detail ? { detail: attempt.failure.detail } : {}),
+              ...(attempt.failure.diagnostics ?? {}),
             },
           }
         : undefined;
@@ -482,27 +426,39 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       contextId: detail.currentHistory.context_id,
       requestedRef,
       runtimeEntityId: detail.entity.id,
-      attemptId: `${detail.entity.id}@${detail.entity.activeBuildKey ?? "pending"}`,
+      attemptId: attempt?.attemptId ?? "unknown-attempt",
+      attemptRef: attempt
+        ? { epoch: attempt.epoch, attemptId: attempt.attemptId }
+        : { epoch: runtime.version.epoch, attemptId: "unknown-attempt" },
       effectiveVersion: detail.entity.source.effectiveVersion || null,
       buildKey: detail.entity.activeBuildKey ?? null,
       phase,
       ...(failure ? { failure } : {}),
-      ...(runtime.lease
+      ...(runtime.route.connectionId
         ? {
             host: {
-              holderLabel: runtime.lease.holderLabel,
-              platform: runtime.lease.platform,
-              supportsInspection: runtime.lease.supportsCdp,
+              holderLabel: runtime.route.holderLabel,
+              platform: runtime.route.platform,
+              supportsInspection: runtime.route.supportsCdp,
+              reachable: runtime.route.reachable,
               view: {
-                exists: exactRuntimeObservation !== null,
-                ...(exactRuntimeObservation
-                  ? {
-                      url: exactRuntimeObservation.view.url,
-                      loading: exactRuntimeObservation.view.loading,
-                    }
-                  : {}),
+                exists: runtime.route.view !== undefined,
+                ...(runtime.route.view ?? {}),
               },
-              boot: boot ?? { phase: "unavailable" as const },
+              boot:
+                phase === "loading" ||
+                phase === "booting" ||
+                phase === "ready" ||
+                phase === "failed"
+                  ? {
+                      kind: "observed" as const,
+                      observation: {
+                        phase,
+                        ...(failure?.message ? { message: failure.message } : {}),
+                        ...(attempt?.failure?.stack ? { stack: attempt.failure.stack } : {}),
+                      },
+                    }
+                  : { kind: "unavailable" as const },
               ...(failure
                 ? {
                     failure: {
@@ -517,7 +473,6 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         : {}),
       updatedAt,
     };
-    observationVersions.set(observation, runtime.version);
     return observation;
   };
 
@@ -527,31 +482,178 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
 
   const waitUntilReady = async (
     initial: PanelObservation,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    exactAttempt?: PanelAttempt
   ): Promise<PanelObservation> => {
-    let observation = initial;
+    let attemptRef: PanelAttemptRef = exactAttempt
+      ? { epoch: exactAttempt.epoch, attemptId: exactAttempt.attemptId }
+      : initial.attemptRef;
+    const unknownAttemptFailure = (): PanelOperationError =>
+      new PanelOperationError(
+        panelFailure({
+          code: "host_unavailable",
+          stage: "runtime",
+          message: `Panel ${initial.panelId} attempt is unknown to this runtime epoch`,
+          provenance: {
+            panelId: initial.panelId,
+            runtimeEntityId: initial.runtimeEntityId,
+            attemptId: attemptRef.attemptId,
+            source: initial.source,
+            contextId: initial.contextId,
+            requestedRef: initial.requestedRef,
+            effectiveVersion: initial.effectiveVersion,
+            buildKey: initial.buildKey,
+          },
+          details: {
+            failureKind: "infrastructure",
+            reason: "unknown-attempt",
+            attemptRef,
+          },
+        })
+      );
+    const stoppedFailure = (attempt: PanelAttempt): PanelOperationError =>
+      new PanelOperationError(
+        panelFailure({
+          code: "host_unavailable",
+          stage: "runtime",
+          message: `Panel ${initial.panelId} stopped (${attempt.stopReason ?? "unknown"}) before it became ready`,
+          provenance: {
+            panelId: initial.panelId,
+            runtimeEntityId: attempt.runtimeEntityId,
+            attemptId: attempt.attemptId,
+            source: initial.source,
+            contextId: initial.contextId,
+            requestedRef: initial.requestedRef,
+            effectiveVersion: initial.effectiveVersion,
+            buildKey: attempt.buildKey ?? initial.buildKey,
+          },
+          details: {
+            failureKind: "infrastructure",
+            reason: "stopped",
+            ...(attempt.stopReason ? { stopReason: attempt.stopReason } : {}),
+          },
+        })
+      );
+    if (!exactAttempt && initial.phase === "ready") return initial;
+    // The exact-attempt contract: a waiter is resolved by its own attempt's
+    // terminal outcome, never silently switched to a replacement. Without an
+    // exact attempt the caller is a slot follower (focus/reload/invoke): a
+    // missing or evicted attempt means "not yet materialized" or "the world
+    // moved on", and the wait rides the slot until a live attempt appears.
+    const followSlot = !exactAttempt;
+    let attempt = exactAttempt;
+    let abandonedAttemptId: string | null = null;
     for (;;) {
       signal?.throwIfAborted();
-      if (observation.phase === "failed" && observation.failure) {
-        throw new PanelOperationError(observation.failure);
+      if (!attempt) {
+        if (followSlot) {
+          const lifecycle = await options.rpc.call<PanelSlotObservation>(
+            "main",
+            "panelRuntime.observeSlot",
+            [initial.panelId]
+          );
+          // A stopped attempt stays the slot's current attempt until its
+          // successor commits; re-adopting it would spin. Wait for the slot
+          // to actually change.
+          if (!lifecycle.attempt || lifecycle.attempt.attemptId === abandonedAttemptId) {
+            await options.rpc.call(
+              "main",
+              "panelRuntime.awaitSlot",
+              [initial.panelId, lifecycle.version],
+              { signal }
+            );
+            continue;
+          }
+          attempt = lifecycle.attempt;
+          attemptRef = { epoch: attempt.epoch, attemptId: attempt.attemptId };
+        } else {
+          const snapshot = await options.rpc.call<AwaitPanelAttemptResult>(
+            "main",
+            "panelRuntime.getAttempt",
+            [attemptRef]
+          );
+          if (snapshot.kind === "unknown-attempt") throw unknownAttemptFailure();
+          attempt = snapshot.attempt;
+        }
       }
-      if (observation.phase === "stopped") {
-        throw new Error(`Panel ${observation.panelId} stopped before it became ready`);
+      if (attempt.phase === "ready") {
+        if (initial.phase === "ready" && initial.attemptId === attempt.attemptId) return initial;
+        const observed = await observePanel(initial.panelId);
+        if (observed.attemptId === attempt.attemptId && observed.phase === "ready") {
+          return observed;
+        }
+        if (followSlot) {
+          // The slot advanced past the attempt we watched; follow it.
+          abandonedAttemptId = attempt.attemptId;
+          attempt = undefined;
+          continue;
+        }
+        // The exact attempt did reach ready; a raced supersession must not
+        // make its waiter report a different attempt's (non-ready) state.
+        return {
+          ...initial,
+          phase: "ready",
+          runtimeEntityId: attempt.runtimeEntityId,
+          attemptId: attempt.attemptId,
+          attemptRef: { epoch: attempt.epoch, attemptId: attempt.attemptId },
+          updatedAt: attempt.updatedAt,
+        };
       }
-      if (observation.phase === "ready") {
-        return observation;
+      if (attempt.phase === "failed") {
+        const observed = await observePanel(initial.panelId);
+        // Only the awaited attempt's own failure may be blamed; a fresh
+        // observation can already describe a replacement attempt.
+        if (observed.attemptId === attempt.attemptId && observed.failure) {
+          throw new PanelOperationError(observed.failure);
+        }
+        throw new PanelOperationError(
+          panelFailure({
+            code: attempt.failure?.code ?? "unknown_failure",
+            stage: attempt.failure?.stage === "build" ? "build" : "boot",
+            message: attempt.failure?.message ?? `Panel ${initial.panelId} boot failed`,
+            provenance: {
+              panelId: initial.panelId,
+              runtimeEntityId: attempt.runtimeEntityId,
+              attemptId: attempt.attemptId,
+              source: initial.source,
+              contextId: initial.contextId,
+              requestedRef: initial.requestedRef,
+              effectiveVersion: initial.effectiveVersion,
+              buildKey: attempt.buildKey ?? initial.buildKey,
+            },
+            details: {
+              ...(attempt.failure?.stage ? { attemptFailureStage: attempt.failure.stage } : {}),
+              ...(attempt.failure?.stack ? { stack: attempt.failure.stack } : {}),
+              ...(attempt.failure?.detail ? { detail: attempt.failure.detail } : {}),
+            },
+          })
+        );
       }
-      const version = observationVersions.get(observation);
-      if (!version) throw new Error(`Panel ${observation.panelId} has no observation version`);
-      await options.rpc.call(
+      if (attempt.phase === "stopped") {
+        if (followSlot) {
+          abandonedAttemptId = attempt.attemptId;
+          attempt = undefined;
+          continue;
+        }
+        throw stoppedFailure(attempt);
+      }
+      const result = await options.rpc.call<AwaitPanelAttemptResult>(
         "main",
-        "panelRuntime.awaitSlotChange",
-        [observation.panelId, version],
+        "panelRuntime.awaitAttempt",
+        [attemptRef, attempt.revision],
         {
           signal,
         }
       );
-      observation = await observePanel(observation.panelId);
+      if (result.kind === "unknown-attempt") {
+        if (followSlot) {
+          abandonedAttemptId = attemptRef.attemptId;
+          attempt = undefined;
+          continue;
+        }
+        throw unknownAttemptFailure();
+      }
+      attempt = result.attempt;
     }
   };
 
@@ -663,7 +765,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
           : (panelMetadata?.title ?? source)
       ) ?? "panel";
     await callState("panel.updateTitle", [id, title, { explicit: false }]);
-    await ensurePanelMaterialized(id);
+    const attempt = await ensurePanelMaterialized(id);
     const observation = await observePanel(id);
     rememberMetadata({
       id,
@@ -676,7 +778,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       effectiveVersion: next.source.effectiveVersion,
       buildKey: next.buildKey ?? null,
     });
-    return waitUntilReady(observation, navigateOptions?.signal);
+    return waitUntilReady(observation, navigateOptions?.signal, attempt);
   };
 
   const navigateHistory = async (
@@ -728,9 +830,9 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       mutation: { kind: "select", entryKey: target.entry_key },
     });
     reportNavigationCleanup(transition);
-    await ensurePanelMaterialized(id);
+    const attempt = await ensurePanelMaterialized(id);
     const observation = await observePanel(id);
-    return waitUntilReady(observation, waitOptions?.signal);
+    return waitUntilReady(observation, waitOptions?.signal, attempt);
   };
 
   const restartPanel = async (id: string): Promise<void> => {
@@ -799,6 +901,41 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       error
     );
 
+  const waitUntilRoutable = async (
+    observation: PanelObservation,
+    signal?: AbortSignal
+  ): Promise<PanelObservation> => {
+    if (observation.phase === "ready" && observation.host?.reachable === true) return observation;
+    let watchedAttemptId = observation.attemptId;
+    let slot = await options.rpc.call<PanelSlotObservation>("main", "panelRuntime.observeSlot", [
+      observation.panelId,
+    ]);
+    for (;;) {
+      signal?.throwIfAborted();
+      if (slot.attempt && slot.attempt.attemptId !== watchedAttemptId) {
+        // The slot advanced past the attempt we were routing to. Wait for the
+        // replacement to become ready, then re-enter this loop: readiness
+        // alone is not routability, so the reachability check must re-run for
+        // the replacement too.
+        const readied = await waitUntilReady(await observePanel(observation.panelId), signal);
+        watchedAttemptId = readied.attemptId;
+        slot = await options.rpc.call<PanelSlotObservation>("main", "panelRuntime.observeSlot", [
+          observation.panelId,
+        ]);
+        continue;
+      }
+      if (slot.attempt?.phase === "ready" && slot.route.reachable) {
+        return observePanel(observation.panelId);
+      }
+      slot = await options.rpc.call<PanelSlotObservation>(
+        "main",
+        "panelRuntime.awaitSlot",
+        [observation.panelId, slot.version],
+        { signal }
+      );
+    }
+  };
+
   const rpcErrorCode = (error: unknown): string | null => {
     const code = (error as { code?: unknown } | null)?.code;
     return typeof code === "string" ? code : null;
@@ -812,6 +949,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
   ): Promise<{ observation: PanelObservation; runtimeEntityId: string; result: T }> => {
     await ensurePanelMaterialized(id);
     let observation = await waitUntilReady(await observePanel(id), waitOptions?.signal);
+    observation = await waitUntilRoutable(observation, waitOptions?.signal);
     if (!observation.runtimeEntityId) throw new Error(`Panel ${id} has no runtime entity`);
     const expectedRuntimeEntityId = observation.runtimeEntityId;
     try {
@@ -840,6 +978,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       // for that exact replacement attempt, then invoke it once. This is not a
       // transport retry of the failed target and never creates another panel.
       observation = await waitUntilReady(current, waitOptions?.signal);
+      observation = await waitUntilRoutable(observation, waitOptions?.signal);
       const replacementRuntimeEntityId = observation.runtimeEntityId;
       if (!replacementRuntimeEntityId) throw new Error(`Panel ${id} has no runtime entity`);
       try {
@@ -1306,6 +1445,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     const panelHandle = await createPanelSlot(source, openOptions);
     let observation: PanelObservation | null = null;
     try {
+      let committedAttempt: PanelAttempt | undefined;
       if (openOptions?.focus !== false) {
         const anchorPanelId = requesterPanelId();
         const focusOptions: PanelFocusOptions = {
@@ -1313,11 +1453,19 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
           ...(anchorPanelId ? { anchorPanelId } : {}),
         };
         if (options.focusPanel) await options.focusPanel(panelHandle.id, focusOptions);
-        else await ensurePanelMaterialized(panelHandle.id);
-        observation = await waitUntilReady(await observePanel(panelHandle.id), openOptions?.signal);
+        else committedAttempt = await ensurePanelMaterialized(panelHandle.id);
+        observation = await waitUntilReady(
+          await observePanel(panelHandle.id),
+          openOptions?.signal,
+          committedAttempt
+        );
       } else {
-        await ensurePanelMaterialized(panelHandle.id);
-        observation = await waitUntilReady(await observePanel(panelHandle.id), openOptions?.signal);
+        committedAttempt = await ensurePanelMaterialized(panelHandle.id);
+        observation = await waitUntilReady(
+          await observePanel(panelHandle.id),
+          openOptions?.signal,
+          committedAttempt
+        );
       }
     } catch (error) {
       if (error instanceof PanelOperationError) throw error;

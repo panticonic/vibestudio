@@ -31,7 +31,7 @@ import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { assertPresent } from "../lintHelpers";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
 import { PanelResourcePolicy } from "./panelResourcePolicy.js";
-import type { PanelBootObservation } from "@vibestudio/shared/panel/observation";
+import type { PanelBootProbeResult } from "@vibestudio/shared/panel/observation";
 
 const log = createDevLogger("PanelRuntimeLeaseController");
 
@@ -45,7 +45,7 @@ export interface PanelRuntimeLeaseControllerDeps {
     registerTarget?(panelId: string, contentsId: number): void;
     cleanupPanelAccess(panelId: string): void;
     unregisterTarget?(panelId: string): void;
-    getBootObservation?(panelId: string): Promise<PanelBootObservation>;
+    getBootObservation?(panelId: string): Promise<PanelBootProbeResult>;
   };
   panelHttpServer: PanelHttpServerLike;
   sendPanelEvent: (panelId: string, event: string, payload: unknown) => void;
@@ -192,8 +192,8 @@ export class PanelRuntimeLeaseController {
     const boot = this.deps.cdpHost.getBootObservation
       ? await this.deps.cdpHost
           .getBootObservation(panelId)
-          .catch(() => ({ phase: "unavailable" as const }))
-      : ({ phase: "unavailable" } as const);
+          .catch(() => ({ kind: "unavailable" as const }))
+      : ({ kind: "unavailable" } as const);
     if (this.connectionBySlot.get(panelId) !== connection) return;
     await this.panelRuntime.reportView(
       asPanelEntityId(connection.runtimeEntityId),
@@ -210,6 +210,17 @@ export class PanelRuntimeLeaseController {
     await this.ensureClientRegistered();
     this.resources.start();
     await this.repairLeasesForExistingViews();
+  }
+
+  /**
+   * Re-establish process-local registration after the server transport has
+   * recovered. The remote coordinator may be a fresh process even though this
+   * controller and its renderers survived, so the local registration cache is
+   * not evidence about remote state.
+   */
+  async recoverClientRegistration(): Promise<void> {
+    await this.panelRuntime.registerClient(this.registration);
+    this.clientRegistered = true;
   }
 
   async unregisterClient(): Promise<void> {
@@ -650,10 +661,12 @@ export class PanelRuntimeLeaseController {
       await this.panelRuntime.reportView(lease.runtimeEntityId, lease.connectionId, {
         url: "",
         loading: false,
-        boot: {
-          phase: "failed",
-          runtimeEntityId: lease.runtimeEntityId,
-          message,
+        boot: { kind: "unavailable" },
+        // Host-originated fact: the renderer never got far enough to report,
+        // so this must not be flattened into a renderer boot failure.
+        failure: {
+          reporter: "host",
+          failure: { stage: "navigation", code: "navigation_failed", message },
         },
       });
       return true;

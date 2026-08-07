@@ -4909,6 +4909,31 @@ async function main() {
               url: hostObservation.view.url,
               loading: hostObservation.view.loading,
               boot: hostObservation.boot,
+              ...(hostObservation.failure
+                ? {
+                    failure:
+                      hostObservation.failure.stage === "build" ||
+                      hostObservation.failure.stage === "resolve"
+                        ? {
+                            reporter: "build" as const,
+                            failure: {
+                              stage: "build" as const,
+                              code: hostObservation.failure.code,
+                              message: hostObservation.failure.message,
+                              diagnostics: hostObservation.failure.details,
+                            },
+                          }
+                        : {
+                            reporter: "host" as const,
+                            failure: {
+                              stage: "navigation" as const,
+                              code: hostObservation.failure.code,
+                              message: hostObservation.failure.message,
+                              diagnostics: hostObservation.failure.details,
+                            },
+                          },
+                  }
+                : {}),
             };
           },
           currentEntityForSlot: async (slotId) => {
@@ -4924,6 +4949,20 @@ async function main() {
               slotId
             )) as { entity?: { id?: string } } | null;
             return detail?.entity?.id ?? null;
+          },
+          browserSourceForSlot: async (slotId) => {
+            const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+            const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+            const detail = (await doDispatch.dispatch(
+              {
+                source: INTERNAL_DO_SOURCE,
+                className: "WorkspaceDO",
+                objectKey: entryWorkspaceId,
+              },
+              "panelTreeDetail",
+              slotId
+            )) as { currentHistory?: { source?: string } } | null;
+            return detail?.currentHistory?.source ?? null;
           },
           isRuntimeRouteReachable: (runtimeEntityId, connectionId) =>
             rpcServerForGateway?.isRuntimeRouteReachable(runtimeEntityId, connectionId) ?? false,

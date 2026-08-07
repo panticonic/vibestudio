@@ -330,12 +330,8 @@ class MobilePanels implements PanelHost {
     const options = detail.currentHistory.options
       ? (JSON.parse(detail.currentHistory.options) as { ref?: string })
       : {};
-    const boot = runtime.observation?.boot;
-    const phase = !runtime.lease
-      ? ("assigning-host" as const)
-      : !boot || boot.phase === "unavailable" || boot.phase === "loading"
-        ? ("loading" as const)
-        : boot.phase;
+    const attempt = runtime.attempt?.runtimeEntityId === detail.entity.id ? runtime.attempt : null;
+    const phase = attempt?.phase ?? ("pending" as const);
     return {
       panelId,
       title: detail.slot.current_entity_title ?? panelId,
@@ -345,30 +341,35 @@ class MobilePanels implements PanelHost {
       contextId: detail.currentHistory.context_id,
       requestedRef: options.ref ?? "latest",
       runtimeEntityId: detail.entity.id,
-      attemptId: `${detail.entity.id}@${detail.entity.activeBuildKey ?? "pending"}`,
+      attemptId: attempt?.attemptId ?? "unknown-attempt",
+      attemptRef: attempt
+        ? { epoch: attempt.epoch, attemptId: attempt.attemptId }
+        : { epoch: runtime.version.epoch, attemptId: "unknown-attempt" },
       effectiveVersion: detail.entity.source.effectiveVersion || null,
       buildKey: detail.entity.activeBuildKey ?? null,
       phase,
-      ...(runtime.lease
+      ...(runtime.route.connectionId
         ? {
             host: {
-              holderLabel: runtime.lease.holderLabel,
-              platform: runtime.lease.platform,
-              supportsInspection: runtime.lease.supportsCdp,
+              holderLabel: runtime.route.holderLabel,
+              platform: runtime.route.platform,
+              supportsInspection: runtime.route.supportsCdp,
+              reachable: runtime.route.reachable,
               view: {
-                exists: runtime.observation !== null,
-                ...(runtime.observation
-                  ? {
-                      url: runtime.observation.view.url,
-                      loading: runtime.observation.view.loading,
-                    }
-                  : {}),
+                exists: runtime.route.view !== undefined,
+                ...(runtime.route.view ?? {}),
               },
-              boot: boot ?? { phase: "unavailable" as const },
+              boot:
+                phase === "loading" ||
+                phase === "booting" ||
+                phase === "ready" ||
+                phase === "failed"
+                  ? { kind: "observed" as const, observation: { phase } }
+                  : { kind: "unavailable" as const },
             },
           }
         : {}),
-      updatedAt: boot?.updatedAt ?? Date.now(),
+      updatedAt: attempt?.updatedAt ?? Date.now(),
     };
   }
   getTreePath(panelId: string) {

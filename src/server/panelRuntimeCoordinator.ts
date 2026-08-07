@@ -18,31 +18,44 @@ import {
 } from "@vibestudio/shared/panel/ids";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
-  PanelBootObservation,
+  AwaitPanelAttemptResult,
+  AttemptFailureStage,
+  AttemptPhase,
+  AttemptReporter,
+  PanelAttempt,
+  PanelAttemptFailure,
+  PanelAttemptRef,
+  PanelBootProbeResult,
   PanelPageObservation,
+  PanelSlotObservation,
+  StopReason,
 } from "@vibestudio/shared/panel/observation";
 
 const LEASE_RECONNECT_GRACE_MS = 3000;
 
-function samePageObservation(
-  previous: PanelPageObservation | undefined,
-  next: { url: string; loading: boolean; boot: PanelBootObservation }
-): boolean {
-  if (!previous) return false;
-  return (
-    previous.view.url === next.url &&
-    previous.view.loading === next.loading &&
-    previous.boot.phase === next.boot.phase &&
-    previous.boot.runtimeEntityId === next.boot.runtimeEntityId &&
-    previous.boot.source === next.boot.source &&
-    previous.boot.contextId === next.boot.contextId &&
-    previous.boot.effectiveVersion === next.boot.effectiveVersion &&
-    previous.boot.buildKey === next.boot.buildKey &&
-    previous.boot.message === next.boot.message &&
-    previous.boot.errorName === next.boot.errorName &&
-    previous.boot.stack === next.boot.stack
-  );
-}
+const ATTEMPT_HISTORY_LIMIT = 8;
+const ATTEMPT_STALL_PROBE_MS = 1_000;
+const ATTEMPT_STALL_ROUNDS = 12;
+const PHASE_RANK: Record<Exclude<AttemptPhase, "failed">, number> = {
+  pending: 0,
+  loading: 1,
+  booting: 2,
+  ready: 3,
+  stopped: 4,
+};
+const STOP_CLOSE: Record<StopReason, { code: number; reason: string }> = {
+  superseded: { code: 4091, reason: "Panel attempt superseded" },
+  retired: { code: 4093, reason: "Panel runtime entity retired" },
+  unloaded: { code: 4094, reason: "Panel runtime unloaded" },
+  "host-lost": { code: 4095, reason: "Panel runtime host lost" },
+};
+
+type AttemptProbe = (slotId: PanelSlotId) => Promise<{
+  url: string;
+  loading: boolean;
+  boot: PanelBootProbeResult;
+  failure?: { reporter: "build" | "materialization" | "host"; failure: PanelAttemptFailure };
+} | null>;
 
 type DefaultCdpHostOptions = {
   isHostAvailable?: (hostConnectionId: string) => boolean;
@@ -67,9 +80,20 @@ export class PanelRuntimeCoordinator {
   private clients = new Map<string, ClientSession>();
   private expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private defaultCdpLeaseConnections = new Set<string>();
-  private reportedViews = new Map<
-    PanelEntityId,
-    { connectionId: string; observation: PanelPageObservation }
+  private attempts = new Map<string, PanelAttempt>();
+  private currentAttemptBySlot = new Map<PanelSlotId, string>();
+  private terminalHistoryBySlot = new Map<PanelSlotId, string[]>();
+  private routeBindings = new Map<string, string>();
+  private routeReachability = new Map<string, boolean>();
+  private routeViews = new Map<string, PanelPageObservation>();
+  private buildStates = new Map<PanelSlotId, PanelSlotObservation["build"]>();
+  private attemptListeners = new Set<(attemptId: string) => void>();
+  private attemptProbe: AttemptProbe | null = null;
+  private supervisionTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private supervisionInFlight = new Set<string>();
+  private supervisionRounds = new Map<
+    string,
+    { revision: number; rounds: number; valid: number; unobservable: number }
   >();
   /**
    * Slots that must stay loaded on their serving host (≥1 CDP client attached).
@@ -109,12 +133,184 @@ export class PanelRuntimeCoordinator {
     return () => this.slotObservationListeners.delete(listener);
   }
 
+  onAttemptChanged(listener: (attemptId: string) => void): () => void {
+    this.attemptListeners.add(listener);
+    return () => this.attemptListeners.delete(listener);
+  }
+
+  setAttemptProbe(probe: AttemptProbe | null): void {
+    this.attemptProbe = probe;
+  }
+
+  get epochId(): string {
+    return this.epoch;
+  }
+
   observationVersion(slotId: string): RuntimeLeaseVersion {
     const normalizedSlotId = asPanelSlotId(slotId);
     return {
       epoch: this.epoch,
       counter: this.slotObservationCounters.get(normalizedSlotId) ?? 0,
     };
+  }
+
+  commitAttempt(
+    slotId: string,
+    input: {
+      runtimeEntityId: string;
+      hostConnectionId?: string;
+      connectionId?: string;
+      buildKey?: string;
+      effectiveVersion?: string;
+    }
+  ): PanelAttempt {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    const runtimeEntityId = asPanelEntityId(input.runtimeEntityId);
+    const previous = this.currentAttempt(normalizedSlotId);
+    if (previous && previous.phase !== "failed" && previous.phase !== "stopped") {
+      this.transitionAttempt(previous, {
+        phase: "stopped",
+        reporter: "coordinator",
+        stopReason: "superseded",
+      });
+    }
+    if (previous) {
+      for (const [connectionId, boundAttemptId] of this.routeBindings) {
+        if (boundAttemptId !== previous.attemptId) continue;
+        this.detachRoute(connectionId);
+        // A same-connection re-acquire hands its live connection to the new
+        // attempt; closing it here would kill the successor's route at birth.
+        if (connectionId === input.connectionId) continue;
+        const wire = STOP_CLOSE.superseded;
+        this.closeLeaseConnection(previous.runtimeEntityId, connectionId, wire.code, wire.reason);
+      }
+      this.rememberTerminal(previous);
+      // The build axis describes what the slot's *current* attempt depends on;
+      // carrying the predecessor's resolved state across a supersession would
+      // show "build: ready" (with the old buildKey) for the whole rebuild.
+      this.buildStates.delete(normalizedSlotId);
+    }
+
+    const attempt: PanelAttempt = {
+      epoch: this.epoch,
+      attemptId: randomUUID(),
+      slotId: normalizedSlotId,
+      runtimeEntityId,
+      ...(input.buildKey ? { buildKey: input.buildKey } : {}),
+      ...(input.effectiveVersion ? { effectiveVersion: input.effectiveVersion } : {}),
+      ...(input.hostConnectionId ? { hostConnectionId: input.hostConnectionId } : {}),
+      phase: "pending",
+      revision: 0,
+      reporter: "coordinator",
+      updatedAt: Date.now(),
+    };
+    this.attempts.set(attempt.attemptId, attempt);
+    this.currentAttemptBySlot.set(normalizedSlotId, attempt.attemptId);
+    if (input.connectionId) {
+      this.routeBindings.set(input.connectionId, attempt.attemptId);
+      this.routeReachability.set(input.connectionId, false);
+    }
+    this.nextSlotObservationVersion(normalizedSlotId);
+    this.emitSlotObservationChanged(normalizedSlotId);
+    return attempt;
+  }
+
+  stopAttempt(attemptId: string, reason: StopReason): PanelAttempt | null {
+    const attempt = this.attempts.get(attemptId);
+    if (!attempt) return null;
+    if (attempt.phase !== "failed" && attempt.phase !== "stopped") {
+      this.transitionAttempt(attempt, {
+        phase: "stopped",
+        reporter: "coordinator",
+        stopReason: reason,
+      });
+    }
+    this.rememberTerminal(attempt);
+    return this.attempts.get(attemptId) ?? attempt;
+  }
+
+  getAttempt(ref: PanelAttemptRef): AwaitPanelAttemptResult {
+    if (ref.epoch !== this.epoch) return { kind: "unknown-attempt", ref };
+    const attempt = this.attempts.get(ref.attemptId);
+    return attempt ? { kind: "report", attempt } : { kind: "unknown-attempt", ref };
+  }
+
+  currentAttemptForSlot(slotId: string): PanelAttempt | null {
+    return this.currentAttempt(asPanelSlotId(slotId));
+  }
+
+  ensureAttemptForSlot(slotId: string, runtimeEntityId: string): PanelAttempt {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const current = this.currentAttempt(normalizedSlotId);
+    if (current && current.runtimeEntityId === entityId && current.phase !== "stopped")
+      return current;
+    return this.commitAttempt(normalizedSlotId, { runtimeEntityId: entityId });
+  }
+
+  observeSlotLifecycle(slotId: string): PanelSlotObservation {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    const attempt = this.currentAttempt(normalizedSlotId);
+    const lease = this.leaseForSlot(normalizedSlotId);
+    const connectionId = lease?.connectionId;
+    const view = attempt ? this.routeViews.get(attempt.attemptId)?.view : undefined;
+    return {
+      attempt,
+      route: {
+        reachable: Boolean(connectionId && this.routeReachability.get(connectionId)),
+        ...(connectionId ? { connectionId } : {}),
+        ...(lease
+          ? {
+              holderLabel: lease.holderLabel,
+              platform: lease.platform,
+              supportsCdp: lease.supportsCdp,
+            }
+          : {}),
+        ...(view ? { view } : {}),
+      },
+      ...(this.buildStates.get(normalizedSlotId)
+        ? { build: this.buildStates.get(normalizedSlotId) }
+        : {}),
+      version: this.observationVersion(normalizedSlotId),
+    };
+  }
+
+  setBuildState(slotId: string, build: NonNullable<PanelSlotObservation["build"]>): void {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    const previous = this.buildStates.get(normalizedSlotId);
+    if (previous?.state === build.state && previous.buildKey === build.buildKey) return;
+    this.buildStates.set(normalizedSlotId, build);
+    const attempt = this.currentAttempt(normalizedSlotId);
+    if (attempt && build.buildKey && !attempt.buildKey) {
+      this.updateAttempt(attempt, { buildKey: build.buildKey });
+    }
+    this.resetSupervisionProgress(attempt);
+    this.nextSlotObservationVersion(normalizedSlotId);
+    this.emitSlotObservationChanged(normalizedSlotId);
+  }
+
+  reportAttemptPhase(
+    attemptId: string,
+    report: {
+      phase: AttemptPhase;
+      reporter: AttemptReporter;
+      failure?: PanelAttemptFailure;
+      stopReason?: StopReason;
+      buildKey?: string;
+      effectiveVersion?: string;
+    }
+  ): boolean {
+    const attempt = this.attempts.get(attemptId);
+    if (!attempt || !this.reporterAuthorized(report)) {
+      this.rejectReport(attemptId, report, attempt ? "unauthorized reporter" : "unknown attempt");
+      return false;
+    }
+    if (!this.canAdvance(attempt, report.phase)) {
+      this.rejectReport(attemptId, report, "non-monotonic or terminal transition");
+      return false;
+    }
+    this.transitionAttempt(attempt, report);
+    return true;
   }
 
   /**
@@ -177,14 +373,8 @@ export class PanelRuntimeCoordinator {
       if (lease.clientSessionId !== clientSessionId) continue;
       this.clearExpiry(entityId);
       this.leases.delete(entityId);
-      this.reportedViews.delete(entityId);
       const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(lease.connectionId);
-      this.closeLeaseConnection(
-        lease.runtimeEntityId,
-        lease.connectionId,
-        4095,
-        "Panel runtime host unregistered"
-      );
+      this.stopRouteAttempt(lease, "host-lost", true);
       this.emitChange(entityId, lease.slotId, lease, null, "released");
       released.push({ entityId, lease, wasDefaultCdpLease });
     }
@@ -240,30 +430,136 @@ export class PanelRuntimeCoordinator {
   reportView(
     runtimeEntityId: string,
     connectionId: string,
-    input: { url: string; loading: boolean; boot: PanelBootObservation }
+    input: {
+      url: string;
+      loading: boolean;
+      boot: PanelBootProbeResult;
+      failure?: {
+        reporter: "build" | "materialization" | "host";
+        failure: PanelAttemptFailure;
+      };
+    },
+    deliveryPrincipal: "renderer" | "host" = "host"
   ): boolean {
     const entityId = asPanelEntityId(runtimeEntityId);
     const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) {
+      this.rejectReport(
+        this.routeBindings.get(connectionId) ?? "unbound-route",
+        input,
+        lease ? "stale connection for leased entity" : "no lease for reporting entity"
+      );
       return false;
     }
-    const previous = this.reportedViews.get(entityId);
-    if (
-      previous?.connectionId === connectionId &&
-      samePageObservation(previous.observation, input)
-    ) {
-      return true;
+    const attemptId = this.routeBindings.get(connectionId);
+    const attempt = attemptId ? this.attempts.get(attemptId) : undefined;
+    if (!attempt || attempt.runtimeEntityId !== entityId || attempt.slotId !== lease.slotId) {
+      this.rejectReport(
+        attemptId ?? "unbound-route",
+        input,
+        "route is not bound to current attempt"
+      );
+      return false;
     }
-    this.reportedViews.set(entityId, {
-      connectionId,
-      observation: {
-        view: { url: input.url, loading: input.loading },
-        boot: { ...input.boot, updatedAt: Date.now() },
-      },
-    });
-    this.nextVersion();
-    this.nextSlotObservationVersion(lease.slotId);
-    this.emitSlotObservationChanged(lease.slotId);
+    const wasReachable = this.routeReachability.get(connectionId) === true;
+    const previousPage = this.routeViews.get(attempt.attemptId);
+    const observedBoot =
+      input.boot.kind === "observed" ? { ...input.boot.observation, updatedAt: Date.now() } : null;
+    const nextPage: PanelPageObservation = {
+      view: { url: input.url, loading: input.loading },
+      boot: observedBoot
+        ? { kind: "observed", observation: observedBoot }
+        : { kind: "unavailable" },
+    };
+    const pageChanged =
+      previousPage?.view.url !== nextPage.view.url ||
+      previousPage?.view.loading !== nextPage.view.loading ||
+      previousPage?.boot.kind !== nextPage.boot.kind ||
+      (previousPage?.boot.kind === "observed" ? previousPage.boot.observation.phase : undefined) !==
+        observedBoot?.phase ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.runtimeEntityId
+        : undefined) !== observedBoot?.runtimeEntityId ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.source
+        : undefined) !== observedBoot?.source ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.contextId
+        : undefined) !== observedBoot?.contextId ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.effectiveVersion
+        : undefined) !== observedBoot?.effectiveVersion ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.buildKey
+        : undefined) !== observedBoot?.buildKey ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.message
+        : undefined) !== observedBoot?.message ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.errorName
+        : undefined) !== observedBoot?.errorName ||
+      (previousPage?.boot.kind === "observed" ? previousPage.boot.observation.stack : undefined) !==
+        observedBoot?.stack ||
+      (previousPage?.boot.kind === "observed"
+        ? previousPage.boot.observation.failureStage
+        : undefined) !== observedBoot?.failureStage;
+    const previousBuild = this.buildStates.get(lease.slotId);
+    const buildChanged = Boolean(
+      observedBoot?.buildKey &&
+      (previousBuild?.state !== "ready" || previousBuild.buildKey !== observedBoot.buildKey)
+    );
+    if (observedBoot?.buildKey) {
+      this.buildStates.set(lease.slotId, { state: "ready", buildKey: observedBoot.buildKey });
+    }
+    this.routeReachability.set(connectionId, true);
+    this.routeViews.set(attempt.attemptId, nextPage);
+    // A host may originate its own typed failure (navigation, renderer crash)
+    // alongside the observed page state. The renderer principal cannot: its
+    // failures travel inside the boot record it owns.
+    if (input.failure && deliveryPrincipal === "host") {
+      const reported = this.reportAttemptPhase(attempt.attemptId, {
+        phase: "failed",
+        reporter: input.failure.reporter,
+        failure: input.failure.failure,
+      });
+      if (reported && input.failure.failure.stage === "build") {
+        this.setBuildState(attempt.slotId, { state: "failed" });
+      }
+      return reported;
+    }
+    let advanced = false;
+    if (observedBoot && observedBoot.phase !== attempt.phase) {
+      // Preserve the loader's failure taxonomy. Records predating the
+      // failureStage tag default to entry — the historical common case.
+      const bootFailureStage = observedBoot.failureStage ?? "entry";
+      const failure =
+        observedBoot.phase === "failed"
+          ? {
+              stage: bootFailureStage,
+              code:
+                bootFailureStage === "bundle-load"
+                  ? ("asset_unavailable" as const)
+                  : bootFailureStage === "config"
+                    ? ("unknown_failure" as const)
+                    : ("entry_threw" as const),
+              ...(observedBoot.message ? { message: observedBoot.message } : {}),
+              ...(observedBoot.stack ? { stack: observedBoot.stack } : {}),
+            }
+          : undefined;
+      advanced = this.reportAttemptPhase(attempt.attemptId, {
+        phase: observedBoot.phase,
+        reporter: deliveryPrincipal,
+        ...(failure ? { failure } : {}),
+        ...(observedBoot.buildKey ? { buildKey: observedBoot.buildKey } : {}),
+        ...(observedBoot.effectiveVersion
+          ? { effectiveVersion: observedBoot.effectiveVersion }
+          : {}),
+      });
+    }
+    if (!advanced && (pageChanged || buildChanged || !wasReachable)) {
+      this.nextSlotObservationVersion(lease.slotId);
+      this.emitSlotObservationChanged(lease.slotId);
+    }
     return true;
   }
 
@@ -271,15 +567,12 @@ export class PanelRuntimeCoordinator {
     slotId: string
   ): { lease: PanelRuntimeLease; observation: PanelPageObservation } | null {
     const normalizedSlotId = asPanelSlotId(slotId);
-    for (const [entityId, lease] of this.leases) {
+    for (const lease of this.leases.values()) {
       if (lease.slotId !== normalizedSlotId) continue;
-      // A reconnecting client still owns the lease during the short grace
-      // period, but its last page sample is no longer evidence about the
-      // current connection. Do not expose that sample as live state.
-      if (lease.expiresAt !== undefined) return null;
-      const reported = this.reportedViews.get(entityId);
-      if (!reported || reported.connectionId !== lease.connectionId) return null;
-      return { lease, observation: reported.observation };
+      const attemptId = this.routeBindings.get(lease.connectionId);
+      const observation = attemptId ? this.routeViews.get(attemptId) : undefined;
+      if (!observation) return null;
+      return { lease, observation };
     }
     return null;
   }
@@ -290,11 +583,8 @@ export class PanelRuntimeCoordinator {
   } {
     const lease = this.leaseForSlot(asPanelSlotId(slotId));
     if (!lease) return { lease: null, observation: null };
-    // Reconnect grace is a real lifecycle state: routing may preserve the
-    // lease briefly, but readiness cannot survive a broken runtime channel.
-    if (lease.expiresAt !== undefined) return { lease, observation: null };
-    const reported = this.reportedViews.get(lease.runtimeEntityId);
-    const observation = reported?.connectionId === lease.connectionId ? reported.observation : null;
+    const attemptId = this.routeBindings.get(lease.connectionId);
+    const observation = attemptId ? (this.routeViews.get(attemptId) ?? null) : null;
     return { lease, observation };
   }
 
@@ -412,29 +702,29 @@ export class PanelRuntimeCoordinator {
     const existing = this.leases.get(entityId) ?? null;
     if (existing) {
       if (!existing.supportsCdp) return { assigned: false, reason: "mobile_held", lease: existing };
-      const reported = this.reportedViews.get(entityId);
+      const attempt = this.currentAttempt(normalizedSlotId);
       if (
-        reported?.connectionId === existing.connectionId &&
-        reported.observation.boot.phase === "failed" &&
+        attempt?.runtimeEntityId === entityId &&
+        attempt.phase === "failed" &&
         (this.defaultCdpLeaseConnections.has(existing.connectionId) ||
           existing.platform === "headless")
       ) {
         // A lease whose host has reported materialization failure no longer
         // satisfies ensureSlot. Reissue the host incarnation so the caller
         // gets one clean recovery attempt instead of waiting on a dead lease.
-        return this.replaceFailedCdpLease(entityId, existing, options);
+        return this.replaceCdpLease(entityId, existing, options, "prefer-default");
       }
       if (
         options.replaceUnavailableLease &&
         options.isHostAvailable &&
         !options.isHostAvailable(existing.hostConnectionId)
       ) {
-        return this.replaceUnavailableCdpLease(entityId, existing, options);
+        return this.replaceCdpLease(entityId, existing, options, "same-platform");
       }
       if (
         existing.loadOnLeaseAssignment &&
         this.defaultCdpLeaseConnections.has(existing.connectionId) &&
-        reported?.connectionId !== existing.connectionId
+        !this.routeViews.has(attempt?.attemptId ?? "")
       ) {
         // A lease is only the desired presentation assignment. Until its host
         // reports the exact connection, it is not evidence that a renderer was
@@ -471,7 +761,7 @@ export class PanelRuntimeCoordinator {
         options.isHostAvailable &&
         !options.isHostAvailable(lease.hostConnectionId)
       ) {
-        return this.replaceUnavailableCdpLease(entityId, lease, options);
+        return this.replaceCdpLease(entityId, lease, options, "same-platform");
       }
       return { assigned: false, reason: "already_held", lease };
     }
@@ -539,35 +829,16 @@ export class PanelRuntimeCoordinator {
     if (!previous || previous.slotId !== normalizedSlotId) {
       return this.leases.get(nextEntityId) ?? null;
     }
-    const existingNext = this.leases.get(nextEntityId);
-    if (existingNext) {
-      // Converge recovery state as well as the ordinary single-lease path. A
-      // pre-existing next lease must not leave the retiring incarnation as a
-      // second lease for the same slot.
-      this.clearExpiry(previousEntityId);
-      this.leases.delete(previousEntityId);
-      this.reportedViews.delete(previousEntityId);
-      this.defaultCdpLeaseConnections.delete(previous.connectionId);
-      this.closeLeaseConnection(
-        previousEntityId,
-        previous.connectionId,
-        4091,
-        "Panel runtime replaced"
-      );
-      this.emitChange(nextEntityId, normalizedSlotId, previous, existingNext, "acquired");
-      return existingNext;
-    }
-
     const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(previous.connectionId);
     this.clearExpiry(previousEntityId);
     this.leases.delete(previousEntityId);
-    this.reportedViews.delete(previousEntityId);
-    this.closeLeaseConnection(
-      previousEntityId,
-      previous.connectionId,
-      4091,
-      "Panel runtime replaced"
-    );
+    this.stopRouteAttempt(previous, "superseded", true);
+
+    const existingNext = this.leases.get(nextEntityId);
+    if (existingNext) {
+      this.emitChange(nextEntityId, normalizedSlotId, previous, existingNext, "acquired");
+      return existingNext;
+    }
 
     if (!previous.loadOnLeaseAssignment) {
       // Hosts such as mobile own their renderer lifecycle and cannot realize a
@@ -575,21 +846,21 @@ export class PanelRuntimeCoordinator {
       // that host acquire the new entity with its own connection after the
       // canonical tree update. Transferring a fabricated lease here strands
       // the host on an unregistered principal.
+      this.commitAttempt(normalizedSlotId, { runtimeEntityId: nextEntityId });
       this.emitChange(nextEntityId, normalizedSlotId, previous, null, "released");
       return null;
     }
-
-    const next: PanelRuntimeLease = {
-      ...previous,
-      runtimeEntityId: nextEntityId,
-      connectionId: `replacement-cdp-${normalizedSlotId}-${randomUUID()}`,
-      acquiredAt: Date.now(),
-    };
-    delete next.expiresAt;
-    this.leases.set(nextEntityId, next);
-    if (wasDefaultCdpLease) this.defaultCdpLeaseConnections.add(next.connectionId);
-    this.emitChange(nextEntityId, normalizedSlotId, previous, next, "acquired");
-    return next;
+    return this.writeLease(
+      nextEntityId,
+      {
+        slotId: normalizedSlotId,
+        clientSessionId: previous.clientSessionId,
+        connectionId: randomUUID(),
+        hostConnectionId: previous.hostConnectionId,
+      },
+      "acquired",
+      { defaultCdpLease: wasDefaultCdpLease }
+    );
   }
 
   acquire(
@@ -625,12 +896,7 @@ export class PanelRuntimeCoordinator {
     const entityId = asPanelEntityId(runtimeEntityId);
     const existing = this.leases.get(entityId);
     if (existing && existing.connectionId !== input.connectionId) {
-      this.closeLeaseConnection(
-        runtimeEntityId,
-        existing.connectionId,
-        4091,
-        "Panel runtime lease revoked"
-      );
+      this.stopRouteAttempt(existing, "superseded", true);
       this.emitChange(entityId, existing.slotId, existing, null, "revoked");
     }
     return { acquired: true, lease: this.writeLease(entityId, input, "acquired") };
@@ -652,8 +918,8 @@ export class PanelRuntimeCoordinator {
     }
     this.clearExpiry(entityId);
     this.leases.delete(entityId);
-    this.reportedViews.delete(entityId);
     const wasDefaultCdpLease = this.defaultCdpLeaseConnections.delete(existing.connectionId);
+    this.stopRouteAttempt(existing, reason === "expired" ? "host-lost" : "unloaded", false);
     this.emitChange(entityId, existing.slotId, existing, null, reason);
     if (
       (reason === "released" || reason === "expired") &&
@@ -671,17 +937,13 @@ export class PanelRuntimeCoordinator {
       if (lease.slotId !== normalizedSlotId) continue;
       this.clearExpiry(entityId);
       this.leases.delete(entityId);
-      this.reportedViews.delete(entityId);
       this.defaultCdpLeaseConnections.delete(lease.connectionId);
-      this.closeLeaseConnection(
-        lease.runtimeEntityId,
-        lease.connectionId,
-        4094,
-        "Panel runtime unloaded"
-      );
+      this.stopRouteAttempt(lease, "unloaded", true);
       this.emitChange(entityId, lease.slotId, lease, null, "released");
       return lease;
     }
+    const attempt = this.currentAttempt(normalizedSlotId);
+    if (attempt) this.stopAttempt(attempt.attemptId, "unloaded");
     return null;
   }
 
@@ -691,18 +953,17 @@ export class PanelRuntimeCoordinator {
     if (!isPanelEntityId(runtimeEntityId)) return;
     const entityId = runtimeEntityId;
     const existing = this.leases.get(entityId);
-    if (!existing) return;
-    this.clearExpiry(entityId);
-    this.leases.delete(entityId);
-    this.reportedViews.delete(entityId);
-    this.defaultCdpLeaseConnections.delete(existing.connectionId);
-    this.closeLeaseConnection(
-      runtimeEntityId,
-      existing.connectionId,
-      4093,
-      "Panel runtime entity retired"
-    );
-    this.emitChange(entityId, existing.slotId, existing, null, "retired");
+    if (existing) {
+      this.clearExpiry(entityId);
+      this.leases.delete(entityId);
+      this.defaultCdpLeaseConnections.delete(existing.connectionId);
+      this.stopRouteAttempt(existing, "retired", true);
+      this.emitChange(entityId, existing.slotId, existing, null, "retired");
+    }
+    for (const attemptId of this.currentAttemptBySlot.values()) {
+      const attempt = this.attempts.get(attemptId);
+      if (attempt?.runtimeEntityId === entityId) this.stopAttempt(attemptId, "retired");
+    }
   }
 
   authorizePanelConnection(
@@ -722,11 +983,21 @@ export class PanelRuntimeCoordinator {
     const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) return;
     this.clearExpiry(entityId);
+    const wasReachable = this.routeReachability.get(connectionId) === true;
+    this.routeReachability.set(connectionId, true);
+    const attemptId = this.routeBindings.get(connectionId);
+    const attempt = attemptId ? this.attempts.get(attemptId) : undefined;
+    if (attempt && (attempt.phase === "loading" || attempt.phase === "booting")) {
+      this.ensureSupervision(attempt);
+    }
     if (lease.expiresAt !== undefined) {
       const next = { ...lease };
       delete next.expiresAt;
       this.leases.set(entityId, next);
       this.emitChange(entityId, lease.slotId, lease, next, "acquired");
+    } else if (!wasReachable) {
+      this.nextSlotObservationVersion(lease.slotId);
+      this.emitSlotObservationChanged(lease.slotId);
     }
   }
 
@@ -735,9 +1006,7 @@ export class PanelRuntimeCoordinator {
     const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) return;
     this.clearExpiry(entityId);
-    // The old sample belongs to the disconnected runtime channel. Keeping it
-    // would make observeSlot report ready throughout reconnect grace.
-    this.reportedViews.delete(entityId);
+    this.routeReachability.set(connectionId, false);
     const expiresAt = Date.now() + LEASE_RECONNECT_GRACE_MS;
     const next = { ...lease, expiresAt };
     this.leases.set(entityId, next);
@@ -792,13 +1061,8 @@ export class PanelRuntimeCoordinator {
     const slotId = asPanelSlotId(input.slotId);
     const previous = this.leases.get(runtimeEntityId) ?? null;
     this.clearExpiry(runtimeEntityId);
-    // Re-acquiring the exact same runtime connection is an idempotent lease
-    // refresh. Its page did not change, so keep the observation. A different
-    // connection is a different host incarnation and must prove readiness for
-    // itself.
-    if (previous?.connectionId !== input.connectionId) {
-      this.reportedViews.delete(runtimeEntityId);
-    }
+    const sameRoute = previous?.connectionId === input.connectionId;
+    if (previous && !sameRoute) this.detachRoute(previous.connectionId);
     if (previous) this.defaultCdpLeaseConnections.delete(previous.connectionId);
     const lease: PanelRuntimeLease = {
       slotId,
@@ -815,6 +1079,31 @@ export class PanelRuntimeCoordinator {
     };
     this.leases.set(runtimeEntityId, lease);
     if (options.defaultCdpLease) this.defaultCdpLeaseConnections.add(lease.connectionId);
+    const currentAttempt = this.currentAttempt(slotId);
+    const reusesCurrentMaterialization = Boolean(
+      currentAttempt &&
+      currentAttempt.runtimeEntityId === runtimeEntityId &&
+      currentAttempt.phase !== "failed" &&
+      currentAttempt.phase !== "stopped" &&
+      (sameRoute ||
+        (!previous &&
+          currentAttempt.phase === "pending" &&
+          currentAttempt.hostConnectionId === undefined))
+    );
+    if (!reusesCurrentMaterialization) {
+      this.commitAttempt(slotId, {
+        runtimeEntityId,
+        hostConnectionId: lease.hostConnectionId,
+        connectionId: lease.connectionId,
+      });
+    } else {
+      const reusedAttempt = currentAttempt!;
+      this.updateAttempt(reusedAttempt, { hostConnectionId: lease.hostConnectionId });
+      this.routeBindings.set(lease.connectionId, reusedAttempt.attemptId);
+      if (!this.routeReachability.has(lease.connectionId)) {
+        this.routeReachability.set(lease.connectionId, false);
+      }
+    }
     this.emitChange(runtimeEntityId, slotId, previous, lease, reason);
     return lease;
   }
@@ -845,28 +1134,33 @@ export class PanelRuntimeCoordinator {
     );
   }
 
-  private replaceUnavailableCdpLease(
+  /**
+   * Revoke a default-CDP lease and re-home its slot on a fresh default host.
+   * `hostSelection` differs by trigger: an unavailable host must be replaced
+   * like-for-like on platform; a failed boot on a default lease may re-home
+   * anywhere (one clean recovery attempt), while a self-acquired host stays
+   * platform-pinned.
+   */
+  private replaceCdpLease(
     runtimeEntityId: PanelEntityId,
     existing: PanelRuntimeLease,
-    options: DefaultCdpHostOptions
+    options: DefaultCdpHostOptions,
+    hostSelection: "same-platform" | "prefer-default"
   ):
     | { assigned: true; lease: PanelRuntimeLease }
     | { assigned: false; reason: "no_default_cdp_host"; lease: PanelRuntimeLease } {
     const wasDefaultCdpLease = this.defaultCdpLeaseConnections.has(existing.connectionId);
-    const client = this.getDefaultCdpHostClient(options, existing.platform);
+    const client = this.getDefaultCdpHostClient(
+      options,
+      hostSelection === "prefer-default" && wasDefaultCdpLease ? undefined : existing.platform
+    );
     if (!client || (!wasDefaultCdpLease && client.platform !== existing.platform)) {
       return { assigned: false, reason: "no_default_cdp_host", lease: existing };
     }
     this.defaultCdpLeaseConnections.delete(existing.connectionId);
     this.clearExpiry(existing.runtimeEntityId);
     this.leases.delete(existing.runtimeEntityId);
-    this.reportedViews.delete(existing.runtimeEntityId);
-    this.closeLeaseConnection(
-      existing.runtimeEntityId,
-      existing.connectionId,
-      4091,
-      "Panel runtime lease revoked"
-    );
+    this.stopRouteAttempt(existing, "superseded", true);
     this.emitChange(existing.runtimeEntityId, existing.slotId, existing, null, "revoked");
     return {
       assigned: true,
@@ -884,46 +1178,287 @@ export class PanelRuntimeCoordinator {
     };
   }
 
-  private replaceFailedCdpLease(
-    runtimeEntityId: PanelEntityId,
-    existing: PanelRuntimeLease,
-    options: DefaultCdpHostOptions
-  ):
-    | { assigned: true; lease: PanelRuntimeLease }
-    | { assigned: false; reason: "no_default_cdp_host"; lease: PanelRuntimeLease } {
-    const wasDefaultCdpLease = this.defaultCdpLeaseConnections.has(existing.connectionId);
-    const client = this.getDefaultCdpHostClient(
-      options,
-      wasDefaultCdpLease ? undefined : existing.platform
-    );
-    if (!client || (!wasDefaultCdpLease && client.platform !== existing.platform)) {
-      return { assigned: false, reason: "no_default_cdp_host", lease: existing };
+  private currentAttempt(slotId: PanelSlotId): PanelAttempt | null {
+    const attemptId = this.currentAttemptBySlot.get(slotId);
+    return attemptId ? (this.attempts.get(attemptId) ?? null) : null;
+  }
+
+  private reporterAuthorized(report: {
+    phase: AttemptPhase;
+    reporter: AttemptReporter;
+    failure?: PanelAttemptFailure;
+  }): boolean {
+    if (report.reporter === "coordinator") {
+      return (
+        report.phase === "stopped" ||
+        (report.phase === "failed" && report.failure?.stage === "boot-stall")
+      );
     }
-    this.defaultCdpLeaseConnections.delete(existing.connectionId);
-    this.clearExpiry(existing.runtimeEntityId);
-    this.leases.delete(existing.runtimeEntityId);
-    this.reportedViews.delete(existing.runtimeEntityId);
-    this.closeLeaseConnection(
-      existing.runtimeEntityId,
-      existing.connectionId,
-      4091,
-      "Panel runtime materialization retry"
+    if (report.reporter === "build") {
+      return report.phase === "failed" && report.failure?.stage === "build";
+    }
+    if (report.reporter === "materialization") {
+      return report.phase === "failed" && report.failure?.stage === "materialization";
+    }
+    if (report.reporter === "renderer") {
+      return (
+        report.phase === "loading" ||
+        report.phase === "booting" ||
+        report.phase === "ready" ||
+        (report.phase === "failed" &&
+          (report.failure?.stage === "bundle-load" ||
+            report.failure?.stage === "config" ||
+            report.failure?.stage === "entry"))
+      );
+    }
+    return (
+      report.phase === "loading" ||
+      report.phase === "booting" ||
+      report.phase === "ready" ||
+      (report.phase === "failed" &&
+        (report.failure?.stage === "bundle-load" ||
+          report.failure?.stage === "config" ||
+          report.failure?.stage === "entry" ||
+          report.failure?.stage === "navigation" ||
+          report.failure?.stage === "renderer-crash"))
     );
-    this.emitChange(existing.runtimeEntityId, existing.slotId, existing, null, "revoked");
-    return {
-      assigned: true,
-      lease: this.writeLease(
-        runtimeEntityId,
-        {
-          slotId: existing.slotId,
-          clientSessionId: client.clientSessionId,
-          connectionId: `default-cdp-${existing.slotId}-${randomUUID()}`,
-          hostConnectionId: client.hostConnectionId,
-        },
-        "acquired",
-        { defaultCdpLease: wasDefaultCdpLease }
-      ),
+  }
+
+  private canAdvance(attempt: PanelAttempt, next: AttemptPhase): boolean {
+    if (attempt.phase === "failed" || attempt.phase === "stopped") return false;
+    if (next === "failed") return attempt.phase !== "ready";
+    if (next === "stopped") return true;
+    if (attempt.phase === "ready") return false;
+    return PHASE_RANK[next] > PHASE_RANK[attempt.phase];
+  }
+
+  private transitionAttempt(
+    attempt: PanelAttempt,
+    report: {
+      phase: AttemptPhase;
+      reporter: AttemptReporter;
+      failure?: PanelAttemptFailure;
+      stopReason?: StopReason;
+      buildKey?: string;
+      effectiveVersion?: string;
+    }
+  ): PanelAttempt {
+    const next: PanelAttempt = {
+      ...attempt,
+      phase: report.phase,
+      reporter: report.reporter,
+      revision: attempt.revision + 1,
+      updatedAt: Date.now(),
+      ...(report.buildKey ? { buildKey: report.buildKey } : {}),
+      ...(report.effectiveVersion ? { effectiveVersion: report.effectiveVersion } : {}),
+      ...(report.failure ? { failure: report.failure } : {}),
+      ...(report.stopReason ? { stopReason: report.stopReason } : {}),
     };
+    this.attempts.set(next.attemptId, next);
+    if ((next.phase === "loading" || next.phase === "booting") && this.hasReachableRoute(next)) {
+      this.ensureSupervision(next);
+    } else if (next.phase === "failed" || next.phase === "stopped" || next.phase === "ready") {
+      this.stopSupervision(next.attemptId);
+    }
+    this.emitAttemptChanged(next.attemptId);
+    const slotId = asPanelSlotId(next.slotId);
+    this.nextSlotObservationVersion(slotId);
+    this.emitSlotObservationChanged(slotId);
+    return next;
+  }
+
+  private updateAttempt(attempt: PanelAttempt, attributes: Partial<PanelAttempt>): PanelAttempt {
+    const next = { ...attempt, ...attributes, updatedAt: Date.now() };
+    this.attempts.set(next.attemptId, next);
+    return next;
+  }
+
+  private stopRouteAttempt(lease: PanelRuntimeLease, reason: StopReason, close: boolean): void {
+    const boundAttemptId = this.routeBindings.get(lease.connectionId);
+    const current = this.currentAttempt(lease.slotId);
+    const attemptId =
+      boundAttemptId ??
+      (current?.runtimeEntityId === lease.runtimeEntityId ? current.attemptId : undefined);
+    if (attemptId) this.stopAttempt(attemptId, reason);
+    this.detachRoute(lease.connectionId);
+    if (close) {
+      const wire = STOP_CLOSE[reason];
+      this.closeLeaseConnection(lease.runtimeEntityId, lease.connectionId, wire.code, wire.reason);
+    }
+  }
+
+  private detachRoute(connectionId: string): void {
+    this.routeBindings.delete(connectionId);
+    this.routeReachability.delete(connectionId);
+  }
+
+  private rememberTerminal(attempt: PanelAttempt): void {
+    const stored = this.attempts.get(attempt.attemptId) ?? attempt;
+    if (stored.phase !== "failed" && stored.phase !== "stopped") return;
+    const slotId = asPanelSlotId(stored.slotId);
+    const history = this.terminalHistoryBySlot.get(slotId) ?? [];
+    const next = [stored.attemptId, ...history.filter((id) => id !== stored.attemptId)];
+    const evicted = next.splice(ATTEMPT_HISTORY_LIMIT);
+    this.terminalHistoryBySlot.set(slotId, next);
+    for (const attemptId of evicted) {
+      if (this.currentAttemptBySlot.get(slotId) === attemptId) continue;
+      this.attempts.delete(attemptId);
+      this.routeViews.delete(attemptId);
+      this.stopSupervision(attemptId);
+      this.emitAttemptChanged(attemptId);
+    }
+  }
+
+  private ensureSupervision(attempt: PanelAttempt): void {
+    if (!this.supervisionTimers.has(attempt.attemptId)) {
+      this.startSupervision(attempt);
+      return;
+    }
+    this.resetSupervisionProgress(attempt);
+  }
+
+  private hasReachableRoute(attempt: PanelAttempt): boolean {
+    const lease = this.leaseForSlot(asPanelSlotId(attempt.slotId));
+    return Boolean(
+      lease &&
+      this.routeBindings.get(lease.connectionId) === attempt.attemptId &&
+      this.routeReachability.get(lease.connectionId) === true
+    );
+  }
+
+  private emitAttemptChanged(attemptId: string): void {
+    for (const listener of this.attemptListeners) {
+      try {
+        listener(attemptId);
+      } catch (error) {
+        this.deps.onError?.(error, `notify attempt listener for ${attemptId}`);
+      }
+    }
+  }
+
+  private startSupervision(attempt: PanelAttempt): void {
+    this.stopSupervision(attempt.attemptId);
+    this.supervisionRounds.set(attempt.attemptId, {
+      revision: attempt.revision,
+      rounds: 0,
+      valid: 0,
+      unobservable: 0,
+    });
+    const timer = setInterval(
+      () => void this.superviseAttempt(attempt.attemptId),
+      ATTEMPT_STALL_PROBE_MS
+    );
+    timer.unref?.();
+    this.supervisionTimers.set(attempt.attemptId, timer);
+  }
+
+  private stopSupervision(attemptId: string): void {
+    const timer = this.supervisionTimers.get(attemptId);
+    if (timer) clearInterval(timer);
+    this.supervisionTimers.delete(attemptId);
+    this.supervisionRounds.delete(attemptId);
+  }
+
+  private resetSupervisionProgress(attempt: PanelAttempt | null | undefined): void {
+    if (!attempt) return;
+    const state = this.supervisionRounds.get(attempt.attemptId);
+    if (!state) return;
+    state.revision = attempt.revision;
+    state.rounds = 0;
+    state.valid = 0;
+    state.unobservable = 0;
+  }
+
+  private async superviseAttempt(attemptId: string): Promise<void> {
+    const attempt = this.attempts.get(attemptId);
+    const state = this.supervisionRounds.get(attemptId);
+    if (
+      !attempt ||
+      !state ||
+      attempt.phase === "ready" ||
+      attempt.phase === "failed" ||
+      attempt.phase === "stopped"
+    ) {
+      this.stopSupervision(attemptId);
+      return;
+    }
+    // A probe slower than the cadence must not overlap itself: overlapping
+    // completions would count as extra rounds and reach the stall threshold
+    // in less wall time than the cadence promises.
+    if (this.supervisionInFlight.has(attemptId)) return;
+    this.supervisionInFlight.add(attemptId);
+    try {
+      await this.superviseAttemptRound(attemptId, attempt, state);
+    } finally {
+      this.supervisionInFlight.delete(attemptId);
+    }
+  }
+
+  private async superviseAttemptRound(
+    attemptId: string,
+    attempt: PanelAttempt,
+    state: { revision: number; rounds: number; valid: number; unobservable: number }
+  ): Promise<void> {
+    let observed = false;
+    if (this.attemptProbe) {
+      try {
+        const report = await this.attemptProbe(asPanelSlotId(attempt.slotId));
+        // A probe that answers with no boot record is a renderer that isn't
+        // talking, not a valid observation — count it on the unobservable side.
+        observed = report?.boot.kind === "observed";
+        if (report?.failure) {
+          this.reportAttemptPhase(attemptId, {
+            phase: "failed",
+            reporter: report.failure.reporter,
+            failure: report.failure.failure,
+          });
+          if (report.failure.failure.stage === "build") {
+            this.setBuildState(attempt.slotId, { state: "failed" });
+          }
+          return;
+        }
+        const lease = this.leaseForSlot(asPanelSlotId(attempt.slotId));
+        if (report && lease && this.routeBindings.get(lease.connectionId) === attemptId) {
+          this.reportView(attempt.runtimeEntityId, lease.connectionId, report, "host");
+        }
+      } catch (error) {
+        this.deps.onError?.(error, `probe panel attempt ${attemptId}`);
+      }
+    }
+    const current = this.attempts.get(attemptId);
+    if (!current || current.revision > state.revision) {
+      if (current) this.resetSupervisionProgress(current);
+      return;
+    }
+    state.rounds += 1;
+    if (observed) state.valid += 1;
+    else state.unobservable += 1;
+    if (state.rounds < ATTEMPT_STALL_ROUNDS) return;
+    this.reportAttemptPhase(attemptId, {
+      phase: "failed",
+      reporter: "coordinator",
+      failure: {
+        stage: "boot-stall",
+        code: "boot_stalled",
+        message: "Panel boot made no progress",
+        detail: state.unobservable > state.valid ? "unobservable" : "no-progress",
+        diagnostics: {
+          rounds: state.rounds,
+          valid: state.valid,
+          unobservable: state.unobservable,
+          lastObservation: this.routeViews.get(attemptId) ?? null,
+        },
+      },
+    });
+  }
+
+  private rejectReport(attemptId: string, report: unknown, reason: string): void {
+    const error = Object.assign(new Error(`Rejected panel attempt report: ${reason}`), {
+      attemptId,
+      report,
+      attempt: this.attempts.get(attemptId) ?? null,
+    });
+    this.deps.onError?.(error, `reject panel attempt report ${attemptId}`);
   }
 
   private shouldReassignDefaultCdpLease(

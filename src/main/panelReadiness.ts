@@ -1,51 +1,34 @@
-import type { PanelRuntimeStatus } from "@vibestudio/shared/types";
+import type { PanelSlotObservation } from "@vibestudio/shared/panel/observation";
 
+/** Test diagnostics projected from the server-owned canonical lifecycle. */
 export type PanelReadinessSnapshot = {
   panelId: string;
   source: string | null;
   runtimeEntityId: string | null;
-  /** Renderer content and its runtime are ready, whether or not this panel is visible. */
   contentReady: boolean;
-  /** Content-ready and bound into the visible native panel slot. */
   terminal: boolean;
-  view: { exists: boolean; url: string | null; isLoading: boolean | null };
-  artifacts: {
-    buildState: string | null;
-    htmlPath: string | null;
-    hostedRuntimeEntityId: string | null;
-    error: string | null;
-    viewFailure: string | null;
-  };
-  runtime: PanelRuntimeStatus | null;
   nativeSlotBound: boolean;
+  attempt: PanelSlotObservation["attempt"];
+  route: PanelSlotObservation["route"];
+  build?: PanelSlotObservation["build"];
 };
 
-export type PanelReadinessSignals = Omit<PanelReadinessSnapshot, "contentReady" | "terminal">;
-
-export function isPanelContentReady(signals: PanelReadinessSignals): boolean {
-  return (
-    signals.source !== null &&
-    signals.runtimeEntityId !== null &&
-    signals.artifacts.hostedRuntimeEntityId === signals.runtimeEntityId &&
-    signals.runtime?.leased === true &&
-    signals.view.exists &&
-    !!signals.view.url &&
-    signals.view.isLoading === false &&
-    signals.artifacts.buildState === "ready" &&
-    !!signals.artifacts.htmlPath &&
-    !signals.artifacts.error &&
-    !signals.artifacts.viewFailure
-  );
-}
-
-export function isTerminalPanelReadiness(signals: PanelReadinessSignals): boolean {
-  return isPanelContentReady(signals) && signals.nativeSlotBound;
-}
-
-export function panelReadinessSnapshot(signals: PanelReadinessSignals): PanelReadinessSnapshot {
+export function panelReadinessSnapshot(input: {
+  panelId: string;
+  source: string | null;
+  nativeSlotBound: boolean;
+  observation: PanelSlotObservation;
+}): PanelReadinessSnapshot {
+  const contentReady = input.observation.attempt?.phase === "ready";
   return {
-    ...signals,
-    contentReady: isPanelContentReady(signals),
-    terminal: isTerminalPanelReadiness(signals),
+    panelId: input.panelId,
+    source: input.source,
+    runtimeEntityId: input.observation.attempt?.runtimeEntityId ?? null,
+    contentReady,
+    terminal: contentReady && input.nativeSlotBound,
+    nativeSlotBound: input.nativeSlotBound,
+    attempt: input.observation.attempt,
+    route: input.observation.route,
+    ...(input.observation.build ? { build: input.observation.build } : {}),
   };
 }

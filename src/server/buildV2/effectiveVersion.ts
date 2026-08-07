@@ -32,6 +32,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import type { PackageGraph } from "./packageGraph.js";
 import { getUserDataPath } from "@vibestudio/env-paths";
+import { panelEntryProtocolFingerprint } from "./panelEntryProtocol.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -488,9 +489,15 @@ function rootDependencyFingerprint(): string {
  * (different entry points, HTML titles, dependency sets produce different
  * artifacts).
  */
-export function computeBuildKey(unitName: string, ev: string, sourcemap: boolean): string {
+export function computeBuildKey(
+  unitName: string,
+  ev: string,
+  sourcemap: boolean,
+  protocolFingerprint = panelEntryProtocolFingerprint()
+): string {
   return hashStrings([
     BUILD_CACHE_VERSION,
+    `panel-entry-protocol:${protocolFingerprint}`,
     `root-deps:${rootDependencyFingerprint()}`,
     unitName,
     ev,

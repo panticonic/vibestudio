@@ -53,7 +53,7 @@ import {
 import { assertPresent } from "../lintHelpers";
 import { PanelRuntimeLeaseController } from "./panelRuntimeLeaseController.js";
 import type {
-  PanelBootObservation,
+  PanelBootProbeResult,
   PanelFailureCode,
   PanelFailureStage,
   PanelHostObservation,
@@ -1058,6 +1058,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   async recoverShellSnapshot(
     opts: { loadFocusedView?: boolean } = {}
   ): Promise<PanelRecoverySnapshot> {
+    await this.runtime.recoverClientRegistration();
     const { collapsedIds } = await this.shellCore.loadViewState();
     await this.runtime.syncLeaseSnapshot();
     await this.runtime.repairLeasesForExistingViews();
@@ -1190,7 +1191,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
    */
   getPanelHostObservation(
     panelId: string,
-    boot: PanelBootObservation = { phase: "unavailable" }
+    boot: PanelBootProbeResult = { kind: "unavailable" }
   ): PanelHostObservation {
     const panel = this.registry.getPanel(panelId);
     const contents = this.getPanelView()?.getWebContents(panelId) as
@@ -1232,16 +1233,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         details: {
           buildState: panel?.artifacts.buildState ?? null,
           buildProgress: panel?.artifacts.buildProgress ?? null,
-        },
-      };
-    } else if (boot.phase === "failed") {
-      failure = {
-        code: "entry_threw",
-        stage: "boot",
-        message: boot.message ?? "Panel entry failed",
-        details: {
-          errorName: boot.errorName ?? null,
-          stack: boot.stack ?? null,
         },
       };
     }

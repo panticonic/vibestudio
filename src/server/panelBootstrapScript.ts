@@ -7,12 +7,23 @@
  * globals consumed by the transport/runtime code.
  */
 
+/** Loader ↔ generated-entry protocol epoch; folded into every panel build key. */
+export const PANEL_ENTRY_PROTOCOL_VERSION = "1";
+
 export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   const bootStartedAt = Date.now();
-  const reportBoot = (phase, error) => {
+  const reportBoot = (phase, error, failureStage) => {
     const previous = globalThis.__vibestudioPanelBoot;
+    // Ready is boot-terminal. A later error/unhandledrejection is an
+    // application-runtime event, not a boot outcome; letting it overwrite the
+    // held record would poison host relays and post-restart re-adoption.
+    if (previous?.phase === "ready" && phase === "failed") return previous;
     const next = {
       phase,
+      // The loader is the only place that can tell an incomplete host config
+      // from a bundle that failed to load from entry code that threw; tag the
+      // record so the coordinator preserves the distinction.
+      ...(phase === "failed" && failureStage ? { failureStage } : {}),
       startedAt: previous?.startedAt ?? bootStartedAt,
       updatedAt: Date.now(),
       runtimeEntityId: globalThis.__vibestudioEntityId ?? previous?.runtimeEntityId ?? null,
@@ -43,10 +54,10 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   globalThis.__vibestudioPanelMarkReady = () => reportBoot("ready");
   reportBoot("loading");
   globalThis.addEventListener("error", (event) => {
-    reportBoot("failed", event.error || new Error(event.message || "Panel entry failed"));
+    reportBoot("failed", event.error || new Error(event.message || "Panel entry failed"), "entry");
   });
   globalThis.addEventListener("unhandledrejection", (event) => {
-    reportBoot("failed", event.reason || new Error("Unhandled panel rejection"));
+    reportBoot("failed", event.reason || new Error("Unhandled panel rejection"), "entry");
   });
 
   // Capture the loader <script> element synchronously: document.currentScript
@@ -120,7 +131,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
       cfg = await shell.getPanelInit();
       persistPanelInit(cfg);
     } catch (err) {
-      reportBoot("failed", err);
+      reportBoot("failed", err, "config");
       const root = document.getElementById("root");
       if (root) root.textContent = "Failed to load panel init: " + (err.message || err);
       return;
@@ -138,7 +149,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   const connectionId = typeof cfg?.connectionId === "string" ? cfg.connectionId : undefined;
 
   if (!cfg || !entityId || !cfg.gatewayConfig || !cfg.gatewayConfig.serverUrl || !cfg.gatewayConfig.token) {
-    reportBoot("failed", new Error("Panel bootstrap configuration is incomplete"));
+    reportBoot("failed", new Error("Panel bootstrap configuration is incomplete"), "config");
     const root = document.getElementById("root");
     if (root) root.innerHTML = "<p>Open this panel from Vibestudio.</p>";
     return;
@@ -188,7 +199,7 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   bundle.type = "module";
   bundle.src = configuredBundleSrc || "./bundle.js";
   bundle.onerror = () => {
-    reportBoot("failed", new Error("The panel bundle could not be loaded"));
+    reportBoot("failed", new Error("The panel bundle could not be loaded"), "bundle-load");
     const root = document.getElementById("root");
     if (!root || root.childElementCount > 0) return;
     root.innerHTML =

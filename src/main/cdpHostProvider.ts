@@ -7,7 +7,7 @@ import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthPro
 import {
   PANEL_PAGE_OBSERVATION_EXPRESSION,
   parsePanelPageObservation,
-  type PanelBootObservation,
+  type PanelBootProbeResult,
 } from "@vibestudio/shared/panel/observation";
 import type { ViewManager } from "./viewManager.js";
 import type {
@@ -289,7 +289,7 @@ export class CdpHostProvider {
    * readiness signal: about:blank preparation views and failed bundles both
    * have a valid WebContents.
    */
-  async getBootObservation(targetId: string): Promise<PanelBootObservation> {
+  async getBootObservation(targetId: string): Promise<PanelBootProbeResult> {
     const contents = this.requireTargetContents(targetId);
     const unavailable = Symbol("panel-page-observation-unavailable");
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -306,7 +306,7 @@ export class CdpHostProvider {
     // succeed. Observation is a live probe, so an overdue read is unavailable
     // rather than a terminal panel failure; the caller's next observation
     // retries against the current document.
-    if (result === unavailable) return { phase: "unavailable" };
+    if (result === unavailable) return { kind: "unavailable" };
     return parsePanelPageObservation(result).boot;
   }
 

@@ -86,6 +86,8 @@ import type {
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
 import { workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 import { createPanelBundleReport } from "./panelBundleReport.js";
+import { generatePanelEntry } from "./panelEntryProtocol.js";
+export { generatePanelEntry } from "./panelEntryProtocol.js";
 
 /**
  * Library artifacts execute inside the eval linker, not the host ESM loader.
@@ -1490,17 +1492,6 @@ function panelExposeEntrySpecifier(index: number): string {
 export function generatePanelExposeEntryCode(specifier: string): string {
   return `import * as namespace from ${JSON.stringify(specifier)};
 export default namespace;
-`;
-}
-
-export function generatePanelEntry(
-  exposeEntryFile: string,
-  entryFile: string,
-  adapter: FrameworkAdapter,
-  frameworkModule?: string
-): string {
-  return `${adapter.generateEntry(exposeEntryFile, entryFile, frameworkModule)}
-globalThis.__vibestudioPanelMarkReady?.();
 `;
 }
 

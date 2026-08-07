@@ -3,6 +3,12 @@ import { PanelEntityIdSchema, PanelSlotIdSchema } from "./panel/ids.js";
 import type { PanelRuntimeLease } from "./panel/panelLease.js";
 import type {
   PanelBootObservation,
+  PanelBootProbeResult,
+  PanelAttempt,
+  PanelAttemptFailure,
+  PanelAttemptRef,
+  AwaitPanelAttemptResult,
+  PanelSlotObservation,
   PanelConsoleHistoryObservation,
   PanelDiagnosticPacket,
   PanelHostObservation,
@@ -82,11 +88,10 @@ export const PanelFailureCodeSchema = z.enum([
   "build_identity_invalid",
   "host_unavailable",
   "lease_conflict",
-  "parent_resolution_timeout",
   "navigation_failed",
   "asset_unavailable",
   "entry_threw",
-  "runtime_handshake_timeout",
+  "boot_stalled",
   "render_crashed",
   "panel_not_found",
   "unknown_failure",
@@ -121,7 +126,7 @@ export const PanelRuntimeFailureSchema: z.ZodType<PanelRuntimeFailure> = z.objec
 });
 
 export const PanelBootObservationSchema: z.ZodType<PanelBootObservation> = z.object({
-  phase: z.enum(["unavailable", "loading", "booting", "ready", "failed"]),
+  phase: z.enum(["loading", "booting", "ready", "failed"]),
   runtimeEntityId: z.string().nullable().optional(),
   source: z.string().nullable().optional(),
   contextId: z.string().nullable().optional(),
@@ -130,8 +135,17 @@ export const PanelBootObservationSchema: z.ZodType<PanelBootObservation> = z.obj
   message: z.string().optional(),
   errorName: z.string().optional(),
   stack: z.string().optional(),
+  failureStage: z.enum(["config", "bundle-load", "entry"]).optional(),
   updatedAt: z.number().optional(),
 });
+
+export const PanelBootProbeResultSchema: z.ZodType<PanelBootProbeResult> = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({ kind: z.literal("observed"), observation: PanelBootObservationSchema }).strict(),
+    z.object({ kind: z.literal("unavailable") }).strict(),
+  ]
+);
 
 export const PanelPageObservationSchema: z.ZodType<PanelPageObservation> = z
   .object({
@@ -141,7 +155,81 @@ export const PanelPageObservationSchema: z.ZodType<PanelPageObservation> = z
         loading: z.boolean(),
       })
       .strict(),
-    boot: PanelBootObservationSchema,
+    boot: PanelBootProbeResultSchema,
+  })
+  .strict();
+
+export const PanelAttemptRefSchema: z.ZodType<PanelAttemptRef> = z
+  .object({ epoch: z.string().min(1), attemptId: z.string().min(1) })
+  .strict();
+
+export const PanelAttemptFailureSchema: z.ZodType<PanelAttemptFailure> = z
+  .object({
+    stage: z.enum([
+      "build",
+      "bundle-load",
+      "config",
+      "entry",
+      "navigation",
+      "renderer-crash",
+      "boot-stall",
+      "materialization",
+    ]),
+    code: PanelFailureCodeSchema,
+    message: z.string().optional(),
+    stack: z.string().optional(),
+    detail: z.enum(["no-progress", "unobservable"]).optional(),
+    diagnostics: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+export const PanelAttemptSchema: z.ZodType<PanelAttempt> = z
+  .object({
+    epoch: z.string().min(1),
+    attemptId: z.string().min(1),
+    slotId: PanelSlotIdSchema,
+    runtimeEntityId: PanelEntityIdSchema,
+    buildKey: z.string().optional(),
+    effectiveVersion: z.string().optional(),
+    hostConnectionId: z.string().optional(),
+    phase: z.enum(["pending", "loading", "booting", "ready", "failed", "stopped"]),
+    revision: z.number().int().nonnegative(),
+    failure: PanelAttemptFailureSchema.optional(),
+    stopReason: z.enum(["superseded", "retired", "unloaded", "host-lost"]).optional(),
+    reporter: z.enum(["coordinator", "build", "materialization", "renderer", "host"]),
+    updatedAt: z.number(),
+  })
+  .strict();
+
+export const AwaitPanelAttemptResultSchema: z.ZodType<AwaitPanelAttemptResult> =
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("report"), attempt: PanelAttemptSchema }).strict(),
+    z.object({ kind: z.literal("unknown-attempt"), ref: PanelAttemptRefSchema }).strict(),
+  ]);
+
+export const PanelSlotObservationSchema: z.ZodType<PanelSlotObservation> = z
+  .object({
+    attempt: PanelAttemptSchema.nullable(),
+    route: z
+      .object({
+        reachable: z.boolean(),
+        connectionId: z.string().optional(),
+        holderLabel: z.string().optional(),
+        platform: z.enum(["desktop", "headless", "mobile"]).optional(),
+        supportsCdp: z.boolean().optional(),
+        view: z.object({ url: z.string(), loading: z.boolean() }).strict().optional(),
+      })
+      .strict(),
+    build: z
+      .object({
+        state: z.enum(["building", "ready", "failed"]),
+        buildKey: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    version: z
+      .object({ epoch: z.string().min(1), counter: z.number().int().nonnegative() })
+      .strict(),
   })
   .strict();
 
@@ -149,13 +237,14 @@ export const PanelHostObservationSchema: z.ZodType<PanelHostObservation> = z.obj
   holderLabel: z.string().optional(),
   platform: z.enum(["desktop", "headless", "mobile"]).optional(),
   supportsInspection: z.boolean().optional(),
+  reachable: z.boolean().optional(),
   viewRevision: z.number().optional(),
   view: z.object({
     exists: z.boolean(),
     url: z.string().optional(),
     loading: z.boolean().optional(),
   }),
-  boot: PanelBootObservationSchema,
+  boot: PanelBootProbeResultSchema,
   failure: z
     .object({
       code: PanelFailureCodeSchema,
@@ -176,18 +265,10 @@ export const PanelObservationSchema: z.ZodType<PanelObservation> = z.object({
   requestedRef: z.string(),
   runtimeEntityId: z.string().nullable(),
   attemptId: z.string(),
+  attemptRef: PanelAttemptRefSchema,
   effectiveVersion: z.string().nullable(),
   buildKey: z.string().nullable(),
-  phase: z.enum([
-    "resolving",
-    "building",
-    "assigning-host",
-    "loading",
-    "booting",
-    "ready",
-    "failed",
-    "stopped",
-  ]),
+  phase: z.enum(["pending", "loading", "booting", "ready", "failed", "stopped"]),
   failure: PanelRuntimeFailureSchema.optional(),
   host: PanelHostObservationSchema.optional(),
   updatedAt: z.number(),

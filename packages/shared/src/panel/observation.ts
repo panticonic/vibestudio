@@ -2,15 +2,25 @@ import { RpcBoundaryError, rpcErrorDataOf } from "@vibestudio/rpc";
 
 export const PANEL_OPERATION_ERROR_CODE = "PANEL_OPERATION_FAILED";
 
-export type PanelRuntimePhase =
-  | "resolving"
-  | "building"
-  | "assigning-host"
-  | "loading"
-  | "booting"
-  | "ready"
-  | "failed"
-  | "stopped";
+export type AttemptPhase = "pending" | "loading" | "booting" | "ready" | "failed" | "stopped";
+export type PanelRuntimePhase = AttemptPhase;
+
+export type AttemptReporter = "coordinator" | "build" | "materialization" | "renderer" | "host";
+export type AttemptFailureStage =
+  | "build"
+  | "bundle-load"
+  | "config"
+  | "entry"
+  | "navigation"
+  | "renderer-crash"
+  | "boot-stall"
+  | "materialization";
+
+/** Renderer-side failure taxonomy carried in the boot record: the loader can
+ *  distinguish an incomplete host config, a bundle that failed to load, and
+ *  entry code that threw — the coordinator must not flatten these. */
+export type PanelBootFailureStage = "config" | "bundle-load" | "entry";
+export type StopReason = "superseded" | "retired" | "unloaded" | "host-lost";
 
 export type PanelFailureStage = "resolve" | "build" | "host" | "load" | "boot" | "runtime";
 
@@ -23,11 +33,10 @@ export type PanelFailureCode =
   | "build_identity_invalid"
   | "host_unavailable"
   | "lease_conflict"
-  | "parent_resolution_timeout"
   | "navigation_failed"
   | "asset_unavailable"
   | "entry_threw"
-  | "runtime_handshake_timeout"
+  | "boot_stalled"
   | "render_crashed"
   | "panel_not_found"
   | "unknown_failure";
@@ -55,7 +64,7 @@ export interface PanelRuntimeFailure {
 }
 
 export interface PanelBootObservation {
-  phase: "unavailable" | "loading" | "booting" | "ready" | "failed";
+  phase: "loading" | "booting" | "ready" | "failed";
   runtimeEntityId?: string | null;
   source?: string | null;
   contextId?: string | null;
@@ -64,7 +73,61 @@ export interface PanelBootObservation {
   message?: string;
   errorName?: string;
   stack?: string;
+  failureStage?: PanelBootFailureStage;
   updatedAt?: number;
+}
+
+/** Result of attempting to inspect a panel document's boot record. Probe
+ * unavailability is transport/inspection state, not a boot lifecycle phase. */
+export type PanelBootProbeResult =
+  | { kind: "observed"; observation: PanelBootObservation }
+  | { kind: "unavailable" };
+
+/** Opaque coordinator identity. Attributes such as entity/build are deliberately not identity. */
+export interface PanelAttemptRef {
+  epoch: string;
+  attemptId: string;
+}
+
+export interface PanelAttemptFailure {
+  stage: AttemptFailureStage;
+  code: PanelFailureCode;
+  message?: string;
+  stack?: string;
+  detail?: "no-progress" | "unobservable";
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface PanelAttempt extends PanelAttemptRef {
+  slotId: string;
+  runtimeEntityId: string;
+  buildKey?: string;
+  effectiveVersion?: string;
+  hostConnectionId?: string;
+  phase: AttemptPhase;
+  revision: number;
+  failure?: PanelAttemptFailure;
+  stopReason?: StopReason;
+  reporter: AttemptReporter;
+  updatedAt: number;
+}
+
+export type AwaitPanelAttemptResult =
+  | { kind: "report"; attempt: PanelAttempt }
+  | { kind: "unknown-attempt"; ref: PanelAttemptRef };
+
+export interface PanelSlotObservation {
+  attempt: PanelAttempt | null;
+  route: {
+    reachable: boolean;
+    connectionId?: string;
+    holderLabel?: string;
+    platform?: "desktop" | "headless" | "mobile";
+    supportsCdp?: boolean;
+    view?: { url: string; loading: boolean };
+  };
+  build?: { state: "building" | "ready" | "failed"; buildKey?: string };
+  version: { epoch: string; counter: number };
 }
 
 export interface PanelPageObservation {
@@ -72,7 +135,7 @@ export interface PanelPageObservation {
     url: string;
     loading: boolean;
   };
-  boot: PanelBootObservation;
+  boot: PanelBootProbeResult;
 }
 
 /**
@@ -91,13 +154,13 @@ export const PANEL_PAGE_OBSERVATION_EXPRESSION = `(() => {
     boot?.phase === "ready" ||
     boot?.phase === "failed"
       ? boot.phase
-      : "unavailable";
+      : null;
   return {
     view: {
       url: typeof globalThis.location?.href === "string" ? globalThis.location.href : "",
       loading: globalThis.document?.readyState === "loading",
     },
-    boot: {
+    boot: phase === null ? { kind: "unavailable" } : { kind: "observed", observation: {
       phase,
       runtimeEntityId:
         typeof boot?.runtimeEntityId === "string" ? boot.runtimeEntityId : null,
@@ -110,7 +173,13 @@ export const PANEL_PAGE_OBSERVATION_EXPRESSION = `(() => {
       message: typeof boot?.error?.message === "string" ? boot.error.message : undefined,
       errorName: typeof boot?.error?.name === "string" ? boot.error.name : undefined,
       stack: typeof boot?.error?.stack === "string" ? boot.error.stack : undefined,
-    },
+      failureStage:
+        boot?.failureStage === "config" ||
+        boot?.failureStage === "bundle-load" ||
+        boot?.failureStage === "entry"
+          ? boot.failureStage
+          : undefined,
+    }},
   };
 })()`;
 
@@ -119,21 +188,22 @@ export function parsePanelPageObservation(value: unknown): PanelPageObservation 
     throw new Error("Panel page observation is missing view or boot state");
   }
   const view = value["view"];
-  const boot = value["boot"];
-  if (!isRecord(view) || !isRecord(boot)) {
+  const bootProbe = value["boot"];
+  if (!isRecord(view) || !isRecord(bootProbe)) {
     throw new Error("Panel page observation is missing view or boot state");
   }
   if (typeof view["url"] !== "string" || typeof view["loading"] !== "boolean") {
     throw new Error("Panel page observation has invalid view state");
   }
+  if (bootProbe["kind"] === "unavailable") {
+    return { view: { url: view["url"], loading: view["loading"] }, boot: { kind: "unavailable" } };
+  }
+  const boot = bootProbe["observation"];
+  if (bootProbe["kind"] !== "observed" || !isRecord(boot)) {
+    throw new Error("Panel page observation has invalid boot probe result");
+  }
   const phase = boot["phase"];
-  if (
-    phase !== "unavailable" &&
-    phase !== "loading" &&
-    phase !== "booting" &&
-    phase !== "ready" &&
-    phase !== "failed"
-  ) {
+  if (phase !== "loading" && phase !== "booting" && phase !== "ready" && phase !== "failed") {
     throw new Error("Panel page observation has invalid boot phase");
   }
   return {
@@ -142,16 +212,24 @@ export function parsePanelPageObservation(value: unknown): PanelPageObservation 
       loading: view["loading"],
     },
     boot: {
-      phase,
-      ...optionalNullableString(boot, "runtimeEntityId"),
-      ...optionalNullableString(boot, "source"),
-      ...optionalNullableString(boot, "contextId"),
-      ...optionalNullableString(boot, "effectiveVersion"),
-      ...optionalNullableString(boot, "buildKey"),
-      ...optionalString(boot, "message"),
-      ...optionalString(boot, "errorName"),
-      ...optionalString(boot, "stack"),
-      ...(typeof boot["updatedAt"] === "number" ? { updatedAt: boot["updatedAt"] } : {}),
+      kind: "observed",
+      observation: {
+        phase,
+        ...optionalNullableString(boot, "runtimeEntityId"),
+        ...optionalNullableString(boot, "source"),
+        ...optionalNullableString(boot, "contextId"),
+        ...optionalNullableString(boot, "effectiveVersion"),
+        ...optionalNullableString(boot, "buildKey"),
+        ...optionalString(boot, "message"),
+        ...optionalString(boot, "errorName"),
+        ...optionalString(boot, "stack"),
+        ...(boot["failureStage"] === "config" ||
+        boot["failureStage"] === "bundle-load" ||
+        boot["failureStage"] === "entry"
+          ? { failureStage: boot["failureStage"] }
+          : {}),
+        ...(typeof boot["updatedAt"] === "number" ? { updatedAt: boot["updatedAt"] } : {}),
+      },
     },
   };
 }
@@ -160,6 +238,7 @@ export interface PanelHostObservation {
   holderLabel?: string;
   platform?: "desktop" | "headless" | "mobile";
   supportsInspection?: boolean;
+  reachable?: boolean;
   /** Monotonic host-local revision bumped whenever native panel views mutate. */
   viewRevision?: number;
   view: {
@@ -167,7 +246,7 @@ export interface PanelHostObservation {
     url?: string;
     loading?: boolean;
   };
-  boot: PanelBootObservation;
+  boot: PanelBootProbeResult;
   failure?: {
     code: PanelFailureCode;
     stage: PanelFailureStage;
@@ -186,6 +265,7 @@ export interface PanelObservation {
   requestedRef: string;
   runtimeEntityId: string | null;
   attemptId: string;
+  attemptRef: PanelAttemptRef;
   effectiveVersion: string | null;
   buildKey: string | null;
   phase: PanelRuntimePhase;
@@ -237,13 +317,6 @@ export interface PanelDiagnosticPacket {
   observation: PanelObservation;
   consoleHistory: PanelConsoleHistoryObservation;
   document?: PanelSnapshotObservation;
-}
-
-export function panelAttemptId(
-  runtimeEntityId: string | null | undefined,
-  buildKey: string | null | undefined
-): string {
-  return `${runtimeEntityId ?? "unassigned"}@${buildKey ?? "unbuilt"}`;
 }
 
 export function panelDiagnosticId(

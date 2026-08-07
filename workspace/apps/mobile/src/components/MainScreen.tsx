@@ -1694,7 +1694,10 @@ export function MainScreen() {
         .then((result) => {
           if (result === "reported" && hostConfig?.protocol === "http") {
             console.log(`[MainScreen] Reported panel boot for ${panelId}`, {
-              phase: observation.boot.phase,
+              phase:
+                observation.boot.kind === "observed"
+                  ? observation.boot.observation.phase
+                  : "probe-unavailable",
               runtimeEntityId,
               connectionId,
             });

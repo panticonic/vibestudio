@@ -293,6 +293,15 @@ export const evalRunStatusSchema = z
       .discriminatedUnion("kind", [
         z.object({ kind: z.literal("executing") }).strict(),
         z.object({ kind: z.literal("authority-pending"), request: z.unknown() }).strict(),
+        z
+          .object({
+            kind: z.literal("external-wait"),
+            operation: z.string().min(1),
+            resource: z.object({ kind: z.string().min(1), value: z.unknown() }).strict(),
+            targetId: z.string().min(1),
+            method: z.string().min(1),
+          })
+          .strict(),
         z.object({ kind: z.literal("cancelling") }).strict(),
       ])
       .optional(),

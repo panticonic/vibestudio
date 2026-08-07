@@ -33,6 +33,10 @@ import { evalExecutionRootsMethods } from "@vibestudio/service-schemas/evalExecu
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import { docsMethods } from "@vibestudio/service-schemas/docs";
+import {
+  externalWaitResource,
+  progressSemanticsForRpcMethod,
+} from "@vibestudio/service-schemas/progressSemantics";
 import { EVAL_AMBIENT_ONLY } from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
@@ -703,12 +707,21 @@ export class EvalDO extends DurableObjectBase {
       options?: RpcCallOptions
     ): Promise<T> => {
       const controls = input.runId ? this.runLeaseSuspensionControls.get(input.runId) : undefined;
+      const progressSemantics = progressSemanticsForRpcMethod(method);
+      const checkpoint =
+        progressSemantics?.kind === "external-wait"
+          ? {
+              stage: "external-wait",
+              operation: progressSemantics.operation,
+              resource: externalWaitResource(progressSemantics, args),
+              targetId,
+              method,
+            }
+          : { stage: "outbound-rpc", targetId, method };
       if (input.runId) {
         this.recordRunCheckpoint(input.runId, {
-          stage: "outbound-rpc",
+          ...checkpoint,
           state: "waiting",
-          targetId,
-          method,
         });
         controls?.pause("outbound-rpc");
       }
@@ -716,20 +729,16 @@ export class EvalDO extends DurableObjectBase {
         const result = await base.call<T>(targetId, method, args, mergeOptions(options));
         if (input.runId) {
           this.completeRunCheckpoint(input.runId, {
-            stage: "outbound-rpc",
+            ...checkpoint,
             state: "completed",
-            targetId,
-            method,
           });
         }
         return result;
       } catch (error) {
         if (input.runId) {
           this.completeRunCheckpoint(input.runId, {
-            stage: "outbound-rpc",
+            ...checkpoint,
             state: "failed",
-            targetId,
-            method,
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1669,6 +1678,13 @@ export class EvalDO extends DurableObjectBase {
     activity?:
       | { kind: "executing" }
       | { kind: "authority-pending"; request: unknown }
+      | {
+          kind: "external-wait";
+          operation: string;
+          resource: { kind: string; value: unknown };
+          targetId: string;
+          method: string;
+        }
       | { kind: "cancelling" };
   } {
     const row = this.sql
@@ -1701,7 +1717,23 @@ export class EvalDO extends DurableObjectBase {
                 kind: "authority-pending" as const,
                 request: pendingAuthority,
               } as const)
-            : ({ kind: "executing" } as const)
+            : checkpoint &&
+                checkpoint.stage === "external-wait" &&
+                checkpoint.state === "waiting" &&
+                typeof checkpoint.operation === "string" &&
+                checkpoint.resource &&
+                typeof checkpoint.resource === "object" &&
+                typeof checkpoint.resource.kind === "string" &&
+                typeof checkpoint.targetId === "string" &&
+                typeof checkpoint.method === "string"
+              ? ({
+                  kind: "external-wait" as const,
+                  operation: checkpoint.operation,
+                  resource: checkpoint.resource,
+                  targetId: checkpoint.targetId,
+                  method: checkpoint.method,
+                } as const)
+              : ({ kind: "executing" } as const)
           : undefined;
     return {
       status,
