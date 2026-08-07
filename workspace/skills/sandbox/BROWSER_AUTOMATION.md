@@ -187,6 +187,28 @@ const page = await browser.cdp.page();
 internally; do not import that package directly for ordinary page work. There is
 no second page-acquisition API.
 
+### Performance profiling
+
+Profile one exact reload or interaction with the same page used for automation:
+
+```ts
+const report = await page.profile(
+  async () => {
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("dialog", { name: "Settings" }).waitFor();
+  },
+  { label: "open settings" }
+);
+```
+
+The bounded JSON report includes browser CPU/task/layout deltas, heap, page
+timings and long tasks, network transfer/cache/failures, and optional precise
+JavaScript coverage. The callback defines completion; await a semantic UI or
+network condition instead of sleeping. Use `disableCache: true` for a distinct
+cold HTTP-cache run. Use `javascriptCoverage: true` only for a separate
+attribution run because coverage adds overhead. Read
+[`performance`](../performance/SKILL.md) for the complete cross-layer workflow.
+
 Historical console diagnostics are not a CDP page feature. CDP console events
 only include messages after the client connects. For "something already went
 wrong in this panel" debugging, use the host-captured history:

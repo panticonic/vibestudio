@@ -1,0 +1,4 @@
+interface:
+  display_name: "Performance Profiling"
+  short_description: "Profile Vibestudio panels and common code paths"
+  default_prompt: "Use $performance to profile this Vibestudio workflow and implement behavior-preserving optimizations for measured bottlenecks."

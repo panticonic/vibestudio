@@ -10,6 +10,19 @@
 // is always available for protocol-level work those cases would need.
 
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+import { runCdpProfile } from "./profile";
+import type { CdpProfileOptions, CdpProfileReport } from "./profile";
+
+export type {
+  CdpProfileCoverage,
+  CdpProfileCoverageScript,
+  CdpProfileNetworkMetrics,
+  CdpProfileNetworkRequest,
+  CdpProfileOptions,
+  CdpProfilePageMetrics,
+  CdpProfileReport,
+  CdpProfileRuntimeMetrics,
+} from "./profile";
 
 type CdpResponse = {
   id?: number;
@@ -111,12 +124,13 @@ function compileLocatorSelector(selector: string): LocatorStep {
   try {
     value = JSON.parse(source);
   } catch (cause) {
-    throw new TypeError(
+    const error = new TypeError(
       `Invalid text locator ${JSON.stringify(
         selector
-      )}: quoted text must be a valid JSON string, for example locator('text="Save changes"').`,
-      { cause }
+      )}: quoted text must be a valid JSON string, for example locator('text="Save changes"').`
     );
+    (error as Error & { cause?: unknown }).cause = cause;
+    throw error;
   }
   if (typeof value !== "string") {
     throw new TypeError(
@@ -807,6 +821,7 @@ class WorkerCdpPage {
   private readonly consoleBuffer: CdpConsoleEvent[] = [];
   private readonly pressedModifiers = new Set<string>();
   private retainedElementSequence = 0;
+  private profileActive = false;
   private readonly retainedElementOwner = `${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2)}`;
@@ -1001,6 +1016,31 @@ class WorkerCdpPage {
 
   viewportSize(): CdpViewportSize | null {
     return this.currentViewportSize ? { ...this.currentViewportSize } : null;
+  }
+
+  /**
+   * Measure one bounded reload or interaction using browser-native CDP metrics.
+   * The callback owns readiness/settling so the report describes the exact
+   * user-visible boundary chosen by the caller.
+   */
+  async profile(
+    action: () => void | Promise<void>,
+    options?: CdpProfileOptions
+  ): Promise<CdpProfileReport> {
+    if (this.profileActive) {
+      throw new Error("A profiling operation is already active on this page");
+    }
+    this.profileActive = true;
+    try {
+      return await runCdpProfile({
+        page: this,
+        transport: this.connection,
+        action,
+        options,
+      });
+    } finally {
+      this.profileActive = false;
+    }
   }
 
   // ---- Evaluate ---------------------------------------------------------

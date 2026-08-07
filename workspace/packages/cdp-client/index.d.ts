@@ -21,6 +21,100 @@ export interface CdpScreenshotOptions {
   fullPage?: boolean;
 }
 
+export interface CdpProfileOptions {
+  /** Human-readable operation name copied into the report. */
+  label?: string;
+  /** Disable the Chromium HTTP cache for this operation, then restore it. */
+  disableCache?: boolean;
+  /** Collect precise JS coverage. This adds profiler overhead and is off by default. */
+  javascriptCoverage?: boolean;
+  /** Number of slow network requests retained in the bounded report (default 20, max 100). */
+  maxNetworkRecords?: number;
+}
+
+export interface CdpProfileRuntimeMetrics {
+  taskDurationMs: number;
+  scriptDurationMs: number;
+  layoutDurationMs: number;
+  styleRecalcDurationMs: number;
+  layoutCount: number;
+  styleRecalcCount: number;
+  jsHeapUsedBytes: number;
+  jsHeapDeltaBytes: number;
+  nodes: number;
+  documents: number;
+}
+
+export interface CdpProfilePageMetrics {
+  navigation?: {
+    ttfbMs: number;
+    responseStartMs: number;
+    domContentLoadedMs: number;
+    loadMs: number;
+  };
+  firstContentfulPaintMs?: number;
+  largestContentfulPaintMs?: number;
+  cumulativeLayoutShift: number;
+  layoutShiftCount: number;
+  interactionLatencyMs?: number;
+  longTasks: {
+    count: number;
+    totalDurationMs: number;
+    maxDurationMs: number;
+  };
+}
+
+export interface CdpProfileNetworkRequest {
+  url: string;
+  method: string;
+  type: string;
+  status?: number;
+  mimeType?: string;
+  durationMs?: number;
+  transferBytes: number;
+  fromCache: boolean;
+  failedReason?: string;
+}
+
+export interface CdpProfileNetworkMetrics {
+  requestCount: number;
+  failedCount: number;
+  cacheHits: number;
+  transferBytes: number;
+  resourceEncodedBytes: number;
+  resourceDecodedBytes: number;
+  byType: Record<string, { requestCount: number; transferBytes: number }>;
+  slowest: CdpProfileNetworkRequest[];
+}
+
+export interface CdpProfileCoverageScript {
+  url: string;
+  totalBytes: number;
+  usedBytes: number;
+  unusedBytes: number;
+}
+
+export interface CdpProfileCoverage {
+  scriptCount: number;
+  totalBytes: number;
+  usedBytes: number;
+  unusedBytes: number;
+  usedPercent: number;
+  largestUnused: CdpProfileCoverageScript[];
+}
+
+export interface CdpProfileReport {
+  version: 1;
+  label?: string;
+  url: string;
+  startedAt: string;
+  elapsedMs: number;
+  runtime: CdpProfileRuntimeMetrics;
+  page: CdpProfilePageMetrics;
+  network: CdpProfileNetworkMetrics;
+  coverage?: CdpProfileCoverage;
+}
+
 export interface CdpConsoleEvent {
   type: string;
   text: string;
@@ -143,6 +237,14 @@ export interface CdpPage {
   setViewportSize(viewportSize: CdpViewportSize): Promise<void>;
   /** Current configured or observed CSS viewport. */
   viewportSize(): CdpViewportSize | null;
+  /**
+   * Profile one exact reload or interaction. Await readiness/settling inside
+   * the callback so the bounded JSON report matches the intended UX boundary.
+   */
+  profile(
+    action: () => void | Promise<void>,
+    options?: CdpProfileOptions
+  ): Promise<CdpProfileReport>;
   evaluate(pageFunction: string | ((arg?: unknown) => unknown), arg?: unknown): Promise<unknown>;
   /**
    * Find by CSS or `text=...`. A quoted JSON string is exact text; unquoted

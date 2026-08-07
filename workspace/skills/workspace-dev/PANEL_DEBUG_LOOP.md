@@ -123,6 +123,11 @@ page. Actions auto-wait, so do not add sleeps. Finish by reading console events,
 capturing the final screenshot, closing the page client, and returning compact
 evidence.
 
+When the task includes performance, read `skills/performance/SKILL.md` and wrap
+the exact interaction plus its real completion condition with `page.profile()`.
+Run precise JS coverage separately from the latency measurement because
+coverage changes execution cost.
+
 ## 7. Commit and publish once
 
 Read `skills/vibestudio-vcs/SKILL.md`, reobserve `vcs.status`, commit the complete

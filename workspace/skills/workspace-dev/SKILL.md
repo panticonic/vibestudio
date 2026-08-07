@@ -50,6 +50,7 @@ Agents read skills by the path shown in the generated skill index, for example
 | [PANEL_API.md](PANEL_API.md)               | Runtime panel API reference                                                                                                                                      |
 | [WORKERS.md](WORKERS.md)                   | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
 | [capabilities](../capabilities/SKILL.md)   | Explicit requests and provided capabilities, dynamic workspace service discovery, host grants, receiver-owned acquisition, and content provenance                |
+| [performance](../performance/SKILL.md)     | Bounded panel/app profiling plus build, worker, startup, and optimization workflow                                                                               |
 | [RPC.md](RPC.md)                           | Typed parent-child contracts                                                                                                                                     |
 | [BROWSER.md](BROWSER.md)                   | Browser automation (Playwright/CDP)                                                                                                                              |
 | [TOOLS.md](TOOLS.md)                       | Agent tools reference                                                                                                                                            |

@@ -9,6 +9,12 @@ Durable Objects / server-side `eval` alike.
 This is the **single browser-automation surface** in the workspace. There is no
 "full Playwright" package — do not install any `playwright*` dependency.
 
+The page API also provides bounded, agent-readable performance profiling. Wrap
+one exact interaction or reload with `page.profile(action, options)` to collect
+Chromium runtime, page, network, and optional precise JavaScript-coverage
+evidence without exporting an unbounded trace. Await the workflow's actual
+completion condition inside `action`; coverage and cold-cache modes are opt-in.
+
 ## Getting a page
 
 From any panel handle (panels, workers, server-side eval — anywhere you hold a
