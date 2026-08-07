@@ -7,7 +7,11 @@ const generation = "1".repeat(32);
 
 function execution(
   scenario: string,
-  operations: Array<{ service: "development" | "vcs" | "attachedHosts"; method: string; result: unknown }>,
+  operations: Array<{
+    service: "development" | "vcs" | "attachedHosts";
+    method: string;
+    result: unknown;
+  }>,
   prerequisite = { available: true, reason: null as string | null }
 ): TestExecutionResult {
   return {
@@ -107,6 +111,11 @@ function validate(name: string, value: unknown) {
 }
 
 describe("self-development semantic validators", () => {
+  it("classifies every receipt-driven scenario as harness validation", () => {
+    expect(selfDevelopmentTests).not.toHaveLength(0);
+    expect(selfDevelopmentTests.every((test) => test.validation === "harness")).toBe(true);
+  });
+
   it("binds a current-host client to typed ready attestation", () => {
     const run = {
       state: "ready",
@@ -123,7 +132,9 @@ describe("self-development semantic validators", () => {
       },
     };
     expect(validate("self-development-current-client", run).passed).toBe(true);
-    expect(validate("self-development-current-client", { ...run, client: null }).passed).toBe(false);
+    expect(validate("self-development-current-client", { ...run, client: null }).passed).toBe(
+      false
+    );
   });
 
   it("joins isolated readiness and route to one generation", () => {
@@ -362,16 +373,14 @@ describe("self-development semantic validators", () => {
     )!;
     expect(
       test.validate(
-        execution(
-          test.name,
-          [],
-          { available: false, reason: "no reviewed disposable failure injector" }
-        )
+        execution(test.name, [], {
+          available: false,
+          reason: "no reviewed disposable failure injector",
+        })
       )
     ).toEqual({
       passed: false,
-      reason:
-        "Self-development prerequisite unavailable: no reviewed disposable failure injector",
+      reason: "Self-development prerequisite unavailable: no reviewed disposable failure injector",
     });
   });
 

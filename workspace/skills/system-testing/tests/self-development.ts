@@ -1,8 +1,4 @@
-import type {
-  TestCase,
-  TestExecutionResult,
-  TestOrchestrationContext,
-} from "../types.js";
+import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "../types.js";
 import { walkRecords } from "./_scenario-evidence.js";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -191,16 +187,13 @@ function validateNativeCheckpoint(result: TestExecutionResult) {
   const tools = Array.isArray(availability?.result) ? availability.result : [];
   const session = checked.rows.find(
     (row) =>
-      row["mode"] === "native-tool" &&
-      object(object(row["native"])?.["lastCheckpoint"]) !== null
+      row["mode"] === "native-tool" && object(object(row["native"])?.["lastCheckpoint"]) !== null
   );
   const native = object(session?.["native"]);
   const checkpoint = object(native?.["lastCheckpoint"]);
   const imported = object(checkpoint?.["imported"]);
   const repository = object(session?.["repository"]);
-  const selected = tools.find(
-    (tool) => object(tool)?.["toolId"] === native?.["toolId"]
-  );
+  const selected = tools.find((tool) => object(tool)?.["toolId"] === native?.["toolId"]);
   return object(selected)?.["available"] === true &&
     object(selected)?.["interactiveTerminal"] === true &&
     session &&
@@ -234,8 +227,7 @@ function validateBuildFailureRecovery(result: TestExecutionResult) {
       row["state"] === "failed" &&
       row["commitPoint"] === "snapshot-retained" &&
       object(row["repair"])?.["retryable"] === true &&
-      object(object(row["repair"])?.["primaryError"])?.["code"] ===
-        "ESYSTEMTEST_INJECTED_BUILD"
+      object(object(row["repair"])?.["primaryError"])?.["code"] === "ESYSTEMTEST_INJECTED_BUILD"
   );
   const recovered = checked.rows.find(
     (row) =>
@@ -280,7 +272,9 @@ function validateBuildFailureRecovery(result: TestExecutionResult) {
 function validateChildEval(result: TestExecutionResult) {
   const checked = captured(result, "self-development-child-eval");
   if (!checked.passed) return checked;
-  const attachedRun = checked.rows.find((row) => object(row["attachedHost"])?.["state"] === "ready");
+  const attachedRun = checked.rows.find(
+    (row) => object(row["attachedHost"])?.["state"] === "ready"
+  );
   const route = object(attachedRun?.["attachedHost"]);
   const instance = object(attachedRun?.["instance"]);
   const started = checked.receipt.operations.find(
@@ -318,14 +312,15 @@ function validateChildEval(result: TestExecutionResult) {
 function validateChildApproval(result: TestExecutionResult) {
   const checked = captured(result, "self-development-child-approval");
   if (!checked.passed) return checked;
-  const attachedRun = checked.rows.find((row) => object(row["attachedHost"])?.["state"] === "ready");
+  const attachedRun = checked.rows.find(
+    (row) => object(row["attachedHost"])?.["state"] === "ready"
+  );
   const route = object(attachedRun?.["attachedHost"]);
   const invocation = checked.receipt.operations.find(
     ({ service, method }) => service === "attachedHosts" && method === "permissions.list"
   );
   const auditOperation = checked.receipt.operations.find(
-    ({ service, method }) =>
-      service === "attachedHosts" && method === "listApprovalAudit.after"
+    ({ service, method }) => service === "attachedHosts" && method === "listApprovalAudit.after"
   );
   const auditPage = object(auditOperation?.result);
   const events = Array.isArray(auditPage?.["events"]) ? auditPage["events"] : [];
@@ -437,7 +432,8 @@ async function repositoryAndRecipe(
 ) {
   const repository = await context.runner.resolveSelfDevelopmentRepository();
   operation(receipt, "vcs", "resolveRepository", repository);
-  const recipes = await context.runner.callSelfDevelopment<Record<string, unknown>[]>("listRecipes");
+  const recipes =
+    await context.runner.callSelfDevelopment<Record<string, unknown>[]>("listRecipes");
   operation(receipt, "development", "listRecipes", recipes);
   const recipe = recipes.find((candidate) => object(candidate["target"])?.["kind"] === targetKind);
   if (!recipe || typeof recipe["recipeId"] !== "string") {
@@ -624,9 +620,8 @@ async function selectClientExecutor(
   context: TestOrchestrationContext,
   receipt: SelfDevelopmentReceipt
 ): Promise<{ executorId: string } | null> {
-  const executors = await context.runner.callSelfDevelopment<Record<string, unknown>[]>(
-    "listClientExecutors"
-  );
+  const executors =
+    await context.runner.callSelfDevelopment<Record<string, unknown>[]>("listClientExecutors");
   operation(receipt, "development", "listClientExecutors", executors);
   const selected = executors.find((candidate) => candidate["current"] === true) ?? executors[0];
   if (!selected || typeof selected["executorId"] !== "string") {
@@ -675,9 +670,8 @@ async function nativeCheckpoint(context: TestOrchestrationContext) {
   return orchestrate("self-development-native-checkpoint", context, async (receipt) => {
     const repository = await context.runner.resolveSelfDevelopmentRepository();
     operation(receipt, "vcs", "resolveRepository", repository);
-    const tools = await context.runner.callSelfDevelopment<Record<string, unknown>[]>(
-      "listNativeTools"
-    );
+    const tools =
+      await context.runner.callSelfDevelopment<Record<string, unknown>[]>("listNativeTools");
     operation(receipt, "development", "listNativeTools", tools);
     const tool = tools.find(
       (candidate) => candidate["available"] === true && candidate["interactiveTerminal"] === true
@@ -706,8 +700,7 @@ async function nativeCheckpoint(context: TestOrchestrationContext) {
       await context.runner.callSelfDevelopment("writeNativeTerminal", {
         sessionId,
         writeId: `system-test-native-write-${crypto.randomUUID()}`,
-        data:
-          "Create a new file named .vibestudio-system-test/native-checkpoint.txt containing exactly native checkpoint probe, then stop and wait. Do not commit or publish it.\n",
+        data: "Create a new file named .vibestudio-system-test/native-checkpoint.txt containing exactly native checkpoint probe, then stop and wait. Do not commit or publish it.\n",
       });
       operation(receipt, "development", "writeNativeTerminal", { sessionId, accepted: true });
       const deadline = Date.now() + Math.min(context.remainingTimeMs() ?? 120_000, 120_000);
@@ -745,60 +738,51 @@ async function nativeCheckpoint(context: TestOrchestrationContext) {
 }
 
 async function buildFailureRecovery(context: TestOrchestrationContext) {
-  return orchestrate(
-    "self-development-build-failure-recovery",
-    context,
-    async (receipt) => {
-      const setup = await repositoryAndRecipe(context, receipt, "build-only");
-      if (!setup) return;
-      const session = await openSemantic(context, receipt, setup.repository.repositoryId);
-      if (!session) return;
-      const sessionId = String(session["sessionId"]);
-      const runId = `system-test-development-recovery-${crypto.randomUUID()}`;
-      let latest: Record<string, unknown> | null = null;
-      try {
-        const armed = await context.runner.callSelfDevelopment(
-          "faultFailBuildAfterSnapshotRetained",
-          {
-            sessionId,
-            runId,
-            phase: "after-snapshot-retained",
-          }
-        );
-        operation(
-          receipt,
-          "development",
-          "faultFailBuildAfterSnapshotRetained",
-          armed
-        );
-        const started = await context.runner.callSelfDevelopment("start", {
+  return orchestrate("self-development-build-failure-recovery", context, async (receipt) => {
+    const setup = await repositoryAndRecipe(context, receipt, "build-only");
+    if (!setup) return;
+    const session = await openSemantic(context, receipt, setup.repository.repositoryId);
+    if (!session) return;
+    const sessionId = String(session["sessionId"]);
+    const runId = `system-test-development-recovery-${crypto.randomUUID()}`;
+    let latest: Record<string, unknown> | null = null;
+    try {
+      const armed = await context.runner.callSelfDevelopment(
+        "faultFailBuildAfterSnapshotRetained",
+        {
           sessionId,
           runId,
-          recipeId: setup.recipe["recipeId"],
-          target: { kind: "build-only" },
-        });
-        operation(receipt, "development", "start", started);
-        latest = await waitForRun(context, receipt, runId, "injected build failure");
-        if (latest["state"] !== "failed") {
-          throw new Error("Injected retained-snapshot build did not fail");
+          phase: "after-snapshot-retained",
         }
-        const events = await context.runner.callSelfDevelopment("events", {
-          runId,
-          after: 0,
-          limit: 200,
-        });
-        operation(receipt, "development", "events", events);
-        const retried = await context.runner.callSelfDevelopment("retry", {
-          runId,
-          idempotencyKey: `system-test-development-retry-${crypto.randomUUID()}`,
-        });
-        operation(receipt, "development", "retry", retried);
-        latest = await waitForRun(context, receipt, runId, "same-run retry");
-      } finally {
-        await stopAndClose(context, receipt, latest, sessionId);
+      );
+      operation(receipt, "development", "faultFailBuildAfterSnapshotRetained", armed);
+      const started = await context.runner.callSelfDevelopment("start", {
+        sessionId,
+        runId,
+        recipeId: setup.recipe["recipeId"],
+        target: { kind: "build-only" },
+      });
+      operation(receipt, "development", "start", started);
+      latest = await waitForRun(context, receipt, runId, "injected build failure");
+      if (latest["state"] !== "failed") {
+        throw new Error("Injected retained-snapshot build did not fail");
       }
+      const events = await context.runner.callSelfDevelopment("events", {
+        runId,
+        after: 0,
+        limit: 200,
+      });
+      operation(receipt, "development", "events", events);
+      const retried = await context.runner.callSelfDevelopment("retry", {
+        runId,
+        idempotencyKey: `system-test-development-retry-${crypto.randomUUID()}`,
+      });
+      operation(receipt, "development", "retry", retried);
+      latest = await waitForRun(context, receipt, runId, "same-run retry");
+    } finally {
+      await stopAndClose(context, receipt, latest, sessionId);
     }
-  );
+  });
 }
 
 async function childEval(context: TestOrchestrationContext) {
@@ -904,6 +888,7 @@ export const selfDevelopmentTests: TestCase[] = [
     authorityPolicy: DEVELOPMENT_AUTHORITY,
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,
+    validation: "harness",
     orchestrate: currentClient,
     validate: validateCurrentClient,
   },
@@ -914,6 +899,7 @@ export const selfDevelopmentTests: TestCase[] = [
     authorityPolicy: DEVELOPMENT_AUTHORITY,
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,
+    validation: "harness",
     orchestrate: (context) => isolatedHost("self-development-isolated-host", context),
     validate: validateIsolatedHost,
   },
@@ -924,6 +910,7 @@ export const selfDevelopmentTests: TestCase[] = [
     authorityPolicy: DEVELOPMENT_AUTHORITY,
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,
+    validation: "harness",
     orchestrate: dirtySemanticState,
     validate: validateDirtySemanticState,
   },
@@ -934,6 +921,7 @@ export const selfDevelopmentTests: TestCase[] = [
     authorityPolicy: DEVELOPMENT_AUTHORITY,
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,
+    validation: "harness",
     orchestrate: nativeCheckpoint,
     validate: validateNativeCheckpoint,
   },
@@ -944,6 +932,7 @@ export const selfDevelopmentTests: TestCase[] = [
     authorityPolicy: DEVELOPMENT_AUTHORITY,
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,
+    validation: "harness",
     orchestrate: buildFailureRecovery,
     validate: validateBuildFailureRecovery,
   },
@@ -954,6 +943,7 @@ export const selfDevelopmentTests: TestCase[] = [
     authorityPolicy: DEVELOPMENT_AUTHORITY,
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,
+    validation: "harness",
     orchestrate: childEval,
     validate: validateChildEval,
   },
@@ -975,6 +965,7 @@ export const selfDevelopmentTests: TestCase[] = [
     },
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,
+    validation: "harness",
     orchestrate: childApproval,
     validate: validateChildApproval,
   },
@@ -985,6 +976,7 @@ export const selfDevelopmentTests: TestCase[] = [
     authorityPolicy: DEVELOPMENT_AUTHORITY,
     resources: SHARED_RESOURCE,
     prompt: HARNESS_PROMPT,
+    validation: "harness",
     orchestrate: ownedCleanup,
     validate: validateOwnedCleanup,
   },
