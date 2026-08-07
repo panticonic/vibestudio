@@ -117,7 +117,13 @@ export class DevelopmentDO extends DurableObjectBase {
       parentContextId: string;
       parentWorkingHead: DevelopmentSession["basis"]["parentWorkingHead"];
       childBaseState: DevelopmentSession["basis"]["childBaseState"];
-    }>("main", "runtime.forkSemanticContext", [{ targetContextId }]);
+    }>("main", "runtime.forkSemanticContext", [
+      {
+        ownerRuntimeId: owner.runtimeId,
+        parentContextId,
+        targetContextId,
+      },
+    ]);
     const childRepository = await this.resolveRepository(context.contextId, input.repositoryId);
     if (!childRepository || childRepository.repoPath !== parentRepository.repoPath) {
       await this.rpc.call("main", "runtime.dropSemanticContext", [

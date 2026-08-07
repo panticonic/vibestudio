@@ -61,6 +61,13 @@ describe("DevelopmentDO", () => {
         return { kind: "durable-object", targetId: workspaceSource };
       }
       if (target === "main" && method === "runtime.forkSemanticContext") {
+        expect(args).toEqual([
+          {
+            ownerRuntimeId: "panel:development",
+            parentContextId: "context:parent",
+            targetContextId: expect.stringMatching(/^ctx-development-/),
+          },
+        ]);
         return {
           contextId: "context:child",
           parentContextId: "context:parent",

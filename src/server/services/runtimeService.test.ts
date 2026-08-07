@@ -607,8 +607,19 @@ describe("runtimeService.forkSemanticContext", () => {
       cleanupComplete: true,
     });
 
-    const first = await internal.forkSemanticContext(caller, "ctx-development-session-1");
-    const second = await internal.forkSemanticContext(caller, "ctx-development-session-1");
+    const input = {
+      ownerRuntimeId: caller.runtime.id,
+      parentContextId: "ctx-parent",
+      targetContextId: "ctx-development-session-1",
+    };
+    const first = await internal.forkSemanticContext(input);
+    const second = await internal.forkSemanticContext(input);
+    await expect(
+      internal.forkSemanticContext({
+        ...input,
+        ownerRuntimeId: "panel:other",
+      })
+    ).rejects.toThrow(/does not own semantic context ctx-parent/);
 
     expect(first).toMatchObject({
       parentContextId: "ctx-parent",
@@ -617,6 +628,7 @@ describe("runtimeService.forkSemanticContext", () => {
     });
     expect(second.contextId).toBe(first.contextId);
     expect(forkContext).toHaveBeenCalledWith("ctx-parent", first.contextId);
+    expect(forkContext).toHaveBeenCalledTimes(2);
     expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
     expect(cloneDurableStorage).not.toHaveBeenCalled();
     const edges = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [

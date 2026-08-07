@@ -183,10 +183,11 @@ export interface RuntimeServiceInternal {
    * session. It intentionally does not create entities, clone DO storage, or
    * materialize a host projection.
    */
-  forkSemanticContext(
-    caller: VerifiedCaller,
-    targetContextId: string
-  ): Promise<{
+  forkSemanticContext(input: {
+    ownerRuntimeId: string;
+    parentContextId: string;
+    targetContextId: string;
+  }): Promise<{
     contextId: string;
     parentContextId: string;
     parentWorkingHead: VcsStateNodeRef;
@@ -1644,23 +1645,27 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return { contextId };
   }
 
-  async function forkSemanticContext(
-    caller: VerifiedCaller,
-    targetContextId: string
-  ): Promise<{
+  async function forkSemanticContext(input: {
+    ownerRuntimeId: string;
+    parentContextId: string;
+    targetContextId: string;
+  }): Promise<{
     contextId: string;
     parentContextId: string;
     parentWorkingHead: VcsStateNodeRef;
     childBaseState: VcsStateNodeRef;
   }> {
-    const parentContextId = await store.resolveContext(caller.runtime.id);
-    if (!parentContextId) {
+    const ownedContextId = await store.resolveContext(input.ownerRuntimeId);
+    if (ownedContextId !== input.parentContextId) {
       throw Object.assign(
-        new Error(`Development session caller ${caller.runtime.id} has no semantic context`),
-        { code: "ENOENT" }
+        new Error(
+          `Development session owner ${input.ownerRuntimeId} does not own semantic context ${input.parentContextId}`
+        ),
+        { code: "EIDENTITYDRIFT" }
       );
     }
-    const contextId = targetContextId;
+    const parentContextId = input.parentContextId;
+    const contextId = input.targetContextId;
     const parentWorkingHead = await deps.semanticContexts.resolveWorkingState(parentContextId);
     // Semantic state only: do not create a projection folder and do not touch
     // entity/DO state. forkContext is valid even when the parent is empty.
@@ -1669,7 +1674,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       contextId,
       ownerContextId: parentContextId,
       kind: "lifecycle",
-      ownerEntityId: caller.runtime.id,
+      ownerEntityId: input.ownerRuntimeId,
     });
     await deps.onContextCreated?.({ contextId, ownerContextId: parentContextId });
     const childBaseState = await deps.semanticContexts.resolveWorkingState(contextId);
@@ -1909,8 +1914,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       destroyContext: async (ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });
       },
-      forkSemanticContext: (ctx, [{ targetContextId }]) =>
-        forkSemanticContext(ctx.caller, targetContextId),
+      forkSemanticContext: (_ctx, [input]) => forkSemanticContext(input),
       dropSemanticContext: async (_ctx, [{ contextId }]) => {
         await dropSemanticContext(contextId);
       },

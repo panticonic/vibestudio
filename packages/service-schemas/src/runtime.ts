@@ -997,7 +997,7 @@ export const runtimeMethods = defineServiceMethods({
         "Creates one exact semantic-only child and records its generic lifecycle ownership without cloning entities or Durable Object state",
     },
     description:
-      "Fork the caller runtime's semantic context into one exact owned child context without materializing a host checkout.",
+      "Fork one runtime's exact semantic context into one owned child context without materializing a host checkout.",
     presentation: {
       title: "Fork a semantic workspace",
       action: "fork a semantic workspace",
@@ -1005,7 +1005,15 @@ export const runtimeMethods = defineServiceMethods({
       group: "runtime",
       authorityCategory: { domain: "files", verb: "act" },
     },
-    args: z.tuple([z.object({ targetContextId: z.string().min(1) }).strict()]),
+    args: z.tuple([
+      z
+        .object({
+          ownerRuntimeId: z.string().min(1),
+          parentContextId: z.string().min(1),
+          targetContextId: z.string().min(1),
+        })
+        .strict(),
+    ]),
     returns: z
       .object({
         contextId: z.string().min(1),
