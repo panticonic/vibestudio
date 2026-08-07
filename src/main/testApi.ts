@@ -109,8 +109,11 @@ export interface TestApi {
   /** Reload a panel in place */
   reloadPanel(id: string): Promise<PanelLifecycleResult>;
 
+  /** Force a rebuild of a panel while preserving its stable slot. */
+  rebuildPanel(id: string): Promise<PanelLifecycleResult>;
+
   /** Read all terminal-readiness signals for a panel. */
-  getPanelReadiness(panelId: string): PanelReadinessSnapshot;
+  getPanelReadiness(panelId: string): Promise<PanelReadinessSnapshot>;
 
   /** Main-process failures captured since the last ledger clear. */
   readMainProcessErrors(): MainProcessErrorRecord[];
@@ -303,36 +306,25 @@ export function setupTestApi(
       return panelOrchestrator.reloadPanel(id);
     },
 
-    getPanelReadiness(panelId): PanelReadinessSnapshot {
+    async rebuildPanel(id) {
+      return panelOrchestrator.rebuildPanel(id);
+    },
+
+    async getPanelReadiness(panelId): Promise<PanelReadinessSnapshot> {
       const panel = panelRegistry.getPanel(panelId);
-      const wc = panelView?.getWebContents(panelId) ?? null;
-      const viewExists = !!wc && !wc.isDestroyed();
-      const artifacts = panel?.artifacts;
       const nativeSlotBound =
         panelView
           ?.getViewManager()
           .getNativePanelSlotDebugInfo()
           .some((slot) => slot.panelId === panelId) ?? false;
-      const url = viewExists ? wc.getURL() : null;
-      const isLoading = viewExists ? wc.isLoading() : null;
-      const buildState = artifacts?.buildState ?? null;
-      const htmlPath = artifacts?.htmlPath ?? null;
-      const error = artifacts?.error ?? null;
-      const viewFailure = artifacts?.viewFailure?.message ?? null;
+      const observation = (await panelOrchestrator.callServer("panelRuntime", "observeSlot", [
+        panelId,
+      ])) as import("@vibestudio/shared/panel/observation").PanelSlotObservation;
       return panelReadinessSnapshot({
         panelId,
         source: panel ? getPanelSource(panel) : null,
-        runtimeEntityId: panel?.runtimeEntityId ?? null,
-        view: { exists: viewExists, url, isLoading },
-        artifacts: {
-          buildState,
-          htmlPath,
-          hostedRuntimeEntityId: artifacts?.hostedRuntimeEntityId ?? null,
-          error,
-          viewFailure,
-        },
-        runtime: panel?.state?.runtime ?? null,
         nativeSlotBound,
+        observation,
       });
     },
 

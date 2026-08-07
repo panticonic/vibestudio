@@ -226,21 +226,46 @@ function makeContext(callerKind: string | null = "shell", callerId = "shell") {
           },
         };
       }
-      if (method === "panelRuntime.ensureSlot") return { status: "assigned", lease: null };
+      if (method === "panelRuntime.ensureSlot") {
+        const panelId = String(args[0]);
+        const runtimeEntityId = String(args[1]);
+        return {
+          status: "assigned",
+          lease: null,
+          attempt: {
+            epoch: "test",
+            attemptId: `attempt:${runtimeEntityId}`,
+            slotId: panelId,
+            runtimeEntityId,
+            phase: "ready",
+            revision: 1,
+            reporter: "renderer",
+            updatedAt: 1,
+          },
+        };
+      }
       if (method === "panelRuntime.observeSlot") {
         const panelId = String(args[0]);
         const slot = slots.get(panelId) ?? { entityId: `entity:${panelId}` };
         return {
           version: { epoch: "test", counter: 1 },
-          lease: {
+          attempt: {
+            epoch: "test",
+            attemptId: `attempt:${slot.entityId}`,
+            slotId: panelId,
             runtimeEntityId: slot.entityId,
+            phase: "ready",
+            revision: 1,
+            reporter: "renderer",
+            updatedAt: 1,
+          },
+          route: {
+            reachable: true,
+            connectionId: `route:${panelId}`,
             holderLabel: "Test",
             platform: "headless",
             supportsCdp: true,
-          },
-          observation: {
             view: { url: "http://panel.test/", loading: false },
-            boot: { phase: "ready", updatedAt: 1 },
           },
         };
       }

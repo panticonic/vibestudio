@@ -24,6 +24,19 @@ function readyObservation(panelId: string, source = "panels/example") {
   };
 }
 
+function readyAttempt(slotId: string, runtimeEntityId: string) {
+  return {
+    epoch: "test",
+    attemptId: `attempt:${runtimeEntityId}`,
+    slotId,
+    runtimeEntityId,
+    phase: "ready" as const,
+    revision: 1,
+    reporter: "renderer" as const,
+    updatedAt: 1,
+  };
+}
+
 function createRpcCall() {
   return vi.fn(async (_target: string, method: string, args: unknown[]) => {
     switch (method) {
@@ -50,7 +63,11 @@ function createRpcCall() {
       case "panelTree.focus":
         return undefined;
       case "panelRuntime.ensureSlot":
-        return { status: "assigned", lease: null };
+        return {
+          status: "assigned",
+          lease: null,
+          attempt: readyAttempt(String(args[0]), String(args[1])),
+        };
       case "workspace-state.slot.commitPreparedNavigation": {
         const input = args[0] as {
           expectedCurrentEntityId: string;
@@ -149,17 +166,17 @@ function createRpcCall() {
       case "panelRuntime.observeSlot":
         const observedPanelId = String(args[0]);
         const observedEntityKey = observedPanelId.replace(/^panel:tree\//, "");
+        const observedRuntimeEntityId = `panel:nav-${observedEntityKey}-entity`;
         return {
           version: { epoch: "test", counter: 1 },
-          lease: {
-            runtimeEntityId: `panel:nav-${observedEntityKey}-entity`,
+          attempt: readyAttempt(observedPanelId, observedRuntimeEntityId),
+          route: {
+            reachable: true,
+            connectionId: `route:${observedPanelId}`,
             holderLabel: "Test host",
             platform: "headless",
             supportsCdp: true,
-          },
-          observation: {
             view: { url: "http://panel.test/", loading: false },
-            boot: { phase: "ready", updatedAt: 1 },
           },
         };
       case "panelTree.diagnose":

@@ -1,703 +1,249 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import { createPanelRuntimeService } from "./panelRuntimeService.js";
+import type { PanelBootProbeResult } from "@vibestudio/shared/panel/observation";
 
-describe("panelRuntimeService", () => {
-  const currentEntityForSlot = async () => null;
-  const observeHostSlot = async () => null;
+const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
 
-  it("accepts headless CDP-capable clients with stable host ids", async () => {
-    const coordinator = {
-      registerClient: vi.fn(),
-      unregisterClient: vi.fn(),
-      getSnapshot: vi.fn(),
-      acquire: vi.fn(),
-      takeOver: vi.fn(),
-      release: vi.fn(),
-      ownsClientSession: vi.fn(() => true),
-    };
-    const service = createPanelRuntimeService({
-      coordinator: coordinator as never,
-      currentEntityForSlot,
-      observeHostSlot,
+function setup(
+  input: {
+    observeHostSlot?: () => Promise<{
+      url: string;
+      loading: boolean;
+      boot: PanelBootProbeResult;
+    } | null>;
+    browserSource?: string | null;
+  } = {}
+) {
+  const coordinator = new PanelRuntimeCoordinator();
+  coordinator.registerClient({
+    clientSessionId: "desktop",
+    hostConnectionId: "desktop-host",
+    label: "Desktop",
+    platform: "desktop",
+    supportsCdp: true,
+    loadOnLeaseAssignment: true,
+  });
+  coordinator.acquire("panel:nav-a", {
+    slotId: "panel:tree/a",
+    clientSessionId: "desktop",
+    connectionId: "route-a",
+  });
+  const observeHostSlot = vi.fn(input.observeHostSlot ?? (async () => null));
+  const service = createPanelRuntimeService({
+    coordinator,
+    currentEntityForSlot: async () => "panel:nav-a",
+    observeHostSlot,
+    browserSourceForSlot: async () => input.browserSource ?? null,
+  });
+  return {
+    coordinator,
+    service,
+    observeHostSlot,
+    attempt: coordinator.currentAttemptForSlot("panel:tree/a")!,
+  };
+}
+
+afterEach(() => vi.useRealTimers());
+
+describe("panelRuntimeService attempt waits", () => {
+  it("observes the canonical composite without polling the host", async () => {
+    const { service, observeHostSlot, attempt } = setup();
+    await expect(
+      service.handler(desktopCtx, "observeSlot", ["panel:tree/a"])
+    ).resolves.toMatchObject({
+      attempt: { attemptId: attempt.attemptId, phase: "pending" },
+      route: { reachable: false, connectionId: "route-a" },
     });
-    const input = {
-      clientSessionId: "headless-session",
-      hostConnectionId: "headless-host",
-      label: "Headless",
-      platform: "headless",
-      loadOnLeaseAssignment: true,
-      supportsCdp: true,
-    };
-
-    expect(() => service.methods["registerClient"]?.args.parse([input])).not.toThrow();
-    await service.handler(
-      { caller: createVerifiedCaller("shell:desktop", "shell") },
-      "registerClient",
-      [input]
-    );
-
-    expect(coordinator.registerClient).toHaveBeenCalledWith({
-      ...input,
-      ownerCallerId: "shell:desktop",
-    });
+    expect(observeHostSlot).not.toHaveBeenCalled();
   });
 
-  it("accepts lease requests that carry a provider host id", () => {
-    const service = createPanelRuntimeService({
-      coordinator: {} as never,
-      currentEntityForSlot,
-      observeHostSlot,
-    });
-
-    expect(() =>
-      service.methods["acquire"]?.args.parse([
-        "panel:entity",
-        {
-          slotId: "slot",
-          clientSessionId: "headless-session",
-          connectionId: "runtime-connection",
-          hostConnectionId: "headless-host",
-        },
-      ])
-    ).not.toThrow();
-  });
-
-  it("forwards client unregister requests to the coordinator", async () => {
-    const coordinator = {
-      registerClient: vi.fn(),
-      unregisterClient: vi.fn(),
-      getSnapshot: vi.fn(),
-      acquire: vi.fn(),
-      takeOver: vi.fn(),
-      release: vi.fn(),
-      ownsClientSession: vi.fn(() => true),
-    };
-    const service = createPanelRuntimeService({
-      coordinator: coordinator as never,
-      currentEntityForSlot,
-      observeHostSlot,
-    });
-
-    expect(() =>
-      service.methods["unregisterClient"]?.args.parse(["headless-session"])
-    ).not.toThrow();
-    await service.handler(
-      { caller: createVerifiedCaller("shell:desktop", "shell") },
-      "unregisterClient",
-      ["headless-session"]
-    );
-
-    expect(coordinator.unregisterClient).toHaveBeenCalledWith("headless-session");
-    expect(coordinator.ownsClientSession).toHaveBeenCalledWith("headless-session", "shell:desktop");
-  });
-
-  it("rejects lease mutations for client sessions owned by another caller", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    const headlessCtx = { caller: createVerifiedCaller("shell:headless", "shell") };
-
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "desktop-session",
-        hostConnectionId: "desktop-host",
-        label: "Desktop",
-        platform: "desktop",
-      },
+  it("returns the exact snapshot from awaitAttempt with no re-observe round trip", async () => {
+    const { coordinator, service, attempt } = setup();
+    const waiting = service.handler(desktopCtx, "awaitAttempt", [
+      { epoch: attempt.epoch, attemptId: attempt.attemptId },
+      attempt.revision,
     ]);
-    await service.handler(desktopCtx, "acquire", [
+    coordinator.reportView("panel:nav-a", "route-a", {
+      url: "http://panel/",
+      loading: true,
+      boot: { kind: "observed", observation: { phase: "booting" } },
+    });
+    await expect(waiting).resolves.toMatchObject({
+      kind: "report",
+      attempt: { attemptId: attempt.attemptId, phase: "booting", revision: 1 },
+    });
+  });
+
+  it("does not wake an attempt waiter for route churn", async () => {
+    const { coordinator, service, attempt } = setup();
+    let settled = false;
+    const waiting = service
+      .handler(desktopCtx, "awaitAttempt", [
+        { epoch: attempt.epoch, attemptId: attempt.attemptId },
+        attempt.revision,
+      ])
+      .then(() => {
+        settled = true;
+      });
+    coordinator.markConnected("panel:nav-a", "route-a");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    coordinator.reportView("panel:nav-a", "route-a", {
+      url: "http://panel/",
+      loading: false,
+      boot: { kind: "observed", observation: { phase: "ready" } },
+    });
+    await waiting;
+  });
+
+  it("wakes slot waiters on both route flips", async () => {
+    const { coordinator, service } = setup();
+    const first = coordinator.observeSlotLifecycle("panel:tree/a");
+    const connected = service.handler(desktopCtx, "awaitSlot", ["panel:tree/a", first.version]);
+    coordinator.markConnected("panel:nav-a", "route-a");
+    await expect(connected).resolves.toMatchObject({ route: { reachable: true } });
+
+    const second = coordinator.observeSlotLifecycle("panel:tree/a");
+    const disconnected = service.handler(desktopCtx, "awaitSlot", ["panel:tree/a", second.version]);
+    coordinator.markDisconnected("panel:nav-a", "route-a");
+    await expect(disconnected).resolves.toMatchObject({
+      attempt: { phase: "pending" },
+      route: { reachable: false },
+    });
+  });
+
+  it("returns unknown-attempt immediately for stale epochs", async () => {
+    const { service } = setup();
+    await expect(
+      service.handler(desktopCtx, "awaitAttempt", [
+        { epoch: "previous-process", attemptId: "attempt" },
+        0,
+      ])
+    ).resolves.toEqual({
+      kind: "unknown-attempt",
+      ref: { epoch: "previous-process", attemptId: "attempt" },
+    });
+  });
+
+  it("returns an already-terminal attempt even at its current revision", async () => {
+    const { coordinator, service, attempt } = setup();
+    coordinator.reportView("panel:nav-a", "route-a", {
+      url: "http://panel/",
+      loading: false,
+      boot: { kind: "observed", observation: { phase: "ready" } },
+    });
+    const terminal = coordinator.currentAttemptForSlot("panel:tree/a")!;
+
+    await expect(
+      service.handler(desktopCtx, "awaitAttempt", [
+        { epoch: attempt.epoch, attemptId: attempt.attemptId },
+        terminal.revision,
+      ])
+    ).resolves.toMatchObject({
+      kind: "report",
+      attempt: { phase: "ready", revision: terminal.revision },
+    });
+  });
+
+  it("resolves a parked waiter with its own stopped record when the slot is superseded", async () => {
+    const { coordinator, service, attempt } = setup();
+    const waiting = service.handler(desktopCtx, "awaitAttempt", [
+      { epoch: attempt.epoch, attemptId: attempt.attemptId },
+      attempt.revision,
+    ]);
+    coordinator.commitAttempt("panel:tree/a", {
+      runtimeEntityId: "panel:nav-b",
+      connectionId: "route-b",
+      hostConnectionId: "desktop-host",
+    });
+    await expect(waiting).resolves.toMatchObject({
+      kind: "report",
+      attempt: {
+        attemptId: attempt.attemptId,
+        phase: "stopped",
+        stopReason: "superseded",
+      },
+    });
+  });
+
+  it("propagates cancellation and removes the coordinator listener", async () => {
+    const { service, attempt } = setup();
+    const controller = new AbortController();
+    const waiting = service.handler({ ...desktopCtx, signal: controller.signal }, "awaitAttempt", [
+      { epoch: attempt.epoch, attemptId: attempt.attemptId },
+      attempt.revision,
+    ]);
+    controller.abort(new Error("cancelled by eval"));
+    await expect(waiting).rejects.toThrow("cancelled by eval");
+  });
+
+  it("ensureSlot returns the coordinator-minted attempt", async () => {
+    const { service, attempt } = setup();
+    await expect(
+      service.handler(desktopCtx, "ensureSlot", ["panel:tree/a", "panel:nav-a"])
+    ).resolves.toMatchObject({
+      status: "already-held",
+      attempt: { attemptId: attempt.attemptId, runtimeEntityId: "panel:nav-a" },
+    });
+  });
+
+  it("publishes browser readiness as a host-owned lifecycle fact", async () => {
+    const { coordinator, service, attempt } = setup({
+      browserSource: "browser:https://example.com/path",
+    });
+    await service.handler(desktopCtx, "reportView", [
       "panel:nav-a",
+      "route-a",
       {
-        slotId: "panel:tree/slot-a",
-        clientSessionId: "desktop-session",
-        connectionId: "desktop-runtime",
+        url: "https://example.com/redirected",
+        loading: false,
+        boot: { kind: "unavailable" },
       },
     ]);
-
-    await expect(
-      service.handler(headlessCtx, "release", ["panel:nav-a", "desktop-runtime"])
-    ).rejects.toMatchObject({
-      code: "PANEL_RUNTIME_CLIENT_FORBIDDEN",
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).toMatchObject({
+      kind: "report",
+      attempt: { phase: "ready", reporter: "host" },
     });
-    await expect(
-      service.handler(headlessCtx, "unregisterClient", ["desktop-session"])
-    ).rejects.toMatchObject({
-      code: "PANEL_RUNTIME_CLIENT_FORBIDDEN",
-    });
-    await expect(
-      service.handler(headlessCtx, "acquire", [
-        "panel:nav-b",
-        {
-          slotId: "panel:tree/slot-b",
-          clientSessionId: "desktop-session",
-          connectionId: "headless-runtime",
-        },
-      ])
-    ).rejects.toMatchObject({
-      code: "PANEL_RUNTIME_CLIENT_FORBIDDEN",
-    });
-    await expect(
-      service.handler(headlessCtx, "takeOver", [
-        "panel:nav-a",
-        {
-          slotId: "panel:tree/slot-a",
-          clientSessionId: "desktop-session",
-          connectionId: "headless-runtime",
-        },
-      ])
-    ).rejects.toMatchObject({
-      code: "PANEL_RUNTIME_CLIENT_FORBIDDEN",
-    });
-    await expect(
-      service.handler(headlessCtx, "reportView", [
-        "panel:nav-a",
-        "desktop-runtime",
-        {
-          url: "http://127.0.0.1/panels/chat/",
-          loading: false,
-          boot: { phase: "ready" },
-        },
-      ])
-    ).rejects.toMatchObject({
-      code: "PANEL_RUNTIME_CLIENT_FORBIDDEN",
-    });
-
-    expect(coordinator.getLease("panel:nav-a")).toEqual(
-      expect.objectContaining({
-        clientSessionId: "desktop-session",
-        connectionId: "desktop-runtime",
-      })
-    );
   });
 
-  it("treats a view report for a superseded lease as a stale transition", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "desktop-session",
-        hostConnectionId: "desktop-host",
-        label: "Desktop",
-        platform: "desktop",
-      },
-    ]);
-    await service.handler(desktopCtx, "acquire", [
-      "panel:nav-a",
-      {
-        slotId: "panel:tree/slot-a",
-        clientSessionId: "desktop-session",
-        connectionId: "replacement-runtime",
-      },
-    ]);
-
+  it("forwards typed host failures without synthesizing a renderer boot failure", async () => {
+    const { coordinator, service, attempt } = setup();
     await expect(
       service.handler(desktopCtx, "reportView", [
         "panel:nav-a",
-        "superseded-runtime",
+        "route-a",
         {
-          url: "http://127.0.0.1/panels/chat/",
+          url: "",
           loading: false,
-          boot: { phase: "ready" },
-        },
-      ])
-    ).resolves.toBe("stale");
-    expect(coordinator.reportedViewForSlot("panel:tree/slot-a")).toBeNull();
-
-    await expect(
-      service.handler(desktopCtx, "reportView", [
-        "panel:nav-a",
-        "replacement-runtime",
-        {
-          url: "http://127.0.0.1/panels/chat/",
-          loading: false,
-          boot: { phase: "ready" },
+          boot: { kind: "unavailable" },
+          failure: {
+            reporter: "host",
+            failure: {
+              stage: "renderer-crash",
+              code: "render_crashed",
+              message: "renderer exited",
+            },
+          },
         },
       ])
     ).resolves.toBe("reported");
-    expect(coordinator.reportedViewForSlot("panel:tree/slot-a")).toMatchObject({
-      lease: { connectionId: "replacement-runtime" },
-      observation: { boot: { phase: "ready" } },
-    });
-  });
-
-  it("reads and caches the active desktop host observation on demand", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const hostObservation = {
-      url: "http://127.0.0.1/panels/chat/",
-      loading: false,
-      boot: { phase: "ready" as const },
-    };
-    const observeHost = vi.fn(async () => hostObservation);
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot: observeHost,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "desktop-session",
-        hostConnectionId: "desktop-host",
-        label: "Desktop",
-        platform: "desktop",
-      },
-    ]);
-    await service.handler(desktopCtx, "acquire", [
-      "panel:nav-a",
-      {
-        slotId: "panel:tree/slot-a",
-        clientSessionId: "desktop-session",
-        connectionId: "desktop-runtime",
-      },
-    ]);
-
-    await expect(
-      service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])
-    ).resolves.toMatchObject({
-      version: { epoch: expect.any(String), counter: expect.any(Number) },
-      lease: expect.objectContaining({ runtimeEntityId: "panel:nav-a" }),
-      observation: {
-        view: { url: hostObservation.url, loading: false },
-        boot: expect.objectContaining({ phase: "ready" }),
-      },
-    });
-    await service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"]);
-    expect(observeHost).toHaveBeenCalledTimes(1);
-  });
-
-  it("refreshes a cached loading observation until the host reports readiness", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const observeHost = vi.fn(async () => ({
-      url: "http://127.0.0.1/panels/chat/",
-      loading: false,
-      boot: { phase: "ready" as const },
-    }));
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot: observeHost,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "desktop-session",
-        hostConnectionId: "desktop-host",
-        label: "Desktop",
-        platform: "desktop",
-      },
-    ]);
-    await service.handler(desktopCtx, "acquire", [
-      "panel:nav-a",
-      {
-        slotId: "panel:tree/slot-a",
-        clientSessionId: "desktop-session",
-        connectionId: "desktop-runtime",
-      },
-    ]);
-    coordinator.reportView("panel:nav-a", "desktop-runtime", {
-      url: "http://127.0.0.1/panels/chat/",
-      loading: false,
-      boot: { phase: "booting" },
-    });
-
-    await expect(
-      service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])
-    ).resolves.toMatchObject({ observation: { boot: { phase: "ready" } } });
-    await service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"]);
-    expect(observeHost).toHaveBeenCalledOnce();
-  });
-
-  it("waits for the next coordinator transition without polling the host", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const observeHost = vi.fn(async () => null);
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot: observeHost,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "desktop-session",
-        hostConnectionId: "desktop-host",
-        label: "Desktop",
-        platform: "desktop",
-      },
-    ]);
-    await service.handler(desktopCtx, "acquire", [
-      "panel:nav-a",
-      {
-        slotId: "panel:tree/slot-a",
-        clientSessionId: "desktop-session",
-        connectionId: "desktop-runtime",
-      },
-    ]);
-    const snapshot = (await service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])) as {
-      version: { epoch: string; counter: number };
-    };
-    const waiting = service.handler(desktopCtx, "awaitSlotChange", [
-      "panel:tree/slot-a",
-      snapshot.version,
-    ]);
-
-    coordinator.reportView("panel:nav-a", "desktop-runtime", {
-      url: "http://127.0.0.1/panels/chat/",
-      loading: false,
-      boot: { phase: "ready" },
-    });
-
-    await expect(waiting).resolves.toMatchObject({
-      observation: { boot: { phase: "ready" } },
-    });
-    expect(observeHost).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not wake a slot waiter for another slot's transition", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot: async () => null,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "desktop-session",
-        hostConnectionId: "desktop-host",
-        label: "Desktop",
-        platform: "desktop",
-      },
-    ]);
-    for (const suffix of ["a", "b"]) {
-      await service.handler(desktopCtx, "acquire", [
-        `panel:nav-${suffix}`,
-        {
-          slotId: `panel:tree/slot-${suffix}`,
-          clientSessionId: "desktop-session",
-          connectionId: `desktop-runtime-${suffix}`,
+    expect(
+      coordinator.getAttempt({ epoch: attempt.epoch, attemptId: attempt.attemptId })
+    ).toMatchObject({
+      kind: "report",
+      attempt: {
+        phase: "failed",
+        reporter: "host",
+        failure: {
+          stage: "renderer-crash",
+          code: "render_crashed",
+          message: "renderer exited",
         },
-      ]);
-    }
-    const snapshot = (await service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])) as {
-      version: { epoch: string; counter: number };
-    };
-    let settled = false;
-    const waiting = service
-      .handler(desktopCtx, "awaitSlotChange", ["panel:tree/slot-a", snapshot.version])
-      .finally(() => {
-        settled = true;
-      });
-
-    coordinator.reportView("panel:nav-b", "desktop-runtime-b", {
-      url: "http://127.0.0.1/panels/other/",
-      loading: false,
-      boot: { phase: "ready" },
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    coordinator.reportView("panel:nav-a", "desktop-runtime-a", {
-      url: "http://127.0.0.1/panels/chat/",
-      loading: false,
-      boot: { phase: "ready" },
-    });
-    await expect(waiting).resolves.toMatchObject({
-      observation: { boot: { phase: "ready" } },
-    });
-  });
-
-  it("refreshes an external document while its managed boot phase is unavailable", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const observeHost = vi
-      .fn()
-      .mockResolvedValueOnce({
-        url: "https://example.com/",
-        loading: true,
-        boot: { phase: "unavailable" as const },
-      })
-      .mockResolvedValue({
-        url: "https://example.com/",
-        loading: false,
-        boot: { phase: "unavailable" as const },
-      });
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot: observeHost,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "headless-session",
-        hostConnectionId: "headless-host",
-        label: "Headless",
-        platform: "headless",
-      },
-    ]);
-    await service.handler(desktopCtx, "acquire", [
-      "panel:nav-browser",
-      {
-        slotId: "panel:tree/browser",
-        clientSessionId: "headless-session",
-        connectionId: "headless-runtime",
-      },
-    ]);
-    coordinator.reportView("panel:nav-browser", "headless-runtime", {
-      url: "about:blank",
-      loading: false,
-      boot: { phase: "unavailable" },
-    });
-
-    await expect(
-      service.handler(desktopCtx, "observeSlot", ["panel:tree/browser"])
-    ).resolves.toMatchObject({
-      observation: {
-        view: { url: "https://example.com/", loading: true },
-        boot: { phase: "unavailable" },
       },
     });
-    await expect(
-      service.handler(desktopCtx, "observeSlot", ["panel:tree/browser"])
-    ).resolves.toMatchObject({
-      observation: { view: { url: "https://example.com/", loading: false } },
-    });
-    expect(observeHost).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not require a panel RPC route for an external browser document", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const observeHost = vi.fn(async () => ({
-      url: "data:text/html,<p>ready</p>",
-      loading: false,
-      boot: { phase: "unavailable" as const },
-    }));
-    const isRuntimeRouteReachable = vi.fn(() => false);
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot: observeHost,
-      isRuntimeRouteReachable,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "headless-session",
-        hostConnectionId: "headless-host",
-        label: "Headless",
-        platform: "headless",
-      },
-    ]);
-    await service.handler(desktopCtx, "acquire", [
-      "panel:nav-browser",
-      {
-        slotId: "panel:tree/browser",
-        clientSessionId: "headless-session",
-        connectionId: "headless-runtime",
-      },
-    ]);
-
-    await expect(
-      service.handler(desktopCtx, "observeSlot", ["panel:tree/browser"])
-    ).resolves.toMatchObject({
-      observation: {
-        view: { url: "data:text/html,<p>ready</p>", loading: false },
-        boot: { phase: "unavailable" },
-      },
-    });
-    expect(isRuntimeRouteReachable).not.toHaveBeenCalled();
-  });
-
-  it("does not refresh or expose a disconnected host during reconnect grace", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    const observeHost = vi.fn(async () => ({
-      url: "http://127.0.0.1/panels/chat/",
-      loading: false,
-      boot: { phase: "ready" as const },
-    }));
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot: observeHost,
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "desktop-session",
-        hostConnectionId: "desktop-host",
-        label: "Desktop",
-        platform: "desktop",
-      },
-    ]);
-    await service.handler(desktopCtx, "acquire", [
-      "panel:nav-a",
-      {
-        slotId: "panel:tree/slot-a",
-        clientSessionId: "desktop-session",
-        connectionId: "desktop-runtime",
-      },
-    ]);
-    coordinator.reportView("panel:nav-a", "desktop-runtime", {
-      url: "http://127.0.0.1/panels/chat/",
-      loading: false,
-      boot: { phase: "ready" },
-    });
-    coordinator.markDisconnected("panel:nav-a", "desktop-runtime");
-
-    await expect(
-      service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])
-    ).resolves.toMatchObject({
-      lease: { expiresAt: expect.any(Number) },
-      observation: null,
-    });
-    expect(observeHost).not.toHaveBeenCalled();
-  });
-
-  it("does not expose cached boot readiness before the exact panel RPC route registers", async () => {
-    const coordinator = new PanelRuntimeCoordinator();
-    let routeReachable = false;
-    const service = createPanelRuntimeService({
-      coordinator,
-      currentEntityForSlot,
-      observeHostSlot,
-      isRuntimeRouteReachable: (runtimeEntityId, connectionId) => {
-        expect(runtimeEntityId).toBe("panel:nav-a");
-        expect(connectionId).toBe("desktop-runtime");
-        return routeReachable;
-      },
-    });
-    const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
-    await service.handler(desktopCtx, "registerClient", [
-      {
-        clientSessionId: "desktop-session",
-        hostConnectionId: "desktop-host",
-        label: "Desktop",
-        platform: "desktop",
-      },
-    ]);
-    await service.handler(desktopCtx, "acquire", [
-      "panel:nav-a",
-      {
-        slotId: "panel:tree/slot-a",
-        clientSessionId: "desktop-session",
-        connectionId: "desktop-runtime",
-      },
-    ]);
-    coordinator.reportView("panel:nav-a", "desktop-runtime", {
-      url: "http://127.0.0.1/panels/chat/",
-      loading: false,
-      boot: { phase: "ready" },
-    });
-
-    await expect(
-      service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])
-    ).resolves.toMatchObject({
-      lease: { runtimeEntityId: "panel:nav-a", connectionId: "desktop-runtime" },
-      observation: null,
-    });
-
-    routeReachable = true;
-    await expect(
-      service.handler(desktopCtx, "observeSlot", ["panel:tree/slot-a"])
-    ).resolves.toMatchObject({
-      observation: { boot: { phase: "ready" } },
-    });
-  });
-
-  it("autospawns the default headless host for programmatic panel assignment", async () => {
-    const ensureDefaultHeadlessHost = vi.fn(async () => true);
-    const ensureDefaultCdpHostForSlot = vi
-      .fn()
-      .mockReturnValueOnce({ assigned: false, reason: "no_default_cdp_host" as const })
-      .mockReturnValueOnce({
-        assigned: true,
-        lease: {
-          runtimeEntityId: "panel:nav-a",
-          slotId: "panel:tree/slot-a",
-          clientSessionId: "headless-session",
-          connectionId: "default-cdp-panel:tree/slot-a",
-          hostConnectionId: "headless-host",
-          platform: "headless",
-          supportsCdp: true,
-        },
-      });
-    const coordinator = {
-      ensureDefaultCdpHostForSlot,
-    };
-    const service = createPanelRuntimeService({
-      coordinator: coordinator as never,
-      currentEntityForSlot: async () => "panel:nav-a",
-      observeHostSlot,
-      ensureDefaultHeadlessHost,
-    });
-
-    await expect(
-      service.handler({ caller: createVerifiedCaller("do:test", "do") }, "ensureSlot", [
-        "panel:tree/slot-a",
-        "panel:nav-a",
-      ])
-    ).resolves.toMatchObject({ status: "assigned" });
-    expect(ensureDefaultHeadlessHost).toHaveBeenCalledOnce();
-    expect(ensureDefaultCdpHostForSlot).toHaveBeenCalledTimes(2);
-  });
-
-  it("lets userland callers read lease snapshots but not mutate leases", async () => {
-    const coordinator = {
-      registerClient: vi.fn(),
-      unregisterClient: vi.fn(),
-      getSnapshot: vi.fn(() => ({ version: { epoch: "test", counter: 0 }, leases: [] })),
-      acquire: vi.fn(),
-      takeOver: vi.fn(),
-      release: vi.fn(),
-      ownsClientSession: vi.fn(() => true),
-      getLease: vi.fn(() => null),
-    };
-    const dispatcher = createTestServiceDispatcher();
-    dispatcher.registerService(
-      createPanelRuntimeService({
-        coordinator: coordinator as never,
-        currentEntityForSlot,
-        observeHostSlot,
-      })
-    );
-    dispatcher.markInitialized();
-
-    for (const kind of ["panel", "worker", "do"] as const) {
-      await expect(
-        dispatcher.dispatch(
-          { caller: createVerifiedCaller(`${kind}:test`, kind) },
-          "panelRuntime",
-          "getSnapshot",
-          []
-        )
-      ).resolves.toMatchObject({ leases: [] });
-    }
-
-    await expect(
-      dispatcher.dispatch(
-        { caller: createVerifiedCaller("panel:test", "panel") },
-        "panelRuntime",
-        "acquire",
-        [
-          "panel:nav-a",
-          {
-            slotId: "panel:tree/slot-a",
-            clientSessionId: "desktop-session",
-            connectionId: "panel-runtime",
-          },
-        ]
-      )
-    ).rejects.toThrow(/no authority branch admits the code origin/);
   });
 });

@@ -5,15 +5,23 @@ import { createPanelRuntime } from "./panelRuntime.js";
 function readyHostReport() {
   return {
     version: { epoch: "test", counter: 1 },
-    lease: {
+    attempt: {
+      epoch: "test",
+      attemptId: "attempt:panel:nav-new",
+      slotId: "panel:tree/new",
       runtimeEntityId: "panel:nav-new",
+      phase: "ready" as const,
+      revision: 1,
+      reporter: "renderer" as const,
+      updatedAt: 1,
+    },
+    route: {
+      reachable: true,
+      connectionId: "route",
       holderLabel: "Headless",
       platform: "headless" as const,
       supportsCdp: true,
-    },
-    observation: {
       view: { url: "http://panel.test/", loading: false },
-      boot: { phase: "ready" as const, updatedAt: 1 },
     },
   };
 }
@@ -43,6 +51,7 @@ function runtimeHarness(
     browserSource?: string;
     observeError?: Error;
     alwaysLoading?: boolean;
+    unknownAttempt?: boolean;
     activateError?: Error;
     slotCreateError?: Error;
     replaceEntityOnAgentFailure?: boolean;
@@ -141,25 +150,50 @@ function runtimeHarness(
         case "panelRuntime.ensureSlot":
           return {
             status: options.hostAvailable === false ? "unavailable" : "assigned",
-            lease: null,
+            lease:
+              options.hostAvailable === false
+                ? null
+                : { holderLabel: "Headless", platform: "headless", supportsCdp: true },
+            attempt: {
+              epoch: "test",
+              attemptId: `attempt:${currentEntityId}`,
+              slotId: currentSlotId,
+              runtimeEntityId: currentEntityId,
+              phase: options.alwaysLoading ? "loading" : "ready",
+              revision: 1,
+              reporter: "renderer",
+              updatedAt: 1,
+            },
           } as T;
         case "panelRuntime.observeSlot":
           if (options.observeError) throw options.observeError;
           if (options.hostAvailable === false) {
-            return { version: { epoch: "test", counter: 1 }, lease: null, observation: null } as T;
+            return {
+              version: { epoch: "test", counter: 1 },
+              attempt: null,
+              route: { reachable: false },
+            } as T;
           }
           if (options.alwaysLoading) {
             return {
               version: { epoch: "test", counter: 1 },
-              lease: {
+              attempt: {
+                epoch: "test",
+                attemptId: `attempt:${currentEntityId}`,
+                slotId: currentSlotId,
                 runtimeEntityId: currentEntityId,
+                phase: "loading",
+                revision: 1,
+                reporter: "renderer",
+                updatedAt: 1,
+              },
+              route: {
+                reachable: true,
+                connectionId: "route",
                 holderLabel: "Headless",
                 platform: "headless" as const,
                 supportsCdp: true,
-              },
-              observation: {
                 view: { url: "http://panel.test/", loading: true },
-                boot: { phase: "loading" as const, updatedAt: 1 },
               },
             } as T;
           }
@@ -167,26 +201,58 @@ function runtimeHarness(
             options.browserReady
               ? {
                   version: { epoch: "test", counter: 1 },
-                  lease: {
+                  attempt: {
+                    epoch: "test",
+                    attemptId: `attempt:${currentEntityId}`,
+                    slotId: currentSlotId,
                     runtimeEntityId: currentEntityId,
+                    phase: options.browserUrl === "about:blank" ? "pending" : "ready",
+                    revision: 1,
+                    reporter: "host",
+                    updatedAt: 1,
+                  },
+                  route: {
+                    reachable: true,
+                    connectionId: "route",
                     holderLabel: "Headless",
                     platform: "headless" as const,
                     supportsCdp: true,
-                  },
-                  observation: {
                     view: {
                       url: options.browserUrl ?? "data:text/html,<p>ready</p>",
                       loading: false,
                     },
-                    boot: { phase: "unavailable" as const },
                   },
                 }
               : {
                   ...readyHostReport(),
-                  lease: { ...readyHostReport().lease, runtimeEntityId: currentEntityId },
+                  attempt: {
+                    ...readyHostReport().attempt,
+                    attemptId: `attempt:${currentEntityId}`,
+                    runtimeEntityId: currentEntityId,
+                  },
                 }
           ) as T;
-        case "panelRuntime.awaitSlotChange":
+        case "panelRuntime.getAttempt":
+          if (options.unknownAttempt) {
+            return { kind: "unknown-attempt", ref: args[0] } as T;
+          }
+          return {
+            kind: "report",
+            attempt: {
+              epoch: "test",
+              attemptId: `attempt:${currentEntityId}`,
+              slotId: currentSlotId,
+              runtimeEntityId: currentEntityId,
+              phase: options.alwaysLoading ? "loading" : "ready",
+              revision: 1,
+              reporter: "renderer",
+              updatedAt: 1,
+            },
+          } as T;
+        case "panelRuntime.awaitAttempt":
+          if (options.unknownAttempt) {
+            return { kind: "unknown-attempt", ref: args[0] } as T;
+          }
           return (await new Promise((_, reject) => {
             const signal = callOptions?.signal;
             if (signal?.aborted) reject(signal.reason);
@@ -304,7 +370,7 @@ describe("panel runtime topology composition", () => {
     const { runtime } = runtimeHarness({ hostAvailable: false });
 
     await expect(runtime.getPanelHandle("panel:tree/new").observe()).resolves.toMatchObject({
-      phase: "assigning-host",
+      phase: "pending",
       runtimeEntityId: "panel:nav-new",
     });
   });
@@ -450,6 +516,24 @@ describe("panel runtime topology composition", () => {
     await expect(opening).rejects.toThrow(/caller stopped observing/);
   });
 
+  it("surfaces a stale exact attempt as a typed infrastructure failure", async () => {
+    const { runtime } = runtimeHarness({ alwaysLoading: true, unknownAttempt: true });
+
+    await expect(
+      runtime.openPanel("panels/new", { slug: "new", focus: false })
+    ).rejects.toMatchObject({
+      code: "PANEL_OPERATION_FAILED",
+      failure: {
+        code: "host_unavailable",
+        stage: "runtime",
+        details: {
+          failureKind: "infrastructure",
+          reason: "unknown-attempt",
+        },
+      },
+    });
+  });
+
   it("subscribes once while a host remains loading", async () => {
     const { runtime, call } = runtimeHarness({ alwaysLoading: true });
     const controller = new AbortController();
@@ -460,7 +544,7 @@ describe("panel runtime topology composition", () => {
     });
 
     await vi.waitFor(() => {
-      expect(call.mock.calls.some((entry) => entry[1] === "panelRuntime.awaitSlotChange")).toBe(
+      expect(call.mock.calls.some((entry) => entry[1] === "panelRuntime.awaitAttempt")).toBe(
         true
       );
     });
@@ -470,7 +554,7 @@ describe("panel runtime topology composition", () => {
       1
     );
     expect(
-      call.mock.calls.filter((entry) => entry[1] === "panelRuntime.awaitSlotChange")
+      call.mock.calls.filter((entry) => entry[1] === "panelRuntime.awaitAttempt")
     ).toHaveLength(1);
   });
 
@@ -522,7 +606,7 @@ describe("panel runtime topology composition", () => {
         provenance: {
           panelId: "panel:tree/new",
           runtimeEntityId: "panel:nav-new",
-          attemptId: "panel:nav-new@build-new",
+          attemptId: "attempt:panel:nav-new",
         },
         details: {
           routeFailureCode: "TARGET_NOT_REACHABLE",
@@ -618,7 +702,7 @@ describe("panel runtime topology composition", () => {
       phase: "ready",
       host: {
         view: { exists: true, loading: false },
-        boot: { phase: "unavailable" },
+        boot: { kind: "observed" as const, observation: { phase: "ready" } },
       },
     });
   });
@@ -628,7 +712,7 @@ describe("panel runtime topology composition", () => {
 
     await expect(runtime.getPanelHandle("panel:tree/new").observe()).resolves.toMatchObject({
       kind: "browser",
-      phase: "loading",
+      phase: "pending",
       host: { view: { url: "about:blank", loading: false } },
     });
   });

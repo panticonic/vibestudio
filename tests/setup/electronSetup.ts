@@ -1052,6 +1052,24 @@ export async function reloadPanel(
   }, panelId);
 }
 
+/** Force a panel rebuild through the same main-process path used by the desktop UI. */
+export async function rebuildPanel(
+  app: ElectronApplication,
+  panelId: string
+): Promise<PanelLifecycleResult> {
+  return app.evaluate(async (_electron, id) => {
+    const testApi = (
+      globalThis as {
+        __testApi?: Pick<TestApi, "rebuildPanel">;
+      }
+    ).__testApi;
+    if (!testApi) {
+      throw new Error("Test API not available. Make sure VIBESTUDIO_TEST_MODE=1 is set.");
+    }
+    return testApi.rebuildPanel(id);
+  }, panelId);
+}
+
 export async function getPanelReadiness(
   app: ElectronApplication,
   panelId: string
@@ -1131,7 +1149,7 @@ export async function ensureHostedShellReady(
           .getPanelTree()
           .find((entry) => entry.snapshot?.source === input.panelSource);
         if (panel) {
-          const readiness = testApi.getPanelReadiness(panel.id);
+          const readiness = await testApi.getPanelReadiness(panel.id);
           lastState = readiness;
           if (readiness.terminal) {
             return { readiness, initializationFailure: null, lastState };

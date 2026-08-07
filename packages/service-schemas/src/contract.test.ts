@@ -65,6 +65,7 @@ import { workspacePresenceMethods } from "./workspacePresence.js";
 import { gadWireMethods } from "./workspaceSource.js";
 import { workspaceStateMethods } from "./workspaceState.js";
 import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
+import { RPC_PROGRESS_SEMANTICS } from "./progressSemantics.generated.js";
 
 type ServiceTable = {
   service: string;
@@ -278,6 +279,19 @@ function weakReturnRootPaths(
 }
 
 describe("service schema contracts", () => {
+  it("indexes every contract-declared progress semantic without service-specific lookup code", () => {
+    const declared = Object.fromEntries(
+      serviceTables.flatMap(({ service, methods }) =>
+        Object.entries(methods).flatMap(([method, schema]) =>
+          schema.progressSemantics
+            ? [[`${service}.${method}`, schema.progressSemantics] as const]
+            : []
+        )
+      )
+    );
+    expect(RPC_PROGRESS_SEMANTICS).toEqual(declared);
+  });
+
   it("allows eval reset to omit its optional routing object", () => {
     expect(evalMethods.reset.args.safeParse([]).success).toBe(true);
     expect(evalMethods.reset.args.safeParse([{}]).success).toBe(true);
@@ -374,7 +388,10 @@ describe("service schema contracts", () => {
     const schemaFiles = readdirSync(schemaDir)
       .filter(
         (file) =>
-          file.endsWith(".ts") && !file.endsWith(".test.ts") && file !== "productBuiltinServices.ts"
+          file.endsWith(".ts") &&
+          !file.endsWith(".test.ts") &&
+          file !== "productBuiltinServices.ts" &&
+          !file.startsWith("progressSemantics")
       )
       .sort();
 

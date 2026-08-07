@@ -40,7 +40,7 @@ describe("HeadlessHost lifecycle guards", () => {
     const pages = {
       panelPageObservation: vi.fn(async () => ({
         view: { url: "http://127.0.0.1/panels/chat/", loading: false },
-        boot: { phase: "ready" as const, runtimeEntityId: lease.runtimeEntityId },
+        boot: { kind: "observed" as const, observation: { phase: "ready" as const, runtimeEntityId: lease.runtimeEntityId } },
       })),
     };
     Object.assign(
@@ -62,7 +62,7 @@ describe("HeadlessHost lifecycle guards", () => {
       {
         url: "http://127.0.0.1/panels/chat/",
         loading: false,
-        boot: { phase: "ready", runtimeEntityId: lease.runtimeEntityId },
+        boot: { kind: "observed" as const, observation: { phase: "ready", runtimeEntityId: lease.runtimeEntityId } },
       },
     ]);
   });
@@ -496,7 +496,7 @@ describe("HeadlessHost lifecycle guards", () => {
     });
     const panelPageObservation = vi.fn(async () => ({
       view: { url: "http://127.0.0.1/panel", loading: false },
-      boot: { phase: "ready" as const },
+      boot: { kind: "observed" as const, observation: { phase: "ready" as const } },
     }));
     Object.assign(host as unknown as { tracker: LeaseTracker; pages: unknown }, {
       tracker,
@@ -514,7 +514,7 @@ describe("HeadlessHost lifecycle guards", () => {
       platform: "headless",
       supportsInspection: true,
       view: { exists: true, url: "http://127.0.0.1/panel", loading: false },
-      boot: { phase: "ready" },
+      boot: { kind: "observed" as const, observation: { phase: "ready" } },
     });
   });
 });

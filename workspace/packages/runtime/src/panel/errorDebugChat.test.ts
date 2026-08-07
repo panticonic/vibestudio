@@ -18,6 +18,19 @@ function readyObservation(panelId: string, source: string) {
   };
 }
 
+function readyAttempt(slotId: string, runtimeEntityId: string) {
+  return {
+    epoch: "test",
+    attemptId: `attempt:${runtimeEntityId}`,
+    slotId,
+    runtimeEntityId,
+    phase: "ready" as const,
+    revision: 1,
+    reporter: "renderer" as const,
+    updatedAt: 1,
+  };
+}
+
 function createRpcCall() {
   let createdTitle = "Agentic Chat";
   const runtimeEntity = {
@@ -97,7 +110,11 @@ function createRpcCall() {
         if (method === "workspace-state.panel.updateTitle") createdTitle = String(args[1]);
         return undefined;
       case "panelRuntime.ensureSlot":
-        return { status: "assigned" };
+        return {
+          status: "assigned",
+          lease: null,
+          attempt: readyAttempt(String(args[0]), String(args[1])),
+        };
       case "workspace-state.panelTree.detail":
         if (args[0] === "panel:tree/spectrolite") {
           return {
@@ -143,15 +160,14 @@ function createRpcCall() {
       case "panelRuntime.observeSlot":
         return {
           version: { epoch: "test", counter: 1 },
-          lease: {
-            runtimeEntityId: runtimeEntity.id,
+          attempt: readyAttempt(String(args[0]), runtimeEntity.id),
+          route: {
+            reachable: true,
+            connectionId: `route:${String(args[0])}`,
             holderLabel: "test",
             platform: "headless",
             supportsCdp: false,
-          },
-          observation: {
             view: { url: "http://test/panels/chat", loading: false },
-            boot: { phase: "ready", updatedAt: 1 },
           },
         };
       case "panelTree.create":

@@ -83,17 +83,43 @@ function workspaceDetailFor(panelId: string, source = "panels/a") {
 
 function readyRuntimeSlot(panelId: string) {
   const entityKey = panelId.replace(/^panel:tree\//, "");
+  const runtimeEntityId = `panel:nav-${entityKey}-current-entity`;
   return {
     version: { epoch: "test", counter: 1 },
-    lease: {
-      runtimeEntityId: `panel:nav-${entityKey}-current-entity`,
+    attempt: {
+      epoch: "test",
+      attemptId: `attempt:${runtimeEntityId}`,
+      slotId: panelId,
+      runtimeEntityId,
+      phase: "ready" as const,
+      revision: 1,
+      reporter: "renderer" as const,
+      updatedAt: 1,
+    },
+    route: {
+      reachable: true,
+      connectionId: `route:${panelId}`,
       holderLabel: "Headless",
       platform: "headless",
       supportsCdp: true,
-    },
-    observation: {
       view: { url: "http://panel.test/", loading: false },
-      boot: { phase: "ready", updatedAt: 1 },
+    },
+  };
+}
+
+function assignedRuntimeSlot(panelId: string, runtimeEntityId: string) {
+  return {
+    status: "assigned",
+    lease: null,
+    attempt: {
+      epoch: "test",
+      attemptId: `attempt:${runtimeEntityId}`,
+      slotId: panelId,
+      runtimeEntityId,
+      phase: "ready" as const,
+      revision: 1,
+      reporter: "renderer" as const,
+      updatedAt: 1,
     },
   };
 }
@@ -336,7 +362,7 @@ describe("DurableObjectBase panelTree handles", () => {
       if (body.method === "workspace-state.panelTree.detail")
         return respond(init, workspaceDetailFor(String(body.args[0]), "panels/new"));
       if (body.method === "panelRuntime.ensureSlot")
-        return respond(init, { status: "assigned", lease: null });
+        return respond(init, assignedRuntimeSlot(String(body.args[0]), String(body.args[1])));
       if (body.method === "panelRuntime.observeSlot")
         return respond(init, readyRuntimeSlot(String(body.args[0])));
       return respond(init, "ok");
@@ -436,7 +462,7 @@ describe("DurableObjectBase panelTree handles", () => {
       if (body.method === "workspace-state.panelTree.detail")
         return respond(init, workspaceDetailFor(String(body.args[0]), "panels/new"));
       if (body.method === "panelRuntime.ensureSlot")
-        return respond(init, { status: "assigned", lease: null });
+        return respond(init, assignedRuntimeSlot(String(body.args[0]), String(body.args[1])));
       if (body.method === "panelRuntime.observeSlot")
         return respond(init, readyRuntimeSlot(String(body.args[0])));
       return respond(init, null);
@@ -522,7 +548,7 @@ describe("DurableObjectBase panelTree handles", () => {
         });
       }
       if (body.method === "panelRuntime.ensureSlot")
-        return respond(init, { status: "assigned", lease: null });
+        return respond(init, assignedRuntimeSlot(String(body.args[0]), String(body.args[1])));
       return respond(init, undefined);
     }) as typeof fetch;
 

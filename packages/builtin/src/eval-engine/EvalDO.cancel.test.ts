@@ -774,6 +774,55 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
   });
 
+  it("surfaces contract-declared panel boot waits as external activity", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    seedPendingRun(sql, "panel-boot-wait");
+    sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'panel-boot-wait'`);
+    let release!: () => void;
+    vi.spyOn(
+      priv<{ call: (...args: unknown[]) => Promise<unknown> }>(instance, "rpc"),
+      "call"
+    ).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    const execution = priv<
+      (input: { runId: string; contextId: string }) => {
+        rpc: { call: (...args: unknown[]) => Promise<unknown> };
+      }
+    >(instance, "createExecutionContext").call(instance, {
+      runId: "panel-boot-wait",
+      contextId: "ctx",
+    });
+
+    const ref = { epoch: "epoch-a", attemptId: "attempt-a" };
+    const pending = execution.rpc.call("main", "panelRuntime.awaitAttempt", [ref, 2]);
+    expect(instance.getRun("panel-boot-wait")).toMatchObject({
+      checkpoint: {
+        stage: "external-wait",
+        state: "waiting",
+        operation: "panel.boot",
+        resource: { kind: "panel-attempt", value: ref },
+        targetId: "main",
+        method: "panelRuntime.awaitAttempt",
+      },
+      activity: {
+        kind: "external-wait",
+        operation: "panel.boot",
+        resource: { kind: "panel-attempt", value: ref },
+      },
+    });
+
+    release();
+    await pending;
+    expect(instance.getRun("panel-boot-wait")).toMatchObject({
+      checkpoint: { stage: "external-wait", state: "completed" },
+      activity: { kind: "executing" },
+    });
+  });
+
   it("reports authority waiting as lifecycle state and clears it on decision", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const call = vi.fn(() => Promise.resolve(undefined));

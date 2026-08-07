@@ -438,19 +438,40 @@ describe("initRuntime", () => {
                                   currentEntityId: "panel:nav-next-entity",
                                 }
                               : message.method === "panelRuntime.ensureSlot"
-                                ? { status: "assigned" }
+                                ? {
+                                    status: "assigned",
+                                    lease: null,
+                                    attempt: {
+                                      epoch: "test",
+                                      attemptId: `attempt:${String(message.args[1])}`,
+                                      slotId: String(message.args[0]),
+                                      runtimeEntityId: String(message.args[1]),
+                                      phase: "ready",
+                                      revision: 1,
+                                      reporter: "renderer",
+                                      updatedAt: 1,
+                                    },
+                                  }
                                 : message.method === "panelRuntime.observeSlot"
                                   ? {
                                       version: { epoch: "test", counter: 1 },
-                                      lease: {
+                                      attempt: {
+                                        epoch: "test",
+                                        attemptId: "attempt:panel:nav-parent-entity",
+                                        slotId: String(message.args[0]),
                                         runtimeEntityId: "panel:nav-parent-entity",
+                                        phase: "ready",
+                                        revision: 1,
+                                        reporter: "renderer",
+                                        updatedAt: 1,
+                                      },
+                                      route: {
+                                        reachable: true,
+                                        connectionId: "route:parent",
                                         holderLabel: "test",
                                         platform: "headless",
                                         supportsCdp: false,
-                                      },
-                                      observation: {
                                         view: { url: "http://test/panels/next", loading: false },
-                                        boot: { phase: "ready", updatedAt: 1 },
                                       },
                                     }
                                   : message.method === "panelTree.page"

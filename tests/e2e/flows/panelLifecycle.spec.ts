@@ -19,9 +19,52 @@ import {
   approvePendingStartupUnits,
   createManagedTestWorkspace,
   removeManagedTestWorkspace,
+  getPanelReadiness,
+  rebuildPanel,
 } from "../../setup/electronSetup";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
+
+test.describe("Panel Rebuild Lifecycle", () => {
+  test("visible desktop rebuild replaces the exact attempt and reaches ready", async () => {
+    test.setTimeout(300_000);
+    const workspacePath = createManagedTestWorkspace();
+    let testApp: Awaited<ReturnType<typeof launchTestApp>> | null = null;
+
+    try {
+      testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180_000 });
+      await approvePendingStartupUnits(testApp.app);
+      await approvePendingWorkspaceCreationReview(testApp.app);
+
+      const before = await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
+      expect(before.attempt?.phase).toBe("ready");
+      expect(before.runtimeEntityId).toBeTruthy();
+
+      const result = await rebuildPanel(testApp.app, before.panelId);
+      expect(result).toMatchObject({
+        panelId: before.panelId,
+        operation: "rebuild",
+        rebuilt: true,
+      });
+
+      await expect
+        .poll(async () => getPanelReadiness(testApp!.app, before.panelId), {
+          timeout: 120_000,
+        })
+        .toMatchObject({
+          panelId: before.panelId,
+          terminal: true,
+          attempt: { phase: "ready" },
+        });
+      const after = await getPanelReadiness(testApp.app, before.panelId);
+      expect(after.runtimeEntityId).not.toBe(before.runtimeEntityId);
+      expect(after.attempt?.attemptId).not.toBe(before.attempt?.attemptId);
+    } finally {
+      if (testApp) await testApp.cleanup();
+      removeManagedTestWorkspace(workspacePath);
+    }
+  });
+});
 
 type PanelTreeEntry = Awaited<ReturnType<typeof getPanelTree>>[number];
 

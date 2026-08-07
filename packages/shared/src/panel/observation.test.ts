@@ -3,7 +3,6 @@ import {
   PANEL_OPERATION_ERROR_CODE,
   parsePanelPageObservation,
   PanelOperationError,
-  panelAttemptId,
   panelFailure,
   panelFailureBoundaryError,
   panelFailureFromError,
@@ -38,16 +37,28 @@ describe("panel observation failures", () => {
     }
   });
 
-  it("uses runtime and build identity for stable attempt correlation", () => {
-    expect(panelAttemptId("panel:nav-a", "build-a")).toBe("panel:nav-a@build-a");
-    expect(panelAttemptId(null, null)).toBe("unassigned@unbuilt");
-  });
-
   it("validates the canonical browser page observation", () => {
     expect(
       parsePanelPageObservation({
         view: { url: "http://127.0.0.1/panel", loading: false },
         boot: {
+          kind: "observed",
+          observation: {
+            phase: "ready",
+            runtimeEntityId: "panel:nav-a",
+            source: "panels/example",
+            contextId: "ctx-a",
+            effectiveVersion: "state-a",
+            buildKey: "build-a",
+            updatedAt: 2,
+          },
+        },
+      })
+    ).toEqual({
+      view: { url: "http://127.0.0.1/panel", loading: false },
+      boot: {
+        kind: "observed",
+        observation: {
           phase: "ready",
           runtimeEntityId: "panel:nav-a",
           source: "panels/example",
@@ -56,24 +67,28 @@ describe("panel observation failures", () => {
           buildKey: "build-a",
           updatedAt: 2,
         },
-      })
-    ).toEqual({
-      view: { url: "http://127.0.0.1/panel", loading: false },
-      boot: {
-        phase: "ready",
-        runtimeEntityId: "panel:nav-a",
-        source: "panels/example",
-        contextId: "ctx-a",
-        effectiveVersion: "state-a",
-        buildKey: "build-a",
-        updatedAt: 2,
       },
     });
     expect(() =>
       parsePanelPageObservation({
         view: { url: "http://127.0.0.1/panel", loading: "no" },
-        boot: { phase: "ready" },
+        boot: { kind: "observed", observation: { phase: "ready" } },
       })
     ).toThrow("invalid view state");
+    expect(
+      parsePanelPageObservation({
+        view: { url: "about:blank", loading: false },
+        boot: { kind: "unavailable" },
+      })
+    ).toEqual({
+      view: { url: "about:blank", loading: false },
+      boot: { kind: "unavailable" },
+    });
+    expect(() =>
+      parsePanelPageObservation({
+        view: { url: "about:blank", loading: false },
+        boot: { phase: "unavailable" },
+      })
+    ).toThrow("invalid boot probe result");
   });
 });

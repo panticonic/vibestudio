@@ -198,6 +198,12 @@ describe("effectiveVersion", () => {
   });
 
   describe("computeBuildKey", () => {
+    it("invalidates every build key when generated wrapper protocol output changes", () => {
+      for (const sourcemap of [true, false]) {
+        const before = computeBuildKey("unit-a", "ev1", sourcemap, "protocol-a");
+        expect(computeBuildKey("unit-a", "ev1", sourcemap, "protocol-b")).not.toBe(before);
+      }
+    });
     it("varies by unit name, ev, and sourcemap flag", () => {
       const base = computeBuildKey("unit-a", "ev1", true);
       expect(computeBuildKey("unit-a", "ev1", true)).toBe(base);

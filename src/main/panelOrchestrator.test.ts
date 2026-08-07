@@ -1254,6 +1254,26 @@ describe("PanelOrchestrator.rebuildPanel", () => {
 });
 
 describe("PanelOrchestrator.recoverShellSnapshot", () => {
+  it("re-registers the surviving runtime client before repairing views after recovery", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const root = makePanel("panel:tree/root");
+    registry.addPanel(root, null, { addAsRoot: true });
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
+    panelView.hasView.mockImplementation((panelId: string) => panelId === root.id);
+    await orchestrator.registerRuntimeClient();
+    serverClient.call.mockClear();
+
+    await orchestrator.recoverShellSnapshot({ loadFocusedView: false });
+
+    const runtimeCalls = serverClient.call.mock.calls.filter(
+      ([service]) => service === "panelRuntime"
+    );
+    const methods = runtimeCalls.map(([, method]) => method);
+    expect(methods[0]).toBe("registerClient");
+    expect(methods[1]).toBe("getSnapshot");
+    expect(methods.indexOf("acquire")).toBeGreaterThan(methods.indexOf("registerClient"));
+  });
+
   it("syncs tree and leases, resolves focus, and publishes one normalized snapshot", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const root = makePanel("panel:tree/root");
@@ -1487,6 +1507,24 @@ describe("PanelOrchestrator.getPanelHostObservation", () => {
       message: "Failed to load a build dependency",
     });
   });
+
+  it("keeps renderer boot failures in the renderer-owned boot record", () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/boot-failure");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator } = createOrchestrator(registry);
+    const boot = {
+      kind: "observed" as const,
+      observation: {
+        phase: "failed" as const,
+        failureStage: "bundle-load" as const,
+        message: "bundle missing",
+      },
+    };
+
+    expect(orchestrator.getPanelHostObservation(panel.id, boot)).toMatchObject({ boot });
+    expect(orchestrator.getPanelHostObservation(panel.id, boot).failure).toBeUndefined();
+  });
 });
 
 describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
@@ -1583,7 +1621,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, panelView } = createOrchestrator(registry);
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
     panelView.hasView.mockReturnValue(true);
     panelView.createViewForPanel.mockRejectedValueOnce(new Error("News renderer failed to load"));
 
@@ -1611,6 +1649,23 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     });
     expect(registry.getPanel(panel.id)?.artifacts.htmlPath).toBeUndefined();
     expect(registry.getPanel(panel.id)?.artifacts.hostedRuntimeEntityId).toBeUndefined();
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "reportView", [
+      "panel:nav-news",
+      "news-runtime-conn",
+      {
+        url: "",
+        loading: false,
+        boot: { kind: "unavailable" },
+        failure: {
+          reporter: "host",
+          failure: {
+            stage: "navigation",
+            code: "navigation_failed",
+            message: "News renderer failed to load",
+          },
+        },
+      },
+    ]);
   });
 
   it("unloads local panel resources when the local runtime lease is released", async () => {

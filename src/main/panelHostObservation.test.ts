@@ -3,14 +3,17 @@ import { observeDesktopPanelHost } from "./panelHostObservation";
 
 describe("observeDesktopPanelHost", () => {
   it("publishes the canonical host observation without flattening its view", async () => {
-    const getBootObservation = vi.fn(async () => ({ phase: "ready" as const }));
+    const getBootObservation = vi.fn(async () => ({
+      kind: "observed" as const,
+      observation: { phase: "ready" as const },
+    }));
     const getPanelHostObservation = vi.fn(() => ({
       holderLabel: "Desktop",
       platform: "desktop" as const,
       supportsInspection: true,
       viewRevision: 7,
       view: { exists: true, url: "http://panel.test/", loading: false },
-      boot: { phase: "ready" as const },
+      boot: { kind: "observed" as const, observation: { phase: "ready" as const } },
     }));
 
     await expect(
@@ -21,19 +24,22 @@ describe("observeDesktopPanelHost", () => {
       supportsInspection: true,
       viewRevision: 7,
       view: { exists: true, url: "http://panel.test/", loading: false },
-      boot: { phase: "ready" },
+      boot: { kind: "observed" as const, observation: { phase: "ready" } },
     });
   });
 
   it("rejects the obsolete flattened desktop-only shape at its producer", async () => {
     const source = {
-      getBootObservation: vi.fn(async () => ({ phase: "ready" as const })),
+      getBootObservation: vi.fn(async () => ({
+        kind: "observed" as const,
+        observation: { phase: "ready" as const },
+      })),
       getPanelHostObservation: vi.fn(
         () =>
           ({
             url: "http://panel.test/",
             loading: false,
-            boot: { phase: "ready" },
+            boot: { kind: "observed" as const, observation: { phase: "ready" } },
           }) as never
       ),
     };

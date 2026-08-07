@@ -59,10 +59,15 @@ interface RuntimeSlotObservation {
       url: string;
       loading: boolean;
     };
-    boot: {
-      phase: "unavailable" | "loading" | "booting" | "ready" | "failed";
-      message?: string;
-    };
+    boot:
+      | { kind: "unavailable" }
+      | {
+          kind: "observed";
+          observation: {
+            phase: "loading" | "booting" | "ready" | "failed";
+            message?: string;
+          };
+        };
   } | null;
 }
 
@@ -548,7 +553,10 @@ async function waitForPanelReady(
     if (exactObservation?.view.loading === false && exactObservation.view.url === expectedUrl) {
       return;
     }
-    if (exactObservation?.boot.phase === "failed") {
+    if (
+      exactObservation?.boot.kind === "observed" &&
+      exactObservation.boot.observation.phase === "failed"
+    ) {
       const leases = await connection.rpc.call("main", "panelRuntime.getSnapshot", []);
       const hostLogs = await shellConnection!.rpc.call("main", "serverLog.query", [
         { contains: "HeadlessHost", limit: 100 },

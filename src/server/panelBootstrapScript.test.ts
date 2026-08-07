@@ -50,6 +50,14 @@ describe("PANEL_BOOTSTRAP_SCRIPT", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('"vibestudio:panel-boot"');
   });
 
+  it("keeps a ready boot record terminal against later application errors", () => {
+    // Post-ready unhandled rejections are app-runtime noise; the held record
+    // must stay ready or host relay / restart re-adoption republishes failed.
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain(
+      'if (previous?.phase === "ready" && phase === "failed") return previous;'
+    );
+  });
+
   it("ties the handshake to runtime and immutable build identity", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioEntityId");
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioEffectiveVersion");

@@ -43,7 +43,7 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
     stop: vi.fn(),
     executeJavaScript: vi.fn(async () => ({
       view: { url: "https://example.com/app", loading: false },
-      boot: { phase: "ready" },
+      boot: { kind: "observed" as const, observation: { phase: "ready" } },
     })),
     debugger: debuggerApi,
   });
@@ -532,7 +532,7 @@ describe("CdpHostProvider", () => {
     const observation = provider.getBootObservation("panel-1");
     await vi.advanceTimersByTimeAsync(2_000);
 
-    await expect(observation).resolves.toEqual({ phase: "unavailable" });
+    await expect(observation).resolves.toEqual({ kind: "unavailable" });
   });
 
   it("serves accessibility trees as a built-in host command", async () => {
