@@ -544,7 +544,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   static override schemaVersion = 3;
 
   protected override schemaProductionBaseline() {
-    return { version: 3, name: "agent-vessel-v3" } as const;
+    return { version: 3, name: "agent-vessel-v3" };
   }
 
   protected readonly identity: DOIdentity;
