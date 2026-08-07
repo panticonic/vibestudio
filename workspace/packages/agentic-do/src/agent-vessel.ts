@@ -3581,11 +3581,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }));
     const fingerprint = JSON.stringify(roster);
     if (this.getStateValue(`agent:roster:${channelId}`) === fingerprint) return false;
-    const loop = await this.driver.loop(channelId);
-    const envelope = await this.appendRosterSnapshot(loop.state, channelId, roster);
     await this.driver.handleIncoming(channelId, {
-      type: "event-appended",
-      envelope: envelope as never,
+      type: "command",
+      command: { kind: "setRoster", roster: { participants: roster } },
     });
     this.setStateValue(`agent:roster:${channelId}`, fingerprint);
     // Schema materialization is cached independently from the durable roster.
@@ -3619,44 +3617,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const value = await this.createChannelClient(channelId).getParticipants();
     this.participantCache.set(channelId, { value, expiresAt: now + CHANNEL_STATE_CACHE_MS });
     return value;
-  }
-
-  private async appendRosterSnapshot(
-    state: AgentState,
-    channelId: string,
-    roster: RosterEntry[]
-  ): Promise<unknown> {
-    const result = await this.callGad<{ envelopes: unknown[] }>("appendLogEvent", {
-      logId: state.logId,
-      head: state.head,
-      logKind: "trajectory",
-      events: [
-        {
-          // Roster refreshes are emitted independently by every resident
-          // agent. They can observe the same presence change at the same
-          // trajectory sequence, but their snapshots intentionally exclude
-          // themselves and therefore have different actors/payloads. Scope
-          // the id by both emitter and snapshot content so concurrent refresh
-          // cannot turn a harmless presence update into a log id collision —
-          // AND by the fold's monotonic lastSeq, so a roster flap back to an
-          // earlier content (A→B→A) mints a fresh id instead of replaying the
-          // first A's envelope (which observers that saw B would dedupe,
-          // never converging back to A).
-          envelopeId: ids.systemEvent(
-            `${channelId}:${this.participantId()}:${state.lastSeq}:${stableSha256Hex(roster)}`,
-            "roster"
-          ),
-          actor: { kind: "agent", id: this.participantId() },
-          payloadKind: "system.event",
-          payload: {
-            protocol: "agentic.trajectory.v1",
-            kind: "roster.snapshot",
-            details: { kind: "roster.snapshot", roster: { participants: roster } },
-          },
-        },
-      ],
-    });
-    return result.envelopes[result.envelopes.length - 1];
   }
 
   // ── Method calls (agent as PROVIDER) ─────────────────────────────────────

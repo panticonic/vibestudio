@@ -1292,6 +1292,26 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
       };
     }
 
+    case "setRoster": {
+      return {
+        append: [
+          {
+            envelopeId: ids.systemEvent(
+              `${state.channelId}:${state.selfId}:${state.lastSeq}:${patchHashOf(command.roster)}`,
+              "roster"
+            ),
+            payloadKind: "system.event",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              kind: "roster.snapshot",
+              details: { kind: "roster.snapshot", roster: command.roster },
+            },
+          },
+        ],
+        effects: [],
+      };
+    }
+
     case "compact": {
       // Exact-entry compaction (model-summarized compaction is a follow-on).
       if (state.entries.length === 0) return EMPTY;

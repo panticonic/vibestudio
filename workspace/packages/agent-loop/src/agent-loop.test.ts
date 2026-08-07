@@ -307,6 +307,31 @@ describe("agent-loop core lifecycle", () => {
     expect(s.state.entries.map((entry) => entry.kind)).toEqual(["user", "assistant"]);
   });
 
+  it("journals roster refreshes through the ordered command path", () => {
+    const s = scenario();
+    const roster = {
+      participants: [
+        {
+          participantId: "panel:user",
+          ref: { kind: "panel" as const, id: "panel:user", participantId: "panel:user" },
+          type: "panel",
+          methods: [{ name: "set_title" }],
+        },
+      ],
+    };
+
+    dispatch(s, { type: "command", command: { kind: "setRoster", roster } });
+
+    expect(kinds(s)).toEqual(["system.event"]);
+    expect(s.log[0]).toMatchObject({
+      payload: {
+        kind: "roster.snapshot",
+        details: { kind: "roster.snapshot", roster },
+      },
+    });
+    expect(s.state.config.roster).toEqual(roster);
+  });
+
   it("runs the tool loop: model tool-call → local_tool effect → result → next model call", () => {
     const s = scenario();
     prompt(s);

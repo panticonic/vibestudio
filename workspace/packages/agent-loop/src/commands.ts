@@ -5,7 +5,7 @@
  */
 
 import type { LogEnvelope, MessageBlockInput, ParticipantRef } from "@workspace/agentic-protocol";
-import type { AgentLoopConfig, AgentTurnMetadata } from "./state.js";
+import type { AgentLoopConfig, AgentTurnMetadata, RosterSnapshot } from "./state.js";
 import type { EffectKind } from "./effects.js";
 
 export interface SerializedError {
@@ -59,6 +59,7 @@ export type Command =
   | { kind: "edit"; sourceMessageId: string; blocks: MessageBlockInput[]; by: ParticipantRef }
   | { kind: "retract"; sourceMessageId: string; by: ParticipantRef }
   | { kind: "setConfig"; patch: Partial<AgentLoopConfig> }
+  | { kind: "setRoster"; roster: RosterSnapshot }
   | { kind: "compact" }
   | { kind: "resumeAfterReset"; messageId: string; resetAt: string }
   | { kind: "wake" };
