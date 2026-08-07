@@ -207,6 +207,34 @@ describe("semantic system-test validators", () => {
     });
   });
 
+  it("requires stale RPC catalog guidance to preserve exact-build authority", () => {
+    const test = docsProbeTests.find(
+      (candidate) => candidate.name === "docs-do-rpc-catalog-mismatch"
+    )!;
+    const docsRead = {
+      name: "docs_open",
+      execution: {
+        status: "complete",
+        isError: false,
+        result: {
+          text: "WORKSPACE_RPC_METHOD_UNDECLARED means the exact active provider build does not declare the requested method. Inspect its declared methods.",
+        },
+      },
+    };
+
+    expect(
+      test.validate(
+        execution(
+          "The source edit is not the live contract. Publish or activate the exact provider build, or use a declared method from the live service docs. Do not bypass this with raw addressing.",
+          [docsRead]
+        )
+      ).passed
+    ).toBe(true);
+    expect(
+      test.validate(execution("Call the raw Durable Object target directly.", [docsRead])).passed
+    ).toBe(false);
+  });
+
   it("requires provenance orientation to return a typed root and complete typed edges", () => {
     const test = harnessToolTests.find((candidate) => candidate.name === "provenance-orientation")!;
     const invocation = {
@@ -450,9 +478,7 @@ describe("semantic system-test validators", () => {
   });
 
   it("accepts typed gad.status metrics", () => {
-    const test = agenticRuntimeTests.find(
-      (candidate) => candidate.name === "gad-status-summary"
-    )!;
+    const test = agenticRuntimeTests.find((candidate) => candidate.name === "gad-status-summary")!;
     expect(
       test.validate(
         execution("The GAD status returned one metric value.", [
@@ -612,9 +638,7 @@ describe("semantic system-test validators", () => {
     )!;
     expect(test.validation).toBe("harness");
     expect(
-      test.validate(
-        execution('<ActionButton message="Tell me more">Continue</ActionButton>')
-      )
+      test.validate(execution('<ActionButton message="Tell me more">Continue</ActionButton>'))
     ).toEqual({ passed: true, reason: undefined });
   });
 });

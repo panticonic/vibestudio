@@ -114,6 +114,18 @@ export const docsProbeTests: TestCase[] = [
     [/fork|clone/iu, /durable object/iu, /route|rpc|service/iu]
   ),
   appliedDocsProbe(
+    "docs-do-rpc-catalog-mismatch",
+    "Repair an exact-build Durable Object RPC catalog mismatch without bypassing authority",
+    "I added a Durable Object RPC method in workspace source, but the live call reports WORKSPACE_RPC_METHOD_UNDECLARED. Explain why and what I should do next.",
+    /WORKSPACE_RPC_METHOD_UNDECLARED|exact active provider build|declared methods/iu,
+    [
+      /exact|active.*build|build.*active/iu,
+      /publish|activate/iu,
+      /declared method|live service docs/iu,
+      /not|do not|avoid.*(?:raw|bypass)|raw.*(?:not|avoid)/iu,
+    ]
+  ),
+  appliedDocsProbe(
     "docs-do-schema-migration-recovery",
     "Choose migration over data encoding and identify structured schema refusals",
     "A live Durable Object reports DO_SCHEMA_INCOMPATIBLE after a schemaVersion bump. Explain the safe repair and publication-fixture path.",
