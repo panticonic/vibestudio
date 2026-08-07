@@ -551,7 +551,7 @@ describe("approvalCopy", () => {
     const approval: Extract<PendingApproval, { kind: "capability" }> = {
       ...(capability as Extract<PendingApproval, { kind: "capability" }>),
       callerId: "do:workers/agent-worker:AiChatWorker:ai-chat-2ec1-f7a9fd80",
-      callerTitle: "Build Trello-style task tracker agent",
+      callerTitle: "Workspace maintenance agent",
       repoPath: "workers/agent-worker",
       allowedDecisions: ["agent"] as ["agent"],
       snapshot: {
@@ -560,12 +560,12 @@ describe("approvalCopy", () => {
     };
 
     expect(getApprovalCallerPresentation(approval).label).toBe(
-      "Build Trello-style task tracker agent"
+      "Workspace maintenance agent"
     );
     expect(getStandardApprovalDecisionActions(approval)).toEqual([
       expect.objectContaining({
         decision: "agent",
-        label: "Always for Build Trello-style task tracker agent",
+        label: "Always for Workspace maintenance agent",
       }),
     ]);
 
