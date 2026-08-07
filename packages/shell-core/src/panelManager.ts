@@ -297,7 +297,7 @@ export class PanelManager {
   }
 
   private logIncarnationChurn(): void {
-    log.info(`Panel incarnation churn ${JSON.stringify(this.getIncarnationChurnSnapshot())}`);
+    log.verbose(`Panel incarnation churn ${JSON.stringify(this.getIncarnationChurnSnapshot())}`);
   }
 
   async loadViewState(): Promise<{

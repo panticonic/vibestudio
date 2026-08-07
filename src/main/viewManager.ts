@@ -359,7 +359,7 @@ export class ViewManager {
         },
         reconcileNativeLayerOrder: () => this.reconcileNativeLayerOrder(),
         isShellOverlayActive: () => this.shellOverlayActive,
-        logVerbose: (message) => log.verbose(` ${message}`),
+        logVerbose: (message) => log.trace(` ${message}`),
         logWarning: (message) => console.warn(`[ViewManager] ${message}`),
         logError: (message, error) => {
           console.error(
@@ -631,7 +631,7 @@ export class ViewManager {
     this.views.set(config.id, managed);
     this.webContentsIdToViewId.set(view.webContents.id, config.id);
     if (hostChrome) this.installShellKeyForwarding(view.webContents);
-    log.verbose(` Created view for ${config.id}, type: ${config.type}`);
+    log.trace(` Created view for ${config.id}, type: ${config.type}`);
 
     // Create named handlers for proper cleanup in destroyView
     const handlers = {
@@ -734,7 +734,7 @@ export class ViewManager {
       return;
     }
 
-    log.verbose(
+    log.trace(
       ` Restoring native panel slot ${slot.nativeSlotId} -> ${panelId} after view recreation`
     );
     this.nativePanelSlots.activeSlots.set(slot.nativeSlotId, slot);
@@ -954,7 +954,7 @@ export class ViewManager {
         // (e.g. a late effect after the shell's panel surfaces have bound).
         // Keep existing slots — clearing here hides bound panels the shell
         // still believes are bound, with no signal that would make it rebind.
-        log.verbose(
+        log.trace(
           ` Hosted shell ready reasserted by ${ownerViewId} (gen ${this.nativePanelSlots.hostedShellGeneration}); keeping ${this.nativePanelSlots.activeSlots.size} slot(s)`
         );
         this.hideBootstrapShell();
@@ -963,7 +963,7 @@ export class ViewManager {
         return;
       }
       this.nativePanelSlots.hostedShellGeneration += 1;
-      log.verbose(
+      log.trace(
         ` Hosted shell ready: ${ownerViewId} (gen ${this.nativePanelSlots.hostedShellGeneration}); clearing ${this.nativePanelSlots.activeSlots.size} slot(s)`
       );
       this.clearAllPanelSlots();
@@ -994,11 +994,11 @@ export class ViewManager {
       this.nativePanelSlots.activeHostedShellInstanceId &&
       rendererInstanceId !== this.nativePanelSlots.activeHostedShellInstanceId
     ) {
-      log.verbose(` Ignore stale hosted shell cleanup from ${rendererInstanceId}`);
+      log.trace(` Ignore stale hosted shell cleanup from ${rendererInstanceId}`);
       return;
     }
 
-    log.verbose(
+    log.trace(
       ` Hosted shell not ready: ${ownerViewId}; clearing ${this.nativePanelSlots.activeSlots.size} slot(s)`
     );
     this.nativePanelSlots.hostedShellReady = false;
@@ -1064,7 +1064,7 @@ export class ViewManager {
       previousSlot.detachFocusListener?.();
     }
 
-    log.verbose(` Bind native panel slot ${nativeSlotId} -> ${panelId}`);
+    log.trace(` Bind native panel slot ${nativeSlotId} -> ${panelId}`);
     const bounds = this.normalizeAndClampPanelSlotBounds(request.bounds);
     const generation = this.nativePanelSlots.hostedShellGeneration;
     const focused = request.focused === true;
@@ -1119,7 +1119,7 @@ export class ViewManager {
     const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (!slot) {
       const reason = `unknown native panel slot: ${nativeSlotId}`;
-      log.verbose(`Ignoring update for ${reason}`);
+      log.trace(`Ignoring update for ${reason}`);
       return { status: "missing", reason };
     }
     this.assertSlotOwner(slot, ownerViewId);
@@ -1172,18 +1172,18 @@ export class ViewManager {
   ): void {
     this.assertActiveHostedShellOwner(ownerViewId);
     if (!this.acceptNativeSlotOperation(nativeSlotId, ordering)) {
-      log.verbose(` Ignore stale native panel slot operation ${nativeSlotId} (${bindingId})`);
+      log.trace(` Ignore stale native panel slot operation ${nativeSlotId} (${bindingId})`);
       return;
     }
     const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (slot) this.assertSlotOwner(slot, ownerViewId);
     if (slot && slot.bindingId !== bindingId) {
-      log.verbose(
+      log.trace(
         ` Ignore stale native panel slot clear ${nativeSlotId} (${bindingId}; active=${slot.bindingId})`
       );
       return;
     }
-    log.verbose(` Clear native panel slot ${nativeSlotId} (was ${slot?.panelId ?? "empty"})`);
+    log.trace(` Clear native panel slot ${nativeSlotId} (was ${slot?.panelId ?? "empty"})`);
     // The shell explicitly released this slot — drop any remembered binding.
     for (const [pendingPanelId, pending] of this.pendingSlotRestores) {
       if (pending.nativeSlotId === nativeSlotId) this.pendingSlotRestores.delete(pendingPanelId);
@@ -1194,7 +1194,7 @@ export class ViewManager {
 
   clearAllPanelSlots(): void {
     if (this.nativePanelSlots.activeSlots.size > 0 || this.pendingSlotRestores.size > 0) {
-      log.verbose(
+      log.trace(
         ` Clear all native panel slots (${this.nativePanelSlots.activeSlots.size} active, ${this.pendingSlotRestores.size} pending restore)`
       );
     }
@@ -1909,7 +1909,7 @@ export class ViewManager {
       await contents.executeJavaScript(
         "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))"
       );
-      log.verbose(` waitForRender: frame rendered after ${Date.now() - startTime}ms`);
+      log.trace(` waitForRender: frame rendered after ${Date.now() - startTime}ms`);
     } catch (error) {
       // Fall back to a short timeout if executeJavaScript fails (e.g., page not ready)
       console.warn(
@@ -2678,9 +2678,7 @@ export class ViewManager {
       if (!managed || !managed.visible) continue;
       const panelIndex = children.indexOf(managed.view);
       if (panelIndex !== -1 && panelIndex < shellIndex) {
-        log.verbose(
-          ` Slotted panel ${slot.panelId} is layered below the hosted shell — restacking`
-        );
+        log.trace(` Slotted panel ${slot.panelId} is layered below the hosted shell — restacking`);
         this.reconcileNativeLayerOrder();
         return true;
       }

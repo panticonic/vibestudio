@@ -120,6 +120,7 @@ describe("PanelView app views", () => {
 
   it("retries transient main-frame load failures for app views", async () => {
     vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const url = "https://server.example/_workspace/dev/_a/app/index.html";
     const webContents = Object.assign(new EventEmitter(), {
       id: 10,
@@ -155,10 +156,13 @@ describe("PanelView app views", () => {
     } as never);
 
     await panelView.createViewForApp("@workspace-apps/shell", url, undefined, ["panel-hosting"]);
+    webContents.emit("did-fail-load", {}, -3, "ERR_ABORTED", url, true);
+    expect(warn).not.toHaveBeenCalled();
     webContents.emit("did-fail-load", {}, -21, "ERR_NETWORK_CHANGED", url, true);
     await vi.advanceTimersByTimeAsync(500);
 
     expect(viewManager.retryViewNavigation).toHaveBeenCalledWith("@workspace-apps/shell", url);
+    warn.mockRestore();
     vi.useRealTimers();
   });
 });

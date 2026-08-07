@@ -79,8 +79,13 @@ export function createWorkerLogService(deps: WorkerLogServiceDeps = {}): Service
           case "warn":
             log.warn(`${prefix} ${message}`);
             break;
+          case "debug":
+            log.verbose(`${prefix} ${message}`);
+            break;
           case "info":
           case "log":
+            log.info(`${prefix} ${message}`);
+            break;
           default:
             log.info(`${prefix} ${message}`);
             break;

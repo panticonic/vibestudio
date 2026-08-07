@@ -222,6 +222,7 @@ function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
     rpc.call("main", `${svc}.${m}`, a)
   );
   const original = {
+    debug: console.debug.bind(console),
     log: console.log.bind(console),
     info: console.info.bind(console),
     warn: console.warn.bind(console),
@@ -229,7 +230,7 @@ function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
   };
   let forwarding = false;
   const forward = (
-    level: "log" | "info" | "warn" | "error",
+    level: "debug" | "log" | "info" | "warn" | "error",
     args: unknown[],
     source?: string
   ): void => {
@@ -262,13 +263,14 @@ function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
   const installSink = (
     globalThis as typeof globalThis & {
       __vibestudioInstallConsoleSink?: (
-        sink: (level: "log" | "info" | "warn" | "error", args: unknown[]) => void
+        sink: (level: "debug" | "log" | "info" | "warn" | "error", args: unknown[]) => void
       ) => void;
     }
   ).__vibestudioInstallConsoleSink;
   if (installSink) {
     installSink((level, args) => forward(level, args, source));
   } else {
+    console.debug = (...args: unknown[]) => forward("debug", args, source);
     console.log = (...args: unknown[]) => forward("log", args, source);
     console.info = (...args: unknown[]) => forward("info", args, source);
     console.warn = (...args: unknown[]) => forward("warn", args, source);

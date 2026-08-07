@@ -536,7 +536,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               ...(event.reason ? { reason: event.reason } : {}),
             };
             if (event.denied) log.warn(message, payload);
-            else log.info(message, payload);
+            else log.verbose(message, payload);
           },
         });
 

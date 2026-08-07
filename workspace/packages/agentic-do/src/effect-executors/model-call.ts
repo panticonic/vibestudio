@@ -258,7 +258,9 @@ function modelCallTraceEnabled(env?: Record<string, unknown>): boolean {
     processEnv?.["VIBESTUDIO_MODEL_CALL_TRACE"] === "1" ||
     processEnv?.["VIBESTUDIO_MODEL_CALL_TRACE"] === "true" ||
     env?.["VIBESTUDIO_LOG_LEVEL"] === "verbose" ||
-    processEnv?.["VIBESTUDIO_LOG_LEVEL"] === "verbose"
+    env?.["VIBESTUDIO_LOG_LEVEL"] === "trace" ||
+    processEnv?.["VIBESTUDIO_LOG_LEVEL"] === "verbose" ||
+    processEnv?.["VIBESTUDIO_LOG_LEVEL"] === "trace"
   );
 }
 

@@ -9,7 +9,7 @@
  */
 import "ses";
 
-type ConsoleLevel = "log" | "info" | "warn" | "error";
+type ConsoleLevel = "debug" | "log" | "info" | "warn" | "error";
 type ConsoleSink = (level: ConsoleLevel, args: unknown[]) => void;
 
 // SES freezes the realm console. Install one stable facade first; runtime code
@@ -32,7 +32,7 @@ for (const name of consoleNames) {
     (consoleFacade as unknown as Record<string, unknown>)[name] = value;
   }
 }
-for (const level of ["log", "info", "warn", "error"] as const) {
+for (const level of ["debug", "log", "info", "warn", "error"] as const) {
   consoleFacade[level] = (...args: unknown[]) =>
     consoleSink ? consoleSink(level, args) : nativeConsole[level](...args);
 }

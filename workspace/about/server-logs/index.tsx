@@ -314,7 +314,9 @@ function ServerLogsPage() {
 
   // Controls
   const [search, setSearch] = useState("");
-  const [minLevel, setMinLevel] = useState<Level>("verbose");
+  // Verbose records remain available through the filter, but the live system
+  // log should open on operational events instead of per-event diagnostics.
+  const [minLevel, setMinLevel] = useState<Level>("info");
   const [tagFilter, setTagFilter] = useState<string>("__all__");
   const [follow, setFollow] = useState(true);
 

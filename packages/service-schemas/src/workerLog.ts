@@ -27,7 +27,7 @@ export const workerLogMethods = defineServiceMethods({
     description:
       "Forward one DO console line (level + message, plus optional source) to the server terminal and the workspace-unit log stream.",
     args: z.tuple([
-      z.enum(["log", "info", "warn", "error"]),
+      z.enum(["debug", "log", "info", "warn", "error"]),
       z.string(),
       z
         .object({

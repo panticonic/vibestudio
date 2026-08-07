@@ -3,21 +3,23 @@
  *
  * Controls verbosity of console output during development.
  * Set VIBESTUDIO_LOG_LEVEL environment variable to control output:
- *   - "verbose" - All logs including detailed debug info
+ *   - "trace" - Per-event lifecycle traces and all other logs
+ *   - "verbose" - Detailed diagnostics and all operational logs
  *   - "info" - Normal operational logs (default)
  *   - "warn" - Warnings and errors only
  *   - "error" - Errors only
  *   - "silent" - No logs
  */
 
-export type LogLevel = "verbose" | "info" | "warn" | "error" | "silent";
+export type LogLevel = "trace" | "verbose" | "info" | "warn" | "error" | "silent";
 
 const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
-  verbose: 0,
-  info: 1,
-  warn: 2,
-  error: 3,
-  silent: 4,
+  trace: 0,
+  verbose: 1,
+  info: 2,
+  warn: 3,
+  error: 4,
+  silent: 5,
 };
 
 function getLogLevel(): LogLevel {
@@ -32,13 +34,19 @@ function shouldLog(level: LogLevel): boolean {
   return LOG_LEVEL_PRIORITY[level] >= LOG_LEVEL_PRIORITY[getLogLevel()];
 }
 
-/**
- * Log at verbose level - detailed debug information.
- * Use for: database operations, cache hits, internal state changes.
- */
+/** Log a per-event trace. Use for high-frequency lifecycle churn. */
+export function logTrace(tag: string, message: string, ...args: unknown[]): void {
+  if (shouldLog("trace")) {
+    console.debug(`[${tag}] ${message}`, ...args);
+  }
+}
+
+/** Log at verbose level - detailed diagnostic information. */
 export function logVerbose(tag: string, message: string, ...args: unknown[]): void {
   if (shouldLog("verbose")) {
-    console.log(`[${tag}] ${message}`, ...args);
+    // Keep diagnostic output on console.debug so the server log capture can
+    // preserve its verbose level instead of misclassifying it as info.
+    console.debug(`[${tag}] ${message}`, ...args);
   }
 }
 
@@ -79,15 +87,22 @@ export function isVerbose(): boolean {
   return shouldLog("verbose");
 }
 
+/** Check if per-event trace logging is enabled. */
+export function isTrace(): boolean {
+  return shouldLog("trace");
+}
+
 /**
  * Create a scoped logger for a specific component.
  */
 export function createDevLogger(tag: string) {
   return {
+    trace: (message: string, ...args: unknown[]) => logTrace(tag, message, ...args),
     verbose: (message: string, ...args: unknown[]) => logVerbose(tag, message, ...args),
     info: (message: string, ...args: unknown[]) => logInfo(tag, message, ...args),
     warn: (message: string, ...args: unknown[]) => logWarn(tag, message, ...args),
     error: (message: string, ...args: unknown[]) => logError(tag, message, ...args),
+    isTrace: () => isTrace(),
     isVerbose: () => isVerbose(),
   };
 }

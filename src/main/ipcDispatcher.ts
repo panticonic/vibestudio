@@ -41,9 +41,9 @@ import {
 } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelSession, ServerClient } from "./serverClient.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import { createIpcResponsivenessReporter } from "./ipcResponsiveness.js";
 
 const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
-const SLOW_INTERACTIVE_RPC_MS = 250;
 const log = createDevLogger("IpcDispatcher");
 
 type PanelRuntimeConnection = { runtimeEntityId: string; connectionId: string };
@@ -162,6 +162,18 @@ export class IpcDispatcher {
   /** Response streams carried by ordinary RPC envelopes over Electron IPC. */
   private readonly activeIpcStreams = new Map<string, ActiveIpcStream>();
   private readonly ipcStreamDestroyHooked = new Set<number>();
+  private readonly responsiveness = createIpcResponsivenessReporter({
+    onReport: (report) => {
+      const methods = report.methods
+        .map(({ method, count }) => `${method}${count > 1 ? `×${count}` : ""}`)
+        .join(",");
+      log.warn(
+        `[responsiveness] ipc-rpc ${report.kind} ` +
+          `caller=${report.callerKind}:${report.callerId} count=${report.count} ` +
+          `maxElapsedMs=${report.maxElapsedMs.toFixed(1)} methods=${methods}`
+      );
+    },
+  });
 
   constructor(deps: IpcDispatcherDeps) {
     this.deps = deps;
@@ -424,17 +436,13 @@ export class IpcDispatcher {
         });
       } finally {
         const elapsedMs = performance.now() - startedAt;
-        const message =
-          `[responsiveness] ipc-rpc request=${req.requestId} ` +
-          `caller=${callerKind}:${callerId} method=${service}.${method} ` +
-          `outcome=${outcome} elapsedMs=${elapsedMs.toFixed(1)}`;
-        // Healthy RPCs are high-frequency control-plane traffic, not useful
-        // diagnostics. Log only actionable failures and latency violations;
-        // callers that need distributions should consume metrics rather than
-        // turning every heartbeat into a console line.
-        if (outcome === "error" || elapsedMs >= SLOW_INTERACTIVE_RPC_MS) {
-          log.warn(message);
-        }
+        this.responsiveness.observe({
+          callerId,
+          callerKind,
+          method: `${service}.${method}`,
+          outcome,
+          elapsedMs,
+        });
       }
     }
   }

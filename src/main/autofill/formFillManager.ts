@@ -437,7 +437,7 @@ export class FormFillManager {
 
     try {
       await wc.executeJavaScriptInIsolatedWorld(AUTOFILL_WORLD_ID, [{ code: getContentScript() }]);
-      log.verbose(` Injected content script into wc ${wcId}`);
+      log.trace(` Injected content script into wc ${wcId}`);
     } catch (err) {
       log.verbose(` Failed to inject content script: ${err}`);
     }

@@ -158,7 +158,7 @@ Options:
   --bind-host <addr>       Explicit bind address (default: 127.0.0.1, or 0.0.0.0 with --host)
   --serve-panels           Enable panel HTTP serving
   --gateway-port <port>    Port for the gateway HTTP/WS ingress (default: auto-assigned)
-  --log-level <level>      Log verbosity
+  --log-level <level>      Log verbosity (trace, verbose, info, warn, error, silent)
   --require-mobile-ready   Fail startup unless the workspace React Native app can be
                            built and served to native mobile clients.
   --require-electron-ready Fail startup unless the workspace Electron shell app can be

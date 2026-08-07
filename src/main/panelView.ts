@@ -535,7 +535,7 @@ export class PanelView implements PanelViewLike {
 
     const handlers = {
       didNavigate: (_event: Electron.Event, url: string) => {
-        log.verbose(` Panel ${panelId} navigated to: ${url}`);
+        log.trace(` Panel ${panelId} navigated to: ${url}`);
         queueStateUpdate({ url });
         const panel = this.panelRegistry.getPanel(panelId);
         if (!panel) return;
@@ -587,9 +587,10 @@ export class PanelView implements PanelViewLike {
         url: string,
         isMainFrame?: boolean
       ) => {
-        console.warn(`[PanelView] Panel ${panelId} failed to load: ${desc} (${code}) - ${url}`);
         // -3 is ERR_ABORTED (navigation superseded) — routine, not a failure.
-        if (isMainFrame && code !== -3) {
+        if (code === -3) return;
+        console.warn(`[PanelView] Panel ${panelId} failed to load: ${desc} (${code}) - ${url}`);
+        if (isMainFrame) {
           if (
             TRANSIENT_MAIN_FRAME_LOAD_RETRY_CODES.has(code) &&
             /^https?:\/\//i.test(url) &&
@@ -635,7 +636,7 @@ export class PanelView implements PanelViewLike {
         this.onPanelResponsivenessChanged?.(panelId, false);
       },
       responsive: () => {
-        log.verbose(` Panel ${panelId} became responsive again`);
+        log.trace(` Panel ${panelId} became responsive again`);
         this.onPanelResponsivenessChanged?.(panelId, true);
       },
       didStartLoading: () => {

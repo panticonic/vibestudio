@@ -251,7 +251,10 @@ export interface ExtensionDependencyDiagnostics {
 const execFileAsync = promisify(execFile);
 
 function isVerboseBuildLogEnabled(): boolean {
-  return process.env["VIBESTUDIO_LOG_LEVEL"] === "verbose";
+  return (
+    process.env["VIBESTUDIO_LOG_LEVEL"] === "verbose" ||
+    process.env["VIBESTUDIO_LOG_LEVEL"] === "trace"
+  );
 }
 
 function formatBytes(bytes: number): string {

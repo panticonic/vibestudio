@@ -609,7 +609,7 @@ export class DurableWorkDriver {
     // Mirroring every hint/claim/settlement at the normal operational level
     // produces dozens of terminal lines per agent turn and obscures actual
     // failures. Operators can opt into the same stream with
-    // VIBESTUDIO_LOG_LEVEL=verbose.
+    // VIBESTUDIO_LOG_LEVEL=verbose (or trace).
     if (log.isVerbose()) {
       log.verbose(`[trace] ${JSON.stringify(record)}`);
     }

@@ -2899,7 +2899,7 @@ export class WorkerdManager {
       const line = data.toString().trim();
       if (line) {
         this.rememberWorkerdStartupOutput(`stdout: ${line}`);
-        log.info(`[workerd] ${line}`);
+        log.verbose(`[workerd] ${line}`);
       }
     });
 

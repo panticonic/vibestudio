@@ -230,8 +230,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       focus: createOpts.focus === true,
       ...(createOpts.placement ? { placement: createOpts.placement } : {}),
     });
-    if (log.isVerbose()) {
-      log.verbose(
+    if (log.isTrace()) {
+      log.trace(
         `[responsiveness] panel-created panel=${result.panelId} ` +
           `committedMs=${(performance.now() - interactionStartedAt).toFixed(1)}`
       );
@@ -305,8 +305,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         return;
       }
     }
-    if (log.isVerbose()) {
-      log.verbose(
+    if (log.isTrace()) {
+      log.trace(
         `[responsiveness] panel-ready panel=${result.panelId} ` +
           `preparedMs=${preparedMs.toFixed(1)} ` +
           `totalMs=${(performance.now() - interactionStartedAt).toFixed(1)}`

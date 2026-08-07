@@ -41,6 +41,7 @@ vi.mock("./autofillOverlay.js", () => ({
 // Mock dev logger
 vi.mock("@vibestudio/dev-log", () => ({
   createDevLogger: () => ({
+    trace: vi.fn(),
     verbose: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),

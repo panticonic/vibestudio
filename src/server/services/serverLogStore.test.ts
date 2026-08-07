@@ -89,18 +89,31 @@ describe("serverLogStore", () => {
 
   it("console capture tees into the store and does not recurse from listeners", () => {
     const store = createServerLogStore();
-    const original = console.log;
+    const originals = {
+      debug: console.debug,
+      log: console.log,
+      info: console.info,
+      warn: console.warn,
+      error: console.error,
+    };
     const printed = vi.fn();
     console.log = printed;
+    console.debug = printed;
     try {
       store.installConsoleCapture();
       // A listener that logs must not re-enter capture (re-entrancy guard).
       store.onAppend(() => console.log("from listener"));
       console.log("[Capture] hi");
-      expect(store.tail().records.map((r) => r.message)).toEqual(["hi"]);
+      console.debug("[Capture] verbose");
+      expect(store.tail().records.map((r) => r.message)).toEqual(["hi", "verbose"]);
+      expect(store.tail().records[1]?.level).toBe("verbose");
       expect(printed).toHaveBeenCalled();
     } finally {
-      console.log = original;
+      console.debug = originals.debug;
+      console.log = originals.log;
+      console.info = originals.info;
+      console.warn = originals.warn;
+      console.error = originals.error;
     }
   });
 });
