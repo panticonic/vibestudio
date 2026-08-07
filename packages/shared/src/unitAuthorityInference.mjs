@@ -41,6 +41,16 @@ const HOSTED_RUNTIME_DERIVED_METHODS = {
   "workspace.switchTo": ["workspace.select"],
 };
 
+const WORKSPACE_SERVICE_CLIENT_CONSTRUCTORS = {
+  createBrowserDataClient: "browser.data",
+  createGadClient: "gad.workspace",
+};
+
+const HOSTED_RUNTIME_WORKSPACE_SERVICE_FACADES = {
+  browserData: "browser.data",
+  gad: "gad.workspace",
+};
+
 const CONTEXT_RECEIVER = String.raw`(?:\bctx|\bthis\s*\.\s*ctx)`;
 
 /**
@@ -334,6 +344,10 @@ export function inferWorkspaceServiceCapabilities(source, serviceSelectors) {
         if (capability) capabilities.add(capability);
       }
     };
+    const addServiceName = (serviceName) => {
+      const capability = serviceSelectors.get(serviceName);
+      if (capability) capabilities.add(capability);
+    };
     const inspect = (node) => {
       if (ts.isCallExpression(node)) {
         if (
@@ -344,10 +358,21 @@ export function inferWorkspaceServiceCapabilities(source, serviceSelectors) {
           // runtimes expose (query, objectKey). Only known selectors match.
           for (const argument of node.arguments.slice(0, 2)) addSelector(argument);
         } else if (
+          ts.isIdentifier(node.expression) &&
+          WORKSPACE_SERVICE_CLIENT_CONSTRUCTORS[node.expression.text]
+        ) {
+          addServiceName(WORKSPACE_SERVICE_CLIENT_CONSTRUCTORS[node.expression.text]);
+        } else if (
           ts.isPropertyAccessExpression(node.expression) &&
           node.expression.name.text === "resolveService"
         ) {
           addSelector(node.arguments[0]);
+        } else if (
+          ts.isPropertyAccessExpression(node.expression) &&
+          ts.isIdentifier(node.expression.expression) &&
+          HOSTED_RUNTIME_WORKSPACE_SERVICE_FACADES[node.expression.expression.text]
+        ) {
+          addServiceName(HOSTED_RUNTIME_WORKSPACE_SERVICE_FACADES[node.expression.expression.text]);
         }
       }
       ts.forEachChild(node, inspect);

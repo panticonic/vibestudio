@@ -46,6 +46,27 @@ describe("inferWorkspaceServiceCapabilities", () => {
       ["workspace-service:channel", "workspace-service:development"]
     );
   });
+
+  it("charges service-backed runtime facades and canonical client constructors", () => {
+    const serviceBackedSelectors = new Map([
+      ...selectors,
+      ["browser.data", "workspace-service:browser.data"],
+      ["gad.workspace", "workspace-service:gad.workspace"],
+    ]);
+    assert.deepEqual(
+      [
+        ...inferWorkspaceServiceCapabilities(
+          `
+            const direct = createBrowserDataClient(rpc);
+            await browserData.getPasswords();
+            await gad.readContext("ctx");
+          `,
+          serviceBackedSelectors
+        ),
+      ].sort(),
+      ["workspace-service:browser.data", "workspace-service:gad.workspace"]
+    );
+  });
 });
 
 function sourceTreeContains(directory, pattern) {
