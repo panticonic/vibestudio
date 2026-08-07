@@ -22,6 +22,7 @@ type NativeReceipt = z.infer<typeof nativeDevelopmentSessionReceiptSchema>;
 type TerminalSnapshot = z.infer<typeof nativeDevelopmentTerminalSnapshotSchema>;
 type PreparedBuild = z.infer<typeof preparedNativeBuildSchema>;
 
+const WORKSPACE_SOURCE_PROTOCOL = "vibestudio.workspace-source.v1";
 const TERMINAL_RUN_STATES = new Set<DevelopmentRun["state"]>([
   "succeeded",
   "stopped",
@@ -870,15 +871,16 @@ export class DevelopmentDO extends DurableObjectBase {
     repoPath: string;
     sourceState: DevelopmentSession["basis"]["parentWorkingHead"];
   } | null> {
-    const status = await this.rpc.call<VcsStatusResult>("main", "vcs.status", [
-      { contextId },
+    const workspaceSource = await this.resolveWorkspaceSource();
+    const status = await this.rpc.call<VcsStatusResult>(workspaceSource, "vcsStatus", [
+      this.semanticRead({ contextId }),
     ]);
     try {
-      const inspected = await this.rpc.call<VcsInspectResult>("main", "vcs.inspect", [
-        {
+      const inspected = await this.rpc.call<VcsInspectResult>(workspaceSource, "vcsInspect", [
+        this.semanticRead({
           node: { kind: "repository", state: status.workingHead, repositoryId },
           edgeLimit: 1,
-        },
+        }),
       ]);
       if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") {
         return null;
@@ -895,6 +897,36 @@ export class DevelopmentDO extends DurableObjectBase {
       }
       throw error;
     }
+  }
+
+  private semanticRead(input: unknown) {
+    const integrity = this.authorization?.contextIntegrity;
+    if (!integrity) {
+      throw coded("EACCES", "Development semantic reads require host-attested context integrity");
+    }
+    return {
+      input,
+      ingress: {
+        causalParent: null,
+        contextIntegrity:
+          integrity.class === "external"
+            ? { class: "external" as const, externalKeys: [...integrity.externalKeys] }
+            : { class: "internal" as const, externalKeys: [] },
+      },
+    };
+  }
+
+  private async resolveWorkspaceSource(): Promise<string> {
+    const resolved = await this.rpc.call<{
+      kind: "durable-object" | "worker";
+      targetId?: string;
+    }>("main", "workers.resolveService", [WORKSPACE_SOURCE_PROTOCOL]);
+    if (resolved.kind !== "durable-object" || !resolved.targetId) {
+      throw new Error(
+        `Workspace protocol ${WORKSPACE_SOURCE_PROTOCOL} must resolve to a Durable Object`
+      );
+    }
+    return resolved.targetId;
   }
 
   private async retireSessionEffects(session: DevelopmentSession): Promise<DevelopmentSession> {

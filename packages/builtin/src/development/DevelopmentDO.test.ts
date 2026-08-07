@@ -50,13 +50,31 @@ describe("DevelopmentDO", () => {
     expect(rpcCall).toHaveBeenCalledWith("main", "developmentNative.describeHost", []);
   });
 
-  it("resolves session repositories through the canonical public VCS service", async () => {
-    const { instance } = await development();
-    const workingHead = { kind: "event" as const, eventId: "event:main" };
-    const rpcCall = vi.fn(async (target: string, method: string) => {
-      if (target !== "main") throw new Error(`Unexpected target ${target}`);
-      if (method === "vcs.status") return { workingHead };
-      if (method === "vcs.inspect") {
+  it("supplies host-attested semantic ingress when resolving session repositories", async () => {
+    const { instance, callAs } = await development();
+    const parentHead = { kind: "event" as const, eventId: "event:parent" };
+    const childHead = { kind: "event" as const, eventId: "event:child" };
+    const workspaceSource = "do:workers/workspace-source:GadWorkspaceDO:workspace";
+    const rpcCall = vi.fn(async (target: string, method: string, args: unknown[]) => {
+      if (target === "main" && method === "runtime.resolveContext") return "context:parent";
+      if (target === "main" && method === "workers.resolveService") {
+        return { kind: "durable-object", targetId: workspaceSource };
+      }
+      if (target === "main" && method === "runtime.forkSemanticContext") {
+        return {
+          contextId: "context:child",
+          parentContextId: "context:parent",
+          parentWorkingHead: parentHead,
+          childBaseState: childHead,
+        };
+      }
+      if (target === workspaceSource && method === "vcsStatus") {
+        const request = args[0] as { input: { contextId: string } };
+        return {
+          workingHead: request.input.contextId === "context:parent" ? parentHead : childHead,
+        };
+      }
+      if (target === workspaceSource && method === "vcsInspect") {
         return {
           node: {
             kind: "repository",
@@ -71,31 +89,40 @@ describe("DevelopmentDO", () => {
       configurable: true,
     });
 
-    const resolved = await (
-      instance as unknown as {
-        resolveRepository(
-          contextId: string,
-          repositoryId: string
-        ): Promise<{ repoPath: string; sourceState: typeof workingHead } | null>;
-      }
-    ).resolveRepository("context:self-development", "repository:vibestudio");
-
-    expect(resolved).toEqual({
-      repoPath: "projects/vibestudio",
-      sourceState: workingHead,
-    });
-    expect(rpcCall).toHaveBeenNthCalledWith(1, "main", "vcs.status", [
-      { contextId: "context:self-development" },
-    ]);
-    expect(rpcCall).toHaveBeenNthCalledWith(2, "main", "vcs.inspect", [
+    const opened = await callAs(
+      { callerId: "panel:development", callerKind: "panel", userId: "alice" },
+      "openSession",
       {
-        node: {
-          kind: "repository",
-          state: workingHead,
+        repositoryId: "repository:vibestudio",
+        mode: "semantic",
+        idempotencyKey: "open:self-development",
+      }
+    );
+
+    expect(opened).toMatchObject({
+      kind: "opened",
+      session: {
+        contextId: "context:child",
+        repository: {
           repositoryId: "repository:vibestudio",
+          repoPath: "projects/vibestudio",
         },
-        edgeLimit: 1,
       },
-    ]);
+    });
+    const semanticCalls = rpcCall.mock.calls.filter(
+      ([target, method]) => target === workspaceSource && String(method).startsWith("vcs")
+    );
+    expect(semanticCalls).toHaveLength(4);
+    for (const [, , args] of semanticCalls) {
+      expect(args).toEqual([
+        expect.objectContaining({
+          input: expect.any(Object),
+          ingress: {
+            causalParent: null,
+            contextIntegrity: { class: "internal", externalKeys: [] },
+          },
+        }),
+      ]);
+    }
   });
 });
