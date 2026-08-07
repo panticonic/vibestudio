@@ -64,7 +64,11 @@ const APP_SHUTDOWN_TIMEOUT_MS = 30_000;
 const startupInvocation = parseMainStartupInvocation(process.argv, process.env);
 // Consume one-shot recovery markers so intentional relaunches do not replay them.
 process.argv = startupInvocation.argv;
-const IS_HEADLESS_HOST = startupInvocation.isHeadlessHost;
+const IS_DEVELOPMENT_CLIENT_EXECUTOR = startupInvocation.isDevelopmentClientExecutor;
+// An executor appliance has no presentation surface. Reuse the established
+// headless startup containment, then stop initialization immediately after its
+// paired executor lease and direct-event subscriptions are live.
+const IS_HEADLESS_HOST = startupInvocation.isHeadlessHost || IS_DEVELOPMENT_CLIENT_EXECUTOR;
 const {
   recoveredExitCode: recoveredLocalServerCrash,
   crashLoopExitCode: localServerCrashLoopCode,
@@ -269,10 +273,12 @@ if (localServerCrashLoopCode) {
 }
 
 try {
-  startupMode = resolveStartupMode(centralData, { interactiveDesktop: !IS_HEADLESS_HOST });
+  startupMode = resolveStartupMode(centralData, {
+    interactiveDesktop: !startupInvocation.isHeadlessHost,
+  });
 } catch (error) {
   console.error("[Workspace] Failed to initialize workspace:", error);
-  if (IS_HEADLESS_HOST) {
+  if (startupInvocation.isHeadlessHost) {
     writeHeadlessStartupError(error);
     app.quit();
     process.exit(1);
@@ -310,7 +316,12 @@ if (startupMode.kind === "local") {
     path.join(startupMode.wsDir, IS_HEADLESS_HOST ? "state-headless-host" : "state")
   );
 } else {
-  app.setPath("userData", getPendingUserDataDir());
+  app.setPath(
+    "userData",
+    IS_DEVELOPMENT_CLIENT_EXECUTOR
+      ? path.join(getPendingUserDataDir(), "development-client-executor")
+      : getPendingUserDataDir()
+  );
 }
 
 let cdpHostProvider: CdpHostProvider | null = null;
@@ -2230,7 +2241,7 @@ app.on("ready", async () => {
     }
     serverClientRef = serverSession.serverClient;
     bindHostDirectServerEvents(serverClientRef, handleServerEvent);
-    if (!IS_HEADLESS_HOST) {
+    if (!IS_HEADLESS_HOST || IS_DEVELOPMENT_CLIENT_EXECUTOR) {
       const { CurrentHostDevelopmentClientExecutor } =
         await import("./currentHostDevelopmentClientExecutor.js");
       currentHostDevelopmentExecutor = new CurrentHostDevelopmentClientExecutor({
@@ -2276,6 +2287,14 @@ app.on("ready", async () => {
     // window is up.
     void approvalAttention?.refresh({ quiet: true });
     workspaceId = serverSession.workspaceId;
+
+    if (IS_DEVELOPMENT_CLIENT_EXECUTOR) {
+      bootstrapWorkspaceRpcReady = true;
+      log.info(
+        `[development] executor-only client ready for workspace ${workspaceId}; presentation startup skipped`
+      );
+      return;
+    }
 
     performance.mark("startup:server-spawned");
     performance.mark("startup:server-connected");

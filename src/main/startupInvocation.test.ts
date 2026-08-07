@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEVELOPMENT_CLIENT_EXECUTOR_ARG,
   DEV_WEBRTC_REMOTE_ARG,
   HEADLESS_HOST_ARG,
   PAIR_CONFIRMED_ARG,
@@ -51,6 +52,7 @@ describe("parseMainStartupInvocation", () => {
         PAIR_CONFIRMED_ARG,
         SKIP_REMOTE_PAIRING_ARG,
         DEV_WEBRTC_REMOTE_ARG,
+        DEVELOPMENT_CLIENT_EXECUTOR_ARG,
       ],
       {}
     );
@@ -60,6 +62,7 @@ describe("parseMainStartupInvocation", () => {
       pendingPairConfirmed: true,
       skipRemotePairing: true,
       devWebRtcRemote: true,
+      isDevelopmentClientExecutor: true,
     });
   });
 

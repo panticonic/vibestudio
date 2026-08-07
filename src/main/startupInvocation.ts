@@ -2,6 +2,7 @@ export const DEV_WEBRTC_REMOTE_ARG = "--dev-webrtc-remote";
 export const PAIR_CONFIRMED_ARG = "--pair-confirmed";
 export const SKIP_REMOTE_PAIRING_ARG = "--skip-remote-pairing";
 export const HEADLESS_HOST_ARG = "--headless-host";
+export const DEVELOPMENT_CLIENT_EXECUTOR_ARG = "--development-client-executor";
 
 const RECOVERED_LOCAL_SERVER_CRASH_PREFIX = "--recovered-local-server-crash=";
 const LOCAL_SERVER_CRASH_LOOP_PREFIX = "--local-server-crash-loop=";
@@ -19,6 +20,7 @@ export interface MainStartupInvocation {
   /** argv with one-shot crash-recovery markers consumed. */
   argv: string[];
   isHeadlessHost: boolean;
+  isDevelopmentClientExecutor: boolean;
   pendingPairConfirmed: boolean;
   skipRemotePairing: boolean;
   devWebRtcRemote: boolean;
@@ -71,6 +73,7 @@ export function parseMainStartupInvocation(
   return {
     argv: crashWorkspace.argv,
     isHeadlessHost: env["VIBESTUDIO_HEADLESS_HOST"] === "1" || argv.includes(HEADLESS_HOST_ARG),
+    isDevelopmentClientExecutor: argv.includes(DEVELOPMENT_CLIENT_EXECUTOR_ARG),
     pendingPairConfirmed: argv.includes(PAIR_CONFIRMED_ARG),
     skipRemotePairing: argv.includes(SKIP_REMOTE_PAIRING_ARG),
     devWebRtcRemote: argv.includes(DEV_WEBRTC_REMOTE_ARG),
