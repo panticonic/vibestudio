@@ -8,8 +8,9 @@ function escapeRegex(value: string): string {
 
 /** Resolve the workspace tsconfig's package paths for a Vitest config. */
 export function workspaceSourceAliases(repoRoot: string): Alias[] {
+  const workspaceRoot = path.resolve(repoRoot, "workspace");
   const workspaceTsconfig = JSON.parse(
-    readFileSync(path.resolve(repoRoot, "workspace/tsconfig.json"), "utf8")
+    readFileSync(path.resolve(workspaceRoot, "tsconfig.json"), "utf8")
   ) as { compilerOptions?: { paths?: Record<string, string[]> } };
   const tsconfigPaths = workspaceTsconfig.compilerOptions?.paths ?? {};
   const aliases: Alias[] = [];
@@ -24,10 +25,10 @@ export function workspaceSourceAliases(repoRoot: string): Alias[] {
     if (importPath.includes("*") && sourcePath.includes("*")) {
       aliases.push({
         find: new RegExp(`^${escapeRegex(importPath).replace("\\*", "(.+)")}$`),
-        replacement: path.resolve(repoRoot, sourcePath).replace("*", "$1"),
+        replacement: path.resolve(workspaceRoot, sourcePath).replace("*", "$1"),
       });
     } else {
-      aliases.push({ find: importPath, replacement: path.resolve(repoRoot, sourcePath) });
+      aliases.push({ find: importPath, replacement: path.resolve(workspaceRoot, sourcePath) });
     }
   }
 
