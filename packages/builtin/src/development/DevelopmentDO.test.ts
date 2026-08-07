@@ -71,14 +71,20 @@ describe("DevelopmentDO", () => {
       if (target === workspaceSource && method === "vcsStatus") {
         const request = args[0] as { input: { contextId: string } };
         return {
-          workingHead: request.input.contextId === "context:parent" ? parentHead : childHead,
+          kind: "complete",
+          result: {
+            workingHead: request.input.contextId === "context:parent" ? parentHead : childHead,
+          },
         };
       }
       if (target === workspaceSource && method === "vcsInspect") {
         return {
-          node: {
-            kind: "repository",
-            value: { kind: "present", repoPath: "projects/vibestudio" },
+          kind: "complete",
+          result: {
+            node: {
+              kind: "repository",
+              value: { kind: "present", repoPath: "projects/vibestudio" },
+            },
           },
         };
       }

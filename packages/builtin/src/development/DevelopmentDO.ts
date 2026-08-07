@@ -872,16 +872,18 @@ export class DevelopmentDO extends DurableObjectBase {
     sourceState: DevelopmentSession["basis"]["parentWorkingHead"];
   } | null> {
     const workspaceSource = await this.resolveWorkspaceSource();
-    const status = await this.rpc.call<VcsStatusResult>(workspaceSource, "vcsStatus", [
-      this.semanticRead({ contextId }),
-    ]);
+    const status = await this.callSemanticRead<VcsStatusResult>(workspaceSource, "vcsStatus", {
+      contextId,
+    });
     try {
-      const inspected = await this.rpc.call<VcsInspectResult>(workspaceSource, "vcsInspect", [
-        this.semanticRead({
+      const inspected = await this.callSemanticRead<VcsInspectResult>(
+        workspaceSource,
+        "vcsInspect",
+        {
           node: { kind: "repository", state: status.workingHead, repositoryId },
           edgeLimit: 1,
-        }),
-      ]);
+        }
+      );
       if (inspected.node.kind !== "repository" || inspected.node.value.kind !== "present") {
         return null;
       }
@@ -899,7 +901,23 @@ export class DevelopmentDO extends DurableObjectBase {
     }
   }
 
-  private semanticRead(input: unknown) {
+  private async callSemanticRead<T>(
+    workspaceSource: string,
+    method: "vcsStatus" | "vcsInspect",
+    input: unknown
+  ): Promise<T> {
+    const outcome = await this.rpc.call<
+      | { kind: "complete"; result: T }
+      | { kind: "effects-pending"; effects: readonly unknown[] }
+      | { kind: "host-read"; request: unknown }
+    >(workspaceSource, method, [this.semanticRequest(input)]);
+    if (outcome.kind !== "complete") {
+      throw coded("ESEMANTICREAD", `Development ${method} unexpectedly required ${outcome.kind}`);
+    }
+    return outcome.result;
+  }
+
+  private semanticRequest(input: unknown) {
     const integrity = this.authorization?.contextIntegrity;
     if (!integrity) {
       throw coded("EACCES", "Development semantic reads require host-attested context integrity");
