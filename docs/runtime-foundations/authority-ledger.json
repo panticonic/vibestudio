@@ -13277,6 +13277,47 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:adoptDurableWorkWorker",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+      "source": "workers/workspace-source",
+      "method": "adoptDurableWorkWorker",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:adoptDurableWorkWorker",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:adoptDurableWorkWorker)",
+      "r3b": {
+        "review": "host-only-publication-worker-fencing",
+        "change": "Adds host-only adoption of one exact workspace publication queue generation. A new activation releases only leases held by the previous host worker and grants no access to publication payloads or workspace content."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:appendChannelEnvelope",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
@@ -13447,6 +13488,47 @@
       "r3b": {
         "review": "schema-authority",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:claimReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+      "source": "workers/workspace-source",
+      "method": "claimReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:claimReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:claimReadyWork)",
+      "r3b": {
+        "review": "host-only-bounded-publication-claim",
+        "change": "Adds bounded, generation-fenced claims over committed channel-publication outbox rows. Claims expose only exact channel and stored-envelope coordinates required by the durable delivery driver."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -13754,6 +13836,47 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:durableWorkStatus",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+      "source": "workers/workspace-source",
+      "method": "durableWorkStatus",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "rpc:durableWorkStatus",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:durableWorkStatus)",
+      "r3b": {
+        "review": "host-only-publication-readiness-summary",
+        "change": "Adds a bounded host read of publication queue readiness and its next recovery time without exposing message payloads, channel history, or workspace source state."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:ensureBlob",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
@@ -13794,6 +13917,47 @@
       "r3b": {
         "review": "schema-authority",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:failReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+      "source": "workers/workspace-source",
+      "method": "failReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:failReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:failReadyWork)",
+      "r3b": {
+        "review": "host-only-publication-claim-failure",
+        "change": "Records bounded retry state only for the exact publication item, worker identity, and lease generation; stale hosts cannot alter a newer claim or discard delivery."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -15894,6 +16058,47 @@
       "r3b": {
         "review": "schema-authority",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:settleReadyWork",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+      "source": "workers/workspace-source",
+      "method": "settleReadyWork",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:settleReadyWork",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "capability(host,rpc:settleReadyWork)",
+      "r3b": {
+        "review": "host-only-publication-claim-settlement",
+        "change": "Deletes a publication outbox row only after the exact worker and lease generation report a complete stored-envelope broadcast; missing, partial, duplicate, and stale settlements fail closed."
       },
       "parityAssertion": "generated-census:direct-authority"
     },

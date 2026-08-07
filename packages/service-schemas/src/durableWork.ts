@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { DURABLE_WORK_QUEUES } from "@vibestudio/shared/durableWork";
 
 const durableWorkTriggerSchema = z.enum(["hint", "recovery", "continuation"]);
-const durableWorkQueueSchema = z.enum(["channel-delivery", "agent-inbox", "agent-effect"]);
+const durableWorkQueueSchema = z.enum(DURABLE_WORK_QUEUES);
 const durableWorkSettlementSchema = z.enum(["accepted", "duplicate", "stale"]);
 
 export const durableWorkDriverTraceSchema = z

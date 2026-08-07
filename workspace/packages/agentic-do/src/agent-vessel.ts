@@ -1227,9 +1227,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       configFor: (channelId) => this.loopConfig(channelId),
       policiesFor: (channelId) => this.getStepPolicies(channelId),
       onEphemeral: (emit) => this.emitEphemeral(emit),
-      broadcastStoredEnvelopes: async (channelId, envelopeIds) => {
-        await this.createChannelClient(channelId).broadcastStoredEnvelopes(envelopeIds);
-      },
       onHeartbeatOutcome: (input) => this.onHeartbeatOutcome(input),
       now: () => Date.now(),
       // Idle-history budget before a fold-shrinking compaction. Kept well

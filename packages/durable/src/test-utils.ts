@@ -1,5 +1,5 @@
 import initSqlJs, { type Database, type SqlJsStatic } from "sql.js";
-import type { AuthenticatedCaller, AuthorizationContext } from "@vibestudio/rpc";
+import type { AuthenticatedCaller, AuthorizationContext, RpcEnvelope } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { rpcMethodAuthority } from "@vibestudio/rpc";
 
@@ -131,6 +131,26 @@ const AGENTIC_ENV_DEFAULTS: Record<string, string> = {
   RPC_AUTH_TOKEN: "test-token",
   WORKER_SOURCE: "test",
   WORKER_CLASS_NAME: "TestDO",
+};
+
+/** Deterministic host transport for unit tests whose subject schedules durable work. */
+export const successfulTestRpcFetch: typeof fetch = async (_input, init) => {
+  const request = JSON.parse(String(init?.body ?? "{}")) as RpcEnvelope;
+  const requestMessage = request.message as { requestId?: string };
+  return new Response(
+    JSON.stringify({
+      from: request.target,
+      target: request.from,
+      delivery: request.delivery,
+      provenance: request.provenance ?? [],
+      message: {
+        type: "response",
+        requestId: requestMessage.requestId ?? "",
+        result: null,
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
 };
 
 export function createTestDirectAuthority(input: {

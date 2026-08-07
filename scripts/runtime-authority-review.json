@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:364c3de4e44d396eff39a04986695e4944b1b77d4ca1e52aee85931d43968e86",
+  "censusDigest": "sha256:0d685e84f0df74b38df8049686276cd4f4f1ab174b8743713dbe0b647187a1b5",
   "decisions": {
     "host:panelRuntime.awaitAttempt": {
       "review": "exact-panel-attempt-readiness-read",
@@ -277,6 +277,26 @@
     "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:diagnoseInvocation": {
       "review": "bounded-read-only-causal-diagnostics",
       "change": "Adds an open, read-only exact-coordinate projection over existing trajectory, semantic command, effect-intent, and receipt authorities; every collection is bounded and reports truncation, and the method performs no mutation."
+    },
+    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:adoptDurableWorkWorker": {
+      "review": "host-only-publication-worker-fencing",
+      "change": "Adds host-only adoption of one exact workspace publication queue generation. A new activation releases only leases held by the previous host worker and grants no access to publication payloads or workspace content."
+    },
+    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:claimReadyWork": {
+      "review": "host-only-bounded-publication-claim",
+      "change": "Adds bounded, generation-fenced claims over committed channel-publication outbox rows. Claims expose only exact channel and stored-envelope coordinates required by the durable delivery driver."
+    },
+    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:durableWorkStatus": {
+      "review": "host-only-publication-readiness-summary",
+      "change": "Adds a bounded host read of publication queue readiness and its next recovery time without exposing message payloads, channel history, or workspace source state."
+    },
+    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:failReadyWork": {
+      "review": "host-only-publication-claim-failure",
+      "change": "Records bounded retry state only for the exact publication item, worker identity, and lease generation; stale hosts cannot alter a newer claim or discard delivery."
+    },
+    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:settleReadyWork": {
+      "review": "host-only-publication-claim-settlement",
+      "change": "Deletes a publication outbox row only after the exact worker and lease generation report a complete stored-envelope broadcast; missing, partial, duplicate, and stale settlements fail closed."
     },
     "host:contextIntegrity.explain": {
       "review": "own-session-verified-lineage-explanation",

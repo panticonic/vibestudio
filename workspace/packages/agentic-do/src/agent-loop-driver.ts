@@ -206,7 +206,6 @@ export interface DriverDeps {
   notifyWorkReady?(): void;
   /** Live fan-out for GAD-created channel publication rows. The trajectory log
    *  append is authoritative; this only wakes channel subscribers in-process. */
-  broadcastStoredEnvelopes?(channelId: string, envelopeIds: string[]): Promise<void>;
   onHeartbeatOutcome?(input: {
     channelId: string;
     descriptor: EffectDescriptor;
@@ -1199,7 +1198,6 @@ export class AgentLoopDriver {
       envelopes: LogEnvelope[];
       headSeq: number;
       headHash: string;
-      published?: Array<{ originEnvelopeId: string; channelId: string; envelopeId: string }>;
     }>("appendLogEvent", {
       logId: loop.logId,
       head: loop.head,
@@ -1217,41 +1215,7 @@ export class AgentLoopDriver {
     });
     // only the suffix that is new to this state matters for the fold
     const newEnvelopes = result.envelopes.filter((envelope) => envelope.seq > loop.state.lastSeq);
-    await this.broadcastPublications(newEnvelopes, result.published ?? []);
     return newEnvelopes;
-  }
-
-  private async broadcastPublications(
-    newEnvelopes: LogEnvelope[],
-    published: Array<{ originEnvelopeId: string; channelId: string; envelopeId: string }>
-  ): Promise<void> {
-    if (
-      !this.deps.broadcastStoredEnvelopes ||
-      newEnvelopes.length === 0 ||
-      published.length === 0
-    ) {
-      return;
-    }
-    const newOriginIds = new Set(newEnvelopes.map((envelope) => String(envelope.envelopeId)));
-    const byChannel = new Map<string, string[]>();
-    for (const publication of published) {
-      if (!newOriginIds.has(publication.originEnvelopeId)) continue;
-      const envelopeIds = byChannel.get(publication.channelId) ?? [];
-      envelopeIds.push(publication.envelopeId);
-      byChannel.set(publication.channelId, envelopeIds);
-    }
-    await Promise.all(
-      [...byChannel.entries()].map(async ([channelId, envelopeIds]) => {
-        try {
-          await this.deps.broadcastStoredEnvelopes?.(channelId, envelopeIds);
-        } catch (err) {
-          console.warn(
-            "[agent-loop-driver] failed to broadcast published envelopes:",
-            err instanceof Error ? err.message : String(err)
-          );
-        }
-      })
-    );
   }
 
   /** §2.2 — replaces the recovery zoo. */

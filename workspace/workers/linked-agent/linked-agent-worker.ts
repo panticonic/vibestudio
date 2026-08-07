@@ -1133,10 +1133,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     if (items.length === 0) return;
     const { logId, head } = channelTrajectoryFor(channelId);
     const selfRef = this.selfRef(channelId);
-    const result = await this.callGad<{
-      envelopes: Array<{ envelopeId: string }>;
-      published?: Array<{ originEnvelopeId: string; channelId: string; envelopeId: string }>;
-    }>("appendLogEvent", {
+    await this.callGad("appendLogEvent", {
       logId,
       head,
       logKind: "trajectory",
@@ -1151,20 +1148,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         ...(item.publish ? { publish: { channels: [{ channelId }] } } : {}),
       })),
     });
-    const published = result.published ?? [];
-    const envelopeIds = published
-      .filter((entry) => entry.channelId === channelId)
-      .map((entry) => entry.envelopeId);
-    if (envelopeIds.length > 0) {
-      await this.createChannelClient(channelId)
-        .broadcastStoredEnvelopes(envelopeIds)
-        .catch((err) => {
-          console.warn(
-            "[LinkedAgent] broadcast of published trajectory events failed:",
-            err instanceof Error ? err.message : err
-          );
-        });
-    }
   }
 
   // ── Permission relay (plan §7.3) ───────────────────────────────────────────

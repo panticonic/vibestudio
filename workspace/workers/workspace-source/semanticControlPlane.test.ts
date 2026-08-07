@@ -1,7 +1,10 @@
 // Builtin semantic-authority tests.
 import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
-import { createTestDO } from "@vibestudio/durable/test-utils";
+import {
+  createTestDO as createBaseTestDO,
+  successfulTestRpcFetch,
+} from "@vibestudio/durable/test-utils";
 import {
   AgentHealthInspectionSchema,
   gadWireMethods,
@@ -14,6 +17,10 @@ import {
   type AgenticEvent,
 } from "@workspace/agentic-protocol";
 import { GadWorkspaceDO } from "./index.js";
+import type { WorkClaim } from "@vibestudio/shared/durableWork";
+
+const createTestDO: typeof createBaseTestDO = (DOClass, env, opts) =>
+  createBaseTestDO(DOClass, { RPC_FETCH: successfulTestRpcFetch, ...env }, opts);
 
 const owner = { kind: "agent" as const, id: "agent-1" };
 const GENESIS = GENESIS_EVENT_HASH;
@@ -365,7 +372,9 @@ describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
       })
     ).rejects.toThrow(/Invalid arguments for putChannelMembership/);
 
-    await expect(callAs(verifiedUserCaller("usr_bob"), "listUserNotificationsForMe")).resolves.toMatchObject({
+    await expect(
+      callAs(verifiedUserCaller("usr_bob"), "listUserNotificationsForMe")
+    ).resolves.toMatchObject({
       notifications: [
         { id: "channel.invite:channel-b", kind: "channel.invite", userId: "usr_bob" },
         { id: "channel.invite:channel-a", kind: "channel.invite", userId: "usr_bob" },
@@ -422,8 +431,9 @@ describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
       1
     );
 
-    await expect(callAs({ callerId: "shell", callerKind: "shell" }, "listUserNotificationsForMe"))
-      .rejects.toThrow(/authenticated workspace account/);
+    await expect(
+      callAs({ callerId: "shell", callerKind: "shell" }, "listUserNotificationsForMe")
+    ).rejects.toThrow(/authenticated workspace account/);
     await expect(
       callAs(channelCaller("bad"), "putChannelMembership", {
         channelId: "bad",
@@ -559,6 +569,90 @@ describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
 });
 
 describe("appendLogEvent core (§3.2)", () => {
+  it("retains publication delivery across failure, retry, and stale settlement", async () => {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    await appendTrajectoryEvents(call, {
+      trajectoryId: "trajectory:publication-retry",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "event:publication-retry",
+          event: event("system.event", {
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              kind: "publication-retry-test",
+              details: { text: "hello" },
+            },
+          }),
+          publish: { channelIds: ["channel-retry"] },
+        },
+      ],
+    });
+
+    const workerId = "driver-publication-1";
+    const [first] = await call<WorkClaim[]>("claimReadyWork", "workspace-publication", {
+      workerId,
+      now: Date.now(),
+      limit: 10,
+    });
+    expect(first).toMatchObject({
+      generation: 1,
+      attempt: 1,
+      payload: {
+        laneKey: "channel-retry",
+        target: {
+          source: "workers/pubsub-channel",
+          className: "PubSubChannel",
+          objectKey: "channel-retry",
+        },
+      },
+    });
+
+    const failed = await call<{ retryAt: number }>("failReadyWork", "workspace-publication", {
+      workerId,
+      itemId: first!.itemId,
+      generation: first!.generation,
+    });
+    expect(failed.retryAt).toBeGreaterThan(Date.now());
+    await expect(
+      call<WorkClaim[]>("claimReadyWork", "workspace-publication", {
+        workerId,
+        now: failed.retryAt - 1,
+        limit: 10,
+      })
+    ).resolves.toEqual([]);
+
+    const [retry] = await call<WorkClaim[]>("claimReadyWork", "workspace-publication", {
+      workerId,
+      now: failed.retryAt,
+      limit: 10,
+    });
+    expect(retry).toMatchObject({ generation: 2, attempt: 2 });
+    await expect(
+      call("settleReadyWork", "workspace-publication", {
+        workerId,
+        itemId: retry!.itemId,
+        generation: first!.generation,
+        outcome: { broadcasted: 1 },
+      })
+    ).resolves.toBe("stale");
+    await expect(
+      call("settleReadyWork", "workspace-publication", {
+        workerId,
+        itemId: retry!.itemId,
+        generation: retry!.generation,
+        outcome: { broadcasted: 1 },
+      })
+    ).resolves.toBe("accepted");
+
+    const remaining = await querySql<{ rows: unknown[] }>(
+      sql,
+      "SELECT item_id FROM publication_delivery_outbox"
+    );
+    expect(remaining.rows).toEqual([]);
+  });
+
   it("reuses the transactional head snapshot instead of re-reading every fresh append", async () => {
     const { instance, sql } = await createTestDO(GadWorkspaceDO);
     const queries: string[] = [];
@@ -1871,35 +1965,37 @@ describe("channel projections (§3.4)", () => {
       logId: "channel-1",
       head: "main",
       logKind: "channel",
-      events: [{
-        envelopeId: "env-registry",
-        actor: {
-          kind: "panel",
-          id: "panel:user",
-          participantId: "panel:user",
-          metadata: hugeMetadata,
-        },
-        payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: {
-          kind: "messageType.registered",
-          actor: { kind: "panel", id: "panel:user", metadata: hugeMetadata },
-          createdAt: "2026-05-20T12:00:00.000Z",
-          payload: {
-            protocol: AGENTIC_PROTOCOL_VERSION,
-            typeId: "custom",
-            displayMode: "inline",
-            source: {
-              protocol: "vibestudio.blob-ref.v1",
-              digest: "registry-source",
-              size: 19,
-              encoding: "json",
-              originalBytes: 19,
-            },
-            registeredBy: { kind: "panel", id: "panel:user", metadata: hugeMetadata },
+      events: [
+        {
+          envelopeId: "env-registry",
+          actor: {
+            kind: "panel",
+            id: "panel:user",
+            participantId: "panel:user",
+            metadata: hugeMetadata,
           },
+          payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload: {
+            kind: "messageType.registered",
+            actor: { kind: "panel", id: "panel:user", metadata: hugeMetadata },
+            createdAt: "2026-05-20T12:00:00.000Z",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              typeId: "custom",
+              displayMode: "inline",
+              source: {
+                protocol: "vibestudio.blob-ref.v1",
+                digest: "registry-source",
+                size: 19,
+                encoding: "json",
+                originalBytes: 19,
+              },
+              registeredBy: { kind: "panel", id: "panel:user", metadata: hugeMetadata },
+            },
+          },
+          annotations: { metadata: hugeMetadata },
         },
-        annotations: { metadata: hugeMetadata },
-      }],
+      ],
     });
 
     await appendTrajectoryEvents(call, {
@@ -2056,37 +2152,40 @@ describe("channel projections (§3.4)", () => {
       envelopeId: string;
       kind: "messageType.registered" | "messageType.cleared";
       sourceDigest?: string;
-    }) => call("appendLogEvent", {
-      logId: "channel-1",
-      head: "main",
-      logKind: "channel",
-      events: [{
-        envelopeId: input.envelopeId,
-        actor: { kind: "panel", id: "panel:user", participantId: "panel:user" },
-        payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: {
-          kind: input.kind,
-          actor: { kind: "panel", id: "panel:user" },
-          createdAt: "2026-05-20T12:00:00.000Z",
-          payload: {
-            protocol: AGENTIC_PROTOCOL_VERSION,
-            typeId: "custom",
-            ...(input.kind === "messageType.registered"
-              ? {
-                  displayMode: "inline",
-                  source: {
-                    protocol: "vibestudio.blob-ref.v1",
-                    digest: input.sourceDigest!,
-                    size: 16,
-                    encoding: "json",
-                    originalBytes: 16,
-                  },
-                }
-              : {}),
+    }) =>
+      call("appendLogEvent", {
+        logId: "channel-1",
+        head: "main",
+        logKind: "channel",
+        events: [
+          {
+            envelopeId: input.envelopeId,
+            actor: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+            payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+            payload: {
+              kind: input.kind,
+              actor: { kind: "panel", id: "panel:user" },
+              createdAt: "2026-05-20T12:00:00.000Z",
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                typeId: "custom",
+                ...(input.kind === "messageType.registered"
+                  ? {
+                      displayMode: "inline",
+                      source: {
+                        protocol: "vibestudio.blob-ref.v1",
+                        digest: input.sourceDigest!,
+                        size: 16,
+                        encoding: "json",
+                        originalBytes: 16,
+                      },
+                    }
+                  : {}),
+              },
+            },
           },
-        },
-      }],
-    });
+        ],
+      });
 
     await appendRegistryEvent({
       envelopeId: "env-upsert",

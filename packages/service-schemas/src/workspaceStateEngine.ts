@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DURABLE_WORK_QUEUES } from "@vibestudio/shared/durableWork";
 import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { AuthorityResourceScopeSchema, UnitAuthorityManifestSchema } from "./build.js";
@@ -100,7 +101,7 @@ const lifecycleOpResultSchema = LifecycleKeySchema.extend({
   updatedAt: z.number().int().nonnegative(),
 });
 
-const durableWorkQueueSchema = z.enum(["channel-delivery", "agent-inbox", "agent-effect"]);
+const durableWorkQueueSchema = z.enum(DURABLE_WORK_QUEUES);
 const durableWorkReadyHintSchema = z
   .object({
     owner: LifecycleKeySchema,

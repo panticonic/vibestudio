@@ -82,7 +82,7 @@ import {
   type DurableObjectSchemaBaseline,
   type DurableObjectSchemaMigration,
 } from "@vibestudio/durable/schema";
-import { InvocationContext } from "@vibestudio/durable";
+import { DurableWorkReadiness, InvocationContext } from "@vibestudio/durable";
 
 interface RpcInvocationContext {
   verifiedCaller: AttestedCaller | null;
@@ -96,11 +96,6 @@ interface RpcInvocationContext {
   idempotencyKey: string | null;
   readyQueues: Set<DurableWorkQueue>;
 }
-
-const DURABLE_WORK_READY_GENERATION_PREFIX = "durable-work-ready-generation:";
-const DURABLE_WORK_ACK_GENERATION_PREFIX = "durable-work-ack-generation:";
-const DURABLE_WORK_WORKER_KEY = "durable-work-active-worker";
-const DURABLE_WORK_ACTIVATION_KEY = "durable-work-active-activation";
 
 // ---------------------------------------------------------------------------
 // Console bridge — forwards DO console.* output to the server terminal.
@@ -262,9 +257,7 @@ export abstract class DurableObjectBase {
   private _credentials: CredentialClient | null = null;
   private _notifications: NotificationClient | null = null;
   private _fs: RuntimeFs | null = null;
-  /** A lease generation belongs to one concrete DO activation as well as one
-   * host driver. A facet can be reconstructed without restarting that driver. */
-  private readonly _durableWorkActivationId = crypto.randomUUID();
+  private readonly _durableWorkReadiness: DurableWorkReadiness;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     this.ctx = ctx;
@@ -274,6 +267,14 @@ export abstract class DurableObjectBase {
       transactionSync: (callback) => this.ctx.storage.transactionSync(callback),
     });
     this.env = env as Record<string, unknown>;
+    this._durableWorkReadiness = new DurableWorkReadiness(
+      {
+        get: (key) => this.getStateValue(key),
+        set: (key, value) => this.setStateValue(key, value),
+        transaction: (callback) => this.ctx.storage.transactionSync(callback),
+      },
+      crypto.randomUUID()
+    );
     // Schema is NOT initialized here — deferred to first fetch()/alarm().
     // This avoids the init-order bug where createTables() would be called
     // during super() before subclass fields are initialized.
@@ -1449,16 +1450,7 @@ export abstract class DurableObjectBase {
   protected markWorkReady(...queues: DurableWorkQueue[]): void {
     const unique = [...new Set(queues)];
     this.emitWorkReadyHint(...unique);
-    this.ctx.storage.transactionSync(() => {
-      for (const queue of unique) {
-        const key = `${DURABLE_WORK_READY_GENERATION_PREFIX}${queue}`;
-        const current = Number(this.getStateValue(key) ?? 0);
-        if (!Number.isSafeInteger(current) || current < 0) {
-          throw new Error(`Invalid durable work ready generation for ${queue}`);
-        }
-        this.setStateValue(key, String(current + 1));
-      }
-    });
+    this._durableWorkReadiness.markReady(unique);
   }
 
   /**
@@ -1477,29 +1469,11 @@ export abstract class DurableObjectBase {
   }
 
   private pendingDurableWorkReadyQueues(): DurableWorkQueue[] {
-    return this.durableWorkQueues().filter((queue) => {
-      const ready = Number(
-        this.getStateValue(`${DURABLE_WORK_READY_GENERATION_PREFIX}${queue}`) ?? 0
-      );
-      const acknowledged = Number(
-        this.getStateValue(`${DURABLE_WORK_ACK_GENERATION_PREFIX}${queue}`) ?? 0
-      );
-      if (
-        !Number.isSafeInteger(ready) ||
-        ready < 0 ||
-        !Number.isSafeInteger(acknowledged) ||
-        acknowledged < 0 ||
-        acknowledged > ready
-      ) {
-        throw new Error(`Invalid durable work generations for ${queue}`);
-      }
-      return ready > acknowledged;
-    });
+    return this._durableWorkReadiness.pendingQueues(this.durableWorkQueues());
   }
 
   protected acknowledgeDurableWorkReady(queue: DurableWorkQueue): void {
-    const ready = this.getStateValue(`${DURABLE_WORK_READY_GENERATION_PREFIX}${queue}`) ?? "0";
-    this.setStateValue(`${DURABLE_WORK_ACK_GENERATION_PREFIX}${queue}`, ready);
+    this._durableWorkReadiness.acknowledge(queue);
   }
 
   /** Queue capabilities are registered by the host before entity activation
@@ -1526,20 +1500,9 @@ export abstract class DurableObjectBase {
     adopted: boolean;
     previousWorkerId: string | null;
   } {
-    if (typeof workerId !== "string" || workerId.length < 8 || workerId.length > 512) {
-      throw new Error("adoptDurableWorkWorker: invalid worker identity");
-    }
-    return this.ctx.storage.transactionSync(() => {
-      const previousWorkerId = this.getStateValue(DURABLE_WORK_WORKER_KEY);
-      const previousActivationId = this.getStateValue(DURABLE_WORK_ACTIVATION_KEY);
-      if (previousWorkerId === workerId && previousActivationId === this._durableWorkActivationId) {
-        return { adopted: false, previousWorkerId };
-      }
-      this.releaseDurableWorkClaims(previousWorkerId, workerId);
-      this.setStateValue(DURABLE_WORK_WORKER_KEY, workerId);
-      this.setStateValue(DURABLE_WORK_ACTIVATION_KEY, this._durableWorkActivationId);
-      return { adopted: true, previousWorkerId };
-    });
+    return this._durableWorkReadiness.adoptWorker(workerId, (previousWorkerId, nextWorkerId) =>
+      this.releaseDurableWorkClaims(previousWorkerId, nextWorkerId)
+    );
   }
 
   protected releaseDurableWorkClaims(

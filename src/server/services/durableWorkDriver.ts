@@ -160,6 +160,7 @@ interface DriverClaimPayload {
   laneKey?: unknown;
   target?: unknown;
   batch?: unknown;
+  envelopeIds?: unknown;
 }
 
 function requireTarget(value: unknown): DORef {
@@ -170,7 +171,7 @@ function requireTarget(value: unknown): DORef {
     typeof (value as DORef).className !== "string" ||
     typeof (value as DORef).objectKey !== "string"
   ) {
-    throw new Error("channel-delivery claim has no valid target");
+    throw new Error("durable-work claim has no valid target");
   }
   return value as DORef;
 }
@@ -238,6 +239,31 @@ export function createDurableWorkHandlers(
           "acceptChannelBatch",
           payload.batch
         );
+      },
+    },
+    "workspace-publication": {
+      ...common("workspace-publication"),
+      execute: async (_owner, claim, signal) => {
+        const payload = claim.payload as DriverClaimPayload;
+        const target = requireTarget(payload.target);
+        const envelopeIds = Array.isArray(payload.envelopeIds)
+          ? payload.envelopeIds.filter((value): value is string => typeof value === "string")
+          : [];
+        if (envelopeIds.length === 0) {
+          throw new Error("workspace-publication claim has no envelope ids");
+        }
+        const outcome = (await doDispatch.dispatchHeldWithSignal(
+          target,
+          signal,
+          "broadcastStoredEnvelopes",
+          envelopeIds
+        )) as { broadcasted?: unknown };
+        if (outcome?.broadcasted !== envelopeIds.length) {
+          throw new Error(
+            `workspace-publication broadcast acknowledged ${String(outcome?.broadcasted)} of ${envelopeIds.length} envelopes`
+          );
+        }
+        return outcome;
       },
     },
     "agent-inbox": {

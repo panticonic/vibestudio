@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO as createBaseTestDO } from "@workspace/runtime/worker/test-utils";
+import { successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
 import { GadWorkspaceDO } from "@workspace-workers/workspace-source";
 import {
   ids,
@@ -15,6 +16,9 @@ import type { ChannelCallPort, EffectExecutor, EphemeralEmit } from "./effect-ex
 import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { summarizeTurn } from "./agent-vessel.js";
+
+const createTestDO: typeof createBaseTestDO = (DOClass, env, opts) =>
+  createBaseTestDO(DOClass, { RPC_FETCH: successfulTestRpcFetch, ...env }, opts);
 
 const CHANNEL = "chan-d1";
 const LOG_ID = logIdForChannel(CHANNEL);
@@ -84,7 +88,6 @@ async function makeHarness(opts: {
   const driverHost =
     opts.driverSql ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" }));
   const ephemerals: EphemeralEmit[] = [];
-  const broadcasts: Array<{ channelId: string; envelopeIds: string[] }> = [];
   const channelPublishes: Array<Parameters<ChannelCallPort["publish"]>[0]> = [];
   const channelCalls: Array<Parameters<ChannelCallPort["callMethod"]>[0]> = [];
   const cancelledChannelCalls: Array<{ channelId: string; transportCallId: string }> = [];
@@ -153,9 +156,6 @@ async function makeHarness(opts: {
     configFor: () => opts.config ?? config,
     policiesFor: () => opts.policies ?? [],
     onEphemeral: (emit) => ephemerals.push(emit),
-    broadcastStoredEnvelopes: async (channelId, envelopeIds) => {
-      broadcasts.push({ channelId, envelopeIds });
-    },
     now: () => (now += 7),
     scheduleAlarm: (at) => alarms.push(at),
     executorOverride: (descriptor) => {
@@ -175,7 +175,6 @@ async function makeHarness(opts: {
     driverHost,
     ephemerals,
     alarms,
-    broadcasts,
     channelPublishes,
     channelCalls,
     cancelledChannelCalls,
@@ -404,13 +403,20 @@ describe("AgentLoopDriver", () => {
     // still lease and dispatch another channel while channel A is awaiting I/O.
     const CHANNEL_B = "chan-d2";
     const hung = deferred<EffectOutcome>();
+    const aStarted = deferred<void>();
     let bModelCalls = 0;
     const harness = await makeHarness({
       script: { model: [], tool: [] },
       executorOverride: (descriptor) => {
         if (descriptor.kind !== "model_call") return null;
         if (descriptor.channelId === CHANNEL) {
-          return { kind: "model_call", execute: () => hung.promise } as EffectExecutor; // hangs forever
+          return {
+            kind: "model_call",
+            execute: () => {
+              aStarted.resolve();
+              return hung.promise;
+            },
+          } as EffectExecutor;
         }
         return {
           kind: "model_call",
@@ -425,8 +431,7 @@ describe("AgentLoopDriver", () => {
     await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-a"));
     const alarmA = harness.driver.dispatchReadyEffectsForTest();
     alarmA.catch(() => undefined);
-    await Promise.resolve();
-    await Promise.resolve();
+    await aStarted.promise;
     // Channel B: a different channel's turn must still dispatch + complete.
     await harness.driver.handleIncoming(CHANNEL_B, {
       type: "command",
@@ -1155,9 +1160,11 @@ describe("AgentLoopDriver", () => {
       `SELECT COUNT(*) AS cnt FROM log_events WHERE log_id = '${CHANNEL}'`
     );
     expect(channelRows.rows[0]!.cnt).toBeGreaterThan(0);
-    expect(harness.broadcasts.length).toBeGreaterThan(0);
-    expect(harness.broadcasts.every((item) => item.channelId === CHANNEL)).toBe(true);
-    expect(harness.broadcasts.flatMap((item) => item.envelopeIds)).toContain(
+    const publicationRows = inspectSql<{ rows: Array<{ envelope_id: string }> }>(
+      harness.gad,
+      `SELECT envelope_id FROM publication_delivery_outbox ORDER BY created_at, item_id`
+    );
+    expect(publicationRows.rows.map((row) => row.envelope_id)).toContain(
       `pub:${ids.messageTerminal(ids.messageId(ids.turnId(CHANNEL, "env-1", "agent:self"), 1))}:${CHANNEL}`
     );
   });

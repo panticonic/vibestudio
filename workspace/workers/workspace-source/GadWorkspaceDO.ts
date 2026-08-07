@@ -5,8 +5,17 @@
  * The host recognizes only the workspace-source protocol and seals this
  * worker's receiver authority into the exact activated build.
  */
-import { schemaRpc } from "@vibestudio/rpc";
+import { rpc, schemaRpc } from "@vibestudio/rpc";
 import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
+import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
+import type {
+  ClaimRequest,
+  ClaimSettlement,
+  DurableWorkQueue,
+  SettleRequest,
+  WorkClaim,
+} from "@vibestudio/shared/durableWork";
+import type { DurableObjectSchemaMigration } from "@vibestudio/durable/schema";
 import {
   gadWireMethods,
   StoredRegistryMutationInputSchema,
@@ -154,7 +163,10 @@ type ChannelRosterRow = ChannelRosterInspection["rows"][number];
 type StorageDiagnostic = AgentHealthInspection["storage"]["rows"][number];
 
 /** First supported production schema for the semantic workspace authority. */
-const GAD_WORKSPACE_SCHEMA_VERSION = 61;
+const GAD_WORKSPACE_SCHEMA_VERSION = 62;
+
+const PUBLICATION_RETRY_BASE_MS = 250;
+const PUBLICATION_RETRY_MAX_MS = 30_000;
 
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
 
@@ -180,6 +192,32 @@ function createWorkspaceSourceInitializationTable(sql: {
       updated_at TEXT NOT NULL
     )
   `);
+}
+
+function createPublicationDeliveryOutbox(sql: {
+  exec(query: string, ...bindings: SqlBinding[]): unknown;
+}): void {
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS publication_delivery_outbox (
+      item_id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL,
+      envelope_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at INTEGER NOT NULL,
+      lease_owner TEXT,
+      lease_generation INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      last_attempt_at INTEGER,
+      disposition TEXT NOT NULL DEFAULT 'ready'
+        CHECK (disposition IN ('ready', 'leased', 'retrying')),
+      UNIQUE(channel_id, envelope_id)
+    )
+  `);
+  sql.exec(
+    `CREATE INDEX IF NOT EXISTS idx_publication_delivery_claim
+       ON publication_delivery_outbox(disposition, next_attempt_at, created_at)`
+  );
 }
 
 function createMemoryIndex(sql: {
@@ -255,6 +293,7 @@ const GAD_REQUIRED_TABLES = [
   "channel_membership_revisions",
   "gad_blobs",
   "workspace_source_initializations",
+  "publication_delivery_outbox",
   ...SEMANTIC_VCS_REQUIRED_TABLES,
 ] as const;
 
@@ -742,7 +781,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   protected override schemaProductionBaseline() {
-    return { version: GAD_WORKSPACE_SCHEMA_VERSION, name: "gad-workspace-baseline" } as const;
+    return { version: 61, name: "gad-workspace-v61" } as const;
+  }
+
+  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [
+      {
+        version: 62,
+        name: "durable-publication-delivery-outbox",
+        validateSource: (sql) => {
+          const logEvents = sql
+            .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'log_events'`)
+            .toArray();
+          if (logEvents.length === 0) {
+            throw new Error("GAD v61 source is missing log_events");
+          }
+        },
+        migrate: (sql) => createPublicationDeliveryOutbox(sql),
+      },
+    ];
   }
   protected createTables(): void {
     this.createFreshSchema();
@@ -750,6 +807,224 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   protected override requiredTables(): readonly string[] {
     return GAD_REQUIRED_TABLES;
+  }
+
+  protected override durableWorkQueues(): readonly DurableWorkQueue[] {
+    return ["workspace-publication"];
+  }
+
+  protected override releaseDurableWorkClaims(
+    previousWorkerId: string | null,
+    _nextWorkerId: string
+  ): void {
+    if (!previousWorkerId) return;
+    this.sql.exec(
+      `UPDATE publication_delivery_outbox
+          SET disposition = 'ready', lease_owner = NULL, next_attempt_at = ?
+        WHERE disposition = 'leased' AND lease_owner = ?`,
+      Date.now(),
+      previousWorkerId
+    );
+  }
+
+  private hasReadyPublicationDelivery(now: number): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM publication_delivery_outbox
+            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
+            LIMIT 1`,
+          now
+        )
+        .toArray().length > 0
+    );
+  }
+
+  private nextPublicationRecoveryAt(): number | null {
+    const value = this.sql
+      .exec(
+        `SELECT MIN(next_attempt_at) AS due
+           FROM publication_delivery_outbox
+          WHERE disposition = 'retrying'`
+      )
+      .toArray()[0]?.["due"];
+    return typeof value === "number" ? value : null;
+  }
+
+  override async alarm(): Promise<DoAlarmSchedule | null> {
+    await super.alarm();
+    if (this.hasReadyPublicationDelivery(Date.now())) {
+      this.markWorkReady("workspace-publication");
+    }
+    const recoveryAt = this.nextPublicationRecoveryAt();
+    return recoveryAt === null ? null : { wakeAt: Math.max(recoveryAt, Date.now() + 100) };
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  adoptDurableWorkWorker(workerId: string): { adopted: boolean; previousWorkerId: string | null } {
+    return this.adoptDurableWorkWorkerGeneration(workerId);
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  claimReadyWork(queue: DurableWorkQueue, input: ClaimRequest): WorkClaim[] {
+    if (queue !== "workspace-publication") return [];
+    if (!input.workerId || input.limit < 1) {
+      throw new Error("claimReadyWork: invalid publication claim request");
+    }
+    this.adoptDurableWorkWorkerGeneration(input.workerId);
+    const claims = this.ctx.storage.transactionSync(() => {
+      const rows = this.sql
+        .exec(
+          `SELECT * FROM publication_delivery_outbox
+            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
+            ORDER BY created_at, item_id
+            LIMIT ?`,
+          input.now,
+          input.limit
+        )
+        .toArray();
+      return rows.map((row) => {
+        const itemId = String(row["item_id"]);
+        const generation = Number(row["lease_generation"] ?? 0) + 1;
+        this.sql.exec(
+          `UPDATE publication_delivery_outbox
+              SET disposition = 'leased', lease_owner = ?, lease_generation = ?,
+                  last_attempt_at = ?
+            WHERE item_id = ?`,
+          input.workerId,
+          generation,
+          input.now,
+          itemId
+        );
+        const channelId = String(row["channel_id"]);
+        return {
+          itemId,
+          generation,
+          idempotencyKey: String(row["idempotency_key"]),
+          createdAt: Number(row["created_at"]),
+          attempt: Number(row["attempts"] ?? 0) + 1,
+          payload: {
+            laneKey: channelId,
+            target: {
+              source: "workers/pubsub-channel",
+              className: "PubSubChannel",
+              objectKey: channelId,
+            },
+            envelopeIds: [String(row["envelope_id"])],
+          },
+        } satisfies WorkClaim;
+      });
+    });
+    if (!this.hasReadyPublicationDelivery(input.now)) {
+      this.acknowledgeDurableWorkReady("workspace-publication");
+    }
+    return claims;
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  settleReadyWork(
+    queue: DurableWorkQueue,
+    request: SettleRequest<{ broadcasted: number }>
+  ): ClaimSettlement {
+    if (queue !== "workspace-publication") return "stale";
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.sql
+        .exec(
+          `SELECT lease_owner, lease_generation, disposition
+             FROM publication_delivery_outbox WHERE item_id = ?`,
+          request.itemId
+        )
+        .toArray()[0];
+      if (!row) return "duplicate";
+      if (
+        row["lease_owner"] !== request.workerId ||
+        Number(row["lease_generation"]) !== request.generation ||
+        row["disposition"] !== "leased"
+      ) {
+        return "stale";
+      }
+      if (!request.outcome || request.outcome.broadcasted !== 1) {
+        throw new Error("settleReadyWork: publication was not broadcast exactly once");
+      }
+      this.sql.exec(`DELETE FROM publication_delivery_outbox WHERE item_id = ?`, request.itemId);
+      return "accepted";
+    });
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  failReadyWork(
+    queue: DurableWorkQueue,
+    request: { workerId: string; itemId: string; generation: number }
+  ): { retryAt: number } | "stale" {
+    if (queue !== "workspace-publication") return "stale";
+    const result = this.ctx.storage.transactionSync(() => {
+      const row = this.sql
+        .exec(
+          `SELECT attempts FROM publication_delivery_outbox
+            WHERE item_id = ? AND lease_owner = ? AND lease_generation = ?
+              AND disposition = 'leased'`,
+          request.itemId,
+          request.workerId,
+          request.generation
+        )
+        .toArray()[0];
+      if (!row) return "stale";
+      const attempts = Number(row["attempts"] ?? 0) + 1;
+      const retryAt =
+        Date.now() +
+        Math.min(
+          PUBLICATION_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 7),
+          PUBLICATION_RETRY_MAX_MS
+        );
+      this.sql.exec(
+        `UPDATE publication_delivery_outbox
+            SET attempts = ?, disposition = 'retrying', next_attempt_at = ?, lease_owner = NULL
+          WHERE item_id = ? AND lease_owner = ? AND lease_generation = ?`,
+        attempts,
+        retryAt,
+        request.itemId,
+        request.workerId,
+        request.generation
+      );
+      return { retryAt };
+    });
+    if (result !== "stale") this.setAlarmAt(result.retryAt);
+    return result;
+  }
+
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  durableWorkStatus(): { readyQueues: DurableWorkQueue[]; nextRecoveryAt: number | null } {
+    const now = Date.now();
+    const ready = this.hasReadyPublicationDelivery(now);
+    return {
+      readyQueues: ready ? ["workspace-publication"] : [],
+      nextRecoveryAt: this.nextPublicationRecoveryAt(),
+    };
   }
 
   private createFreshSchema(): void {
@@ -1060,6 +1335,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       )
     `);
     createWorkspaceSourceInitializationTable(this.sql);
+    createPublicationDeliveryOutbox(this.sql);
     createSemanticVcsSchema(this.sql);
     // The recall contents are disposable, but the index table is part of the
     // exact database shape. Lazy creation changed sqlite_master after schema
@@ -2180,7 +2456,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @schemaRpc()
   async appendLogEvent(input: AppendLogEventInput): Promise<AppendLogEventResult> {
     this.ensureReady();
-    return this.transaction(() => this.appendLogEventInTxn(input));
+    const publicationWasReady = this.hasReadyPublicationDelivery(Date.now());
+    const result = this.transaction(() => this.appendLogEventInTxn(input));
+    if (!publicationWasReady && this.hasReadyPublicationDelivery(Date.now())) {
+      this.markWorkReady("workspace-publication");
+    }
+    return result;
   }
 
   private appendLogEventInTxn(input: AppendLogEventInput): AppendLogEventResult {
@@ -2394,6 +2675,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
           channelId: target.channelId,
           envelopeId: pubEnvelopeId,
         });
+        const createdAt = Date.now();
+        const itemId = JSON.stringify([target.channelId, pubEnvelopeId]);
+        this.sql.exec(
+          `INSERT OR IGNORE INTO publication_delivery_outbox (
+             item_id, channel_id, envelope_id, idempotency_key, attempts,
+             next_attempt_at, lease_generation, created_at, disposition
+           ) VALUES (?, ?, ?, ?, 0, ?, 0, ?, 'ready')`,
+          itemId,
+          target.channelId,
+          pubEnvelopeId,
+          `workspace-publication:${target.channelId}:${pubEnvelopeId}`,
+          createdAt,
+          createdAt
+        );
       }
     }
 

@@ -46,6 +46,7 @@ function handlers(overrides: Partial<DurableWorkHandler> = {}) {
       "channel-delivery": handler,
       "agent-inbox": handler,
       "agent-effect": handler,
+      "workspace-publication": handler,
     } satisfies Record<DurableWorkQueue, DurableWorkHandler>,
   };
 }
@@ -329,6 +330,55 @@ describe("DurableWorkDriver", () => {
       "executeChannelMaintenanceClaim",
       { itemId: work.itemId, generation: 4 }
     );
+  });
+
+  it("delivers committed workspace publications to their exact channel target", async () => {
+    const dispatchHeldWithSignal = vi.fn(async () => ({ broadcasted: 2 }));
+    const record = createDurableWorkHandlers({
+      dispatch: vi.fn(),
+      dispatchHeldWithSignal,
+    } as never);
+    const work = claim("publication-1", 3);
+    const target = {
+      source: "workers/pubsub-channel",
+      className: "PubSubChannel",
+      objectKey: "channel-7",
+    };
+    work.payload = {
+      laneKey: "channel-7",
+      target,
+      envelopeIds: ["event-1", "event-2"],
+    };
+
+    await expect(
+      record["workspace-publication"].execute(owner("gad"), work, new AbortController().signal)
+    ).resolves.toEqual({ broadcasted: 2 });
+    expect(dispatchHeldWithSignal).toHaveBeenCalledWith(
+      target,
+      expect.any(AbortSignal),
+      "broadcastStoredEnvelopes",
+      ["event-1", "event-2"]
+    );
+  });
+
+  it("fails a publication claim unless the channel acknowledges the complete batch", async () => {
+    const record = createDurableWorkHandlers({
+      dispatch: vi.fn(),
+      dispatchHeldWithSignal: vi.fn(async () => ({ broadcasted: 0 })),
+    } as never);
+    const work = claim("publication-1");
+    work.payload = {
+      target: {
+        source: "workers/pubsub-channel",
+        className: "PubSubChannel",
+        objectKey: "channel-7",
+      },
+      envelopeIds: ["event-1"],
+    };
+
+    await expect(
+      record["workspace-publication"].execute(owner("gad"), work, new AbortController().signal)
+    ).rejects.toThrow(/acknowledged 0 of 1 envelopes/);
   });
 
   it("adopts only on recovery claims", async () => {
