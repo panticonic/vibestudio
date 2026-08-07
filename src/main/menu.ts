@@ -170,6 +170,16 @@ function reportMenuActionError(action: string, error: unknown): void {
 }
 
 /**
+ * Electron's default zoomIn role uses CommandOrControl+Plus. On Linux, the
+ * keyboard event for the plus key is shifted Equal, so that accelerator does
+ * not match the key users actually press. Keep the macOS role spelling while
+ * registering the physical shifted-plus chord on other platforms.
+ */
+function zoomInAccelerator(isMac: boolean): string {
+  return isMac ? "Cmd+Plus" : "Ctrl+Shift+Plus";
+}
+
+/**
  * Build the hamburger popup menu template.
  *
  * On Windows and Linux the shell window is a `BaseWindow` with a custom
@@ -249,7 +259,7 @@ export function buildHamburgerMenuTemplate(
 
   // View: how the window itself is presented, plus the display escape hatches.
   const view: MenuItemConstructorOptions[] = [
-    { label: "Zoom In", role: "zoomIn" },
+    { label: "Zoom In", role: "zoomIn", accelerator: zoomInAccelerator(isMac) },
     { label: "Zoom Out", role: "zoomOut" },
     { label: "Reset Zoom", role: "resetZoom" },
     { type: "separator" },
@@ -541,7 +551,7 @@ export function setupMenu(
         },
         { type: "separator" },
         { role: "resetZoom" },
-        { role: "zoomIn" },
+        { role: "zoomIn", accelerator: zoomInAccelerator(isMac) },
         { role: "zoomOut" },
         { type: "separator" },
         { role: "togglefullscreen" },

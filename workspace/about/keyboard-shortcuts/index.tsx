@@ -64,7 +64,7 @@ const shortcutGroups: ShortcutGroup[] = [
   {
     title: "View",
     shortcuts: [
-      { description: "Zoom in", mac: ["⌘", "+"] },
+      { description: "Zoom in", mac: ["⌘", "+"], other: ["Ctrl", "Shift", "+"] },
       { description: "Zoom out", mac: ["⌘", "−"] },
       { description: "Reset zoom", mac: ["⌘", "0"] },
       { description: "Toggle fullscreen", mac: ["⌃", "⌘", "F"], other: ["F11"] },
