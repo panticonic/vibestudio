@@ -137,9 +137,11 @@ describe("ExecutionPublicationJournal", () => {
         ownerId: `entity:${index}`,
       });
       journal.finalize(reservation);
-      const epoch = journal.beginEpoch();
-      journal.completeEpoch(epoch, new Set([ref.buildKey]));
     }
+    expect(journal.pendingPublicationCount()).toBe(500);
+
+    const epoch = journal.beginEpoch();
+    journal.completeEpoch(epoch, new Set([ref.buildKey]));
     expect(journal.pendingPublicationCount()).toBe(0);
     journal.close();
   }, 10_000);

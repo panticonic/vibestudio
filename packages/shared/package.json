@@ -134,6 +134,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/json-schema": "^7.0.15"
+    "@types/json-schema": "^7.0.15",
+    "es-module-lexer": "^1.7.0"
   }
 }

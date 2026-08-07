@@ -859,6 +859,9 @@ importers:
       '@types/json-schema':
         specifier: ^7.0.15
         version: 7.0.15
+      es-module-lexer:
+        specifier: ^1.7.0
+        version: 1.7.0
 
   packages/shell-core:
     dependencies:

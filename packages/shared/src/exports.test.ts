@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parse, type ParserPlugin } from "@babel/parser";
+import { parse as parseBabel, type ParserPlugin } from "@babel/parser";
+import { init, parse } from "es-module-lexer";
+
+await init;
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 const SOURCE_ROOTS = ["src", "packages", "apps", "workspace", "scripts", "tests"];
@@ -24,6 +27,22 @@ function sourceFiles(dir: string): string[] {
 function sharedImports(file: string): string[] {
   const text = fs.readFileSync(file, "utf8");
   if (!text.includes("@vibestudio/shared/")) return [];
+  const imports = new Set<string>();
+  let references: ReturnType<typeof parse>[0];
+  try {
+    [references] = parse(text);
+  } catch (error) {
+    return sharedImportsFromAst(file, text, error);
+  }
+  for (const reference of references) {
+    if (reference.n?.startsWith("@vibestudio/shared/")) {
+      imports.add(`./${reference.n.slice("@vibestudio/shared/".length)}`);
+    }
+  }
+  return [...imports];
+}
+
+function sharedImportsFromAst(file: string, text: string, lexerError: unknown): string[] {
   const extension = path.extname(file);
   const plugins: ParserPlugin[] = [
     "decorators-legacy",
@@ -32,11 +51,13 @@ function sharedImports(file: string): string[] {
   ];
   if ([".ts", ".tsx", ".mts"].includes(extension)) plugins.push("typescript");
   if (extension === ".tsx" || extension === ".js") plugins.push("jsx");
-  let ast: ReturnType<typeof parse>;
+  let ast: ReturnType<typeof parseBabel>;
   try {
-    ast = parse(text, { sourceType: "unambiguous", errorRecovery: true, plugins });
+    ast = parseBabel(text, { sourceType: "unambiguous", errorRecovery: true, plugins });
   } catch (error) {
-    throw new Error(`Could not inspect imports in ${path.relative(ROOT, file)}`, { cause: error });
+    throw new Error(`Could not inspect imports in ${path.relative(ROOT, file)}`, {
+      cause: new AggregateError([lexerError, error]),
+    });
   }
   const imports = new Set<string>();
   const visit = (value: unknown, parent?: Record<string, unknown>, parentKey?: string): void => {

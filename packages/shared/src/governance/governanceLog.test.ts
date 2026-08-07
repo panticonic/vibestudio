@@ -168,14 +168,14 @@ describe("GovernanceLog", () => {
 
   it("finds an old revocation without a bounded timeline scan", async () => {
     await log.append(membershipRecord({ op: "revoke-user", target: { userId: "usr_old" } }));
-    for (let index = 0; index < 600; index++) {
-      await log.append(
+    await log.appendMany(
+      Array.from({ length: 600 }, (_, index) =>
         membershipRecord({
           target: { userId: `usr_${index}` },
           at: atLocalNoon() + index + 1,
         })
-      );
-    }
+      )
+    );
     await expect(log.hasMembershipOperation("revoke-user", "usr_old")).resolves.toBe(true);
   });
 });
