@@ -14,12 +14,29 @@ import { pathToFileURL } from "node:url";
 import * as esbuild from "esbuild";
 import {
   generateModuleMapBootstrap,
+  generatePanelEntry,
   generateExposeModuleCode,
   generatePanelExposeEntryCode,
   generateWorkerEntry,
   injectHtmlTransforms,
   resolveEntryPoint,
 } from "./builder.js";
+import { getAdapter } from "./adapters/index.js";
+
+describe("generatePanelEntry", () => {
+  it.each(["react", "svelte", "vanilla"] as const)(
+    "publishes readiness only after the %s entry reaches its mount boundary",
+    (framework) => {
+      const code = generatePanelEntry("expose", "entry", getAdapter(framework));
+      const entryIndex = code.lastIndexOf('"entry"');
+      const readyIndex = code.indexOf("globalThis.__vibestudioPanelMarkReady?.()");
+
+      expect(entryIndex).toBeGreaterThan(-1);
+      expect(readyIndex).toBeGreaterThan(entryIndex);
+      expect(code.match(/__vibestudioPanelMarkReady/g)).toHaveLength(1);
+    }
+  );
+});
 
 describe("generateModuleMapBootstrap (panel target)", () => {
   it("declares the module map and both require functions on globalThis", () => {

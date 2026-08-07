@@ -42,7 +42,10 @@ describe("PANEL_BOOTSTRAP_SCRIPT", () => {
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain("__vibestudioPanelBoot");
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("loading")');
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("booting")');
-    expect(PANEL_BOOTSTRAP_SCRIPT).toContain('bundle.onload = () => reportBoot("ready")');
+    expect(PANEL_BOOTSTRAP_SCRIPT).toContain(
+      'globalThis.__vibestudioPanelMarkReady = () => reportBoot("ready")'
+    );
+    expect(PANEL_BOOTSTRAP_SCRIPT).not.toContain("bundle.onload");
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('reportBoot("failed"');
     expect(PANEL_BOOTSTRAP_SCRIPT).toContain('"vibestudio:panel-boot"');
   });

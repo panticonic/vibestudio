@@ -37,6 +37,10 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
     );
     return next;
   };
+  // The generated entry graph owns the successful terminal transition. A
+  // module script's load event is a browser resource signal, not proof that
+  // the framework adapter reached its mount boundary.
+  globalThis.__vibestudioPanelMarkReady = () => reportBoot("ready");
   reportBoot("loading");
   globalThis.addEventListener("error", (event) => {
     reportBoot("failed", event.error || new Error(event.message || "Panel entry failed"));
@@ -183,7 +187,6 @@ export const PANEL_BOOTSTRAP_SCRIPT = `(async () => {
   const bundle = document.createElement("script");
   bundle.type = "module";
   bundle.src = configuredBundleSrc || "./bundle.js";
-  bundle.onload = () => reportBoot("ready");
   bundle.onerror = () => {
     reportBoot("failed", new Error("The panel bundle could not be loaded"));
     const root = document.getElementById("root");

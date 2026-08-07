@@ -52,6 +52,8 @@ declare global {
         error?: { name: string; message: string; stack?: string };
       }
     | undefined;
+  /** Published by the host loader and called by the generated entry after mount. */
+  var __vibestudioPanelMarkReady: (() => void) | undefined;
   /** Environment variables */
   var __vibestudioEnv: Record<string, string> | undefined;
 }

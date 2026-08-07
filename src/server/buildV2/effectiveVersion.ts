@@ -227,9 +227,9 @@ export function persistEvState(state: Omit<PersistedEvState, "version">): void {
  * Increment when build logic changes (plugins, esbuild options, shims) OR when
  * the build-key derivation itself changes, to invalidate all cached builds.
  *
- * "27": worker source maps are linked artifacts instead of inline runtime bytes.
+ * "28": generated panel entries publish readiness at their mount boundary.
  */
-const BUILD_CACHE_VERSION = "27";
+const BUILD_CACHE_VERSION = "28";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the

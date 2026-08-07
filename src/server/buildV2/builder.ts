@@ -1493,13 +1493,15 @@ export default namespace;
 `;
 }
 
-function generatePanelEntry(
+export function generatePanelEntry(
   exposeEntryFile: string,
   entryFile: string,
   adapter: FrameworkAdapter,
   frameworkModule?: string
 ): string {
-  return adapter.generateEntry(exposeEntryFile, entryFile, frameworkModule);
+  return `${adapter.generateEntry(exposeEntryFile, entryFile, frameworkModule)}
+globalThis.__vibestudioPanelMarkReady?.();
+`;
 }
 
 /**
