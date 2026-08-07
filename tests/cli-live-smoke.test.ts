@@ -129,6 +129,7 @@ function makeCliSmokeServers(
       tokenManager: hubTokenManager,
       dispatcher: hubDispatcher,
       entityCache: new EntityCache(),
+      ensureUserlandDoReady: async () => undefined,
       redeemPairingCredential: createHubCredentialRedeemer({
         deviceAuthStore,
         tokenManager: hubTokenManager,
@@ -147,6 +148,7 @@ function makeCliSmokeServers(
       tokenManager: workspaceTokenManager,
       dispatcher: workspaceDispatcher,
       entityCache: new EntityCache(),
+      ensureUserlandDoReady: async () => undefined,
       redeemPairingCredential: createWorkspaceCredentialRedeemer({
         deviceAuthStore,
         tokenManager: workspaceTokenManager,
