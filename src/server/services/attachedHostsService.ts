@@ -39,24 +39,12 @@ export function createAttachedHostsService(deps: AttachedHostsServiceDeps): Serv
         requireController(deps).listApprovalAudit(input.sessionId, ownerFrom(ctx), input),
       bootstrapExchange: async (ctx, [hello]) => {
         const child = requireChild(deps);
-        const transportUserId = ctx.caller.subject?.userId ?? null;
-        if (transportUserId !== hello.initiatingUserId) {
-          throw serviceError(
-            "EATTACHED_OWNER",
-            "Bootstrap device user does not own the attached development run"
-          );
-        }
+        requireBootstrapDeviceUser(ctx);
         return child.acceptChild(hello);
       },
       bootstrapConfirm: async (ctx, [proof]) => {
         const child = requireChild(deps);
-        const transportUserId = ctx.caller.subject?.userId ?? null;
-        if (transportUserId !== proof.transcript.initiatingUserId) {
-          throw serviceError(
-            "EATTACHED_OWNER",
-            "Bootstrap device user does not own the attached development run"
-          );
-        }
+        requireBootstrapDeviceUser(ctx);
         child.finalizeChild(proof);
         return { attachedHostSessionId: proof.transcript.sessionId };
       },
@@ -87,6 +75,19 @@ export function createAttachedHostsService(deps: AttachedHostsServiceDeps): Serv
       },
     }),
   };
+}
+
+function requireBootstrapDeviceUser(ctx: {
+  caller: { subject?: { userId: string } };
+}): string {
+  const userId = ctx.caller.subject?.userId;
+  if (!userId) {
+    throw serviceError(
+      "EATTACHED_OWNER",
+      "Attached-host bootstrap requires an authenticated child user device"
+    );
+  }
+  return userId;
 }
 
 function requireController(
