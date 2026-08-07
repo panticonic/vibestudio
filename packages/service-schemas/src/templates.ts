@@ -335,9 +335,9 @@ export const templatesMethods = defineServiceMethods({
   },
   catalog: {
     description:
-      "Return the last verified userland registry snapshot, optionally refreshing its configured moving source first.",
+      "Return the last verified userland registry snapshot, or null when none is cached, optionally refreshing its configured moving source first.",
     args: z.union([z.tuple([]), z.tuple([z.object({ refresh: z.boolean().optional() }).strict()])]),
-    returns: templateCatalogSnapshotSchema,
+    returns: templateCatalogSnapshotSchema.nullable(),
     access: READ_ACCESS,
   },
   check: {

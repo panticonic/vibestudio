@@ -22,7 +22,7 @@ export interface TemplatePendingOperation {
 
 export interface TemplateManagementClient {
   status(): Promise<TemplateStatusRow[]>;
-  catalog(options?: { refresh?: boolean }): Promise<TemplateCatalogSnapshot>;
+  catalog(options?: { refresh?: boolean }): Promise<TemplateCatalogSnapshot | null>;
   check(options?: { alias?: string }): Promise<Array<{ alias: string }>>;
   inspect(locator: TemplateLocator): Promise<TemplateInspection>;
   prepareAdd(request: TemplateAddRequest): Promise<TemplateAddPreparation>;
@@ -76,7 +76,7 @@ export function createTemplateManagementClient(
         TEMPLATE_COMPOSER,
         "catalog",
         options ? [options] : []
-      ) as Promise<TemplateCatalogSnapshot>,
+      ) as Promise<TemplateCatalogSnapshot | null>,
     check: (options) =>
       invoke(TEMPLATE_COMPOSER, "check", options ? [options] : []) as Promise<
         Array<{ alias: string }>

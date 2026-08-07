@@ -23,6 +23,10 @@ const blocker = {
 };
 
 describe("template recovery contracts", () => {
+  it("represents an uninitialized registry cache without an exception payload", () => {
+    expect(templatesMethods.catalog.returns.parse(null)).toBeNull();
+  });
+
   it("uses operationId consistently for resume and cancel", () => {
     expect(
       templatesMethods.resume.args.parse([

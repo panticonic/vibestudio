@@ -784,7 +784,11 @@ export async function activate(ctx: ExtensionContextLike) {
     },
 
     async catalog(options: { refresh?: boolean } = {}) {
-      return (await environment(ctx, { ...options, requireCatalog: true })).catalog!;
+      const env = await environment(ctx, {
+        ...options,
+        requireCatalog: options.refresh === true,
+      });
+      return env.catalog ?? null;
     },
 
     async operations() {

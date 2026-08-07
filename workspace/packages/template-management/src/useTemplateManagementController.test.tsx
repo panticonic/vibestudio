@@ -64,6 +64,16 @@ function client(overrides: Partial<TemplateLifecycleClient> = {}): TemplateLifec
 }
 
 describe("useTemplateManagementController", () => {
+  it("treats an empty verified-registry cache as a neutral first-run state", async () => {
+    const source = client({ catalog: vi.fn(async () => null) });
+    const view = renderHook(() => useTemplateManagementController(source));
+
+    await act(async () => void (await view.result.current.refresh()));
+
+    expect(view.result.current.catalog).toBeNull();
+    expect(view.result.current.error).toBeNull();
+  });
+
   it("renders the post-check observation and projects attached operations only on their row", async () => {
     const verifiedRow = { ...deferredRow, verification: "verified" as const };
     const status = vi

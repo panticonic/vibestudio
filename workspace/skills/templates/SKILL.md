@@ -189,10 +189,12 @@ Catalog reads are cache-only. Invoke `catalog` with no arguments when rendering
 or inspecting the current observation. Invoke `catalog` with
 `[{ refresh: true }]` only for an explicit user refresh; a failed refresh may
 return the last verified snapshot with `stale: true`. Keep cache-only catalog
-reads in their own `try`/`catch` (or catch them inside one eval) so an expected
-“no verified registry is cached” result does not discard a successful `status`
-observation. Report that state as “catalog cache unavailable”; it is not zero
-catalog entries and does not authorize a refresh.
+reads separate from status projection so one observation never hides the other.
+An uncached registry is returned as `null`; handle that result without
+discarding a successful `status` observation. Report it as “catalog cache
+unavailable”; it is not zero catalog entries and does not authorize a refresh.
+A thrown error instead represents an invalid cached record or a failed explicit
+refresh and should remain visible.
 
 See [template authoring](references/template-authoring.md) and
 [errors and remedies](references/errors-and-remedies.md). The machine-readable

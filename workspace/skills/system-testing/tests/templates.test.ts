@@ -24,12 +24,8 @@ function execution(
               options.code ??
               [
                 'const status = await extensions.invoke("@workspace-extensions/template-composer", "status", []);',
-                "let catalog;",
-                "try {",
-                '  catalog = await extensions.invoke("@workspace-extensions/template-composer", "catalog", []);',
-                "} catch {",
-                "  return { statusCount: status.length, catalogUnavailable: true };",
-                "}",
+                'const catalog = await extensions.invoke("@workspace-extensions/template-composer", "catalog", []);',
+                "if (catalog === null) return { statusCount: status.length, catalogUnavailable: true };",
                 "return { statusCount: status.length, catalogCount: catalog.entries.length, firstCatalog: catalog.entries[0] };",
               ].join("\n"),
           },

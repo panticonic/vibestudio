@@ -194,6 +194,11 @@ async function resolvedTarget(
 ): Promise<TemplateLocator> {
   if (typeof inv.flags["catalog"] !== "string") return target(inv);
   const catalog = await templates.catalog();
+  if (!catalog) {
+    throw new UsageError(
+      "no verified template registry is cached; run templates catalog --refresh first"
+    );
+  }
   return target(inv, catalog.coordinates);
 }
 
@@ -582,6 +587,10 @@ export const templatesCommands: CliCommand[] = [
             ? templates.catalog({ refresh: true })
             : templates.catalog(),
         (catalog) => {
+          if (!catalog) {
+            console.log("No verified template registry is cached. Run with --refresh to load it.");
+            return;
+          }
           console.log(`Registry ${catalog.revision}${catalog.stale ? " (cached)" : ""}`);
           for (const entry of catalog.entries)
             console.log(`  ${entry.id} — ${entry.name}: ${entry.description}`);

@@ -7,7 +7,7 @@
     "catalog": {
       "tier": "read",
       "arguments": ["optional { refresh: true }"],
-      "returns": "TemplateCatalogSnapshot"
+      "returns": "TemplateCatalogSnapshot | null"
     },
     "check": {
       "tier": "read",
