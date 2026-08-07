@@ -150,10 +150,25 @@ interface ManagedView {
   codeIdentity?: HostedCodeIdentity;
   /** Latest requested main-frame target, retained after its load settles. */
   desiredUrl?: string;
+  /**
+   * Immutable document incarnation associated with the desired URL.
+   *
+   * Panel build URLs are deliberately reusable across runtime entities. A
+   * matching URL therefore does not prove that the currently loaded document
+   * belongs to the runtime entity now occupying the slot.
+   */
+  desiredDocumentId?: string;
+  /** Document incarnation whose load most recently completed. */
+  committedDocumentId?: string;
   /** Monotonic ownership token for main-frame navigations of this view. */
   navigationRevision: number;
   /** One owned request for the current desired URL; identical callers share it. */
-  navigation?: { url: string; revision: number; promise: Promise<void> };
+  navigation?: {
+    url: string;
+    documentId?: string;
+    revision: number;
+    promise: Promise<void>;
+  };
   themeCssKey?: string;
   /** Stored event handlers for proper cleanup */
   handlers?: {
@@ -355,8 +370,6 @@ export class ViewManager {
       },
       {
         keepaliveIntervalMs: 5000,
-        minimumProbeIntervalMs: 10000,
-        maximumProbeIntervalMs: 60000,
         visibilityCycleCooldownMs: 1000,
       }
     );
@@ -2396,14 +2409,15 @@ export class ViewManager {
   /**
    * Navigate a view to a URL.
    */
-  async navigateView(id: string, url: string): Promise<void> {
+  async navigateView(id: string, url: string, documentId?: string): Promise<void> {
     const managed = this.views.get(id);
     if (!managed || managed.view.webContents.isDestroyed()) {
       throw new Error(`View not found: ${id}`);
     }
 
     managed.desiredUrl = url;
-    await this.loadManagedViewUrl(managed, url);
+    managed.desiredDocumentId = documentId;
+    await this.loadManagedViewUrl(managed, url, documentId);
   }
 
   /**
@@ -2418,9 +2432,15 @@ export class ViewManager {
     return managed?.navigation?.url === url;
   }
 
-  private async loadManagedViewUrl(managed: ManagedView, url: string): Promise<void> {
+  private async loadManagedViewUrl(
+    managed: ManagedView,
+    url: string,
+    documentId?: string
+  ): Promise<void> {
     const contents = managed.view.webContents;
-    if (managed.navigation?.url === url) return managed.navigation.promise;
+    if (managed.navigation?.url === url && managed.navigation.documentId === documentId) {
+      return managed.navigation.promise;
+    }
     // A committed URL is terminal only when no different desired navigation is
     // still in flight. Requesting the committed URL again must supersede that
     // older request, otherwise the older load can win after this method returns.
@@ -2428,21 +2448,32 @@ export class ViewManager {
       !managed.navigation &&
       !contents.isDestroyed() &&
       contents.getURL() === url &&
-      !contents.isLoading()
+      !contents.isLoading() &&
+      (documentId === undefined || managed.committedDocumentId === documentId)
     ) {
       return;
     }
 
     const revision = ++managed.navigationRevision;
-    const promise = this.performManagedViewNavigation(managed, url, revision);
-    managed.navigation = { url, revision, promise };
+    const promise = this.performManagedViewNavigation(managed, url, documentId, revision);
+    managed.navigation = { url, documentId, revision, promise };
     return promise;
   }
 
   private restartManagedViewUrl(managed: ManagedView, url: string): Promise<void> {
     const revision = ++managed.navigationRevision;
-    const promise = this.performManagedViewNavigation(managed, url, revision);
-    managed.navigation = { url, revision, promise };
+    const promise = this.performManagedViewNavigation(
+      managed,
+      url,
+      managed.desiredDocumentId,
+      revision
+    );
+    managed.navigation = {
+      url,
+      documentId: managed.desiredDocumentId,
+      revision,
+      promise,
+    };
     return promise;
   }
 
@@ -2461,11 +2492,15 @@ export class ViewManager {
   private async performManagedViewNavigation(
     managed: ManagedView,
     url: string,
+    documentId: string | undefined,
     revision: number
   ): Promise<void> {
     const contents = managed.view.webContents;
     try {
       await contents.loadURL(url);
+      if (revision === managed.navigationRevision) {
+        managed.committedDocumentId = documentId;
+      }
     } catch (error) {
       const superseded = revision !== managed.navigationRevision;
       const committedRequestedUrl = !contents.isDestroyed() && contents.getURL() === url;
@@ -2510,6 +2545,7 @@ export class ViewManager {
     }
     managed.codeIdentity = nextIdentity;
     managed.desiredUrl = url;
+    managed.desiredDocumentId = undefined;
     await this.loadManagedViewUrl(managed, url);
     if (managed.visible) this.updateLayout({});
   }

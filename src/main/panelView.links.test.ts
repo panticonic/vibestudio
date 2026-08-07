@@ -58,6 +58,7 @@ function createHarness(
     getViewUrl: vi.fn(() => null),
     isManagedNavigationInFlight: vi.fn(() => options.managedNavigationInFlight ?? false),
     navigateView: vi.fn(async () => undefined),
+    updateCodeIdentity: vi.fn(),
     updateAppView: vi.fn(async () => undefined),
     createView: vi.fn(() => ({ webContents: wc.webContents })),
     getWebContents: vi.fn(() => wc.webContents),
@@ -107,10 +108,37 @@ function createHarness(
     appPreloadPath: "/app-preload.js",
   } as never);
 
-  return { panelId, panelView, panelOrchestrator, sendPanelEvent, openExternal, ...wc };
+  return {
+    panelId,
+    panel,
+    panelView,
+    viewManager,
+    panelOrchestrator,
+    sendPanelEvent,
+    openExternal,
+    ...wc,
+  };
 }
 
 describe("PanelView plain panel links", () => {
+  it("starts a new document when the runtime incarnation changes at the same build URL", async () => {
+    const { panelId, panel, panelView, viewManager } = createHarness();
+    const url = "http://127.0.0.1:1234/about/new/";
+
+    await panelView.createViewForPanel(panelId, url, "ctx-current");
+    viewManager.hasView.mockReturnValue(true);
+    panel.runtimeEntityId = "panel:nav-replacement";
+    await panelView.createViewForPanel(panelId, url, "ctx-current");
+
+    expect(viewManager.navigateView).toHaveBeenNthCalledWith(1, panelId, url, "panel:nav-current");
+    expect(viewManager.navigateView).toHaveBeenNthCalledWith(
+      2,
+      panelId,
+      url,
+      "panel:nav-replacement"
+    );
+  });
+
   it("navigates the current panel slot for same-frame managed links", async () => {
     const { panelId, panelView, webContents, panelOrchestrator } = createHarness();
     await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");

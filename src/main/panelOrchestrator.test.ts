@@ -153,6 +153,7 @@ function createOrchestrator(
     refreshSlotEntity: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
     getPanel: vi.fn(async (panelId: string) => registry.getPanel(panelId) ?? null),
     refreshPanel: vi.fn(async (panelId: string) => registry.getPanel(panelId) ?? null),
+    replaceCurrentSnapshot: vi.fn(async () => undefined),
     syncEntityCachesFromRegistry: vi.fn(() => {}),
     loadViewState: vi.fn(async () => ({ collapsedIds: [] })),
     hasRootPanelSource: vi.fn(async (source: string) =>
@@ -1308,7 +1309,7 @@ describe("PanelOrchestrator.applyBuildComplete", () => {
 });
 
 describe("PanelOrchestrator.rebuildPanel", () => {
-  it("forces a rebuild for the named panel without rebuilding child panels", async () => {
+  it("replaces and presents only the named panel incarnation", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const child = makePanel("panel:tree/child", [], {
       snapshot: {
@@ -1329,12 +1330,24 @@ describe("PanelOrchestrator.rebuildPanel", () => {
     registry.addPanel(parent, null, { addAsRoot: true });
     registry.addPanel(child, parent.id);
 
-    const { orchestrator, panelView, panelHttpServer } = createOrchestrator(registry);
+    const { orchestrator, panelView, panelHttpServer, shellCore } = createOrchestrator(registry);
     panelView.hasView.mockReturnValue(true);
+    shellCore.replaceCurrentSnapshot.mockImplementationOnce(async () => {
+      parent.runtimeEntityId = "panel:nav-rebuilt-parent";
+      parent.buildKey = "c".repeat(64);
+      parent.executionDigest = "f".repeat(64);
+      parent.authorityRequests = [];
+    });
+    shellCore.getCurrentEntityId.mockResolvedValueOnce("panel:nav-rebuilt-parent");
 
     const result = await orchestrator.rebuildPanel(parent.id);
 
-    expect(panelHttpServer.invalidateBuild).toHaveBeenCalledWith("panels/parent");
+    expect(shellCore.replaceCurrentSnapshot).toHaveBeenCalledWith(asPanelSlotId(parent.id), {
+      contextId: "ctx-panel:tree/parent",
+      source: "panels/parent",
+      stateArgs: {},
+    });
+    expect(panelHttpServer.invalidateBuild).not.toHaveBeenCalledWith("panels/parent");
     expect(panelHttpServer.invalidateBuild).not.toHaveBeenCalledWith("panels/child");
     expect(panelView.createViewForPanel).toHaveBeenCalledTimes(1);
     expect(panelView.createViewForPanel).toHaveBeenCalledWith(
@@ -1345,6 +1358,7 @@ describe("PanelOrchestrator.rebuildPanel", () => {
     expect(registry.getPanel(parent.id)?.artifacts).toMatchObject({
       buildState: "ready",
       buildProgress: undefined,
+      hostedRuntimeEntityId: "panel:nav-rebuilt-parent",
     });
     expect(registry.getPanel(child.id)?.artifacts).toMatchObject({
       buildState: "ready",
@@ -1538,6 +1552,36 @@ describe("PanelOrchestrator.initializePanelTree", () => {
     expect(registry.getPanel(seeded.id)?.artifacts).toEqual({
       buildState: "ready",
       htmlPath: "http://localhost/panels/seeded/",
+    });
+  });
+});
+
+describe("PanelOrchestrator.refreshPanelProjection", () => {
+  it("refreshes an existing local panel from durable state before returning presentation", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/stale", [], {
+      runtimeEntityId: "panel:nav-old",
+      buildKey: null,
+      executionDigest: null,
+      artifacts: { buildState: "pending", buildProgress: "Preparing panel runtime..." },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, shellCore } = createOrchestrator(registry);
+    shellCore.refreshPanel.mockImplementationOnce(async () => {
+      panel.runtimeEntityId = "panel:nav-current";
+      panel.buildKey = "b".repeat(64);
+      panel.executionDigest = "e".repeat(64);
+      panel.authorityRequests = [];
+      panel.artifacts = { buildState: "building", buildProgress: "Loading panel runtime..." };
+      return panel;
+    });
+
+    await expect(orchestrator.refreshPanelProjection(panel.id)).resolves.toBe(panel);
+
+    expect(shellCore.refreshPanel).toHaveBeenCalledWith(asPanelSlotId(panel.id));
+    expect(registry.getPanel(panel.id)).toMatchObject({
+      runtimeEntityId: "panel:nav-current",
+      buildKey: "b".repeat(64),
     });
   });
 });

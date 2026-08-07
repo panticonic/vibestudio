@@ -327,6 +327,26 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     expect(replacement.phase).toBe("pending");
   });
 
+  it("keeps acquire idempotent when the same host already owns a healthy route", () => {
+    const { coordinator, attempt } = resident();
+
+    const acquired = coordinator.acquire("panel:nav-a", {
+      slotId: "panel:tree/a",
+      clientSessionId: "desktop",
+      connectionId: "route-that-must-not-replace-the-owner",
+    });
+
+    expect(acquired).toMatchObject({
+      acquired: true,
+      lease: { connectionId: "route-a", clientSessionId: "desktop" },
+    });
+    expect(coordinator.currentAttemptForSlot("panel:tree/a")?.attemptId).toBe(attempt.attemptId);
+    expect(
+      coordinator.authorizePanelConnection("panel:nav-a", "route-that-must-not-replace-the-owner")
+    ).toMatchObject({ ok: false });
+    expect(coordinator.authorizePanelConnection("panel:nav-a", "route-a")).toEqual({ ok: true });
+  });
+
   it("terminates lease-less attempts on unload and entity retirement", () => {
     const unloadedCoordinator = new PanelRuntimeCoordinator();
     const unloaded = unloadedCoordinator.ensureAttemptForSlot("panel:tree/u", "panel:nav-u");

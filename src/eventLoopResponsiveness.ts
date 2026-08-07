@@ -44,11 +44,6 @@ export function startEventLoopResponsivenessMonitor(options: {
         `responsiveness budget exceeded p99Ms=${sample.p99Ms.toFixed(1)} ` +
           `maxMs=${sample.maxMs.toFixed(1)} utilization=${sample.utilization.toFixed(3)}`
       );
-    } else if (log.isVerbose()) {
-      log.verbose(
-        `sample p50Ms=${sample.p50Ms.toFixed(1)} p99Ms=${sample.p99Ms.toFixed(1)} ` +
-          `maxMs=${sample.maxMs.toFixed(1)} utilization=${sample.utilization.toFixed(3)}`
-      );
     }
   }, intervalMs);
   timer.unref();

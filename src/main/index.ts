@@ -3115,7 +3115,8 @@ app.on("ready", async () => {
 
     // Log startup timing in dev mode
     if (isDev()) {
-      performance.measure("startup:total", "startup:ready", "startup:window-created");
+      performance.measure("startup:total", "startup:ready", "startup:workspace-window-attached");
+      performance.measure("startup:bootstrap-window", "startup:ready", "startup:window-created");
       performance.measure(
         "startup:server-spawn",
         "startup:server-spawn-begin",
@@ -3129,7 +3130,7 @@ app.on("ready", async () => {
       performance.measure(
         "startup:post-connect",
         "startup:server-connected",
-        "startup:window-created"
+        "startup:workspace-window-attached"
       );
       const entries = performance
         .getEntriesByType("measure")

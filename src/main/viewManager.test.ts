@@ -1558,9 +1558,21 @@ describe("ViewManager", () => {
       (view.webContents.getURL as Mock).mockReturnValue("https://example.com/committed");
       (view.webContents.isLoading as Mock).mockReturnValue(false);
 
-      await vm.navigateView("test-view", "https://example.com/committed");
+      await vm.navigateView("test-view", "https://example.com/committed", "runtime:current");
+      await vm.navigateView("test-view", "https://example.com/committed", "runtime:current");
 
-      expect(view.webContents.loadURL).not.toHaveBeenCalled();
+      expect(view.webContents.loadURL).toHaveBeenCalledTimes(1);
+    });
+
+    it("restarts a committed URL when its document incarnation changes", async () => {
+      const view = vm.createView({ id: "test-view", type: "panel", preload: null });
+      (view.webContents.getURL as Mock).mockReturnValue("https://example.com/committed");
+      (view.webContents.isLoading as Mock).mockReturnValue(false);
+
+      await vm.navigateView("test-view", "https://example.com/committed", "runtime:first");
+      await vm.navigateView("test-view", "https://example.com/committed", "runtime:replacement");
+
+      expect(view.webContents.loadURL).toHaveBeenCalledTimes(2);
     });
 
     it("lets the committed URL supersede a different in-flight desired URL", async () => {

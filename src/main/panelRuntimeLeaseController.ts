@@ -529,8 +529,14 @@ export class PanelRuntimeLeaseController {
     if (!result.acquired) {
       throw new Error(formatPanelRuntimeLeaseDeniedMessage(panelId, result.lease));
     }
-    this.connectionBySlot.set(panelId, { runtimeEntityId, connectionId });
-    return connectionId;
+    // Acquire is idempotent when this host already owns the entity (notably
+    // after an automatic replacement transfer). The returned lease is the
+    // authority; the proposed connection id may never have been installed.
+    this.connectionBySlot.set(panelId, {
+      runtimeEntityId: result.lease.runtimeEntityId,
+      connectionId: result.lease.connectionId,
+    });
+    return result.lease.connectionId;
   }
 
   async ensureLeaseForExistingView(panelId: string): Promise<void> {

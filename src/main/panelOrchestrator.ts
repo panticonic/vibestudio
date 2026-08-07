@@ -562,7 +562,27 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   }
 
   async rebuildPanel(panelId: string): Promise<PanelLifecycleResult> {
-    return this.rebuildUnloadedPanel(panelId, { force: true });
+    const panel = this.registry.getPanel(panelId);
+    if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    const snapshot = getCurrentSnapshot(panel);
+
+    // Rebuild has one meaning across chrome, the portable panel API, menus,
+    // and tests: replace the immutable runtime incarnation in the current
+    // history cell, then present that exact replacement. Invalidating a shared
+    // source build under the existing entity leaves its sealed execution
+    // identity contradictory and can fail the live attempt while its agent is
+    // still running.
+    await this.shellCore.replaceCurrentSnapshot(asPanelSlotId(panelId), {
+      contextId: snapshot.contextId,
+      source: snapshot.source,
+      stateArgs: (snapshot.stateArgs ?? {}) as Record<string, unknown>,
+    });
+    await this.runtime.loadPanelIntoView(panelId);
+
+    return this.lifecycleResult(panelId, "rebuild", "rebuild_requested", {
+      loaded: Boolean(this.getPanelView()?.hasView(panelId)),
+      rebuilt: true,
+    });
   }
 
   applyBuildComplete(source: string, error?: string): void {
@@ -1214,9 +1234,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   async refreshPanelProjection(panelId: string): Promise<Panel | null> {
     const slotId = asPanelSlotId(panelId);
-    if (!this.registry.getPanel(panelId)) {
-      await this.shellCore.getPanel(slotId);
-    }
+    // Presentation events are an optimization, not a correctness boundary.
+    // An activation can race ahead of local registry hydration, and navigation
+    // can replace the durable entity before this process observes its event.
+    // Every addressed presentation read therefore rejoins the current durable
+    // slot before converging the native view.
+    await this.shellCore.refreshPanel(slotId);
     await this.runtime.convergePreparedPanelView(panelId);
     return this.registry.getPanel(panelId) ?? null;
   }

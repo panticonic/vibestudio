@@ -47,15 +47,22 @@ test.describe("Panel Rebuild Lifecycle", () => {
         rebuilt: true,
       });
 
-      await expect
-        .poll(async () => getPanelReadiness(testApp!.app, before.panelId), {
-          timeout: 120_000,
-        })
-        .toMatchObject({
-          panelId: before.panelId,
-          terminal: true,
-          attempt: { phase: "ready" },
-        });
+      try {
+        await expect
+          .poll(
+            async () => (await getPanelReadiness(testApp!.app, before.panelId)).attempt?.phase,
+            {
+              timeout: 120_000,
+            }
+          )
+          .toBe("ready");
+      } catch (error) {
+        const readiness = await getPanelReadiness(testApp.app, before.panelId);
+        throw new Error(
+          `Replacement panel did not become ready:\n${JSON.stringify(readiness, null, 2)}`,
+          { cause: error }
+        );
+      }
       const after = await getPanelReadiness(testApp.app, before.panelId);
       expect(after.runtimeEntityId).not.toBe(before.runtimeEntityId);
       expect(after.attempt?.attemptId).not.toBe(before.attempt?.attemptId);

@@ -887,12 +887,24 @@ export class PanelRuntimeCoordinator {
   ): PanelRuntimeAcquireResult {
     const entityId = asPanelEntityId(runtimeEntityId);
     const existing = this.leases.get(entityId);
-    if (
-      existing &&
-      existing.connectionId !== input.connectionId &&
-      existing.clientSessionId !== input.clientSessionId
-    ) {
-      return { acquired: false, lease: existing };
+    if (existing) {
+      if (existing.clientSessionId !== input.clientSessionId) {
+        return { acquired: false, lease: existing };
+      }
+      const attempt = this.currentAttempt(asPanelSlotId(input.slotId));
+      if (
+        attempt?.runtimeEntityId === entityId &&
+        attempt.phase !== "failed" &&
+        attempt.phase !== "stopped"
+      ) {
+        // Acquire establishes ownership; it does not rotate a healthy route
+        // already owned by the same host. Replacement transfers can arrive
+        // immediately before a host's explicit presentation request, and
+        // rewriting that lease would create two valid-looking connection ids
+        // whose events race in the host. Route replacement is the distinct,
+        // explicit takeOver operation.
+        return { acquired: true, lease: existing };
+      }
     }
     return { acquired: true, lease: this.writeLease(entityId, input, "acquired") };
   }

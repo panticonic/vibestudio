@@ -15,7 +15,6 @@ export interface CompositorRecoveryView {
     setVisible(visible: boolean): void;
     webContents: {
       isDestroyed(): boolean;
-      capturePage(): Promise<{ isEmpty(): boolean }>;
       invalidate(): void;
     };
   };
@@ -45,35 +44,30 @@ export interface CompositorRecoveryDeps {
 
 export interface CompositorRecoveryTimings {
   keepaliveIntervalMs: number;
-  minimumProbeIntervalMs: number;
-  maximumProbeIntervalMs: number;
   visibilityCycleCooldownMs: number;
 }
 
 /**
- * Owns compositor liveness policy: periodic keepalive, adaptive stall probes,
- * and the bounded visibility-cycle recovery used by explicit repaint requests.
+ * Owns compositor liveness policy: periodic non-destructive maintenance and
+ * the bounded visibility-cycle recovery used by explicit repaint requests.
+ *
+ * `capturePage()` is deliberately not a liveness probe. Chromium can return an
+ * empty readback for a healthy WebContentsView, especially when it is layered
+ * with the hosted shell on Linux. A false positive here used to visibility-
+ * cycle live panels out from under the slot protocol while their agents kept
+ * running. Automatic maintenance therefore only reasserts bounds, layer order,
+ * and invalidation; visibility cycling is reserved for an explicit user action.
  * ViewManager remains responsible for native layer mechanics and supplies them
  * through the required host callbacks above.
  */
 export class CompositorRecovery {
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  private stallDetectorTimer: ReturnType<typeof setTimeout> | null = null;
-  private probeIntervalMs: number;
   private readonly lastVisibilityCycleTimeByView = new Map<string, number>();
 
   constructor(
     private readonly deps: CompositorRecoveryDeps,
     private readonly timings: CompositorRecoveryTimings
-  ) {
-    if (timings.minimumProbeIntervalMs <= 0) {
-      throw new Error("minimumProbeIntervalMs must be positive");
-    }
-    if (timings.maximumProbeIntervalMs < timings.minimumProbeIntervalMs) {
-      throw new Error("maximumProbeIntervalMs must be at least minimumProbeIntervalMs");
-    }
-    this.probeIntervalMs = timings.minimumProbeIntervalMs;
-  }
+  ) {}
 
   start(): void {
     this.stop();
@@ -81,15 +75,11 @@ export class CompositorRecovery {
       () => this.keepCompositorAlive(),
       this.timings.keepaliveIntervalMs
     );
-    this.probeIntervalMs = this.timings.minimumProbeIntervalMs;
-    this.scheduleProbe();
   }
 
   stop(): void {
     if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
-    if (this.stallDetectorTimer) clearTimeout(this.stallDetectorTimer);
     this.keepaliveTimer = null;
-    this.stallDetectorTimer = null;
   }
 
   forgetView(viewId: string): void {
@@ -97,13 +87,11 @@ export class CompositorRecovery {
   }
 
   handleWindowFocused(): void {
-    this.probeIntervalMs = this.timings.minimumProbeIntervalMs;
     this.keepCompositorAlive();
-    void this.probeNow();
   }
 
-  probeNow(): Promise<void> {
-    return this.detectAndRecoverStall();
+  async probeNow(): Promise<void> {
+    this.keepCompositorAlive();
   }
 
   forceRepaint(viewId: string): boolean {
@@ -130,14 +118,6 @@ export class CompositorRecovery {
     }
   }
 
-  private scheduleProbe(): void {
-    this.stallDetectorTimer = setTimeout(async () => {
-      await this.probeNow();
-      if (this.stallDetectorTimer === null) return;
-      this.scheduleProbe();
-    }, this.probeIntervalMs);
-  }
-
   private keepCompositorAlive(): void {
     if (!this.canProbe()) return;
 
@@ -162,61 +142,7 @@ export class CompositorRecovery {
     managed.bounds = bounds;
     managed.view.setBounds(bounds);
     managed.view.webContents.invalidate();
-  }
-
-  private async detectAndRecoverStall(): Promise<void> {
-    if (!this.canProbe()) return;
-
-    const slots = this.deps.getActiveSlots();
-    if (slots.length > 0) {
-      // capturePage is not a reliable liveness signal for a WebContentsView
-      // that is composited as a child of the hosted shell. In particular,
-      // Linux/Chromium can return an empty readback for a healthy, visible
-      // native surface. Treating that as a stall visibility-cycles the user's
-      // panel and races the shell's slot bind/clear messages. Keep the native
-      // layer alive through the non-destructive maintenance path instead.
-      this.deps.ensureSlotLayerOrder();
-      for (const slot of slots) {
-        const managed = this.deps.getView(slot.panelId);
-        if (!this.canRepaint(managed)) continue;
-        const currentSlot = this.deps
-          .getActiveSlots()
-          .find((candidate) => candidate.nativeSlotId === slot.nativeSlotId);
-        if (currentSlot?.panelId !== slot.panelId) continue;
-        managed.bounds = currentSlot.bounds;
-        managed.view.setBounds(currentSlot.bounds);
-        managed.view.webContents.invalidate();
-      }
-      this.adjustProbeBackoff(false);
-      return;
-    }
-
-    const panelId = this.deps.getVisiblePanelId();
-    if (!panelId) return;
-    const managed = this.deps.getView(panelId);
-    if (!this.canRepaint(managed)) return;
-
-    try {
-      const image = await managed.view.webContents.capturePage();
-      if (this.deps.getVisiblePanelId() !== panelId || !managed.visible) return;
-
-      if (image.isEmpty()) {
-        this.deps.logVerbose(
-          `Compositor stall detected on ${panelId} (empty capture) — recovering`
-        );
-        this.deps.reconcileNativeLayerOrder();
-        const bounds = this.deps.calculatePanelBounds();
-        managed.bounds = bounds;
-        managed.view.setBounds(bounds);
-        managed.view.webContents.invalidate();
-        this.cycleVisibility(managed);
-        this.adjustProbeBackoff(true);
-      } else {
-        this.adjustProbeBackoff(false);
-      }
-    } catch {
-      // Navigation and destruction can race a capture. The next probe retries.
-    }
+    this.deps.reconcileNativeLayerOrder();
   }
 
   private canProbe(): boolean {
@@ -229,12 +155,6 @@ export class CompositorRecovery {
     managed: CompositorRecoveryView | undefined
   ): managed is CompositorRecoveryView {
     return Boolean(managed?.visible && !managed.view.webContents.isDestroyed());
-  }
-
-  private adjustProbeBackoff(stalled: boolean): void {
-    this.probeIntervalMs = stalled
-      ? this.timings.minimumProbeIntervalMs
-      : Math.min(this.probeIntervalMs * 2, this.timings.maximumProbeIntervalMs);
   }
 
   private cycleVisibility(managed: CompositorRecoveryView): void {

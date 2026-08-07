@@ -278,6 +278,51 @@ describe("useFullPanel local presentation", () => {
     );
   });
 
+  it("rejoins durable presentation after a tree transition races the activation event", async () => {
+    const preparing = {
+      id: "panel:tree/a",
+      title: "Panel",
+      runtimeEntityId: "panel:nav-a",
+      buildKey: null,
+      parentId: null,
+      position: 0,
+      selectedChildId: null,
+      children: [],
+      snapshot: { source: "panels/ready", contextId: "context-a", options: {} },
+      artifacts: { buildState: "pending", buildProgress: "Preparing panel runtime..." },
+      hostViewRevision: 1,
+    };
+    getPresentation.mockResolvedValueOnce(preparing).mockResolvedValue({
+      ...preparing,
+      buildKey: "b".repeat(64),
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "/ready",
+        hostedRuntimeEntityId: "panel:nav-a",
+      },
+      hostViewRevision: 2,
+    });
+    render(<FullPanelProbe panelId="panel:tree/a" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:pending")
+    );
+
+    act(() => {
+      treeUpdateHandler?.({
+        revision: 2,
+        reset: true,
+        groups: [],
+        changedSlotIds: [],
+        removedSlotIds: [],
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:ready")
+    );
+    expect(getPresentation).toHaveBeenCalledTimes(2);
+  });
+
   it("waits for projection events instead of polling a building panel", async () => {
     getPresentation.mockResolvedValue({
       id: "panel:tree/a",

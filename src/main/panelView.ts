@@ -293,10 +293,10 @@ export class PanelView implements PanelViewLike {
           requested: panel.authorityRequests,
         }
       : undefined;
+    const documentId = panel?.runtimeEntityId ?? undefined;
     if (this.viewManager.hasView(panelId)) {
       this.viewManager.updateCodeIdentity(panelId, identity);
-      const currentUrl = this.viewManager.getViewUrl(panelId);
-      if (currentUrl !== url) await this.viewManager.navigateView(panelId, url);
+      await this.viewManager.navigateView(panelId, url, documentId);
       return;
     }
 
@@ -324,7 +324,7 @@ export class PanelView implements PanelViewLike {
     this.contentLoadHandlers.set(panelId, { domReady: domReadyHandler });
 
     this.setupLinkInterception(panelId, view.webContents);
-    await this.viewManager.navigateView(panelId, url);
+    await this.viewManager.navigateView(panelId, url, documentId);
   }
 
   async createViewForApp(

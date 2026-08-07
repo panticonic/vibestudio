@@ -8,12 +8,10 @@ import {
 
 const timings = {
   keepaliveIntervalMs: 5,
-  minimumProbeIntervalMs: 10,
-  maximumProbeIntervalMs: 40,
   visibilityCycleCooldownMs: 1,
 };
 
-function createView(id: string, empty = false): CompositorRecoveryView {
+function createView(id: string): CompositorRecoveryView {
   return {
     id,
     type: "panel",
@@ -24,7 +22,6 @@ function createView(id: string, empty = false): CompositorRecoveryView {
       setVisible: vi.fn(),
       webContents: {
         isDestroyed: vi.fn(() => false),
-        capturePage: vi.fn(async () => ({ isEmpty: () => empty })),
         invalidate: vi.fn(),
       },
     },
@@ -81,8 +78,8 @@ describe("CompositorRecovery", () => {
     vi.useRealTimers();
   });
 
-  it("recovers an empty visible surface with bounds, invalidation, and a visibility cycle", async () => {
-    const harness = createHarness(createView("stalled", true));
+  it("maintains an unslotted visible surface without changing its visibility", async () => {
+    const harness = createHarness(createView("visible"));
 
     await harness.recovery.probeNow();
 
@@ -94,42 +91,30 @@ describe("CompositorRecovery", () => {
       height: 200,
     });
     expect(harness.view.view.webContents.invalidate).toHaveBeenCalledOnce();
-    expect(harness.view.view.setVisible).toHaveBeenNthCalledWith(1, false);
-    expect(harness.view.view.setVisible).toHaveBeenNthCalledWith(2, true);
+    expect(harness.view.view.setVisible).not.toHaveBeenCalled();
   });
 
-  it("backs healthy capture probes off and resets the interval after a stall", async () => {
+  it("runs periodic maintenance without a second destructive probe timer", async () => {
     const harness = createHarness();
-    const capturePage = vi.mocked(harness.view.view.webContents.capturePage);
     harness.recovery.start();
 
-    await vi.advanceTimersByTimeAsync(10);
-    expect(capturePage).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(19);
-    expect(capturePage).toHaveBeenCalledTimes(1);
-
-    capturePage.mockResolvedValue({ isEmpty: () => true });
-    await vi.advanceTimersByTimeAsync(1);
-    expect(capturePage).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(capturePage).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(15);
+    expect(harness.view.view.webContents.invalidate).toHaveBeenCalledTimes(3);
+    expect(harness.view.view.setVisible).not.toHaveBeenCalled();
   });
 
-  it("does not repaint when capture fails or the window cannot be probed", async () => {
+  it("does not repaint when the window cannot be maintained", async () => {
     const harness = createHarness();
-    vi.mocked(harness.view.view.webContents.capturePage).mockRejectedValue(new Error("navigating"));
-
-    await harness.recovery.probeNow();
     harness.state.focused = false;
     await harness.recovery.probeNow();
 
-    expect(harness.view.view.webContents.capturePage).toHaveBeenCalledTimes(1);
+    expect(harness.view.view.webContents.invalidate).not.toHaveBeenCalled();
     expect(harness.deps.reconcileNativeLayerOrder).not.toHaveBeenCalled();
     expect(harness.view.view.setVisible).not.toHaveBeenCalled();
   });
 
   it("maintains slotted surfaces without treating empty readbacks as stalls", async () => {
-    const harness = createHarness(createView("old-panel", true));
+    const harness = createHarness(createView("old-panel"));
     harness.state.slots = [
       {
         nativeSlotId: "slot-1",
@@ -139,7 +124,6 @@ describe("CompositorRecovery", () => {
     ];
     await harness.recovery.probeNow();
 
-    expect(harness.view.view.webContents.capturePage).not.toHaveBeenCalled();
     expect(harness.deps.ensureSlotLayerOrder).toHaveBeenCalledOnce();
     expect(harness.view.view.setBounds).toHaveBeenCalledWith({
       x: 1,

@@ -553,18 +553,36 @@ export function useFullPanel(panelId: string | null): {
     },
     [panelId]
   );
+  const refreshPresentation = useCallback(() => {
+    if (!panelId) return;
+    const request = ++nextRequestRef.current;
+    void panel
+      .getPresentation(panelId)
+      .then((presentation) => applyPresentation(presentation, request))
+      .catch(() => {});
+  }, [applyPresentation, panelId]);
   useDirectShellEvent(
     "panel-presentation-changed",
     useCallback(
       (event) => {
         if (!panelId || !event.panelIds.includes(panelId)) return;
-        const request = ++nextRequestRef.current;
-        void panel
-          .getPresentation(panelId)
-          .then((presentation) => applyPresentation(presentation, request))
-          .catch(() => {});
+        refreshPresentation();
       },
-      [applyPresentation, panelId]
+      [panelId, refreshPresentation]
+    )
+  );
+  useShellEvent(
+    "panel-tree-invalidated",
+    useCallback(
+      (event) => {
+        if (!panelId) return;
+        if (!event.reset && !event.changedSlotIds.includes(panelId)) return;
+        // The durable tree transition is the level-triggered lifecycle signal.
+        // Refresh the addressed presentation even when a transient activation
+        // or lease event raced ahead of local registry hydration.
+        refreshPresentation();
+      },
+      [panelId, refreshPresentation]
     )
   );
   useEffect(() => {

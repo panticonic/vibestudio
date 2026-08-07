@@ -428,8 +428,13 @@ export class IpcDispatcher {
           `[responsiveness] ipc-rpc request=${req.requestId} ` +
           `caller=${callerKind}:${callerId} method=${service}.${method} ` +
           `outcome=${outcome} elapsedMs=${elapsedMs.toFixed(1)}`;
-        if (elapsedMs >= SLOW_INTERACTIVE_RPC_MS) log.warn(message);
-        else if (log.isVerbose()) log.verbose(message);
+        // Healthy RPCs are high-frequency control-plane traffic, not useful
+        // diagnostics. Log only actionable failures and latency violations;
+        // callers that need distributions should consume metrics rather than
+        // turning every heartbeat into a console line.
+        if (outcome === "error" || elapsedMs >= SLOW_INTERACTIVE_RPC_MS) {
+          log.warn(message);
+        }
       }
     }
   }
