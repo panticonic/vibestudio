@@ -3763,7 +3763,7 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "supervision",
       family: "panelRuntime.control",
       rationale:
-        "A panel principal publishes its own bootstrap transition; the active lease identity is derived server-side.",
+        "A panel principal publishes its own bootstrap transition only while its authenticated connection owns the exact active lease.",
     },
     capability: null,
     presentation: null,

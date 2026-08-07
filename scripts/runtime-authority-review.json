@@ -1,7 +1,19 @@
 {
   "version": 1,
-  "censusDigest": "sha256:d50a0b697bc167ded859d274887f1464a6a741443ba2cfaf057f416d090e9113",
+  "censusDigest": "sha256:364c3de4e44d396eff39a04986695e4944b1b77d4ca1e52aee85931d43968e86",
   "decisions": {
+    "host:panelRuntime.awaitAttempt": {
+      "review": "exact-panel-attempt-readiness-read",
+      "change": "Adds an open, read-only wait for one opaque panel attempt already reachable by the caller. It observes lifecycle settlement without creating, activating, navigating, or granting control of a panel."
+    },
+    "host:panelRuntime.awaitSlot": {
+      "review": "exact-panel-slot-readiness-read",
+      "change": "Renames the existing open slot-lifecycle wait while preserving its caller-reachable exact slot scope and read-only supervision semantics."
+    },
+    "host:panelRuntime.getAttempt": {
+      "review": "exact-panel-attempt-resolution-read",
+      "change": "Adds an open, read-only resolution of one opaque attempt reference. The receiver returns bounded lifecycle identity and state without panel mutation or authority acquisition."
+    },
     "host:credentials.resolveCredential": {
       "review": "handler-owned-exact-credential-use-approval",
       "change": "Opens only the mediation entrypoint and removes its redundant generic credential.use dispatcher prompt. The handler still matches the concrete credential and requires the existing exact credential, caller, use, audience, workspace, and grant-scope authorization before returning any credential summary or material."

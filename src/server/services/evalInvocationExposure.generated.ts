@@ -9260,16 +9260,29 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
-    id: "host:panelRuntime.awaitSlotChange",
+    id: "host:panelRuntime.awaitAttempt",
     rpcPlane: "host-service",
-    capability: "service:panelRuntime.awaitSlotChange",
+    capability: "service:panelRuntime.awaitAttempt",
     authorityPrincipals: ["user", "code", "host"],
     owner: "panelRuntime",
-    method: "awaitSlotChange",
+    method: "awaitAttempt",
     sensitivity: "read",
     resourceDerivation: {
       kind: "literal",
-      key: "service:panelRuntime.awaitSlotChange",
+      key: "service:panelRuntime.awaitAttempt",
+    },
+  },
+  {
+    id: "host:panelRuntime.awaitSlot",
+    rpcPlane: "host-service",
+    capability: "service:panelRuntime.awaitSlot",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "panelRuntime",
+    method: "awaitSlot",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:panelRuntime.awaitSlot",
     },
   },
   {
@@ -9283,6 +9296,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:panelRuntime.ensureSlot",
+    },
+  },
+  {
+    id: "host:panelRuntime.getAttempt",
+    rpcPlane: "host-service",
+    capability: "service:panelRuntime.getAttempt",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "panelRuntime",
+    method: "getAttempt",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:panelRuntime.getAttempt",
     },
   },
   {
@@ -11576,6 +11602,32 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:workers.listStorageBackups",
+    rpcPlane: "host-service",
+    capability: "service:workers.listStorageBackups",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "workers",
+    method: "listStorageBackups",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:workers.listStorageBackups",
+    },
+  },
+  {
+    id: "host:workers.resetStorage",
+    rpcPlane: "host-service",
+    capability: "service:workers.resetStorage",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "workers",
+    method: "resetStorage",
+    sensitivity: "destructive",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:workers.resetStorage",
+    },
+  },
+  {
     id: "host:workers.resolveDurableObject",
     rpcPlane: "host-service",
     capability: "service:workers.resolveDurableObject",
@@ -11599,6 +11651,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:workers.resolveService",
+    },
+  },
+  {
+    id: "host:workers.restoreStorageBackup",
+    rpcPlane: "host-service",
+    capability: "service:workers.restoreStorageBackup",
+    authorityPrincipals: ["user", "host", "code"],
+    owner: "workers",
+    method: "restoreStorageBackup",
+    sensitivity: "destructive",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:workers.restoreStorageBackup",
     },
   },
   {
@@ -13087,11 +13152,19 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "panelRuntime",
-    method: "awaitSlotChange",
+    method: "awaitAttempt",
+  },
+  {
+    service: "panelRuntime",
+    method: "awaitSlot",
   },
   {
     service: "panelRuntime",
     method: "ensureSlot",
+  },
+  {
+    service: "panelRuntime",
+    method: "getAttempt",
   },
   {
     service: "panelRuntime",
@@ -13511,11 +13584,23 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "workers",
+    method: "listStorageBackups",
+  },
+  {
+    service: "workers",
+    method: "resetStorage",
+  },
+  {
+    service: "workers",
     method: "resolveDurableObject",
   },
   {
     service: "workers",
     method: "resolveService",
+  },
+  {
+    service: "workers",
+    method: "restoreStorageBackup",
   },
   {
     service: "workspace",
@@ -14432,8 +14517,10 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:panelCdp.getCdpEndpoint",
   "service:panelCdp.screenshot",
   "service:panelCdp.stop",
-  "service:panelRuntime.awaitSlotChange",
+  "service:panelRuntime.awaitAttempt",
+  "service:panelRuntime.awaitSlot",
   "service:panelRuntime.ensureSlot",
+  "service:panelRuntime.getAttempt",
   "service:panelRuntime.getSnapshot",
   "service:panelRuntime.observeSlot",
   "service:panelRuntime.reportOwnView",
@@ -14582,8 +14669,11 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:workerdInspector.listTargets",
   "service:workers.listServices",
   "service:workers.listSources",
+  "service:workers.listStorageBackups",
+  "service:workers.resetStorage",
   "service:workers.resolveDurableObject",
   "service:workers.resolveService",
+  "service:workers.restoreStorageBackup",
   "service:workspace-state.alarmClear",
   "service:workspace-state.alarmSet",
   "service:workspace-state.entity.resolve",

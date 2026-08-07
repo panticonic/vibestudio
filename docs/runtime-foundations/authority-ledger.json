@@ -29938,18 +29938,18 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:panelRuntime.awaitSlotChange",
+      "id": "host:panelRuntime.awaitAttempt",
       "rpcPlane": "host-service",
       "owner": "panelRuntime",
-      "method": "awaitSlotChange",
+      "method": "awaitAttempt",
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "supervision",
       "mechanismFamily": "panelRuntime.read",
-      "reviewRationale": "Waits on the canonical panel observation stream without acquiring authority",
+      "reviewRationale": "Waits on one exact panel boot lifecycle without acquiring authority",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:panelRuntime.awaitSlotChange"
+        "key": "service:panelRuntime.awaitAttempt"
       },
       "authorityPrincipals": [
         "user",
@@ -29975,12 +29975,58 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.awaitSlotChange),allOf(capability(user,service:panelRuntime.awaitSlotChange),workspace-member),allOf(capability(code,service:panelRuntime.awaitSlotChange),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.awaitAttempt),allOf(capability(user,service:panelRuntime.awaitAttempt),workspace-member),allOf(capability(code,service:panelRuntime.awaitAttempt),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "exact-panel-attempt-readiness-read",
+        "change": "Adds an open, read-only wait for one opaque panel attempt already reachable by the caller. It observes lifecycle settlement without creating, activating, navigating, or granting control of a panel."
       },
-      "capability": "service:panelRuntime.awaitSlotChange",
+      "capability": "service:panelRuntime.awaitAttempt",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelRuntime.awaitSlot",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "awaitSlot",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "panelRuntime.read",
+      "reviewRationale": "Waits on the canonical panel observation stream without acquiring authority",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.awaitSlot"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.awaitSlot),allOf(capability(user,service:panelRuntime.awaitSlot),workspace-member),allOf(capability(code,service:panelRuntime.awaitSlot),workspace-member))",
+      "r3b": {
+        "review": "exact-panel-slot-readiness-read",
+        "change": "Renames the existing open slot-lifecycle wait while preserving its caller-reachable exact slot scope and read-only supervision semantics."
+      },
+      "capability": "service:panelRuntime.awaitSlot",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -30027,6 +30073,52 @@
         "change": null
       },
       "capability": "service:panelRuntime.ensureSlot",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelRuntime.getAttempt",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "getAttempt",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "panelRuntime.read",
+      "reviewRationale": "Resolves opaque attempt references without acquiring authority",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.getAttempt"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.getAttempt),allOf(capability(user,service:panelRuntime.getAttempt),workspace-member),allOf(capability(code,service:panelRuntime.getAttempt),workspace-member))",
+      "r3b": {
+        "review": "exact-panel-attempt-resolution-read",
+        "change": "Adds an open, read-only resolution of one opaque attempt reference. The receiver returns bounded lifecycle identity and state without panel mutation or authority acquisition."
+      },
+      "capability": "service:panelRuntime.getAttempt",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -30220,7 +30312,7 @@
       "sessionAdmission": "family",
       "residency": "supervision",
       "mechanismFamily": "panelRuntime.control",
-      "reviewRationale": "A panel principal publishes its own bootstrap transition; the active lease identity is derived server-side.",
+      "reviewRationale": "A panel principal publishes its own bootstrap transition only while its authenticated connection owns the exact active lease.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:panelRuntime.reportOwnView"
@@ -38012,6 +38104,98 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:workers.listStorageBackups",
+      "rpcPlane": "host-service",
+      "owner": "workers",
+      "method": "listStorageBackups",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "workers.read",
+      "reviewRationale": "Backup metadata for one exact target is recovery discovery",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workers.listStorageBackups"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workers.listStorageBackups),allOf(capability(user,service:workers.listStorageBackups),workspace-member),allOf(capability(code,service:workers.listStorageBackups),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workers.listStorageBackups",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workers.resetStorage",
+      "rpcPlane": "host-service",
+      "owner": "workers",
+      "method": "resetStorage",
+      "tier": "critical",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "workers.storage-maintenance",
+      "reviewRationale": "Exact-target durable storage replacement is destructive and individually reviewed",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workers.resetStorage"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workers.resetStorage),allOf(capability(user,service:workers.resetStorage),workspace-member),allOf(capability(code,service:workers.resetStorage),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workers.resetStorage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:workers.resolveDurableObject",
       "rpcPlane": "host-service",
       "owner": "workers",
@@ -38201,6 +38385,52 @@
         "review": "schema-owned-prepared-leaf",
         "change": null
       },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workers.restoreStorageBackup",
+      "rpcPlane": "host-service",
+      "owner": "workers",
+      "method": "restoreStorageBackup",
+      "tier": "critical",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "workers.storage-maintenance",
+      "reviewRationale": "Exact-target durable storage replacement is destructive and individually reviewed",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workers.restoreStorageBackup"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workers.restoreStorageBackup),allOf(capability(user,service:workers.restoreStorageBackup),workspace-member),allOf(capability(code,service:workers.restoreStorageBackup),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workers.restoreStorageBackup",
       "parityAssertion": "generated-census:host-authority"
     },
     {
