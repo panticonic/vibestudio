@@ -46,6 +46,17 @@ export interface AuthorityCompilerSnapshot {
     maxProgramMs: number;
     analyzerMs: number;
     compositionMs: number;
+    native: {
+      requestCount: number;
+      roundTripMs: number;
+      serverTimeMs: number;
+      transportOverheadMs: number;
+      bytesSent: number;
+      bytesReceived: number;
+      sourceFilesFetched: number;
+      nodesFetched: number;
+      nodesMaterialized: number;
+    };
   };
 }
 
@@ -61,6 +72,18 @@ function isWithin(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
 }
+
+const CHECK_IRRELEVANT_COMPILER_OPTIONS = new Set([
+  "configFile",
+  "configFilePath",
+  "outDir",
+  "outFile",
+  "declarationDir",
+  "tsBuildInfoFile",
+  "sourceRoot",
+  "mapRoot",
+  "pathsBasePath",
+]);
 
 async function hasOwnTsconfig(sourceRoot: string, unit: AuthorityCompilerSnapshotUnit) {
   try {
@@ -79,7 +102,9 @@ function canonicalCompilerValue(value: unknown, sourceRoot: string): unknown {
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([key, child]) => key !== "configFile" && child !== undefined)
+        .filter(
+          ([key, child]) => !CHECK_IRRELEVANT_COMPILER_OPTIONS.has(key) && child !== undefined
+        )
         .map(([key, child]) => [key, canonicalCompilerValue(child, sourceRoot)])
     );
   }
@@ -155,43 +180,34 @@ function symbolDeclarations(project: Project, symbol: TypeScriptSymbol | undefin
   );
 }
 
-function resolvedWorkspaceImports(
+function resolvedImportGraphs(
   project: Project,
   workspaceFiles: ReadonlySet<string>
-): Map<string, ReadonlySet<string>> {
+): {
+  workspace: Map<string, ReadonlySet<string>>;
+  all: Map<string, ReadonlySet<string>>;
+} {
   const checker = project.checker;
-  const graph = new Map<string, ReadonlySet<string>>();
+  const workspace = new Map<string, ReadonlySet<string>>();
+  const all = new Map<string, ReadonlySet<string>>();
   for (const sourceFile of sourceFiles(project.program)) {
     const source = path.resolve(sourceFile.fileName);
-    if (!workspaceFiles.has(source)) continue;
     const imports = new Set<string>();
-    for (const specifier of moduleSpecifiers(sourceFile)) {
-      const symbol = checker.getSymbolAtLocation(specifier);
+    const workspaceImports = new Set<string>();
+    const specifiers = moduleSpecifiers(sourceFile);
+    const symbols = checker.getSymbolAtLocation(specifiers);
+    for (let index = 0; index < specifiers.length; index += 1) {
+      const symbol = symbols[index];
       for (const declaration of symbolDeclarations(project, symbol)) {
         const target = path.resolve(declaration.getSourceFile().fileName);
-        if (workspaceFiles.has(target)) imports.add(target);
+        imports.add(target);
+        if (workspaceFiles.has(target)) workspaceImports.add(target);
       }
     }
-    graph.set(source, imports);
+    all.set(source, imports);
+    if (workspaceFiles.has(source)) workspace.set(source, workspaceImports);
   }
-  return graph;
-}
-
-function resolvedImports(project: Project): Map<string, ReadonlySet<string>> {
-  const checker = project.checker;
-  const graph = new Map<string, ReadonlySet<string>>();
-  for (const sourceFile of sourceFiles(project.program)) {
-    const source = path.resolve(sourceFile.fileName);
-    const imports = new Set<string>();
-    for (const specifier of moduleSpecifiers(sourceFile)) {
-      const symbol = checker.getSymbolAtLocation(specifier);
-      for (const declaration of symbolDeclarations(project, symbol)) {
-        imports.add(path.resolve(declaration.getSourceFile().fileName));
-      }
-    }
-    graph.set(source, imports);
-  }
-  return graph;
+  return { workspace, all };
 }
 
 function contentHash(content: string | Buffer): string {
@@ -393,6 +409,17 @@ export async function createAuthorityCompilerSnapshot(
   let maxProgramMs = 0;
   let analyzerMs = 0;
   let compositionMs = 0;
+  const native = {
+    requestCount: 0,
+    roundTripMs: 0,
+    serverTimeMs: 0,
+    transportOverheadMs: 0,
+    bytesSent: 0,
+    bytesReceived: 0,
+    sourceFilesFetched: 0,
+    nodesFetched: 0,
+    nodesMaterialized: 0,
+  };
   const importsByFile = new Map<string, ReadonlySet<string>>();
   const factsByConsumer = new Map<string, readonly WorkspaceServiceCallFact[]>();
   const dependenciesByConsumer = new Map<string, readonly AuthorityCompilerDependency[]>();
@@ -405,6 +432,7 @@ export async function createAuthorityCompilerSnapshot(
       ...(group.tsconfigPath
         ? { tsconfigPath: group.tsconfigPath }
         : { disableTsconfigDiscovery: true }),
+      collectTiming: true,
     });
     for (const unit of group.units) {
       for (const file of rootsByUnit.get(unit.name) ?? []) {
@@ -424,8 +452,9 @@ export async function createAuthorityCompilerSnapshot(
           .map((sourceFile) => path.resolve(sourceFile.fileName))
           .filter((file) => isWithin(sourceRoot, file))
       );
-      const groupImports = resolvedWorkspaceImports(project, groupWorkspaceFiles);
-      const allImports = resolvedImports(project);
+      const importGraphs = resolvedImportGraphs(project, groupWorkspaceFiles);
+      const groupImports = importGraphs.workspace;
+      const allImports = importGraphs.all;
       const externalFiles = new Set(
         sourceFiles(program)
           .map((sourceFile) => path.resolve(sourceFile.fileName))
@@ -468,6 +497,10 @@ export async function createAuthorityCompilerSnapshot(
       compositionMs += Date.now() - compositionStartedAt;
       groups.push({ fingerprint, units: group.units });
     } finally {
+      const totals = service.getTimingInfo().totals;
+      for (const key of Object.keys(native) as (keyof typeof native)[]) {
+        native[key] += totals[key];
+      }
       service.dispose();
     }
   }
@@ -477,6 +510,6 @@ export async function createAuthorityCompilerSnapshot(
     factsByConsumer,
     dependenciesByConsumer,
     importsByFile,
-    timings: { sourceLoadMs, programMs, maxProgramMs, analyzerMs, compositionMs },
+    timings: { sourceLoadMs, programMs, maxProgramMs, analyzerMs, compositionMs, native },
   };
 }

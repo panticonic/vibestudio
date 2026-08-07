@@ -228,7 +228,9 @@ describe("AuthorityCompilerSnapshot", () => {
 
     expect(snapshot.groups).toHaveLength(2);
     expect(
-      snapshot.groups.map((group) => group.units.map((unit) => unit.name).sort()).sort()
+      snapshot.groups
+        .map((group) => group.units.map((unit) => unit.name).sort((a, b) => a.localeCompare(b)))
+        .sort((a, b) => a.join("\0").localeCompare(b.join("\0")))
     ).toEqual([["@workspace/configured-a", "@workspace/configured-b"], ["@workspace/default"]]);
     expect(snapshot.factsByConsumer.has("@workspace/configured-a")).toBe(true);
     expect(snapshot.factsByConsumer.has("@workspace/configured-b")).toBe(true);

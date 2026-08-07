@@ -15,8 +15,10 @@ exact `typescript@7.0.2` dependency.
   no compiler alias or fallback generation.
 
 The React Native config declares its Node, React, and React Native ambient type
-sets explicitly. This makes its environment reproducible instead of depending
-on TypeScript 5's incidental type-package discovery.
+sets explicitly. Node-shaped types are intentional: Metro maps the exact
+`path`, `fs`, and `crypto` imports reachable through shared packages to mobile
+shims. They describe that compatibility surface; they do not imply a Node
+runtime. Metro's native-module boundary remains the runtime enforcement point.
 
 ## Runtime compiler API
 
@@ -27,12 +29,26 @@ information, definitions, and semantic analysis. Module resolution remains the
 compiler's responsibility; Vibestudio only projects materialized workspace and
 external package roots into its filesystem view.
 
+The package name `typescript/unstable/*` belongs to TypeScript 7's new native
+API. It means Microsoft has not frozen that API contract; it does not refer to
+the legacy JavaScript compiler. Vibestudio pins one exact compiler version and
+keeps native project construction in `@vibestudio/typecheck`, so an API change
+is detected by package builds and contract tests rather than leaking across a
+version range.
+
 Compiler-API consumers receive a native `Project`, not a detached legacy
 `Program`. Symbols expose project-scoped node handles, so authority analysis
 resolves declarations inside the same immutable snapshot. Services are disposed
 at their build, test, or analysis boundary, which also terminates the native
 compiler child and prevents the host-process heap growth caused by the old
 JavaScript language service.
+
+The workspace typecheck extension keeps recently used projects warm in a
+bounded LRU. Repeated diagnostics, hover, completion, definition, and reference
+queries therefore reuse incremental snapshots, while eviction synchronously
+closes the native compiler child. Native request timings are included in
+authority-analysis phase logs; `TypeCheckService` also exposes opt-in CPU and
+heap profiles for focused diagnostics.
 
 Syntax-only repository folds use `TypeScriptSyntaxService`. It reuses one native
 project during a synchronous scan and releases it on the next event-loop turn.
@@ -42,10 +58,12 @@ parser; they do not construct a semantic compiler project.
 ## Linting
 
 Oxlint replaces ESLint and `typescript-eslint`. Type-aware operation is backed by
-`oxlint-tsgolint@7.0.2001`, which matches TypeScript 7.0.2. The initial ruleset
-preserves the repository's explicit unused-variable, empty-block, dynamic-delete,
-and non-null-assertion policy without enabling thousands of new recommended-rule
-findings as an accidental part of the compiler migration.
+`oxlint-tsgolint@7.0.2001`, which matches TypeScript 7.0.2. Correctness rules are
+enabled as errors. High-volume semantic rules that require existing repository
+cleanup remain visible as warnings in production source and are disabled only
+where test-double patterns make them inapplicable. Unused variables and empty
+blocks remain hard failures; dynamic deletion and non-null assertions remain
+warnings.
 
 ## Browser standard libraries
 

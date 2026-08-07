@@ -35,7 +35,11 @@ import {
 import { getUserDataPath } from "@vibestudio/env-paths";
 import { runNpmInstall } from "@vibestudio/shared/npmInstaller";
 
-/** Per-panel TypeCheckService cache — keyed by absolute panel path. */
+/**
+ * Per-panel native project cache. Map insertion order is the LRU order, so a
+ * hit is promoted and eviction synchronously closes the native compiler child.
+ */
+const MAX_TYPECHECK_PROJECTS = 8;
 const typeCheckServiceCache = new Map<string, TypeCheckService>();
 const nodeModulesPathCache = new Map<string, string[]>();
 
@@ -230,7 +234,11 @@ async function getOrCreateTypeCheckService(
   const resolved = path.resolve(panelPath);
   const key = typecheckCacheKey(resolved, options);
   const cached = typeCheckServiceCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    typeCheckServiceCache.delete(key);
+    typeCheckServiceCache.set(key, cached);
+    return cached;
+  }
 
   const nodeModulesPaths = await resolveTypecheckNodeModulesPaths(resolved, options);
   const service = new TypeCheckService({
@@ -250,6 +258,13 @@ async function getOrCreateTypeCheckService(
   }
 
   typeCheckServiceCache.set(key, service);
+  while (typeCheckServiceCache.size > MAX_TYPECHECK_PROJECTS) {
+    const oldestKey = typeCheckServiceCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const evicted = typeCheckServiceCache.get(oldestKey);
+    typeCheckServiceCache.delete(oldestKey);
+    evicted?.dispose();
+  }
   return service;
 }
 
@@ -456,7 +471,18 @@ export const typeCheckRpcMethods = {
     column: number,
     fileContent?: string,
     options?: TypeCheckRpcOptions
-  ): Promise<{ entries: { name: string; kind: string }[] } | null> => {
+  ): Promise<{
+    isIncomplete: boolean;
+    entries: {
+      name: string;
+      kind: string;
+      sortText?: string;
+      insertText?: string;
+      filterText?: string;
+      detail?: string;
+      labelDetails?: { detail?: string; description?: string };
+    }[];
+  } | null> => {
     const service = await getOrCreateTypeCheckService(panelPath, options);
     const resolved = path.resolve(panelPath);
     const resolvedFile = path.resolve(resolved, filePath);
@@ -475,7 +501,8 @@ export const typeCheckRpcMethods = {
     if (!completions || completions.entries.length === 0) return null;
 
     return {
-      entries: completions.entries.map((e) => ({ name: e.name, kind: e.kind })),
+      isIncomplete: completions.isIncomplete,
+      entries: completions.entries.map((entry) => ({ ...entry })),
     };
   },
 
@@ -512,4 +539,16 @@ export function clearTypeCheckCache(): void {
   for (const service of typeCheckServiceCache.values()) service.dispose();
   typeCheckServiceCache.clear();
   nodeModulesPathCache.clear();
+}
+
+export function getTypeCheckCacheStats(): {
+  size: number;
+  limit: number;
+  panelKeys: readonly string[];
+} {
+  return {
+    size: typeCheckServiceCache.size,
+    limit: MAX_TYPECHECK_PROJECTS,
+    panelKeys: [...typeCheckServiceCache.keys()],
+  };
 }

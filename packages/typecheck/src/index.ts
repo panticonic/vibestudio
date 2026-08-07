@@ -32,6 +32,10 @@ export {
   type BaseDiagnostic,
   type TypeCheckDiagnostic,
   type QuickInfo,
+  type CompletionInfo,
+  type CompletionEntry,
+  type DefinitionInfo,
+  type ReferenceInfo,
 } from "./service.js";
 
 export {

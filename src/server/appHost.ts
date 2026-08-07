@@ -679,7 +679,9 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           `Candidate app ${candidate.unitName} requests a capability invalid for ${target}`
         );
       }
-      const capabilities = [...new Set(declaredCapabilities)].sort() as AppCapability[];
+      const capabilities = [...new Set(declaredCapabilities)].sort((left, right) =>
+        left.localeCompare(right)
+      ) as AppCapability[];
       const provider =
         target === "react-native"
           ? (this.deps.buildSystem.getBuildProviderDetails?.("react-native") ?? null)

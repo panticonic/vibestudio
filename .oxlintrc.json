@@ -2,7 +2,7 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript"],
   "categories": {
-    "correctness": "off"
+    "correctness": "error"
   },
   "ignorePatterns": [
     "node_modules",
@@ -25,6 +25,13 @@
     ],
     "typescript/no-dynamic-delete": "warn",
     "typescript/no-non-null-assertion": "warn",
+    "typescript/unbound-method": "warn",
+    "typescript/no-floating-promises": "warn",
+    "typescript/no-base-to-string": "warn",
+    "typescript/no-redundant-type-constituents": "warn",
+    "typescript/restrict-template-expressions": "warn",
+    "typescript/await-thenable": "warn",
+    "typescript/no-misused-spread": "warn",
     "eslint/no-empty": [
       "error",
       {
@@ -36,7 +43,16 @@
     {
       "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts"],
       "rules": {
-        "typescript/no-non-null-assertion": "off"
+        "typescript/no-non-null-assertion": "off",
+        "typescript/unbound-method": "off",
+        "typescript/no-floating-promises": "off",
+        "typescript/no-base-to-string": "off",
+        "typescript/no-redundant-type-constituents": "off",
+        "typescript/restrict-template-expressions": "off",
+        "typescript/await-thenable": "off",
+        "eslint/no-unsafe-optional-chaining": "off",
+        "typescript/no-useless-default-assignment": "off",
+        "typescript/no-implied-eval": "off"
       }
     }
   ]

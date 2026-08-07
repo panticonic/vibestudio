@@ -9,7 +9,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, writeFile, rm, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { typeCheckRpcMethods, clearTypeCheckCache } from "./typecheckService.js";
+import {
+  typeCheckRpcMethods,
+  clearTypeCheckCache,
+  getTypeCheckCacheStats,
+} from "./typecheckService.js";
 import {
   FS_TYPE_DEFINITIONS,
   GLOBAL_TYPE_DEFINITIONS,
@@ -29,6 +33,20 @@ afterEach(async () => {
 });
 
 describe("typecheck.check", () => {
+  it("bounds native project reuse with LRU eviction", async () => {
+    for (let index = 0; index < 10; index += 1) {
+      const child = join(panelDir, `panel-${index}`);
+      await mkdir(child, { recursive: true });
+      await writeFile(join(child, "index.ts"), `export const value = ${index};\n`);
+      await typeCheckRpcMethods["typecheck.check"](child);
+    }
+
+    const stats = getTypeCheckCacheStats();
+    expect(stats.size).toBe(stats.limit);
+    expect(stats.panelKeys.some((key) => key.includes("panel-0"))).toBe(false);
+    expect(stats.panelKeys.some((key) => key.includes("panel-9"))).toBe(true);
+  });
+
   it("returns error diagnostics for explicit fileContent with a type error", async () => {
     const filePath = "index.tsx";
     const fullPath = join(panelDir, filePath);
@@ -43,7 +61,7 @@ describe("typecheck.check", () => {
     );
 
     expect(result.diagnostics.length).toBeGreaterThan(0);
-    const errorDiag = result.diagnostics.find(d => d.severity === "error");
+    const errorDiag = result.diagnostics.find((d) => d.severity === "error");
     expect(errorDiag).toBeDefined();
     expect(result.checkedFiles).toContain(fullPath);
   });
@@ -57,7 +75,7 @@ describe("typecheck.check", () => {
     const result = await typeCheckRpcMethods["typecheck.check"](panelDir, filePath);
 
     expect(result.diagnostics.length).toBeGreaterThan(0);
-    expect(result.diagnostics.some(d => d.severity === "error")).toBe(true);
+    expect(result.diagnostics.some((d) => d.severity === "error")).toBe(true);
     expect(result.checkedFiles).toContain(fullPath);
   });
 
@@ -68,7 +86,7 @@ describe("typecheck.check", () => {
     // Start with valid code
     await writeFile(fullPath, "const x: number = 42;\n");
     const result1 = await typeCheckRpcMethods["typecheck.check"](panelDir, filePath);
-    expect(result1.diagnostics.filter(d => d.severity === "error")).toHaveLength(0);
+    expect(result1.diagnostics.filter((d) => d.severity === "error")).toHaveLength(0);
 
     // Modify file on disk to introduce an error
     await writeFile(fullPath, "const x: number = 'now broken';\n");
@@ -76,7 +94,7 @@ describe("typecheck.check", () => {
 
     // Should see the new error despite cached service
     expect(result2.diagnostics.length).toBeGreaterThan(0);
-    expect(result2.diagnostics.some(d => d.severity === "error")).toBe(true);
+    expect(result2.diagnostics.some((d) => d.severity === "error")).toBe(true);
   });
 
   it("checks all files in whole-panel mode (no filePath)", async () => {
@@ -86,7 +104,9 @@ describe("typecheck.check", () => {
     const result = await typeCheckRpcMethods["typecheck.check"](panelDir);
 
     // Should have errors from both files
-    expect(result.diagnostics.filter(d => d.severity === "error").length).toBeGreaterThanOrEqual(2);
+    expect(result.diagnostics.filter((d) => d.severity === "error").length).toBeGreaterThanOrEqual(
+      2
+    );
     expect(result.checkedFiles.length).toBeGreaterThanOrEqual(2);
   });
 });
@@ -97,7 +117,10 @@ describe("typecheck.getTypeInfo", () => {
     await writeFile(join(panelDir, filePath), "const greeting: string = 'hello';\n");
 
     const info = await typeCheckRpcMethods["typecheck.getTypeInfo"](
-      panelDir, filePath, 1, 7 // "greeting" starts at column 7
+      panelDir,
+      filePath,
+      1,
+      7 // "greeting" starts at column 7
     );
 
     expect(info).not.toBeNull();
@@ -109,9 +132,7 @@ describe("typecheck.getTypeInfo", () => {
     await writeFile(join(panelDir, filePath), "const val: number = 42;\n");
 
     // First call — type is number
-    const info1 = await typeCheckRpcMethods["typecheck.getTypeInfo"](
-      panelDir, filePath, 1, 7
-    );
+    const info1 = await typeCheckRpcMethods["typecheck.getTypeInfo"](panelDir, filePath, 1, 7);
     expect(info1).not.toBeNull();
     expect(info1!.displayParts).toContain("number");
 
@@ -119,9 +140,7 @@ describe("typecheck.getTypeInfo", () => {
     await writeFile(join(panelDir, filePath), "const val: string = 'hi';\n");
 
     // Second call — should see updated type despite cached service
-    const info2 = await typeCheckRpcMethods["typecheck.getTypeInfo"](
-      panelDir, filePath, 1, 7
-    );
+    const info2 = await typeCheckRpcMethods["typecheck.getTypeInfo"](panelDir, filePath, 1, 7);
     expect(info2).not.toBeNull();
     expect(info2!.displayParts).toContain("string");
   });
@@ -131,19 +150,19 @@ describe("typecheck.getCompletions", () => {
   it("returns completion entries at a known position", async () => {
     const filePath = "index.tsx";
     // Write code where completions should be available after the dot
-    await writeFile(
-      join(panelDir, filePath),
-      'const msg = "hello";\nmsg.\n'
-    );
+    await writeFile(join(panelDir, filePath), 'const msg = "hello";\nmsg.\n');
 
     const completions = await typeCheckRpcMethods["typecheck.getCompletions"](
-      panelDir, filePath, 2, 5 // after "msg."
+      panelDir,
+      filePath,
+      2,
+      5 // after "msg."
     );
 
     expect(completions).not.toBeNull();
     expect(completions!.entries.length).toBeGreaterThan(0);
     // String methods should be available
-    const names = completions!.entries.map(e => e.name);
+    const names = completions!.entries.map((e) => e.name);
     expect(names).toContain("length");
   });
 
@@ -152,21 +171,17 @@ describe("typecheck.getCompletions", () => {
     // Start with a string variable
     await writeFile(join(panelDir, filePath), 'const val = "hello";\nval.\n');
 
-    const comp1 = await typeCheckRpcMethods["typecheck.getCompletions"](
-      panelDir, filePath, 2, 5
-    );
+    const comp1 = await typeCheckRpcMethods["typecheck.getCompletions"](panelDir, filePath, 2, 5);
     expect(comp1).not.toBeNull();
-    const names1 = comp1!.entries.map(e => e.name);
+    const names1 = comp1!.entries.map((e) => e.name);
     expect(names1).toContain("length"); // string property
 
     // Change to an array
     await writeFile(join(panelDir, filePath), "const val = [1, 2, 3];\nval.\n");
 
-    const comp2 = await typeCheckRpcMethods["typecheck.getCompletions"](
-      panelDir, filePath, 2, 5
-    );
+    const comp2 = await typeCheckRpcMethods["typecheck.getCompletions"](panelDir, filePath, 2, 5);
     expect(comp2).not.toBeNull();
-    const names2 = comp2!.entries.map(e => e.name);
+    const names2 = comp2!.entries.map((e) => e.name);
     expect(names2).toContain("push"); // array method, not present on string
   });
 });
@@ -181,7 +196,7 @@ describe("path key consistency (Bug 2 regression)", () => {
     const result = await typeCheckRpcMethods["typecheck.check"](panelDir);
 
     // Should have exactly 1 error, not 2 (duplicate from mismatched keys)
-    const errors = result.diagnostics.filter(d => d.severity === "error");
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
     expect(errors).toHaveLength(1);
   });
 
@@ -238,9 +253,7 @@ describe("cross-handler freshness (Bug 3 regression)", () => {
     await writeFile(join(panelDir, filePath), "const val: string = 'changed';\n");
 
     // getTypeInfo should see the updated type, not the stale "number"
-    const info = await typeCheckRpcMethods["typecheck.getTypeInfo"](
-      panelDir, filePath, 1, 7
-    );
+    const info = await typeCheckRpcMethods["typecheck.getTypeInfo"](panelDir, filePath, 1, 7);
     expect(info).not.toBeNull();
     expect(info!.displayParts).toContain("string");
     expect(info!.displayParts).not.toContain("number");
@@ -256,11 +269,9 @@ describe("cross-handler freshness (Bug 3 regression)", () => {
     // Agent changes the variable to an array
     await writeFile(join(panelDir, filePath), "const val = [1, 2];\nval.\n");
 
-    const comp = await typeCheckRpcMethods["typecheck.getCompletions"](
-      panelDir, filePath, 2, 5
-    );
+    const comp = await typeCheckRpcMethods["typecheck.getCompletions"](panelDir, filePath, 2, 5);
     expect(comp).not.toBeNull();
-    const names = comp!.entries.map(e => e.name);
+    const names = comp!.entries.map((e) => e.name);
     expect(names).toContain("push"); // array, not string
   });
 
@@ -275,7 +286,7 @@ describe("cross-handler freshness (Bug 3 regression)", () => {
     await writeFile(join(panelDir, filePath), "const val: number = 'oops';\n");
 
     const result = await typeCheckRpcMethods["typecheck.check"](panelDir, filePath);
-    expect(result.diagnostics.some(d => d.severity === "error")).toBe(true);
+    expect(result.diagnostics.some((d) => d.severity === "error")).toBe(true);
   });
 });
 
@@ -289,7 +300,7 @@ describe("new files after init", () => {
     await writeFile(join(panelDir, "newfile.tsx"), "const x: number = 'bad';\n");
 
     const result = await typeCheckRpcMethods["typecheck.check"](panelDir, "newfile.tsx");
-    expect(result.diagnostics.some(d => d.severity === "error")).toBe(true);
+    expect(result.diagnostics.some((d) => d.severity === "error")).toBe(true);
   });
 
   it("whole-panel check picks up files added after init", async () => {
@@ -302,7 +313,7 @@ describe("new files after init", () => {
 
     const result = await typeCheckRpcMethods["typecheck.check"](panelDir);
     const addedErrors = result.diagnostics.filter(
-      d => d.file === join(panelDir, "added.tsx") && d.severity === "error"
+      (d) => d.file === join(panelDir, "added.tsx") && d.severity === "error"
     );
     expect(addedErrors.length).toBeGreaterThan(0);
   });
@@ -314,9 +325,7 @@ describe("new files after init", () => {
     // New file
     await writeFile(join(panelDir, "utils.tsx"), "export const count: number = 10;\n");
 
-    const info = await typeCheckRpcMethods["typecheck.getTypeInfo"](
-      panelDir, "utils.tsx", 1, 14
-    );
+    const info = await typeCheckRpcMethods["typecheck.getTypeInfo"](panelDir, "utils.tsx", 1, 14);
     expect(info).not.toBeNull();
     expect(info!.displayParts).toContain("number");
   });
@@ -328,14 +337,14 @@ describe("whole-panel resync", () => {
 
     // Init — no errors
     const result1 = await typeCheckRpcMethods["typecheck.check"](panelDir);
-    expect(result1.diagnostics.filter(d => d.severity === "error")).toHaveLength(0);
+    expect(result1.diagnostics.filter((d) => d.severity === "error")).toHaveLength(0);
 
     // Modify the file to introduce an error
     await writeFile(join(panelDir, "index.tsx"), "const x: number = 'broken';\n");
 
     // Whole-panel resync should catch it
     const result2 = await typeCheckRpcMethods["typecheck.check"](panelDir);
-    expect(result2.diagnostics.some(d => d.severity === "error")).toBe(true);
+    expect(result2.diagnostics.some((d) => d.severity === "error")).toBe(true);
   });
 });
 
@@ -350,8 +359,8 @@ describe("service caching", () => {
     const result2 = await typeCheckRpcMethods["typecheck.check"](panelDir, filePath);
 
     // Both should succeed without errors
-    expect(result1.diagnostics.filter(d => d.severity === "error")).toHaveLength(0);
-    expect(result2.diagnostics.filter(d => d.severity === "error")).toHaveLength(0);
+    expect(result1.diagnostics.filter((d) => d.severity === "error")).toHaveLength(0);
+    expect(result2.diagnostics.filter((d) => d.severity === "error")).toHaveLength(0);
   });
 });
 
@@ -364,7 +373,7 @@ describe("typecheck.getBrowserTypeDefinitions", () => {
     expect(result.GLOBAL_TYPE_DEFINITIONS).toBe(GLOBAL_TYPE_DEFINITIONS);
     expect(result.TS_LIB_FILES["lib.es5.d.ts"]).toBe(TS_LIB_FILES["lib.es5.d.ts"]);
     expect(result.tsLibFilePaths["lib.es5.d.ts"]).toBe(
-      "file:///node_modules/typescript/lib/lib.es5.d.ts",
+      "file:///node_modules/typescript/lib/lib.es5.d.ts"
     );
     expect(result.typeDefinitionFiles).toEqual(
       expect.arrayContaining([
@@ -382,7 +391,7 @@ describe("typecheck.getBrowserTypeDefinitions", () => {
           filePath: "file:///vibestudio/globals.d.ts",
           content: GLOBAL_TYPE_DEFINITIONS,
         }),
-      ]),
+      ])
     );
     expect(result.packageTypes).toEqual([]);
     expect(result.packageTypeDefinitionFiles).toEqual([]);
@@ -401,15 +410,15 @@ describe("typecheck.getBrowserTypeDefinitions", () => {
           ".": { types: "./index.d.ts" },
           "./sub": { types: "./sub.d.ts" },
         },
-      }),
+      })
     );
     await writeFile(join(packageDir, "index.d.ts"), "export declare const answer: number;\n");
     await writeFile(join(packageDir, "sub.d.ts"), "export declare const subAnswer: string;\n");
 
-    const result = await typeCheckRpcMethods["typecheck.getBrowserTypeDefinitions"](
-      panelDir,
-      ["typed-pkg", "typed-pkg"],
-    );
+    const result = await typeCheckRpcMethods["typecheck.getBrowserTypeDefinitions"](panelDir, [
+      "typed-pkg",
+      "typed-pkg",
+    ]);
 
     expect(result.packageTypes).toHaveLength(1);
     expect(result.packageTypes[0]).toEqual(
@@ -424,7 +433,7 @@ describe("typecheck.getBrowserTypeDefinitions", () => {
         subpaths: expect.objectContaining({
           "./sub": "sub.d.ts",
         }),
-      }),
+      })
     );
     expect(result.packageTypeDefinitionFiles).toEqual(
       expect.arrayContaining([
@@ -440,7 +449,7 @@ describe("typecheck.getBrowserTypeDefinitions", () => {
           filePath: "file:///node_modules/typed-pkg/sub.d.ts",
           content: "export declare const subAnswer: string;\n",
         },
-      ]),
+      ])
     );
   });
 });

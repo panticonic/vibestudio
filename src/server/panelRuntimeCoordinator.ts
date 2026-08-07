@@ -19,7 +19,6 @@ import {
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
   AwaitPanelAttemptResult,
-  AttemptFailureStage,
   AttemptPhase,
   AttemptReporter,
   PanelAttempt,

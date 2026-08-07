@@ -82,21 +82,7 @@ const config = {
         return context.resolveRequest(context, `${rootWebRtc}${subpath}`, platform);
       }
 
-      // 0a. Shim Node builtins pulled in transitively by @vibestudio/shared.
-      //     shell lifecycle imports trickle down into panelTypes/panelIdUtils
-      //     which assume a Node runtime. Mobile-safe replacements live in
-      //     src/nodeShims — unused APIs throw if accidentally reached.
-      if (moduleName === "path" || moduleName === "node:path") {
-        return { type: "sourceFile", filePath: path.resolve(workspaceAppRoot, "src/nodeShims/path.ts") };
-      }
-      if (moduleName === "fs" || moduleName === "node:fs") {
-        return { type: "sourceFile", filePath: path.resolve(workspaceAppRoot, "src/nodeShims/fs.ts") };
-      }
-      if (moduleName === "crypto" || moduleName === "node:crypto") {
-        return { type: "sourceFile", filePath: path.resolve(workspaceAppRoot, "src/nodeShims/crypto.ts") };
-      }
-
-      // 0b. Resolve @vibestudio/* packages to their TypeScript source.
+      // 0a. Resolve @vibestudio/* packages to their TypeScript source.
       //     These packages export "main": "./dist/index.js" for Node/esbuild,
       //     but dist/ may not exist (it's built by the desktop build pipeline).
       //     Metro can bundle .ts directly, so point to src/index.ts instead.
@@ -114,7 +100,7 @@ const config = {
         return { type: "sourceFile", filePath: srcEntry };
       }
 
-      // 0c. Resolve react-native-screens via pre-built lib/ output.
+      // 0b. Resolve react-native-screens via pre-built lib/ output.
       //     Metro's default "react-native" field points to src/ which contains
       //     Fabric NativeComponent specs using CodegenTypes -- a pattern the
       //     @react-native/babel-plugin-codegen in RN 0.79 cannot parse.

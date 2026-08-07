@@ -15,11 +15,13 @@ import {
   API,
   CompletionItemKind,
   DiagnosticCategory,
+  SymbolFlags,
   type CompilerOptions,
   type Diagnostic,
   type Program,
   type Project,
   type Snapshot,
+  type TimingInfo,
 } from "typescript/unstable/sync";
 import type { FileSystemEntries } from "typescript/unstable/fs";
 import {
@@ -43,6 +45,9 @@ export interface BaseDiagnostic {
 export interface TypeCheckDiagnostic extends BaseDiagnostic {
   code: number;
   category: DiagnosticCategory;
+  reportsUnnecessary?: boolean;
+  reportsDeprecated?: boolean;
+  relatedInformation?: TypeCheckDiagnostic[];
 }
 
 export interface TypeCheckResult {
@@ -59,7 +64,18 @@ export interface QuickInfo {
 }
 
 export interface CompletionInfo {
-  entries: readonly { name: string; kind: string }[];
+  isIncomplete: boolean;
+  entries: readonly CompletionEntry[];
+}
+
+export interface CompletionEntry {
+  name: string;
+  kind: string;
+  sortText?: string;
+  insertText?: string;
+  filterText?: string;
+  detail?: string;
+  labelDetails?: { detail?: string; description?: string };
 }
 
 export interface DefinitionInfo {
@@ -68,11 +84,18 @@ export interface DefinitionInfo {
   name: string;
 }
 
+export interface ReferenceInfo {
+  fileName: string;
+  textSpan: { start: number; length: number };
+}
+
 export interface TypeCheckServiceConfig {
   /** Root path and compiler working directory for the checked unit. */
   panelPath: string;
   /** External dependency roots projected as node_modules ancestors. */
   nodeModulesPaths?: string[];
+  /** Override effective compiler options. Check-only invariants remain enforced. */
+  compilerOptions?: Readonly<Record<string, unknown>>;
   /** Pre-discovered workspace package projection. */
   workspaceContext?: WorkspaceContext | null;
   /** Skip suggestion diagnostics. */
@@ -83,6 +106,8 @@ export interface TypeCheckServiceConfig {
   tsconfigSearchBoundary?: string;
   /** Use this exact source tsconfig instead of discovery. */
   tsconfigPath?: string;
+  /** Collect native compiler request and transport timings. */
+  collectTiming?: boolean;
 }
 
 interface OverlayFile {
@@ -128,6 +153,7 @@ export class TypeCheckService {
 
     this.api = new API({
       cwd: this.panelPath,
+      collectTiming: config.collectTiming,
       fs: {
         readFile: (fileName) => this.readProjectedFile(fileName),
         fileExists: (fileName) => this.projectedFileExists(fileName),
@@ -200,16 +226,21 @@ export class TypeCheckService {
     const position = this.getPosition(project, filePath, line, column);
     if (position === undefined) return null;
     const absolute = path.resolve(filePath);
-    const symbol = project.checker.getSymbolAtPosition(absolute, position);
+    const rawSymbol = project.checker.getSymbolAtPosition(absolute, position);
+    const symbol =
+      rawSymbol && rawSymbol.flags & SymbolFlags.Alias
+        ? project.checker.getAliasedSymbol(rawSymbol)
+        : rawSymbol;
     const type = project.checker.getTypeAtPosition(absolute, position);
-    if (!symbol && !type) return null;
-    const documentation = symbol?.getDocumentationComment(project.checker) || undefined;
-    const tags = symbol?.getJsDocTags(project.checker).map((tag) => ({
+    const semanticSymbol = symbol && !project.checker.isUnknownSymbol(symbol) ? symbol : undefined;
+    if (!semanticSymbol && !type) return null;
+    const documentation = semanticSymbol?.getDocumentationComment(project.checker) || undefined;
+    const tags = semanticSymbol?.getJsDocTags(project.checker).map((tag) => ({
       name: tag.name,
       ...(tag.text ? { text: tag.text } : {}),
     }));
     return {
-      displayParts: type ? project.checker.typeToString(type) : (symbol?.name ?? ""),
+      displayParts: type ? project.checker.typeToString(type) : (semanticSymbol?.name ?? ""),
       ...(documentation ? { documentation } : {}),
       ...(tags && tags.length > 0 ? { tags } : {}),
     };
@@ -222,12 +253,18 @@ export class TypeCheckService {
     const completions = project.checker.getCompletionsAtPosition(path.resolve(filePath), position);
     if (!completions) return undefined;
     return {
+      isIncomplete: completions.isIncomplete,
       entries: completions.entries.map((entry) => ({
         name: entry.name,
         kind:
           entry.kind === undefined
             ? "unknown"
             : (CompletionItemKind[entry.kind] ?? "unknown").toLowerCase(),
+        ...(entry.sortText !== undefined ? { sortText: entry.sortText } : {}),
+        ...(entry.insertText !== undefined ? { insertText: entry.insertText } : {}),
+        ...(entry.filterText !== undefined ? { filterText: entry.filterText } : {}),
+        ...(entry.detail !== undefined ? { detail: entry.detail } : {}),
+        ...(entry.labelDetails !== undefined ? { labelDetails: { ...entry.labelDetails } } : {}),
       })),
     };
   }
@@ -242,17 +279,49 @@ export class TypeCheckService {
     if (position === undefined) return undefined;
     const symbol = project.checker.getSymbolAtPosition(path.resolve(filePath), position);
     if (!symbol) return undefined;
-    const definitions = symbol.declarations.map((handle) => {
+    const definitionSymbol =
+      symbol.flags & SymbolFlags.Alias ? project.checker.getAliasedSymbol(symbol) : symbol;
+    if (project.checker.isUnknownSymbol(definitionSymbol)) return undefined;
+    const definitions = definitionSymbol.declarations.map((handle) => {
       const node = handle.resolve(project);
       const start = node?.getStart() ?? 0;
       const end = node?.end ?? start;
       return {
         fileName: handle.path,
         textSpan: { start, length: Math.max(0, end - start) },
-        name: symbol.name,
+        name: definitionSymbol.name,
       };
     });
     return definitions.length > 0 ? definitions : undefined;
+  }
+
+  getReferences(
+    filePath: string,
+    line: number,
+    column: number
+  ): readonly ReferenceInfo[] | undefined {
+    const project = this.ensureProject();
+    const position = this.getPosition(project, filePath, line, column);
+    if (position === undefined) return undefined;
+    const rawSymbol = project.checker.getSymbolAtPosition(path.resolve(filePath), position);
+    if (!rawSymbol) return undefined;
+    const symbol =
+      rawSymbol.flags & SymbolFlags.Alias ? project.checker.getAliasedSymbol(rawSymbol) : rawSymbol;
+    if (project.checker.isUnknownSymbol(symbol)) return undefined;
+    const references = project.program.getSourceFileNames().flatMap((sourceFile) =>
+      project.checker.getReferencesToSymbolInFile(sourceFile, symbol).flatMap((handle) => {
+        const node = handle.resolve(project);
+        if (!node) return [];
+        const start = node.getStart();
+        return [
+          {
+            fileName: handle.path,
+            textSpan: { start, length: Math.max(0, node.end - start) },
+          },
+        ];
+      })
+    );
+    return references.length > 0 ? references : undefined;
   }
 
   getProgram(): Program {
@@ -266,6 +335,31 @@ export class TypeCheckService {
    */
   getProject(): Project {
     return this.ensureProject();
+  }
+
+  getTimingInfo(): TimingInfo {
+    this.assertActive();
+    return this.api.getTimingInfo();
+  }
+
+  resetTimingInfo(): void {
+    this.assertActive();
+    this.api.resetTimingInfo();
+  }
+
+  startCpuProfile(directory: string): void {
+    this.assertActive();
+    this.api.internal.startCPUProfile(path.resolve(directory));
+  }
+
+  stopCpuProfile(): string {
+    this.assertActive();
+    return this.api.internal.stopCPUProfile();
+  }
+
+  saveHeapProfile(directory: string): string {
+    this.assertActive();
+    return this.api.internal.saveHeapProfile(path.resolve(directory));
   }
 
   dispose(): void {
@@ -313,9 +407,8 @@ export class TypeCheckService {
   }
 
   private synchronizeGeneratedConfig(): void {
-    const compilerOptions = this.sourceConfigPath
+    const compilerOptions: Record<string, unknown> = this.sourceConfigPath
       ? {
-          noEmit: true,
           skipLibCheck: true,
           composite: false,
           incremental: false,
@@ -325,6 +418,8 @@ export class TypeCheckService {
           rootDir: path.parse(this.panelPath).root,
           rootDirs: [],
           paths: {},
+          ...this.config.compilerOptions,
+          noEmit: true,
         }
       : {
           target: "ES2022",
@@ -349,8 +444,9 @@ export class TypeCheckService {
           isolatedModules: true,
           allowJs: true,
           checkJs: false,
-          noEmit: true,
           skipLibCheck: true,
+          ...this.config.compilerOptions,
+          noEmit: true,
         };
     const content = `${JSON.stringify(
       {
@@ -378,11 +474,28 @@ export class TypeCheckService {
       line: (start?.line ?? 0) + 1,
       column: (start?.character ?? 0) + 1,
       ...(end ? { endLine: end.line + 1, endColumn: end.character + 1 } : {}),
-      message: diagnostic.text,
+      message: this.flattenDiagnosticMessage(diagnostic),
       code: diagnostic.code,
       category: diagnostic.category,
       severity: this.categoryToSeverity(diagnostic.category),
+      ...(diagnostic.reportsUnnecessary ? { reportsUnnecessary: true } : {}),
+      ...(diagnostic.reportsDeprecated ? { reportsDeprecated: true } : {}),
+      ...(diagnostic.relatedInformation && diagnostic.relatedInformation.length > 0
+        ? {
+            relatedInformation: diagnostic.relatedInformation.map((related) =>
+              this.convertDiagnostic(related)
+            ),
+          }
+        : {}),
     };
+  }
+
+  private flattenDiagnosticMessage(diagnostic: Diagnostic): string {
+    const children = diagnostic.messageChain ?? [];
+    if (children.length === 0) return diagnostic.text;
+    return [diagnostic.text, ...children.map((child) => this.flattenDiagnosticMessage(child))]
+      .filter(Boolean)
+      .join("\n");
   }
 
   private categoryToSeverity(category: DiagnosticCategory): "error" | "warning" | "info" {

@@ -40,7 +40,9 @@ export interface InternalDOExecutionIdentity {
   authority: UnitAuthorityManifest;
 }
 
-declare const globalThis: { __VIBESTUDIO_INTERNAL_DO_BUNDLE__?: string };
+declare global {
+  var __VIBESTUDIO_INTERNAL_DO_BUNDLE__: string | undefined;
+}
 
 let cached: InternalDOBundle | null = null;
 

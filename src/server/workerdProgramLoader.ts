@@ -7,7 +7,9 @@ export interface WorkerdProgramSources {
   readonly universalDo: string;
 }
 
-declare const globalThis: { __VIBESTUDIO_WORKERD_PROGRAMS__?: WorkerdProgramSources };
+declare global {
+  var __VIBESTUDIO_WORKERD_PROGRAMS__: WorkerdProgramSources | undefined;
+}
 
 let cached: WorkerdProgramSources | null = null;
 

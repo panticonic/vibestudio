@@ -405,3 +405,104 @@ describe("TypeCheckService extension augmentation", () => {
     expect(result.diagnostics.filter((d) => d.severity === "error").length).toBeGreaterThan(0);
   });
 });
+
+describe("TypeCheckService native editor contract", () => {
+  it("applies caller compiler-option overrides without allowing emit", () => {
+    const root = createTempDir("typecheck-service-options-");
+    const sourceFile = path.join(root, "index.ts");
+    writeFile(sourceFile, "export function identity(value) { return value; }\n");
+    const service = new TypeCheckService({
+      panelPath: root,
+      disableTsconfigDiscovery: true,
+      workspaceContext: null,
+      compilerOptions: { noImplicitAny: false, noEmit: false },
+    });
+    try {
+      service.updateFile(sourceFile, fs.readFileSync(sourceFile, "utf8"));
+      expect(
+        service.check(sourceFile).diagnostics.filter((item) => item.severity === "error")
+      ).toEqual([]);
+      expect(service.getEffectiveCompilerOptions().noEmit).toBe(true);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("preserves completion insertion metadata exposed by the native checker", () => {
+    const root = createTempDir("typecheck-service-completion-");
+    const sourceFile = path.join(root, "index.ts");
+    const source = "const value = { greeting: 'hello' };\nvalue.\n";
+    writeFile(sourceFile, source);
+    const service = new TypeCheckService({
+      panelPath: root,
+      disableTsconfigDiscovery: true,
+      workspaceContext: null,
+    });
+    try {
+      service.updateFile(sourceFile, source);
+      const completion = service.getCompletions(sourceFile, 2, 7);
+      expect(completion?.isIncomplete).toBeTypeOf("boolean");
+      expect(completion?.entries.find((entry) => entry.name === "greeting")).toMatchObject({
+        name: "greeting",
+        kind: expect.any(String),
+        sortText: expect.any(String),
+      });
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("follows import aliases to the exported definition", () => {
+    const root = createTempDir("typecheck-service-definition-");
+    const definitionFile = path.join(root, "definition.ts");
+    const consumerFile = path.join(root, "consumer.ts");
+    const definition = "export const original = 42;\n";
+    const consumer = "import { original as local } from './definition.js';\nvoid local;\n";
+    writeFile(definitionFile, definition);
+    writeFile(consumerFile, consumer);
+    const service = new TypeCheckService({
+      panelPath: root,
+      disableTsconfigDiscovery: true,
+      workspaceContext: null,
+    });
+    try {
+      service.updateFile(definitionFile, definition);
+      service.updateFile(consumerFile, consumer);
+      expect(service.getDefinition(consumerFile, 2, 7)).toEqual([
+        expect.objectContaining({ fileName: definitionFile, name: "original" }),
+      ]);
+      expect(service.getReferences(definitionFile, 1, 14)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ fileName: consumerFile })])
+      );
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("retains nested diagnostic context and native timing evidence", () => {
+    const root = createTempDir("typecheck-service-diagnostics-");
+    const sourceFile = path.join(root, "index.ts");
+    const source = [
+      "interface Expected { nested: { count: number } }",
+      "const actual: Expected = { nested: { count: 'wrong' } };",
+    ].join("\n");
+    writeFile(sourceFile, source);
+    const service = new TypeCheckService({
+      panelPath: root,
+      disableTsconfigDiscovery: true,
+      workspaceContext: null,
+      collectTiming: true,
+    });
+    try {
+      service.updateFile(sourceFile, source);
+      const diagnostic = service.check(sourceFile).diagnostics.find((item) => item.code === 2322);
+      expect(diagnostic?.message).toContain("string");
+      expect(diagnostic?.message).toContain("number");
+      const timing = service.getTimingInfo();
+      expect(timing.enabled).toBe(true);
+      expect(timing.totals.requestCount).toBeGreaterThan(0);
+    } finally {
+      service.dispose();
+    }
+  });
+});

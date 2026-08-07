@@ -75,7 +75,10 @@ import {
   type AuthorityIndexIdentity,
 } from "./authorityAnalysisCache.js";
 import { analyzeWorkspaceServiceCalls } from "./userlandAuthorityAnalyzer.js";
-import { createAuthorityCompilerSnapshot } from "./authorityCompilerSnapshot.js";
+import {
+  createAuthorityCompilerSnapshot,
+  type AuthorityCompilerSnapshot,
+} from "./authorityCompilerSnapshot.js";
 import { workspaceRpcSchemaVersion } from "./workspaceRpcSchemas.js";
 import {
   StateTransitionTrigger,
@@ -701,6 +704,7 @@ export async function initBuildSystemV2(
           let maxProgramMs = 0;
           let analyzerMs = 0;
           let compositionMs = 0;
+          let nativeCompiler: AuthorityCompilerSnapshot["timings"]["native"] | null = null;
           let sharedProgramConsumers = 0;
           let compilerGroups = 0;
           if (missingConsumers.length > 0) {
@@ -747,6 +751,7 @@ export async function initBuildSystemV2(
               maxProgramMs = compilerSnapshot.timings.maxProgramMs;
               analyzerMs = compilerSnapshot.timings.analyzerMs;
               compositionMs = compilerSnapshot.timings.compositionMs;
+              nativeCompiler = compilerSnapshot.timings.native;
               compilerGroups = compilerSnapshot.groups.length;
 
               for (const consumer of missingConsumers) {
@@ -836,6 +841,7 @@ export async function initBuildSystemV2(
               maxProgramMs,
               analyzerMs,
               compositionMs,
+              nativeCompiler,
               compilerGroups,
               sharedProgramConsumers,
               foldMs,
