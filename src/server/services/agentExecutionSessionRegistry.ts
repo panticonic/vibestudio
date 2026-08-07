@@ -62,7 +62,19 @@ export class AgentExecutionSessionRegistry {
       orchestratorPolicyId: orchestrator.policyId,
       case: Object.freeze({
         testId: spec.testId,
-        agent: Object.freeze({ ...spec.agent }),
+        agent: Object.freeze({
+          ...spec.agent,
+          ...(spec.agent.fallback === "disabled"
+            ? {}
+            : {
+                fallback: Object.freeze({
+                  ...spec.agent.fallback,
+                  on: Object.freeze([...spec.agent.fallback.on]) as readonly [
+                    "usage_limit_terminal",
+                  ],
+                }),
+              }),
+        }),
         authority: Object.freeze(
           spec.authority.map((rule) =>
             Object.freeze({ ...rule, resource: Object.freeze({ ...rule.resource }) })

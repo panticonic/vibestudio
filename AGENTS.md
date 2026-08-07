@@ -30,7 +30,7 @@ command.
 4. A non-zero test exit is an investigation trigger, not a reporting boundary.
    Immediately run `pnpm system-test [--instance ID] inspect RUN_ID --json`,
    then `pnpm system-test [--instance ID] trajectory RUN_ID TEST_NAME
-   --full --json` when the bounded packet is insufficient.
+--full --json` when the bounded packet is insufficient.
 5. Classify the root cause as infrastructure, documentation, harness, or
    validator. Default to repairing infrastructure; do not route around platform
    bugs by over-specifying prompts.
@@ -51,6 +51,14 @@ command.
    from that run remain relevant to the same fix.
 8. When verification is complete, stop the exact managed instance with
    `pnpm system-test [--instance ID] stop`.
+
+The default agentic test route starts with
+`openai-codex:gpt-5.3-codex-spark` and automatically falls back to
+`openai-codex:gpt-5.6-luna` at low thinking effort only when Spark reports
+`usage_limit_terminal`. Do not stop or manually rerun solely because Spark's
+quota is exhausted; inspect the completed run to confirm whether the configured
+fallback also failed. Passing `--model` intentionally disables this fallback
+for a single-model diagnostic run.
 
 Incorrect: stop after doctor says “not paired.” Correct: invoke
 `pnpm system-test [--instance ID] doctor`; it provisions and pairs an isolated

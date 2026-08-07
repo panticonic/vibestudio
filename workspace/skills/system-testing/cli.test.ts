@@ -11,9 +11,10 @@ const mocks = vi.hoisted(() => ({
   modelPolicySnapshot: vi.fn(() => ({
     primaryModel: "openai-codex:gpt-5.3-codex-spark",
     activeModel: "openai-codex:gpt-5.3-codex-spark",
-    fallbackModel: null,
-    fallbackThinkingLevel: null,
-    fallbackOn: null,
+    fallbackModel: "openai-codex:gpt-5.6-luna",
+    fallbackThinkingLevel: "low" as const,
+    fallbackOn: ["usage_limit_terminal"],
+    fallbackScope: "all-turns" as const,
     activations: [],
   })),
   resolveService: vi.fn(),
@@ -102,7 +103,7 @@ import {
   systemTestTrajectory,
   type SystemTestRunRecord,
 } from "./cli.js";
-import { SYSTEM_TEST_AGENT_MODEL } from "./config.js";
+import { SYSTEM_TEST_AGENT_MODEL, SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL } from "./config.js";
 
 describe("system-testing CLI-neutral API", () => {
   beforeEach(() => {
@@ -194,9 +195,10 @@ describe("system-testing CLI-neutral API", () => {
     });
   });
 
-  it("doctors only GPT-5.3 Codex Spark for the default route", async () => {
+  it("doctors Spark and its low-effort Luna usage-limit fallback for the default route", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+      { ref: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL, availability: { state: "ready" } },
     ]);
 
     const result = await systemTestDoctor();
@@ -206,7 +208,33 @@ describe("system-testing CLI-neutral API", () => {
       ok: true,
       data: {
         primary: { model: SYSTEM_TEST_AGENT_MODEL, availability: "ready" },
-        usageLimitFallback: null,
+        usageLimitFallback: {
+          model: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL,
+          availability: "ready",
+          thinkingLevel: "low",
+          scope: "all-turns",
+        },
+      },
+    });
+  });
+
+  it("treats an RPC-null doctor model as the default two-model route", async () => {
+    configureHealthyDoctorModels([
+      { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+      { ref: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL, availability: { state: "ready" } },
+    ]);
+
+    const result = await systemTestDoctor(null);
+
+    expect(result.checks.find((check) => check.name === "model")).toMatchObject({
+      ok: true,
+      data: {
+        primary: { model: SYSTEM_TEST_AGENT_MODEL },
+        usageLimitFallback: {
+          model: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL,
+          thinkingLevel: "low",
+          scope: "all-turns",
+        },
       },
     });
   });
@@ -214,6 +242,7 @@ describe("system-testing CLI-neutral API", () => {
   it("fails doctor while any declared workspace extension awaits approval", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+      { ref: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL, availability: { state: "ready" } },
     ]);
     mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
       const method = args[1];
@@ -273,33 +302,37 @@ describe("system-testing CLI-neutral API", () => {
   it("reports lazy extension states without forcing eager startup", async () => {
     configureHealthyDoctorModels([
       { ref: SYSTEM_TEST_AGENT_MODEL, availability: { state: "ready" } },
+      { ref: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL, availability: { state: "ready" } },
     ]);
     const priorImplementation = mocks.rpcCall.getMockImplementation();
     mocks.rpcCall.mockImplementation(async (...args: unknown[]) => {
       if (args[1] === "build.listUnits") {
-        return [{
-          name: "workers/agent-worker",
-          kind: "worker",
-          source: "workers/agent-worker",
-          status: "available",
-          lastError: null,
-        }, ...[
-          "browser-data",
-          "claude-code",
-          "file-tools",
-          "git-bridge",
-          "image-service",
-          "mobile-debug",
-          "shell",
-          "test-runner",
-          "typecheck-service",
-        ].map((name) => ({
-          name: `@workspace-extensions/${name}`,
-          kind: "extension",
-          source: `extensions/${name}`,
-          status: name === "shell" ? "ready" : "available",
-          lastError: null,
-        }))];
+        return [
+          {
+            name: "workers/agent-worker",
+            kind: "worker",
+            source: "workers/agent-worker",
+            status: "available",
+            lastError: null,
+          },
+          ...[
+            "browser-data",
+            "claude-code",
+            "file-tools",
+            "git-bridge",
+            "image-service",
+            "mobile-debug",
+            "shell",
+            "test-runner",
+            "typecheck-service",
+          ].map((name) => ({
+            name: `@workspace-extensions/${name}`,
+            kind: "extension",
+            source: `extensions/${name}`,
+            status: name === "shell" ? "ready" : "available",
+            lastError: null,
+          })),
+        ];
       }
       if (args[1] === "workspace.getConfig") {
         return {
@@ -433,7 +466,8 @@ describe("system-testing CLI-neutral API", () => {
           testName: "alphabet",
           validator: "harness" as const,
           phase: "validation" as const,
-          stack: "TypeError: Cannot read properties of undefined (reading 'includes')\n    at validate (validator.ts:12:3)",
+          stack:
+            "TypeError: Cannot read properties of undefined (reading 'includes')\n    at validate (validator.ts:12:3)",
           inputProjection: {
             messageCount: 2,
             invocations: [{ name: "eval", result: { type: "object", fields: {} } }],
@@ -548,10 +582,7 @@ describe("system-testing CLI-neutral API", () => {
       onProgress: progress,
     });
 
-    expect(mocks.runnerArgs).toEqual([
-      "ctx-1",
-      { model: "openai:test", thinkingLevel: "low" },
-    ]);
+    expect(mocks.runnerArgs).toEqual(["ctx-1", { model: "openai:test", thinkingLevel: "low" }]);
     expect(mocks.runSuite.mock.calls[0]![0]).toHaveLength(1);
     expect(mocks.runSuite.mock.calls[0]![0][0].name).toBe("alpha");
     expect(record.config).toMatchObject({
@@ -595,13 +626,14 @@ describe("system-testing CLI-neutral API", () => {
       names: ["alpha"],
     });
 
-    expect(mocks.runnerArgs).toEqual(["ctx-1", { model: SYSTEM_TEST_AGENT_MODEL }]);
+    expect(mocks.runnerArgs).toEqual(["ctx-1", {}]);
     expect(record.config.model).toBe(SYSTEM_TEST_AGENT_MODEL);
     expect(record.config.modelPolicy).toMatchObject({
       primaryModel: SYSTEM_TEST_AGENT_MODEL,
-      fallbackModel: null,
-      fallbackThinkingLevel: null,
-      fallbackOn: null,
+      fallbackModel: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL,
+      fallbackThinkingLevel: "low",
+      fallbackOn: ["usage_limit_terminal"],
+      fallbackScope: "all-turns",
     });
   });
 

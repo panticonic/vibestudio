@@ -320,15 +320,17 @@ instances isolate workspace state; separate named agent sessions provide truly
 parallel eval scopes within an instance.
 Exact test names are used to avoid accidental substring expansion.
 
-The system-test execution model is pinned to
-`openai-codex:gpt-5.3-codex-spark` with no implicit usage-limit fallback.
-`doctor` checks that exact model, every spawned workspace agent receives it,
-and run metadata records the same route. This includes auxiliary agents created
-inside panel and worker contexts: the host rewrites their model configuration
-to the case policy, forces `approvalLevel: 2`, and removes fallback routes.
-Keep the explicit `--model` spelling in automation so logs and operator intent
-are self-describing; another model is only for a deliberately model-specific
-diagnostic experiment.
+The default system-test route uses `openai-codex:gpt-5.3-codex-spark` and falls
+back to `openai-codex:gpt-5.6-luna` at `low` thinking effort only when Spark
+terminates with `usage_limit_terminal`. `doctor` checks both models, every
+spawned workspace agent receives the same exact route, and run metadata records
+it. This includes auxiliary agents created inside panel and worker contexts:
+the host replaces their model, approval, and fallback configuration with the
+case policy. Other provider failures remain visible and do not activate Luna.
+
+Passing `--model REF` deliberately selects a single-model diagnostic run and
+disables the default fallback. Keep explicit model overrides in automation only
+when the model choice itself is part of the experiment.
 Each system-test case has a 10-minute wall-clock deadline. Pass
 `--test-timeout-ms N` to override that budget; multi-phase tests share one
 deadline. A timeout produces a terminal errored result with captured

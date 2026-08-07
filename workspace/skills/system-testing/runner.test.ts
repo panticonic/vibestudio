@@ -41,7 +41,7 @@ vi.mock("@workspace/runtime", () => ({
   vcs: mocks.vcs,
 }));
 
-import { SYSTEM_TEST_AGENT_MODEL } from "./config.js";
+import { SYSTEM_TEST_AGENT_MODEL, SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL } from "./config.js";
 import { HeadlessRunner, SYSTEM_TEST_AGENT_PROMPT } from "./runner.js";
 import { CONTENT_WORKSPACE_REPO_FIXTURE, CREATED_PANEL_WORKSPACE_REPO_FIXTURE } from "./types.js";
 
@@ -82,7 +82,7 @@ describe("HeadlessRunner", () => {
     expect(config.extraConfig).not.toHaveProperty("maxModelCallsPerTurn");
   });
 
-  it("keeps GPT-5.3 Codex Spark pinned without a usage-limit fallback", async () => {
+  it("falls back from Spark to low-effort Luna only for terminal usage limits", async () => {
     const runner = new HeadlessRunner("ctx-test");
 
     await runner.forTest("first").spawn();
@@ -91,8 +91,11 @@ describe("HeadlessRunner", () => {
     };
     expect(first.extraConfig).toMatchObject({
       model: SYSTEM_TEST_AGENT_MODEL,
+      fallbackModel: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL,
+      fallbackThinkingLevel: "low",
+      fallbackOn: ["usage_limit_terminal"],
+      fallbackScope: "all-turns",
     });
-    expect(first.extraConfig).not.toHaveProperty("fallbackModel");
 
     mocks.messageListeners[0]?.({
       diagnostic: { code: "message_failed", failureCode: "usage_limit_terminal" },
@@ -103,12 +106,18 @@ describe("HeadlessRunner", () => {
     };
     expect(second.extraConfig).toMatchObject({
       model: SYSTEM_TEST_AGENT_MODEL,
+      fallbackModel: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL,
+      fallbackThinkingLevel: "low",
+      fallbackOn: ["usage_limit_terminal"],
+      fallbackScope: "all-turns",
     });
-    expect(second.extraConfig).not.toHaveProperty("fallbackModel");
     expect(runner.modelPolicySnapshot()).toMatchObject({
       primaryModel: SYSTEM_TEST_AGENT_MODEL,
       activeModel: SYSTEM_TEST_AGENT_MODEL,
-      fallbackModel: null,
+      fallbackModel: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL,
+      fallbackThinkingLevel: "low",
+      fallbackOn: ["usage_limit_terminal"],
+      fallbackScope: "all-turns",
       activations: [],
     });
   });
@@ -194,9 +203,7 @@ describe("HeadlessRunner", () => {
     mocks.rpc.call.mockResolvedValue({ aborted: true });
 
     await expect(
-      runner.faultAbortAgentVesselForReplayProbe(
-        "do:workers/agent-worker:AiChatWorker:agent-1"
-      )
+      runner.faultAbortAgentVesselForReplayProbe("do:workers/agent-worker:AiChatWorker:agent-1")
     ).resolves.toEqual({
       targetId: "do:workers/agent-worker:AiChatWorker:agent-1",
       aborted: true,
@@ -426,7 +433,12 @@ describe("HeadlessRunner", () => {
           agent: {
             model: "openai-codex:gpt-5.3-codex-spark",
             approvalLevel: 2,
-            fallback: "disabled",
+            fallback: {
+              model: SYSTEM_TEST_USAGE_LIMIT_FALLBACK_MODEL,
+              thinkingLevel: "low",
+              on: ["usage_limit_terminal"],
+              scope: "all-turns",
+            },
           },
           authority: [
             {

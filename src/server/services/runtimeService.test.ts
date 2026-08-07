@@ -397,14 +397,15 @@ const serverCaller = createVerifiedCaller("server", "server");
 const extensionCaller = (id = "extension:agent-launcher") => createVerifiedCaller(id, "extension");
 
 const systemTestCasePolicy = (
-  model = "openai-codex:gpt-5.3-codex-spark"
+  model = "openai-codex:gpt-5.3-codex-spark",
+  fallback: import("@vibestudio/rpc").AgentExecutionTestAgentPolicy["fallback"] = "disabled"
 ): import("@vibestudio/rpc").AgentExecutionTestPolicy => ({
   policyId: "test:runtime-service:case:model-policy",
   kind: "case",
   orchestratorPolicyId: "test:runtime-service",
   case: {
     testId: "model-policy",
-    agent: { model, approvalLevel: 2, fallback: "disabled" },
+    agent: { model, approvalLevel: 2, fallback },
     authority: [],
     unexpectedPrompts: "fail",
   },
@@ -473,6 +474,61 @@ describe("runtimeService system-test agent execution policy", () => {
             model: "openai-codex:gpt-5.3-codex-spark",
             approvalLevel: 2,
             respondPolicy: "all",
+          },
+        },
+      })
+    );
+  });
+
+  it("replaces child fallback settings with the exact case fallback route", async () => {
+    const prepareDurableObject = vi.fn(async () => ({
+      targetId: "target:agent",
+      effectiveVersion: "ev-agent",
+      ...sealedExecution,
+    }));
+    const { internal } = await buildDeps({ prepareDurableObject });
+    const caller = createVerifiedCaller(
+      "server:test-runner",
+      "server",
+      null,
+      null,
+      null,
+      null,
+      systemTestCasePolicy("openai-codex:gpt-5.3-codex-spark", {
+        model: "openai-codex:gpt-5.6-luna",
+        thinkingLevel: "low",
+        on: ["usage_limit_terminal"],
+        scope: "all-turns",
+      })
+    );
+
+    await internal.createEntity(
+      caller,
+      doCreateSpec({
+        key: "downstream-agent-fallback",
+        contextId: "ctx-system-test",
+        agentChannelId: "chat-downstream",
+        stateArgs: {
+          agentConfig: {
+            model: "openai-codex:gpt-5.6-sol",
+            fallbackModel: "local:other",
+            fallbackThinkingLevel: "max",
+            fallbackOn: ["invalid_request"],
+          },
+        },
+      })
+    );
+
+    expect(prepareDurableObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateArgs: {
+          agentConfig: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            approvalLevel: 2,
+            fallbackModel: "openai-codex:gpt-5.6-luna",
+            fallbackThinkingLevel: "low",
+            fallbackOn: ["usage_limit_terminal"],
+            fallbackScope: "all-turns",
           },
         },
       })

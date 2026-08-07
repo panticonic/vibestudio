@@ -1244,7 +1244,7 @@ describe("TestRunner", () => {
       modelRef: fallbackModel,
       modelPolicySnapshot: () => ({
         primaryModel: TEST_MODEL,
-        activeModel: fallbackModel,
+        activeModel: TEST_MODEL,
         fallbackModel,
         fallbackThinkingLevel: "minimal",
         fallbackOn: "usage_limit_terminal",

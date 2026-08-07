@@ -58,6 +58,26 @@ describe("runtime context-boundary authority", () => {
     ).toThrow();
   });
 
+  it("accepts the exact low-effort Luna usage-limit fallback policy", () => {
+    const spec = {
+      testId: "model-fallback",
+      agent: {
+        model: "openai-codex:gpt-5.3-codex-spark",
+        approvalLevel: 2,
+        fallback: {
+          model: "openai-codex:gpt-5.6-luna",
+          thinkingLevel: "low",
+          on: ["usage_limit_terminal"],
+          scope: "all-turns",
+        },
+      },
+      authority: [],
+      unexpectedPrompts: "fail",
+    };
+
+    expect(AgentExecutionTestPolicySpecSchema.parse(spec)).toEqual(spec);
+  });
+
   it("uses reviewed semantic capabilities as the primary authority leaves", () => {
     const capabilityFor = (method: keyof typeof runtimeMethods) => {
       const authority = runtimeMethods[method].authority;

@@ -107,12 +107,19 @@ export interface AgentExecutionTestAuthorityRule {
 }
 
 export interface AgentExecutionTestAgentPolicy {
-  /** The only model that agents created inside this test context may execute. */
+  /** The primary model that agents created inside this test context execute. */
   model: string;
   /** System tests are unattended, so downstream agents inherit full-auto. */
   approvalLevel: 2;
-  /** A test model is an exact route, never the first leg of a fallback chain. */
-  fallback: "disabled";
+  /** Exact host-enforced route; arbitrary workspace fallback settings are never inherited. */
+  fallback:
+    | "disabled"
+    | {
+        model: string;
+        thinkingLevel: "low";
+        on: readonly ["usage_limit_terminal"];
+        scope: "all-turns";
+      };
 }
 
 export interface AgentExecutionTestCasePolicy {

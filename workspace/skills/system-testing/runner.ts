@@ -64,9 +64,10 @@ interface ModelPolicyActivation {
 interface ModelPolicyState {
   primaryModel: string;
   activeModel: string;
-  fallbackModel: null;
-  fallbackThinkingLevel: null;
-  fallbackOn: null;
+  fallbackModel: string | null;
+  fallbackThinkingLevel: SystemTestThinkingLevel | null;
+  fallbackOn: readonly string[] | null;
+  fallbackScope: "all-turns" | null;
   activations: ModelPolicyActivation[];
 }
 
@@ -191,7 +192,7 @@ export class HeadlessRunner {
   ) {
     this.contextId = contextId;
     const primaryModel = opts?.model ?? SYSTEM_TEST_AGENT_MODEL;
-    const modelRoute = systemTestModelRoute(primaryModel);
+    const modelRoute = systemTestModelRoute(primaryModel, opts?.model === undefined);
     this.shared = shared ?? {
       sessions: new Set(),
       testNames: new Map(),
@@ -285,7 +286,17 @@ export class HeadlessRunner {
         agent: {
           model: this.shared.modelPolicy.primaryModel,
           approvalLevel: 2,
-          fallback: "disabled",
+          fallback:
+            this.shared.modelPolicy.fallbackModel &&
+            this.shared.modelPolicy.fallbackThinkingLevel === "low" &&
+            this.shared.modelPolicy.fallbackOn?.[0] === "usage_limit_terminal"
+              ? {
+                  model: this.shared.modelPolicy.fallbackModel,
+                  thinkingLevel: "low",
+                  on: ["usage_limit_terminal"],
+                  scope: "all-turns",
+                }
+              : "disabled",
         },
         authority: [
           {
@@ -460,6 +471,17 @@ export class HeadlessRunner {
         systemPromptMode: "append",
         model,
         ...(this.shared.thinkingLevel ? { thinkingLevel: this.shared.thinkingLevel } : {}),
+        ...(policy.fallbackModel &&
+        policy.fallbackThinkingLevel &&
+        policy.fallbackOn &&
+        policy.fallbackScope
+          ? {
+              fallbackModel: policy.fallbackModel,
+              fallbackThinkingLevel: policy.fallbackThinkingLevel,
+              fallbackOn: [...policy.fallbackOn],
+              fallbackScope: policy.fallbackScope,
+            }
+          : {}),
       },
     });
     this.shared.sessions.add(session);
@@ -467,9 +489,10 @@ export class HeadlessRunner {
     const sessionPolicy: ModelPolicyState = {
       primaryModel: model,
       activeModel: model,
-      fallbackModel: null,
-      fallbackThinkingLevel: null,
-      fallbackOn: null,
+      fallbackModel: policy.fallbackModel,
+      fallbackThinkingLevel: policy.fallbackThinkingLevel,
+      fallbackOn: policy.fallbackOn,
+      fallbackScope: policy.fallbackScope,
       activations: [],
     };
     this.shared.sessionPolicies.set(session, sessionPolicy);
@@ -690,9 +713,7 @@ export class HeadlessRunner {
       .resolveService("vibestudio.development.v1")
       .then((service) => {
         if (service.kind !== "durable-object" || !service.targetId) {
-          throw new Error(
-            "vibestudio.development.v1 did not resolve to a Durable Object service"
-          );
+          throw new Error("vibestudio.development.v1 did not resolve to a Durable Object service");
         }
         return service.targetId;
       })

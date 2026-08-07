@@ -273,14 +273,16 @@ There is no default per-test harness deadline. An explicit deadline is an
 operator cancellation boundary, never a workaround for effect, transport, or
 Durable Object liveness bugs.
 
-The execution model is pinned to `openai-codex:gpt-5.3-codex-spark`. It has no
-implicit usage-limit fallback: doctor and every spawned test agent name the
-same single model, so a provider failure remains visible instead of silently
-changing the experiment. Context-created auxiliary agents are covered too:
-host mediation carries the resident case policy and runtime creation replaces
-their requested model/approval/fallback fields with Spark, full-auto, and no
-fallback. Keep that explicit `--model` value in automation; an override is
-only for a deliberately model-specific diagnosis.
+The default execution route uses `openai-codex:gpt-5.3-codex-spark`, with
+`openai-codex:gpt-5.6-luna` at `low` thinking effort as its sole fallback for
+`usage_limit_terminal`. Doctor verifies both models and every spawned test
+agent receives the same route. Context-created auxiliary agents are covered
+too: host mediation replaces their requested model, approval, and fallback
+fields with the resident case policy. Other model failures remain visible.
+
+An explicit `--model REF` selects a single-model diagnostic run and disables
+the default fallback. Use it when the selected model is itself part of the
+experiment, not merely to recover from Spark quota exhaustion.
 
 One named agent session owns one EvalDO notebook: its live heap is retained for
 while its kernel activation remains resident and its exact durable scope is cold-recovered, so eval work is

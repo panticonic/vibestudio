@@ -17,10 +17,7 @@ import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { systemTestFailure } from "./structured-error.js";
 import { materializeValidationEvidence } from "./validation-evidence.js";
 import { DEFAULT_SYSTEM_TEST_TIMEOUT_MS } from "./config.js";
-import {
-  projectValidationInput,
-  validationFailureProvenance,
-} from "./validation-failure.js";
+import { projectValidationInput, validationFailureProvenance } from "./validation-failure.js";
 import type { SystemTestJsonValue } from "./structured-error.js";
 
 const NON_INTERACTIVE_TERMINAL_WAIT_REASONS = [
@@ -570,10 +567,8 @@ export class TestRunner {
             activeModel: this.runner.modelRef,
             fallbackModel: null,
           };
-    const allowedRefs = new Set([policy.activeModel]);
-    if (policy.activeModel === policy.fallbackModel && policy.primaryModel !== policy.activeModel) {
-      allowedRefs.add(policy.primaryModel);
-    }
+    const allowedRefs = new Set([policy.primaryModel]);
+    if (policy.fallbackModel) allowedRefs.add(policy.fallbackModel);
     const mismatches = calls.filter((call) => {
       const ref = String(call?.["ref"] ?? "");
       const separator = ref.indexOf(":");
@@ -602,19 +597,20 @@ export class TestRunner {
     }
     if (allowedRefs.size > 1) {
       const refs = calls.map((call) => String(call?.["ref"] ?? ""));
-      const fallbackIndex = refs.indexOf(policy.activeModel);
+      const fallbackModel = policy.fallbackModel;
+      const fallbackIndex = fallbackModel ? refs.indexOf(fallbackModel) : -1;
       const invalidTransition =
-        fallbackIndex < 0 ||
-        calls
-          .slice(0, fallbackIndex)
-          .some(
-            (call) => call?.["ref"] !== policy.primaryModel || call?.["outcome"] !== "failed"
-          ) ||
-        refs.slice(fallbackIndex).some((ref) => ref !== policy.activeModel);
+        fallbackIndex < 0
+          ? refs.some((ref) => ref !== policy.primaryModel)
+          : calls
+              .slice(0, fallbackIndex)
+              .some(
+                (call) => call?.["ref"] !== policy.primaryModel || call?.["outcome"] !== "failed"
+              ) || refs.slice(fallbackIndex).some((ref) => ref !== fallbackModel);
       if (invalidTransition) {
         throw new Error(
           `System test "${testName}" has an invalid model transition during ${phase}; ` +
-            `expected failed ${policy.primaryModel} call(s) followed only by ${policy.activeModel}`
+            `expected primary-only calls or failed ${policy.primaryModel} call(s) followed only by ${fallbackModel}`
         );
       }
     }

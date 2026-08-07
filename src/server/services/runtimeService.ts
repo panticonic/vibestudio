@@ -386,6 +386,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     delete currentConfig["fallbackModel"];
     delete currentConfig["fallbackThinkingLevel"];
     delete currentConfig["fallbackOn"];
+    delete currentConfig["fallbackScope"];
     const requestedChildModel =
       caller.runtime.kind === "do" && typeof currentConfig["model"] === "string"
         ? currentConfig["model"]
@@ -394,6 +395,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       ...currentConfig,
       model: requestedChildModel,
       approvalLevel: agentPolicy.approvalLevel,
+      ...(agentPolicy.fallback === "disabled"
+        ? {}
+        : {
+            fallbackModel: agentPolicy.fallback.model,
+            fallbackThinkingLevel: agentPolicy.fallback.thinkingLevel,
+            fallbackOn: [...agentPolicy.fallback.on],
+            fallbackScope: agentPolicy.fallback.scope,
+          }),
     };
     return { ...spec, stateArgs };
   }

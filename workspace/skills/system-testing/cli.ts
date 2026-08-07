@@ -197,7 +197,7 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
 
   const model = options.model ?? SYSTEM_TEST_AGENT_MODEL;
   const runner = new HeadlessRunner(options.contextId, {
-    model,
+    ...(options.model ? { model } : {}),
     ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
   });
   const tester = new TestRunner(runner, {
@@ -430,7 +430,9 @@ export function failedSystemTestNames(record: SystemTestRunRecord): string[] {
     .map((entry) => entry.test.name);
 }
 
-export async function systemTestDoctor(expectedModel?: string): Promise<SystemTestDoctorResult> {
+export async function systemTestDoctor(
+  expectedModel?: string | null
+): Promise<SystemTestDoctorResult> {
   const primaryModel = expectedModel ?? SYSTEM_TEST_AGENT_MODEL;
   const checks: SystemTestDoctorResult["checks"] = [];
   const capture = async (name: string, operation: () => Promise<unknown>, detail: string) => {
@@ -530,7 +532,7 @@ export async function systemTestDoctor(expectedModel?: string): Promise<SystemTe
   await capture(
     "model",
     async () => {
-      const modelRoute = systemTestModelRoute(primaryModel);
+      const modelRoute = systemTestModelRoute(primaryModel, typeof expectedModel !== "string");
       const service = await workers.resolveService("vibestudio.models.v1", null);
       if (service.kind !== "durable-object" || !service.targetId) {
         throw new Error("vibestudio.models.v1 did not resolve to a Durable Object");
@@ -562,6 +564,7 @@ export async function systemTestDoctor(expectedModel?: string): Promise<SystemTe
             : {
                 ...availability[1],
                 thinkingLevel: modelRoute.fallbackThinkingLevel,
+                scope: modelRoute.fallbackScope,
               },
       };
     },

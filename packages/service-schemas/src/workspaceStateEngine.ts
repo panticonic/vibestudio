@@ -126,7 +126,17 @@ const testPolicySchema = z.discriminatedUnion("kind", [
             .object({
               model: z.string().min(1),
               approvalLevel: z.literal(2),
-              fallback: z.literal("disabled"),
+              fallback: z.union([
+                z.literal("disabled"),
+                z
+                  .object({
+                    model: z.string().min(1),
+                    thinkingLevel: z.literal("low"),
+                    on: z.tuple([z.literal("usage_limit_terminal")]).readonly(),
+                    scope: z.literal("all-turns"),
+                  })
+                  .strict(),
+              ]),
             })
             .strict(),
           authority: z.array(
