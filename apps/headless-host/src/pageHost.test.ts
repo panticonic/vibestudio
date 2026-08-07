@@ -239,12 +239,15 @@ describe("PageHost.panelPageObservation", () => {
     const value = {
       view: { url: "http://127.0.0.1/panel", loading: false },
       boot: {
-        phase: "ready",
-        runtimeEntityId: "panel:nav-a",
-        source: "panels/example",
-        contextId: "ctx-a",
-        effectiveVersion: "state-a",
-        buildKey: "build-a",
+        kind: "observed",
+        observation: {
+          phase: "ready",
+          runtimeEntityId: "panel:nav-a",
+          source: "panels/example",
+          contextId: "ctx-a",
+          effectiveVersion: "state-a",
+          buildKey: "build-a",
+        },
       },
     };
     const send = vi.fn(async () => ({ result: { value } }));
