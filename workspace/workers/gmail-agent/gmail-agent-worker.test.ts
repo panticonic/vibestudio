@@ -43,6 +43,10 @@ function message(
 }
 
 class TestGmailAgentWorker extends GmailAgentWorker {
+  schemaProductionBaselineForTest() {
+    return this.schemaProductionBaseline();
+  }
+
   published: Array<{
     participantId: string;
     event: { kind?: string; payload?: unknown };
@@ -459,9 +463,15 @@ describe("GmailAgentWorker", () => {
     });
   });
 
-  it("owns the explicit v7 production schema baseline", () => {
+  it("owns the explicit v7 production schema baseline", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
     expect(GmailAgentWorker.schemaVersion).toBe(7);
     expect(GmailAgentWorker.schemaVersion).toBeGreaterThan(AgentWorkerBase.schemaVersion);
+    expect(worker.schemaProductionBaselineForTest()).toEqual({
+      version: 7,
+      name: "gmail-agent-v7",
+    });
   });
 
   it("advertises Gmail and standard agent methods with mention-or-followup policy", async () => {

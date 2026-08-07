@@ -105,7 +105,16 @@ interface GmailPushTarget {
 }
 
 export class GmailAgentWorker extends AgentWorkerBase {
+  // Version 7 is the first supported production shape. Earlier experimental
+  // layouts have no proven lossless translation and are rejected intact.
   static override schemaVersion = GMAIL_AGENT_SCHEMA_BASELINE;
+
+  protected override schemaProductionBaseline() {
+    return {
+      version: GMAIL_AGENT_SCHEMA_BASELINE,
+      name: "gmail-agent-v7",
+    } as const;
+  }
 
   private gmailClients = new Map<string, GmailClient>();
   private recoveredChannels = new Set<string>();
