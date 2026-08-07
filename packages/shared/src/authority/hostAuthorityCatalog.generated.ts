@@ -3666,7 +3666,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "panelRuntime.awaitSlotChange": {
+  "panelRuntime.awaitAttempt": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Waits on one exact panel boot lifecycle without acquiring authority",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "panelRuntime.awaitSlot": {
     tier: {
       tier: "open",
       session: "family",
@@ -3685,6 +3696,17 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panelRuntime.control",
       rationale:
         "Assigns a presentation lease only for the exact runtime entity already committed by the builtin topology owner",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "panelRuntime.getAttempt": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Resolves opaque attempt references without acquiring authority",
     },
     capability: null,
     presentation: null,
@@ -5982,6 +6004,38 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "workers.listStorageBackups": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "workers.read",
+      rationale: "Backup metadata for one exact target is recovery discovery",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "workers.resetStorage": {
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "workers.storage-maintenance",
+      rationale:
+        "Exact-target durable storage replacement is destructive and individually reviewed",
+    },
+    capability: "workers.storage.reset",
+    presentation: {
+      title: "Replace Durable Object storage",
+      action: "replace Durable Object storage",
+      description: "Back up and replace the persisted storage of one exact Durable Object target.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
+  },
   "workers.resolveDurableObject": {
     tier: {
       tier: "open",
@@ -6005,6 +6059,27 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: null,
     presentation: null,
+  },
+  "workers.restoreStorageBackup": {
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "workers.storage-maintenance",
+      rationale:
+        "Exact-target durable storage replacement is destructive and individually reviewed",
+    },
+    capability: "workers.storage.reset",
+    presentation: {
+      title: "Replace Durable Object storage",
+      action: "replace Durable Object storage",
+      description: "Back up and replace the persisted storage of one exact Durable Object target.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
   },
   "workspace-state.alarmClear": {
     tier: {
@@ -7254,6 +7329,10 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "sharing",
     verb: "manage",
   },
+  "workers.storage.reset": {
+    domain: "automation",
+    verb: "act",
+  },
   "workspace.build-cache.manage": {
     domain: "automation",
     verb: "act",
@@ -8046,6 +8125,16 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "sharing",
       verb: "manage",
+    },
+  },
+  "workers.storage.reset": {
+    title: "Replace Durable Object storage",
+    action: "replace Durable Object storage",
+    description: "Back up and replace the persisted storage of one exact Durable Object target.",
+    group: "runtime",
+    authorityCategory: {
+      domain: "automation",
+      verb: "act",
     },
   },
   "workspace.build-cache.manage": {
