@@ -73,7 +73,7 @@ export function draftForAgent(
     typeof defaults["handle"] === "string" ? defaults["handle"] : agent?.proposedHandle;
   return {
     model: ws?.model || workerModel || pickDefaultModel(opts.modelCatalog, opts.defaultModelRef),
-    thinkingLevel: ws?.thinkingLevel ?? defaults.thinkingLevel ?? "high",
+    thinkingLevel: ws?.thinkingLevel ?? defaults.thinkingLevel ?? "medium",
     approvalLevel: ws?.approvalLevel ?? defaults.approvalLevel,
     respondPolicy: defaults.respondPolicy ?? (opts.showReactiveness ? "mentioned" : undefined),
     respondFrom: defaults.respondFrom,

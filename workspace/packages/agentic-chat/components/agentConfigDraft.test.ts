@@ -97,5 +97,6 @@ describe("draftForAgent", () => {
     });
 
     expect(draft.model).toBe(CATALOG_DEFAULT);
+    expect(draft.thinkingLevel).toBe("medium");
   });
 });

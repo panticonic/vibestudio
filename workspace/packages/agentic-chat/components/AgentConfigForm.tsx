@@ -125,9 +125,9 @@ export function AgentConfigForm({
   const effort: AgentThinkingLevel =
     value.thinkingLevel && thinkingLevels.includes(value.thinkingLevel)
       ? value.thinkingLevel
-      : thinkingLevels.includes("high")
-        ? "high"
-        : (thinkingLevels[thinkingLevels.length - 1] ?? "high");
+      : thinkingLevels.includes("medium")
+        ? "medium"
+        : (thinkingLevels[thinkingLevels.length - 1] ?? "medium");
 
   const policy: AgentRespondPolicy = value.respondPolicy ?? "all";
 
