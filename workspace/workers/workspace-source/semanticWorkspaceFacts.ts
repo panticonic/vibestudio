@@ -488,6 +488,9 @@ export class SemanticWorkspaceFacts {
     }
 
     const manifestProofs: FileManifestMutationProof[] = [];
+    const fileUpdateById = new Map(
+      changeSet.fileUpdates.map((update) => [update.fileId, update] as const)
+    );
     for (const update of changeSet.manifestUpdates) {
       let manifest: PersistentFileManifest;
       if (update.expectedFileManifestId === null) {
@@ -504,7 +507,7 @@ export class SemanticWorkspaceFacts {
           [update.repositoryId, manifest.repositoryId, manifest.fileManifestId]
         );
       }
-      this.assertTouchedManifestStates(update.repositoryId, update.pathUpdates, changeSet);
+      this.assertTouchedManifestStates(update.repositoryId, update.pathUpdates, fileUpdateById);
       if (update.pathUpdates.length === 0) {
         if (
           update.expectedFileManifestId !== null ||
@@ -576,9 +579,12 @@ export class SemanticWorkspaceFacts {
         );
       }
     }
+    const resultFileStates = this.fileStatesByStateId(
+      changeSet.fileUpdates.map((update) => update.result.fileStateId)
+    );
     for (const update of changeSet.fileUpdates) {
       if (
-        canonicalJson(this.fileStateById(update.result.fileStateId)) !==
+        canonicalJson(resultFileStates.get(update.result.fileStateId) ?? null) !==
         canonicalJson(update.result)
       ) {
         throw new SemanticWorkspaceFactsError(
@@ -835,12 +841,10 @@ export class SemanticWorkspaceFacts {
   private assertTouchedManifestStates(
     repositoryId: string,
     pathUpdates: WorkspaceFactChangeSet["manifestUpdates"][number]["pathUpdates"],
-    changeSet: WorkspaceFactChangeSet
+    fileUpdateById: ReadonlyMap<string, WorkspaceFactChangeSet["fileUpdates"][number]>
   ): void {
     for (const update of pathUpdates) {
-      const fileUpdate = changeSet.fileUpdates.find(
-        (candidate) => candidate.fileId === update.fileId
-      );
+      const fileUpdate = fileUpdateById.get(update.fileId);
       for (const [path, state] of [
         [update.expectedPath, fileUpdate?.expected ?? null],
         [update.resultPath, fileUpdate?.result ?? null],
