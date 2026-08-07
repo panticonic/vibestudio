@@ -51,6 +51,15 @@ function makeBuildSystem(): BuildSystemV2 {
                 runtimeAbi: "4",
                 providerContracts: {},
               },
+              executableModules: [
+                {
+                  moduleId: "extensions/example/index.ts",
+                  contentDigest: "source-digest",
+                  package: { kind: "first-party" as const },
+                  format: "ts" as const,
+                  source: "export const example = true;",
+                },
+              ],
               builtAt: "2026-01-01T00:00:00.000Z",
             },
           }
@@ -146,8 +155,26 @@ describe("build service extension diagnostics", () => {
     ).resolves.toMatchObject({
       kind: "extension",
       name: "@workspace-extensions/example",
+      executableModules: [{ moduleId: "extensions/example/index.ts" }],
       details: { kind: "extension", runtimeAbi: "4", providerContracts: {} },
     });
+  });
+
+  it("omits executable source inventory from compact metadata reads", async () => {
+    const buildSystem = makeBuildSystem();
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
+
+    const metadata = await service.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "getBuildMetadata",
+      ["build-key", { includeExecutableModules: false }]
+    );
+
+    expect(metadata).toMatchObject({
+      kind: "extension",
+      name: "@workspace-extensions/example",
+    });
+    expect(metadata).not.toHaveProperty("executableModules");
   });
 
   it("resolves panel metadata by its public workspace source path", async () => {

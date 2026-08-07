@@ -37,15 +37,19 @@ export function createBuildService(deps: {
       },
       getBuildNpm: (_ctx, [specifier, version, externals]) =>
         deps.buildSystem.getBuildNpm(specifier, version, externals),
-      getBuildMetadata: (_ctx, [key]) => {
+      getBuildMetadata: (_ctx, [key, options]) => {
         const bs = deps.buildSystem;
         const build = bs.getBuildByKey(key);
         if (!build) return null;
+        const metadata =
+          options?.includeExecutableModules === false
+            ? (({ executableModules: _executableModules, ...compact }) => compact)(build.metadata)
+            : build.metadata;
         const diagnostics =
           diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
         return diagnostics && diagnostics.length > 0
-          ? { ...build.metadata, diagnostics }
-          : build.metadata;
+          ? { ...metadata, diagnostics }
+          : metadata;
       },
       getBuildReport: (_ctx, [unit, ref]) => deps.buildSystem.getBuildReport(unit, ref),
       getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),

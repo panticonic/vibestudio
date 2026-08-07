@@ -86,13 +86,19 @@ const report = await services.build.getBuildReport(source, `ctx:${ctx.contextId}
 const metadata = await Promise.all(
   report.builds
     .filter((build) => build.buildKey)
-    .map((build) => services.build.getBuildMetadata(build.buildKey!))
+    .map((build) =>
+      services.build.getBuildMetadata(build.buildKey!, {
+        includeExecutableModules: false,
+      })
+    )
 );
 return { report, metadata };
 ```
 
 For panels, `metadata.bundleReport` separates initial, lazy, and total payloads
-and lists their largest inputs. Attribute initial bytes before splitting code.
+and lists their largest inputs. Worker metadata can contain megabytes of sealed
+executable source, so keep `includeExecutableModules: false` unless source-level
+provenance is the measurement. Attribute initial bytes before splitting code.
 Do not infer that an import is unused from bundle size alone; confirm it with a
 coverage run or source ownership. Measure cache-cold and verified-cache build
 paths separately.
