@@ -287,11 +287,11 @@ async function readPageSnapshot(page: ProfilePage, baseline: PageBaseline): Prom
     const navigation = !sameDocument
       ? (navigations[navigations.length - 1] as PerformanceNavigationTiming | undefined)
       : undefined;
-    const shifts = layoutShifts.filter((entry) => entry.hadRecentInput !== true);
+    const shifts = layoutShifts.filter((entry) => entry["hadRecentInput"] !== true);
     const interactionDurations = interactions
-      .filter((entry) => number(entry.interactionId) > 0)
-      .map((entry) => number(entry.duration));
-    const longTaskDurations = longTasks.map((entry) => number(entry.duration));
+      .filter((entry) => number(entry["interactionId"]) > 0)
+      .map((entry) => number(entry["duration"]));
+    const longTaskDurations = longTasks.map((entry) => number(entry["duration"]));
 
     return {
       ...(navigation
@@ -308,11 +308,11 @@ async function readPageSnapshot(page: ProfilePage, baseline: PageBaseline): Prom
       ...(largestPaint.length
         ? {
             largestContentfulPaintMs: Math.max(
-              ...largestPaint.map((entry) => number(entry.startTime))
+              ...largestPaint.map((entry) => number(entry["startTime"]))
             ),
           }
         : {}),
-      cumulativeLayoutShift: shifts.reduce((sum, entry) => sum + number(entry.value), 0),
+      cumulativeLayoutShift: shifts.reduce((sum, entry) => sum + number(entry["value"]), 0),
       layoutShiftCount: shifts.length,
       ...(interactionDurations.length
         ? { interactionLatencyMs: Math.max(...interactionDurations) }
