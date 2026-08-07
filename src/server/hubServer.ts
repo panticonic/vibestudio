@@ -1235,7 +1235,7 @@ export async function revokeHubDevice(
   state: HubRuntimeState,
   subject: HubSubject,
   deviceId: string
-): Promise<{ revoked: boolean; closedSessions: number }> {
+): Promise<{ revoked: boolean }> {
   const device = state.identityDb.getDevice(deviceId);
   if (!device) throw new Error("Unknown device");
   if (device.userId !== subject.userId) requireRole(subject, "admin");
@@ -1244,9 +1244,11 @@ export async function revokeHubDevice(
   if (revoked) {
     state.tokenManager.revokeToken(shellCallerId(deviceId));
     retireDeviceControlReach(state, deviceId, controlRoom);
+    void closeDeviceSessionsAcrossChildren(state, deviceId).catch((error) => {
+      console.warn(`[Hub] retiring sessions for revoked device "${deviceId}" failed:`, error);
+    });
   }
-  const closedSessions = revoked ? await closeDeviceSessionsAcrossChildren(state, deviceId) : 0;
-  return { revoked, closedSessions };
+  return { revoked };
 }
 
 /** One semantic hub-control dispatcher for the hub-owned RPC ingress. */

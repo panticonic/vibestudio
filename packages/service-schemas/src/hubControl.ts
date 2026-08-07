@@ -570,9 +570,10 @@ export const hubControlMethods = defineServiceMethods({
         verb: "manage",
       },
     },
-    description: "Revoke a device and close all of its child sessions.",
+    description:
+      "Revoke a device immediately; transports and child sessions retire after authority is removed.",
     args: z.tuple([z.string().min(1)]),
-    returns: z.object({ revoked: z.boolean(), closedSessions: z.number() }),
+    returns: z.object({ revoked: z.boolean() }),
     access: destructiveAccess,
   },
   revokeUser: {
