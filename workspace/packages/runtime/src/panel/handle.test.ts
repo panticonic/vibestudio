@@ -394,15 +394,14 @@ describe("PanelHandle", () => {
     });
 
     const groups = await panelTree.rootGroups({ limit: 200 });
-    const roots = await panelTree.page({
-      group: { kind: "roots", ownerUserId: groups.groups[0]!.ownerUserId },
-      limit: 200,
-    });
+    const roots = await panelTree.roots(groups.groups[0]!.ownerUserId, { limit: 200 });
+    const children = await panelTree.children("parent-1", { limit: 50 });
     const self = panelTree.self();
     const parent = self.parent();
 
     expect(roots.entries).toHaveLength(1);
     expect(roots.entries[0]?.handle.id).toBe("panel:tree/browser-1");
+    expect(children.entries[0]?.handle.id).toBe("panel:tree/child-1");
     await expect(roots.entries[0]?.handle.observe()).resolves.toMatchObject({
       phase: "ready",
     });
@@ -419,6 +418,12 @@ describe("PanelHandle", () => {
       panelId: "panel:tree/panel-parent",
       parentId: null,
     });
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.panelTree.page", [
+      { group: { kind: "roots", ownerUserId: null }, limit: 200 },
+    ]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "workspace-state.panelTree.page", [
+      { group: { kind: "children", parentSlotId: "parent-1" }, limit: 50 },
+    ]);
     await (parent!.call as Record<string, () => Promise<unknown>>)["ping"]!();
     expect(rpcCall).toHaveBeenCalledWith("panel:nav-panel-parent-entity", "ping", []);
   });

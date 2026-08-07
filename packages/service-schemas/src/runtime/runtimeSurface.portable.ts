@@ -350,6 +350,8 @@ export const PANEL_TREE_MEMBERS = [
   "self",
   "get",
   "rootGroups",
+  "roots",
+  "children",
   "page",
   "path",
   "search",
@@ -474,10 +476,48 @@ export const PANEL_TREE_METHOD_CATALOG = {
       additionalProperties: false,
     },
   },
+  roots: {
+    signature:
+      "roots(ownerUserId: string | null, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>",
+    description:
+      "Read one bounded root-panel page for an owner returned by rootGroups(). This is the ergonomic roots traversal; no group discriminator is needed.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        { type: ["string", "null"], description: "ownerUserId from rootGroups().groups." },
+        {
+          type: "object",
+          properties: { cursor: { type: "string" }, limit: { type: "number" } },
+          additionalProperties: false,
+        },
+      ],
+      minItems: 1,
+      maxItems: 2,
+    },
+  },
+  children: {
+    signature:
+      "children(parentSlotId: string, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>",
+    description:
+      "Read one bounded child-panel page for a parent slot. This is the ergonomic child traversal; no group discriminator is needed.",
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        { type: "string", description: "Exact parent panel slot id." },
+        {
+          type: "object",
+          properties: { cursor: { type: "string" }, limit: { type: "number" } },
+          additionalProperties: false,
+        },
+      ],
+      minItems: 1,
+      maxItems: 2,
+    },
+  },
   page: {
     signature: "page(input: PanelTreePageInput): Promise<PanelRuntimeTreePage>",
     description:
-      "Read one bounded sibling page. The input object and its group selector are required.",
+      "Advanced sibling-page primitive. Prefer roots(ownerUserId, input?) or children(parentSlotId, input?). Direct calls require group: {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}.",
     argsSchema: {
       type: "array",
       prefixItems: [

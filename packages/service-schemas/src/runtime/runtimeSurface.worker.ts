@@ -11,7 +11,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Runtime property, not workspace.panelTree. self/get are synchronous handle factories. rootGroups() returns a page object with groups; page(...) returns a page object with entries; search(...) returns a page object with hits, each containing entry.node and entry.handle. Traversal reads are bounded. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read.";
+  "Runtime property, not workspace.panelTree. self/get are synchronous handle factories. Use rootGroups() then roots(ownerUserId), or children(parentSlotId); each returns a bounded page with entries. page(...) is the advanced discriminated-group primitive. search(...) returns hits containing entry.node and entry.handle. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read.";
 
 export const workerRuntimeSurface: RuntimeSurface = {
   target: "workerRuntime",

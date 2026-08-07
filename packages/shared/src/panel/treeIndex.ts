@@ -44,6 +44,11 @@ export interface PanelTreePageInput {
   limit?: number;
 }
 
+export interface PanelTreePageWindow {
+  cursor?: string;
+  limit?: number;
+}
+
 export interface PanelTreeRootGroup {
   ownerUserId: string | null;
   rootCount: number;

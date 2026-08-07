@@ -4,6 +4,7 @@ import type {
   PanelTreeNode,
   PanelTreePage,
   PanelTreePageInput,
+  PanelTreePageWindow,
   PanelTreePath,
   PanelTreeRootGroupPage,
   PanelTreeRootGroupPageInput,
@@ -129,6 +130,8 @@ export interface PanelRuntimeTree {
   self(): PanelHandle;
   get(id: string, kind?: "workspace" | "browser"): PanelHandle;
   rootGroups(input?: PanelTreeRootGroupPageInput): Promise<PanelTreeRootGroupPage>;
+  roots(ownerUserId: string | null, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>;
+  children(parentSlotId: string, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>;
   page(input: PanelTreePageInput): Promise<PanelRuntimeTreePage>;
   path(id: string): Promise<PanelRuntimeTreePath | null>;
   search(input: PanelTreeSearchInput): Promise<PanelRuntimeTreeSearchPage>;
@@ -1212,6 +1215,12 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     },
     rootGroups(input = {}) {
       return callPanelState<PanelTreeRootGroupPage>("rootGroups", [input]);
+    },
+    roots(ownerUserId, input = {}) {
+      return readPage({ group: { kind: "roots", ownerUserId }, ...input });
+    },
+    children(parentSlotId, input = {}) {
+      return readPage({ group: { kind: "children", parentSlotId }, ...input });
     },
     page(input) {
       return readPage(input);

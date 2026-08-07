@@ -63,7 +63,6 @@ export type SlotCommitPreparedNavigationResult = z.infer<
   typeof SlotCommitPreparedNavigationResultSchema
 >;
 
-
 export const SlotCreateInputSchema = z.object({
   slotId: z.string(),
   parentSlotId: z.string().nullable(),
@@ -326,7 +325,8 @@ export const workspaceStateMethods = defineServiceMethods({
         "Bounded durable parent/child and ownership projection from the builtin slot identity authority",
     },
     args: z.tuple([PanelTreePageInputSchema]),
-    description: "Read one bounded, newest-first sibling page.",
+    description:
+      "Read one bounded, newest-first sibling page. group is required and must be {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}.",
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: PanelTreePageSchema,

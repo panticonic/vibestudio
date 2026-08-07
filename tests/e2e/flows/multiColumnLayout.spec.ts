@@ -370,19 +370,19 @@ test.describe("Multi-column panel layout", () => {
                 })),
               })`
             ),
-            app.evaluate((_electron, panelId) => {
+            app.evaluate(async (_electron, panelId) => {
               const testApi = (
                 globalThis as {
                   __testApi?: {
                     getPanel: (id: string) => unknown;
-                    getPanelReadiness: (id: string) => unknown;
+                    getPanelReadiness: (id: string) => Promise<unknown>;
                     getFocusedPanelId: () => string | null;
                   };
                 }
               ).__testApi;
               return {
                 panel: testApi?.getPanel(panelId) ?? null,
-                readiness: testApi?.getPanelReadiness(panelId) ?? null,
+                readiness: testApi ? await testApi.getPanelReadiness(panelId) : null,
                 focusedPanelId: testApi?.getFocusedPanelId() ?? null,
               };
             }, panel2),
