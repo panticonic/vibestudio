@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   publishDevInstanceReady,
@@ -66,12 +67,49 @@ describe("self-provisioning system-test instance", () => {
       instance: { id: "existing" },
       ready: { status: "paired", workspaceName: "dev" },
       created: false,
+      managed: false,
     });
     await expect(stopManagedSystemTestInstance(repoRoot, "existing")).rejects.toThrow(
       /not created by pnpm system-test/u
     );
 
     unregisterDevInstance(repoRoot, "existing");
+  });
+
+  it("retains managed ownership when reusing an instance after launcher recovery", async () => {
+    const root = fs.mkdtempSync(path.join(tempDir, "instance-"));
+    const instance = registerDevInstance({
+      id: "managed",
+      root,
+      repoRoot,
+      supervisorPid: process.pid,
+      kind: "server",
+      lifecycle: "ephemeral",
+      startedAt: Date.now(),
+    });
+    publishDevInstanceReady(instance, { status: "paired", workspaceName: "dev" });
+    fs.writeFileSync(
+      path.join(root, "system-test-managed.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        instanceId: instance.id,
+        generationId: instance.generationId,
+        repoDigest: createHash("sha256")
+          .update(fs.realpathSync(repoRoot))
+          .digest("hex")
+          .slice(0, 16),
+      })
+    );
+
+    await expect(
+      ensureSystemTestInstance(repoRoot, "managed", { explicitInstance: true })
+    ).resolves.toMatchObject({
+      instance: { id: "managed" },
+      created: false,
+      managed: true,
+    });
+
+    unregisterDevInstance(repoRoot, "managed");
   });
 
   it("does not silently reuse an unmanaged default instance", async () => {

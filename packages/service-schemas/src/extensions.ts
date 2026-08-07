@@ -73,7 +73,7 @@ export const extensionsMethods = defineServiceMethods({
     authority: extensionInvocationAuthority,
     examples: [
       {
-        args: ["shell", "exec", [{ intent: { kind: "argv", executable: "echo", args: ["hi"] } }]],
+        args: ["shell", "list", []],
       },
     ],
   },

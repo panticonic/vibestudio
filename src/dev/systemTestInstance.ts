@@ -34,6 +34,7 @@ export type EnsuredSystemTestInstance = {
   instance: DevInstanceRecord;
   ready: DevInstanceReadyRecord;
   created: boolean;
+  managed: boolean;
   logFile?: string;
 };
 
@@ -229,6 +230,7 @@ export async function ensureSystemTestInstance(
     throw new Error(`System tests require a server instance; ${instanceId} is ${instance.kind}`);
   }
   if (created) writeManagedMarker(instance);
+  const managed = readManagedMarker(instance) !== null;
   let ready: DevInstanceReadyRecord;
   try {
     ready = await timeout(
@@ -250,7 +252,7 @@ export async function ensureSystemTestInstance(
       "the server did not provide an automatically pairable development invite"
     );
   }
-  return { instance, ready, created, ...(outputFile ? { logFile: outputFile } : {}) };
+  return { instance, ready, created, managed, ...(outputFile ? { logFile: outputFile } : {}) };
 }
 
 async function waitForStopped(instance: DevInstanceRecord, timeoutMs: number): Promise<void> {

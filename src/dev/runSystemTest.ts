@@ -93,13 +93,15 @@ async function main(): Promise<void> {
   // The ready record means the host is addressable, not that asynchronous
   // workspace installation/admission has settled. A server provisioned for
   // unattended system tests owns that startup review, so settle it before the
-  // first test command can race the review publication. Existing instances are
-  // deliberately left alone: their reviews may belong to an interactive user.
+  // first test command can race the review publication. Unmanaged existing
+  // instances are deliberately left alone: their reviews may belong to an
+  // interactive user. Managed instances retain ownership across launcher
+  // retries, including recovery from a failed first doctor call.
   if (ensured.created && parsed.command[0] !== "doctor") {
     await prepareFreshInstance(ensured.instance.id);
   }
   const command =
-    ensured.created &&
+    ensured.managed &&
     parsed.command[0] === "doctor" &&
     !parsed.command.includes("--approve-startup")
       ? [...parsed.command, "--approve-startup"]
