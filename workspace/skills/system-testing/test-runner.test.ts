@@ -1202,9 +1202,10 @@ describe("TestRunner", () => {
       },
     ] satisfies ChatMessage[];
     const evidence = {
-      totalCalls: 2,
+      totalCalls: 4,
       calls: [
         {
+          messageId: "m:t:chat-fallback:first:agent:0",
           ref: TEST_MODEL,
           provider: "openai-codex",
           model: "gpt-5.3-codex-spark",
@@ -1213,6 +1214,7 @@ describe("TestRunner", () => {
           outcome: "failed",
         },
         {
+          messageId: "m:t:chat-fallback:first:agent:1",
           ref: fallbackModel,
           provider: "openai-codex",
           model: "gpt-5.6-luna",
@@ -1220,6 +1222,25 @@ describe("TestRunner", () => {
           auth: "url-bound",
           outcome: "completed",
           usage: { input: 12, output: 4, totalTokens: 16 },
+        },
+        {
+          messageId: "m:t:chat-fallback:followup:agent:0",
+          ref: TEST_MODEL,
+          provider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          api: "openai-codex-responses",
+          auth: "url-bound",
+          outcome: "failed",
+        },
+        {
+          messageId: "m:t:chat-fallback:followup:agent:1",
+          ref: fallbackModel,
+          provider: "openai-codex",
+          model: "gpt-5.6-luna",
+          api: "openai-codex-responses",
+          auth: "url-bound",
+          outcome: "completed",
+          usage: { input: 10, output: 3, totalTokens: 13 },
         },
       ],
     };

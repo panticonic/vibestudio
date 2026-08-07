@@ -596,21 +596,33 @@ export class TestRunner {
       );
     }
     if (allowedRefs.size > 1) {
-      const refs = calls.map((call) => String(call?.["ref"] ?? ""));
       const fallbackModel = policy.fallbackModel;
-      const fallbackIndex = fallbackModel ? refs.indexOf(fallbackModel) : -1;
-      const invalidTransition =
-        fallbackIndex < 0
+      const callsByTurn = new Map<string, typeof calls>();
+      for (const call of calls) {
+        const messageId = String(call?.["messageId"] ?? "");
+        // Model message ids end in the per-turn call index. Evidence from
+        // older fixtures may omit messageId; retain the former single-sequence
+        // behavior for those records.
+        const turnKey = messageId.replace(/:\d+$/u, "") || "legacy";
+        const turnCalls = callsByTurn.get(turnKey) ?? [];
+        turnCalls.push(call);
+        callsByTurn.set(turnKey, turnCalls);
+      }
+      const invalidTransition = [...callsByTurn.values()].some((turnCalls) => {
+        const refs = turnCalls.map((call) => String(call?.["ref"] ?? ""));
+        const fallbackIndex = fallbackModel ? refs.indexOf(fallbackModel) : -1;
+        return fallbackIndex < 0
           ? refs.some((ref) => ref !== policy.primaryModel)
-          : calls
+          : turnCalls
               .slice(0, fallbackIndex)
               .some(
                 (call) => call?.["ref"] !== policy.primaryModel || call?.["outcome"] !== "failed"
               ) || refs.slice(fallbackIndex).some((ref) => ref !== fallbackModel);
+      });
       if (invalidTransition) {
         throw new Error(
           `System test "${testName}" has an invalid model transition during ${phase}; ` +
-            `expected primary-only calls or failed ${policy.primaryModel} call(s) followed only by ${fallbackModel}`
+            `expected each turn to use primary-only calls or failed ${policy.primaryModel} call(s) followed only by ${fallbackModel}`
         );
       }
     }
