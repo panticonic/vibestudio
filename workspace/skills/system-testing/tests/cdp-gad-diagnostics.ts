@@ -11,7 +11,11 @@ import {
   classifyBuiltInToolFailure,
   isUnexpectedToolFailure,
 } from "../tool-failure-classification.js";
-import { panelControlAuthorityPolicy, PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
+import {
+  panelControlAuthorityPolicy,
+  PANEL_AUTOMATION_RESOURCE,
+  PANEL_RUNTIME_SUPERVISION_AUTHORITY,
+} from "../panel-authority.js";
 
 interface ToolFailureLike {
   name: string;
@@ -555,7 +559,9 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     name: "workspace-panel-reload-performance-profile",
     description: "Profile a real workspace-panel reload without replacing its CDP lease",
     category: "cdp-gad-diagnostics",
-    authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-performance-panel-reload"),
+    authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-performance-panel-reload", [
+      PANEL_RUNTIME_SUPERVISION_AUTHORITY,
+    ]),
     resources: [PANEL_AUTOMATION_RESOURCE],
     prompt:
       "Read skills/performance/SKILL.md, then open a small disposable workspace panel without focusing it. Acquire its canonical CDP page, capture the panel attempt id before the action, and use page.profile to measure handle.reload() while awaiting networkidle on the same page. Capture the attempt id afterward and return both ids plus report version, elapsedMs, navigation load timing, network requestCount, and page long-task count. The evidence must demonstrate a real reload rather than a no-op. Close the panel and page connection you own, then report what the profile showed.",

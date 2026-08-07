@@ -58,6 +58,15 @@ export const PANEL_TESTKIT_DRIVER_AUTHORITY: AgentExecutionTestAuthorityRule = {
   decision: "once",
 };
 
+/** Reload/rebuild operations restart one exact runtime presentation. */
+export const PANEL_RUNTIME_SUPERVISION_AUTHORITY: AgentExecutionTestAuthorityRule = {
+  ruleId: "manage-panel-runtime-supervision",
+  capability: { kind: "exact", key: "runtime.supervision.manage" },
+  resource: { kind: "exact", key: "runtime.supervision.manage" },
+  tier: "gated",
+  decision: "once",
+};
+
 export function panelControlAuthorityPolicy(
   inspectionRuleId: string,
   additionalAuthority: readonly AgentExecutionTestAuthorityRule[] = []
