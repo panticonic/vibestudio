@@ -419,9 +419,7 @@ export default { fetch() { return new Response("v2"); } };`;
     const { manager } = active;
     const source = "workers/board";
     const descriptor = (
-      overrides: Partial<
-        import("./workerdManager.js").DurableObjectPublishedSchemaDescriptor
-      >
+      overrides: Partial<import("./workerdManager.js").DurableObjectPublishedSchemaDescriptor>
     ): import("./workerdManager.js").DurableObjectPublishedSchemaDescriptor => ({
       className: "BoardDO",
       version: 2,

@@ -362,10 +362,7 @@ export class DevelopmentClientExecutorRegistry {
   list(ownerUserId: string): DevelopmentClientExecutorBinding[] {
     const now = this.now();
     return [...this.providers.values()]
-      .filter(
-        (provider) =>
-          provider.ownerUserId === ownerUserId && provider.leaseExpiresAt > now
-      )
+      .filter((provider) => provider.ownerUserId === ownerUserId && provider.leaseExpiresAt > now)
       .sort((left, right) => left.ownerRuntimeId.localeCompare(right.ownerRuntimeId));
   }
 

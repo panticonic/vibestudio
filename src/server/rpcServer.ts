@@ -3097,9 +3097,7 @@ export class RpcServer {
 
       const ctx: ServiceContext = {
         caller: invocationCaller,
-        ...(authorityParent?.authorizingCaller
-          ? { authorizingCaller }
-          : {}),
+        ...(authorityParent?.authorizingCaller ? { authorizingCaller } : {}),
         ...(causalParent ? { causalParent } : {}),
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),

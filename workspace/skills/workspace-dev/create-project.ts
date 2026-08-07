@@ -360,9 +360,9 @@ async function writeProjectFiles(
               ? "reuse-identical-only-if-outcome-uncertain"
               : detail.code === "BuildGateFailed"
                 ? "repair-source-and-recommit"
-              : detail.code === "IntegrityFailure"
-                ? "stop-integrity-investigation"
-                : "reobserve-status-and-use-new-command",
+                : detail.code === "IntegrityFailure"
+                  ? "stop-integrity-investigation"
+                  : "reobserve-status-and-use-new-command",
         },
       },
       error
@@ -525,11 +525,7 @@ async function resolveProject(params: CreateProjectParams): Promise<ResolvedProj
           title,
           entry: "index.tsx",
           ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
-          exposeModules: [
-            "react",
-            "react/jsx-runtime",
-            "react/jsx-dev-runtime",
-          ],
+          exposeModules: ["react", "react/jsx-runtime", "react/jsx-dev-runtime"],
           dependencies: {
             react: "^19.0.0",
           },
@@ -758,9 +754,7 @@ export default {
  * related units (e.g. a DO service and its panel) so the user sees one
  * consolidated review instead of separate prompts for each.
  */
-export async function createProjects(
-  projects: CreateProjectParams[]
-): Promise<
+export async function createProjects(projects: CreateProjectParams[]): Promise<
   Array<{
     created: string;
     files: string[];
@@ -839,7 +833,9 @@ export async function createProjects(
         code: "scaffold_publication_failed",
         stage: "push",
         created: resolved.map((p) => p.projectPath).join(", "),
-        files: resolved.flatMap((p) => Object.keys(p.files).map((f) => `${p.projectPath}/${f}`)).sort(),
+        files: resolved
+          .flatMap((p) => Object.keys(p.files).map((f) => `${p.projectPath}/${f}`))
+          .sort(),
         committedEventId: committed.event.eventId,
         published: false,
         publicationRequest,
@@ -852,16 +848,15 @@ export async function createProjects(
               ? "reuse-identical-only-if-outcome-uncertain"
               : detail.code === "BuildGateFailed"
                 ? "repair-source-and-recommit"
-              : detail.code === "IntegrityFailure"
-                ? "stop-integrity-investigation"
-                : "reobserve-status-and-use-new-command",
+                : detail.code === "IntegrityFailure"
+                  ? "stop-integrity-investigation"
+                  : "reobserve-status-and-use-new-command",
         },
       },
       error
     );
   }
 }
-
 
 const COPY_SKIP_DIRS = new Set([
   ".cache",

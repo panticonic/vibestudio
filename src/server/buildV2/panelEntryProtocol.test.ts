@@ -25,8 +25,9 @@ describe("panelEntryProtocolFingerprint", () => {
 
   it("changes when any generated wrapper output changes", () => {
     const baseline = panelEntryProtocolFingerprint();
-    const mutated = panelEntryProtocolFingerprint((expose, entry, adapter, frameworkModule) =>
-      `${generatePanelEntry(expose, entry, adapter, frameworkModule)}/* protocol drift */`
+    const mutated = panelEntryProtocolFingerprint(
+      (expose, entry, adapter, frameworkModule) =>
+        `${generatePanelEntry(expose, entry, adapter, frameworkModule)}/* protocol drift */`
     );
     expect(mutated).not.toBe(baseline);
   });
