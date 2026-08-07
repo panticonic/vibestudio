@@ -64,7 +64,7 @@ import {
   panelLocalScopeChannelId,
 } from "../utils/localStorageScopePersistence";
 import { scheduleBackgroundWork } from "../utils/scheduleBackgroundWork";
-import { normalizeSandboxSendOptions, type SandboxSendOptions } from "./sandboxSend";
+import { sendSandboxText, type SandboxSendOptions } from "./sandboxSend";
 /** Installed agent info passed from the host panel. */
 interface InstalledAgentInfo {
   agentId: string;
@@ -391,9 +391,10 @@ export function useAgenticChat({
   const chat: ChatSandboxValue = useMemo(
     () => ({
       send: (content: string, opts?: SandboxSendOptions) => {
-        return core.clientRef
-          .current!.send(content, normalizeSandboxSendOptions(opts, crypto.randomUUID()))
-          .then((result) => result.pubsubId) as Promise<unknown>;
+        if (!core.clientRef.current) {
+          return Promise.reject(new Error("Agentic chat is not connected"));
+        }
+        return sendSandboxText(core.publishText, content, opts, crypto.randomUUID());
       },
       publish: (
         eventType: string,
