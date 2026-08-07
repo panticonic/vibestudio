@@ -104,6 +104,66 @@ function fakePage() {
 }
 
 describe("CDP bounded profiling", () => {
+  it("reads resource timing after a cross-document action in the isolated page realm", async () => {
+    const transport = new FakeTransport();
+    let timeOrigin = 1_000;
+    const resource = {
+      startTime: 4,
+      encodedBodySize: 321,
+      decodedBodySize: 654,
+    };
+    const navigation = {
+      startTime: 0,
+      requestStart: 1,
+      responseStart: 3,
+      domContentLoadedEventEnd: 8,
+      loadEventEnd: 10,
+    };
+    const performance = {
+      get timeOrigin() {
+        return timeOrigin;
+      },
+      now: () => 12,
+      getEntriesByType: (type: string) =>
+        type === "resource" ? [resource] : type === "navigation" ? [navigation] : [],
+      getEntriesByName: () => [],
+    };
+    const page = {
+      url: () => "https://example.com/panel",
+      evaluate: vi.fn(async (pageFunction: string | ((arg?: unknown) => unknown), arg?: unknown) => {
+        if (typeof pageFunction !== "function") throw new Error("expected an evaluation function");
+        // CDP serializes function source into the target realm. Reconstructing
+        // it here prevents module-scope helpers from accidentally making a
+        // browser callback look valid in unit tests.
+        const isolated = Function(
+          "performance",
+          "PerformanceObserver",
+          `return (${pageFunction.toString()});`
+        )(performance, undefined) as (value?: unknown) => unknown;
+        return isolated(arg);
+      }),
+    };
+
+    const report = await runCdpProfile({
+      page,
+      transport,
+      action: () => {
+        timeOrigin = 2_000;
+      },
+    });
+
+    expect(report.page.navigation).toEqual({
+      ttfbMs: 2,
+      responseStartMs: 3,
+      domContentLoadedMs: 8,
+      loadMs: 10,
+    });
+    expect(report.network).toMatchObject({
+      resourceEncodedBytes: 321,
+      resourceDecodedBytes: 654,
+    });
+  });
+
   it("reports runtime, page, network, and optional coverage measurements", async () => {
     const transport = new FakeTransport();
     const page = fakePage();

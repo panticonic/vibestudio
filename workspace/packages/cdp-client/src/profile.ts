@@ -323,11 +323,11 @@ async function readPageSnapshot(page: ProfilePage, baseline: PageBaseline): Prom
         maxDurationMs: longTaskDurations.length ? Math.max(...longTaskDurations) : 0,
       },
       resourceEncodedBytes: resources.reduce(
-        (sum, resource) => sum + finite(resource.encodedBodySize),
+        (sum, resource) => sum + number(resource.encodedBodySize),
         0
       ),
       resourceDecodedBytes: resources.reduce(
-        (sum, resource) => sum + finite(resource.decodedBodySize),
+        (sum, resource) => sum + number(resource.decodedBodySize),
         0
       ),
     };
