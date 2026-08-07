@@ -348,7 +348,9 @@ function toManifestCapability(capability) {
   const method = capability.slice("service:".length);
   const tier = methodTiers.get(method);
   if (!tier) throw new Error(`Host capability ${capability} has no reviewed tier`);
-  if (tier === "open") return null;
+  // An open transport may carry a same-named prepared semantic leaf. Preserve
+  // that reviewed capability instead of mistaking it for an unprotected call.
+  if (tier === "open") return capabilityTiers.has(capability) ? capability : null;
   const semantic = methodCapabilities.get(method);
   if (!semantic) throw new Error(`Host method ${method} has no reviewed semantic capability`);
   return semantic;
@@ -357,6 +359,7 @@ function toManifestCapability(capability) {
 function requiresManifestRequest(capability) {
   if (capability === null) return false;
   if (capability.startsWith("service:")) {
+    if (capabilityTiers.has(capability)) return true;
     throw new Error(`Transport capability survived semantic conversion: ${capability}`);
   }
   if (capability.startsWith("rpc:")) {

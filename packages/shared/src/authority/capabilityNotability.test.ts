@@ -53,6 +53,15 @@ describe("capability notability", () => {
     );
   });
 
+  it("keeps native file-launch effects prominent while folding download controls", () => {
+    expect(reviewedCapabilityNotability("service:browserEnvironment.listDownloads")).toBe(
+      "everyday"
+    );
+    expect(reviewedCapabilityNotability("service:browserEnvironment.openDownload")).toBe(
+      "headline"
+    );
+  });
+
   it("lets a receiver declare its own capability everyday, but never demote a platform headline", () => {
     expect(
       capabilityNotability({

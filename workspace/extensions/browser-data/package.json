@@ -47,6 +47,24 @@
           "evidence": "bounded-dynamic"
         },
         {
+          "capability": "service:browserEnvironment.flushCookieProjection",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "service:browserEnvironment.getImportHost",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "subagents.create",
           "resource": {
             "kind": "prefix",
@@ -129,14 +147,6 @@
             "listImportJobs",
             "listOpenTabs",
             "openTabsAsPanels",
-            "flushCookieProjection",
-            "getCookieProjectionDiagnostics",
-            "listDownloads",
-            "pauseDownload",
-            "resumeDownload",
-            "cancelDownload",
-            "openDownload",
-            "revealDownload",
             "exportBookmarks",
             "exportPasswords",
             "exportCookies"

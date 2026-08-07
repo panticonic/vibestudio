@@ -1,5 +1,6 @@
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import { browserDataMethods } from "@vibestudio/service-schemas/browserData";
+import { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
 import {
   callTypedServiceMethod,
   createTypedServiceClient,
@@ -176,6 +177,17 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
   );
   const callNative = <T>(method: string, ...args: unknown[]): Promise<T> =>
     extensions.invokeProvider("browserData", method, args) as Promise<T>;
+  const callBrowserEnvironment = <T>(
+    method: keyof typeof browserEnvironmentMethods & string,
+    ...args: unknown[]
+  ) =>
+    callTypedServiceMethod(
+      "browserEnvironment",
+      browserEnvironmentMethods,
+      (service, wireMethod, wireArgs) => rpc.callService(service, wireMethod, wireArgs),
+      method,
+      args
+    ) as Promise<T>;
   let resolvedTarget: Promise<string> | null = null;
   const target = (): Promise<string> => {
     resolvedTarget ??= rpc
@@ -263,16 +275,17 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     clearAllCookies: () => callData("clearAllCookies"),
     endBrowserSession: () => callData("endBrowserSession"),
     getCookieSiteSummary: (origin) => callData("getCookieSiteSummary", origin),
-    flushCookieProjection: (origins) => callNative("flushCookieProjection", origins ?? []),
-    getCookieProjectionDiagnostics: () => callNative("getCookieProjectionDiagnostics"),
-    listDownloads: () => callNative("listDownloads"),
+    flushCookieProjection: (origins) =>
+      callBrowserEnvironment("flushCookieProjection", origins ?? []),
+    getCookieProjectionDiagnostics: () => callBrowserEnvironment("getCookieProjectionDiagnostics"),
+    listDownloads: () => callBrowserEnvironment("listDownloads"),
     listDownloadRecords: (hostId) => callData("listDownloadRecords", hostId),
     upsertDownloadRecord: (record) => callData("upsertDownloadRecord", record),
-    pauseDownload: (id) => callNative("pauseDownload", id),
-    resumeDownload: (id) => callNative("resumeDownload", id),
-    cancelDownload: (id) => callNative("cancelDownload", id),
-    openDownload: (id) => callNative("openDownload", id),
-    revealDownload: (id) => callNative("revealDownload", id),
+    pauseDownload: (id) => callBrowserEnvironment("pauseDownload", id),
+    resumeDownload: (id) => callBrowserEnvironment("resumeDownload", id),
+    cancelDownload: (id) => callBrowserEnvironment("cancelDownload", id),
+    openDownload: (id) => callBrowserEnvironment("openDownload", id),
+    revealDownload: (id) => callBrowserEnvironment("revealDownload", id),
     putPageFavicon: (favicon) => callData("putPageFavicon", favicon),
     getPageFavicon: (pageUrl) => callData("getPageFavicon", pageUrl),
     exportBookmarks: (format) => callNative("exportBookmarks", format),

@@ -384,30 +384,6 @@ export async function activate(ctx: ExtensionContextLike) {
         sourceName,
       });
     }),
-    flushCookieProjection: guarded("flushCookieProjection", async (origins?: string[]) =>
-      ctx.rpc.call("main", "browserEnvironment.flushCookieProjection", origins ?? [])
-    ),
-    getCookieProjectionDiagnostics: guarded("getCookieProjectionDiagnostics", async () =>
-      ctx.rpc.call("main", "browserEnvironment.getCookieProjectionDiagnostics")
-    ),
-    listDownloads: guarded("listDownloads", async () =>
-      ctx.rpc.call("main", "browserEnvironment.listDownloads")
-    ),
-    pauseDownload: guarded("pauseDownload", async (id: string) =>
-      ctx.rpc.call("main", "browserEnvironment.pauseDownload", id)
-    ),
-    resumeDownload: guarded("resumeDownload", async (id: string) =>
-      ctx.rpc.call("main", "browserEnvironment.resumeDownload", id)
-    ),
-    cancelDownload: guarded("cancelDownload", async (id: string) =>
-      ctx.rpc.call("main", "browserEnvironment.cancelDownload", id)
-    ),
-    openDownload: guarded("openDownload", async (id: string) =>
-      ctx.rpc.call("main", "browserEnvironment.openDownload", id)
-    ),
-    revealDownload: guarded("revealDownload", async (id: string) =>
-      ctx.rpc.call("main", "browserEnvironment.revealDownload", id)
-    ),
 
     exportBookmarks: guarded("exportBookmarks", async (format: "html" | "json" | "chrome-json") =>
       exportBookmarks(format, await callStore<Array<Record<string, unknown>>>("getAllBookmarks"))

@@ -84,6 +84,21 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "panel.inspect", notability: "headline" },
   { key: "workerd.inspector", notability: "headline" },
   { key: "runtime.inspect", notability: "everyday" },
+  // Browser-host maintenance and download controls are the ordinary machinery
+  // of their explicit built-in panels. Launching a downloaded file or exposing
+  // it in the OS crosses out of the workspace and remains prominent.
+  { key: "service:browserEnvironment.cancelDownload", notability: "everyday" },
+  { key: "service:browserEnvironment.flushCookieProjection", notability: "everyday" },
+  {
+    key: "service:browserEnvironment.getCookieProjectionDiagnostics",
+    notability: "everyday",
+  },
+  { key: "service:browserEnvironment.getImportHost", notability: "headline" },
+  { key: "service:browserEnvironment.listDownloads", notability: "everyday" },
+  { key: "service:browserEnvironment.openDownload", notability: "headline" },
+  { key: "service:browserEnvironment.pauseDownload", notability: "everyday" },
+  { key: "service:browserEnvironment.resumeDownload", notability: "everyday" },
+  { key: "service:browserEnvironment.revealDownload", notability: "headline" },
   { key: "runtime.code-execution.manage", notability: "headline" },
   { key: "runtime.execution.recover", notability: "headline" },
   { key: "runtime.supervision.manage", notability: "headline" },

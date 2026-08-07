@@ -10,6 +10,7 @@ function makeRpc() {
       };
     }
     if (service === "extensions" && method === "invokeProvider") return [];
+    if (service === "browserEnvironment" && method === "listDownloads") return [];
     return undefined;
   });
   const callTarget = vi.fn(async (_targetId: string, method: string, _args: unknown[]) => {
@@ -60,6 +61,24 @@ describe("createBrowserDataClient", () => {
       "workers",
       "resolveService",
       expect.anything()
+    );
+  });
+
+  it("routes Electron-native browser effects directly to their resident service", async () => {
+    const rpc = makeRpc();
+    const client = createBrowserDataClient(rpc);
+
+    await client.listDownloads();
+    await client.pauseDownload("download-1");
+
+    expect(rpc.callService).toHaveBeenCalledWith("browserEnvironment", "listDownloads", []);
+    expect(rpc.callService).toHaveBeenCalledWith("browserEnvironment", "pauseDownload", [
+      "download-1",
+    ]);
+    expect(rpc.callService).not.toHaveBeenCalledWith(
+      "extensions",
+      "invokeProvider",
+      expect.arrayContaining(["browserData", "listDownloads"])
     );
   });
 

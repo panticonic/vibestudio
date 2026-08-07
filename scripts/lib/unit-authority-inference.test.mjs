@@ -106,6 +106,24 @@ describe("inferTypedServiceClientCapabilities", () => {
   });
 });
 
+describe("hosted runtime service-backed methods", () => {
+  it("maps native browser-data methods to the Electron-resident service", () => {
+    const host = new Set([
+      "service:browserEnvironment.listDownloads",
+      "service:browserEnvironment.pauseDownload",
+    ]);
+    assert.deepEqual(
+      [
+        ...inferHostedRuntimeCapabilities(
+          `await browserData.listDownloads(); await browserData.pauseDownload("id");`,
+          host
+        ),
+      ].sort(),
+      ["service:browserEnvironment.listDownloads", "service:browserEnvironment.pauseDownload"]
+    );
+  });
+});
+
 describe("inferDirectRpcCapabilities", () => {
   const direct = new Set(["rpc:publish", "rpc:subscribe", "rpc:subscribeChannel", "rpc:unknown"]);
 
