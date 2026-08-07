@@ -2,7 +2,6 @@ import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import * as crypto from "node:crypto";
 import * as ts from "typescript/unstable/ast";
-import { createScanner } from "typescript/unstable/ast/scanner";
 import type { CompilerOptions, Program, Project } from "typescript/unstable/sync";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
@@ -130,103 +129,17 @@ async function packageInfo(
   return { name: unit.name, dir, packageJson };
 }
 
-interface SourceToken {
-  kind: ts.SyntaxKind;
-  start: number;
-  text: string;
-}
-
-function moduleSpecifierScan(source: string): {
-  positions: number[];
-  requiresNodeResolution: boolean;
-} {
-  const scanner = createScanner(true, undefined, source);
-  const previous: SourceToken[] = [];
-  const positions: number[] = [];
-  let requiresNodeResolution = false;
-  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFile; kind = scanner.scan()) {
-    const token = { kind, start: scanner.getTokenStart(), text: scanner.getTokenText() };
-    if (
-      kind === ts.SyntaxKind.StringLiteral ||
-      kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral
-    ) {
-      const one = previous.at(-1);
-      const two = previous.at(-2);
-      const requireCall =
-        one?.kind === ts.SyntaxKind.OpenParenToken &&
-        (two?.kind === ts.SyntaxKind.Identifier || two?.kind === ts.SyntaxKind.RequireKeyword) &&
-        two.text === "require";
-      if (
-        one?.kind === ts.SyntaxKind.ImportKeyword ||
-        one?.kind === ts.SyntaxKind.FromKeyword ||
-        (one?.kind === ts.SyntaxKind.OpenParenToken &&
-          (two?.kind === ts.SyntaxKind.ImportKeyword || requireCall))
-      ) {
-        positions.push(token.start + 1);
-        if (requireCall) requiresNodeResolution = true;
-      }
-    }
-    previous.push(token);
-    if (previous.length > 2) previous.shift();
-  }
-  return { positions, requiresNodeResolution };
-}
-
-function astModuleSpecifiers(sourceFile: ts.SourceFile): ts.StringLiteralLikeNode[] {
-  const result: ts.StringLiteralLikeNode[] = [];
-  const visit = (node: ts.Node): void => {
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteralLikeNode(node.moduleSpecifier)
-    ) {
-      result.push(node.moduleSpecifier);
-    } else if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference) &&
-      node.moduleReference.expression &&
-      ts.isStringLiteralLikeNode(node.moduleReference.expression)
-    ) {
-      result.push(node.moduleReference.expression);
-    } else if (
-      ts.isCallExpression(node) &&
-      node.arguments[0] &&
-      ts.isStringLiteralLikeNode(node.arguments[0]) &&
-      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
-    ) {
-      result.push(node.arguments[0]);
-    }
-    node.forEachChild(visit);
-  };
-  visit(sourceFile);
-  return result;
-}
-
-async function programSourceContents(
-  program: Program,
-  overlays: ReadonlyMap<string, string>
-): Promise<Map<string, string>> {
-  const files = program
-    .getSourceFileNames()
-    .map((fileName) => path.resolve(fileName))
-    .filter((file) => !file.startsWith("/@typescript/lib/"));
-  const contents = new Map<string, string>();
-  const concurrency = 32;
-  for (let offset = 0; offset < files.length; offset += concurrency) {
-    await Promise.all(
-      files.slice(offset, offset + concurrency).map(async (file) => {
-        const overlay = overlays.get(file);
-        contents.set(file, overlay ?? (await fsp.readFile(file, "utf8")));
-      })
-    );
-  }
-  return contents;
+function programSourceFiles(program: Program): ts.SourceFile[] {
+  return program.getSourceFileNames().flatMap((fileName) => {
+    if (fileName.startsWith("/@typescript/lib/")) return [];
+    const sourceFile = program.getSourceFile(fileName);
+    return sourceFile ? [sourceFile] : [];
+  });
 }
 
 function resolvedImportGraphs(
   project: Project,
-  contentsByFile: ReadonlyMap<string, string>,
+  sourceFiles: readonly ts.SourceFile[],
   workspaceFiles: ReadonlySet<string>
 ): {
   workspace: Map<string, ReadonlySet<string>>;
@@ -235,15 +148,15 @@ function resolvedImportGraphs(
   const checker = project.checker;
   const workspace = new Map<string, ReadonlySet<string>>();
   const all = new Map<string, ReadonlySet<string>>();
-  for (const [source, content] of contentsByFile) {
+  for (const sourceFile of sourceFiles) {
+    const source = path.resolve(sourceFile.fileName);
     const imports = new Set<string>();
     const workspaceImports = new Set<string>();
-    const scan = moduleSpecifierScan(content);
-    const symbols = checker.getSymbolAtPosition(source, scan.positions);
-    if (scan.requiresNodeResolution) {
-      const sourceFile = project.program.getSourceFile(source);
-      if (sourceFile) symbols.push(...checker.getSymbolAtLocation(astModuleSpecifiers(sourceFile)));
-    }
+    // TypeScript already records every static import, re-export, import-equals,
+    // require(), and dynamic import on SourceFile. Reading that compact index
+    // avoids walking and materializing the full remote AST. Resolving the
+    // indexed nodes also preserves the compiler's exact module semantics.
+    const symbols = checker.getSymbolAtLocation(sourceFile.imports);
     for (const symbol of symbols) {
       for (const declaration of symbol?.declarations ?? []) {
         const target = path.resolve(declaration.path);
@@ -277,20 +190,21 @@ async function nearestPackageManifest(file: string): Promise<string | null> {
 }
 
 async function compilerDependencies(
+  sourceFiles: readonly ts.SourceFile[],
   reachable: ReadonlySet<string>,
   sourceRoot: string,
   configFiles: readonly string[],
-  contentsByFile: ReadonlyMap<string, string>,
   cache: Map<string, readonly AuthorityCompilerDependency[]>
 ): Promise<AuthorityCompilerDependency[]> {
   const contents = new Map<string, string>();
-  for (const [file, source] of contentsByFile) {
+  for (const sourceFile of sourceFiles) {
+    const file = path.resolve(sourceFile.fileName);
     if (!reachable.has(file) || isWithin(sourceRoot, file) || file.startsWith("/@typescript/lib/"))
       continue;
     let dependencies = cache.get(file);
     if (!dependencies) {
       const discovered: AuthorityCompilerDependency[] = [
-        { path: file, contentHash: contentHash(source) },
+        { path: file, contentHash: contentHash(sourceFile.text) },
       ];
       const manifest = await nearestPackageManifest(file);
       if (manifest && !isWithin(sourceRoot, manifest)) {
@@ -495,18 +409,20 @@ export async function createAuthorityCompilerSnapshot(
       programMs += groupProgramMs;
       maxProgramMs = Math.max(maxProgramMs, groupProgramMs);
       const importGraphStartedAt = Date.now();
-      const groupContents = await programSourceContents(program, contentsByFile);
+      const groupSourceFiles = programSourceFiles(program);
       const groupWorkspaceFiles = new Set(
-        [...groupContents.keys()].filter((file) => isWithin(sourceRoot, file))
+        groupSourceFiles
+          .map((sourceFile) => path.resolve(sourceFile.fileName))
+          .filter((file) => isWithin(sourceRoot, file))
       );
-      const importGraphs = resolvedImportGraphs(project, groupContents, groupWorkspaceFiles);
+      const importGraphs = resolvedImportGraphs(project, groupSourceFiles, groupWorkspaceFiles);
       importGraphMs += Date.now() - importGraphStartedAt;
       const groupImports = importGraphs.workspace;
       const allImports = importGraphs.all;
       const externalFiles = new Set(
-        [...groupContents.keys()].filter(
-          (file) => !isWithin(sourceRoot, file) && !file.startsWith("/@typescript/lib/")
-        )
+        groupSourceFiles
+          .map((sourceFile) => path.resolve(sourceFile.fileName))
+          .filter((file) => !isWithin(sourceRoot, file))
       );
       const importedTargets = new Set([...allImports.values()].flatMap((imports) => [...imports]));
       const ambientExternalFiles = new Set(
@@ -534,10 +450,10 @@ export async function createAuthorityCompilerSnapshot(
         dependenciesByConsumer.set(
           consumer.name,
           await compilerDependencies(
+            groupSourceFiles,
             compilerReachable,
             sourceRoot,
             [...group.configFiles],
-            groupContents,
             dependencyCache
           )
         );
