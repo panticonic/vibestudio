@@ -78,17 +78,24 @@ visitPackageManifests(path.join(root, "workspace"));
 // Dynamic workspace-service envelopes are authored by the workspace, so their
 // review classification belongs beside the service's action and presentation.
 // This is the same declaration the live build and install review consume.
-const workspaceConfigPath = path.join(root, "workspace/meta/vibestudio.yml");
-const workspaceConfig = parseYaml(fs.readFileSync(workspaceConfigPath, "utf8"));
-for (const service of workspaceConfig.services ?? []) {
-  note(
-    `workspace-service:${service.name}`,
-    `${path.relative(root, workspaceConfigPath)} services.${service.name}.notability`,
-    service.notability
-  );
+const workspaceServiceDeclarationGaps = [];
+for (const relativeConfigPath of [
+  "workspace/meta/template.yml",
+  "workspace/meta/vibestudio.yml",
+]) {
+  const workspaceConfigPath = path.join(root, relativeConfigPath);
+  const workspaceConfig = parseYaml(fs.readFileSync(workspaceConfigPath, "utf8"));
+  for (const service of workspaceConfig.services ?? []) {
+    const capability = `workspace-service:${service.name}`;
+    const source = `${relativeConfigPath} services.${service.name}.notability`;
+    if (service.notability !== "headline" && service.notability !== "everyday") {
+      workspaceServiceDeclarationGaps.push({ capability, source });
+    }
+    note(capability, source, service.notability);
+  }
 }
 
-const missing = [];
+const missing = [...workspaceServiceDeclarationGaps];
 for (const [capability, { source, declared }] of capabilities) {
   // A direct userland receiver reference is classified by its provider's
   // authority definition in the same reviewed install set. Dynamic workspace
@@ -111,7 +118,7 @@ if (missing.length > 0) {
   }
   console.error(
     `\n${missing.length} capabilit${missing.length === 1 ? "y is" : "ies are"} unclassified. ` +
-      "Classify dynamic workspace services in meta/vibestudio.yml; classify host-owned capabilities in REVIEWED_NOTABILITY.\n" +
+      "Classify dynamic workspace services in their meta YAML declaration; classify host-owned capabilities in REVIEWED_NOTABILITY.\n" +
       "headline: a reasonable non-technical person, told a part can do this, would want to know " +
       "before adding it.\neveryday: the ordinary machinery of being a part here."
   );

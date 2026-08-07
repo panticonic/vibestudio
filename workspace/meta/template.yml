@@ -98,6 +98,7 @@ services:
     action: send and receive messages in your conversations
     description: Access your workspace's conversations, including sending messages
       and reading replies.
+    notability: everyday
     presentation:
       domain: sharing
       verb: act
@@ -118,6 +119,7 @@ services:
     title: AI model settings
     action: read or change which AI models your workspace uses
     description: Read or change the AI model and provider settings for this workspace.
+    notability: everyday
     presentation:
       domain: automation
       verb: manage
@@ -137,6 +139,7 @@ services:
     title: Test runner
     action: run workspace tests and record results
     description: Run this workspace's test suite and record results.
+    notability: everyday
     presentation:
       domain: automation
       verb: act
