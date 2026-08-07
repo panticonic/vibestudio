@@ -6,6 +6,7 @@ import type {
   DevelopmentRecipe,
   DevelopmentRun,
   DevelopmentSession,
+  DevelopmentTarget,
 } from "@vibestudio/service-schemas/development";
 import type { z } from "zod";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -102,7 +103,7 @@ export function createDevelopmentNativeService(deps: {
   >;
   clientExecutors?: Pick<
     DevelopmentClientExecutorRegistry,
-    "select" | "launch" | "stop" | "acceptManagedChildAttestation"
+    "list" | "select" | "launch" | "stop" | "acceptManagedChildAttestation"
   >;
   resolveClientExecutorRuntime?: (ctx: ServiceContext) => string | null;
   mintCurrentHostInvite?: (input: {
@@ -137,14 +138,14 @@ export function createDevelopmentNativeService(deps: {
     plan: PreparedDevelopmentBuild,
     build: NativeBuildState
   ): Promise<void> => {
-    if (run.target.kind === "current-host-client") {
+    if (run.target.kind === "client-device") {
       if (
         !deps.clientExecutors ||
         !deps.mintCurrentHostInvite ||
         !plan.clientExecutor ||
         !run.ownerUserId
       ) {
-        throw Object.assign(new Error("The current-host client executor is unavailable"), {
+        throw Object.assign(new Error("The selected client-device executor is unavailable"), {
           code: "EEXECUTOR_UNAVAILABLE",
         });
       }
@@ -235,7 +236,7 @@ export function createDevelopmentNativeService(deps: {
         instance = receipt;
         if (run.target.kind === "isolated-host" && run.target.includeClient) {
           if (!deps.clientExecutors || !plan.clientExecutor || !run.ownerUserId) {
-            throw Object.assign(new Error("The initiating desktop executor is unavailable"), {
+            throw Object.assign(new Error("The selected client-device executor is unavailable"), {
               code: "EEXECUTOR_UNAVAILABLE",
             });
           }
@@ -337,6 +338,18 @@ export function createDevelopmentNativeService(deps: {
     methods: developmentNativeMethods,
     handler: defineServiceHandler("developmentNative", developmentNativeMethods, {
       describeHost: () => ({ platform: process.platform, arch: process.arch }),
+      listClientExecutors: (ctx) => {
+        const ownerUserId = ctx.caller.subject?.userId;
+        if (!ownerUserId || !deps.clientExecutors) return [];
+        const currentExecutorId = deps.resolveClientExecutorRuntime?.(ctx) ?? null;
+        return deps.clientExecutors.list(ownerUserId).map((executor) => ({
+          executorId: executor.ownerRuntimeId,
+          providerId: executor.providerId,
+          platform: executor.platform,
+          arch: executor.arch,
+          current: executor.ownerRuntimeId === currentExecutorId,
+        }));
+      },
       describeTool: (_ctx, [toolId]) => deps.native.describeTool(toolId),
       openTool: (ctx, [input]) =>
         deps.native.open({
@@ -366,27 +379,28 @@ export function createDevelopmentNativeService(deps: {
       resizeTerminal: async (_ctx, [input]) => {
         await deps.native.resizeTerminal(input);
       },
-      prepareBuild: async (ctx, [{ session, runId, recipe }]) => {
+      prepareBuild: async (ctx, [{ session, runId, recipe, target }]) => {
         const plan = await deps.executor.prepareExact({
           session,
           runId,
           recipe: recipe as DevelopmentRecipe,
         });
-        if (needsClientExecutor(plan.recipe.target)) {
+        assertRecipeTarget(plan.recipe.target, target);
+        if (needsClientExecutor(target)) {
           const ownerUserId = ctx.caller.subject?.userId;
-          const ownerRuntimeId = deps.resolveClientExecutorRuntime?.(ctx) ?? null;
+          const executorId = clientExecutorId(target);
           const selected =
-            ownerUserId && ownerRuntimeId
+            ownerUserId && executorId
               ? deps.clientExecutors?.select({
                   ownerUserId,
-                  ownerRuntimeId,
+                  executorId,
                   platform: plan.recipe.platform,
                   arch: plan.recipe.arch,
                 })
               : null;
           if (!selected) {
             throw Object.assign(
-              new Error("The initiating desktop has no live reviewed Electron executor"),
+              new Error("The selected client device has no live reviewed Electron executor"),
               { code: "EEXECUTOR_UNAVAILABLE" }
             );
           }
@@ -495,7 +509,7 @@ export function createDevelopmentNativeService(deps: {
           });
         }
         const build = builds.get(runId);
-        if (build?.run.target.kind === "current-host-client") {
+        if (build?.run.target.kind === "client-device") {
           await deps.clientExecutors?.stop(runId);
         } else if (build?.run.target.kind === "isolated-host" && build.result.state !== "running") {
           await deps.isolatedExecutor?.stop(build.run);
@@ -531,9 +545,30 @@ function semanticIngress(ctx: ServiceContext): NativeDevelopmentSemanticIngress 
 
 function needsClientExecutor(target: DevelopmentRun["target"]): boolean {
   return (
-    target.kind === "current-host-client" ||
+    target.kind === "client-device" ||
     (target.kind === "isolated-host" && target.includeClient)
   );
+}
+
+function clientExecutorId(target: DevelopmentRun["target"]): string | null {
+  if (target.kind === "client-device") return target.executorId;
+  if (target.kind === "isolated-host" && target.includeClient) return target.executorId;
+  return null;
+}
+
+function assertRecipeTarget(recipe: DevelopmentRecipe["target"], target: DevelopmentTarget): void {
+  const compatible =
+    recipe.kind === target.kind &&
+    (recipe.kind === "build-only" ||
+      (recipe.kind === "client-device" && target.kind === "client-device") ||
+      (recipe.kind === "isolated-host" &&
+        target.kind === "isolated-host" &&
+        recipe.includeClient === target.includeClient));
+  if (!compatible) {
+    throw Object.assign(new Error("Selected target does not match the reviewed recipe"), {
+      code: "EIDEMPOTENCYDRIFT",
+    });
+  }
 }
 
 function initiatingAttachedHostCeiling(

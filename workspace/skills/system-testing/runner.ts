@@ -694,6 +694,7 @@ export class HeadlessRunner {
       | "openSession"
       | "getSession"
       | "listRecipes"
+      | "listClientExecutors"
       | "listNativeTools"
       | "start"
       | "faultFailBuildAfterSnapshotRetained"

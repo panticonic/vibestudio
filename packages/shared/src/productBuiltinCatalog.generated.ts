@@ -159,6 +159,21 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
+      listClientExecutors: {
+        capability: "service:development.listClientExecutors",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["code", "user", "host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "service:development.listClientExecutors",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       listNativeTools: {
         capability: "service:development.listNativeTools",
         tier: "open",
@@ -697,6 +712,21 @@ export const PRODUCT_BUILTIN_CATALOG = [
         effect: {
           kind: "host-capability",
           capability: "service:development.listRecipes",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      listClientExecutors: {
+        capability: "service:development.listClientExecutors",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["code", "user", "host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "service:development.listClientExecutors",
           resource: {
             kind: "receiver-object",
           },

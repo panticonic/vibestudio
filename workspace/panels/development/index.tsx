@@ -29,6 +29,7 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { createDurableObjectServiceClient } from "@vibestudio/shared/workspaceServiceRpc";
 import {
   developmentBuiltinMethods,
+  type DevelopmentClientExecutor,
   type DevelopmentRun,
   type DevelopmentRunEvent,
   type DevelopmentSession,
@@ -77,12 +78,6 @@ interface DevelopmentPanelArgs {
   source?: { repositoryId?: string; repoPath?: string; state?: string; dirty?: boolean };
 }
 
-const TARGETS: readonly DevelopmentTarget[] = [
-  { kind: "build-only" },
-  { kind: "current-host-client", client: "electron" },
-  { kind: "isolated-host", includeClient: false },
-  { kind: "isolated-host", includeClient: true },
-];
 type DevelopmentSessionMode = "semantic" | "native-tool";
 type NativeDevelopmentTool = "claude-code" | "system-editor";
 interface NativeToolAvailability {
@@ -102,8 +97,8 @@ interface RunCursor {
 }
 const PAGE_LIMIT = 30;
 
-function targetForKey(key: string): DevelopmentTarget {
-  return TARGETS.find((target) => targetKey(target) === key) ?? TARGETS[0]!;
+function targetForKey(targets: readonly DevelopmentTarget[], key: string): DevelopmentTarget {
+  return targets.find((target) => targetKey(target) === key) ?? targets[0]!;
 }
 
 function errorText(error: unknown): string {
@@ -137,10 +132,11 @@ export default function DevelopmentPanel() {
   const [runs, setRuns] = useState<DevelopmentRun[]>([]);
   const [grants, setGrants] = useState<SavedPermissionGrant[]>([]);
   const [nativeTools, setNativeTools] = useState<NativeToolAvailability[]>([]);
+  const [clientExecutors, setClientExecutors] = useState<DevelopmentClientExecutor[]>([]);
   const [events, setEvents] = useState<DevelopmentRunEvent[]>([]);
   const [mode, setMode] = useState<DevelopmentSessionMode>("semantic");
   const [nativeTool, setNativeTool] = useState<NativeDevelopmentTool>("claude-code");
-  const [selectedTargetKey, setSelectedTargetKey] = useState(targetKey(TARGETS[0]!));
+  const [selectedTargetKey, setSelectedTargetKey] = useState("build-only");
   const [terminalText, setTerminalText] = useState("");
   const [terminalOutput, setTerminalOutput] = useState<string | null>(null);
   const [terminalSessionId, setTerminalSessionId] = useState<string | null>(null);
@@ -163,7 +159,18 @@ export default function DevelopmentPanel() {
   const selectedRun = runs.find((run) => run.runId === selectedRunId) ?? null;
   const selectedSession =
     sessions.find((session) => session.sessionId === selectedRun?.sessionId) ?? sessions[0] ?? null;
-  const selectedTarget = targetForKey(selectedTargetKey);
+  const targets = useMemo<DevelopmentTarget[]>(
+    () => [
+      { kind: "build-only" },
+      { kind: "isolated-host", includeClient: false },
+      ...clientExecutors.flatMap<DevelopmentTarget>((executor) => [
+        { kind: "client-device", client: "electron", executorId: executor.executorId },
+        { kind: "isolated-host", includeClient: true, executorId: executor.executorId },
+      ]),
+    ],
+    [clientExecutors]
+  );
+  const selectedTarget = targetForKey(targets, selectedTargetKey);
   const selectedNativeTool = nativeTools.find((tool) => tool.toolId === nativeTool) ?? null;
   const confirmedSession =
     confirm?.kind === "force-retire-session"
@@ -198,16 +205,18 @@ export default function DevelopmentPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [nextSessions, nextRuns, nextGrants, nextNativeTools] = await Promise.all([
+      const [nextSessions, nextRuns, nextGrants, nextNativeTools, nextClientExecutors] = await Promise.all([
         development.listSessions({ limit: PAGE_LIMIT }),
         development.list({ limit: PAGE_LIMIT }),
         permissions.list(),
         development.listNativeTools(),
+        development.listClientExecutors(),
       ]);
       setSessions(nextSessions.sessions);
       setRuns(nextRuns.runs);
       setGrants(nextGrants);
       setNativeTools(nextNativeTools);
+      setClientExecutors(nextClientExecutors);
       setNextSessionCursor(nextSessions.nextCursor);
       setNextRunCursor(nextRuns.nextCursor);
       const nextRunId =
@@ -356,7 +365,11 @@ export default function DevelopmentPanel() {
   const start = (session: DevelopmentSession) =>
     invoke(`start:${session.sessionId}`, async () => {
       const recipe = (await development.listRecipes()).find(
-        (candidate) => targetKey(candidate.target) === targetKey(selectedTarget)
+        (candidate) =>
+          candidate.target.kind === selectedTarget.kind &&
+          (candidate.target.kind !== "isolated-host" ||
+            (selectedTarget.kind === "isolated-host" &&
+              candidate.target.includeClient === selectedTarget.includeClient))
       );
       if (!recipe) throw new Error("No reviewed development recipe is available on this executor.");
       const run = await development.start({
@@ -605,7 +618,7 @@ export default function DevelopmentPanel() {
                   value={selectedTargetKey}
                   onChange={(event) => setSelectedTargetKey(event.target.value)}
                 >
-                  {TARGETS.map((target) => (
+                  {targets.map((target) => (
                     <option key={targetKey(target)} value={targetKey(target)}>
                       {targetLabel(target)}
                     </option>

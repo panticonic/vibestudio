@@ -341,12 +341,12 @@ export class DevelopmentClientExecutorRegistry {
 
   select(input: {
     ownerUserId: string;
-    ownerRuntimeId: string;
+    executorId: string;
     platform: string;
     arch: string;
   }): DevelopmentClientExecutorIdentity | null {
     const now = this.now();
-    const provider = this.providers.get(input.ownerRuntimeId);
+    const provider = this.providers.get(input.executorId);
     if (
       !provider ||
       provider.ownerUserId !== input.ownerUserId ||
@@ -357,6 +357,16 @@ export class DevelopmentClientExecutorRegistry {
       return null;
     }
     return stableIdentity(provider);
+  }
+
+  list(ownerUserId: string): DevelopmentClientExecutorBinding[] {
+    const now = this.now();
+    return [...this.providers.values()]
+      .filter(
+        (provider) =>
+          provider.ownerUserId === ownerUserId && provider.leaseExpiresAt > now
+      )
+      .sort((left, right) => left.ownerRuntimeId.localeCompare(right.ownerRuntimeId));
   }
 
   launch(input: DevelopmentClientLaunchInput): {

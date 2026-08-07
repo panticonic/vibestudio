@@ -4,9 +4,11 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
   developmentExecutionSnapshotSchema,
+  developmentClientExecutorSchema,
   developmentRecipeSchema,
   developmentRunSchema,
   developmentSessionSchema,
+  developmentTargetSchema,
   nativeDevelopmentToolSchema,
 } from "./development.js";
 import { vcsImportSnapshotResultSchema, vcsStateNodeRefSchema } from "./vcs.js";
@@ -135,6 +137,20 @@ export const developmentNativeMethods = defineServiceMethods({
     },
     args: z.tuple([]),
     returns: z.object({ platform: nonEmpty, arch: nonEmpty }).strict(),
+    authority: nativePrincipals,
+    access: { sensitivity: "read" },
+  },
+  listClientExecutors: {
+    description: "List the authenticated user's live reviewed client-device executors.",
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "development-native.discovery",
+      rationale: "Returns explicit executor coordinates without launching native code",
+    },
+    args: z.tuple([]),
+    returns: z.array(developmentClientExecutorSchema),
     authority: nativePrincipals,
     access: { sensitivity: "read" },
   },
@@ -377,6 +393,7 @@ export const developmentNativeMethods = defineServiceMethods({
           session: developmentSessionSchema,
           runId: nonEmpty,
           recipe: developmentRecipeSchema,
+          target: developmentTargetSchema,
         })
         .strict(),
     ]),

@@ -151,7 +151,7 @@ function runAndPlan(): { run: DevelopmentRun; plan: PreparedDevelopmentBuild } {
     ownerRuntimeKind: "shell",
     ownerUserId: "user:one",
     attachedHostAuthorityCeiling: [{ capability: "*", resource: { kind: "prefix", prefix: "" } }],
-    target: { kind: "isolated-host", includeClient: true },
+    target: { kind: "isolated-host", includeClient: true, executorId: "shell:desktop" },
     recipe,
     snapshot,
     state: "starting",

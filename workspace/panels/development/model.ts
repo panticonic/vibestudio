@@ -77,10 +77,12 @@ export function targetKey(target: DevelopmentTarget): string {
   switch (target.kind) {
     case "build-only":
       return "build-only";
-    case "current-host-client":
-      return `current-host-client:${target.client}`;
+    case "client-device":
+      return `client-device:${target.executorId}`;
     case "isolated-host":
-      return `isolated-host:${target.includeClient ? "with-client" : "host-only"}`;
+      return target.includeClient
+        ? `isolated-host:with-client:${target.executorId}`
+        : "isolated-host:host-only";
   }
 }
 
@@ -88,10 +90,12 @@ export function targetLabel(target: DevelopmentTarget): string {
   switch (target.kind) {
     case "build-only":
       return "Build only";
-    case "current-host-client":
-      return "Current host Electron client";
+    case "client-device":
+      return `Electron client · ${target.executorId.slice(0, 12)}`;
     case "isolated-host":
-      return target.includeClient ? "Isolated host with client" : "Isolated host";
+      return target.includeClient
+        ? `Isolated host with client · ${target.executorId.slice(0, 12)}`
+        : "Isolated host";
   }
 }
 

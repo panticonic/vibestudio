@@ -312,6 +312,11 @@ export class DevelopmentDO extends DurableObjectBase {
   }
 
   @schemaRpc()
+  async listClientExecutors() {
+    return this.rpc.call("main", "developmentNative.listClientExecutors", []);
+  }
+
+  @schemaRpc()
   async listNativeTools(): Promise<
     Array<{
       toolId: "claude-code" | "system-editor";
@@ -357,11 +362,11 @@ export class DevelopmentDO extends DurableObjectBase {
       (candidate) => candidate.recipeId === input.recipeId
     );
     if (!recipe) throw coded("ENOENT", `Unknown reviewed recipe ${input.recipeId}`);
-    if (canonicalJson(recipe.target) !== canonicalJson(input.target)) {
+    if (!recipeMatchesTarget(recipe.target, input.target)) {
       throw coded("EIDEMPOTENCYDRIFT", "Selected target does not match the reviewed recipe");
     }
     const plan = await this.rpc.call<PreparedBuild>("main", "developmentNative.prepareBuild", [
-      { session, runId: input.runId, recipe },
+      { session, runId: input.runId, recipe, target: input.target },
     ]);
     const at = Date.now();
     let run = developmentRunSchema.parse({
@@ -535,7 +540,7 @@ export class DevelopmentDO extends DurableObjectBase {
     if (!run.repair?.retryable) throw coded("ENOTRECOVERABLE", "Run cannot be retried");
     const session = this.requireSession(run.sessionId);
     await this.rpc.call("main", "developmentNative.prepareBuild", [
-      { session, runId: run.runId, recipe: run.recipe },
+      { session, runId: run.runId, recipe: run.recipe, target: run.target },
     ]);
     run = this.store.transitionRun({
       runId: run.runId,
@@ -1111,6 +1116,20 @@ export class DevelopmentDO extends DurableObjectBase {
       throw coded("EIDEMPOTENCYDRIFT", "Run id was reused with different intent");
     }
   }
+}
+
+function recipeMatchesTarget(
+  recipe: DevelopmentRun["recipe"]["target"],
+  target: DevelopmentRun["target"]
+): boolean {
+  return (
+    recipe.kind === target.kind &&
+    (recipe.kind === "build-only" ||
+      (recipe.kind === "client-device" && target.kind === "client-device") ||
+      (recipe.kind === "isolated-host" &&
+        target.kind === "isolated-host" &&
+        recipe.includeClient === target.includeClient))
+  );
 }
 
 function toDiagnostic(error: unknown): { code: string; message: string; at: number } {

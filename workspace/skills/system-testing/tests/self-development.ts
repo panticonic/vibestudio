@@ -72,7 +72,7 @@ function validateCurrentClient(result: TestExecutionResult) {
   if (!checked.passed) return checked;
   const run = checked.rows.find(
     (row) =>
-      object(row["target"])?.["kind"] === "current-host-client" &&
+      object(row["target"])?.["kind"] === "client-device" &&
       (row["state"] === "ready" || row["state"] === "succeeded")
   );
   const client = object(run?.["client"]);
@@ -433,7 +433,7 @@ async function orchestrate(
 async function repositoryAndRecipe(
   context: TestOrchestrationContext,
   receipt: SelfDevelopmentReceipt,
-  targetKind: "build-only" | "current-host-client" | "isolated-host"
+  targetKind: "build-only" | "client-device" | "isolated-host"
 ) {
   const repository = await context.runner.resolveSelfDevelopmentRepository();
   operation(receipt, "vcs", "resolveRepository", repository);
@@ -557,15 +557,18 @@ async function stopAndClose(
 
 async function currentClient(context: TestOrchestrationContext) {
   return orchestrate("self-development-current-client", context, async (receipt) => {
-    const setup = await repositoryAndRecipe(context, receipt, "current-host-client");
+    const setup = await repositoryAndRecipe(context, receipt, "client-device");
     if (!setup) return;
+    const executor = await selectClientExecutor(context, receipt);
+    if (!executor) return;
     const session = await openSemantic(context, receipt, setup.repository.repositoryId);
     if (!session) return;
     let run: Record<string, unknown> | null = null;
     try {
       run = await startRun(context, receipt, String(session["sessionId"]), setup.recipe, {
-        kind: "current-host-client",
+        kind: "client-device",
         client: "electron",
+        executorId: executor.executorId,
       });
       if (run["state"] === "failed" && /executor|provider|electron/iu.test(JSON.stringify(run))) {
         unavailable(receipt, "current-host Electron client executor is not provisioned and ready");
@@ -589,6 +592,8 @@ async function isolatedHost(
   return orchestrate(scenario, context, async (receipt) => {
     const setup = await repositoryAndRecipe(context, receipt, "isolated-host");
     if (!setup) return;
+    const executor = includeClient ? await selectClientExecutor(context, receipt) : null;
+    if (includeClient && !executor) return;
     const session = await openSemantic(context, receipt, setup.repository.repositoryId);
     if (!session) return;
     let run: Record<string, unknown> | null = null;
@@ -596,6 +601,7 @@ async function isolatedHost(
       run = await startRun(context, receipt, String(session["sessionId"]), setup.recipe, {
         kind: "isolated-host",
         includeClient,
+        ...(executor ? { executorId: executor.executorId } : {}),
       });
       const route = object(run["attachedHost"]);
       if (run["state"] !== "ready" || route?.["state"] !== "ready") {
@@ -612,6 +618,22 @@ async function isolatedHost(
       await stopAndClose(context, receipt, run, String(session["sessionId"]));
     }
   });
+}
+
+async function selectClientExecutor(
+  context: TestOrchestrationContext,
+  receipt: SelfDevelopmentReceipt
+): Promise<{ executorId: string } | null> {
+  const executors = await context.runner.callSelfDevelopment<Record<string, unknown>[]>(
+    "listClientExecutors"
+  );
+  operation(receipt, "development", "listClientExecutors", executors);
+  const selected = executors.find((candidate) => candidate["current"] === true) ?? executors[0];
+  if (!selected || typeof selected["executorId"] !== "string") {
+    unavailable(receipt, "no live reviewed Electron client-device executor is available");
+    return null;
+  }
+  return { executorId: selected["executorId"] };
 }
 
 async function dirtySemanticState(context: TestOrchestrationContext) {

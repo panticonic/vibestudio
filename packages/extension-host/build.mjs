@@ -51,7 +51,7 @@ if (PUBLISH) {
   // publish bundle ships runtime JS, not types). Use the project's
   // tsconfig.build.json with --emitDeclarationOnly so tsc doesn't double-write
   // the JavaScript that esbuild already produced.
-  const tscBin = require.resolve("typescript/lib/tsc.js");
+  const tscBin = path.join(path.dirname(require.resolve("typescript/package.json")), "lib", "tsc.js");
   execFileSync(
     process.execPath,
     [tscBin, "--project", "tsconfig.build.json", "--emitDeclarationOnly"],

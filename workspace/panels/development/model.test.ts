@@ -71,11 +71,15 @@ describe("Development panel model", () => {
 
   it("keeps target choices typed and renders only durable instance facts", () => {
     expect(targetKey({ kind: "build-only" })).toBe("build-only");
-    expect(targetLabel({ kind: "current-host-client", client: "electron" })).toBe(
-      "Current host Electron client"
+    expect(
+      targetLabel({ kind: "client-device", client: "electron", executorId: "shell:desktop" })
+    ).toBe(
+      "Electron client · shell:deskto"
     );
-    expect(targetLabel({ kind: "isolated-host", includeClient: true })).toBe(
-      "Isolated host with client"
+    expect(
+      targetLabel({ kind: "isolated-host", includeClient: true, executorId: "shell:desktop" })
+    ).toBe(
+      "Isolated host with client · shell:deskto"
     );
     expect(
       instanceSummary({

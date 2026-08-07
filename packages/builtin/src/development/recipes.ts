@@ -49,9 +49,9 @@ export function developmentRecipes(platform: string, arch: string): DevelopmentR
       target: { kind: "isolated-host", includeClient: true },
     }),
     reviewedRecipe(platform, arch, {
-      recipeId: "vibestudio-current-host-client-v1",
-      label: "Build and start an Electron client for the current host",
-      target: { kind: "current-host-client", client: "electron" },
+      recipeId: "vibestudio-client-device-v1",
+      label: "Build and start an Electron client on a selected device",
+      target: { kind: "client-device", client: "electron" },
     }),
   ];
 }

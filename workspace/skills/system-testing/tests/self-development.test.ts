@@ -111,7 +111,7 @@ describe("self-development semantic validators", () => {
     const run = {
       state: "ready",
       commitPoint: "ready",
-      target: { kind: "current-host-client", client: "electron" },
+      target: { kind: "client-device", client: "electron", executorId: "shell:desktop" },
       snapshot: { snapshotDigest: digest("a") },
       artifact: { executionDigest: digest("b") },
       client: {
@@ -389,7 +389,7 @@ describe("self-development semantic validators", () => {
       sessionId: "session",
       state: "ready",
       commitPoint: "ready",
-      target: { kind: "current-host-client", client: "electron" },
+      target: { kind: "client-device", client: "electron", executorId: "shell:desktop" },
       snapshot: { snapshotDigest: digest("a") },
       artifact: { executionDigest: digest("b") },
       client: {
@@ -414,7 +414,10 @@ describe("self-development semantic validators", () => {
       callSelfDevelopment: async (method: string) => {
         calls.push(`development.${method}`);
         if (method === "listRecipes") {
-          return [{ recipeId: "recipe", target: { kind: "current-host-client" } }];
+          return [{ recipeId: "recipe", target: { kind: "client-device" } }];
+        }
+        if (method === "listClientExecutors") {
+          return [{ executorId: "shell:desktop", current: false }];
         }
         if (method === "openSession") {
           return { kind: "opened", session: { sessionId: "session" } };
@@ -440,6 +443,7 @@ describe("self-development semantic validators", () => {
     expect(calls).toEqual([
       "vcs.resolveRepository",
       "development.listRecipes",
+      "development.listClientExecutors",
       "development.openSession",
       "development.start",
       "development.get",

@@ -57,15 +57,21 @@ describe("DevelopmentClientExecutorRegistry", () => {
     ).toBe(true);
   });
 
-  it("selects only the initiating authenticated desktop runtime", async () => {
+  it("discovers and selects an exact live executor owned by the authenticated user", async () => {
     const f = fixture();
     await register(f, "shell:other");
     await register(f, "shell:initiating");
+    await register(f, "shell:another-user", "user:two");
+
+    expect(f.registry.list("user:one").map((executor) => executor.ownerRuntimeId)).toEqual([
+      "shell:initiating",
+      "shell:other",
+    ]);
 
     expect(
       f.registry.select({
         ownerUserId: "user:one",
-        ownerRuntimeId: "shell:initiating",
+        executorId: "shell:initiating",
         platform: process.platform,
         arch: process.arch,
       })
@@ -80,11 +86,13 @@ describe("DevelopmentClientExecutorRegistry", () => {
     expect(
       f.registry.select({
         ownerUserId: "user:one",
-        ownerRuntimeId: "shell:missing",
+        executorId: "shell:missing",
         platform: process.platform,
         arch: process.arch,
       })
     ).toBeNull();
+    f.advance(60_001);
+    expect(f.registry.list("user:one")).toEqual([]);
   });
 
   it("requires both the selected provider receipt and a newly paired child attestation", async () => {
@@ -93,7 +101,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
     await register(f, "shell:other");
     const binding = f.registry.select({
       ownerUserId: "user:one",
-      ownerRuntimeId: "shell:initiating",
+      executorId: "shell:initiating",
       platform: process.platform,
       arch: process.arch,
     })!;
@@ -155,7 +163,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
     await register(f, "shell:initiating");
     const binding = f.registry.select({
       ownerUserId: "user:one",
-      ownerRuntimeId: "shell:initiating",
+      executorId: "shell:initiating",
       platform: process.platform,
       arch: process.arch,
     })!;
@@ -194,7 +202,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
     await register(f, "shell:initiating");
     const binding = f.registry.select({
       ownerUserId: "user:one",
-      ownerRuntimeId: "shell:initiating",
+      executorId: "shell:initiating",
       platform: process.platform,
       arch: process.arch,
     })!;
@@ -248,7 +256,7 @@ describe("DevelopmentClientExecutorRegistry", () => {
     await register(f, "shell:initiating");
     const binding = f.registry.select({
       ownerUserId: "user:one",
-      ownerRuntimeId: "shell:initiating",
+      executorId: "shell:initiating",
       platform: process.platform,
       arch: process.arch,
     })!;

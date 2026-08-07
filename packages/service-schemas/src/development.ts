@@ -113,11 +113,11 @@ const commandSchema = z
     args: z.array(z.string()),
   })
   .strict();
-export const developmentTargetSchema = z.discriminatedUnion("kind", [
+export const developmentRecipeTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("build-only") }).strict(),
   z
     .object({
-      kind: z.literal("current-host-client"),
+      kind: z.literal("client-device"),
       client: z.literal("electron"),
     })
     .strict(),
@@ -128,14 +128,52 @@ export const developmentTargetSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
 ]);
+export type DevelopmentRecipeTarget = z.infer<typeof developmentRecipeTargetSchema>;
+
+export const developmentTargetSchema = z.union([
+  z.object({ kind: z.literal("build-only") }).strict(),
+  z
+    .object({
+      kind: z.literal("client-device"),
+      client: z.literal("electron"),
+      executorId: nonEmpty,
+    })
+    .strict(),
+  z.discriminatedUnion("includeClient", [
+    z
+      .object({
+        kind: z.literal("isolated-host"),
+        includeClient: z.literal(false),
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal("isolated-host"),
+        includeClient: z.literal(true),
+        executorId: nonEmpty,
+      })
+      .strict(),
+  ]),
+]);
 export type DevelopmentTarget = z.infer<typeof developmentTargetSchema>;
+
+export const developmentClientExecutorSchema = z
+  .object({
+    executorId: nonEmpty,
+    providerId: nonEmpty,
+    platform: nonEmpty,
+    arch: nonEmpty,
+    current: z.boolean(),
+  })
+  .strict();
+export type DevelopmentClientExecutor = z.infer<typeof developmentClientExecutorSchema>;
 
 export const developmentRecipeSchema = z
   .object({
     version: z.literal(1),
     recipeId: nonEmpty,
     label: nonEmpty,
-    target: developmentTargetSchema,
+    target: developmentRecipeTargetSchema,
     executor: z.literal("node-pnpm"),
     install: z
       .object({
@@ -562,6 +600,19 @@ export const developmentMethods = defineServiceMethods({
     description: "List the reviewed build recipes. No method accepts a command line.",
     args: z.tuple([]),
     returns: z.array(developmentRecipeSchema),
+    authority: DEVELOPMENT_PRINCIPALS,
+    access: { sensitivity: "read" },
+  },
+  listClientExecutors: {
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "Read-only discovery of the caller's live reviewed client-device executors",
+    },
+    description:
+      "List the authenticated user's live reviewed Electron executors as explicit launch coordinates.",
+    args: z.tuple([]),
+    returns: z.array(developmentClientExecutorSchema),
     authority: DEVELOPMENT_PRINCIPALS,
     access: { sensitivity: "read" },
   },
