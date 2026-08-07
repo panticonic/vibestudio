@@ -464,11 +464,12 @@ export class AgentLoopDriver {
   private readonly retiredChannels = new Set<string>();
   /**
    * Effect I/O may run in parallel, but one channel has one ordered semantic
-   * log. Commit complete outcomes through a single per-channel writer so a
-   * provider failure cannot race sibling tool terminals until every optimistic
-   * append exhausts its head-conflict retries and leaves the turn open.
+   * log. Every local writer — outcomes, inbound messages, and wake recovery —
+   * crosses one per-channel boundary. This makes a committed terminal plus its
+   * event cascade atomic with respect to later steering and lifecycle commands;
+   * optimistic retries remain only for genuinely remote writers.
    */
-  private readonly outcomeCommitChains = new Map<string, Promise<unknown>>();
+  private readonly channelMutationChains = new Map<string, Promise<unknown>>();
   private activationReleased = false;
 
   constructor(private readonly deps: DriverDeps) {
@@ -724,6 +725,10 @@ export class AgentLoopDriver {
 
   /** Wake protocol: validate fold, run the wake command, reconcile, dispatch. */
   async wake(channelId: string): Promise<void> {
+    return serializeByKey(this.channelMutationChains, channelId, () => this.wakeSerial(channelId));
+  }
+
+  private async wakeSerial(channelId: string): Promise<void> {
     if (this.retiredChannels.has(channelId)) return;
     this.loops.delete(channelId); // force re-validation against the remote head
     const loop = await this.loop(channelId);
@@ -756,15 +761,28 @@ export class AgentLoopDriver {
    * elapsed time, is what releases work orphaned by a dead host.
    */
   async handleIncoming(channelId: string, incoming: Incoming): Promise<void> {
+    return serializeByKey(this.channelMutationChains, channelId, () =>
+      this.handleIncomingSerial(channelId, incoming)
+    );
+  }
+
+  private async handleIncomingSerial(channelId: string, incoming: Incoming): Promise<void> {
     if (
       this.retiredChannels.has(channelId) &&
       !(incoming.type === "command" && incoming.command.kind === "abort")
     ) {
       return;
     }
+    // A previous activation may have committed a terminal event and then died
+    // before its event-appended cascade. Repair that durable fact before new
+    // input is allowed to observe or advance the turn. In particular, a steer
+    // must never start the next model call while the preceding assistant tool
+    // calls are still missing their invocation.started events.
+    await this.recoverOpenTurnAfterReplay(channelId);
     const loop = await this.loop(channelId);
     await this.runStep(loop, incoming, APPEND_RETRIES);
     await this.settle(channelId);
+    await this.recoverOpenTurnAfterReplay(channelId);
   }
 
   /** Post-processing chokepoint shared by handleIncoming and applyOutcome.
@@ -794,6 +812,10 @@ export class AgentLoopDriver {
    * open turn do we publish a deterministic recovery failure and close it.
    */
   private async recoverOpenTurnAfterReplay(channelId: string): Promise<void> {
+    // The interruption window begins after the journal append and before the
+    // in-memory fold update. Never use that possibly pre-terminal cache to
+    // decide whether recovery is needed; validate from the durable head.
+    this.loops.delete(channelId);
     let loop = await this.loop(channelId);
     if (!this.isOpenTurnStranded(loop)) return;
 
@@ -1605,12 +1627,17 @@ export class AgentLoopDriver {
 
   /** Outcome protocol: append outcome events FIRST, then delete the row. */
   async applyOutcome(row: OutboxRow, outcome: EffectOutcome): Promise<void> {
-    return serializeByKey(this.outcomeCommitChains, row.channelId, async () => {
+    return serializeByKey(this.channelMutationChains, row.channelId, async () => {
       // A deferred push and its poll backstop can both queue before the first
       // commit deletes the row. The durable terminal already won; the queued
-      // duplicate must not manufacture a second semantic outcome.
+      // duplicate must not manufacture a second semantic outcome. It must,
+      // however, finish any terminal cascade that the winning callback
+      // committed before its activation was interrupted.
       const current = this.outbox.get(row.branchId, row.effectId);
-      if (!current) return;
+      if (!current) {
+        await this.recoverOpenTurnAfterReplay(row.channelId);
+        return;
+      }
       await this.applyOutcomeSerial(current, outcome);
     });
   }
@@ -1655,15 +1682,20 @@ export class AgentLoopDriver {
           throw err;
         }
         if (code !== null) {
-          // id-collision / replay-mismatch (or a head that will not settle):
-          // the log already holds a terminal for this effect — a raced
-          // duplicate execution. The journaled outcome wins: drop the row,
-          // reload from the log, reconcile.
-          this.outbox.delete(row.branchId, row.effectId);
+          // A typed append refusal does NOT generally mean this effect has a
+          // terminal. In particular, id-collision is an integrity violation
+          // that must never be swallowed. Reload first and prove that the
+          // journal no longer derives this exact effect before consuming its
+          // outbox row as a raced duplicate.
           this.loops.delete(loop.channelId);
           const fresh = await this.loop(loop.channelId);
+          const stillPending = derivePendingEffects(fresh.state).some(
+            (effect) => effect.effectId === row.effectId
+          );
+          if (stillPending) throw err;
+          this.outbox.delete(row.branchId, row.effectId);
           await this.reconcile(fresh);
-          this.requestPump();
+          await this.recoverOpenTurnAfterReplay(loop.channelId);
           return;
         }
         throw err;
@@ -2119,15 +2151,14 @@ export class AgentLoopDriver {
     try {
       // Retirement is stronger than a user interrupt: once requested, no
       // admitted transport may continue while we wait to journal the marker.
-      // Serialize the marker with outcome commits so either a result that was
-      // already committing lands first and is then retired, or retirement
-      // lands first and the queued result observes its outbox row gone.
+      // The inbound mutation boundary is shared with outcome commits, so
+      // either a result that was already committing lands first and is then
+      // retired, or retirement lands first and the queued result observes its
+      // outbox row gone.
       for (const entry of active) entry.controller.abort();
-      await serializeByKey(this.outcomeCommitChains, channelId, async () => {
-        await this.handleIncoming(channelId, {
-          type: "command",
-          command: { kind: "abort", reason },
-        });
+      await this.handleIncoming(channelId, {
+        type: "command",
+        command: { kind: "abort", reason },
       });
       await Promise.all(active.map((entry) => entry.settled));
     } finally {

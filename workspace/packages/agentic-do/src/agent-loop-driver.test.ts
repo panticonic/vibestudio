@@ -811,6 +811,39 @@ describe("AgentLoopDriver", () => {
     );
   });
 
+  it("surfaces a divergent outcome id collision without consuming the effect", async () => {
+    let rejectOutcomeAppend = false;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              async execute() {
+                rejectOutcomeAppend = true;
+                return textReply("done");
+              },
+            } as EffectExecutor)
+          : null,
+      gadFault: (method) =>
+        rejectOutcomeAppend && method === "appendLogEvent"
+          ? new Error("GadAppendError[id-collision]: divergent terminal")
+          : null,
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-collision"));
+    await expect(harness.driver.dispatchReadyEffectsForTest()).rejects.toThrow(
+      "GadAppendError[id-collision]"
+    );
+    expect(harness.driver.outbox.all()).toEqual([
+      expect.objectContaining({
+        kind: "model_call",
+        disposition: "leased",
+      }),
+    ]);
+    expect((await harness.driver.loop(CHANNEL)).state.inFlightModelCall).not.toBeNull();
+  });
+
   it("stamps channel-specific self identity on durable turn events", async () => {
     const harness = await makeHarness({
       script: { model: [], tool: [] },
@@ -1869,6 +1902,59 @@ describe("AgentLoopDriver", () => {
     ]);
     expect((await recovered.driver.loop(CHANNEL)).state.openTurn).toBeNull();
     expect(recovered.driver.outbox.all()).toHaveLength(0);
+  });
+
+  it("repairs a committed tool-call cascade before accepting queued steering", async () => {
+    let deletedOutcomes = 0;
+    const harness = await makeHarness({
+      script: { model: [toolCallReply("tc-queued"), textReply("done")], tool: [toolOk] },
+      killPoint: (point) => {
+        // Prompt-artifact preparation commits first. Crash the same activation
+        // after deleting the completed model row but before message.completed
+        // can expand its tool call into invocation.started.
+        if (point === "after-outbox-delete" && ++deletedOutcomes === 2) {
+          throw new Error("crash before tool-call cascade");
+        }
+      },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await harness.driver.dispatchReadyEffectsForTest().catch(() => {});
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.completed",
+    ]);
+    await harness.driver.handleIncoming(CHANNEL, {
+      type: "command",
+      command: {
+        kind: "steer",
+        channelId: CHANNEL,
+        source: { envelopeId: "env-steer" },
+        content: "also remove the maximum width",
+        senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
+      },
+    });
+
+    const afterSteer = await logKinds(harness.gad);
+    expect(afterSteer).toContain("invocation.started");
+    expect(afterSteer.filter((kind) => kind === "message.started")).toHaveLength(1);
+
+    await settle(harness.driver);
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.completed",
+      "invocation.started",
+      "message.completed",
+      "invocation.completed",
+      "message.started",
+      "message.completed",
+      "turn.closed",
+    ]);
+    expect((await harness.driver.loop(CHANNEL)).state.openTurn).toBeNull();
   });
 
   it("does not re-expand inherited parent tool calls when waking a forked child turn", async () => {
