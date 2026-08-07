@@ -11,7 +11,7 @@ import {
 } from "./runtimeSurface.core.js";
 
 const panelTreeDescription =
-  "Top-level export, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'roots', ownerUserId } }) or page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read.";
+  "Top-level export, not workspace.panelTree. self/get are synchronous handle factories. rootGroups() returns a page object with groups; page(...) returns a page object with entries; search(...) returns a page object with hits, each containing entry.node and entry.handle. Traversal reads are bounded. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read.";
 
 // Panel-only affordances, grouped under one `panel` namespace (was ~16 flat
 // top-level exports). Identity/introspection/theme/focus/lifecycle + stateArgs.

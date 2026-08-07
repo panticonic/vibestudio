@@ -63,7 +63,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `createPanelSlot` | value |  | Commit a panel under the caller and promptly return its durable handle without focusing while build and boot continue in the background. Pass operationId for retry-stable identity across exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. Use handle.observe() when readiness matters. |
 | `openPanel` | value |  | Create a panel and return its handle after the exact attempt is application boot-ready, with no fixed readiness deadline. Pass options.signal for caller-owned cancellation and operationId for retry-stable exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. It defaults under the caller and focused; use parentId:null for a root or focus:false to suppress presentation. options.placement accepts "side" (default), "replace", or "split-below". The returned PanelHandle is the complete lifecycle and inspection API. Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate). |
 | `getPanelHandle` | value |  |  |
-| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate`, `navigateHistory` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. page({ group: { kind: 'roots', ownerUserId } }) or page({ group: { kind: 'children', parentSlotId } }) returns { entries }; search({ query }) returns { hits }, each with entry.node and entry.handle. Traversal reads are bounded. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
+| `panelTree` | namespace | `self`, `get`, `rootGroups`, `page`, `path`, `search`, `parent`, `navigate`, `navigateHistory` | Top-level export, not workspace.panelTree. self/get are synchronous handle factories. rootGroups() returns a page object with groups; page(...) returns a page object with entries; search(...) returns a page object with hits, each containing entry.node and entry.handle. Traversal reads are bounded. Handle navigate/navigateHistory/focus/reload/rebuild return a boot-ready PanelObservation; observe is the sole live status read. |
 | `Rpc` | value |  | RPC helpers namespace export. |
 | `z` | value |  | Zod export. |
 | `defineContract` | value |  |  |
@@ -378,6 +378,14 @@ const created = await openPanel("https://example.com", { focus: true });
 const same = panelTree.get(created.id);
 const parent = panelTree.self().parent();
 const parentObservation = parent ? await parent.observe() : null;
+const rootGroupPage = await panelTree.rootGroups({ limit: 100 });
+for (const group of rootGroupPage.groups) {
+  const roots = await panelTree.page({
+    group: { kind: "roots", ownerUserId: group.ownerUserId },
+    limit: 100,
+  });
+  console.log(roots.entries.map(({ handle }) => handle.title));
+}
 const roots = await panelTree.page({
   group: { kind: "roots", ownerUserId: null },
   limit: 100,

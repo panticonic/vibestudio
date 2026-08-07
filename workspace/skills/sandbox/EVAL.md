@@ -391,6 +391,9 @@ overwritten by the small summaries returned from follow-up inspectors. Large
 console and error text use the corresponding stable `$lastLargeConsole` and
 `$lastLargeError` slots. Each slot holds at most the latest bounded large value
 of its kind, so recovery remains pageable without accumulating output.
+`$lastLargeReturn` is JSON/text, not the original object. Slice or search the
+text directly, or use `JSON.parse(scope.$lastLargeReturn)` before accessing
+properties when the original return was JSON-serializable.
 
 Terminal eval results are always bounded so a huge return cannot strand the
 turn in `eval:pending`. For large data, return a compact summary and keep the
@@ -957,6 +960,9 @@ return {
   length: scope.$lastLargeReturn.length,
   sample: scope.$lastLargeReturn.slice(0, 1_500),
 };
+// For a JSON-serializable original value:
+const recovered = JSON.parse(scope.$lastLargeReturn);
+return { keys: Object.keys(recovered), firstEntry: recovered.entries?.[0] };
 // or
 return /needle/.test(scope.$lastLargeConsole);
 ```

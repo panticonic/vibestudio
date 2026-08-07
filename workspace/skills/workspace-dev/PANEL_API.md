@@ -112,6 +112,33 @@ createPanelSlot(source, opts?): Promise<PanelHandle>
 openPanel(source, opts?): Promise<PanelHandle>
 ```
 
+The bounded discovery methods return page objects, not bare arrays:
+
+```ts
+type PanelTreeRootGroupPage = {
+  revision: number;
+  groups: Array<{ ownerUserId: string | null; rootCount: number }>;
+  nextCursor: string | null;
+};
+
+type PanelRuntimeTreePage = {
+  revision: number;
+  group: { kind: "roots"; ownerUserId: string | null } | { kind: "children"; parentSlotId: string };
+  entries: Array<{ node: PanelTreeNode; handle: PanelHandle }>;
+  nextCursor: string | null;
+};
+
+type PanelRuntimeTreeSearchPage = {
+  revision: number;
+  hits: Array<{
+    entry: { node: PanelTreeNode; handle: PanelHandle };
+    ancestors: Array<{ node: PanelTreeNode; handle: PanelHandle }>;
+    ancestorsTruncated?: boolean;
+  }>;
+  nextCursor: string | null;
+};
+```
+
 When creation may be redelivered, pass the same non-empty `operationId` on
 every attempt. Its durable identity includes `source`, `contextId`, `parentId`,
 and `ref`, so reusing an operation id for a different logical open cannot alias

@@ -326,6 +326,47 @@ describe("buildCatalog", () => {
     expect(byId(projected, "runtime:workerRuntime.gad").members).toEqual(["query"]);
   });
 
+  it("publishes concrete panel-tree result shapes for runtime discovery", () => {
+    const projected = buildCatalog({
+      definitions: [],
+      runtimeSurfaces: {
+        workerRuntime: {
+          target: "workerRuntime",
+          description: "worker runtime",
+          exports: { panelTree: workerRuntimeSurface.exports["panelTree"]! },
+        },
+      },
+    });
+
+    expect(byId(projected, "runtime:workerRuntime.panelTree.rootGroups")).toMatchObject({
+      description: expect.stringContaining("Iterate result.groups"),
+      returnsSchema: {
+        required: expect.arrayContaining(["groups", "nextCursor"]),
+        properties: { groups: { type: "array" } },
+      },
+    });
+    expect(byId(projected, "runtime:workerRuntime.panelTree.page")).toMatchObject({
+      returnsSchema: {
+        properties: {
+          entries: { items: { required: ["node", "handle"] } },
+        },
+      },
+    });
+    expect(byId(projected, "runtime:workerRuntime.panelTree.search")).toMatchObject({
+      description: expect.stringContaining("entry.node and entry.handle"),
+      returnsSchema: {
+        properties: {
+          hits: {
+            items: {
+              required: ["entry", "ancestors"],
+              properties: { entry: { required: ["node", "handle"] } },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("serializes args/returns JSON Schema and carries description/examples", () => {
     const get = byId(entries, "service:demo.get");
     expect(get.argsSchema).toBeTruthy();

@@ -303,6 +303,17 @@ eval. Close stale children explicitly; do not materialize the entire tree.
 ```ts
 import { panelTree } from "@workspace/runtime";
 
+const rootGroupPage = await panelTree.rootGroups({ limit: 100 });
+for (const group of rootGroupPage.groups) {
+  const roots = await panelTree.page({
+    group: { kind: "roots", ownerUserId: group.ownerUserId },
+    limit: 100,
+  });
+  for (const { node, handle } of roots.entries) {
+    console.log(node.childCount, handle.id, handle.title);
+  }
+}
+
 const page = await panelTree.page({
   group: { kind: "children", parentSlotId: scope.myApp.id },
   limit: 100,

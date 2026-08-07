@@ -130,6 +130,33 @@ describe("runtime surface schemaRef parity", () => {
     expect(PANEL_TREE_METHOD_CATALOG.page.argsSchema).not.toEqual(
       expect.objectContaining({ rootGroup: expect.anything() })
     );
+    expect(PANEL_TREE_METHOD_CATALOG.rootGroups.returnsSchema).toMatchObject({
+      required: expect.arrayContaining(["groups", "nextCursor"]),
+      properties: {
+        groups: { type: "array", items: { required: ["ownerUserId", "rootCount"] } },
+      },
+    });
+    expect(PANEL_TREE_METHOD_CATALOG.page.returnsSchema).toMatchObject({
+      required: expect.arrayContaining(["entries", "nextCursor"]),
+      properties: {
+        entries: {
+          type: "array",
+          items: { required: ["node", "handle"] },
+        },
+      },
+    });
+    expect(PANEL_TREE_METHOD_CATALOG.search.returnsSchema).toMatchObject({
+      required: expect.arrayContaining(["hits", "nextCursor"]),
+      properties: {
+        hits: {
+          type: "array",
+          items: {
+            required: ["entry", "ancestors"],
+            properties: { entry: { required: ["node", "handle"] } },
+          },
+        },
+      },
+    });
     expect(PANEL_TREE_METHOD_CATALOG.navigateHistory.signature).toContain(
       "navigateHistory(id: string"
     );

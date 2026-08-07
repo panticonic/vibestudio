@@ -317,6 +317,69 @@ export const PANEL_TREE_MEMBERS = [
   "navigateHistory",
 ];
 
+const PANEL_TREE_GROUP_SCHEMA = {
+  oneOf: [
+    {
+      type: "object",
+      properties: {
+        kind: { const: "roots" },
+        ownerUserId: { type: ["string", "null"] },
+      },
+      required: ["kind", "ownerUserId"],
+      additionalProperties: false,
+    },
+    {
+      type: "object",
+      properties: { kind: { const: "children" }, parentSlotId: { type: "string" } },
+      required: ["kind", "parentSlotId"],
+      additionalProperties: false,
+    },
+  ],
+};
+
+const PANEL_TREE_NODE_SCHEMA = {
+  type: "object",
+  description: "Bounded immutable panel-tree projection; use handle.observe() for live state.",
+  properties: {
+    slotId: { type: "string" },
+    parentSlotId: { type: ["string", "null"] },
+    ownerUserId: { type: ["string", "null"] },
+    title: { type: "string" },
+    createdAt: { type: "number" },
+    childCount: { type: "number" },
+    source: { type: "string" },
+    kind: { enum: ["workspace", "browser"] },
+    contextId: { type: "string" },
+  },
+  required: ["slotId", "parentSlotId", "ownerUserId", "title", "createdAt", "childCount"],
+  additionalProperties: true,
+};
+
+const PANEL_HANDLE_SCHEMA = {
+  type: "object",
+  description:
+    "Live panel handle. Scalar fields are last-observed descriptors; methods include observe(), stateArgs, focus(), close(), and CDP automation.",
+  properties: {
+    id: { type: "string" },
+    title: { type: "string" },
+    source: { type: "string" },
+    kind: { enum: ["workspace", "browser"] },
+    parentId: { type: ["string", "null"] },
+  },
+  required: ["id", "title", "source", "kind", "parentId"],
+  additionalProperties: true,
+};
+
+const PANEL_TREE_ENTRY_SCHEMA = {
+  type: "object",
+  properties: {
+    node: PANEL_TREE_NODE_SCHEMA,
+    handle: PANEL_HANDLE_SCHEMA,
+  },
+  required: ["node", "handle"],
+  additionalProperties: false,
+};
+
 export const PANEL_TREE_METHOD_CATALOG = {
   self: {
     signature: "self(): PanelHandle",
@@ -335,7 +398,8 @@ export const PANEL_TREE_METHOD_CATALOG = {
   },
   rootGroups: {
     signature: "rootGroups(input?: PanelTreeRootGroupPageInput): Promise<PanelTreeRootGroupPage>",
-    description: "List the owner-scoped root groups that contain open panels.",
+    description:
+      "Return a bounded page object. Iterate result.groups; the return value itself is not iterable.",
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -346,6 +410,27 @@ export const PANEL_TREE_METHOD_CATALOG = {
         },
       ],
       maxItems: 1,
+    },
+    returnsSchema: {
+      type: "object",
+      properties: {
+        revision: { type: "number" },
+        groups: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              ownerUserId: { type: ["string", "null"] },
+              rootCount: { type: "number" },
+            },
+            required: ["ownerUserId", "rootCount"],
+            additionalProperties: false,
+          },
+        },
+        nextCursor: { type: ["string", "null"] },
+      },
+      required: ["revision", "groups", "nextCursor"],
+      additionalProperties: false,
     },
   },
   page: {
@@ -358,25 +443,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
         {
           type: "object",
           properties: {
-            group: {
-              oneOf: [
-                {
-                  type: "object",
-                  properties: {
-                    kind: { const: "roots" },
-                    ownerUserId: { type: ["string", "null"] },
-                  },
-                  required: ["kind", "ownerUserId"],
-                  additionalProperties: false,
-                },
-                {
-                  type: "object",
-                  properties: { kind: { const: "children" }, parentSlotId: { type: "string" } },
-                  required: ["kind", "parentSlotId"],
-                  additionalProperties: false,
-                },
-              ],
-            },
+            group: PANEL_TREE_GROUP_SCHEMA,
             cursor: { type: "string" },
             limit: { type: "number" },
           },
@@ -387,13 +454,36 @@ export const PANEL_TREE_METHOD_CATALOG = {
       minItems: 1,
       maxItems: 1,
     },
+    returnsSchema: {
+      type: "object",
+      properties: {
+        revision: { type: "number" },
+        group: PANEL_TREE_GROUP_SCHEMA,
+        entries: { type: "array", items: PANEL_TREE_ENTRY_SCHEMA },
+        nextCursor: { type: ["string", "null"] },
+      },
+      required: ["revision", "group", "entries", "nextCursor"],
+      additionalProperties: false,
+    },
   },
   path: {
     signature: "path(id: string): Promise<PanelRuntimeTreePath | null>",
     argsSchema: { type: "array", prefixItems: [{ type: "string" }], minItems: 1, maxItems: 1 },
+    returnsSchema: {
+      type: "object",
+      nullable: true,
+      properties: {
+        revision: { type: "number" },
+        entries: { type: "array", items: PANEL_TREE_ENTRY_SCHEMA },
+      },
+      required: ["revision", "entries"],
+      additionalProperties: false,
+    },
   },
   search: {
     signature: "search(input: PanelTreeSearchInput): Promise<PanelRuntimeTreeSearchPage>",
+    description:
+      "Return a bounded page whose hits contain entry.node and entry.handle plus hydrated ancestor entries.",
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -410,6 +500,28 @@ export const PANEL_TREE_METHOD_CATALOG = {
       ],
       minItems: 1,
       maxItems: 1,
+    },
+    returnsSchema: {
+      type: "object",
+      properties: {
+        revision: { type: "number" },
+        hits: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              entry: PANEL_TREE_ENTRY_SCHEMA,
+              ancestors: { type: "array", items: PANEL_TREE_ENTRY_SCHEMA },
+              ancestorsTruncated: { type: "boolean" },
+            },
+            required: ["entry", "ancestors"],
+            additionalProperties: false,
+          },
+        },
+        nextCursor: { type: ["string", "null"] },
+      },
+      required: ["revision", "hits", "nextCursor"],
+      additionalProperties: false,
     },
   },
   parent: {
