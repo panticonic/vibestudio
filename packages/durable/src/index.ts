@@ -170,10 +170,10 @@ export abstract class DurableObjectBase {
 
   /**
    * Optional receiver binding for schema-declared code principals. Product
-   * policy remains in `rpcMethods`; a concrete service may bind that generic
-   * relationship to one provider source from its sealed environment.
+   * policy remains in `rpcMethods`; a concrete service may bind each method's
+   * generic code relationship to its intended provider source.
    */
-  protected rpcSchemaCodeSource(): string | null {
+  protected rpcSchemaCodeSource(_method: string, _wireMethod: MethodSchema): string | null {
     return null;
   }
 
@@ -210,7 +210,7 @@ export abstract class DurableObjectBase {
         ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),
       };
     }
-    const codeSource = this.rpcSchemaCodeSource();
+    const codeSource = this.rpcSchemaCodeSource(method, wireMethod);
     if (!codeSource || !authority.principals.includes("code")) {
       return {
         principals: authority.principals,

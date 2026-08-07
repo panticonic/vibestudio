@@ -6,6 +6,7 @@
  * worker's receiver authority into the exact activated build.
  */
 import { schemaRpc } from "@vibestudio/rpc";
+import type { MethodSchema } from "@vibestudio/shared/typedServiceClient";
 import {
   gadWireMethods,
   StoredRegistryMutationInputSchema,
@@ -733,6 +734,12 @@ interface ProjectionKey {
 export class GadWorkspaceDO extends DurableObjectBase {
   static override rpcMethods = gadWireMethods;
   static override schemaVersion = GAD_WORKSPACE_SCHEMA_VERSION;
+
+  protected override rpcSchemaCodeSource(_method: string, wireMethod: MethodSchema): string | null {
+    return wireMethod.capability === "workspace-service:gad.workspace"
+      ? "vibestudio/internal"
+      : null;
+  }
 
   protected override schemaProductionBaseline() {
     return { version: GAD_WORKSPACE_SCHEMA_VERSION, name: "gad-workspace-baseline" } as const;

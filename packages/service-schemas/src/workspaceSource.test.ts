@@ -3,6 +3,7 @@ import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
 import {
   AgentHealthInspectionSchema,
   gadMethods,
+  gadWireMethods,
   InspectAgentHealthInputSchema,
 } from "@vibestudio/service-schemas/workspaceSource";
 
@@ -96,5 +97,12 @@ describe("GAD runtime schema", () => {
     expect(gadMethods).not.toHaveProperty("provenanceForFile");
     expect(gadMethods).not.toHaveProperty("provenanceForSession");
     expect(gadMethods).not.toHaveProperty("walkProvenance");
+  });
+
+  it("exposes semantic operations to declared workspace-service clients", () => {
+    expect(gadWireMethods.vcsStatus).toMatchObject({
+      capability: "workspace-service:gad.workspace",
+      authority: { principals: ["host", "code"] },
+    });
   });
 });

@@ -2020,8 +2020,8 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
   },
   {
     methods: Object.keys(semanticWireMethods),
-    capability: "workspace.source.admin",
-    principals: ["host"],
+    capability: "workspace-service:gad.workspace",
+    principals: ["host", "code"],
     tier: "open",
     sensitivity: "admin",
     effect: { kind: "open" },

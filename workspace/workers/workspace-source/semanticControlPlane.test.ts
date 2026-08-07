@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
 import { createTestDO } from "@vibestudio/durable/test-utils";
-import { AgentHealthInspectionSchema } from "@vibestudio/service-schemas/workspaceSource";
+import {
+  AgentHealthInspectionSchema,
+  gadWireMethods,
+} from "@vibestudio/service-schemas/workspaceSource";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -165,6 +168,36 @@ async function countRows(sql: TestSql, where: string, params: unknown[]): Promis
 }
 
 describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
+  it("binds code-level semantic access to the reviewed product builtin source", async () => {
+    const { instance } = await createTestDO(GadWorkspaceDO);
+    const authority = (
+      instance as unknown as {
+        rpcAuthorityDeclaration(
+          method: string,
+          schema: (typeof gadWireMethods)["vcsStatus"]
+        ): unknown;
+      }
+    ).rpcAuthorityDeclaration("vcsStatus", gadWireMethods.vcsStatus);
+
+    expect(authority).toMatchObject({
+      requires: {
+        kind: "any",
+        requirements: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "all",
+            requirements: expect.arrayContaining([
+              {
+                kind: "relationship",
+                name: "code-source",
+                value: "vibestudio/internal",
+              },
+            ]),
+          }),
+        ]),
+      },
+    });
+  });
+
   it("fails closed when topology does not bind a workspace identity", async () => {
     const { instance } = await createTestDO(GadWorkspaceDO, {
       __objectKey: "storage-coordinate-is-not-workspace-identity",
