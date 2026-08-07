@@ -11,7 +11,10 @@ import type {
 import type { z } from "zod";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  verifiedInitiatingUserId,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import type { DevelopmentExecutor, PreparedDevelopmentBuild } from "./developmentExecutor.js";
 import type { IsolatedDevelopmentHostExecutor } from "./isolatedDevelopmentHostExecutor.js";
@@ -339,7 +342,7 @@ export function createDevelopmentNativeService(deps: {
     handler: defineServiceHandler("developmentNative", developmentNativeMethods, {
       describeHost: () => ({ platform: process.platform, arch: process.arch }),
       listClientExecutors: (ctx) => {
-        const ownerUserId = ctx.caller.subject?.userId;
+        const ownerUserId = verifiedInitiatingUserId(ctx);
         if (!ownerUserId || !deps.clientExecutors) return [];
         const currentExecutorId = deps.resolveClientExecutorRuntime?.(ctx) ?? null;
         return deps.clientExecutors.list(ownerUserId).map((executor) => ({
@@ -387,7 +390,7 @@ export function createDevelopmentNativeService(deps: {
         });
         assertRecipeTarget(plan.recipe.target, target);
         if (needsClientExecutor(target)) {
-          const ownerUserId = ctx.caller.subject?.userId;
+          const ownerUserId = verifiedInitiatingUserId(ctx);
           const executorId = clientExecutorId(target);
           const selected =
             ownerUserId && executorId
