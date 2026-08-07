@@ -56,6 +56,7 @@ import {
 import { assertPresent } from "../utils/assertPresent";
 import { BrowserFavicon } from "./BrowserFavicon";
 import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
+import { buildGuides } from "./panelTreeGuides.js";
 import { ThemeSettings } from "./ThemeSettings";
 
 // ============================================================================
@@ -137,69 +138,6 @@ function getRowBackground(
   // Visible in some pane but not focused: subtle emphasis (multi-column D8/§6).
   if (isVisible) return COLORS.hover;
   return undefined;
-}
-
-/**
- * Compute a per-row connector descriptor from the flattened list.
- *
- * Each row's string has one char per ancestor depth:
- *  - ' ' blank   — ancestor at this level was a last child; no stem here
- *  - 'v' vertical — ancestor's branch continues below; draw a pass-through stem
- *  - 'L' / 'T'    — the elbow into this row: 'L' = last child (rounded corner,
- *                   terminate), 'T' = has a following sibling (corner + continue)
- */
-function buildGuides(items: FlattenedPanel[]): Map<string, string> {
-  const n = items.length;
-  const indexById = new Map<string, number>();
-  for (let i = 0; i < n; i++) {
-    indexById.set(assertPresent(items[i]).id, i);
-  }
-
-  // A node is the last child of its parent if, scanning forward, we pop above
-  // its depth before meeting another node at the same depth.
-  const isLast = new Array<boolean>(n).fill(true);
-  for (let i = 0; i < n; i++) {
-    const d = assertPresent(items[i]).depth;
-    for (let j = i + 1; j < n; j++) {
-      const dj = assertPresent(items[j]).depth;
-      if (dj < d) break;
-      if (dj === d) {
-        isLast[i] = false;
-        break;
-      }
-    }
-  }
-
-  const guides = new Map<string, string>();
-  for (let i = 0; i < n; i++) {
-    const item = assertPresent(items[i]);
-    const { depth } = item;
-    if (depth === 0) {
-      guides.set(item.id, "");
-      continue;
-    }
-
-    // Walk up the parent chain collecting each level's last-child flag.
-    const colLast = new Array<boolean>(depth).fill(true);
-    let curId: string | null = item.id;
-    for (let col = depth - 1; col >= 0 && curId != null; col--) {
-      const idx = indexById.get(curId);
-      if (idx === undefined) break;
-      colLast[col] = isLast[idx] ?? true;
-      curId = assertPresent(items[idx]).parentId;
-    }
-
-    let s = "";
-    for (let col = 0; col < depth; col++) {
-      if (col < depth - 1) {
-        s += colLast[col] ? " " : "v";
-      } else {
-        s += colLast[col] ? "L" : "T";
-      }
-    }
-    guides.set(item.id, s);
-  }
-  return guides;
 }
 
 /**
@@ -1185,9 +1123,24 @@ export function LazyPanelTreeSidebar({
   }, [ancestorIds, collapsedIds, expandIds]);
 
   const handleNewPanel = useCallback(async () => {
+    const interactionId = crypto.randomUUID();
+    const startMark = `interaction:new-panel:${interactionId}:start`;
+    const responseMark = `interaction:new-panel:${interactionId}:response`;
+    performance.mark(startMark);
     try {
       await panel.createAboutPanel("new");
+      performance.mark(responseMark);
+      performance.measure("interaction:new-panel:response", startMark, responseMark);
+      requestAnimationFrame(() => {
+        const frameMark = `interaction:new-panel:${interactionId}:frame`;
+        performance.mark(frameMark);
+        performance.measure("interaction:new-panel:frame", startMark, frameMark);
+        performance.clearMarks(startMark);
+        performance.clearMarks(responseMark);
+        performance.clearMarks(frameMark);
+      });
     } catch (error) {
+      performance.clearMarks(startMark);
       void notification.show({
         type: "error",
         title: "Couldn't create panel",

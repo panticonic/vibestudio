@@ -114,9 +114,10 @@ export const panelMethods = defineServiceMethods({
       residency: "native-effect",
       family: "panel.control",
       rationale:
-        "Shell-owned panel creation commits the durable slot and attaches the native view as one host operation",
+        "Shell-owned panel creation commits and presents the durable slot promptly; native readiness follows through the panel presentation lifecycle",
     },
-    description: "Create and present a workspace panel under a parent on the current native host.",
+    description:
+      "Commit and present a workspace panel under a parent on the current native host while runtime preparation continues in the background.",
     args: z.tuple([z.string().nullable(), z.string(), PanelCreateOptionsSchema.optional()]),
     returns: PanelCreateResultSchema,
     authority: { principals: ["user", "code"] },
@@ -216,6 +217,20 @@ export const panelMethods = defineServiceMethods({
     description: "Return the Electron host's current local presentation projection for a panel.",
     args: z.tuple([z.string()]),
     returns: PanelPresentationSchema.nullable(),
+    access: READ_ACCESS,
+  },
+  getPresentations: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale:
+        "P-panels: batched read-only Electron-local presentation state for trusted panel-hosting chrome",
+    },
+    description: "Return local presentation projections for a bounded set of panels in one IPC.",
+    args: z.tuple([z.array(z.string()).max(2_000)]),
+    returns: z.array(PanelPresentationSchema),
     access: READ_ACCESS,
   },
   getChromeState: {

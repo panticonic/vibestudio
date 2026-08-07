@@ -57,8 +57,11 @@ import {
 } from "./protocolHandler.js";
 import { BrowserEnvironmentReadiness } from "./services/browserEnvironmentReadiness.js";
 import { installRelaunchHandler, type RelaunchOptions } from "./relaunchApp.js";
+import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
 
 const log = createDevLogger("App");
+const stopMainEventLoopMonitor = startEventLoopResponsivenessMonitor({ label: "electron-main" });
+app.once("quit", stopMainEventLoopMonitor);
 const APP_NAME = "Vibestudio";
 const APP_SHUTDOWN_TIMEOUT_MS = 30_000;
 const startupInvocation = parseMainStartupInvocation(process.argv, process.env);
@@ -2313,15 +2316,7 @@ app.on("ready", async () => {
       _payload: import("@vibestudio/shared/events").EventPayloads["panel-presentation-changed"]
     ): void => {};
     panelRegistry = new PanelRegistry({
-      onTreeUpdated: (snapshot) => {
-        const panelIds: string[] = [];
-        const visit = (panel: (typeof snapshot.forest)[number]["rootPanels"][number]) => {
-          panelIds.push(panel.id);
-          panel.children.forEach(visit);
-        };
-        snapshot.forest.forEach((group) => group.rootPanels.forEach(visit));
-        forwardPanelProjectionChange({ revision: snapshot.revision, panelIds });
-      },
+      onPresentationUpdated: (update) => forwardPanelProjectionChange(update),
     });
 
     const { createElectronShellCore } = await import("./shellCore/createElectronShellCore.js");

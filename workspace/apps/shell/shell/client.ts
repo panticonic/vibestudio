@@ -314,6 +314,7 @@ export const panel = {
     workspaceStateClient.panelTree.search(input),
   observe: (panelId: string) => productPanelRuntime.panelTree.get(panelId).observe(),
   getPresentation: (panelId: string) => viewClient.getPresentation(panelId),
+  getPresentations: (panelIds: string[]) => viewClient.getPresentations(panelIds),
   getFocusedPanelId: () => viewClient.getFocusedPanelId(),
   setFocusedPanelId: (panelId: string) => viewClient.setFocusedPanelId(panelId),
   focus: focusPanel,

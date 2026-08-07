@@ -831,6 +831,70 @@ describe("PanelOrchestrator.createPanel", () => {
     expect(serverClient.callAs).not.toHaveBeenCalled();
   });
 
+  it("publishes and returns the durable panel before runtime preparation resolves", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const caller = makePanel("panel:tree/caller");
+    registry.addPanel(caller, null, { addAsRoot: true });
+    const { orchestrator, panelView, emit, shellCore } = createOrchestrator(registry);
+    let resolvePreparation!: (value: object) => void;
+    const preparation = new Promise<object>((resolve) => {
+      resolvePreparation = resolve;
+    });
+    const originalCreateExecution = shellCore.createExecution.getMockImplementation();
+    if (!originalCreateExecution) throw new Error("missing createExecution fixture");
+    shellCore.createExecution.mockImplementationOnce(async (...args: unknown[]) => {
+      const result = await originalCreateExecution(
+        ...(args as Parameters<typeof originalCreateExecution>)
+      );
+      return { ...result, preparation };
+    });
+
+    const result = await orchestrator.createPanel(caller.id, "panels/created-panel", {
+      focus: true,
+    });
+
+    expect(emit).toHaveBeenCalledWith("panel-created", {
+      panelId: result.id,
+      parentId: caller.id,
+      focus: true,
+    });
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+
+    resolvePreparation({});
+    await vi.waitFor(() => expect(panelView.createViewForPanel).toHaveBeenCalled());
+  });
+
+  it("captures an immediate preparation failure without rejecting panel creation", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const caller = makePanel("panel:tree/caller");
+    registry.addPanel(caller, null, { addAsRoot: true });
+    const { orchestrator, panelView, emit, shellCore } = createOrchestrator(registry);
+    const originalCreateExecution = shellCore.createExecution.getMockImplementation();
+    if (!originalCreateExecution) throw new Error("missing createExecution fixture");
+    shellCore.createExecution.mockImplementationOnce(async (...args: unknown[]) => {
+      const result = await originalCreateExecution(
+        ...(args as Parameters<typeof originalCreateExecution>)
+      );
+      return { ...result, preparation: Promise.reject(new Error("activation denied")) };
+    });
+
+    await expect(
+      orchestrator.createPanel(caller.id, "panels/created-panel", { focus: true })
+    ).resolves.toMatchObject({ id: "panel:tree/created-1" });
+    expect(emit).toHaveBeenCalledWith("panel-created", {
+      panelId: "panel:tree/created-1",
+      parentId: caller.id,
+      focus: true,
+    });
+    await vi.waitFor(() =>
+      expect(registry.getPanel("panel:tree/created-1")?.artifacts).toMatchObject({
+        buildState: "error",
+        error: "activation denied",
+      })
+    );
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+  });
+
   it("focuses after creating the native view for focused panels", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
@@ -864,17 +928,19 @@ describe("PanelOrchestrator.createPanel", () => {
         runtime: expect.any(Object),
       })
     );
-    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
-      id,
-      expect.stringContaining("/panels/created-panel/"),
-      `ctx-${id}`
-    );
-    expect(panelView.setViewVisible).toHaveBeenCalledWith(id, true);
     expect(emit).toHaveBeenCalledWith("panel-created", {
       panelId: id,
       parentId: caller.id,
       focus: true,
     });
+    await vi.waitFor(() =>
+      expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+        id,
+        expect.stringContaining("/panels/created-panel/"),
+        `ctx-${id}`
+      )
+    );
+    expect(panelView.setViewVisible).toHaveBeenCalledWith(id, true);
     expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
     expect(panelView.createViewForPanel.mock.invocationCallOrder[0]).toBeLessThan(
       panelView.setViewVisible.mock.invocationCallOrder[0] ?? 0
@@ -900,7 +966,14 @@ describe("PanelOrchestrator.createPanel", () => {
         undefined,
         scopedCaller
       )
-    ).rejects.toThrow("native view failed");
+    ).resolves.toMatchObject({ id: "panel:tree/created-1" });
+
+    await vi.waitFor(() =>
+      expect(registry.getPanel("panel:tree/created-1")?.artifacts.viewFailure).toMatchObject({
+        code: "navigation_failed",
+        message: "native view failed",
+      })
+    );
 
     expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "release", [
       "panel:nav-panel:tree/created-1",
@@ -952,6 +1025,13 @@ describe("PanelOrchestrator.createPanel", () => {
         runtime: expect.any(Object),
       })
     );
+    await vi.waitFor(() =>
+      expect(
+        serverClient.call.mock.calls.some(
+          ([service, method]) => service === "panelRuntime" && method === "acquire"
+        )
+      ).toBe(true)
+    );
     const acquireCallIndex = serverClient.call.mock.calls.findIndex(
       ([service, method]) => service === "panelRuntime" && method === "acquire"
     );
@@ -963,11 +1043,13 @@ describe("PanelOrchestrator.createPanel", () => {
         clientSessionId: orchestrator.getRuntimeClientSessionId(),
       }),
     ]);
-    expect(panelView.createViewForBrowser).toHaveBeenCalledWith(
-      id,
-      "https://example.com/",
-      `ctx-${id}`,
-      "persist:browser-test"
+    await vi.waitFor(() =>
+      expect(panelView.createViewForBrowser).toHaveBeenCalledWith(
+        id,
+        "https://example.com/",
+        `ctx-${id}`,
+        "persist:browser-test"
+      )
     );
     const acquireOrder = serverClient.call.mock.invocationCallOrder[acquireCallIndex];
     const createViewOrder = panelView.createViewForBrowser.mock.invocationCallOrder[0];
@@ -976,7 +1058,7 @@ describe("PanelOrchestrator.createPanel", () => {
     expect(acquireOrder!).toBeLessThan(createViewOrder!);
   });
 
-  it("waits for browser-environment readiness before acquiring a lease or creating a view", async () => {
+  it("returns the browser slot before environment readiness and delays only view attachment", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
@@ -1008,13 +1090,16 @@ describe("PanelOrchestrator.createPanel", () => {
     ).toBe(false);
     expect(panelView.createViewForBrowser).not.toHaveBeenCalled();
 
-    resolvePartition("persist:browser-environment:ready");
     await expect(creating).resolves.toMatchObject({ id: expect.any(String) });
-    expect(panelView.createViewForBrowser).toHaveBeenCalledWith(
-      expect.any(String),
-      "https://example.com/",
-      expect.any(String),
-      "persist:browser-environment:ready"
+
+    resolvePartition("persist:browser-environment:ready");
+    await vi.waitFor(() =>
+      expect(panelView.createViewForBrowser).toHaveBeenCalledWith(
+        expect.any(String),
+        "https://example.com/",
+        expect.any(String),
+        "persist:browser-environment:ready"
+      )
     );
   });
 
@@ -1095,7 +1180,14 @@ describe("PanelOrchestrator.createPanel", () => {
         },
         scopedCaller
       )
-    ).rejects.toThrow("native view failed");
+    ).resolves.toMatchObject({ id: "panel:tree/created-1" });
+
+    await vi.waitFor(() =>
+      expect(registry.getPanel("panel:tree/created-1")?.artifacts.viewFailure).toMatchObject({
+        code: "navigation_failed",
+        message: "native view failed",
+      })
+    );
 
     const acquireCall = serverClient.call.mock.calls.find(
       ([service, method]) => service === "panelRuntime" && method === "acquire"
@@ -1390,7 +1482,7 @@ describe("PanelOrchestrator.initializePanelTree", () => {
       }),
       undefined
     );
-    expect(panelView.createViewForPanel).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(panelView.createViewForPanel).toHaveBeenCalledTimes(2));
     expect(shellCore.hasRootPanelSource).toHaveBeenCalledTimes(2);
   });
 

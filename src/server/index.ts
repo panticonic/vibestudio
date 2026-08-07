@@ -64,6 +64,7 @@ import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/s
 import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinates";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
 import { callerControlsLifecycleContext } from "./services/lifecycleContextControl.js";
+import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -346,6 +347,7 @@ getProductBootManifest();
 // =============================================================================
 
 async function main() {
+  const stopEventLoopMonitor = startEventLoopResponsivenessMonitor({ label: "workspace-server" });
   const { setUserDataPath } = await import("@vibestudio/env-paths");
   const { loadCentralEnv } = await import("@vibestudio/workspace/loader");
   const { loadPersistedAdminToken, savePersistedAdminToken, getAdminTokenPath } =
@@ -6914,6 +6916,7 @@ async function main() {
   async function shutdown() {
     if (isShuttingDown) return;
     isShuttingDown = true;
+    stopEventLoopMonitor();
     console.log("[Server] Shutting down...");
 
     const lifecycleDriver =

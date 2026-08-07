@@ -6,6 +6,7 @@
  */
 
 import { ipcMain, type WebContents } from "electron";
+import { createDevLogger } from "@vibestudio/dev-log";
 import {
   createBridgeStreamRelay,
   bytesToBase64,
@@ -42,6 +43,8 @@ import type { PanelSession, ServerClient } from "./serverClient.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 
 const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
+const SLOW_INTERACTIVE_RPC_MS = 250;
+const log = createDevLogger("IpcDispatcher");
 
 type PanelRuntimeConnection = { runtimeEntityId: string; connectionId: string };
 
@@ -335,6 +338,8 @@ export class IpcDispatcher {
       }
       const service = req.method.slice(0, dotIndex);
       const method = req.method.slice(dotIndex + 1);
+      const startedAt = performance.now();
+      let outcome: "ok" | "error" = "ok";
 
       try {
         let result: unknown;
@@ -406,6 +411,7 @@ export class IpcDispatcher {
           result,
         });
       } catch (err) {
+        outcome = "error";
         const error = err instanceof Error ? err.message : String(err);
         const errorCode = (err as { code?: string })?.code;
         this.sendResponse(sender, envelope, {
@@ -416,6 +422,14 @@ export class IpcDispatcher {
           ...(errorCode ? { errorCode } : {}),
           ...(rpcErrorDataOf(err) !== undefined ? { errorData: rpcErrorDataOf(err) } : {}),
         });
+      } finally {
+        const elapsedMs = performance.now() - startedAt;
+        const message =
+          `[responsiveness] ipc-rpc request=${req.requestId} ` +
+          `caller=${callerKind}:${callerId} method=${service}.${method} ` +
+          `outcome=${outcome} elapsedMs=${elapsedMs.toFixed(1)}`;
+        if (elapsedMs >= SLOW_INTERACTIVE_RPC_MS) log.warn(message);
+        else if (log.isVerbose()) log.verbose(message);
       }
     }
   }

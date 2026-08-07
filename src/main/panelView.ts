@@ -738,7 +738,7 @@ export class PanelView implements PanelViewLike {
     if (state.pageTitle !== undefined) {
       void this.panelOrchestrator.updatePanelTitle(panelId, state.pageTitle).catch(() => {});
     }
-    this.panelRegistry.notifyPanelTreeUpdate();
+    this.panelRegistry.notifyPanelTreeUpdate(panelId);
   }
 
   // ==== Link interception ===================================================
@@ -1129,7 +1129,7 @@ export class PanelView implements PanelViewLike {
       } else {
         log.verbose(` No built URL for ${panelId}, triggering rebuild`);
         panel.artifacts = { buildState: "pending" };
-        this.panelRegistry.notifyPanelTreeUpdate();
+        this.panelRegistry.notifyPanelTreeUpdate(panelId);
       }
     } catch (error) {
       console.error(
@@ -1137,7 +1137,7 @@ export class PanelView implements PanelViewLike {
         error instanceof Error ? error.message : error
       );
       panel.artifacts = { buildState: "pending" };
-      this.panelRegistry.notifyPanelTreeUpdate();
+      this.panelRegistry.notifyPanelTreeUpdate(panelId);
     }
   }
 }

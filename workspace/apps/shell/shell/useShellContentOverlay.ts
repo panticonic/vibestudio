@@ -27,60 +27,45 @@ export interface ShellContentOverlayOptions {
   focus?: boolean;
 }
 
-function optionsKey(options: ShellContentOverlayOptions): string {
-  const { bounds } = options;
-  return [
-    options.surface,
-    bounds.x,
-    bounds.y,
-    bounds.width,
-    bounds.height,
-    options.focus ? 1 : 0,
-    JSON.stringify(options.theme),
-    JSON.stringify(options.props),
-  ].join(":");
-}
-
 export function useShellContentOverlay(
   options: ShellContentOverlayOptions | null,
   onIntent?: (payload: unknown) => void
 ): void {
   const shownRef = useRef(false);
-  const lastKeyRef = useRef<string | null>(null);
   const onIntentRef = useRef(onIntent);
   onIntentRef.current = onIntent;
 
   // Forwarded surface intents (subscribe once for the component's lifetime).
   useEffect(() => contentOverlay.on((payload) => onIntentRef.current?.(payload)), []);
 
-  const key = options?.open ? optionsKey(options) : null;
+  const open = options?.open === true;
+  const surface = options?.surface;
+  const bounds = options?.bounds;
+  const props = options?.props;
+  const theme = options?.theme;
+  const focus = options?.focus;
   useEffect(() => {
-    if (!options?.open) {
+    if (!open || !surface || !bounds || !theme) {
       if (shownRef.current) {
         shownRef.current = false;
-        lastKeyRef.current = null;
         void view.hideContentOverlay();
       }
       return;
     }
     const payload = {
-      surface: options.surface,
-      bounds: options.bounds,
-      props: options.props,
-      theme: options.theme,
-      focus: options.focus,
+      surface,
+      bounds,
+      props,
+      theme,
+      focus,
     };
     if (!shownRef.current) {
       shownRef.current = true;
-      lastKeyRef.current = key;
       void view.showContentOverlay(payload);
       return;
     }
-    if (lastKeyRef.current === key) return;
-    lastKeyRef.current = key;
     void view.updateContentOverlay(payload);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [bounds?.height, bounds?.width, bounds?.x, bounds?.y, focus, open, props, surface, theme]);
 
   // Ensure the overlay is torn down if the owner unmounts while open.
   useEffect(

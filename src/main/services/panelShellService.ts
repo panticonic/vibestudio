@@ -47,6 +47,24 @@ export interface PanelViewMethodDeps {
   getAccountUserId?: () => Promise<string>;
 }
 
+async function readPanelPresentation(deps: PanelViewMethodDeps, panelId: string) {
+  const panel = await deps.panelOrchestrator.refreshPanelProjection(panelId);
+  if (!panel) return null;
+  const parentId = deps.panelRegistry.findParentId(panelId);
+  const siblings = parentId
+    ? (deps.panelRegistry.getPanel(parentId)?.children ?? [])
+    : deps.panelRegistry.getRootPanels();
+  return {
+    ...panel,
+    parentId,
+    position: Math.max(
+      0,
+      siblings.findIndex((candidate) => candidate.id === panelId)
+    ),
+    hostViewRevision: deps.panelOrchestrator.getPanelViewRevision(),
+  };
+}
+
 export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler {
   return defineServiceHandler("view", panelMethods, {
     createPanel: async (ctx, [parentId, source, options]) => {
@@ -91,21 +109,14 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     getThemeConfig: () => deps.panelOrchestrator.getThemeConfig(),
     getPresentation: async (ctx, [panelId]) => {
       requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getPresentation");
-      const panel = await deps.panelOrchestrator.refreshPanelProjection(panelId);
-      if (!panel) return null;
-      const parentId = deps.panelRegistry.findParentId(panelId);
-      const siblings = parentId
-        ? (deps.panelRegistry.getPanel(parentId)?.children ?? [])
-        : deps.panelRegistry.getRootPanels();
-      return {
-        ...panel,
-        parentId,
-        position: Math.max(
-          0,
-          siblings.findIndex((candidate) => candidate.id === panelId)
-        ),
-        hostViewRevision: deps.panelOrchestrator.getPanelViewRevision(),
-      };
+      return readPanelPresentation(deps, panelId);
+    },
+    getPresentations: async (ctx, [panelIds]) => {
+      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getPresentations");
+      const presentations = await Promise.all(
+        [...new Set(panelIds)].map((panelId) => readPanelPresentation(deps, panelId))
+      );
+      return presentations.filter((presentation) => presentation !== null);
     },
     getChromeState: (ctx, [panelId]) => {
       requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getChromeState");

@@ -54,6 +54,7 @@ export interface PanelListItem {
 
 export interface PanelRegistryOptions {
   onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
+  onPresentationUpdated?: (update: { revision: number; panelIds: string[] }) => void;
 }
 
 // ============================================================================
@@ -73,13 +74,17 @@ export class PanelRegistry implements PanelRelationshipProvider {
 
   // Debounce state for panel tree update notifications
   private treeUpdatePending = false;
+  private fullPresentationUpdatePending = false;
+  private readonly changedPresentationPanelIds = new Set<string>();
   private treeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly TREE_UPDATE_DEBOUNCE_MS = 16; // ~1 frame at 60fps
 
   private readonly onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
+  private readonly onPresentationUpdated?: PanelRegistryOptions["onPresentationUpdated"];
 
   constructor(opts: PanelRegistryOptions) {
     this.onTreeUpdated = opts.onTreeUpdated;
+    this.onPresentationUpdated = opts.onPresentationUpdated;
   }
 
   // ==========================================================================
@@ -330,7 +335,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       this.panels = new Map([[panel.id, panel]]);
     }
 
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(parentId ? [panel.id, parentId] : panel.id);
   }
 
   addPanelAt(panel: Panel, parentId: string | null, insertionIndex: number): void {
@@ -353,7 +358,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
     }
 
     this.panels.set(panel.id, panel);
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(parentId ? [panel.id, parentId] : panel.id);
   }
 
   /**
@@ -375,7 +380,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
     }
 
     this.panels.delete(panelId);
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(parentId ? [panelId, parentId] : panelId);
   }
 
   /**
@@ -432,7 +437,9 @@ export class PanelRegistry implements PanelRelationshipProvider {
       this.rootPanels.splice(clampedPosition, 0, panel);
     }
 
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(
+      [panelId, currentParentId, newParentId].filter((id): id is string => id !== null)
+    );
   }
 
   reparentPanel(panelId: string, newParentId: string | null, targetPosition: number): void {
@@ -445,14 +452,15 @@ export class PanelRegistry implements PanelRelationshipProvider {
       throw new Error(`Panel not found: ${panelId}`);
     }
     panel.title = title;
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(panelId);
   }
 
   /**
    * Update the focused panel in local memory.
    */
-  updateSelectedPath(focusedPanelId: string): void {
+  updateSelectedPath(focusedPanelId: string): string[] {
     this.focusedPanelId = focusedPanelId;
+    const changedPanelIds: string[] = [];
     const visited = new Set<string>();
     const MAX_DEPTH = 100;
     let currentId: string | null = focusedPanelId;
@@ -469,7 +477,10 @@ export class PanelRegistry implements PanelRelationshipProvider {
       if (!parentId) break;
 
       const parent = this.panels.get(parentId);
-      if (parent) parent.selectedChildId = currentId;
+      if (parent && parent.selectedChildId !== currentId) {
+        parent.selectedChildId = currentId;
+        changedPanelIds.push(parent.id);
+      }
 
       currentId = parentId;
       depth++;
@@ -478,6 +489,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
     if (depth >= MAX_DEPTH) {
       console.error("[PanelRegistry] Max depth exceeded in updateSelectedPath");
     }
+    return changedPanelIds;
   }
 
   /**
@@ -489,7 +501,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       throw new Error(`Panel not found: ${panelId}`);
     }
     replacePanelCurrentSnapshot(panel, { ...getCurrentSnapshot(panel), stateArgs });
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(panelId);
   }
 
   replaceSnapshot(panelId: string, snapshot: ReturnType<typeof getCurrentSnapshot>): void {
@@ -507,7 +519,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
     }
     if (history) replacePanelHistory(panel, history.entries, history.index);
     else replacePanelCurrentSnapshot(panel, snapshot);
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(panelId);
   }
 
   /**
@@ -559,7 +571,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
         error: undefined,
       });
     }
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(panelId);
     return true;
   }
 
@@ -581,7 +593,8 @@ export class PanelRegistry implements PanelRelationshipProvider {
   }
 
   setFocused(panelId: string): void {
-    this.updateSelectedPath(panelId);
+    const changed = this.updateSelectedPath(panelId);
+    if (changed.length > 0) this.notifyPanelTreeUpdate(changed);
   }
 
   getRuntimeLease(panelId: string): PanelRuntimeLease | null {
@@ -622,7 +635,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
     if (!panel || panel.runtimeEntityId !== event.runtimeEntityId) return false;
 
     panel.state = explicitStateFromArtifacts(panel.artifacts, this.getRuntimeLease(panel.id));
-    this.notifyPanelTreeUpdate();
+    this.notifyPanelTreeUpdate(event.slotId);
     return true;
   }
 
@@ -650,9 +663,16 @@ export class PanelRegistry implements PanelRelationshipProvider {
    * Notify renderer of panel tree changes.
    * Debounced to batch rapid updates (~16ms / 1 frame at 60fps).
    */
-  notifyPanelTreeUpdate(): void {
+  notifyPanelTreeUpdate(panelIds?: string | Iterable<string>): void {
     this.treeUpdatePending = true;
     this.treeRevision += 1;
+    if (panelIds === undefined) {
+      this.fullPresentationUpdatePending = true;
+      this.changedPresentationPanelIds.clear();
+    } else if (!this.fullPresentationUpdatePending) {
+      if (typeof panelIds === "string") this.changedPresentationPanelIds.add(panelIds);
+      else for (const panelId of panelIds) this.changedPresentationPanelIds.add(panelId);
+    }
 
     if (this.treeUpdateTimer) {
       return;
@@ -662,7 +682,15 @@ export class PanelRegistry implements PanelRelationshipProvider {
       this.treeUpdateTimer = null;
       if (this.treeUpdatePending) {
         this.treeUpdatePending = false;
-        this.onTreeUpdated?.(this.getPanelTreeSnapshot());
+        if (this.onTreeUpdated) this.onTreeUpdated(this.getPanelTreeSnapshot());
+        if (this.onPresentationUpdated) {
+          const changed = this.fullPresentationUpdatePending
+            ? [...this.panels.keys()]
+            : [...this.changedPresentationPanelIds];
+          this.onPresentationUpdated({ revision: this.treeRevision, panelIds: changed });
+        }
+        this.fullPresentationUpdatePending = false;
+        this.changedPresentationPanelIds.clear();
       }
     }, this.TREE_UPDATE_DEBOUNCE_MS);
   }

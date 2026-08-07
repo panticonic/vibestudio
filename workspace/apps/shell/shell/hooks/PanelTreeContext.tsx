@@ -17,6 +17,7 @@ import type {
   PanelTreePlacementHint,
   PanelTreeSearchPage,
 } from "@vibestudio/shared/panel/treeIndex";
+import { panelTreeGroupKey } from "@vibestudio/shared/panel/treeIndex";
 import type {
   DescendantSiblingGroup,
   PanelAncestor,
@@ -223,7 +224,7 @@ function nodeTree(
 export function PanelTreeProvider({ children }: { children: ReactNode }) {
   const currentAccount = useCurrentAccountProfile();
   const selfUserId = currentAccount.profile?.userId ?? null;
-  const [, rerender] = useState(0);
+  const [cacheVersion, rerender] = useState(0);
   const [treeLoadError, setTreeLoadError] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -257,20 +258,29 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
     if (pinSeq.current === dispatchedAt) setPinnedPanelIds(new Set(ids));
   }, [setPinnedPanelIds]);
 
-  const refreshTree = useCallback(
-    async (invalidatedGroups: readonly PanelTreeGroup[] = []) => {
+  const refreshTreeGroups = useCallback(
+    async (options: {
+      groups: readonly PanelTreeGroup[];
+      refreshRootGroups: boolean;
+      reconcilePinState: boolean;
+    }) => {
       const sequence = ++refreshSequenceRef.current;
       refreshingRef.current = true;
       setRefreshing(true);
       try {
-        const groups = await cache.loadRootGroups(true);
-        await Promise.all([
-          ...groups.groups.map((group) =>
-            cache.loadFirst({ kind: "roots", ownerUserId: group.ownerUserId })
-          ),
-          ...invalidatedGroups.map((group) => cache.loadFirst(group)),
-        ]);
-        await reconcilePins();
+        const rootPage = options.refreshRootGroups ? await cache.loadRootGroups(true) : null;
+        const groups = new Map<string, PanelTreeGroup>();
+        for (const group of options.groups) {
+          groups.set(panelTreeGroupKey(group), group);
+        }
+        if (rootPage) {
+          for (const owner of rootPage.groups) {
+            const group = { kind: "roots" as const, ownerUserId: owner.ownerUserId };
+            groups.set(panelTreeGroupKey(group), group);
+          }
+        }
+        await Promise.all([...groups.values()].map((group) => cache.loadFirst(group)));
+        if (options.reconcilePinState) await reconcilePins();
         setTreeLoadError(null);
         setInitialized(true);
       } catch (error) {
@@ -284,6 +294,16 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
       }
     },
     [cache, reconcilePins]
+  );
+
+  const refreshTree = useCallback(
+    () =>
+      refreshTreeGroups({
+        groups: [],
+        refreshRootGroups: true,
+        reconcilePinState: true,
+      }),
+    [refreshTreeGroups]
   );
 
   useEffect(() => {
@@ -300,9 +320,18 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
         refreshingRef.current = true;
         setRefreshing(true);
         const invalidatedGroups = cache.invalidate(event);
-        void refreshTree(invalidatedGroups);
+        const rootGroupsChanged =
+          event.reset || event.groups.some((group) => group.kind === "roots");
+        const groups = rootGroupsChanged
+          ? [...invalidatedGroups, ...event.groups.filter((group) => group.kind === "roots")]
+          : invalidatedGroups;
+        void refreshTreeGroups({
+          groups,
+          refreshRootGroups: rootGroupsChanged,
+          reconcilePinState: event.reset || event.removedSlotIds.length > 0,
+        });
       },
-      [cache, refreshTree]
+      [cache, refreshTreeGroups]
     )
   );
   useDirectShellEvent(
@@ -311,17 +340,14 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
       if (event.revision <= presentationRevisionRef.current) return;
       presentationRevisionRef.current = event.revision;
       const revision = event.revision;
-      void Promise.all(
-        event.panelIds.map(async (panelId) => ({
-          panelId,
-          presentation: await panel.getPresentation(panelId),
-        }))
-      )
-        .then((updates) => {
+      void panel
+        .getPresentations(event.panelIds)
+        .then((presentations) => {
           if (presentationRevisionRef.current !== revision) return;
           setLocalSelectedChildren((current) => {
             let next: Map<string, string | null> | null = null;
-            for (const { panelId, presentation } of updates) {
+            for (const presentation of presentations) {
+              const panelId = presentation.id;
               const selectedChildId = presentation?.selectedChildId ?? null;
               if (current.has(panelId) && current.get(panelId) === selectedChildId) continue;
               next ??= new Map(current);
@@ -392,6 +418,7 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
     [cache]
   );
 
+  const treeRevision = cache.getRevision();
   const rootGroups = cache.getRootGroups().groups;
   const orderedGroups = useMemo(() => {
     const groups = [...rootGroups];
@@ -401,18 +428,23 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
       ...groups.filter((group) => group.ownerUserId !== selfUserId),
     ];
   }, [rootGroups, selfUserId]);
-  const ownerGroups = orderedGroups.map((owner) => {
-    const group = { kind: "roots" as const, ownerUserId: owner.ownerUserId };
-    return {
-      owner: owner.ownerUserId ?? "",
-      rootCount: owner.rootCount,
-      rootLoadedCount: cache.getGroup(group)?.loadedCount ?? 0,
-      rootsHaveMore: cache.getGroup(group)?.nextCursor !== null && cache.getGroup(group) !== null,
-      rootPanels: (cache.getGroup(group)?.nodes ?? []).map((node) =>
-        nodeTree(node, cache, new Set(), localSelectedChildren)
-      ),
-    };
-  });
+  const ownerGroups = useMemo(
+    () =>
+      orderedGroups.map((owner) => {
+        const group = { kind: "roots" as const, ownerUserId: owner.ownerUserId };
+        const cached = cache.getGroup(group);
+        return {
+          owner: owner.ownerUserId ?? "",
+          rootCount: owner.rootCount,
+          rootLoadedCount: cached?.loadedCount ?? 0,
+          rootsHaveMore: cached !== null && cached.nextCursor !== null,
+          rootPanels: (cached?.nodes ?? []).map((node) =>
+            nodeTree(node, cache, new Set(), localSelectedChildren)
+          ),
+        };
+      }),
+    [cache, cacheVersion, localSelectedChildren, orderedGroups, treeRevision]
+  );
   useEffect(() => {
     const retained: PanelTreeGroup[] = orderedGroups.map((owner) => ({
       kind: "roots",
@@ -427,7 +459,10 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
     ownerGroups.forEach((owner) => owner.rootPanels.forEach(visit));
     cache.retainGroups(retained);
   }, [cache, orderedGroups, ownerGroups]);
-  const allRootPanels = ownerGroups.flatMap((group) => group.rootPanels);
+  const allRootPanels = useMemo(
+    () => ownerGroups.flatMap((group) => group.rootPanels),
+    [ownerGroups]
+  );
   const { panelMap, parentMap } = useMemo(() => {
     const panels = new Map<string, PanelTreeViewNode>();
     const parents = new Map<string, string | null>();
@@ -450,7 +485,7 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
     treeLoadError,
     initialized: initialized && currentAccount.settled,
     refreshing: refreshingRef.current || refreshing,
-    treeRevision: cache.getRevision(),
+    treeRevision,
     refreshTree,
     loadChildren,
     loadSelectionPath,
@@ -490,7 +525,7 @@ export function useFullPanel(panelId: string | null): {
   const applyPresentation = useCallback(
     (presentation: Awaited<ReturnType<typeof panel.getPresentation>>, request: number) => {
       if (!presentation || presentation.id !== panelId) return;
-      // Event-driven and polling reads can overlap. Never let an older RPC
+      // Event-driven and initial reads can overlap. Never let an older RPC
       // response replace a newer materialization identity and strand the pane
       // on its preparing surface after the native view is already ready.
       if (request < appliedRequestRef.current) return;
@@ -534,42 +569,23 @@ export function useFullPanel(panelId: string | null): {
   );
   useEffect(() => {
     let cancelled = false;
-    let timer: number | null = null;
     if (!panelId) {
       setValue(null);
       setLoading(false);
       return;
     }
     setLoading(true);
-    const refreshUntilTerminal = async () => {
-      try {
-        const request = ++nextRequestRef.current;
-        const presentation = await panel.getPresentation(panelId);
-        if (cancelled) return;
-        if (!presentation) {
-          timer = window.setTimeout(refreshUntilTerminal, 250);
-          return;
-        }
-        applyPresentation(presentation, request);
-        const artifacts = presentation.artifacts;
-        const presentsCurrentEntity =
-          Boolean(artifacts.htmlPath) &&
-          artifacts.hostedRuntimeEntityId === presentation.runtimeEntityId;
-        const terminal =
-          artifacts.buildState === "error" ||
-          Boolean(artifacts.viewFailure) ||
-          presentsCurrentEntity;
-        if (!terminal) {
-          timer = window.setTimeout(refreshUntilTerminal, 250);
-        }
-      } catch {
-        if (!cancelled) timer = window.setTimeout(refreshUntilTerminal, 1_000);
-      }
-    };
-    void refreshUntilTerminal();
+    const request = ++nextRequestRef.current;
+    void panel
+      .getPresentation(panelId)
+      .then((presentation) => {
+        if (!cancelled) applyPresentation(presentation, request);
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
-      if (timer !== null) window.clearTimeout(timer);
     };
   }, [applyPresentation, panelId]);
   return { panel: value, loading };

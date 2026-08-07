@@ -130,7 +130,7 @@ export class PanelRuntimeLeaseController {
       panelExists: (panelId) => Boolean(this.deps.registry.getPanel(panelId)),
       unload: async (panelId) => {
         this.unloadPanel(panelId);
-        this.deps.registry.notifyPanelTreeUpdate();
+        this.deps.registry.notifyPanelTreeUpdate(panelId);
       },
       reportUnloadError: (panelId, reason, error) => {
         log.warn(
@@ -433,7 +433,7 @@ export class PanelRuntimeLeaseController {
         message,
       },
     });
-    this.deps.registry.notifyPanelTreeUpdate();
+    this.deps.registry.notifyPanelTreeUpdate(panelId);
   }
 
   async loadPanelIntoView(
@@ -482,7 +482,7 @@ export class PanelRuntimeLeaseController {
             undefined,
           viewFailure: undefined,
         });
-        this.deps.registry.notifyPanelTreeUpdate();
+        this.deps.registry.notifyPanelTreeUpdate(panelId);
         await this.reportPanelViewTransition(panelId);
         this.resources.track(panelId);
         await this.resources.enforceCap(panelId);
@@ -710,7 +710,7 @@ export class PanelRuntimeLeaseController {
   private unloadPanelIfPresent(panelId: string, transition: "unload" | "lease-transfer"): void {
     if (!this.deps.registry.getPanel(panelId)) return;
     this.unloadPanel(panelId, transition);
-    this.deps.registry.notifyPanelTreeUpdate();
+    this.deps.registry.notifyPanelTreeUpdate(panelId);
   }
 
   private async loadAssignedLeaseIntoView(
@@ -745,7 +745,7 @@ export class PanelRuntimeLeaseController {
         hostedRuntimeEntityId: lease.runtimeEntityId,
         viewFailure: undefined,
       });
-      this.deps.registry.notifyPanelTreeUpdate();
+      this.deps.registry.notifyPanelTreeUpdate(panelId);
       await this.reportPanelViewTransition(panelId);
       return;
     }
@@ -793,7 +793,7 @@ export class PanelRuntimeLeaseController {
       error: undefined,
       viewFailure: undefined,
     });
-    this.deps.registry.notifyPanelTreeUpdate();
+    this.deps.registry.notifyPanelTreeUpdate(panelId);
   }
 
   private hasCompleteExecutionIdentity(panel: Panel | null | undefined): boolean {

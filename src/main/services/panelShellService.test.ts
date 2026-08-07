@@ -45,6 +45,23 @@ function createServiceHarness(appCapabilities: string[] = []) {
   const reload = vi.fn();
   const forceReload = vi.fn();
   const getFocusedPanelId = vi.fn(() => "panel-1");
+  const refreshPanelProjection = vi.fn(
+    async (
+      _panelId: string
+    ): Promise<{
+      id: string;
+      title: string;
+      children: never[];
+      snapshot: { source: string; contextId: string; options: Record<string, never> };
+      artifacts: Record<string, never>;
+    } | null> => ({
+      id: "panel-1",
+      title: "Panel 1",
+      children: [],
+      snapshot: { source: "about/new", contextId: "ctx-1", options: {} },
+      artifacts: {},
+    })
+  );
   const getViewInfo = vi.fn(() => ({
     type: "app",
     visible: true,
@@ -68,13 +85,7 @@ function createServiceHarness(appCapabilities: string[] = []) {
       setFocusedPanelId,
       takeOverPanel,
       getPanelViewRevision: vi.fn(() => 4),
-      refreshPanelProjection: vi.fn(async () => ({
-        id: "panel-1",
-        title: "Panel 1",
-        children: [],
-        snapshot: { source: "about/new", contextId: "ctx-1", options: {} },
-        artifacts: {},
-      })),
+      refreshPanelProjection,
     } as never,
     panelRegistry: {
       getPanel: vi.fn(() => ({
@@ -123,6 +134,7 @@ function createServiceHarness(appCapabilities: string[] = []) {
     reload,
     forceReload,
     getFocusedPanelId,
+    refreshPanelProjection,
     serverClient,
   };
 }
@@ -168,6 +180,28 @@ describe("PanelShellService", () => {
     });
     expect(harness.serverClient.call).not.toHaveBeenCalled();
     expect(harness.serverClient.callAs).not.toHaveBeenCalled();
+  });
+
+  it("reads presentation invalidations in one deduplicated batch", async () => {
+    const harness = createServiceHarness(["panel-hosting"]);
+    harness.refreshPanelProjection.mockImplementation(async (panelId: string) =>
+      panelId === "missing"
+        ? null
+        : {
+            id: panelId,
+            title: panelId,
+            children: [],
+            snapshot: { source: "about/new", contextId: "ctx-1", options: {} },
+            artifacts: {},
+          }
+    );
+
+    await expect(
+      harness.service.handler(appCtx, "getPresentations", [["panel-1", "missing", "panel-1"]])
+    ).resolves.toEqual([expect.objectContaining({ id: "panel-1", hostViewRevision: 4 })]);
+    expect(harness.refreshPanelProjection).toHaveBeenCalledTimes(2);
+    expect(harness.refreshPanelProjection).toHaveBeenCalledWith("panel-1");
+    expect(harness.refreshPanelProjection).toHaveBeenCalledWith("missing");
   });
 
   it("denies apps without panel-hosting capability", async () => {

@@ -12,6 +12,11 @@ const getTreePath = vi.fn();
 const searchTree = vi.fn();
 const listPinnedPanelIds = vi.fn();
 const getPresentation = vi.fn();
+const getPresentations = vi.fn((panelIds: string[]) =>
+  Promise.all(panelIds.map((panelId) => getPresentation(panelId))).then((presentations) =>
+    presentations.filter((presentation) => presentation != null)
+  )
+);
 const getProfile = vi.fn(() =>
   Promise.resolve({ userId: "alice", handle: "alice", displayName: "Alice", role: "member" })
 );
@@ -24,6 +29,7 @@ vi.mock("../client.js", () => ({
     searchTree: (...args: unknown[]) => searchTree(...args),
     listPinnedPanelIds: (...args: unknown[]) => listPinnedPanelIds(...args),
     getPresentation: (...args: unknown[]) => getPresentation(...args),
+    getPresentations: (panelIds: string[]) => getPresentations(panelIds),
   },
   account: {
     getProfile: () => getProfile(),
@@ -201,6 +207,7 @@ beforeEach(() => {
   searchTree.mockResolvedValue({ revision: 1, hits: [], nextCursor: null });
   listPinnedPanelIds.mockReset();
   getPresentation.mockReset();
+  getPresentations.mockClear();
   getProfile.mockClear();
 });
 
@@ -269,6 +276,26 @@ describe("useFullPanel local presentation", () => {
     await waitFor(() =>
       expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:ready")
     );
+  });
+
+  it("waits for projection events instead of polling a building panel", async () => {
+    getPresentation.mockResolvedValue({
+      id: "panel:tree/a",
+      title: "Panel",
+      buildKey: "b".repeat(64),
+      parentId: null,
+      position: 0,
+      selectedChildId: null,
+      children: [],
+      snapshot: { source: "panels/ready", contextId: "context-a", options: {} },
+      artifacts: { buildState: "building" },
+      hostViewRevision: 2,
+    });
+    render(<FullPanelProbe panelId="panel:tree/a" />);
+    await waitFor(() => expect(getPresentation).toHaveBeenCalledOnce());
+
+    await new Promise((resolve) => setTimeout(resolve, 325));
+    expect(getPresentation).toHaveBeenCalledOnce();
   });
 
   it("does not let an older ready projection erase the hosted runtime identity", async () => {

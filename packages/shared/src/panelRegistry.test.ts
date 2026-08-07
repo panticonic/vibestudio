@@ -594,6 +594,22 @@ describe("PanelRegistry", () => {
         ],
       });
     });
+
+    it("coalesces exact presentation deltas without requiring a tree snapshot", async () => {
+      const onPresentationUpdated = vi.fn();
+      registry = new PanelRegistry({ onPresentationUpdated });
+      registry.addPanel(makePanel("panel:tree/root"), null, { addAsRoot: true });
+      registry.addPanel(makePanel("panel:tree/child"), "panel:tree/root");
+      registry.updateTitle("panel:tree/child", "Child");
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      expect(onPresentationUpdated).toHaveBeenCalledOnce();
+      expect(onPresentationUpdated).toHaveBeenCalledWith({
+        revision: registry.getTreeRevision(),
+        panelIds: expect.arrayContaining(["panel:tree/root", "panel:tree/child"]),
+      });
+    });
   });
 
   // -------------------------------------------------------------------------

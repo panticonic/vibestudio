@@ -564,7 +564,7 @@ export class PanelManager {
             buildProgress: "Runtime image ready; loading panel...",
             error: undefined,
           });
-          this.registry.notifyPanelTreeUpdate();
+          this.registry.notifyPanelTreeUpdate(slotId);
         }
         return activeHandle;
       })
@@ -1126,7 +1126,7 @@ export class PanelManager {
     }
     this.searchIndex?.updateTitle(slotId, normalized ?? "");
     await this.persistViewState();
-    this.registry.notifyPanelTreeUpdate();
+    this.registry.notifyPanelTreeUpdate(slotId);
   }
 
   async updatePanelState(slotId: PanelSlotId, state: PanelNavigationState): Promise<void> {
@@ -1152,7 +1152,7 @@ export class PanelManager {
       await this.persistViewState();
     }
 
-    this.registry.notifyPanelTreeUpdate();
+    this.registry.notifyPanelTreeUpdate(slotId);
   }
 
   async movePanel(
@@ -1309,7 +1309,7 @@ export class PanelManager {
         panel.title = normalizePanelTitle(slot.current_entity_title) ?? panel.title;
       }
       if (panel.title !== previousTitle) {
-        this.registry.notifyPanelTreeUpdate();
+        this.registry.notifyPanelTreeUpdate(slotId);
       }
     }
     return entityId;

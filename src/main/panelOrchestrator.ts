@@ -206,6 +206,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     },
     caller?: ScopedServerCaller
   ): Promise<{ id: string; title: string }> {
+    const interactionStartedAt = performance.now();
     const result = await this.shellCore.createExecution(
       execution,
       {
@@ -220,59 +221,97 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       },
       this.operationClients(caller)
     );
-    await result.preparation;
-    try {
-      await this.awaitPanelInMirror(result.panelId);
-      // Durable creation and device-local presentation are separate facts.
-      // Publish the creation fact once the authoritative slot is committed so
-      // the shell can place it immediately, while non-focused creations remain
-      // available to tree browsers without changing the current pane.
-      this.eventService.emit("panel-created", {
-        panelId: result.panelId,
-        parentId: createOpts.parentId ?? null,
-        focus: createOpts.focus === true,
-        ...(createOpts.placement ? { placement: createOpts.placement } : {}),
-      });
-      if (shouldMaterializePanelOnCreate(createOpts.initialLoad)) {
-        await this.attachCreatedPanel(
-          {
-            panelId: result.panelId,
-            title: result.title,
-            contextId: result.contextId,
-            source: result.source,
-          },
-          { focus: createOpts.focus }
-        );
-      }
-      return { id: result.panelId, title: result.title };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (this.registry.getPanel(result.panelId)) {
-        this.runtime.recordPanelViewFailure(result.panelId, message);
-        if (createOpts.focus) await this.focusPanelLocally(result.panelId).catch(() => {});
-      } else {
-        await this.serverClient
-          .call("workspace-state", "slot.close", [result.panelId])
-          .catch(() => {});
-      }
-      throw err;
+    // Slot creation is the authoritative interaction boundary. The shell can
+    // place this real, durable panel while its runtime image is still preparing;
+    // neither activation nor the bounded query projection may delay feedback.
+    this.eventService.emit("panel-created", {
+      panelId: result.panelId,
+      parentId: createOpts.parentId ?? null,
+      focus: createOpts.focus === true,
+      ...(createOpts.placement ? { placement: createOpts.placement } : {}),
+    });
+    if (log.isVerbose()) {
+      log.verbose(
+        `[responsiveness] panel-created panel=${result.panelId} ` +
+          `committedMs=${(performance.now() - interactionStartedAt).toFixed(1)}`
+      );
     }
+
+    // The supervisor takes ownership synchronously so a fast rejection can
+    // never become unhandled. It yields one turn before doing readiness/view
+    // work, allowing this RPC response to reach the renderer first.
+    void this.superviseCreatedPanel(
+      result,
+      {
+        focus: createOpts.focus,
+        materialize: shouldMaterializePanelOnCreate(createOpts.initialLoad),
+      },
+      interactionStartedAt
+    );
+    return { id: result.panelId, title: result.title };
   }
 
-  /** Wait briefly for a committed panel to land in the query projection. */
-  private async awaitPanelInMirror(panelId: string, timeoutMs = 4000): Promise<void> {
-    if (this.registry.getPanel(panelId)) return;
-    await new Promise<void>((resolve) => {
-      const start = Date.now();
-      const tick = () => {
-        if (this.registry.getPanel(panelId) || Date.now() - start > timeoutMs) {
-          resolve();
-          return;
-        }
-        setTimeout(tick, 16);
-      };
-      tick();
-    });
+  private async superviseCreatedPanel(
+    result: {
+      panelId: string;
+      title: string;
+      contextId: string;
+      source: string;
+      preparation?: Promise<unknown>;
+    },
+    opts: { focus?: boolean; materialize: boolean },
+    interactionStartedAt: number
+  ): Promise<void> {
+    const preparationOutcome = result.preparation
+      ? result.preparation.then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error })
+        )
+      : Promise.resolve({ ok: true as const });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const outcome = await preparationOutcome;
+    if (!outcome.ok) {
+      const error = outcome.error;
+      const message = error instanceof Error ? error.message : String(error);
+      const panel = this.registry.getPanel(result.panelId);
+      if (panel) {
+        this.registry.updateArtifacts(result.panelId, {
+          ...panel.artifacts,
+          buildState: "error",
+          buildProgress: message,
+          error: message,
+        });
+        this.registry.notifyPanelTreeUpdate(result.panelId);
+      }
+      log.warn(
+        `[responsiveness] panel preparation failed panel=${result.panelId} ` +
+          `elapsedMs=${(performance.now() - interactionStartedAt).toFixed(1)}: ${message}`
+      );
+      return;
+    }
+
+    const preparedMs = performance.now() - interactionStartedAt;
+    if (opts.materialize) {
+      try {
+        await this.attachCreatedPanel(result, { focus: opts.focus });
+      } catch (error) {
+        // attachCreatedPanel records the distinct viewFailure state and releases
+        // any partial local runtime. The durable slot remains authoritative.
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn(
+          `[responsiveness] panel view attachment failed panel=${result.panelId} ` +
+            `elapsedMs=${(performance.now() - interactionStartedAt).toFixed(1)}: ${message}`
+        );
+        return;
+      }
+    }
+    if (log.isVerbose()) {
+      log.verbose(
+        `[responsiveness] panel-ready panel=${result.panelId} ` +
+          `preparedMs=${preparedMs.toFixed(1)} ` +
+          `totalMs=${(performance.now() - interactionStartedAt).toFixed(1)}`
+      );
+    }
   }
 
   async createPanel(
@@ -473,7 +512,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       buildState: "building",
       buildProgress: "Rebuilding panel...",
     });
-    this.registry.notifyPanelTreeUpdate();
+    this.registry.notifyPanelTreeUpdate(panelId);
 
     this.panelHttpServer?.invalidateBuild(getPanelSource(panel));
 
@@ -484,7 +523,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         ...refreshed.artifacts,
         buildProgress: "Rebuilding panel...",
       });
-      this.registry.notifyPanelTreeUpdate();
+      this.registry.notifyPanelTreeUpdate(panelId);
     }
     return this.lifecycleResult(panelId, "rebuild", "rebuild_requested", {
       loaded: Boolean(this.getPanelView()?.hasView(panelId)),
@@ -495,6 +534,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   invalidateReadyPanels(): void {
     const focusedPanelId = this.registry.getFocusedPanelId();
     let focusedWasReset = false;
+    const changedPanelIds: string[] = [];
 
     for (const entry of this.registry.listPanels()) {
       const panel = this.registry.getPanel(entry.panelId);
@@ -508,11 +548,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
           buildState: "pending",
           buildProgress: "Build cache cleared - will rebuild when focused",
         });
+        changedPanelIds.push(entry.panelId);
         if (entry.panelId === focusedPanelId) focusedWasReset = true;
       }
     }
 
-    this.registry.notifyPanelTreeUpdate();
+    if (changedPanelIds.length > 0) this.registry.notifyPanelTreeUpdate(changedPanelIds);
     if (focusedWasReset && focusedPanelId) {
       void this.rebuildUnloadedPanel(focusedPanelId).catch((e) =>
         console.warn(`[PanelOrchestrator] Failed to rebuild ${focusedPanelId}:`, e)
@@ -525,9 +566,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   }
 
   applyBuildComplete(source: string, error?: string): void {
+    const changedPanelIds: string[] = [];
     for (const entry of this.registry.listPanels()) {
       const panel = this.registry.getPanel(entry.panelId);
       if (!panel || getPanelSource(panel) !== source) continue;
+      changedPanelIds.push(entry.panelId);
       if (error) {
         this.registry.updateArtifacts(entry.panelId, {
           ...panel.artifacts,
@@ -554,7 +597,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         });
       }
     }
-    this.registry.notifyPanelTreeUpdate();
+    if (changedPanelIds.length > 0) this.registry.notifyPanelTreeUpdate(changedPanelIds);
   }
 
   // =========================================================================
@@ -678,8 +721,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     // protected by the sweep's protectedIds.
     const previousFocused = this.registry.getFocusedPanelId();
 
-    this.registry.updateSelectedPath(targetPanelId);
-    this.registry.notifyPanelTreeUpdate();
+    const changedSelectionPanelIds = this.registry.updateSelectedPath(targetPanelId);
+    if (changedSelectionPanelIds.length > 0) {
+      this.registry.notifyPanelTreeUpdate(changedSelectionPanelIds);
+    }
 
     if (previousFocused && previousFocused !== targetPanelId) {
       this.runtime.refreshActivity(previousFocused);
@@ -974,7 +1019,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     if (!panel) throw new Error(`Panel not found: ${panelId}`);
 
     this.runtime.unloadPanel(panelId, transition);
-    this.registry.notifyPanelTreeUpdate();
+    this.registry.notifyPanelTreeUpdate(panelId);
     return this.lifecycleResult(
       panelId,
       "unload",
@@ -1022,8 +1067,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         return;
       }
     }
-    this.registry.updateSelectedPath(panelId);
-    this.registry.notifyPanelTreeUpdate();
+    const changedSelectionPanelIds = this.registry.updateSelectedPath(panelId);
+    if (changedSelectionPanelIds.length > 0) {
+      this.registry.notifyPanelTreeUpdate(changedSelectionPanelIds);
+    }
     this.persistFocusedPath(panelId);
   }
 

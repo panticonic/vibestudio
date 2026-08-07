@@ -574,14 +574,55 @@ export function ConsentApprovalBar() {
     current?.kind === "credential-input" ||
     current?.kind === "device-code";
 
-  const theme: OverlayThemeInfo = {
-    appearance: effectiveTheme,
-    accentColor: themeConfig.accentColor,
-    grayColor: themeConfig.grayColor,
-    radius: themeConfig.radius,
-    scaling: themeConfig.scaling,
-    panelBackground: themeConfig.panelBackground,
-  };
+  const theme = useMemo<OverlayThemeInfo>(
+    () => ({
+      appearance: effectiveTheme,
+      accentColor: themeConfig.accentColor,
+      grayColor: themeConfig.grayColor,
+      radius: themeConfig.radius,
+      scaling: themeConfig.scaling,
+      panelBackground: themeConfig.panelBackground,
+    }),
+    [
+      effectiveTheme,
+      themeConfig.accentColor,
+      themeConfig.grayColor,
+      themeConfig.panelBackground,
+      themeConfig.radius,
+      themeConfig.scaling,
+    ]
+  );
+
+  const overlayProps = useMemo(
+    () =>
+      current
+        ? {
+            approval: current,
+            queue:
+              queueLength > 1 ? { index: browseIndex, total: queueLength, canPrev, canNext } : null,
+            decisionError:
+              decisionError && decisionError.approvalId === current.approvalId
+                ? decisionError.message
+                : null,
+            actionPending: submittingApprovalIds.has(current.approvalId),
+            diffReview,
+            blobResults,
+            appearance: effectiveTheme,
+          }
+        : null,
+    [
+      blobResults,
+      browseIndex,
+      canNext,
+      canPrev,
+      current,
+      decisionError,
+      diffReview,
+      effectiveTheme,
+      queueLength,
+      submittingApprovalIds,
+    ]
+  );
 
   /**
    * Where this approval is hosted (§7.2, §7.8).
@@ -602,19 +643,7 @@ export function ConsentApprovalBar() {
           bounds: anchorBounds,
           focus: needsFocus || keyboardFocusRequested,
           theme,
-          props: {
-            approval: current,
-            queue:
-              queueLength > 1 ? { index: browseIndex, total: queueLength, canPrev, canNext } : null,
-            decisionError:
-              decisionError && decisionError.approvalId === current.approvalId
-                ? decisionError.message
-                : null,
-            actionPending: submittingApprovalIds.has(current.approvalId),
-            diffReview,
-            blobResults,
-            appearance: effectiveTheme,
-          },
+          props: overlayProps,
         }
       : null,
     handleIntent
