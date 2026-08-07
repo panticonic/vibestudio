@@ -8,7 +8,7 @@ import { BrowserDataDO } from "./BrowserDataDO.js";
 describe("BrowserDataDO schema", () => {
   it("has one typed declaration for every exposed data method", () => {
     const db = new DatabaseSync(":memory:");
-    const instance = new BrowserDataDO(sqliteContext(db), {});
+    const instance = createBrowserDataDO(db);
     const productMethods = [...rpcExposedMethodNames(instance)].filter(
       (method) => method !== "durableWorkCapabilities"
     );
@@ -17,12 +17,12 @@ describe("BrowserDataDO schema", () => {
 
   it("creates the one canonical pre-release schema directly", () => {
     const db = new DatabaseSync(":memory:");
-    new BrowserDataDO(sqliteContext(db), {});
+    createBrowserDataDO(db);
 
-    expect(db.prepare(`SELECT singleton, version FROM _vibestudio_schema`).get()).toEqual({
-      singleton: 1,
-      version: 1,
-    });
+    expect(
+      db.prepare(`SELECT singleton, version, installed_version FROM _vibestudio_schema`).get()
+    ).toEqual({ singleton: 1, version: 1, installed_version: 1 });
+    expect(db.prepare(`SELECT version, name FROM _vibestudio_schema_migrations`).all()).toEqual([]);
     expect(db.prepare(`SELECT 1 FROM state WHERE key = 'schema_version'`).get()).toBeUndefined();
     expect(
       db
@@ -41,7 +41,7 @@ describe("BrowserDataDO schema", () => {
 
   it("enforces tier, sensitivity, and principals from the typed method table", () => {
     const db = new DatabaseSync(":memory:");
-    const instance = new BrowserDataDO(sqliteContext(db), {
+    const instance = createBrowserDataDO(db, {
       BROWSER_DATA_BROKER_SOURCE: "extensions/browser-data",
     });
     const resolve = (
@@ -95,7 +95,7 @@ describe("BrowserDataDO schema", () => {
 describe("BrowserDataDO form-fill field identity", () => {
   it("rejects credentials and transient secrets from reusable form history", async () => {
     const db = new DatabaseSync(":memory:");
-    const store = new BrowserDataDO(sqliteContext(db), {});
+    const store = createBrowserDataDO(db);
 
     for (const type of ["current-password", "new-password", "one-time-code", "cc-csc"] as const) {
       await expect(
@@ -110,7 +110,7 @@ describe("BrowserDataDO form-fill field identity", () => {
 
   it("stores and retrieves arbitrary browser-native field names", async () => {
     const db = new DatabaseSync(":memory:");
-    const store = new BrowserDataDO(sqliteContext(db), {});
+    const store = createBrowserDataDO(db);
 
     await store.addFormFillValue({
       fieldName: "favorite_pizza_topping",
@@ -133,7 +133,7 @@ describe("BrowserDataDO form-fill field identity", () => {
 
   it("deduplicates semantic equivalents while retaining their native aliases", async () => {
     const db = new DatabaseSync(":memory:");
-    const store = new BrowserDataDO(sqliteContext(db), {});
+    const store = createBrowserDataDO(db);
 
     const firstId = await store.addFormFillValue({
       fieldName: "email_address",
@@ -164,7 +164,7 @@ describe("BrowserDataDO form-fill field identity", () => {
 describe("BrowserDataDO partitioned cookies", () => {
   it("stores identical cookie triples independently by structured partition key", async () => {
     const db = new DatabaseSync(":memory:");
-    const store = new BrowserDataDO(sqliteContext(db), {});
+    const store = createBrowserDataDO(db);
     const base = {
       name: "sid",
       value: "one",
@@ -229,7 +229,7 @@ describe("BrowserDataDO partitioned cookies", () => {
 describe("BrowserDataDO download metadata", () => {
   it("persists download metadata by host inside the canonical environment", () => {
     const db = new DatabaseSync(":memory:");
-    const store = new BrowserDataDO(sqliteContext(db), {});
+    const store = createBrowserDataDO(db);
     const record = {
       id: "download-1",
       environmentKey: "environment-1",
@@ -270,7 +270,7 @@ describe("BrowserDataDO download metadata", () => {
 describe("BrowserDataDO native favicon formats", () => {
   it("stores validated source bytes and serves them by page or origin", () => {
     const db = new DatabaseSync(":memory:");
-    const store = new BrowserDataDO(sqliteContext(db), {});
+    const store = createBrowserDataDO(db);
     const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`);
 
     store.putPageFavicon({
@@ -297,7 +297,7 @@ describe("BrowserDataDO native favicon formats", () => {
 
   it("rejects MIME labels that disagree with the icon bytes", () => {
     const db = new DatabaseSync(":memory:");
-    const store = new BrowserDataDO(sqliteContext(db), {});
+    const store = createBrowserDataDO(db);
     const ico = Buffer.from([0x00, 0x00, 0x01, 0x00, 0x01, 0x00]);
 
     expect(() =>
@@ -312,6 +312,12 @@ describe("BrowserDataDO native favicon formats", () => {
     db.close();
   });
 });
+
+function createBrowserDataDO(db: DatabaseSync, env: Record<string, unknown> = {}): BrowserDataDO {
+  const instance = new BrowserDataDO(sqliteContext(db), env);
+  (instance as unknown as { ensureReady(): void }).ensureReady();
+  return instance;
+}
 
 function sqliteContext(db: DatabaseSync): DurableObjectContext {
   const sql = {

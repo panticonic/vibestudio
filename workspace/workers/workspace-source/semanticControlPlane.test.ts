@@ -540,17 +540,17 @@ describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
     expect(rows.rows).toEqual([{ hash: "blob:one" }]);
   });
 
-  it("rejects a removed schema marker intact", async () => {
+  it("rejects pre-engine persistence intact", async () => {
     const SQL = await initSqlJs();
     const db = new SQL.Database();
     db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, ["14"]);
+    db.run(`INSERT INTO state (key, value) VALUES ('application_marker', ?)`, ["preserved"]);
 
     await expect(createTestDO(GadWorkspaceDO, undefined, { db })).rejects.toThrow(
       /no schema identity/
     );
-    expect(db.exec(`SELECT value FROM state WHERE key = 'schema_version'`)[0]!.values).toEqual([
-      ["14"],
+    expect(db.exec(`SELECT value FROM state WHERE key = 'application_marker'`)[0]!.values).toEqual([
+      ["preserved"],
     ]);
     expect(
       db.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'log_heads'`)

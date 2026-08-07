@@ -375,10 +375,6 @@ export abstract class DurableObjectBase {
           schemaTables: this.requiredTables(),
           productionBaseline: this.schemaProductionBaseline(),
           migrations: this.schemaMigrations(),
-          expectedSchemaFingerprint:
-            typeof this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"] === "string"
-              ? this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"]
-              : undefined,
           createSchema: () => this.createTables(),
           validateSchema: () => this.validateSchema(),
         },
@@ -395,10 +391,6 @@ export abstract class DurableObjectBase {
       schemaTables: this.requiredTables(),
       productionBaseline: this.schemaProductionBaseline(),
       migrations: this.schemaMigrations(),
-      expectedSchemaFingerprint:
-        typeof this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"] === "string"
-          ? this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"]
-          : undefined,
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });

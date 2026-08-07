@@ -37,11 +37,11 @@ const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
   ],
 };
 
-async function createDbAtSchemaVersion(schemaVersion: number) {
+async function createPreEngineDatabase() {
   const SQL = await initSqlJs();
   const db = new SQL.Database();
   db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-  db.run(`INSERT INTO state (key, value) VALUES ('schema_version', ?)`, [String(schemaVersion)]);
+  db.run(`INSERT INTO state (key, value) VALUES ('application_marker', 'preserved')`);
   return db;
 }
 
@@ -88,9 +88,9 @@ function activateAlarmKey(
   );
 }
 
-describe("WorkspaceDO exact pre-release schema", () => {
+describe("WorkspaceDO schema", () => {
   it("requires a fresh database for the v29 bounded-close schema", async () => {
-    const db = await createDbAtSchemaVersion(28);
+    const db = await createPreEngineDatabase();
     await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
       /no schema identity/u
     );
@@ -124,9 +124,12 @@ describe("WorkspaceDO exact pre-release schema", () => {
       "dispatch_generation",
       "dispatch_owner",
     ]);
-    expect(sql.exec(`SELECT singleton, version FROM _vibestudio_schema`).one()).toEqual({
+    expect(
+      sql.exec(`SELECT singleton, version, installed_version FROM _vibestudio_schema`).one()
+    ).toEqual({
       singleton: 1,
       version: CURRENT_SCHEMA_VERSION,
+      installed_version: CURRENT_SCHEMA_VERSION,
     });
   });
 
@@ -139,7 +142,7 @@ describe("WorkspaceDO exact pre-release schema", () => {
       CURRENT_SCHEMA_VERSION,
     ]);
     await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
-      /schema identity table is malformed/
+      /no schema identity and migration ledger/
     );
   });
 });

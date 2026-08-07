@@ -95,14 +95,9 @@ export interface DurableObjectSchemaDefinition {
   readonly schemaTables?: readonly string[];
   readonly productionBaseline: DurableObjectSchemaBaseline;
   readonly migrations?: readonly DurableObjectSchemaMigration[];
-  /** Fresh-install shape supplied by the publication probe for legacy adoption. */
-  readonly expectedSchemaFingerprint?: string;
   createSchema(): void;
   validateSchema(): void;
 }
-
-/** @deprecated Use DurableObjectSchemaDefinition. */
-export type ExactDurableObjectSchemaDefinition = DurableObjectSchemaDefinition;
 
 const SCHEMA_TABLE = "_vibestudio_schema";
 const MIGRATIONS_TABLE = "_vibestudio_schema_migrations";
@@ -112,20 +107,13 @@ const FRAMEWORK_OBJECTS = new Set([
   "_vibestudio_direct_rpc_nonces",
 ]);
 
-function normalizedShape(
-  sql: SchemaSqlStorage,
-  schemaTables?: readonly string[],
-  includeIndexes = true
-): string {
+function normalizedShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]): string {
   const ownedTables = schemaTables === undefined ? null : new Set(["state", ...schemaTables]);
-  const types = includeIndexes
-    ? "'table', 'index', 'view', 'trigger'"
-    : "'table', 'view', 'trigger'";
   return JSON.stringify(
     sql
       .exec(
         `SELECT type, name, tbl_name, sql FROM sqlite_master
-         WHERE type IN (${types})
+         WHERE type IN ('table', 'index', 'view', 'trigger')
            AND name NOT LIKE 'sqlite_%'
          ORDER BY type, name`
       )
@@ -154,7 +142,7 @@ export function durableObjectSchemaFingerprint(
   sql: SchemaSqlStorage,
   schemaTables?: readonly string[]
 ): string {
-  return normalizedShape(sql, schemaTables, true);
+  return normalizedShape(sql, schemaTables);
 }
 
 function normalizeIndexSql(value: string): string {
@@ -218,37 +206,6 @@ export function durableObjectSchemaDescriptor(
   };
 }
 
-/** Exact pre-migration-engine fingerprint format, used only for one-time adoption. */
-function legacySchemaFingerprint(sql: SchemaSqlStorage, schemaTables?: readonly string[]): string {
-  const ownedTables = schemaTables === undefined ? null : new Set(["state", ...schemaTables]);
-  return JSON.stringify(
-    sql
-      .exec(
-        `SELECT type, name, tbl_name, sql FROM sqlite_master
-         WHERE type IN ('table', 'view', 'trigger')
-           AND name NOT LIKE 'sqlite_%'
-           AND name <> ?
-           AND name <> '_vibestudio_direct_rpc_nonces'
-         ORDER BY type, name`,
-        SCHEMA_TABLE
-      )
-      .toArray()
-      .filter((row) => {
-        if (!ownedTables) return true;
-        const name = String(row["name"]);
-        const table = String(row["tbl_name"] ?? "");
-        return ownedTables.has(name) || ownedTables.has(table);
-      })
-      .map((row) => ({
-        type: String(row["type"]),
-        name: String(row["name"]),
-        sql: String(row["sql"] ?? "")
-          .replace(/\s+/g, " ")
-          .trim(),
-      }))
-  );
-}
-
 function schemaObjects(sql: SchemaSqlStorage): string[] {
   return sql
     .exec(
@@ -274,11 +231,13 @@ function incompatible(
   detail: string
 ): DurableObjectSchemaError {
   const safeActions: DurableObjectSchemaSafeAction[] =
-    reason === "future-version"
-      ? ["deploy-compatible-build", "reset-storage"]
-      : reason === "shape-drift" || reason === "ledger-drift"
-        ? ["add-migration", "reset-storage"]
-        : ["add-migration", "revert-schema-version", "reset-storage"];
+    reason === "unversioned-database"
+      ? ["reset-storage"]
+      : reason === "future-version"
+        ? ["deploy-compatible-build", "reset-storage"]
+        : reason === "shape-drift" || reason === "ledger-drift"
+          ? ["add-migration", "reset-storage"]
+          : ["add-migration", "revert-schema-version", "reset-storage"];
   return new DurableObjectSchemaError({
     code: "DO_SCHEMA_INCOMPATIBLE",
     message:
@@ -372,15 +331,13 @@ function runSynchronousMigrationCallback(
   }
 }
 
-function createMetadata(
-  definition: DurableObjectSchemaDefinition,
-  mode: "fresh" | "adopted"
-): void {
+function createMetadata(definition: DurableObjectSchemaDefinition): void {
   const { sql } = definition.storage;
   sql.exec(`
     CREATE TABLE ${SCHEMA_TABLE} (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
       version INTEGER NOT NULL,
+      installed_version INTEGER NOT NULL,
       shape_json TEXT NOT NULL
     )
   `);
@@ -392,25 +349,18 @@ function createMetadata(
   `);
   const shape = normalizedShape(sql, definition.schemaTables);
   sql.exec(
-    `INSERT INTO ${SCHEMA_TABLE} (singleton, version, shape_json) VALUES (1, ?, ?)`,
+    `INSERT INTO ${SCHEMA_TABLE} (singleton, version, installed_version, shape_json)
+     VALUES (1, ?, ?, ?)`,
+    definition.version,
     definition.version,
     shape
-  );
-  sql.exec(
-    `INSERT INTO ${MIGRATIONS_TABLE} (version, name) VALUES (?, ?)`,
-    definition.version,
-    `${mode === "fresh" ? "fresh-install" : "adopted"}:${definition.productionBaseline.name}`
-  );
-  sql.exec(
-    `INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?)`,
-    String(definition.version)
   );
 }
 
 interface PersistedMetadata {
   version: number;
+  installedVersion: number;
   shape: string;
-  hasLedger: boolean;
 }
 
 function readMetadata(
@@ -418,39 +368,48 @@ function readMetadata(
   objects: readonly string[]
 ): PersistedMetadata {
   const { sql } = definition.storage;
-  if (!objects.includes(SCHEMA_TABLE)) {
+  if (!objects.includes(SCHEMA_TABLE) || !objects.includes(MIGRATIONS_TABLE)) {
     throw incompatible(
       definition,
       "unversioned-database",
       null,
-      "persistent objects exist but no schema identity is recorded"
+      "persistent objects exist but no schema identity and migration ledger are recorded"
     );
   }
-  if (exactColumns(sql, SCHEMA_TABLE).join(",") !== "singleton,version,shape_json") {
+  if (
+    exactColumns(sql, SCHEMA_TABLE).join(",") !== "singleton,version,installed_version,shape_json"
+  ) {
     throw incompatible(definition, "ledger-drift", null, "the schema identity table is malformed");
   }
-  const rows = sql.exec(`SELECT singleton, version, shape_json FROM ${SCHEMA_TABLE}`).toArray();
+  const rows = sql
+    .exec(`SELECT singleton, version, installed_version, shape_json FROM ${SCHEMA_TABLE}`)
+    .toArray();
   const row = rows[0];
   const version = Number(row?.["version"]);
+  const installedVersion = Number(row?.["installed_version"]);
   if (
     rows.length !== 1 ||
     Number(row?.["singleton"]) !== 1 ||
     !Number.isSafeInteger(version) ||
     version < 1 ||
+    !Number.isSafeInteger(installedVersion) ||
+    installedVersion < 1 ||
+    installedVersion > version ||
     typeof row?.["shape_json"] !== "string"
   ) {
     throw incompatible(definition, "ledger-drift", null, "the schema identity row is malformed");
   }
   return {
     version,
+    installedVersion,
     shape: String(row["shape_json"]),
-    hasLedger: objects.includes(MIGRATIONS_TABLE),
   };
 }
 
 function validateLedger(
   definition: DurableObjectSchemaDefinition,
   persistedVersion: number,
+  installedVersion: number,
   migrations: ReadonlyMap<number, DurableObjectSchemaMigration>
 ): void {
   const { sql } = definition.storage;
@@ -464,40 +423,22 @@ function validateLedger(
   }
   const rows = sql.exec(`SELECT version, name FROM ${MIGRATIONS_TABLE} ORDER BY version`).toArray();
   if (rows.length === 0) {
+    if (persistedVersion === installedVersion) return;
     throw incompatible(
       definition,
       "ledger-drift",
       persistedVersion,
-      "the migration ledger is empty"
+      "the migration ledger is incomplete"
     );
   }
-  let previous = Number(rows[0]!["version"]);
-  const firstName = String(rows[0]!["name"]);
-  const acceptedBaselineName =
-    firstName === "fresh-install" ||
-    firstName === "legacy-baseline" ||
-    firstName.startsWith("fresh-install:") ||
-    firstName.startsWith("adopted:");
+  let previous = installedVersion;
   // Ledger rows at or below the current production baseline are permanent
   // history from an older support window: a later build that raises its
   // baseline retires those migration definitions, so history is validated for
   // contiguity only. Rows above the baseline must match running definitions.
-  if (
-    !Number.isSafeInteger(previous) ||
-    previous < 1 ||
-    previous > persistedVersion ||
-    !acceptedBaselineName
-  ) {
-    throw incompatible(
-      definition,
-      "ledger-drift",
-      persistedVersion,
-      "the migration ledger starts at an invalid version"
-    );
-  }
-  for (let index = 1; index < rows.length; index += 1) {
+  for (let index = 0; index < rows.length; index += 1) {
     const version = Number(rows[index]!["version"]);
-    if (version !== previous + 1) {
+    if (!Number.isSafeInteger(version) || version !== previous + 1) {
       throw incompatible(
         definition,
         "ledger-drift",
@@ -526,20 +467,11 @@ function validateLedger(
       "the migration ledger does not reach the persisted version"
     );
   }
-  const stateRows = sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).toArray();
-  if (stateRows.length !== 1 || Number(stateRows[0]!["value"]) !== persistedVersion) {
-    throw incompatible(
-      definition,
-      "ledger-drift",
-      persistedVersion,
-      "the mirrored schema version disagrees with the ledger"
-    );
-  }
 }
 
 /**
- * Install, adopt, migrate, or validate a Durable Object schema. All metadata
- * and application changes are committed by one storage transaction.
+ * Install, migrate, or validate a Durable Object schema. All metadata and
+ * application changes are committed by one storage transaction.
  */
 export function installDurableObjectSchema(definition: DurableObjectSchemaDefinition): void {
   validateDefinition(definition);
@@ -553,7 +485,7 @@ export function installDurableObjectSchema(definition: DurableObjectSchemaDefini
       definition.storage.sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
       definition.createSchema();
       definition.validateSchema();
-      createMetadata(definition, "fresh");
+      createMetadata(definition);
       return;
     }
 
@@ -575,64 +507,15 @@ export function installDurableObjectSchema(definition: DurableObjectSchemaDefini
       );
     }
 
-    if (!persisted.hasLedger) {
-      const legacyShape = legacySchemaFingerprint(definition.storage.sql, definition.schemaTables);
-      if (persisted.shape !== legacyShape) {
-        throw incompatible(
-          definition,
-          "shape-drift",
-          persisted.version,
-          "the legacy schema fingerprint does not match the stored database"
-        );
-      }
-      // The transition contract deliberately adopts only the declared baseline.
-      // Later versions always have a ledger, so guessing another historical
-      // shape that happened to share a version is forbidden.
-      if (persisted.version !== definition.productionBaseline.version) {
-        throw incompatible(
-          definition,
-          "version-mismatch",
-          persisted.version,
-          `legacy adoption is declared only for v${definition.productionBaseline.version}`
-        );
-      }
-      if (definition.expectedSchemaFingerprint !== undefined) {
-        const completeShape = normalizedShape(definition.storage.sql, definition.schemaTables);
-        if (completeShape !== definition.expectedSchemaFingerprint) {
-          throw incompatible(
-            definition,
-            "shape-drift",
-            persisted.version,
-            "the deployed legacy shape differs from this build's probed fresh schema"
-          );
-        }
-      }
-      definition.storage.sql.exec(`
-        CREATE TABLE ${MIGRATIONS_TABLE} (
-          version INTEGER PRIMARY KEY,
-          name TEXT NOT NULL
-        )
-      `);
-      definition.storage.sql.exec(
-        `INSERT INTO ${MIGRATIONS_TABLE} (version, name) VALUES (?, ?)`,
+    validateLedger(definition, persisted.version, persisted.installedVersion, migrations);
+    const persistedShape = normalizedShape(definition.storage.sql, definition.schemaTables);
+    if (persistedShape !== persisted.shape) {
+      throw incompatible(
+        definition,
+        "shape-drift",
         persisted.version,
-        `adopted:${definition.productionBaseline.name}`
+        "the complete schema fingerprint has drifted"
       );
-      definition.storage.sql.exec(
-        `INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?)`,
-        String(persisted.version)
-      );
-    } else {
-      validateLedger(definition, persisted.version, migrations);
-      const shape = normalizedShape(definition.storage.sql, definition.schemaTables);
-      if (shape !== persisted.shape) {
-        throw incompatible(
-          definition,
-          "shape-drift",
-          persisted.version,
-          "the complete schema fingerprint has drifted"
-        );
-      }
     }
 
     for (let version = persisted.version + 1; version <= definition.version; version += 1) {
@@ -687,15 +570,8 @@ export function installDurableObjectSchema(definition: DurableObjectSchemaDefini
       definition.version,
       shape
     );
-    definition.storage.sql.exec(
-      `INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?)`,
-      String(definition.version)
-    );
   });
 }
-
-/** Compatibility export retained for existing callers; semantics now migrate. */
-export const installExactDurableObjectSchema = installDurableObjectSchema;
 
 interface RpcLikeEnvelope {
   from?: unknown;

@@ -13,7 +13,7 @@ export interface ExactSqlTableSchema {
   primaryKey: readonly string[];
 }
 
-/** Fail closed on stale pre-release storage instead of silently adopting it. */
+/** Fail closed when a persisted table does not have the declared exact shape. */
 export function assertExactSqlTableSchema(sql: SqlStorage, expected: ExactSqlTableSchema): void {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(expected.table)) {
     throw new Error(`Invalid SQLite table name: ${JSON.stringify(expected.table)}`);

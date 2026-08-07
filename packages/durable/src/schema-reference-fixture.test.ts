@@ -142,10 +142,7 @@ describe("repository-owned Durable Object migration fixture", () => {
     });
     expect(
       sql.exec(`SELECT version, name FROM _vibestudio_schema_migrations ORDER BY version`).toArray()
-    ).toEqual([
-      { version: 1, name: "fresh-install:reference-board-v1" },
-      { version: 2, name: "normalize-board-metadata-and-archive-state" },
-    ]);
+    ).toEqual([{ version: 2, name: "normalize-board-metadata-and-archive-state" }]);
 
     expect(() =>
       replaceCards(sql, "b1", [{ id: "", title: "invalid", label: "todo", archived: false }])

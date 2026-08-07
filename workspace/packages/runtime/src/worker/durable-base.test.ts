@@ -1103,7 +1103,7 @@ describe("DurableObjectBase server-driven alarm durability", () => {
 });
 
 describe("DurableObjectBase schema readiness", () => {
-  it("rejects a malformed current-version schema instead of rebuilding it", async () => {
+  it("rejects pre-engine metadata instead of rebuilding it", async () => {
     const SQL = await initSqlJs();
     const db = new SQL.Database();
     db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
@@ -1112,7 +1112,9 @@ describe("DurableObjectBase schema readiness", () => {
 
     const { instance } = await createTestDO(SchemaProbeDO, undefined, { db, initialize: false });
 
-    expect(() => instance.initializeSchemaForTest()).toThrow(/schema identity table is malformed/);
+    expect(() => instance.initializeSchemaForTest()).toThrow(
+      /no schema identity and migration ledger/
+    );
   });
 
   it("returns the same correlated schema refusal envelope as the product base", async () => {
@@ -1149,7 +1151,7 @@ describe("DurableObjectBase schema readiness", () => {
         errorKind: "service",
         errorCode: "DO_SCHEMA_INCOMPATIBLE",
         errorData: {
-          reason: "ledger-drift",
+          reason: "unversioned-database",
           source: "test",
           className: "TestDO",
           objectKey: "test-key",

@@ -3,9 +3,7 @@ import { createInMemorySql } from "./test-utils.js";
 import {
   DurableObjectSchemaError,
   durableObjectSchemaDescriptor,
-  durableObjectSchemaFingerprint,
   installDurableObjectSchema,
-  installExactDurableObjectSchema,
 } from "./schema.js";
 
 function storage(sql: Awaited<ReturnType<typeof createInMemorySql>>) {
@@ -50,11 +48,11 @@ describe("exact durable-object schema identity", () => {
       validateSchema: () => undefined,
     };
 
-    installExactDurableObjectSchema(definition);
+    installDurableObjectSchema(definition);
     sql.exec("CREATE TABLE repl_scopes (id TEXT PRIMARY KEY)");
     sql.exec("CREATE TABLE user_data (value TEXT)");
 
-    expect(() => installExactDurableObjectSchema(definition)).not.toThrow();
+    expect(() => installDurableObjectSchema(definition)).not.toThrow();
   });
 
   it("still rejects a changed implementation-owned table", async () => {
@@ -71,13 +69,13 @@ describe("exact durable-object schema identity", () => {
       validateSchema: () => undefined,
     };
 
-    installExactDurableObjectSchema(definition);
+    installDurableObjectSchema(definition);
     sql.exec("DROP TABLE runs");
     sql.exec("CREATE TABLE runs (run_id TEXT PRIMARY KEY, changed INTEGER)");
 
-    expect(() => installExactDurableObjectSchema(definition)).toThrow(DurableObjectSchemaError);
+    expect(() => installDurableObjectSchema(definition)).toThrow(DurableObjectSchemaError);
     try {
-      installExactDurableObjectSchema(definition);
+      installDurableObjectSchema(definition);
     } catch (error) {
       expect(error).toMatchObject({
         code: "DO_SCHEMA_INCOMPATIBLE",
@@ -125,11 +123,11 @@ describe("exact durable-object schema identity", () => {
 
     expect(
       sql.exec("SELECT version, name FROM _vibestudio_schema_migrations ORDER BY version").toArray()
-    ).toEqual([
-      { version: 1, name: "fresh-install:items-v1" },
-      { version: 2, name: "add-archived" },
-    ]);
-    expect(sql.exec("SELECT version FROM _vibestudio_schema").one()).toEqual({ version: 2 });
+    ).toEqual([{ version: 2, name: "add-archived" }]);
+    expect(sql.exec("SELECT version, installed_version FROM _vibestudio_schema").one()).toEqual({
+      version: 2,
+      installed_version: 1,
+    });
   });
 
   it("treats ledger rows at or below a raised baseline as history, not drift", async () => {
@@ -166,8 +164,8 @@ describe("exact durable-object schema identity", () => {
     });
 
     // A later build raises the baseline to v2 and retires the 1→2 migration.
-    // The migrated database's historical ledger rows (v1 baseline, v2 step)
-    // stay valid without matching definitions.
+    // The migrated database's historical v2 row stays valid without a
+    // matching definition.
     const raised = {
       ...v1,
       version: 2,
@@ -257,92 +255,44 @@ describe("exact durable-object schema identity", () => {
         .toArray()
         .map((row) => row["name"])
     ).toEqual(["id"]);
-    expect(sql.exec(`SELECT version, name FROM _vibestudio_schema_migrations`).toArray()).toEqual([
-      { version: 1, name: "fresh-install:rollback-v1" },
-    ]);
+    expect(sql.exec(`SELECT version, name FROM _vibestudio_schema_migrations`).toArray()).toEqual(
+      []
+    );
   });
 
-  it("adopts a healthy legacy fingerprint only when complete validation accepts indexes", async () => {
+  it("rejects the old metadata format intact", async () => {
     const sql = await createInMemorySql();
     sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     sql.exec(`CREATE TABLE items (id TEXT PRIMARY KEY, label TEXT NOT NULL)`);
-    sql.exec(`CREATE INDEX items_label_idx ON items(label)`);
-    const legacyShape = JSON.stringify([
-      {
-        type: "table",
-        name: "items",
-        sql: "CREATE TABLE items (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
-      },
-      {
-        type: "table",
-        name: "state",
-        sql: "CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-      },
-    ]);
     sql.exec(
       `CREATE TABLE _vibestudio_schema (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL, shape_json TEXT NOT NULL)`
     );
-    sql.exec(`INSERT INTO _vibestudio_schema VALUES (1, 1, ?)`, legacyShape);
-    installDurableObjectSchema({
-      className: "LegacyDO",
-      version: 1,
-      productionBaseline: { version: 1, name: "legacy-v1" },
-      storage: storage(sql),
-      schemaTables: ["items"],
-      createSchema: () => undefined,
-      validateSchema: () => {
-        const named = sql
-          .exec(`PRAGMA index_list(items)`)
-          .toArray()
-          .map((row) => row["name"])
-          .filter((name) => name !== "sqlite_autoindex_items_1");
-        if (named.join(",") !== "items_label_idx") throw new Error("unexpected items indexes");
-      },
-    });
-    expect(sql.exec(`SELECT name FROM _vibestudio_schema_migrations`).one()).toEqual({
-      name: "adopted:legacy-v1",
-    });
-  });
+    sql.exec(`INSERT INTO _vibestudio_schema VALUES (1, 1, 'old-shape')`);
 
-  it("rejects legacy adoption when the publication fingerprint exposes index drift", async () => {
-    const fresh = await createInMemorySql();
-    fresh.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    fresh.exec(`CREATE TABLE items (id TEXT PRIMARY KEY, label TEXT NOT NULL)`);
-    fresh.exec(`CREATE INDEX items_label_idx ON items(label)`);
-    const expectedSchemaFingerprint = durableObjectSchemaFingerprint(fresh, ["items"]);
-
-    const sql = await createInMemorySql();
-    sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    sql.exec(`CREATE TABLE items (id TEXT PRIMARY KEY, label TEXT NOT NULL)`);
-    const legacyShape = JSON.stringify([
-      {
-        type: "table",
-        name: "items",
-        sql: "CREATE TABLE items (id TEXT PRIMARY KEY, label TEXT NOT NULL)",
-      },
-      {
-        type: "table",
-        name: "state",
-        sql: "CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-      },
-    ]);
-    sql.exec(
-      `CREATE TABLE _vibestudio_schema (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL, shape_json TEXT NOT NULL)`
-    );
-    sql.exec(`INSERT INTO _vibestudio_schema VALUES (1, 1, ?)`, legacyShape);
-
-    expect(() =>
+    try {
       installDurableObjectSchema({
-        className: "LegacyDriftDO",
+        className: "OldFormatDO",
         version: 1,
-        productionBaseline: { version: 1, name: "legacy-drift-v1" },
+        productionBaseline: { version: 1, name: "new-engine-v1" },
         storage: storage(sql),
         schemaTables: ["items"],
-        expectedSchemaFingerprint,
         createSchema: () => undefined,
         validateSchema: () => undefined,
-      })
-    ).toThrow(/probed fresh schema/);
+      });
+      throw new Error("expected old metadata to be rejected");
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: "DO_SCHEMA_INCOMPATIBLE",
+        errorData: {
+          reason: "unversioned-database",
+          safeActions: ["reset-storage"],
+        },
+      });
+      expect(error).toHaveProperty(
+        "message",
+        expect.stringMatching(/no schema identity and migration ledger/u)
+      );
+    }
     expect(
       sql
         .exec(

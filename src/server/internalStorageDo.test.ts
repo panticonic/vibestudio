@@ -37,13 +37,16 @@ describe("DurableObjectBase exact schema identity", () => {
   it("creates only the current schema on a fresh database", async () => {
     const { call, sql } = await createTestDO(ExactSchemaProbeDO);
     expect(await call("countRows")).toBe(0);
-    expect(sql.exec(`SELECT singleton, version FROM _vibestudio_schema`).one()).toEqual({
+    expect(
+      sql.exec(`SELECT singleton, version, installed_version FROM _vibestudio_schema`).one()
+    ).toEqual({
       singleton: 1,
       version: 2,
+      installed_version: 2,
     });
-    expect(sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).toArray()).toEqual([
-      { value: "2" },
-    ]);
+    expect(sql.exec(`SELECT version, name FROM _vibestudio_schema_migrations`).toArray()).toEqual(
+      []
+    );
   });
 
   it("rejects a non-current schema identity", async () => {
@@ -62,7 +65,7 @@ describe("DurableObjectBase exact schema identity", () => {
       db,
       initialize: false,
     });
-    await expect(call("countRows")).rejects.toThrow(/schema identity table is malformed/);
+    await expect(call("countRows")).rejects.toThrow(/no schema identity and migration ledger/);
   });
 
   it("returns a correlated structured schema error envelope from __rpc", async () => {
@@ -102,7 +105,7 @@ describe("DurableObjectBase exact schema identity", () => {
         errorKind: "service",
         errorCode: "DO_SCHEMA_INCOMPATIBLE",
         errorData: {
-          reason: "ledger-drift",
+          reason: "unversioned-database",
           source: "test",
           className: "TestDO",
           objectKey: "test-key",
