@@ -104,7 +104,7 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
   async revoke(): Promise<void> {
     if (this.revoked) return;
     const credentials = this.loadCredentials();
-    await this.client?.close();
+    const client = this.client;
     this.client = null;
     const result = await this.operations.revoke(
       credentials,
@@ -121,6 +121,7 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     this.revoked = true;
     this.credentials = null;
     if (this.operations.exists(this.credentialFile)) this.operations.unlink(this.credentialFile);
+    void client?.close().catch(() => undefined);
   }
 
   async verifyRevoked(): Promise<boolean> {

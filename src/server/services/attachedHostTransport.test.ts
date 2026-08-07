@@ -262,7 +262,7 @@ describe("attached-host HTTP routed connectivity", () => {
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const close = vi.fn(async () => undefined);
+    const close = vi.fn(() => new Promise<void>(() => undefined));
     const revoke = vi.fn(async () => ({ revoked: true }));
     const port = new CliAttachedHostBootstrapPort(
       "/private/bootstrap.json",
