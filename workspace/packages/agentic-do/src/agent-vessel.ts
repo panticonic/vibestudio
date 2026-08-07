@@ -543,6 +543,10 @@ type DeferredEvalGateResult =
 export abstract class AgentVesselBase extends DurableObjectBase {
   static override schemaVersion = 3;
 
+  protected override schemaProductionBaseline() {
+    return { version: 3, name: "agent-vessel-v3" } as const;
+  }
+
   protected readonly identity: DOIdentity;
   protected readonly subscriptions: SubscriptionManager;
   protected readonly feedback: FeedbackIngest;
@@ -596,7 +600,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
-    this.ensureReady();
+    this.prepareSchemaStorage();
     this.identity = new DOIdentity(this.sql);
     this.subscriptions = new SubscriptionManager(
       this.sql,
@@ -619,6 +623,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       getActor: () => ({ kind: "agent", id: this.participantId() }),
       getAgentId: () => this.objectKey,
     });
+    this.prepareSchemaForActivation();
+  }
+
+  protected override afterSchemaReady(): void {
     this.registerAgentAlarmSource({
       id: "agent-loop-driver",
       nextWakeAt: () => this._driver?.nextWakeAt() ?? this.driverNextWakeAtFromSql(),
@@ -735,6 +743,26 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       ],
       primaryKey: ["channel_id", "run_id"],
     });
+  }
+
+  protected override requiredTables(): readonly string[] {
+    return [
+      "do_identity",
+      "subscriptions",
+      "agent_inbox_queue",
+      "agent_hot_path_trace",
+      "subagent_runs",
+      "subagent_progress_outbox",
+      "feedback_seen",
+      "pending_feedback",
+      "custom_cards",
+      "effect_outbox",
+      "fold_cache",
+      "scheduled_model_resumes",
+      "model_execution_attempts",
+      "model_execution_attempt_diagnostics",
+      "deferred_eval_cancel_intents",
+    ];
   }
 
   protected override durableWorkQueues(): readonly DurableWorkQueue[] {

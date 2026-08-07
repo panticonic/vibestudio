@@ -92,7 +92,7 @@ describe("WorkspaceDO exact pre-release schema", () => {
   it("requires a fresh database for the v29 bounded-close schema", async () => {
     const db = await createDbAtSchemaVersion(28);
     await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
-      /no current schema identity/u
+      /no schema identity/u
     );
   });
 
@@ -139,7 +139,7 @@ describe("WorkspaceDO exact pre-release schema", () => {
       CURRENT_SCHEMA_VERSION,
     ]);
     await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
-      /current exact format/
+      /schema identity table is malformed/
     );
   });
 });

@@ -35,6 +35,7 @@ import {
   buildWorkerdPrograms,
   type WorkerdProgramSources,
 } from "../../scripts/build-workerd-programs.mjs";
+import { beginDurableObjectRelay } from "./workerdRpcRelay.js";
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
 
@@ -102,6 +103,26 @@ export class CounterDO extends DurableObject {
 }
 export default { fetch() { return new Response("counter host"); } };`;
 
+const SCHEMA_PROBE_DO = `import { DurableObject } from "cloudflare:workers";
+export class SchemaProbeDO extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env); this.ctx = ctx; this.env = env;
+    this.ctx.storage.sql.exec("CREATE TABLE cards (id TEXT PRIMARY KEY, title TEXT NOT NULL)");
+    this.ctx.storage.sql.exec("CREATE INDEX cards_title ON cards(title)");
+  }
+  async fetch() {
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE !== true) return new Response("missing probe env", { status: 500 });
+    const shape = JSON.stringify([...this.ctx.storage.sql.exec(
+      "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN ('cards', 'cards_title') ORDER BY type, name"
+    )]);
+    return Response.json({
+      className: "SchemaProbeDO", version: 1, freshSchemaFingerprint: shape,
+      baseline: { version: 1, name: "schema-probe-v1" }, migrations: [], fixtureObjectKeys: [],
+    });
+  }
+}
+export default { fetch() { return new Response("probe host"); } };`;
+
 function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
   const buildKey = `build:${source}:${ev}`;
   return {
@@ -117,6 +138,15 @@ function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
       sourceStateHash: "state:test",
       sourcemap: false,
       authority: { requests: [], provides: [] },
+      executableModules: [
+        {
+          moduleId: source + "/index.ts",
+          package: { kind: "workspace", name: source, effectiveVersion: ev },
+          format: "ts",
+          source: bundle,
+          contentDigest: sha256(bundle),
+        },
+      ],
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -216,8 +246,9 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
       ).split("/");
       const source = decodeURIComponent(segs[0] ?? "");
       const className = decodeURIComponent(segs[1] ?? "");
+      const objectKey = new URL(url, "http://gateway").searchParams.get("objectKey") ?? "";
       if (isVersion) {
-        const v = manager.getDoVersion(source, className);
+        const v = manager.getDoVersion(source, className, objectKey);
         if (v === null) {
           res.writeHead(404);
           res.end("nf");
@@ -227,9 +258,8 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
         res.end(JSON.stringify({ version: v }));
         return;
       }
-      const objectKey = new URL(url, "http://gateway").searchParams.get("objectKey") ?? "";
       codeFetches.set(objectKey, (codeFetches.get(objectKey) ?? 0) + 1);
-      void manager.getDoCode(source, className).then((code) => {
+      void manager.getDoCode(source, className, objectKey).then((code) => {
         if (!code) {
           res.writeHead(404);
           res.end("nf");
@@ -278,6 +308,112 @@ afterEach(async () => {
 });
 
 describe("UniversalDO facet host (real workerd)", () => {
+  it("probes a candidate schema in workerd and destroys its reserved scratch storage", async () => {
+    const source = "workers/schema-probe";
+    const build = doBuild(source, "ev-probe", SCHEMA_PROBE_DO);
+    active = await createHarness({ [source]: build });
+
+    const descriptor = await active.manager.probeDurableObjectSchema(
+      source,
+      "SchemaProbeDO",
+      build
+    );
+
+    expect(descriptor).toMatchObject({
+      className: "SchemaProbeDO",
+      version: 1,
+      baseline: { version: 1, name: "schema-probe-v1" },
+      migrations: [],
+    });
+    expect(descriptor.freshSchemaFingerprint).toContain("cards_title");
+  });
+
+  it("captures published representative data and gates candidate migrations against it", async () => {
+    const source = "workers/schema-fixture";
+    const v1 = `import { DurableObject } from "cloudflare:workers";
+export class BoardDO extends DurableObject {
+  constructor(ctx, env) { super(ctx, env); this.ctx = ctx; this.env = env;
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL)"); }
+  async fetch(request) { const method = new URL(request.url).pathname.split("/").filter(Boolean).slice(1).join("/");
+    if (method === "seed") this.ctx.storage.sql.exec("INSERT OR REPLACE INTO cards VALUES ('1', 'captured row')");
+    const shape = JSON.stringify([...this.ctx.storage.sql.exec("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN ('cards', 'cards_archived') ORDER BY type, name")]);
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) return Response.json({ className: "BoardDO", version: 1,
+      freshSchemaFingerprint: shape, baseline: { version: 1, name: "board-v1" }, migrations: [],
+      fixtureObjectKeys: ["representative"] });
+    return Response.json({ result: true }); }
+}
+export default { fetch() { return new Response("v1"); } };`;
+    const v2 = `import { DurableObject } from "cloudflare:workers";
+const retained = { version: 2, name: "add-archive", validateSource: (sql) => sql.exec("SELECT id FROM cards LIMIT 1"),
+  migrate: (sql) => sql.exec("ALTER TABLE cards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0") };
+export class BoardDO extends DurableObject {
+  schemaMigrations() { return [{ version: 2, name: "add-archive", validateSource: (sql) => sql.exec("SELECT id FROM cards LIMIT 1"),
+    migrate: (sql) => sql.exec("ALTER TABLE cards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0") }]; }
+  constructor(ctx, env) { super(ctx, env); this.ctx = ctx; this.env = env;
+    const tables = [...this.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cards'")];
+    if (tables.length === 0) this.ctx.storage.sql.exec("CREATE TABLE cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0)");
+    else if ([...this.ctx.storage.sql.exec("PRAGMA table_info(cards)")].every((row) => row.name !== "archived")) retained.migrate(this.ctx.storage.sql);
+    this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS cards_archived ON cards(archived)"); }
+  async fetch() { const shape = JSON.stringify([...this.ctx.storage.sql.exec("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN ('cards', 'cards_archived') ORDER BY type, name")]);
+    return Response.json({ className: "BoardDO", version: 2, freshSchemaFingerprint: shape,
+      baseline: { version: 1, name: "board-v1" }, migrations: [{ version: 2, name: "add-archive" }],
+      fixtureObjectKeys: ["representative"] }); }
+}
+export default { fetch() { return new Response("v2"); } };`;
+    const oldBuild = doBuild(source, "ev-v1", v1);
+    const candidateBuild = doBuild(source, "ev-v2", v2);
+    active = await createHarness({ [source]: oldBuild });
+    await active.manager.ensureDOClass(source, "BoardDO");
+    await active.dispatch({ source, className: "BoardDO", objectKey: "representative" }, "seed");
+
+    const oldDescriptor = await active.manager.probeDurableObjectSchema(
+      source,
+      "BoardDO",
+      oldBuild
+    );
+    expect(
+      active.manager.validateAndStageDurableObjectSchemas("state:v1", [
+        {
+          source,
+          effectiveVersion: oldBuild.metadata.ev,
+          descriptor: oldDescriptor,
+        },
+      ])
+    ).toEqual([]);
+    active.manager.commitDurableObjectSchemas("state:v1");
+
+    const freshCandidate = await active.manager.probeDurableObjectSchema(
+      source,
+      "BoardDO",
+      candidateBuild
+    );
+    await expect(
+      active.manager.validateDurableObjectSchemaFixtures({
+        source,
+        build: candidateBuild,
+        descriptor: freshCandidate,
+      })
+    ).resolves.toEqual([]);
+
+    const divergentSource = v2.replace(
+      'this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS cards_archived ON cards(archived)");',
+      'if (tables.length === 0) this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS cards_archived ON cards(archived)");'
+    );
+    const divergentBuild = doBuild(source, "ev-v2-divergent", divergentSource);
+    const divergentFresh = await active.manager.probeDurableObjectSchema(
+      source,
+      "BoardDO",
+      divergentBuild
+    );
+    await expect(
+      active.manager.validateDurableObjectSchemaFixtures({
+        source,
+        build: divergentBuild,
+        descriptor: divergentFresh,
+      })
+    ).resolves.toEqual([expect.stringContaining("different from a fresh v2 install")]);
+  }, 30_000);
+
   ledgerTest(
     "execution.ensure-durable-object",
     async () => {
@@ -340,6 +476,47 @@ describe("UniversalDO facet host (real workerd)", () => {
 
     // destroyDO removes the fork's facet storage.
     await manager.destroyDO(cloned);
+  }, 30_000);
+
+  it("backs up, resets, lists, and restores one exact facet storage target", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch } = active;
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const ref = { source: "workers/counter", className: "CounterDO", objectKey: "resettable" };
+    await dispatch(ref, "incr");
+    await dispatch(ref, "incr");
+
+    const finishInFlight = beginDurableObjectRelay(
+      `do:${ref.source}:${ref.className}:${ref.objectKey}`
+    );
+    let resetSettled = false;
+    const resetPromise = manager
+      .resetDOStorage(ref, "exercise disposable schema recovery")
+      .then((result) => {
+        resetSettled = true;
+        return result;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resetSettled).toBe(false);
+    expect(() =>
+      beginDurableObjectRelay(`do:${ref.source}:${ref.className}:${ref.objectKey}`)
+    ).toThrow(/storage maintenance/u);
+    finishInFlight();
+    const reset = await resetPromise;
+    expect(await dispatch(ref, "get")).toMatchObject({ count: 0 });
+    expect(await manager.listDOStorageBackups(ref)).toEqual([
+      expect.objectContaining({
+        operationId: reset.operationId,
+        intent: "exercise disposable schema recovery",
+      }),
+    ]);
+
+    await manager.restoreDOStorageBackup(
+      ref,
+      reset.operationId,
+      "restore the pre-reset representative rows"
+    );
+    expect(await dispatch(ref, "get")).toMatchObject({ count: 2 });
   }, 30_000);
 
   it("forwards a WebSocket upgrade through the facet host (hibernation)", async () => {

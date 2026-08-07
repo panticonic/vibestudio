@@ -104,11 +104,23 @@ function createSqlProxy(db: Database) {
         },
       };
     },
+    transactionSync<T>(callback: () => T): T {
+      db.run("BEGIN");
+      try {
+        const value = callback();
+        db.run("COMMIT");
+        return value;
+      } catch (error) {
+        db.run("ROLLBACK");
+        throw error;
+      }
+    },
   };
 }
 
 export async function createInMemorySql(): Promise<{
   exec(query: string, ...bindings: unknown[]): SqlResult;
+  transactionSync<T>(callback: () => T): T;
 }> {
   const SQL = await getSqlJs();
   return createSqlProxy(new SQL.Database());
@@ -208,7 +220,7 @@ export async function createTestDO<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   DOClass: new (ctx: any, env: any) => T,
   env?: Record<string, unknown>,
-  opts?: { db?: Database }
+  opts?: { db?: Database; initialize?: boolean }
 ): Promise<TestDOResult<T>> {
   const SQL = await getSqlJs();
   const db = opts?.db ?? new SQL.Database();
@@ -270,6 +282,9 @@ export async function createTestDO<T>(
 
   const mergedEnv = { ...AGENTIC_ENV_DEFAULTS, ...env };
   const instance = new DOClass(ctx, mergedEnv);
+  if (opts?.initialize !== false) {
+    (instance as unknown as { ensureReady?: () => void }).ensureReady?.();
+  }
 
   const dispatch = async <R = unknown>(
     caller: Pick<AuthenticatedCaller, "callerId" | "callerKind"> &

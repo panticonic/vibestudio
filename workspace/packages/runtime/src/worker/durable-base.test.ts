@@ -9,6 +9,15 @@ import initSqlJs from "sql.js";
 import { DurableObjectBase } from "./durable-base.js";
 import { createTestDO, createTestDirectAuthority } from "./durable-test-utils.js";
 
+abstract class TestDurableObjectBase extends DurableObjectBase {
+  protected schemaProductionBaseline() {
+    return {
+      version: (this.constructor as typeof DurableObjectBase).schemaVersion,
+      name: "runtime-test-fixture",
+    } as const;
+  }
+}
+
 function authenticatedTestCaller(
   method: string,
   callerKind: AuthenticatedCaller["callerKind"] = "server",
@@ -21,7 +30,7 @@ function authenticatedTestCaller(
   };
 }
 
-class EchoDO extends DurableObjectBase {
+class EchoDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   @rpc({
@@ -35,7 +44,7 @@ class EchoDO extends DurableObjectBase {
   }
 }
 
-class UndeclaredProbeDO extends DurableObjectBase {
+class UndeclaredProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   hidden(): string {
@@ -43,7 +52,7 @@ class UndeclaredProbeDO extends DurableObjectBase {
   }
 }
 
-class StreamProbeDO extends DurableObjectBase {
+class StreamProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   @rpc({
@@ -59,7 +68,7 @@ class StreamProbeDO extends DurableObjectBase {
   }
 }
 
-class AgentSubscriptionProbeDO extends DurableObjectBase {
+class AgentSubscriptionProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   @rpc({
@@ -73,7 +82,7 @@ class AgentSubscriptionProbeDO extends DurableObjectBase {
   }
 }
 
-class StructuredErrorDO extends DurableObjectBase {
+class StructuredErrorDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   @rpc({
@@ -95,7 +104,7 @@ class StructuredErrorDO extends DurableObjectBase {
   }
 }
 
-class LifecycleProbeDO extends DurableObjectBase {
+class LifecycleProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
   prepared = false;
   resumed = false;
@@ -126,7 +135,7 @@ class LifecycleProbeDO extends DurableObjectBase {
   }
 }
 
-class WorkReadyProbeDO extends DurableObjectBase {
+class WorkReadyProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   protected override durableWorkQueues(): readonly ["agent-inbox", "agent-effect"] {
@@ -160,7 +169,7 @@ class WorkReadyProbeDO extends DurableObjectBase {
   }
 }
 
-class DurableWorkAdoptionProbeDO extends DurableObjectBase {
+class DurableWorkAdoptionProbeDO extends TestDurableObjectBase {
   protected createTables(): void {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS adoption_probe_claims (
@@ -209,7 +218,7 @@ class DurableWorkAdoptionProbeDO extends DurableObjectBase {
   }
 }
 
-class SchemaProbeDO extends DurableObjectBase {
+class SchemaProbeDO extends TestDurableObjectBase {
   static override schemaVersion = 2;
 
   protected createTables(): void {
@@ -239,7 +248,7 @@ class SchemaProbeDO extends DurableObjectBase {
   }
 }
 
-class AlarmProbeDO extends DurableObjectBase {
+class AlarmProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   @rpc({
@@ -254,7 +263,7 @@ class AlarmProbeDO extends DurableObjectBase {
   }
 }
 
-class DerivedAlarmProbeDO extends DurableObjectBase {
+class DerivedAlarmProbeDO extends TestDurableObjectBase {
   private wakeAt: number | null = null;
 
   protected createTables(): void {}
@@ -280,7 +289,7 @@ class DerivedAlarmProbeDO extends DurableObjectBase {
   }
 }
 
-class AlarmRescheduleProbeDO extends DurableObjectBase {
+class AlarmRescheduleProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   override async alarm(): Promise<DoAlarmSchedule> {
@@ -289,7 +298,7 @@ class AlarmRescheduleProbeDO extends DurableObjectBase {
   }
 }
 
-class AlarmCancelProbeDO extends DurableObjectBase {
+class AlarmCancelProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   override async alarm(): Promise<null> {
@@ -326,7 +335,7 @@ async function dispatchAlarm(instance: DurableObjectBase): Promise<{
  * setOwnTitleExplicitly publicly so we can drive them from tests, and
  * surfaces the persisted flag via a getter.
  */
-class TitleProbeDO extends DurableObjectBase {
+class TitleProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
   async pushHeuristicTitle(title: string): Promise<void> {
@@ -1101,9 +1110,52 @@ describe("DurableObjectBase schema readiness", () => {
     db.run(`CREATE TABLE _vibestudio_schema (singleton INTEGER PRIMARY KEY, version INTEGER)`);
     db.run(`INSERT INTO _vibestudio_schema (singleton, version) VALUES (1, 2)`);
 
-    const { instance } = await createTestDO(SchemaProbeDO, undefined, { db });
+    const { instance } = await createTestDO(SchemaProbeDO, undefined, { db, initialize: false });
 
-    expect(() => instance.initializeSchemaForTest()).toThrow(/current exact format/);
+    expect(() => instance.initializeSchemaForTest()).toThrow(/schema identity table is malformed/);
+  });
+
+  it("returns the same correlated schema refusal envelope as the product base", async () => {
+    const SQL = await initSqlJs();
+    const db = new SQL.Database();
+    db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    db.run(`CREATE TABLE _vibestudio_schema (singleton INTEGER PRIMARY KEY, version INTEGER)`);
+    db.run(`INSERT INTO _vibestudio_schema (singleton, version) VALUES (1, 2)`);
+    const { instance } = await createTestDO(SchemaProbeDO, undefined, { db, initialize: false });
+    const response = await instance.fetch(
+      new Request("http://test/test-key/__rpc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: "main",
+          target: "do:test:TestDO:test-key",
+          delivery: { caller: { callerId: "main", callerKind: "server" } },
+          provenance: [],
+          message: {
+            type: "request",
+            requestId: "schema-workspace-1",
+            fromId: "main",
+            method: "hasRequiredTable",
+            args: [],
+          },
+        }),
+      })
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()) as unknown).toMatchObject({
+      message: {
+        type: "response",
+        requestId: "schema-workspace-1",
+        errorKind: "service",
+        errorCode: "DO_SCHEMA_INCOMPATIBLE",
+        errorData: {
+          reason: "ledger-drift",
+          source: "test",
+          className: "TestDO",
+          objectKey: "test-key",
+        },
+      },
+    });
   });
 });
 

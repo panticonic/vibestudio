@@ -300,6 +300,9 @@ export function pickFallbackModel(catalog: ModelCatalog): {
 }
 
 export class ModelSettingsDO extends DurableObjectBase {
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "model-settings-v1" } as const;
+  }
   protected createTables(): void {}
 
   @rpc({

@@ -33,7 +33,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibestudio service routes. |
 | `gatewayFetch` | value |  | Gateway-origin fetch helper. It accepts relative paths and absolute URLs on the configured gateway origin, then authenticates that request; cross-origin targets are rejected. Use credentials.fetch for external egress. |
 | `openExternal` | callable |  | Call `await openExternal(url, options?)` from `@workspace/runtime` in server-side eval, panel/client eval, worker, or Durable Object code to open the system browser. The call itself owns the approval prompt and resumes after the user decides. |
-| `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
+| `workers` | namespace | `listSources`, `create`, `list`, `destroy`, `resetStorage`, `listStorageBackups`, `restoreStorageBackup`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery, lifecycle, and manifest-declared service resolution. Use create/list/destroy for regular worker instances; listSources() returns every launchable source with its real manifest entry point and Durable Object classes. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `summarizeStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` | Typed credential lifecycle and credentialed network access. Use store(input) to persist a URL-bound credential, fetch(url, init?, { credentialId? }?) for credentialed HTTP and a standard Response, hookForUrl(url, { credentialId? }?) for a bound fetch function, gitHttp({ credentialId?, gitIntent? }) for smart-HTTP, and forAudience(descriptor) for a credential-bound handle. The underlying RPC transport is internal. |
 | `browserData` | namespace | `getBrowserEnvironment`, `listImportHosts`, `listImportSources`, `previewImport`, `startImport`, `cancelImport`, `getImportJob`, `listImportJobs`, `listOpenTabs`, `openTabsAsPanels`, `getSitePreferences`, `setSiteZoom`, `getBookmarks`, `addBookmark`, `updateBookmark`, `deleteBookmark`, `moveBookmark`, `searchBookmarks`, `getHistory`, `deleteHistoryEntry`, `deleteHistoryRange`, `clearAllHistory`, `searchHistory`, `searchHistoryForAutocomplete`, `recordHistoryVisit`, `updateHistoryTitle`, `getPasswords`, `getPasswordForSite`, `addPassword`, `updatePassword`, `deletePassword`, `updatePasswordLastUsed`, `addNeverSavePassword`, `isNeverSavePassword`, `getNeverSavePasswordOrigins`, `removeNeverSavePassword`, `getFormFillSuggestions`, `addFormFillValue`, `updateFormFillValue`, `markFormFillValueUsed`, `deleteFormFillValue`, `clearFormFillValues`, `getSearchEngines`, `setDefaultEngine`, `applyCookieMutations`, `getCookieSnapshot`, `getCookiesForOrigin`, `clearCookiesForOrigin`, `clearAllCookies`, `endBrowserSession`, `getCookieSiteSummary`, `flushCookieProjection`, `getCookieProjectionDiagnostics`, `listDownloads`, `listDownloadRecords`, `upsertDownloadRecord`, `pauseDownload`, `resumeDownload`, `cancelDownload`, `openDownload`, `revealDownload`, `putPageFavicon`, `getPageFavicon`, `exportBookmarks`, `exportPasswords`, `exportCookies` | Typed access to the manifest-declared browser-data provider: detection, import, secret-free summaries, approved sensitive reads, mutation, and export. |
 | `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `detachUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `commitMapping`, `importProject` | Typed external Git operations routed through the workspace's configured gitInterop provider. Import and pull create unpublished semantic candidates; only ordinary VCS integration and explicit publication advance protected main. Declarations carry logical credential names resolved by the host, while credential-free remotes are anonymous-first. Pull dry-runs use isolated temporary state and do not mutate managed Git, semantic state, or the remote. |
@@ -293,15 +293,16 @@ When building a panel with a DO store, create both together with
 `createProjects` so the user sees one approval prompt:
 
 ```ts
-eval({ code: `
+eval({
+  code: `
   import { createProjects } from "@workspace-skills/workspace-dev";
   scope.created = await createProjects([
     { projectType: "worker", name: "todo-store", title: "Todo Store" },
     { projectType: "panel", name: "todo-app", title: "Todo App" },
   ]);
   return scope.created;
-`
-})
+`,
+});
 ```
 
 Canonical shape:
@@ -333,6 +334,10 @@ type TodoRow = {
 
 export class TodoStore extends DurableObjectBase {
   static override schemaVersion = 1;
+
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "todo-store-v1" } as const;
+  }
 
   protected override createTables(): void {
     this.sql.exec(`
@@ -468,23 +473,46 @@ test process and does not exercise service resolution, workerd persistence, or
 the RPC/policy boundary. Do not import `createTestDO` from agent eval or
 production panel/worker/DO code.
 
-## Durable Object Schema Epochs
+## Durable Object Schema Migrations
 
-`DurableObjectBase` owns SQLite schema lifecycle. Define the one exact current
-schema in `createTables`; never interpret or translate an older shape in a
-handler:
+`DurableObjectBase` owns SQLite schema lifecycle. `createTables()` declares the
+exact fresh-install shape, while retained `schemaMigrations()` definitions
+translate supported production shapes forward in one storage transaction:
 
 ```ts
 export class MyStoreDO extends DurableObjectBase {
-  // Bump this for any schema-shape change. It identifies one exact pre-release
-  // epoch; it is not a sequence of layouts the current code can read.
   static override schemaVersion = 2;
 
-  // Idempotent declarations for the exact CURRENT schema. These may rerun to
-  // complete an interrupted initialization of this same epoch.
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "my-store-v1" } as const;
+  }
+
+  protected override schemaMigrations() {
+    return [
+      {
+        version: 2,
+        name: "add-item-archived",
+        validateSource: (sql) => {
+          const columns = sql.exec(`PRAGMA table_info(items)`).toArray();
+          if (columns.map((row) => row.name).join(",") !== "id,label") {
+            throw new Error("items does not match the captured v1 shape");
+          }
+        },
+        migrate: (sql) => {
+          sql.exec(`ALTER TABLE items ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
+        },
+      },
+    ] as const;
+  }
+
+  protected override schemaMigrationFixtureObjectKeys(): readonly string[] {
+    return ["representative"];
+  }
+
   protected override createTables(): void {
-    this.sql.exec(`CREATE TABLE IF NOT EXISTS items (
-      id TEXT PRIMARY KEY, label TEXT NOT NULL, archived INTEGER DEFAULT 0
+    this.sql.exec(`CREATE TABLE items (
+      id TEXT PRIMARY KEY, label TEXT NOT NULL,
+      archived INTEGER NOT NULL DEFAULT 0
     )`);
   }
 
@@ -495,19 +523,41 @@ export class MyStoreDO extends DurableObjectBase {
 }
 ```
 
-For any table, column, index, trigger, view, or virtual-table shape change, bump
-`schemaVersion` and change only the current declarations. On the next
-`fetch()`/`alarm()`, an instance at an older epoch discards all of its
-non-framework SQLite objects and every application key in the base `state`
-table, then creates and validates the current schema from empty storage. The
-base handles FTS/virtual-table shadows as part of that whole-object reset.
+Every shape change bumps `schemaVersion` and adds one contiguous, permanently
+retained migration. A step at version N transforms N-1 to N. It must validate
+its exact source columns, indexes, constraints, virtual-table declarations, and
+data invariants before changing anything. Fresh databases create only the final
+shape. Existing databases run the full chain, ledger writes, mirrored downgrade
+guard, and final validation in one `transactionSync`; failures roll back intact.
 
-There is deliberately no `migrate` hook. Do not add `ALTER` sequences, old
-table readers, selected-row preservation, compatibility flags, or per-version
-drop lists. A current-epoch activation may rerun idempotent `createTables` after
-an interrupted initialization; that is crash recovery, not old-schema support.
-An instance stamped with a newer epoch refuses to start, preventing an older
-binary from silently destroying storage.
+Each class explicitly declares its production baseline. Never invent no-op
+migrations for unknown pre-production shapes. Preserve unrelated objects and
+generic `state` keys. Capture representative fixtures before a version ships,
+and prove both upgraded and fresh schemas converge. A publication after the
+first installed version rejects a schema-version bump unless
+`schemaMigrationFixtureObjectKeys()` names at least one exact existing object.
+Those real SQLite files are retained with restrictive permissions and replayed
+in a disposable workerd facet, so choose bounded data without secrets.
+
+Schema refusals are structured service failures:
+
+- `DO_SCHEMA_INCOMPATIBLE` identifies `version-mismatch`, `shape-drift`,
+  `unversioned-database`, `future-version`, `migration-missing`, or
+  `ledger-drift`. Inspect `errorData.persistedVersion`, `targetVersion`, and
+  `safeActions`; do not encode the missing schema into application rows.
+- `DO_SCHEMA_MIGRATION_FAILED` means the declared step threw and the entire
+  transaction rolled back. Fix that migration and retry.
+
+For retained state, write a migration. Only for deliberately disposable state,
+resolve the exact target and call `workers.resetStorage(target, intent)`. The
+host automatically fences the object, verifies an out-of-tree backup, and
+returns its operation id. Use `workers.listStorageBackups(target)` and
+`workers.restoreStorageBackup(target, operationId, intent)` for recovery.
+
+Review every version bump for: a named baseline, contiguous stable migrations,
+exact source validation, representative predecessor data, unrelated-object and
+generic-state preservation, fresh/upgrade shape convergence, ledger rows, and
+rollback on an injected failure.
 
 ## Durable Object RPC Exposure & Authorization
 
@@ -534,9 +584,13 @@ effect literal because live docs are extracted from the exact source build
 without executing that source.
 
 ```ts
-import { rpc } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 
 export class MyStoreDO extends DurableObjectBase {
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "my-store-v1" } as const;
+  }
+
   @rpc({ principals: ["user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
   async addItem(label: string): Promise<{ id: string }> { ... }
 

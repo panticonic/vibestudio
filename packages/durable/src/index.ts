@@ -32,7 +32,14 @@ import {
 import type { DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import { bindMethodCapability, allOf, anyOf, capability } from "@vibestudio/shared/authorization";
 import type { MethodSchema, ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
-import { installExactDurableObjectSchema } from "./schema.js";
+import {
+  dispatchWithDurableObjectSchemaGuard,
+  durableObjectSchemaDescriptor,
+  installDurableObjectSchema,
+  validateDurableObjectSchemaIndexes,
+  type DurableObjectSchemaBaseline,
+  type DurableObjectSchemaMigration,
+} from "./schema.js";
 import { InvocationContext } from "./invocation-context.js";
 
 // Re-export the `@rpc` exposure decorator so DO authors import it alongside the base.
@@ -68,7 +75,11 @@ export interface DORef {
   objectKey: string;
 }
 
-export type { SchemaSqlStorage } from "./schema.js";
+export type {
+  DurableObjectSchemaBaseline,
+  DurableObjectSchemaMigration,
+  SchemaSqlStorage,
+} from "./schema.js";
 export { InvocationContext } from "./invocation-context.js";
 
 export interface LifecyclePrepareInput {
@@ -124,6 +135,7 @@ export abstract class DurableObjectBase {
   protected env: Record<string, unknown>;
 
   private schemaReady = false;
+  private schemaPreparationError: unknown = null;
   private connectionless: ConnectionlessRpcClient | null = null;
   private currentObjectKey: string | null = null;
   private readonly invocationContext = new InvocationContext<RpcInvocationContext>();
@@ -139,6 +151,22 @@ export abstract class DurableObjectBase {
   }
 
   protected abstract createTables(): void;
+
+  /** Exact oldest deployed shape this build deliberately supports. */
+  protected abstract schemaProductionBaseline(): DurableObjectSchemaBaseline;
+
+  /** Retained, contiguous forward migrations after the production baseline. */
+  protected schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [];
+  }
+
+  /** Exact representative object keys captured and replayed by publication diagnostics. */
+  protected schemaMigrationFixtureObjectKeys(): readonly string[] {
+    return [];
+  }
+
+  /** Activation-local initialization that requires the committed schema. */
+  protected afterSchemaReady(): void {}
 
   /**
    * Optional receiver binding for schema-declared code principals. Product
@@ -213,6 +241,10 @@ export abstract class DurableObjectBase {
     return [];
   }
 
+  protected schemaIndexDefinitions(): readonly string[] | undefined {
+    return undefined;
+  }
+
   protected validateSchema(): void {
     const missing = this.requiredTables().filter((table) => {
       const rows = this.sql
@@ -225,19 +257,62 @@ export abstract class DurableObjectBase {
         `${this.constructor.name} schema validation failed: missing table(s): ${missing.join(", ")}`
       );
     }
+    const indexes = this.schemaIndexDefinitions();
+    if (indexes) validateDurableObjectSchemaIndexes(this.sql, this.requiredTables(), indexes);
   }
 
   protected ensureReady(): void {
+    if (this.schemaPreparationError !== null) {
+      const error = this.schemaPreparationError;
+      this.schemaPreparationError = null;
+      throw error;
+    }
     if (this.schemaReady) return;
-    installExactDurableObjectSchema({
+    installDurableObjectSchema({
       className: this.constructor.name,
       version: (this.constructor as typeof DurableObjectBase).schemaVersion,
       storage: this.ctx.storage,
       schemaTables: this.requiredTables(),
+      productionBaseline: this.schemaProductionBaseline(),
+      migrations: this.schemaMigrations(),
+      expectedSchemaFingerprint:
+        typeof this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"] === "string"
+          ? this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"]
+          : undefined,
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });
+    if (this.env["VIBESTUDIO_SCHEMA_PROBE"] !== true) this.afterSchemaReady();
     this.schemaReady = true;
+  }
+
+  /** Constructor-time schema preparation whose failure remains fetch-guarded. */
+  protected prepareSchemaForActivation(): void {
+    try {
+      this.ensureReady();
+    } catch (error) {
+      this.schemaPreparationError = error;
+    }
+  }
+
+  private schemaDescriptorResponse(): Response {
+    const definition = {
+      className: this.constructor.name,
+      version: (this.constructor as typeof DurableObjectBase).schemaVersion,
+      storage: this.ctx.storage,
+      schemaTables: this.requiredTables(),
+      productionBaseline: this.schemaProductionBaseline(),
+      migrations: this.schemaMigrations(),
+      expectedSchemaFingerprint:
+        typeof this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"] === "string"
+          ? this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"]
+          : undefined,
+      createSchema: () => this.createTables(),
+      validateSchema: () => this.validateSchema(),
+    };
+    return Response.json(
+      durableObjectSchemaDescriptor(definition, this.schemaMigrationFixtureObjectKeys())
+    );
   }
 
   protected getStateValue(key: string): string | null {
@@ -508,13 +583,31 @@ export abstract class DurableObjectBase {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const segments = new URL(request.url).pathname.split("/").filter(Boolean);
+    if (segments.length >= 1 && !this.currentObjectKey) {
+      this.currentObjectKey = decodeURIComponent(segments[0]!);
+    }
+    const objectKey = this.currentObjectKey ?? this.ctx.id.name;
+    if (!objectKey) throw new Error("Durable Object request has no exact object key");
+    return dispatchWithDurableObjectSchemaGuard({
+      request,
+      identity: {
+        source: String(this.env["WORKER_SOURCE"] ?? ""),
+        className: String(this.env["WORKER_CLASS_NAME"] ?? this.constructor.name),
+        objectKey,
+      },
+      ensureReady: () => this.ensureReady(),
+      dispatch: () => this.dispatchFetch(request),
+    });
+  }
+
+  private async dispatchFetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
     if (segments.length >= 1 && !this.currentObjectKey) {
       this.currentObjectKey = decodeURIComponent(segments[0]!);
     }
 
-    this.ensureReady();
     if (this.currentObjectKey) {
       this.sql.exec(
         `INSERT OR IGNORE INTO state (key, value) VALUES ('__objectKey', ?)`,
@@ -527,6 +620,11 @@ export abstract class DurableObjectBase {
     }
 
     const method = segments.slice(1).join("/") || "getState";
+    if (this.env["VIBESTUDIO_SCHEMA_PROBE"] === true) {
+      return method === "__vibestudio_schema_descriptor"
+        ? this.schemaDescriptorResponse()
+        : new Response("Schema probes refuse application dispatch", { status: 403 });
+    }
     const acceptedAtRaw = request.headers.get(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER);
     const acceptedAtHeader = acceptedAtRaw === null ? Number.NaN : Number(acceptedAtRaw);
     const authorityAcceptedAt = Number.isFinite(acceptedAtHeader) ? acceptedAtHeader : Date.now();

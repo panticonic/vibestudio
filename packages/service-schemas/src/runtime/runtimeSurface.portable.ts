@@ -46,6 +46,9 @@ export const WORKERS_MEMBERS = [
   "create",
   "list",
   "destroy",
+  "resetStorage",
+  "listStorageBackups",
+  "restoreStorageBackup",
   "listServices",
   "resolveService",
   "resolveDurableObject",
@@ -123,6 +126,44 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
       maxItems: 1,
     },
     examples: [{ args: [{ id: "worker:workers/my-worker:probe-1" }] }],
+  },
+  resetStorage: {
+    signature:
+      "resetStorage(target: DurableObjectStorageTarget, intent: string): Promise<{ operationId: string }>",
+    description:
+      "Back up, integrity-check, and reset one exact Durable Object storage target. Use a migration for retained state; reset only explicitly disposable state.",
+    argsSchema: { type: "array", minItems: 2, maxItems: 2 },
+    examples: [
+      {
+        args: [
+          { source: "workers/notes", className: "NotesDO", objectKey: "scratch" },
+          "Discard incompatible disposable test data",
+        ],
+      },
+    ],
+  },
+  listStorageBackups: {
+    signature:
+      "listStorageBackups(target: DurableObjectStorageTarget): Promise<DurableObjectStorageBackup[]>",
+    description: "List verified storage backups for one exact Durable Object target.",
+    argsSchema: { type: "array", minItems: 1, maxItems: 1 },
+    examples: [{ args: [{ source: "workers/notes", className: "NotesDO", objectKey: "scratch" }] }],
+  },
+  restoreStorageBackup: {
+    signature:
+      "restoreStorageBackup(target: DurableObjectStorageTarget, operationId: string, intent: string): Promise<{ operationId: string }>",
+    description:
+      "Back up the current files and restore a verified named backup to the same exact target.",
+    argsSchema: { type: "array", minItems: 3, maxItems: 3 },
+    examples: [
+      {
+        args: [
+          { source: "workers/notes", className: "NotesDO", objectKey: "scratch" },
+          "00000000-0000-4000-8000-000000000000",
+          "Undo the disposable schema reset",
+        ],
+      },
+    ],
   },
   listServices: {
     signature: "listServices(): Promise<WorkspaceServiceInfo[]>",

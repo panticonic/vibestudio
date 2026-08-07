@@ -103,6 +103,20 @@ export function createWorkerService(deps: {
     contextId?: string;
     buildRef?: string;
   }) => Promise<void>;
+  resetDurableObjectStorage?: (
+    target: { source: string; className: string; objectKey: string },
+    intent: string
+  ) => Promise<{ operationId: string }>;
+  listDurableObjectStorageBackups?: (target: {
+    source: string;
+    className: string;
+    objectKey: string;
+  }) => Promise<Array<{ operationId: string; intent: string; createdAt: number }>>;
+  restoreDurableObjectStorageBackup?: (
+    target: { source: string; className: string; objectKey: string },
+    operationId: string,
+    intent: string
+  ) => Promise<{ operationId: string }>;
   assertUserlandServiceExposure?: (
     ctx: ServiceContext,
     input: { name: string; provider: string; providerEv: string }
@@ -160,6 +174,45 @@ export function createWorkerService(deps: {
         leaves: [dynamicWorkspaceServiceLeaf],
       },
     };
+  };
+  const ExactDurableObjectTargetSchema = z
+    .object({
+      source: z.string().min(1),
+      className: z.string().min(1),
+      objectKey: z.string().min(1),
+      targetId: z.string().optional(),
+    })
+    .passthrough()
+    .superRefine((target, ctx) => {
+      if (
+        target.targetId !== undefined &&
+        target.targetId !== `do:${target.source}:${target.className}:${target.objectKey}`
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "targetId does not match the exact source/class/objectKey target",
+        });
+      }
+    });
+  const storageMaintenancePolicy = {
+    capability: "workers.storage.reset",
+    tier: {
+      tier: "critical" as const,
+      session: "family" as const,
+      residency: "untrusted-execution" as const,
+      family: "workers.storage-maintenance",
+      rationale:
+        "Exact-target durable storage replacement is destructive and individually reviewed",
+    },
+    presentation: {
+      title: "Replace Durable Object storage",
+      action: "replace Durable Object storage",
+      description: "Back up and replace the persisted storage of one exact Durable Object target.",
+      group: "runtime",
+      authorityCategory: { domain: "automation" as const, verb: "act" as const },
+    },
+    authority: { principals: ["user", "host", "code"] as PrincipalKind[] },
+    access: { sensitivity: "destructive" as const },
   };
 
   const methods = defineServiceMethods({
@@ -221,6 +274,42 @@ export function createWorkerService(deps: {
       args: z.tuple([z.string(), z.string(), z.string()]),
       access: { sensitivity: "read" as const },
       authority: preparedResolutionAuthority("resolveDurableObject"),
+    },
+    resetStorage: {
+      ...storageMaintenancePolicy,
+      description:
+        "Back up, integrity-check, and reset one exact Durable Object storage target. Intent is required audit context; use migrations for retained data.",
+      args: z.tuple([ExactDurableObjectTargetSchema, z.string().trim().min(1).max(500)]),
+      returns: z.object({ operationId: z.string() }).strict(),
+    },
+    listStorageBackups: {
+      tier: {
+        tier: "open",
+        session: "family",
+        residency: "untrusted-execution",
+        family: "workers.read",
+        rationale: "Backup metadata for one exact target is recovery discovery",
+      },
+      description: "List verified storage backups for one exact Durable Object target.",
+      args: z.tuple([ExactDurableObjectTargetSchema]),
+      returns: z.array(
+        z
+          .object({ operationId: z.string(), intent: z.string(), createdAt: z.number() })
+          .passthrough()
+      ),
+      authority: { principals: ["user", "host", "code"] },
+      access: { sensitivity: "read" },
+    },
+    restoreStorageBackup: {
+      ...storageMaintenancePolicy,
+      description:
+        "Back up the current files, verify a named backup, and restore it to the same exact Durable Object target.",
+      args: z.tuple([
+        ExactDurableObjectTargetSchema,
+        z.string().uuid(),
+        z.string().trim().min(1).max(500),
+      ]),
+      returns: z.object({ operationId: z.string() }).strict(),
     },
   });
 
@@ -408,6 +497,56 @@ export function createWorkerService(deps: {
           objectKey: resolvedObjectKey,
           targetId,
         };
+      },
+      resetStorage: async (ctx, [target, intent]) => {
+        await resolveDurableObjectForCaller(ctx, target.source, target.className);
+        const objectKey = resolvedDurableObjectKey(
+          ctx,
+          target.source,
+          target.className,
+          target.objectKey
+        );
+        if (!deps.resetDurableObjectStorage) {
+          throw new Error("Durable Object storage maintenance is unavailable");
+        }
+        return await deps.resetDurableObjectStorage(
+          { source: target.source, className: target.className, objectKey },
+          intent
+        );
+      },
+      listStorageBackups: async (ctx, [target]) => {
+        await resolveDurableObjectForCaller(ctx, target.source, target.className);
+        const objectKey = resolvedDurableObjectKey(
+          ctx,
+          target.source,
+          target.className,
+          target.objectKey
+        );
+        if (!deps.listDurableObjectStorageBackups) {
+          throw new Error("Durable Object storage backup discovery is unavailable");
+        }
+        return await deps.listDurableObjectStorageBackups({
+          source: target.source,
+          className: target.className,
+          objectKey,
+        });
+      },
+      restoreStorageBackup: async (ctx, [target, operationId, intent]) => {
+        await resolveDurableObjectForCaller(ctx, target.source, target.className);
+        const objectKey = resolvedDurableObjectKey(
+          ctx,
+          target.source,
+          target.className,
+          target.objectKey
+        );
+        if (!deps.restoreDurableObjectStorageBackup) {
+          throw new Error("Durable Object storage restore is unavailable");
+        }
+        return await deps.restoreDurableObjectStorageBackup(
+          { source: target.source, className: target.className, objectKey },
+          operationId,
+          intent
+        );
       },
     }),
   };

@@ -32,6 +32,9 @@ function egressBinding(ctx: DurableObjectState, id: string): Fetcher {
 
 export class EgressGateway extends WorkerEntrypoint<UniversalDoEnv, EgressProps> {
   async fetch(request: Request): Promise<Response> {
+    if (this.ctx.props.id.includes(":__vibestudio_schema_probe:")) {
+      return new Response("Schema probes have no network egress", { status: 403 });
+    }
     const headers = new Headers(request.headers);
     headers.set("X-Vibestudio-Egress-Caller", this.ctx.props.id);
     headers.set("X-Vibestudio-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);

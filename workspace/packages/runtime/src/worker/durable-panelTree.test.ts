@@ -145,6 +145,9 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
 
     class PanelTreeProbeDO extends DurableObjectBase {
+      protected schemaProductionBaseline() {
+        return { version: 1, name: "panel-tree-probe-v1" } as const;
+      }
       protected createTables(): void {}
 
       @rpc({
@@ -230,6 +233,9 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
 
     class PanelTreeProbeDO extends DurableObjectBase {
+      protected schemaProductionBaseline() {
+        return { version: 1, name: "panel-tree-probe-v1" } as const;
+      }
       protected createTables(): void {}
 
       @rpc({
@@ -342,6 +348,9 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
 
     class PanelTreeProbeDO extends DurableObjectBase {
+      protected schemaProductionBaseline() {
+        return { version: 1, name: "panel-tree-probe-v1" } as const;
+      }
       protected createTables(): void {}
 
       @rpc({
@@ -439,6 +448,9 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
 
     class PanelAliasProbeDO extends DurableObjectBase {
+      protected schemaProductionBaseline() {
+        return { version: 1, name: "panel-alias-probe-v1" } as const;
+      }
       protected createTables(): void {}
 
       @rpc({
@@ -520,6 +532,9 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
 
     class ParentProbeDO extends DurableObjectBase {
+      protected schemaProductionBaseline() {
+        return { version: 1, name: "parent-probe-v1" } as const;
+      }
       protected createTables(): void {}
 
       @rpc({

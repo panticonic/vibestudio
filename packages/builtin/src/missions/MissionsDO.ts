@@ -36,11 +36,13 @@ interface MissionRow {
 }
 
 export class MissionsDO extends DurableObjectBase {
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "missions-v1" } as const;
+  }
   static override rpcMethods = missionsMethods;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
-    this.ensureReady();
   }
 
   protected createTables(): void {
@@ -83,6 +85,10 @@ export class MissionsDO extends DurableObjectBase {
 
   protected override requiredTables(): readonly string[] {
     return ["missions", "mission_revisions", "mission_runs"];
+  }
+
+  protected override schemaIndexDefinitions(): readonly string[] {
+    return [`CREATE INDEX mission_runs_by_mission ON mission_runs(mission_id, started_at DESC)`];
   }
 
   @schemaRpc()

@@ -95,9 +95,12 @@ export class BrowserDataDO extends DurableObjectBase {
   static override rpcMethods = browserDataMethods;
   static override schemaVersion = 1;
 
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "browser-data-v1" } as const;
+  }
+
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
-    this.ensureReady();
   }
 
   protected override rpcSchemaCodeSource(): string | null {

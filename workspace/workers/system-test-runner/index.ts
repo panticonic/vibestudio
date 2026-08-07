@@ -147,6 +147,9 @@ function systemTestEvalCode(options: SystemTestRunConfig): string {
 }
 
 export class SystemTestRunnerDO extends DurableObjectBase {
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "system-test-runner-v1" } as const;
+  }
   protected createTables(): void {
     // The child EvalDO owns durable progress/result state. This conduit stays
     // stateless so an activation change cannot orphan an active run.

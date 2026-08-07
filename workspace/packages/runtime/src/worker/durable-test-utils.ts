@@ -239,9 +239,7 @@ export function createTestDirectAuthority(input: {
       lineageAtConsent: [],
       ...(invocationDigest ? { invocationDigest } : {}),
     },
-    provenance: invocationDigest
-      ? "critical-confirmation"
-      : "durable-test-host-attestation",
+    provenance: invocationDigest ? "critical-confirmation" : "durable-test-host-attestation",
   }));
   return {
     audience,
@@ -293,7 +291,7 @@ export async function createTestDO<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   DOClass: new (ctx: any, env: any) => T,
   env?: Record<string, unknown>,
-  opts?: { db?: Database }
+  opts?: { db?: Database; initialize?: boolean }
 ): Promise<TestDOResult<T>> {
   const SQL = await getSqlJs();
   // Reuse an existing db to simulate hibernation (fresh DO, same durable storage).
@@ -358,6 +356,9 @@ export async function createTestDO<T>(
 
   const mergedEnv = { ...AGENTIC_ENV_DEFAULTS, ...env };
   const instance = new DOClass(ctx, mergedEnv);
+  if (opts?.initialize !== false) {
+    (instance as unknown as { ensureReady?: () => void }).ensureReady?.();
+  }
 
   // call() dispatches through fetch(), matching the production DO invocation path:
   // URL /{objectKey}/{method} → ensureReady() → ensureBootstrapped() → method dispatch
@@ -372,9 +373,7 @@ export async function createTestDO<T>(
     args: unknown[]
   ): Promise<R> => {
     const caller =
-      typeof callerInput === "string"
-        ? { callerId: "main", callerKind: callerInput }
-        : callerInput;
+      typeof callerInput === "string" ? { callerId: "main", callerKind: callerInput } : callerInput;
     const { authorization: suppliedAuthorization, ...callerIdentity } = caller;
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
     if (typeof fetchable.fetch !== "function") {

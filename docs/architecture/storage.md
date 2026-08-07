@@ -12,26 +12,53 @@ inside the DO class:
 
 - `createTables()` creates the current schema with `CREATE TABLE IF NOT EXISTS`.
 - `schemaVersion` declares the target schema version.
-- `migrate(fromVersion, toVersion)` runs after `createTables()` and before the
-  version row is updated.
+- `schemaProductionBaseline()` names the oldest exact deployed shape this class
+  supports.
+- `schemaMigrations()` retains contiguous, named N-1→N transformations. The
+  whole chain, ledger, downgrade guard, and final validation commit in one
+  Durable Object storage transaction.
+- `schemaMigrationFixtureObjectKeys()` names exact representative userland
+  objects captured and replayed by the protected-publication schema gate.
+
+Fresh objects create only the final schema. Incompatible or drifted persistence
+fails with `DO_SCHEMA_INCOMPATIBLE`; a thrown migration fails with
+`DO_SCHEMA_MIGRATION_FAILED` and leaves the previous database intact. The full
+contract is [Durable Object schema migrations](../durable-object-schema-migrations.md).
+For explicitly disposable userland data, `workers.resetStorage()` makes a
+verified backup before resetting; it is a recovery primitive, not a migration.
 
 The host stores DO SQLite files under:
 
 ```text
-<statePath>/.databases/workerd-do/<source_class_unique_key>/<object_hash>.sqlite
+<statePath>/.databases/workerd-universal-do/vibestudio:universal-do/<object_hash>.*
 ```
+
+Backups live outside workerd's directory under
+`<statePath>/.databases/do-backups/<operation-id>/`.
+Permanent versioned migration fixtures live separately under
+`<statePath>/.databases/do-schema-fixtures/<fixture-digest>/`.
+
+Storage maintenance (reset/restore) is a journaled, fenced operation recorded
+in `<statePath>/.databases/do-maintenance.db`. While an operation's journal
+row is open, host dispatch to that one object is refused with
+`DO_MAINTENANCE_IN_PROGRESS`. Steps are resumed from the journal's step
+cursor: at host start, and again on the next `resetStorage`/`restoreStorageBackup`
+call for the same target — so retrying the API call is the recovery path for
+an operation interrupted by a crash or failure. An operation that keeps
+failing keeps its fence (fail closed); the last-resort manual escape is to
+inspect that database and the backup directory directly with the host stopped.
 
 ## Internal Vibestudio DOs
 
 Framework-owned storage is implemented as internal DO classes in
 `src/server/internalDOs/`, registered with source `vibestudio/internal`.
 
-| Class | Service | Object key | Owns |
-|---|---|---|---|
-| `EvalDO` | `eval` | per-owner (hash of caller id + subKey) | `repl_scopes` |
-| `WebhookStoreDO` | `webhookIngress` | `global` | `webhook_ingress_subscriptions` |
-| `WorkspaceDO` | `workspace-sync` | workspace id | `entities`, `slots`, `slot_history`, `workspace_meta`, `panel_search_metadata`, `lifecycle_*` (unified entity/slot model; replaced the former `PanelStoreDO`) |
-| `BrowserDataDO` | `browser-data` | `global` | bookmarks, history, history FTS, passwords, cookies, autofill, permissions, import log |
+| Class            | Service          | Object key                             | Owns                                                                                                                                                          |
+| ---------------- | ---------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EvalDO`         | `eval`           | per-owner (hash of caller id + subKey) | `repl_scopes`                                                                                                                                                 |
+| `WebhookStoreDO` | `webhookIngress` | `global`                               | `webhook_ingress_subscriptions`                                                                                                                               |
+| `WorkspaceDO`    | `workspace-sync` | workspace id                           | `entities`, `slots`, `slot_history`, `workspace_meta`, `panel_search_metadata`, `lifecycle_*` (unified entity/slot model; replaced the former `PanelStoreDO`) |
+| `BrowserDataDO`  | `browser-data`   | `global`                               | bookmarks, history, history FTS, passwords, cookies, autofill, permissions, import log                                                                        |
 
 `WorkspaceDO` and `BrowserDataDO` use FTS5 in workerd. Tests that assert FTS
 behavior run against real workerd, not the `sql.js` unit harness.
@@ -75,14 +102,14 @@ Tmp leftovers are swept on service startup.
 
 The service publishes both an RPC contract and HTTP routes:
 
-| Method | Kind | Auth / policy | Use |
-|---|---|---|---|
-| `PUT /_r/s/blobstore/blob` | HTTP | `caller-token` (panel/worker/shell/server) | Stream a body in; response `{ digest, size }`. Hash is computed while writing to a tmp file; `fs.link` then promotes to `sha256/<aa>/<bb>/<rest>`. EEXIST is a dedup hit. |
-| `GET /_r/s/blobstore/blob/:digest` | HTTP | `caller-token` | Stream bytes out. Sets `Content-Length`, quoted `ETag: "<digest>"`, and `Cache-Control: immutable, max-age=31536000`. 404 on missing, 400 on malformed digest. |
-| `blobstore.has(digest)` | RPC | panel/worker/shell/server | Existence check. |
-| `blobstore.stat(digest)` | RPC | panel/worker/shell/server | `{ size, mtime } \| null`. |
-| `blobstore.delete(digest)` | RPC | **shell/server only** | Caller-driven GC. Restricted to trusted callers — panels and workers cannot corrupt the store. |
-| `blobstore.list({ prefix?, limit? })` | RPC | **shell/server only** | Enumerate digests; admin/debug. |
+| Method                                | Kind | Auth / policy                              | Use                                                                                                                                                                       |
+| ------------------------------------- | ---- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUT /_r/s/blobstore/blob`            | HTTP | `caller-token` (panel/worker/shell/server) | Stream a body in; response `{ digest, size }`. Hash is computed while writing to a tmp file; `fs.link` then promotes to `sha256/<aa>/<bb>/<rest>`. EEXIST is a dedup hit. |
+| `GET /_r/s/blobstore/blob/:digest`    | HTTP | `caller-token`                             | Stream bytes out. Sets `Content-Length`, quoted `ETag: "<digest>"`, and `Cache-Control: immutable, max-age=31536000`. 404 on missing, 400 on malformed digest.            |
+| `blobstore.has(digest)`               | RPC  | panel/worker/shell/server                  | Existence check.                                                                                                                                                          |
+| `blobstore.stat(digest)`              | RPC  | panel/worker/shell/server                  | `{ size, mtime } \| null`.                                                                                                                                                |
+| `blobstore.delete(digest)`            | RPC  | **shell/server only**                      | Caller-driven GC. Restricted to trusted callers — panels and workers cannot corrupt the store.                                                                            |
+| `blobstore.list({ prefix?, limit? })` | RPC  | **shell/server only**                      | Enumerate digests; admin/debug.                                                                                                                                           |
 
 ### Design properties
 

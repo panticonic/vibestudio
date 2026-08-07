@@ -362,7 +362,7 @@ export const buildChangeSetSchema = z
  */
 export const buildDiagnosticSchema = z
   .object({
-    source: z.enum(["esbuild", "tsc", "authority"]),
+    source: z.enum(["esbuild", "tsc", "authority", "schema"]),
     severity: z.enum(["error", "warning"]),
     file: z.string(),
     line: z.number().int().nonnegative(),

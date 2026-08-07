@@ -1901,6 +1901,11 @@ async function main() {
   // Bridge one atomic protected publication to the client event bus.
   workspaceVcs.onProtectedPublication((event) => {
     eventService.emit("vcs:publication", event);
+    try {
+      workerdManagerForGateway?.commitDurableObjectSchemas(event.workspaceStateHash);
+    } catch (error) {
+      console.error("[SchemaGate] Failed to commit published schema descriptors:", error);
+    }
   });
   workspaceVcs.onProtectedPublication((event) => {
     treeScanner.invalidate();
@@ -2780,10 +2785,34 @@ async function main() {
         );
       },
       validateCandidateWorkspaceState: async (stateHash, changedPaths) => {
-        await loadWorkspaceConfigFromState(stateHash);
+        const candidateConfig = await loadWorkspaceConfigFromState(stateHash);
+        const candidateDecls = buildWorkspaceDeclarations(candidateConfig);
         const buildSystem = assertPresent(buildSystemInstance);
         try {
+          const classesBySource = new Map<string, Set<string>>();
+          const addClass = (source: string, className: string): void => {
+            let classes = classesBySource.get(source);
+            if (!classes) classesBySource.set(source, (classes = new Set()));
+            classes.add(className);
+          };
+          for (const singleton of candidateDecls.singletons.all()) {
+            addClass(singleton.source, singleton.className);
+          }
+          for (const service of candidateDecls.services) {
+            if (service.durableObject) addClass(service.source, service.durableObject.className);
+          }
+          for (const route of candidateDecls.routes) {
+            if (route.durableObject) addClass(route.source, route.durableObject.className);
+          }
           const unitNames = await buildSystem.listAffectedBuildUnits(stateHash, changedPaths);
+          // A manifest-only change can expose a previously undeclared class
+          // without changing its worker files. Probe every referenced source
+          // against the exact candidate state in that case.
+          if (changedPaths.some((changed) => changed.startsWith("meta/"))) {
+            for (const source of classesBySource.keys()) {
+              if (!unitNames.includes(source)) unitNames.push(source);
+            }
+          }
           const reports = await Promise.all(
             unitNames.map((unitName) => buildSystem.getBuildReport(unitName, stateHash))
           );
@@ -2804,6 +2833,91 @@ async function main() {
               unitNames,
               stateHash
             );
+          }
+          const manager = workerdManagerForGateway;
+          const schemaReports = reports.filter(
+            (report) => report.kind === "worker" && classesBySource.has(report.repoPath)
+          );
+          if (!manager && schemaReports.length > 0) {
+            throw new Error("Durable Object schema publication gate is not ready");
+          }
+          if (manager) {
+            const probeResults = (
+              await Promise.all(
+                schemaReports.flatMap((report) => {
+                  const buildKey = report.builds.find(
+                    (entry) => entry.target === "runtime"
+                  )?.buildKey;
+                  const build = buildKey ? buildSystem.getBuildByKey(buildKey) : null;
+                  const classes = classesBySource.get(report.repoPath);
+                  if (!build || !classes) return [];
+                  return [...classes].map(async (className) => {
+                    try {
+                      return {
+                        candidate: {
+                          source: report.repoPath,
+                          effectiveVersion: build.metadata.ev,
+                          descriptor: await manager.probeDurableObjectSchema(
+                            report.repoPath,
+                            className,
+                            build
+                          ),
+                        },
+                      };
+                    } catch (error) {
+                      return {
+                        failure: `${report.repoPath}:${className} schema probe failed: ${error instanceof Error ? error.message : String(error)}`,
+                      };
+                    }
+                  });
+                })
+              )
+            ).flat();
+            const schemaCandidates = probeResults.flatMap((result) =>
+              result.candidate ? [result.candidate] : []
+            );
+            const schemaFixtureFailures = (
+              await Promise.all(
+                schemaCandidates.map(async (candidate) => {
+                  const report = schemaReports.find((entry) => entry.repoPath === candidate.source);
+                  const buildKey = report?.builds.find(
+                    (entry) => entry.target === "runtime"
+                  )?.buildKey;
+                  const build = buildKey ? buildSystem.getBuildByKey(buildKey) : null;
+                  if (!build) {
+                    return [
+                      `${candidate.source}:${candidate.descriptor.className} fixture gate lost its candidate build`,
+                    ];
+                  }
+                  return await manager.validateDurableObjectSchemaFixtures({
+                    ...candidate,
+                    build,
+                  });
+                })
+              )
+            ).flat();
+            const schemaFailures = [
+              ...probeResults.flatMap((result) => (result.failure ? [result.failure] : [])),
+              ...schemaFixtureFailures,
+              ...(schemaCandidates.length > 0
+                ? manager.validateAndStageDurableObjectSchemas(stateHash, schemaCandidates)
+                : []),
+            ];
+            if (schemaFailures.length > 0) {
+              const { BuildGateFailedError } = await import("./buildV2/diagnostics.js");
+              throw new BuildGateFailedError(
+                schemaFailures.map((message) => ({
+                  source: "schema" as const,
+                  severity: "error" as const,
+                  file: "",
+                  line: 0,
+                  column: 0,
+                  message,
+                })),
+                unitNames,
+                stateHash
+              );
+            }
           }
           await buildSystem.stageAuthorityIndex(stateHash);
         } catch (error) {
@@ -3720,11 +3834,12 @@ async function main() {
                 input
               );
               if (released.status === "ready" && input.mode === "retire") {
-                await sealAndDrainDurableObjectRelays(record.id);
+                await sealAndDrainDurableObjectRelays(record.id, `runtime-retire:${record.id}`);
               }
               return released;
             },
-            releaseEntityRelaySeal: releaseDurableObjectRelaySeal,
+            releaseEntityRelaySeal: (entityId) =>
+              releaseDurableObjectRelaySeal(entityId, `runtime-retire:${entityId}`),
             onRetire: async (record) => {
               await cleanupRuntimeEntityRecord(record);
             },
@@ -5093,6 +5208,12 @@ async function main() {
               ...(buildRef ? { buildRef } : {}),
             });
           },
+          resetDurableObjectStorage: (target, intent) =>
+            workerdManagerInst.resetDOStorage(target, intent),
+          listDurableObjectStorageBackups: (target) =>
+            workerdManagerInst.listDOStorageBackups(target),
+          restoreDurableObjectStorageBackup: (target, operationId, intent) =>
+            workerdManagerInst.restoreDOStorageBackup(target, operationId, intent),
         });
       },
       getServiceDefinition() {

@@ -661,8 +661,6 @@ import type { ParticipantDescriptor } from "@workspace/harness";
  * prompt config.
  */
 export class ${className} extends AgentWorkerBase {
-  static override schemaVersion = 1;
-
   // --- Hook: default model id (provider:model format) ---
   // protected override getDefaultModel(): string {
   //   return "openai-codex:gpt-5.6-sol";

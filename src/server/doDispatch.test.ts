@@ -3,7 +3,11 @@ import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch } from "./doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
-import { getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
+import {
+  getWorkerdConnectionDispatcher,
+  releaseDurableObjectRelaySeal,
+  sealAndDrainDurableObjectRelays,
+} from "./workerdRpcRelay.js";
 import { DURABLE_WORK_READY_HEADER } from "@vibestudio/shared/durableWork";
 import type { AuthorizationContext } from "@vibestudio/rpc";
 import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
@@ -231,6 +235,25 @@ describe("DODispatch", () => {
 
       expect(ensureReady).toHaveBeenCalledTimes(5);
       expect(ensureReady.mock.calls.every(([candidate]) => candidate === ref)).toBe(true);
+    });
+
+    it("refuses server dispatch and alarms while exact-target maintenance is sealed", async () => {
+      dispatch.setTokenManager(new TokenManager());
+      dispatch.setGetWorkerdUrl(() => "http://127.0.0.1:10001");
+      dispatch.setGetWorkerdGatewayToken(() => "workerd-gateway-token");
+      const ref = makeRef();
+      const targetId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+      await sealAndDrainDurableObjectRelays(targetId, "maintenance-test", {
+        code: "DO_MAINTENANCE_IN_PROGRESS",
+        message: "maintenance",
+      });
+      await expect(dispatch.dispatch(ref, "ping")).rejects.toMatchObject({
+        code: "DO_MAINTENANCE_IN_PROGRESS",
+      });
+      await expect(dispatch.dispatchAlarm(ref)).rejects.toMatchObject({
+        code: "DO_MAINTENANCE_IN_PROGRESS",
+      });
+      releaseDurableObjectRelaySeal(targetId, "maintenance-test");
     });
 
     it("strips a work-ready receipt from the result and notifies its owner", async () => {

@@ -904,6 +904,7 @@ function repositorySeedFiles(
           'import { DurableObjectBase, rpc } from "@workspace/runtime/worker";',
           "",
           "export class FixtureWorkerDO extends DurableObjectBase {",
+          '  protected schemaProductionBaseline() { return { version: 1, name: "fixture-worker-v1" } as const; }',
           "  protected createTables(): void {}",
           "",
           "  // This disposable fixture is addressed directly by source/class/key.",

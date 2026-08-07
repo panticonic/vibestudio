@@ -733,11 +733,10 @@ interface ProjectionKey {
 export class GadWorkspaceDO extends DurableObjectBase {
   static override rpcMethods = gadWireMethods;
   static override schemaVersion = GAD_WORKSPACE_SCHEMA_VERSION;
-  constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
-    super(ctx, env);
-    this.ensureReady();
-  }
 
+  protected override schemaProductionBaseline() {
+    return { version: GAD_WORKSPACE_SCHEMA_VERSION, name: "gad-workspace-baseline" } as const;
+  }
   protected createTables(): void {
     this.createFreshSchema();
   }

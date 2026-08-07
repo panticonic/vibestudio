@@ -22,11 +22,14 @@ interface WebhookIngressSubscriptionRow {
 
 export class WebhookStoreDO extends DurableObjectBase {
   static override schemaVersion = 1;
+
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "webhook-store-v1" } as const;
+  }
   static override rpcMethods = webhookEngineMethods;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
-    this.ensureReady();
   }
 
   protected createTables(): void {
@@ -57,6 +60,13 @@ export class WebhookStoreDO extends DurableObjectBase {
 
   protected override requiredTables(): readonly string[] {
     return ["webhook_ingress_subscriptions"];
+  }
+
+  protected override schemaIndexDefinitions(): readonly string[] {
+    return [
+      `CREATE INDEX webhook_ingress_subscriptions_owner_idx
+       ON webhook_ingress_subscriptions(owner_caller_id)`,
+    ];
   }
 
   protected override validateSchema(): void {

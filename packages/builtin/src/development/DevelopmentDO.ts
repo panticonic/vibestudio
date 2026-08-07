@@ -31,6 +31,9 @@ const TERMINAL_RUN_STATES = new Set<DevelopmentRun["state"]>([
 ]);
 
 export class DevelopmentDO extends DurableObjectBase {
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "development-v1" } as const;
+  }
   static override rpcMethods = developmentBuiltinMethods;
   private readonly store: DevelopmentStore;
 
@@ -39,7 +42,6 @@ export class DevelopmentDO extends DurableObjectBase {
     this.store = new DevelopmentStore(this.sql, (operation) =>
       this.ctx.storage.transactionSync(operation)
     );
-    this.ensureReady();
   }
 
   protected createTables(): void {
@@ -53,6 +55,15 @@ export class DevelopmentDO extends DurableObjectBase {
       "development_run_events",
       "development_mutation_intents",
       "development_test_faults",
+    ];
+  }
+
+  protected override schemaIndexDefinitions(): readonly string[] {
+    return [
+      `CREATE UNIQUE INDEX development_session_open_intent
+       ON development_sessions(owner_runtime_id,COALESCE(owner_user_id,''),idempotency_key)`,
+      `CREATE INDEX development_runs_owner
+       ON development_runs(owner_user_id,owner_runtime_id,created_at DESC,run_id ASC)`,
     ];
   }
 

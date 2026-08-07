@@ -60,7 +60,15 @@ export async function destroyWorkerdConnections(reason: string): Promise<void> {
 }
 
 type RelayLane = {
-  sealed: boolean;
+  seals: Map<
+    string,
+    | {
+        code: string;
+        message: string;
+        errorData?: Record<string, unknown>;
+      }
+    | undefined
+  >;
   inFlight: number;
   drained: Promise<void>;
   resolveDrained: () => void;
@@ -80,16 +88,27 @@ function createRelayLane(): RelayLane {
   const drained = new Promise<void>((resolve) => {
     resolveDrained = resolve;
   });
-  return { sealed: false, inFlight: 0, drained, resolveDrained };
+  return { seals: new Map(), inFlight: 0, drained, resolveDrained };
 }
 
-function beginEntityRelay(targetId: string): () => void {
+export function beginDurableObjectRelay(targetId: string): () => void {
   let lane = entityRelayLanes.get(targetId);
   if (!lane) {
     lane = createRelayLane();
     entityRelayLanes.set(targetId, lane);
   }
-  if (lane.sealed) throw new EntityNotCreatedError(targetId);
+  if (lane.seals.size > 0) {
+    const sealedError = [...lane.seals.values()].find((error) => error !== undefined);
+    if (sealedError) {
+      throw new RemoteRpcError(
+        sealedError.message,
+        "service",
+        sealedError.code,
+        sealedError.errorData
+      );
+    }
+    throw new EntityNotCreatedError(targetId);
+  }
   const activeLane = lane;
   activeLane.inFlight += 1;
   let finished = false;
@@ -97,9 +116,9 @@ function beginEntityRelay(targetId: string): () => void {
     if (finished) return;
     finished = true;
     activeLane.inFlight -= 1;
-    if (activeLane.sealed && activeLane.inFlight === 0) activeLane.resolveDrained();
+    if (activeLane.seals.size > 0 && activeLane.inFlight === 0) activeLane.resolveDrained();
     if (
-      !activeLane.sealed &&
+      activeLane.seals.size === 0 &&
       activeLane.inFlight === 0 &&
       entityRelayLanes.get(targetId) === activeLane
     ) {
@@ -109,20 +128,27 @@ function beginEntityRelay(targetId: string): () => void {
 }
 
 /** Seal a runtime DO target against new relays and await all admitted calls. */
-export async function sealAndDrainDurableObjectRelays(targetId: string): Promise<void> {
+export async function sealAndDrainDurableObjectRelays(
+  targetId: string,
+  ownerId: string,
+  sealedError?: { code: string; message: string; errorData?: Record<string, unknown> }
+): Promise<void> {
   let lane = entityRelayLanes.get(targetId);
   if (!lane) {
     lane = createRelayLane();
     entityRelayLanes.set(targetId, lane);
   }
-  lane.sealed = true;
+  lane.seals.set(ownerId, sealedError);
   if (lane.inFlight === 0) lane.resolveDrained();
   await lane.drained;
 }
 
 /** Release a retirement seal after the entity row is retired or retirement aborts. */
-export function releaseDurableObjectRelaySeal(targetId: string): void {
-  entityRelayLanes.delete(targetId);
+export function releaseDurableObjectRelaySeal(targetId: string, ownerId: string): void {
+  const lane = entityRelayLanes.get(targetId);
+  if (!lane) return;
+  lane.seals.delete(ownerId);
+  if (lane.seals.size === 0 && lane.inFlight === 0) entityRelayLanes.delete(targetId);
 }
 
 export function doRefKey(ref: DORef): string {
@@ -259,12 +285,43 @@ async function postEnvelopeToDO(
   signal?: AbortSignal
 ): Promise<unknown> {
   const res = await fetchEnvelopeFromDO(ref, envelope, deps, signal);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`DO RPC relay failed (${res.status}): ${text}`);
-  }
+  await assertDurableObjectResponseOk(ref, res);
 
   return res.json();
+}
+
+async function assertDurableObjectResponseOk(ref: DORef, res: Response): Promise<void> {
+  if (res.ok) return;
+  const text = await res.text();
+  const identity = `${ref.source}:${ref.className}/${ref.objectKey}`;
+  try {
+    const parsed = JSON.parse(text) as {
+      error?: unknown;
+      errorKind?: unknown;
+      errorCode?: unknown;
+      errorData?: unknown;
+    };
+    if (typeof parsed.error === "string") {
+      throw new RemoteRpcError(
+        `${parsed.error} [Durable Object: ${identity}]`,
+        parsed.errorKind === "access" ||
+          parsed.errorKind === "service" ||
+          parsed.errorKind === "transport" ||
+          parsed.errorKind === "protocol" ||
+          parsed.errorKind === "application" ||
+          parsed.errorKind === "internal"
+          ? parsed.errorKind
+          : "transport",
+        typeof parsed.errorCode === "string" ? parsed.errorCode : undefined,
+        parsed.errorData && typeof parsed.errorData === "object"
+          ? { ...(parsed.errorData as Record<string, unknown>), durableObject: ref }
+          : { durableObject: ref }
+      );
+    }
+  } catch (error) {
+    if (error instanceof RemoteRpcError) throw error;
+  }
+  throw new Error(`DO RPC relay failed (${res.status}) for ${identity}: ${text}`);
 }
 
 function unwrapResponseEnvelope(raw: unknown): unknown {
@@ -295,7 +352,7 @@ export async function postToDurableObject(
   signal?: AbortSignal
 ): Promise<unknown> {
   const targetId = doTargetString(ref);
-  const finishRelay = beginEntityRelay(targetId);
+  const finishRelay = beginDurableObjectRelay(targetId);
   try {
     const caller = callerFromDeps(deps);
     const envelope = envelopeFromMessage({
@@ -329,6 +386,8 @@ export async function streamFromDurableObject(
   deps: DurableObjectRelayDeps,
   signal: AbortSignal
 ): Promise<Response> {
+  const targetId = doTargetString(ref);
+  const finishRelay = beginDurableObjectRelay(targetId);
   const caller = callerFromDeps(deps);
   const envelope = envelopeFromMessage({
     selfId: caller.callerId,
@@ -346,7 +405,52 @@ export async function streamFromDurableObject(
       ...(deps.causalParent ? { causalParent: deps.causalParent } : {}),
     },
   });
-  return fetchEnvelopeFromDO(ref, envelope, deps, signal);
+  try {
+    const response = await fetchEnvelopeFromDO(ref, envelope, deps, signal);
+    await assertDurableObjectResponseOk(ref, response);
+    if (!response.body) {
+      finishRelay();
+      return response;
+    }
+    const reader = response.body.getReader();
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      finishRelay();
+    };
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            finish();
+            controller.close();
+          } else {
+            controller.enqueue(chunk.value);
+          }
+        } catch (error) {
+          finish();
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } finally {
+          finish();
+        }
+      },
+    });
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (error) {
+    finishRelay();
+    throw error;
+  }
 }
 
 /** Relay an event to a DO as an event envelope (fire-and-forget). */
@@ -357,6 +461,7 @@ export async function postEventToDurableObject(
   deps: DurableObjectRelayDeps,
   signal?: AbortSignal
 ): Promise<void> {
+  const finishRelay = beginDurableObjectRelay(doTargetString(ref));
   const caller = callerFromDeps(deps);
   const envelope = envelopeFromMessage({
     selfId: caller.callerId,
@@ -365,5 +470,9 @@ export async function postEventToDurableObject(
     caller,
     message: { type: "event", fromId: caller.callerId, event, payload },
   });
-  await postEnvelopeToDO(ref, envelope, deps, signal);
+  try {
+    await postEnvelopeToDO(ref, envelope, deps, signal);
+  } finally {
+    finishRelay();
+  }
 }

@@ -228,6 +228,12 @@ export interface MethodSchema {
   errors?: MethodError[];
   /** Related methods, as qualified names (e.g. "eval.get"). */
   seeAlso?: string[];
+  /** Static call-time metadata for RPCs whose completion depends on an external lifecycle. */
+  progressSemantics?: {
+    kind: "external-wait";
+    operation: string;
+    resource: { arg: number; kind: string };
+  };
 }
 
 export type ServiceMethodSchemas = Record<string, MethodSchema>;

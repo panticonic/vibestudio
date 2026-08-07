@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ExecutionSourceStateRef } from "@vibestudio/shared/execution/retention";
-import { buildMetadataSchema, buildMethods, executionArtifactRefSchema } from "./build.js";
+import {
+  buildDiagnosticSchema,
+  buildMetadataSchema,
+  buildMethods,
+  executionArtifactRefSchema,
+} from "./build.js";
 
 const digest = "0".repeat(64);
 const semanticState = { kind: "event" as const, eventId: "event:test" };
@@ -94,6 +99,19 @@ describe("execution artifact ref wire schema", () => {
 });
 
 describe("build method effects", () => {
+  it("preserves publication schema diagnostics on the public wire", () => {
+    expect(
+      buildDiagnosticSchema.parse({
+        source: "schema",
+        severity: "error",
+        file: "workers/board/index.ts",
+        line: 0,
+        column: 0,
+        message: "BoardDO fixture migration diverged from its fresh schema",
+      })
+    ).toMatchObject({ source: "schema", severity: "error" });
+  });
+
   it("treats workspace compilation as read-only and external acquisition as write", () => {
     expect(buildMethods.getBuild.access).toEqual({ sensitivity: "read" });
     expect(buildMethods.getBuildReport.access).toEqual({ sensitivity: "read" });

@@ -5,8 +5,9 @@
  * The ergonomic methods here delegate to the canonical runtime entity service,
  * so panels, workers, Durable Objects, and eval all use the same lifecycle.
  *
- * DO-storage primitives (cloneDO/destroyDO) are NOT here: they are server-internal
- * and reached only through `runtime.cloneContext`/`runtime.destroyContext`.
+ * Raw file primitives (cloneDO/destroyDO) remain server-internal. The public
+ * exact-target reset/backup/restore methods below are journaled, fenced recovery
+ * operations with normal capability review.
  * Source discovery stays here as `workers.listSources()` so the rich runtime
  * binding does not force callers down to raw `rpc.call` for the obvious read.
  *
@@ -70,6 +71,17 @@ export type RuntimeEntityReference =
   | string
   | Pick<RuntimeEntityHandle, "id">
   | Pick<ResolvedDurableObjectTarget, "targetId">;
+
+export type DurableObjectStorageTarget = Pick<
+  ResolvedDurableObjectTarget,
+  "source" | "className" | "objectKey"
+> & { targetId?: string };
+
+export interface DurableObjectStorageBackup {
+  operationId: string;
+  intent: string;
+  createdAt: number;
+}
 
 export interface WorkerEntityInfo {
   id: string;
@@ -146,6 +158,19 @@ export interface WorkerdClient {
   list(): Promise<WorkerEntityInfo[]>;
   /** Retire a regular worker or disposable resolved Durable Object. */
   destroy(entity: RuntimeEntityReference): Promise<void>;
+  /** Back up and reset one exact DO storage target. */
+  resetStorage(
+    target: DurableObjectStorageTarget,
+    intent: string
+  ): Promise<{ operationId: string }>;
+  /** List recoverable backups for one exact DO storage target. */
+  listStorageBackups(target: DurableObjectStorageTarget): Promise<DurableObjectStorageBackup[]>;
+  /** Restore a verified backup to the same exact DO storage target. */
+  restoreStorageBackup(
+    target: DurableObjectStorageTarget,
+    operationId: string,
+    intent: string
+  ): Promise<{ operationId: string }>;
   /** List product-owned and workspace-authored services available here. */
   listServices(): Promise<WorkspaceServiceInfo[]>;
   /** Resolve a workspace service by name or protocol. */
@@ -182,6 +207,12 @@ export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
           id: typeof entity === "string" ? entity : "id" in entity ? entity.id : entity.targetId,
         },
       ]),
+    resetStorage: (target, intent) =>
+      callWorkers<{ operationId: string }>("resetStorage", target, intent),
+    listStorageBackups: (target) =>
+      callWorkers<DurableObjectStorageBackup[]>("listStorageBackups", target),
+    restoreStorageBackup: (target, operationId, intent) =>
+      callWorkers<{ operationId: string }>("restoreStorageBackup", target, operationId, intent),
     listServices: () => callWorkers<WorkspaceServiceInfo[]>("listServices"),
     resolveService: (query, objectKey) =>
       callWorkers<ResolvedWorkspaceService>("resolveService", query, objectKey ?? null),

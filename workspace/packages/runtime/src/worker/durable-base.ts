@@ -75,7 +75,13 @@ import {
   encodeDurableWorkReady,
   type DurableWorkQueue,
 } from "@vibestudio/shared/durableWork";
-import { installExactDurableObjectSchema } from "@vibestudio/durable/schema";
+import {
+  dispatchWithDurableObjectSchemaGuard,
+  durableObjectSchemaDescriptor,
+  installDurableObjectSchema,
+  type DurableObjectSchemaBaseline,
+  type DurableObjectSchemaMigration,
+} from "@vibestudio/durable/schema";
 import { InvocationContext } from "@vibestudio/durable";
 
 interface RpcInvocationContext {
@@ -241,6 +247,8 @@ export abstract class DurableObjectBase {
   protected env: Record<string, unknown>;
 
   private _schemaReady = false;
+  private _schemaInstalled = false;
+  private _schemaPreparationError: unknown = null;
   private _connectionless: ConnectionlessRpcClient | null = null;
   private readonly _directRpcNonces: DurableDirectRpcNonceLedger;
   protected _currentRpcCallerId: string | null = null;
@@ -279,6 +287,22 @@ export abstract class DurableObjectBase {
   /** Subclasses define their SQL tables here. Called during schema init. */
   protected abstract createTables(): void;
 
+  /** Exact oldest deployed shape this build deliberately supports. */
+  protected abstract schemaProductionBaseline(): DurableObjectSchemaBaseline;
+
+  /** Retained, contiguous forward migrations after the production baseline. */
+  protected schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [];
+  }
+
+  /** Exact representative object keys captured and replayed by publication diagnostics. */
+  protected schemaMigrationFixtureObjectKeys(): readonly string[] {
+    return [];
+  }
+
+  /** Activation-local initialization that requires the committed schema. */
+  protected afterSchemaReady(): void {}
+
   /** Tables that must exist before a schema version is recorded as ready. */
   protected requiredTables(): readonly string[] {
     return [];
@@ -303,17 +327,78 @@ export abstract class DurableObjectBase {
    * earlier from their constructor if they need schema before first request.
    */
   protected ensureReady(): void {
+    if (this._schemaPreparationError !== null) {
+      const error = this._schemaPreparationError;
+      this._schemaPreparationError = null;
+      throw error;
+    }
     if (this._schemaReady) return;
-    this.ensureSchema();
+    if (!this._schemaInstalled) {
+      this.ensureSchema();
+      this._schemaInstalled = true;
+    }
+    if (this.env["VIBESTUDIO_SCHEMA_PROBE"] !== true) this.afterSchemaReady();
     this._schemaReady = true; // only after success — allows retry on next request if init throws
   }
 
+  /** Install schema storage before subclass helpers can create or query tables. */
+  protected prepareSchemaStorage(): void {
+    if (this._schemaInstalled) return;
+    try {
+      this.ensureSchema();
+      this._schemaInstalled = true;
+    } catch (error) {
+      this._schemaPreparationError = error;
+    }
+  }
+
+  /**
+   * Establish constructor-time schema invariants without letting a refusal
+   * escape workerd's request error boundary. The first request observes a
+   * captured failure through ensureReady(); a later request may retry.
+   */
+  protected prepareSchemaForActivation(): void {
+    try {
+      this.ensureReady();
+    } catch (error) {
+      this._schemaPreparationError = error;
+    }
+  }
+
+  private schemaDescriptorResponse(): Response {
+    return Response.json(
+      durableObjectSchemaDescriptor(
+        {
+          className: this.constructor.name,
+          version: (this.constructor as typeof DurableObjectBase).schemaVersion,
+          storage: this.ctx.storage,
+          schemaTables: this.requiredTables(),
+          productionBaseline: this.schemaProductionBaseline(),
+          migrations: this.schemaMigrations(),
+          expectedSchemaFingerprint:
+            typeof this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"] === "string"
+              ? this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"]
+              : undefined,
+          createSchema: () => this.createTables(),
+          validateSchema: () => this.validateSchema(),
+        },
+        this.schemaMigrationFixtureObjectKeys()
+      )
+    );
+  }
+
   private ensureSchema(): void {
-    installExactDurableObjectSchema({
+    installDurableObjectSchema({
       className: this.constructor.name,
       version: (this.constructor as typeof DurableObjectBase).schemaVersion,
       storage: this.ctx.storage,
       schemaTables: this.requiredTables(),
+      productionBaseline: this.schemaProductionBaseline(),
+      migrations: this.schemaMigrations(),
+      expectedSchemaFingerprint:
+        typeof this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"] === "string"
+          ? this.env["VIBESTUDIO_SCHEMA_FINGERPRINT"]
+          : undefined,
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });
@@ -829,7 +914,22 @@ export abstract class DurableObjectBase {
 
   async fetch(request: Request): Promise<Response> {
     try {
-      return await this.dispatchFetch(request);
+      const segments = new URL(request.url).pathname.split("/").filter(Boolean);
+      if (segments.length >= 1 && !this._objectKey) {
+        this._objectKey = decodeURIComponent(segments[0]!);
+      }
+      const objectKey = this._objectKey ?? this.ctx.id.name;
+      if (!objectKey) throw new Error("Durable Object request has no exact object key");
+      return await dispatchWithDurableObjectSchemaGuard({
+        request,
+        identity: {
+          source: String(this.env["WORKER_SOURCE"] ?? ""),
+          className: String(this.env["WORKER_CLASS_NAME"] ?? this.constructor.name),
+          objectKey,
+        },
+        ensureReady: () => this.ensureReady(),
+        dispatch: () => this.dispatchFetch(request),
+      });
     } finally {
       // setAlarmAt/deleteAlarm mirror the synchronous DO storage API, but this
       // runtime persists alarms through an asynchronous server RPC. Do not let
@@ -857,13 +957,16 @@ export abstract class DurableObjectBase {
       }
     }
 
-    this.ensureReady();
-
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
       return this.handleWebSocketUpgrade(request);
     }
 
     const method = segments.slice(1).join("/") || "getState";
+    if (this.env["VIBESTUDIO_SCHEMA_PROBE"] === true) {
+      return method === "__vibestudio_schema_descriptor"
+        ? this.schemaDescriptorResponse()
+        : new Response("Schema probes refuse application dispatch", { status: 403 });
+    }
     const authorityAcceptedAt = directAuthorityAcceptedAt(request);
 
     // Converged inbound dispatch: an `RpcEnvelope` POSTed to `__rpc` (relay

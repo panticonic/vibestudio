@@ -12,11 +12,13 @@ import {
 import type { ConnectedClientDescriptor } from "@vibestudio/service-schemas/connectedClientTransport";
 
 export class PhoneProvisioningDO extends DurableObjectBase {
+  protected override schemaProductionBaseline() {
+    return { version: 1, name: "phone-provisioning-v1" } as const;
+  }
   static override rpcMethods = phoneProvisioningMethods;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
-    this.ensureReady();
   }
 
   protected createTables(): void {}

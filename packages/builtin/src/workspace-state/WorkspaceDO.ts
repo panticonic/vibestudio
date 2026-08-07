@@ -416,9 +416,15 @@ export class WorkspaceDO extends DurableObjectBase {
   static override rpcMethods = workspaceStateEngineMethods;
   static override schemaVersion = 29;
 
+  protected override schemaProductionBaseline() {
+    return { version: 29, name: "workspace-state-v29" } as const;
+  }
+
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
-    this.ensureReady();
+  }
+
+  protected override afterSchemaReady(): void {
     this.repairLifecycleInvariants();
   }
 
@@ -701,6 +707,39 @@ export class WorkspaceDO extends DurableObjectBase {
 
   protected override requiredTables(): readonly string[] {
     return WORKSPACE_REQUIRED_TABLES;
+  }
+
+  protected override schemaIndexDefinitions(): readonly string[] {
+    return [
+      `CREATE INDEX idx_entities_status ON entities(status, retired_at)`,
+      `CREATE INDEX idx_entities_kind_source ON entities(kind, source_repo_path, class_name)`,
+      `CREATE INDEX idx_entities_cleanup
+        ON entities(cleanup_complete, retired_at) WHERE cleanup_complete = 0`,
+      `CREATE INDEX idx_entities_agent_entity
+        ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`,
+      `CREATE INDEX idx_slots_parent ON slots(parent_slot_id)`,
+      `CREATE INDEX idx_slots_sibling_page
+         ON slots(parent_slot_id, sort_key, created_at DESC, slot_id)
+         WHERE closed_at IS NULL`,
+      `CREATE INDEX idx_slots_owner_root_page
+         ON slots(owner_user_id, sort_key, created_at DESC, slot_id)
+         WHERE closed_at IS NULL AND parent_slot_id IS NULL`,
+      `CREATE INDEX idx_slots_current ON slots(current_entity_id)`,
+      `CREATE INDEX idx_slots_owner ON slots(owner_user_id) WHERE closed_at IS NULL`,
+      `CREATE INDEX idx_panel_close_cleanup_page
+         ON panel_close_cleanup(close_id, slot_id)`,
+      `CREATE INDEX idx_panel_close_cleanup_owner_page
+         ON panel_close_cleanup(owner_user_id, slot_id)`,
+      `CREATE INDEX idx_history_entity ON slot_history(entity_id)`,
+      `CREATE INDEX idx_history_entry ON slot_history(entry_key)`,
+      `CREATE INDEX idx_context_edges_owner ON context_edges(owner_context_id, kind)`,
+      `CREATE INDEX idx_context_edges_child ON context_edges(context_id)`,
+      `CREATE INDEX idx_lifecycle_leases_refreshed ON lifecycle_leases(refreshed_at)`,
+      `CREATE INDEX idx_lifecycle_ops_resume
+       ON lifecycle_ops(op_kind, status, source, class_name, object_key)`,
+      `CREATE INDEX idx_do_alarms_wake ON do_alarms(wake_at)`,
+      `CREATE INDEX idx_recurring_jobs_next ON recurring_jobs(next_run_at)`,
+    ];
   }
 
   protected override validateSchema(): void {

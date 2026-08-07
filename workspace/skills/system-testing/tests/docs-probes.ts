@@ -114,6 +114,25 @@ export const docsProbeTests: TestCase[] = [
     [/fork|clone/iu, /durable object/iu, /route|rpc|service/iu]
   ),
   appliedDocsProbe(
+    "docs-do-schema-migration-recovery",
+    "Choose migration over data encoding and identify structured schema refusals",
+    "A live Durable Object reports DO_SCHEMA_INCOMPATIBLE after a schemaVersion bump. Explain the safe repair and publication-fixture path.",
+    /DO_SCHEMA_INCOMPATIBLE|schemaMigrations|productionBaseline|schemaMigrationFixtureObjectKeys/iu,
+    [
+      /schemaMigrations|migration/iu,
+      /schemaMigrationFixtureObjectKeys|representative.*fixture|fixture.*object/iu,
+      /persist|version|reason/iu,
+      /not|avoid.*title|label|row/iu,
+    ]
+  ),
+  appliedDocsProbe(
+    "docs-do-disposable-storage-reset",
+    "Use the exact-target backed-up reset path only for disposable DO state",
+    "A disposable Durable Object test database has an incompatible schema and may be erased. Explain the supported reset and recovery APIs.",
+    /resetStorage|listStorageBackups|restoreStorageBackup/iu,
+    [/exact|target|source|class|object/iu, /intent/iu, /backup|restore/iu, /disposable/iu]
+  ),
+  appliedDocsProbe(
     "docs-appdev-target-triage",
     "Triage a target-specific app bug without editing source",
     "A user reports a bug seen only in the Electron shell. Triage it.",

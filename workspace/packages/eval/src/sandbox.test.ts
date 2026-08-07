@@ -595,6 +595,33 @@ return fs.readFileSync("/tmp/a");`,
     });
   });
 
+  it("classifies structured Durable Object schema refusals as infrastructure", async () => {
+    const result = await executeSandbox(
+      `const error = new Error("ExampleStore cannot open persisted schema v1 with build schema v2");
+       error.code = "DO_SCHEMA_INCOMPATIBLE";
+       error.errorKind = "service";
+       error.errorData = {
+         reason: "migration-missing",
+         persistedVersion: 1,
+         targetVersion: 2,
+         safeActions: ["add-migration", "reset-storage"]
+       };
+       throw error;`,
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failureKind: "infrastructure",
+      failureCode: "DO_SCHEMA_INCOMPATIBLE",
+      errorData: {
+        reason: "migration-missing",
+        persistedVersion: 1,
+        targetVersion: 2,
+      },
+    });
+  });
+
   it("preserves structured guest failure data for agent-facing diagnostics", async () => {
     const result = await executeSandbox(
       `const error = new Error("publication failed");

@@ -15,6 +15,7 @@ import * as fs from "fs";
 import { createRequire } from "module";
 import * as path from "path";
 import * as os from "os";
+import { DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
 import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -46,11 +47,17 @@ import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
-import { destroyWorkerdConnections, getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
+import {
+  destroyWorkerdConnections,
+  getWorkerdConnectionDispatcher,
+  releaseDurableObjectRelaySeal,
+  sealAndDrainDurableObjectRelays,
+} from "./workerdRpcRelay.js";
 import {
   RUNTIME_IMAGE_UNAVAILABLE_ERROR_CODE,
   RUNTIME_IMAGE_WARMING_ERROR_CODE,
 } from "./runtimeReadinessError.js";
+import { migrationDefinitionSourceDigest } from "./buildV2/durableObjectSchemaSource.js";
 
 const log = createDevLogger("WorkerdManager");
 /** uniqueKey of the single static namespace that hosts all userland DO facets.
@@ -67,6 +74,43 @@ export class RuntimeImageWarmingError extends Error {
 
 export class RuntimeImageUnavailableError extends Error {
   readonly code = RUNTIME_IMAGE_UNAVAILABLE_ERROR_CODE;
+}
+
+export interface DurableObjectPublishedSchemaDescriptor {
+  className: string;
+  version: number;
+  freshSchemaFingerprint: string;
+  baseline: { version: number; name: string };
+  migrations: Array<{
+    version: number;
+    name: string;
+    definitionDigest: string;
+  }>;
+  fixtureObjectKeys?: string[];
+}
+
+interface DurableObjectRuntimeSchemaDescriptor extends Omit<
+  DurableObjectPublishedSchemaDescriptor,
+  "migrations"
+> {
+  migrations: Array<{ version: number; name: string }>;
+}
+
+interface SchemaProbeBuild {
+  source: string;
+  className: string;
+  build: BuildResult;
+}
+
+interface DurableObjectSchemaFixtureManifest {
+  source: string;
+  className: string;
+  objectKey: string;
+  effectiveVersion: string;
+  schemaVersion: number;
+  sourceHash: string;
+  files: string[];
+  capturedAt: number;
 }
 
 /** Diagnostic env vars forwarded from the host process into every worker's
@@ -142,6 +186,26 @@ interface DORef {
   source: string;
   className: string;
   objectKey: string;
+}
+
+export interface DurableObjectStorageBackup {
+  operationId: string;
+  target: DORef;
+  intent: string;
+  createdAt: number;
+}
+
+interface DurableObjectMaintenanceRow {
+  operationId: string;
+  kind: "reset" | "restore";
+  targetId: string;
+  source: string;
+  className: string;
+  objectKey: string;
+  intent: string;
+  backupOperationId: string | null;
+  step: string;
+  createdAt: number;
 }
 
 interface DOService {
@@ -515,6 +579,11 @@ export class WorkerdManager {
   private workspaceProvider: WorkerdWorkspaceProvider | null = null;
   /** Resolved shared egress listener port (memoized after first start). */
   private sharedEgressPort: number | null = null;
+  private readonly doMaintenanceDb: DatabaseSync;
+  private readonly doSchemaDescriptorDb: DatabaseSync;
+  private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
+  private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
+  private readonly doMaintenanceRecovery: Promise<void>;
 
   constructor(deps: WorkerdManagerDeps) {
     this.deps = deps;
@@ -524,6 +593,72 @@ export class WorkerdManager {
     fs.mkdirSync(this.configDir, { recursive: true });
     this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
     this.bootGeneration = this.readBootGeneration();
+    const layout = stateLayout(this.deps.statePath).databases;
+    fs.mkdirSync(layout.root, { recursive: true });
+    fs.mkdirSync(layout.durableObjectBackupsDir, { recursive: true });
+    fs.mkdirSync(layout.durableObjectSchemaFixturesDir, { recursive: true, mode: 0o700 });
+    this.doMaintenanceDb = new DatabaseSync(layout.durableObjectMaintenanceDb);
+    this.doMaintenanceDb.exec(`
+      PRAGMA journal_mode = WAL;
+      CREATE TABLE IF NOT EXISTS do_maintenance (
+        operation_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('reset', 'restore')),
+        target_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        intent TEXT NOT NULL,
+        backup_operation_id TEXT,
+        step TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('open', 'complete')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS do_maintenance_one_open_target
+        ON do_maintenance(target_id) WHERE status = 'open';
+    `);
+    this.doSchemaDescriptorDb = new DatabaseSync(layout.durableObjectSchemaDescriptorsDb);
+    this.doSchemaDescriptorDb.exec(`
+      PRAGMA journal_mode = WAL;
+      CREATE TABLE IF NOT EXISTS do_schema_descriptors (
+        source TEXT NOT NULL,
+        effective_version TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        descriptor_json TEXT NOT NULL,
+        PRIMARY KEY (source, effective_version, class_name)
+      );
+      CREATE TABLE IF NOT EXISTS do_schema_installed (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        effective_version TEXT NOT NULL,
+        PRIMARY KEY (source, class_name)
+      );
+      CREATE TABLE IF NOT EXISTS do_schema_candidates (
+        state_hash TEXT NOT NULL,
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        effective_version TEXT NOT NULL,
+        PRIMARY KEY (state_hash, source, class_name)
+      );
+      CREATE TABLE IF NOT EXISTS do_schema_fixtures (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        effective_version TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        PRIMARY KEY (source, class_name, effective_version, object_key)
+      );
+    `);
+    const open = this.readOpenDurableObjectMaintenance();
+    // Establish admission synchronously before any asynchronous recovery work.
+    for (const row of open) void this.fenceDurableObjectMaintenance(row);
+    this.doMaintenanceRecovery = Promise.all(
+      open.map((row) => this.resumeDurableObjectMaintenance(row))
+    )
+      .then(() => undefined)
+      .catch((error) => {
+        log.error("Durable Object maintenance recovery failed", error);
+      });
   }
 
   getStage(): WorkerdStage {
@@ -1476,7 +1611,8 @@ export class WorkerdManager {
    * concurrent planned or crash transition.
    */
   private async stopWorkerdIfIdle(): Promise<void> {
-    if (this.instances.size > 0 || this.doServices.size > 0) return;
+    if (this.instances.size > 0 || this.doServices.size > 0 || this.schemaProbeBuilds.size > 0)
+      return;
     await this.restartWorkerd({ kind: "stop-if-idle" });
   }
 
@@ -1763,6 +1899,10 @@ export class WorkerdManager {
    * forces a fresh isolate for that object/ref binding.
    */
   getDoVersion(source: string, className: string, objectKey?: string): string | null {
+    const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
+    if (probe && probe.source === source && probe.className === className) {
+      return `${probe.build.metadata.ev}:schema-probe:${probe.build.buildKey}`;
+    }
     if (objectKey) {
       const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
       if (objectBuild) {
@@ -1840,6 +1980,25 @@ export class WorkerdManager {
     wasmModules?: Record<string, string>;
     env: Record<string, unknown>;
   } | null> {
+    const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
+    if (probe && probe.source === source && probe.className === className) {
+      const wasmModules: Record<string, string> = {};
+      for (const artifact of probe.build.artifacts) {
+        if (artifact.role === "wasm") wasmModules[artifact.path] = artifact.content;
+      }
+      return {
+        compatibilityDate: "2025-12-01",
+        compatibilityFlags: ["nodejs_compat"],
+        mainModule: "worker.js",
+        modules: { "worker.js": primaryTextArtifactContent(probe.build) },
+        ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
+        env: {
+          WORKER_SOURCE: source,
+          WORKER_CLASS_NAME: className,
+          VIBESTUDIO_SCHEMA_PROBE: true,
+        },
+      };
+    }
     const serviceKey = doServiceKey(source, className);
     const svc = this.doServices.get(serviceKey);
     if (!svc || isInternalDOSource(source)) return null;
@@ -1885,6 +2044,18 @@ export class WorkerdManager {
       GATEWAY_URL: this.deps.getServerUrl(),
       WORKSPACE_ID: this.deps.workspaceId,
     };
+    const schemaRow = this.doSchemaDescriptorDb
+      .prepare(
+        `SELECT descriptor_json FROM do_schema_descriptors
+         WHERE source = ? AND effective_version = ? AND class_name = ?`
+      )
+      .get(source, buildResult.metadata.ev, className) as { descriptor_json: string } | undefined;
+    if (schemaRow) {
+      const descriptor = JSON.parse(
+        schemaRow.descriptor_json
+      ) as DurableObjectPublishedSchemaDescriptor;
+      env["VIBESTUDIO_SCHEMA_FINGERPRINT"] = descriptor.freshSchemaFingerprint;
+    }
     if (process.env["VIBESTUDIO_TEST_MODE"]) {
       env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
     }
@@ -2080,9 +2251,9 @@ export class WorkerdManager {
       }));
 
     // Auto-generate router worker + the static dynamic-worker host.
-    const hasUserlandDOs = Array.from(this.doServices.values()).some(
-      (svc) => !isInternalDOSource(svc.source)
-    );
+    const hasUserlandDOs =
+      this.schemaProbeBuilds.size > 0 ||
+      Array.from(this.doServices.values()).some((svc) => !isInternalDOSource(svc.source));
     const hasAnyService = this.instances.size > 0 || doClassNames.length > 0 || hasUserlandDOs;
     if (hasAnyService) {
       // ── Static `worker-host` service: loads regular workers dynamically ──
@@ -2424,7 +2595,8 @@ export class WorkerdManager {
     // ── stop-if-idle: a pure stop transition; re-check idleness under the
     // owner (an instance/DO registered while queued wins — no stop).
     if (transition.kind === "stop-if-idle") {
-      if (this.instances.size > 0 || this.doServices.size > 0) return;
+      if (this.instances.size > 0 || this.doServices.size > 0 || this.schemaProbeBuilds.size > 0)
+        return;
       transition.state = "stopping";
       if (hadRunningProcess) {
         await this.emitGenerationClosing({
@@ -2496,7 +2668,12 @@ export class WorkerdManager {
 
     if (this.shuttingDown) return;
 
-    if (this.instances.size === 0 && this.doServices.size === 0) return;
+    if (
+      this.instances.size === 0 &&
+      this.doServices.size === 0 &&
+      this.schemaProbeBuilds.size === 0
+    )
+      return;
 
     // ── starting ──
     transition.state = "starting";
@@ -3239,6 +3416,452 @@ export class WorkerdManager {
     );
   }
 
+  private migrationDefinitionDigest(
+    build: BuildResult,
+    className: string,
+    migration: { version: number; name: string }
+  ): string {
+    return migrationDefinitionSourceDigest(build.metadata.executableModules ?? [], {
+      className,
+      ...migration,
+    });
+  }
+
+  private durableObjectSchemaFixtureDir(
+    manifest: Pick<
+      DurableObjectSchemaFixtureManifest,
+      "source" | "className" | "effectiveVersion" | "objectKey"
+    >
+  ): string {
+    const fixtureId = crypto
+      .createHash("sha256")
+      .update(
+        canonicalJson({
+          source: manifest.source,
+          className: manifest.className,
+          effectiveVersion: manifest.effectiveVersion,
+          objectKey: manifest.objectKey,
+        })
+      )
+      .digest("hex");
+    return path.join(
+      stateLayout(this.deps.statePath).databases.durableObjectSchemaFixturesDir,
+      fixtureId
+    );
+  }
+
+  private async verifyDurableObjectSchemaFixture(
+    manifest: DurableObjectSchemaFixtureManifest
+  ): Promise<void> {
+    const fixtureDir = this.durableObjectSchemaFixtureDir(manifest);
+    if (manifest.files.length === 0) throw new Error("captured fixture contains no storage files");
+    for (const file of manifest.files) {
+      if (path.basename(file) !== file || !file.startsWith(`${manifest.sourceHash}.`)) {
+        throw new Error(`captured fixture contains an unexpected storage file ${file}`);
+      }
+      if (!file.endsWith(".sqlite")) continue;
+      const db = new DatabaseSync(path.join(fixtureDir, file), { readOnly: true });
+      try {
+        const result = db.prepare(`PRAGMA integrity_check`).get() as Record<string, unknown>;
+        if (!Object.values(result).includes("ok")) {
+          throw new Error(`captured fixture ${file} failed SQLite integrity_check`);
+        }
+      } finally {
+        db.close();
+      }
+    }
+  }
+
+  private async captureDurableObjectSchemaFixture(
+    input: Omit<DurableObjectSchemaFixtureManifest, "sourceHash" | "files" | "capturedAt">
+  ): Promise<DurableObjectSchemaFixtureManifest> {
+    const existing = this.doSchemaDescriptorDb
+      .prepare(
+        `SELECT manifest_json FROM do_schema_fixtures
+         WHERE source = ? AND class_name = ? AND effective_version = ? AND object_key = ?`
+      )
+      .get(input.source, input.className, input.effectiveVersion, input.objectKey) as
+      | { manifest_json: string }
+      | undefined;
+    if (existing) {
+      const manifest = JSON.parse(existing.manifest_json) as DurableObjectSchemaFixtureManifest;
+      await this.verifyDurableObjectSchemaFixture(manifest);
+      return manifest;
+    }
+
+    const ref = {
+      source: input.source,
+      className: input.className,
+      objectKey: input.objectKey,
+    };
+    if (isInternalDOSource(ref.source)) {
+      throw new Error("publication fixtures currently require userland UniversalDO storage");
+    }
+    const targetId = this.durableObjectTargetId(ref);
+    const sealOwnerId = `schema-fixture:${crypto.randomUUID()}`;
+    await sealAndDrainDurableObjectRelays(targetId, sealOwnerId, {
+      code: "DO_MAINTENANCE_IN_PROGRESS",
+      message: `Durable Object ${targetId} is being captured as schema migration evidence`,
+      errorData: { operation: "schema-fixture-capture", ...ref },
+    });
+    try {
+      await this.quiesceDurableObjectStorage(ref);
+      const storageDir = this.universalDoStorageDir();
+      const sourceHash = this.universalHostHash(ref);
+      const files = (await fs.promises.readdir(storageDir).catch(() => [] as string[])).filter(
+        (file) => file.startsWith(`${sourceHash}.`)
+      );
+      if (files.length === 0) {
+        throw new Error(
+          `${input.source}:${input.className}/${input.objectKey} has no published storage to capture`
+        );
+      }
+      const manifest: DurableObjectSchemaFixtureManifest = {
+        ...input,
+        sourceHash,
+        files,
+        capturedAt: Date.now(),
+      };
+      const fixtureDir = this.durableObjectSchemaFixtureDir(manifest);
+      await fs.promises.mkdir(fixtureDir, { recursive: true, mode: 0o700 });
+      for (const file of files) {
+        const destination = path.join(fixtureDir, file);
+        await fs.promises.copyFile(path.join(storageDir, file), destination);
+        await fs.promises.chmod(destination, 0o600);
+      }
+      await fs.promises.writeFile(
+        path.join(fixtureDir, "manifest.json"),
+        JSON.stringify(manifest, null, 2),
+        { mode: 0o600 }
+      );
+      await this.verifyDurableObjectSchemaFixture(manifest);
+      this.doSchemaDescriptorDb
+        .prepare(
+          `INSERT INTO do_schema_fixtures
+           (source, class_name, effective_version, object_key, manifest_json)
+           VALUES (?, ?, ?, ?, ?)`
+        )
+        .run(
+          input.source,
+          input.className,
+          input.effectiveVersion,
+          input.objectKey,
+          canonicalJson(manifest)
+        );
+      return manifest;
+    } finally {
+      releaseDurableObjectRelaySeal(targetId, sealOwnerId);
+    }
+  }
+
+  private async seedDurableObjectSchemaProbe(
+    ref: DORef,
+    manifest: DurableObjectSchemaFixtureManifest
+  ): Promise<void> {
+    await this.verifyDurableObjectSchemaFixture(manifest);
+    const fixtureDir = this.durableObjectSchemaFixtureDir(manifest);
+    const storageDir = this.universalDoStorageDir();
+    const targetHash = this.universalHostHash(ref);
+    await fs.promises.mkdir(storageDir, { recursive: true });
+    for (const file of manifest.files) {
+      const suffix = file.slice(manifest.sourceHash.length);
+      await fs.promises.copyFile(
+        path.join(fixtureDir, file),
+        path.join(storageDir, `${targetHash}${suffix}`)
+      );
+    }
+  }
+
+  /** Run schema installation in the serving workerd, over an isolated disposable facet. */
+  async probeDurableObjectSchema(
+    source: string,
+    className: string,
+    build: BuildResult,
+    timeoutMs = 10_000,
+    fixture?: DurableObjectSchemaFixtureManifest
+  ): Promise<DurableObjectPublishedSchemaDescriptor> {
+    if (build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
+      throw new Error(`Schema probe build does not belong to worker source ${source}`);
+    }
+    const objectKey = `__vibestudio_schema_probe:${crypto.randomUUID()}`;
+    const ref = { source, className, objectKey };
+    this.schemaProbeBuilds.set(objectKey, { source, className, build });
+    try {
+      if (fixture) await this.seedDurableObjectSchemaProbe(ref, fixture);
+      await this.ensureWorkerdRunning();
+      const key = encodeUniversalKey(ref);
+      const response = await fetch(
+        `http://127.0.0.1:${assertPresent(this.port)}/_u/${encodeURIComponent(key)}/__vibestudio_schema_descriptor`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+            "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+          },
+          signal: AbortSignal.timeout(timeoutMs),
+          dispatcher: getWorkerdConnectionDispatcher(),
+        } as RequestInit
+      );
+      if (!response.ok) {
+        throw new Error(
+          `${source}:${className} schema probe failed (${response.status}): ${await response.text()}`
+        );
+      }
+      const descriptor = (await response.json()) as DurableObjectRuntimeSchemaDescriptor;
+      if (
+        descriptor.className !== className ||
+        !Number.isSafeInteger(descriptor.version) ||
+        descriptor.version < 1 ||
+        typeof descriptor.freshSchemaFingerprint !== "string" ||
+        !descriptor.baseline ||
+        !Array.isArray(descriptor.migrations) ||
+        !Array.isArray(descriptor.fixtureObjectKeys)
+      ) {
+        throw new Error(`${source}:${className} returned a malformed schema descriptor`);
+      }
+      return {
+        ...descriptor,
+        migrations: descriptor.migrations.map((migration) => ({
+          ...migration,
+          definitionDigest: this.migrationDefinitionDigest(build, className, migration),
+        })),
+      };
+    } finally {
+      await this.abortUserlandDOFacet(ref, "__vibestudio_retire").catch(() => undefined);
+      this.schemaProbeBuilds.delete(objectKey);
+      await this.destroyDO(ref).catch((error) => {
+        log.warn(`Failed to destroy schema probe storage for ${source}:${className}`, error);
+      });
+      await this.stopWorkerdIfIdle();
+    }
+  }
+
+  private schemaCompatibilityFailures(
+    source: string,
+    previous: DurableObjectPublishedSchemaDescriptor,
+    candidate: DurableObjectPublishedSchemaDescriptor
+  ): string[] {
+    const identity = `${source}:${candidate.className}`;
+    const failures: string[] = [];
+    if (candidate.version < previous.version) {
+      failures.push(
+        `${identity} schema version decreased from v${previous.version} to v${candidate.version}`
+      );
+      return failures;
+    }
+    if (
+      candidate.version === previous.version &&
+      candidate.freshSchemaFingerprint !== previous.freshSchemaFingerprint
+    ) {
+      failures.push(
+        `${identity} fresh schema changed without a schemaVersion bump (v${candidate.version})`
+      );
+    }
+    const candidateMigrations = new Map(
+      candidate.migrations.map((migration) => [migration.version, migration])
+    );
+    for (const retained of previous.migrations) {
+      const next = candidateMigrations.get(retained.version);
+      if (
+        !next ||
+        next.name !== retained.name ||
+        next.definitionDigest !== retained.definitionDigest
+      ) {
+        failures.push(
+          `${identity} retained migration v${retained.version} (${retained.name}) was removed, renamed, or edited`
+        );
+      }
+    }
+    if (candidate.version > previous.version) {
+      if ((candidate.fixtureObjectKeys ?? []).length === 0) {
+        failures.push(
+          `${identity} schemaVersion advanced to v${candidate.version} without a declared representative schema migration fixture`
+        );
+      }
+      for (let version = previous.version + 1; version <= candidate.version; version += 1) {
+        if (!candidateMigrations.has(version)) {
+          failures.push(
+            `${identity} schemaVersion advanced to v${candidate.version} without contiguous migration v${version}`
+          );
+        }
+      }
+    }
+    return failures;
+  }
+
+  /**
+   * Capture the installed release's declared representative objects and run
+   * every retained supported fixture through the candidate in real workerd.
+   */
+  async validateDurableObjectSchemaFixtures(input: {
+    source: string;
+    build: BuildResult;
+    descriptor: DurableObjectPublishedSchemaDescriptor;
+  }): Promise<string[]> {
+    const installed = this.doSchemaDescriptorDb
+      .prepare(
+        `SELECT i.effective_version, d.descriptor_json
+         FROM do_schema_installed i
+         JOIN do_schema_descriptors d
+           ON d.source = i.source AND d.class_name = i.class_name
+          AND d.effective_version = i.effective_version
+         WHERE i.source = ? AND i.class_name = ?`
+      )
+      .get(input.source, input.descriptor.className) as
+      | { effective_version: string; descriptor_json: string }
+      | undefined;
+    // The first publication establishes lineage; there is no published
+    // predecessor from which trustworthy fixtures can be captured.
+    if (!installed) return [];
+
+    const previous = JSON.parse(
+      installed.descriptor_json
+    ) as DurableObjectPublishedSchemaDescriptor;
+    const fixtureKeys = [
+      ...new Set([
+        ...(previous.fixtureObjectKeys ?? []),
+        ...(input.descriptor.fixtureObjectKeys ?? []),
+      ]),
+    ].sort();
+    const failures: string[] = [];
+    for (const objectKey of fixtureKeys) {
+      try {
+        await this.captureDurableObjectSchemaFixture({
+          source: input.source,
+          className: input.descriptor.className,
+          objectKey,
+          effectiveVersion: installed.effective_version,
+          schemaVersion: previous.version,
+        });
+      } catch (error) {
+        failures.push(
+          `${input.source}:${input.descriptor.className}/${objectKey} fixture capture failed: ${errorMessage(error)}`
+        );
+      }
+    }
+    if (failures.length > 0) return failures;
+
+    const fixtureRows = this.doSchemaDescriptorDb
+      .prepare(
+        `SELECT manifest_json FROM do_schema_fixtures
+         WHERE source = ? AND class_name = ? ORDER BY effective_version, object_key`
+      )
+      .all(input.source, input.descriptor.className) as Array<{ manifest_json: string }>;
+    for (const row of fixtureRows) {
+      const fixture = JSON.parse(row.manifest_json) as DurableObjectSchemaFixtureManifest;
+      if (fixture.schemaVersion < input.descriptor.baseline.version) continue;
+      try {
+        const migrated = await this.probeDurableObjectSchema(
+          input.source,
+          input.descriptor.className,
+          input.build,
+          10_000,
+          fixture
+        );
+        if (migrated.freshSchemaFingerprint !== input.descriptor.freshSchemaFingerprint) {
+          failures.push(
+            `${input.source}:${input.descriptor.className}/${fixture.objectKey} fixture from schema v${fixture.schemaVersion} ` +
+              `migrated to a shape different from a fresh v${input.descriptor.version} install`
+          );
+        }
+      } catch (error) {
+        failures.push(
+          `${input.source}:${input.descriptor.className}/${fixture.objectKey} fixture from schema v${fixture.schemaVersion} ` +
+            `failed candidate migration: ${errorMessage(error)}`
+        );
+      }
+    }
+    return failures;
+  }
+
+  /** Compare candidate descriptors to this workspace's installed lineage and stage them. */
+  validateAndStageDurableObjectSchemas(
+    stateHash: string,
+    candidates: ReadonlyArray<{
+      source: string;
+      effectiveVersion: string;
+      descriptor: DurableObjectPublishedSchemaDescriptor;
+    }>
+  ): string[] {
+    const failures: string[] = [];
+    const insertDescriptor = this.doSchemaDescriptorDb.prepare(
+      `INSERT OR REPLACE INTO do_schema_descriptors
+       (source, effective_version, class_name, descriptor_json) VALUES (?, ?, ?, ?)`
+    );
+    const insertCandidate = this.doSchemaDescriptorDb.prepare(
+      `INSERT OR REPLACE INTO do_schema_candidates
+       (state_hash, source, class_name, effective_version) VALUES (?, ?, ?, ?)`
+    );
+    this.doSchemaDescriptorDb.exec("BEGIN IMMEDIATE");
+    try {
+      this.doSchemaDescriptorDb
+        .prepare(`DELETE FROM do_schema_candidates WHERE state_hash = ?`)
+        .run(stateHash);
+      for (const candidate of candidates) {
+        const installed = this.doSchemaDescriptorDb
+          .prepare(
+            `SELECT d.descriptor_json
+             FROM do_schema_installed i
+             JOIN do_schema_descriptors d
+               ON d.source = i.source AND d.class_name = i.class_name
+              AND d.effective_version = i.effective_version
+             WHERE i.source = ? AND i.class_name = ?`
+          )
+          .get(candidate.source, candidate.descriptor.className) as
+          | { descriptor_json: string }
+          | undefined;
+        if (installed) {
+          failures.push(
+            ...this.schemaCompatibilityFailures(
+              candidate.source,
+              JSON.parse(installed.descriptor_json) as DurableObjectPublishedSchemaDescriptor,
+              candidate.descriptor
+            )
+          );
+        }
+        insertDescriptor.run(
+          candidate.source,
+          candidate.effectiveVersion,
+          candidate.descriptor.className,
+          canonicalJson(candidate.descriptor)
+        );
+        insertCandidate.run(
+          stateHash,
+          candidate.source,
+          candidate.descriptor.className,
+          candidate.effectiveVersion
+        );
+      }
+      if (failures.length > 0) {
+        this.doSchemaDescriptorDb.exec("ROLLBACK");
+      } else {
+        this.doSchemaDescriptorDb.exec("COMMIT");
+      }
+    } catch (error) {
+      this.doSchemaDescriptorDb.exec("ROLLBACK");
+      throw error;
+    }
+    return failures;
+  }
+
+  commitDurableObjectSchemas(stateHash: string): void {
+    this.doSchemaDescriptorDb.exec("BEGIN IMMEDIATE");
+    try {
+      this.doSchemaDescriptorDb
+        .prepare(
+          `INSERT OR REPLACE INTO do_schema_installed (source, class_name, effective_version)
+           SELECT source, class_name, effective_version FROM do_schema_candidates WHERE state_hash = ?`
+        )
+        .run(stateHash);
+      this.doSchemaDescriptorDb
+        .prepare(`DELETE FROM do_schema_candidates WHERE state_hash = ?`)
+        .run(stateHash);
+      this.doSchemaDescriptorDb.exec("COMMIT");
+    } catch (error) {
+      this.doSchemaDescriptorDb.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   // =========================================================================
   // DO cloning (filesystem-level SQLite copy)
   // =========================================================================
@@ -3257,6 +3880,364 @@ export class WorkerdManager {
     return computeWorkerdObjectIdHash(UNIVERSAL_DO_UNIQUE_KEY, encodeUniversalKey(ref));
   }
 
+  private durableObjectTargetId(ref: DORef): string {
+    return canonicalEntityId({
+      kind: "do",
+      source: ref.source,
+      className: ref.className,
+      key: ref.objectKey,
+    });
+  }
+
+  private durableObjectMaintenanceError(row: DurableObjectMaintenanceRow) {
+    return {
+      code: "DO_MAINTENANCE_IN_PROGRESS",
+      message:
+        `${row.className} (${row.source}/${row.objectKey}) storage maintenance ` +
+        `${row.operationId} is in progress`,
+      errorData: {
+        operationId: row.operationId,
+        operation: row.kind,
+        source: row.source,
+        className: row.className,
+        objectKey: row.objectKey,
+      },
+    };
+  }
+
+  private readOpenDurableObjectMaintenance(): DurableObjectMaintenanceRow[] {
+    return this.doMaintenanceDb
+      .prepare(
+        `SELECT operation_id, kind, target_id, source, class_name, object_key,
+                intent, backup_operation_id, step, created_at
+         FROM do_maintenance WHERE status = 'open' ORDER BY created_at`
+      )
+      .all()
+      .map((raw) => {
+        const row = raw as Record<string, unknown>;
+        return {
+          operationId: String(row["operation_id"]),
+          kind: row["kind"] as "reset" | "restore",
+          targetId: String(row["target_id"]),
+          source: String(row["source"]),
+          className: String(row["class_name"]),
+          objectKey: String(row["object_key"]),
+          intent: String(row["intent"]),
+          backupOperationId:
+            row["backup_operation_id"] === null ? null : String(row["backup_operation_id"]),
+          step: String(row["step"]),
+          createdAt: Number(row["created_at"]),
+        };
+      });
+  }
+
+  private updateDurableObjectMaintenance(operationId: string, step: string): void {
+    this.doMaintenanceDb
+      .prepare(`UPDATE do_maintenance SET step = ?, updated_at = ? WHERE operation_id = ?`)
+      .run(step, Date.now(), operationId);
+  }
+
+  private completeDurableObjectMaintenance(operationId: string): void {
+    this.doMaintenanceDb
+      .prepare(
+        `UPDATE do_maintenance SET status = 'complete', step = 'complete', updated_at = ?
+         WHERE operation_id = ?`
+      )
+      .run(Date.now(), operationId);
+  }
+
+  private async fenceDurableObjectMaintenance(row: DurableObjectMaintenanceRow): Promise<void> {
+    await sealAndDrainDurableObjectRelays(
+      row.targetId,
+      row.operationId,
+      this.durableObjectMaintenanceError(row)
+    );
+  }
+
+  private async quiesceDurableObjectStorage(ref: DORef): Promise<void> {
+    if (isInternalDOSource(ref.source)) {
+      throw new Error(
+        `Storage maintenance is not supported for internal DO source "${ref.source}"`
+      );
+    }
+    if (this.process && this.process.exitCode === null && this.port) {
+      await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
+    }
+    // Release proof, not an assumption: open every database read-write and run
+    // integrity_check. The open must acquire SQLite's file lock (it fails if
+    // workerd still holds the facet's connection) and recovers any residual
+    // WAL, so the files a subsequent copy reads are locked-free and coherent.
+    const storageDir = this.universalDoStorageDir();
+    const hash = this.universalHostHash(ref);
+    const files = (await fs.promises.readdir(storageDir).catch(() => [] as string[])).filter(
+      (file) => file.startsWith(`${hash}.`) && file.endsWith(".sqlite")
+    );
+    for (const file of files) {
+      let db: InstanceType<typeof DatabaseSync>;
+      try {
+        db = new DatabaseSync(path.join(storageDir, file));
+      } catch (cause) {
+        throw new Error(
+          `workerd has not released Durable Object storage file ${file}: ${errorMessage(cause)}`,
+          { cause }
+        );
+      }
+      try {
+        const result = db.prepare(`PRAGMA integrity_check`).get() as Record<string, unknown>;
+        if (!Object.values(result).includes("ok")) {
+          throw new Error(
+            `Durable Object storage file ${file} failed SQLite integrity_check after facet retirement`
+          );
+        }
+      } finally {
+        db.close();
+      }
+    }
+  }
+
+  private durableObjectBackupDir(operationId: string): string {
+    return path.join(
+      stateLayout(this.deps.statePath).databases.durableObjectBackupsDir,
+      operationId
+    );
+  }
+
+  private async copyDurableObjectStorageToBackup(
+    ref: DORef,
+    operationId: string,
+    intent: string,
+    createdAt: number
+  ): Promise<void> {
+    const storageDir = this.universalDoStorageDir();
+    const hash = this.universalHostHash(ref);
+    const backupDir = this.durableObjectBackupDir(operationId);
+    await fs.promises.mkdir(backupDir, { recursive: true });
+    const existing = await fs.promises.readdir(backupDir).catch(() => [] as string[]);
+    for (const file of existing) {
+      if (file !== "manifest.json") await fs.promises.unlink(path.join(backupDir, file));
+    }
+    const files = (await fs.promises.readdir(storageDir).catch(() => [] as string[])).filter(
+      (file) => file.startsWith(`${hash}.`)
+    );
+    for (const file of files) {
+      await fs.promises.copyFile(path.join(storageDir, file), path.join(backupDir, file));
+    }
+    await fs.promises.writeFile(
+      path.join(backupDir, "manifest.json"),
+      JSON.stringify({ operationId, target: ref, intent, createdAt, files }, null, 2),
+      { mode: 0o600 }
+    );
+  }
+
+  private async verifyDurableObjectBackup(operationId: string): Promise<void> {
+    const backupDir = this.durableObjectBackupDir(operationId);
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(backupDir, "manifest.json"), "utf8")
+    ) as { files?: unknown };
+    if (!Array.isArray(manifest.files))
+      throw new Error(`Backup ${operationId} has no file manifest`);
+    for (const file of manifest.files) {
+      if (typeof file !== "string" || !file.endsWith(".sqlite")) continue;
+      const db = new DatabaseSync(path.join(backupDir, file), { readOnly: true });
+      try {
+        const result = db.prepare(`PRAGMA integrity_check`).get() as Record<string, unknown>;
+        if (!Object.values(result).includes("ok")) {
+          throw new Error(`Backup ${operationId}/${file} failed SQLite integrity_check`);
+        }
+      } finally {
+        db.close();
+      }
+    }
+  }
+
+  private async restoreDurableObjectFiles(ref: DORef, backupOperationId: string): Promise<void> {
+    await this.verifyDurableObjectBackup(backupOperationId);
+    const backupDir = this.durableObjectBackupDir(backupOperationId);
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(backupDir, "manifest.json"), "utf8")
+    ) as { target?: DORef; files?: string[] };
+    if (
+      manifest.target?.source !== ref.source ||
+      manifest.target?.className !== ref.className ||
+      manifest.target?.objectKey !== ref.objectKey
+    ) {
+      throw new Error(`Backup ${backupOperationId} does not belong to the exact requested target`);
+    }
+    await this.destroyDO(ref);
+    const storageDir = this.universalDoStorageDir();
+    await fs.promises.mkdir(storageDir, { recursive: true });
+    for (const file of manifest.files ?? []) {
+      await fs.promises.copyFile(path.join(backupDir, file), path.join(storageDir, file));
+    }
+  }
+
+  private async resumeDurableObjectMaintenance(row: DurableObjectMaintenanceRow): Promise<void> {
+    const ref = { source: row.source, className: row.className, objectKey: row.objectKey };
+    await this.fenceDurableObjectMaintenance(row);
+    try {
+      if (row.step === "journaled") {
+        this.updateDurableObjectMaintenance(row.operationId, "fenced");
+        row.step = "fenced";
+      }
+      if (row.step === "fenced") {
+        await this.quiesceDurableObjectStorage(ref);
+        this.updateDurableObjectMaintenance(row.operationId, "retired");
+        row.step = "retired";
+      }
+      if (row.step === "retired") {
+        await this.copyDurableObjectStorageToBackup(
+          ref,
+          row.operationId,
+          row.intent,
+          row.createdAt
+        );
+        this.updateDurableObjectMaintenance(row.operationId, "backed-up");
+        row.step = "backed-up";
+      }
+      if (row.step === "backed-up") {
+        await this.verifyDurableObjectBackup(row.operationId);
+        this.updateDurableObjectMaintenance(row.operationId, "verified");
+        row.step = "verified";
+      }
+      if (row.step === "verified") {
+        if (row.kind === "reset") await this.destroyDO(ref);
+        else await this.restoreDurableObjectFiles(ref, assertPresent(row.backupOperationId));
+        this.updateDurableObjectMaintenance(row.operationId, "replaced");
+        row.step = "replaced";
+      }
+      if (row.step === "replaced") this.completeDurableObjectMaintenance(row.operationId);
+    } finally {
+      const stillOpen = this.doMaintenanceDb
+        .prepare(`SELECT 1 AS open FROM do_maintenance WHERE operation_id = ? AND status = 'open'`)
+        .get(row.operationId);
+      if (!stillOpen) releaseDurableObjectRelaySeal(row.targetId, row.operationId);
+    }
+  }
+
+  private async startDurableObjectMaintenance(input: {
+    kind: "reset" | "restore";
+    ref: DORef;
+    intent: string;
+    backupOperationId?: string;
+  }): Promise<string> {
+    await this.doMaintenanceRecovery;
+    if (!input.intent.trim()) throw new Error("Durable Object storage maintenance requires intent");
+    const targetId = this.durableObjectTargetId(input.ref);
+    const previous = this.doMaintenanceChains.get(targetId);
+    if (previous) await previous.catch(() => undefined);
+    const open = this.readOpenDurableObjectMaintenance().find((row) => row.targetId === targetId);
+    if (open) {
+      await this.resumeDurableObjectMaintenance(open);
+      if (
+        open.kind === input.kind &&
+        open.backupOperationId === (input.backupOperationId ?? null)
+      ) {
+        return open.operationId;
+      }
+    }
+    const operationId = crypto.randomUUID();
+    const createdAt = Date.now();
+    const row: DurableObjectMaintenanceRow = {
+      operationId,
+      kind: input.kind,
+      targetId,
+      ...input.ref,
+      intent: input.intent.trim(),
+      backupOperationId: input.backupOperationId ?? null,
+      step: "journaled",
+      createdAt,
+    };
+    this.doMaintenanceDb
+      .prepare(
+        `INSERT INTO do_maintenance (
+           operation_id, kind, target_id, source, class_name, object_key, intent,
+           backup_operation_id, step, status, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'journaled', 'open', ?, ?)`
+      )
+      .run(
+        operationId,
+        input.kind,
+        targetId,
+        input.ref.source,
+        input.ref.className,
+        input.ref.objectKey,
+        input.intent.trim(),
+        input.backupOperationId ?? null,
+        createdAt,
+        createdAt
+      );
+    const run = this.resumeDurableObjectMaintenance(row).finally(() => {
+      if (this.doMaintenanceChains.get(targetId) === run) this.doMaintenanceChains.delete(targetId);
+    });
+    this.doMaintenanceChains.set(targetId, run);
+    await run;
+    await this.sweepDurableObjectBackups(input.ref, 5).catch((error) => {
+      log.warn(`Failed to sweep Durable Object storage backups for ${targetId}`, error);
+    });
+    return operationId;
+  }
+
+  async resetDOStorage(ref: DORef, intent: string): Promise<{ operationId: string }> {
+    return {
+      operationId: await this.startDurableObjectMaintenance({ kind: "reset", ref, intent }),
+    };
+  }
+
+  async restoreDOStorageBackup(
+    ref: DORef,
+    backupOperationId: string,
+    intent: string
+  ): Promise<{ operationId: string }> {
+    return {
+      operationId: await this.startDurableObjectMaintenance({
+        kind: "restore",
+        ref,
+        intent,
+        backupOperationId,
+      }),
+    };
+  }
+
+  async listDOStorageBackups(ref: DORef): Promise<DurableObjectStorageBackup[]> {
+    const root = stateLayout(this.deps.statePath).databases.durableObjectBackupsDir;
+    const directories = await fs.promises.readdir(root).catch(() => [] as string[]);
+    const backups: DurableObjectStorageBackup[] = [];
+    for (const operationId of directories) {
+      try {
+        const completed = this.doMaintenanceDb
+          .prepare(
+            `SELECT 1 AS completed FROM do_maintenance
+             WHERE operation_id = ? AND status = 'complete'`
+          )
+          .get(operationId);
+        if (!completed) continue;
+        const manifest = JSON.parse(
+          await fs.promises.readFile(path.join(root, operationId, "manifest.json"), "utf8")
+        ) as DurableObjectStorageBackup;
+        if (
+          manifest.target?.source === ref.source &&
+          manifest.target.className === ref.className &&
+          manifest.target.objectKey === ref.objectKey
+        ) {
+          backups.push(manifest);
+        }
+      } catch {
+        // Half-written crash artifacts are resumed from the journal, never listed.
+      }
+    }
+    return backups.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  private async sweepDurableObjectBackups(ref: DORef, retain: number): Promise<void> {
+    const backups = await this.listDOStorageBackups(ref);
+    for (const backup of backups.slice(retain)) {
+      await fs.promises.rm(this.durableObjectBackupDir(backup.operationId), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
+
   /**
    * Clone a DO's storage to a new object key. The clone starts with identical
    * state. Used for channel forking.
@@ -3272,32 +4253,42 @@ export class WorkerdManager {
     if (isInternalDOSource(ref.source)) {
       throw new Error(`cloneDO is not supported for internal DO source "${ref.source}"`);
     }
-    const dir = this.universalDoStorageDir();
-    const srcHash = this.universalHostHash(ref);
-    const tgtHash = this.universalHostHash({ ...ref, objectKey: newObjectKey });
+    const targetId = this.durableObjectTargetId(ref);
+    const sealOwnerId = `clone:${crypto.randomUUID()}`;
+    await sealAndDrainDurableObjectRelays(targetId, sealOwnerId, {
+      code: "DO_MAINTENANCE_IN_PROGRESS",
+      message: `Durable Object ${targetId} is being quiesced for a storage snapshot`,
+      errorData: { operation: "clone-snapshot", ...ref },
+    });
+    try {
+      await this.quiesceDurableObjectStorage(ref);
+      const dir = this.universalDoStorageDir();
+      const srcHash = this.universalHostHash(ref);
+      const tgtHash = this.universalHostHash({ ...ref, objectKey: newObjectKey });
 
-    const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
-    // Upsert-safe (idempotent) for cloneContext targetKey retries: if the target
-    // already has facet storage, a prior clone attempt succeeded — skip rather
-    // than double-write (which could clobber a clone that has since diverged).
-    if (files.some((f) => f.startsWith(`${tgtHash}.`))) {
+      const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
+      // Upsert-safe (idempotent) for cloneContext targetKey retries: if the target
+      // already has facet storage, a prior clone attempt succeeded — skip rather
+      // than double-write (which could clobber a clone that has since diverged).
+      if (files.some((f) => f.startsWith(`${tgtHash}.`))) {
+        return { source: ref.source, className: ref.className, objectKey: newObjectKey };
+      }
+      const srcFiles = files.filter((f) => f.startsWith(`${srcHash}.`));
+      if (srcFiles.length === 0) {
+        throw new Error(
+          `Source DO storage not found: ${ref.className}/${ref.objectKey} (no facet storage for host ${srcHash} under ${dir})`
+        );
+      }
+      for (const file of srcFiles) {
+        await fs.promises.copyFile(
+          path.join(dir, file),
+          path.join(dir, `${tgtHash}${file.slice(srcHash.length)}`)
+        );
+      }
       return { source: ref.source, className: ref.className, objectKey: newObjectKey };
+    } finally {
+      releaseDurableObjectRelaySeal(targetId, sealOwnerId);
     }
-    const srcFiles = files.filter((f) => f.startsWith(`${srcHash}.`));
-    if (srcFiles.length === 0) {
-      throw new Error(
-        `Source DO storage not found: ${ref.className}/${ref.objectKey} (no facet storage for host ${srcHash} under ${dir})`
-      );
-    }
-    await Promise.all(
-      srcFiles.map((f) =>
-        fs.promises.copyFile(
-          path.join(dir, f),
-          path.join(dir, `${tgtHash}${f.slice(srcHash.length)}`)
-        )
-      )
-    );
-    return { source: ref.source, className: ref.className, objectKey: newObjectKey };
   }
 
   /**
@@ -3329,6 +4320,8 @@ export class WorkerdManager {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    await this.doMaintenanceRecovery;
+    await Promise.all([...this.doMaintenanceChains.values()]);
     await this.activeTransition?.promise.catch((error) => {
       log.warn("in-flight workerd restart failed while shutdown was taking ownership:", error);
     });
@@ -3354,6 +4347,9 @@ export class WorkerdManager {
     } catch {
       // Ignore
     }
+
+    this.doMaintenanceDb.close();
+    this.doSchemaDescriptorDb.close();
 
     log.info("WorkerdManager shut down");
   }

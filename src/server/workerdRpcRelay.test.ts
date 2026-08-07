@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   doRefUrl,
   encodeUniversalKey,
+  postEventToDurableObject,
   postToDurableObject,
   releaseDurableObjectRelaySeal,
   sealAndDrainDurableObjectRelays,
@@ -131,6 +132,44 @@ describe("workerdRpcRelay", () => {
     });
   });
 
+  it("preserves structured non-OK failures and appends the exact DO identity", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: "schema refused",
+            errorKind: "service",
+            errorCode: "DO_SCHEMA_INCOMPATIBLE",
+            errorData: { reason: "shape-drift" },
+          }),
+          { status: 500 }
+        )
+      )
+    );
+    await expect(
+      postToDurableObject(
+        { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" },
+        "ping",
+        [],
+        { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" }
+      )
+    ).rejects.toMatchObject({
+      name: "RemoteRpcError",
+      code: "DO_SCHEMA_INCOMPATIBLE",
+      errorKind: "service",
+      message: expect.stringContaining("workers/agent:AgentDO/channel-1"),
+      errorData: {
+        reason: "shape-drift",
+        durableObject: {
+          source: "workers/agent",
+          className: "AgentDO",
+          objectKey: "channel-1",
+        },
+      },
+    });
+  });
+
   it("seals retirement admission, drains accepted relays, and reopens after the boundary", async () => {
     const ref = { source: "workers/agent", className: "AgentDO", objectKey: "retiring" };
     const targetId = "do:workers/agent:AgentDO:retiring";
@@ -152,7 +191,7 @@ describe("workerdRpcRelay", () => {
       workerdGatewayToken: "gateway-token",
     });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const drained = sealAndDrainDurableObjectRelays(targetId);
+    const drained = sealAndDrainDurableObjectRelays(targetId, "test-retirement");
 
     await expect(
       postToDurableObject(ref, "late", [], {
@@ -170,7 +209,7 @@ describe("workerdRpcRelay", () => {
     releaseFetch();
     await expect(admitted).resolves.toEqual({ first: true });
     await drained;
-    releaseDurableObjectRelaySeal(targetId);
+    releaseDurableObjectRelaySeal(targetId, "test-retirement");
 
     await expect(
       postToDurableObject(ref, "after-reactivation", [], {
@@ -178,6 +217,159 @@ describe("workerdRpcRelay", () => {
         workerdGatewayToken: "gateway-token",
       })
     ).resolves.toEqual({ reopened: true });
+  });
+
+  it("reports a structured maintenance fence instead of reactivating the target", async () => {
+    const ref = { source: "workers/agent", className: "AgentDO", objectKey: "maintained" };
+    const targetId = "do:workers/agent:AgentDO:maintained";
+    await sealAndDrainDurableObjectRelays(targetId, "op-1", {
+      code: "DO_MAINTENANCE_IN_PROGRESS",
+      message: "storage reset is in progress",
+      errorData: { operationId: "op-1" },
+    });
+    await expect(
+      postToDurableObject(ref, "late", [], {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+      })
+    ).rejects.toMatchObject({
+      name: "RemoteRpcError",
+      code: "DO_MAINTENANCE_IN_PROGRESS",
+      errorKind: "service",
+      errorData: { operationId: "op-1" },
+    });
+    releaseDurableObjectRelaySeal(targetId, "op-1");
+  });
+
+  it("keeps independent seals until their exact owners release them", async () => {
+    const ref = { source: "workers/agent", className: "AgentDO", objectKey: "owned" };
+    const targetId = "do:workers/agent:AgentDO:owned";
+    await sealAndDrainDurableObjectRelays(targetId, "maintenance");
+    await sealAndDrainDurableObjectRelays(targetId, "retirement");
+    releaseDurableObjectRelaySeal(targetId, "maintenance");
+    await expect(
+      postToDurableObject(ref, "still-sealed", [], {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+      })
+    ).rejects.toMatchObject({ code: "DO_NOT_CREATED" });
+    releaseDurableObjectRelaySeal(targetId, "retirement");
+  });
+
+  it("drains admitted events before completing a seal", async () => {
+    const ref = { source: "workers/agent", className: "AgentDO", objectKey: "eventful" };
+    const targetId = "do:workers/agent:AgentDO:eventful";
+    let releaseFetch!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await blocked;
+        return new Response("{}", { status: 200 });
+      })
+    );
+    const event = postEventToDurableObject(
+      ref,
+      "changed",
+      {},
+      {
+        workerdUrl: "http://127.0.0.1:8787",
+        workerdGatewayToken: "gateway-token",
+      }
+    );
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    const drained = sealAndDrainDurableObjectRelays(targetId, "event-test");
+    let settled = false;
+    void drained.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseFetch();
+    await event;
+    await drained;
+    releaseDurableObjectRelaySeal(targetId, "event-test");
+  });
+
+  it("keeps a streaming relay admitted until its response body is cancelled", async () => {
+    const ref = { source: "workers/agent", className: "AgentDO", objectKey: "streaming" };
+    const targetId = "do:workers/agent:AgentDO:streaming";
+    let upstreamCancelled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              cancel() {
+                upstreamCancelled = true;
+              },
+            }),
+            { status: 200 }
+          )
+      )
+    );
+
+    const response = await streamFromDurableObject(
+      ref,
+      "updates",
+      [],
+      { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" },
+      new AbortController().signal
+    );
+    const drained = sealAndDrainDurableObjectRelays(targetId, "stream-test");
+    let settled = false;
+    void drained.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await response.body!.cancel("consumer closed");
+    await drained;
+    expect(upstreamCancelled).toBe(true);
+    releaseDurableObjectRelaySeal(targetId, "stream-test");
+  });
+
+  it("preserves structured non-OK failures when opening a stream", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: "schema refused",
+            errorKind: "service",
+            errorCode: "DO_SCHEMA_INCOMPATIBLE",
+            errorData: { reason: "shape-drift" },
+          }),
+          { status: 500 }
+        )
+      )
+    );
+
+    await expect(
+      streamFromDurableObject(
+        { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" },
+        "updates",
+        [],
+        { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" },
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({
+      name: "RemoteRpcError",
+      code: "DO_SCHEMA_INCOMPATIBLE",
+      errorKind: "service",
+      errorData: {
+        reason: "shape-drift",
+        durableObject: {
+          source: "workers/agent",
+          className: "AgentDO",
+          objectKey: "channel-1",
+        },
+      },
+    });
   });
 
   it("annotates fetch failures with the DO relay URL and low-level cause", async () => {
@@ -258,7 +450,9 @@ describe("workerdRpcRelay", () => {
       controller.signal
     );
 
-    expect(response).toBe(upstream);
+    expect(response.status).toBe(upstream.status);
+    expect(response.headers.get("Content-Type")).toBe("application/x-ndjson");
+    await expect(response.text()).resolves.toBe("subscription bytes");
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     expect(init.signal).toBe(controller.signal);
     const body = JSON.parse(String(init.body));

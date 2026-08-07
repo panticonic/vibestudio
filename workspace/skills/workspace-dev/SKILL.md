@@ -22,7 +22,7 @@ when a package, panel, worker, extension, project, template, about page, or
 other repo needs agent guidance that should travel with its code.
 
 Use repo-local skill docs for implementation-specific workflows, APIs, schemas,
-debugging recipes, generated files, ownership notes, or schema-epoch guidance. Put
+debugging recipes, generated files, ownership notes, or schema-migration guidance. Put
 the file at the repo root:
 
 - `packages/foo/SKILL.md`

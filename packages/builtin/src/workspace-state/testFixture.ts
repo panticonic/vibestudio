@@ -31,6 +31,26 @@ export class WorkspaceDOTestable extends WorkspaceDO {
     return this.testOwnerUserId;
   }
 
+  protected override schemaIndexDefinitions(): readonly string[] {
+    return [
+      `CREATE INDEX idx_entities_status ON entities(status, retired_at)`,
+      `CREATE INDEX idx_entities_kind_source ON entities(kind, source_repo_path, class_name)`,
+      `CREATE INDEX idx_entities_cleanup
+        ON entities(cleanup_complete, retired_at) WHERE cleanup_complete = 0`,
+      `CREATE INDEX idx_entities_agent_entity
+        ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`,
+      `CREATE INDEX idx_slots_parent ON slots(parent_slot_id)`,
+      `CREATE INDEX idx_slots_current ON slots(current_entity_id)`,
+      `CREATE INDEX idx_slots_owner ON slots(owner_user_id) WHERE closed_at IS NULL`,
+      `CREATE INDEX idx_panel_close_cleanup_page ON panel_close_cleanup(close_id, slot_id)`,
+      `CREATE INDEX idx_panel_close_cleanup_owner_page ON panel_close_cleanup(owner_user_id, slot_id)`,
+      `CREATE INDEX idx_history_entity ON slot_history(entity_id)`,
+      `CREATE INDEX idx_history_entry ON slot_history(entry_key)`,
+      `CREATE INDEX idx_context_edges_owner ON context_edges(owner_context_id, kind)`,
+      `CREATE INDEX idx_context_edges_child ON context_edges(context_id)`,
+    ];
+  }
+
   protected override createTables(): void {
     const sql = (this as unknown as { sql: { exec(s: string, ...b: unknown[]): unknown } }).sql;
     sql.exec(`

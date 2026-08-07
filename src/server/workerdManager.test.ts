@@ -264,6 +264,162 @@ afterEach(() => {
 });
 
 describe("WorkerdManager", () => {
+  describe("publication schema lineage", () => {
+    const descriptor = (
+      version: number,
+      fingerprint: string,
+      migrations: Array<{ version: number; name: string; definitionDigest: string }> = [],
+      fixtureObjectKeys: string[] = []
+    ) => ({
+      className: "BoardDO",
+      version,
+      freshSchemaFingerprint: fingerprint,
+      baseline: { version: 1, name: "board-v1" },
+      migrations,
+      fixtureObjectKeys,
+    });
+
+    it("records the first publication and rejects drift, gaps, and retained migration edits", () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:first", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-1",
+            descriptor: descriptor(1, "shape-v1"),
+          },
+        ])
+      ).toEqual([]);
+      mgr.commitDurableObjectSchemas("state:first");
+
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:drift", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-drift",
+            descriptor: descriptor(1, "changed-at-v1"),
+          },
+        ])
+      ).toEqual([expect.stringContaining("changed without a schemaVersion bump")]);
+
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:gap", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-2-gap",
+            descriptor: descriptor(2, "shape-v2", [], ["representative"]),
+          },
+        ])
+      ).toEqual([expect.stringContaining("without contiguous migration v2")]);
+
+      const migration = { version: 2, name: "add-cards", definitionDigest: "digest-a" };
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:second", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-2",
+            descriptor: descriptor(2, "shape-v2", [migration], ["representative"]),
+          },
+        ])
+      ).toEqual([]);
+      mgr.commitDurableObjectSchemas("state:second");
+
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:edited", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-3",
+            descriptor: descriptor(
+              3,
+              "shape-v3",
+              [
+                { ...migration, definitionDigest: "digest-edited" },
+                { version: 3, name: "add-labels", definitionDigest: "digest-b" },
+              ],
+              ["representative"]
+            ),
+          },
+        ])
+      ).toEqual([expect.stringContaining("retained migration v2")]);
+    });
+
+    it("rejects a version bump without representative fixture capture", () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      mgr.validateAndStageDurableObjectSchemas("state:first", [
+        {
+          source: "workers/board",
+          effectiveVersion: "ev-1",
+          descriptor: descriptor(1, "shape-v1"),
+        },
+      ]);
+      mgr.commitDurableObjectSchemas("state:first");
+      expect(
+        mgr.validateAndStageDurableObjectSchemas("state:second", [
+          {
+            source: "workers/board",
+            effectiveVersion: "ev-2",
+            descriptor: descriptor(2, "shape-v2", [
+              { version: 2, name: "add-cards", definitionDigest: "digest" },
+            ]),
+          },
+        ])
+      ).toEqual([expect.stringContaining("without a declared representative")]);
+    });
+  });
+
+  it("resumes a failed maintenance journal and hides its backup until completion", async () => {
+    const mgr = new WorkerdManager(createMockDeps());
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "main" };
+    const internals = mgr as unknown as {
+      verifyDurableObjectBackup(operationId: string): Promise<void>;
+      readOpenDurableObjectMaintenance(): Array<{ operationId: string }>;
+    };
+    const verify = internals.verifyDurableObjectBackup.bind(mgr);
+    let failVerification = true;
+    internals.verifyDurableObjectBackup = async (operationId) => {
+      if (failVerification) throw new Error("injected verification failure");
+      await verify(operationId);
+    };
+
+    await expect(mgr.resetDOStorage(ref, "test resumable reset")).rejects.toThrow(
+      "injected verification failure"
+    );
+    const operationId = internals.readOpenDurableObjectMaintenance()[0]!.operationId;
+    await expect(mgr.listDOStorageBackups(ref)).resolves.toEqual([]);
+
+    failVerification = false;
+    await expect(mgr.resetDOStorage(ref, "retry resumable reset")).resolves.toEqual({
+      operationId,
+    });
+    await expect(mgr.listDOStorageBackups(ref)).resolves.toEqual([
+      expect.objectContaining({ operationId }),
+    ]);
+    await mgr.shutdown();
+  });
+
+  it("resumes after replacement failure and retains only the five newest backups", async () => {
+    const mgr = new WorkerdManager(createMockDeps());
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "retained" };
+    const originalDestroy = mgr.destroyDO.bind(mgr);
+    let failDestroy = true;
+    mgr.destroyDO = async (target) => {
+      if (failDestroy) throw new Error("injected replacement failure");
+      await originalDestroy(target);
+    };
+    await expect(mgr.resetDOStorage(ref, "first attempt")).rejects.toThrow(
+      "injected replacement failure"
+    );
+    failDestroy = false;
+    const resumed = await mgr.resetDOStorage(ref, "resume replacement");
+    for (let index = 0; index < 5; index += 1) {
+      await mgr.resetDOStorage(ref, `retention ${index}`);
+    }
+    const backups = await mgr.listDOStorageBackups(ref);
+    expect(backups).toHaveLength(5);
+    expect(backups.some((backup) => backup.operationId === resumed.operationId)).toBe(false);
+    await mgr.shutdown();
+  });
+
   it("binds the required process-owned egress secret", () => {
     const mgr = new WorkerdManager(createMockDeps({ egressSecret: "owned-by-bootstrap" }));
 

@@ -151,6 +151,19 @@ const CORRECTABLE_IMPORT_FAILURE_CODES = new Set([
 
 function structuredFailureCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
+  // Only an RPC-shaped error (it carries an errorKind) publishes its `code` as
+  // the structured failure code. A bare Node error code (ENOENT, …) thrown by
+  // guest code stays a guest exception, not an invocation failure code.
+  const directCode = (error as { code?: unknown }).code;
+  const directKind = (error as { errorKind?: unknown }).errorKind;
+  if (
+    typeof directCode === "string" &&
+    directCode.length > 0 &&
+    typeof directKind === "string" &&
+    directKind.length > 0
+  ) {
+    return directCode;
+  }
   const errorData = (error as { errorData?: unknown }).errorData;
   if (!errorData || typeof errorData !== "object") return undefined;
   const code = (errorData as Record<string, unknown>)["code"];
@@ -165,6 +178,10 @@ function structuredFailureData(error: unknown): unknown | undefined {
 
 function structuredFailureKind(error: unknown): SandboxFailureKind | undefined {
   if (!error || typeof error !== "object") return undefined;
+  const code = structuredFailureCode(error);
+  if (code?.startsWith("DO_SCHEMA_") || code === "DO_MAINTENANCE_IN_PROGRESS") {
+    return "infrastructure";
+  }
   const errorData = (error as { errorData?: unknown }).errorData;
   if (!errorData || typeof errorData !== "object") return undefined;
   const data = errorData as Record<string, unknown>;

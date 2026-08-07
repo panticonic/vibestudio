@@ -337,6 +337,10 @@ interface ChannelPresenceEntry {
 
 export class PubSubChannel extends DurableObjectBase {
   static override schemaVersion = PUBSUB_CHANNEL_SCHEMA_BASELINE;
+
+  protected override schemaProductionBaseline() {
+    return { version: PUBSUB_CHANNEL_SCHEMA_BASELINE, name: "pubsub-channel-baseline" } as const;
+  }
   private _channelLog: ChannelLog | null = null;
   private _inviteIndex: DurableObjectServiceClient | null = null;
   private _policyHost: PolicyHost | null = null;
@@ -355,8 +359,9 @@ export class PubSubChannel extends DurableObjectBase {
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
-    // Eager init — the DO must be ready before any message arrives.
-    this.ensureReady();
+  }
+
+  protected override afterSchemaReady(): void {
     try {
       this.sql.exec(`PRAGMA foreign_keys = ON`);
     } catch {
@@ -596,6 +601,21 @@ export class PubSubChannel extends DurableObjectBase {
         last_seen      INTEGER NOT NULL
       )
     `);
+  }
+
+  protected override requiredTables(): readonly string[] {
+    return [
+      "participants",
+      "pending_calls",
+      "dedup_keys",
+      "channel_delivery_queue",
+      "channel_maintenance_queue",
+      "fork_ops",
+      "lineage_subscribers",
+      "channel_members",
+      "invite_index_ops",
+      "presence_last_seen",
+    ];
   }
 
   // ── Wiring ────────────────────────────────────────────────────────────────

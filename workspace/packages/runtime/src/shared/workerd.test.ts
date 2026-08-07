@@ -30,9 +30,9 @@ describe("createWorkerdClient", () => {
     client = createWorkerdClient(mock.rpc);
   });
 
-  it("exposes ergonomic worker lifecycle without DO-storage primitives", () => {
-    // cloneDO/destroyDO are closed off — reachable only via runtime.cloneContext/
-    // destroyContext (server-internal), never on this userland client.
+  it("exposes ergonomic worker lifecycle and exact-target DO recovery primitives", () => {
+    // Raw cloneDO/destroyDO remain closed; only the journaled exact-target
+    // reset/backup/restore recovery surface is public.
     expect(Object.keys(client).sort()).toEqual(
       [
         "create",
@@ -41,8 +41,11 @@ describe("createWorkerdClient", () => {
         "list",
         "listServices",
         "listSources",
+        "listStorageBackups",
+        "resetStorage",
         "resolveDurableObject",
         "resolveService",
+        "restoreStorageBackup",
       ].sort()
     );
   });

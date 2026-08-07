@@ -439,6 +439,10 @@ export class EvalDO extends DurableObjectBase {
   static override rpcMethods = evalEngineMethods;
   static override schemaVersion = 2;
 
+  protected override schemaProductionBaseline() {
+    return { version: 2, name: "eval-engine-v2" } as const;
+  }
+
   private engine: EvalEngine | null = null;
   private scopeManager: ScopeManagerLike | null = null;
   /** Invalidates persistence and db bindings captured by an execution orphaned during recovery. */
@@ -534,7 +538,7 @@ export class EvalDO extends DurableObjectBase {
   /** Stable only for this exact in-memory notebook heap. */
   private readonly kernelIncarnationId: string;
   private readonly kernelStartedAt: number;
-  private readonly kernelRestarted: boolean;
+  private kernelRestarted = false;
   private kernelEventPending = true;
   /** Exact durable recovery report captured when this incarnation first hydrates scope. */
   private scopeRecovery: ScopeRecovery | null = null;
@@ -546,9 +550,11 @@ export class EvalDO extends DurableObjectBase {
   private kernelLease: KernelLeaseState | null = null;
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
-    this.ensureReady();
     this.kernelIncarnationId = crypto.randomUUID();
     this.kernelStartedAt = Date.now();
+  }
+
+  protected override afterSchemaReady(): void {
     this.kernelRestarted = this.getStateValue("eval_kernel_incarnation") !== null;
     this.setStateValue(
       "eval_kernel_incarnation",

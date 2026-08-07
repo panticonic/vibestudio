@@ -30,7 +30,11 @@ import type {
 import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
-import { describeWorkerdFetchFailure, getWorkerdConnectionDispatcher } from "./workerdRpcRelay.js";
+import {
+  beginDurableObjectRelay,
+  describeWorkerdFetchFailure,
+  getWorkerdConnectionDispatcher,
+} from "./workerdRpcRelay.js";
 import {
   DURABLE_WORK_READY_HEADER,
   decodeDurableWorkReady,
@@ -329,6 +333,14 @@ export function verifyInstanceTokenEnvelope(
 // ---------------------------------------------------------------------------
 
 export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, LifecycleDoDispatcher {
+  private async withRelayAdmission<T>(ref: DORef, invoke: () => Promise<T>): Promise<T> {
+    const finish = beginDurableObjectRelay(`do:${ref.source}:${ref.className}:${ref.objectKey}`);
+    try {
+      return await invoke();
+    } finally {
+      finish();
+    }
+  }
   private tokenManager: TokenManager | null = null;
   private getWorkerdUrl: (() => string) | null = null;
   private getDispatchSecret: (() => string) | null = null;
@@ -607,14 +619,16 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       `do:${ref.source}:${ref.className}:${ref.objectKey}`,
       authorization,
       () =>
-        postToDOWithToken(
-          ref,
-          method,
-          dispatchedArgs,
-          this.buildPostDeps(ref),
-          "main",
-          serverCaller,
-          signal
+        this.withRelayAdmission(ref, () =>
+          postToDOWithToken(
+            ref,
+            method,
+            dispatchedArgs,
+            this.buildPostDeps(ref),
+            "main",
+            serverCaller,
+            signal
+          )
         )
     );
     return this.authorityResultTransform
@@ -653,13 +667,15 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       `do:${ref.source}:${ref.className}:${ref.objectKey}`,
       serverCaller.authorization,
       () =>
-        postToDOWithToken(
-          ref,
-          lifecycleMethod,
-          [arg],
-          this.buildPostDeps(ref),
-          "main",
-          serverCaller
+        this.withRelayAdmission(ref, () =>
+          postToDOWithToken(
+            ref,
+            lifecycleMethod,
+            [arg],
+            this.buildPostDeps(ref),
+            "main",
+            serverCaller
+          )
         )
     );
   }
@@ -692,15 +708,19 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     await this.prepareTarget(ref);
     const serverCaller = await this.serverCaller(ref, "__alarm", [], testPolicy);
     const invoke = () =>
-      postToDOWithToken(
+      this.withRelayAdmission(
         ref,
-        "__alarm",
-        [],
-        this.buildPostDeps(ref),
-        "main",
-        serverCaller,
-        signal
-      ) as Promise<DoAlarmDispatchResult>;
+        () =>
+          postToDOWithToken(
+            ref,
+            "__alarm",
+            [],
+            this.buildPostDeps(ref),
+            "main",
+            serverCaller,
+            signal
+          ) as Promise<DoAlarmDispatchResult>
+      );
     if (!serverCaller.authorization || !this.authorityParentRunner) {
       throw new Error("DODispatch requires an authority parent runner");
     }
