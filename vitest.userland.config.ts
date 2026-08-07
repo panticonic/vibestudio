@@ -43,9 +43,9 @@ export default defineConfig({
     testTimeout: 30_000,
     // Unbounded host-core parallelism oversubscribes the SQLite-heavy semantic
     // suites and can keep a worker from servicing Vitest's own RPC heartbeat.
-    // Eight workers retain broad parallel coverage without turning machine
+    // Four workers retain broad parallel coverage without turning machine
     // core count into a liveness dependency.
-    maxWorkers: 8,
+    maxWorkers: 4,
     include: [
       "workspace/**/*.test.ts",
       "workspace/**/*.test.tsx",
