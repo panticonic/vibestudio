@@ -1,6 +1,5 @@
 import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import { browserDataMethods } from "@vibestudio/service-schemas/browserData";
-import { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
 import {
   callTypedServiceMethod,
   createTypedServiceClient,
@@ -41,6 +40,16 @@ interface BrowserDataRpc {
   callService(service: string, method: string, args: unknown[]): Promise<unknown>;
   callTarget(targetId: string, method: string, args: unknown[]): Promise<unknown>;
 }
+
+type BrowserEnvironmentMethod =
+  | "flushCookieProjection"
+  | "getCookieProjectionDiagnostics"
+  | "listDownloads"
+  | "pauseDownload"
+  | "resumeDownload"
+  | "cancelDownload"
+  | "openDownload"
+  | "revealDownload";
 
 export interface ImportPreview {
   job: ImportJobSnapshot;
@@ -177,17 +186,8 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
   );
   const callNative = <T>(method: string, ...args: unknown[]): Promise<T> =>
     extensions.invokeProvider("browserData", method, args) as Promise<T>;
-  const callBrowserEnvironment = <T>(
-    method: keyof typeof browserEnvironmentMethods & string,
-    ...args: unknown[]
-  ) =>
-    callTypedServiceMethod(
-      "browserEnvironment",
-      browserEnvironmentMethods,
-      (service, wireMethod, wireArgs) => rpc.callService(service, wireMethod, wireArgs),
-      method,
-      args
-    ) as Promise<T>;
+  const callBrowserEnvironment = <T>(method: BrowserEnvironmentMethod, ...args: unknown[]) =>
+    rpc.callService("browserEnvironment", method, args) as Promise<T>;
   let resolvedTarget: Promise<string> | null = null;
   const target = (): Promise<string> => {
     resolvedTarget ??= rpc
