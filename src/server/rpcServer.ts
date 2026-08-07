@@ -531,6 +531,7 @@ export class RpcServer {
       receiverRuntimeId: string;
       testPolicy: AgentExecutionTestPolicy | null;
       requested: readonly CapabilityScope[] | null;
+      authorizingCaller: VerifiedCaller | null;
     }
   >();
 
@@ -997,6 +998,7 @@ export class RpcServer {
     receiverRuntimeId: string;
     testPolicy: AgentExecutionTestPolicy | null;
     requested: readonly CapabilityScope[] | null;
+    authorizingCaller: VerifiedCaller | null;
   } | null {
     if (authorityParentNonce === undefined) return null;
     if (
@@ -1022,6 +1024,7 @@ export class RpcServer {
       receiverRuntimeId: string;
       testPolicy: AgentExecutionTestPolicy | null;
       requested: readonly CapabilityScope[] | null;
+      authorizingCaller: VerifiedCaller | null;
     } | null
   ): VerifiedCaller {
     if (!parent || parent.requested === null || !caller.code) return caller;
@@ -1036,7 +1039,8 @@ export class RpcServer {
 
   private beginAuthorityParent(
     receiverRuntimeId: string,
-    authorization: DirectAuthorityAttestation
+    authorization: DirectAuthorityAttestation,
+    authorizingCaller: VerifiedCaller | null = null
   ): () => void {
     const inheritedTestPolicy = authorization.context.testPolicy;
     const receiver = this.deps.entityCache?.resolveActive(receiverRuntimeId);
@@ -1055,6 +1059,7 @@ export class RpcServer {
       receiverRuntimeId,
       testPolicy,
       requested,
+      authorizingCaller,
     };
     this.activeAuthorityParents.set(authorization.nonce, entry);
     let active = true;
@@ -1072,7 +1077,11 @@ export class RpcServer {
     authorization: DirectAuthorityAttestation,
     invoke: () => Promise<T>
   ): Promise<T> {
-    const release = this.beginAuthorityParent(receiverRuntimeId, authorization);
+    const release = this.beginAuthorityParent(
+      receiverRuntimeId,
+      authorization,
+      createHostCaller("server", "server", SYSTEM_SUBJECT)
+    );
     try {
       return await invoke();
     } finally {
@@ -3079,6 +3088,7 @@ export class RpcServer {
     // sealed code identity. EvalDO is marked session-originated when its exact
     // active runtime identity is resolved in verifiedCallerFor().
     const invocationCaller = verifiedCaller;
+    const authorizingCaller = authorityParent?.authorizingCaller ?? verifiedCaller;
 
     // Direct service dispatch
     if (targetId === "main") {
@@ -3087,6 +3097,9 @@ export class RpcServer {
 
       const ctx: ServiceContext = {
         caller: invocationCaller,
+        ...(authorityParent?.authorizingCaller
+          ? { authorizingCaller }
+          : {}),
         ...(causalParent ? { causalParent } : {}),
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -3117,7 +3130,7 @@ export class RpcServer {
       },
       {
         authenticatedCaller,
-        authorizingCaller: invocationCaller,
+        authorizingCaller,
       }
     );
   }
@@ -4014,7 +4027,11 @@ export class RpcServer {
         signal: meta?.signal,
       });
       const dispatchedArgs = this.resolveOpaqueHandleArgument(args, authorization);
-      const releaseAuthorityParent = this.beginAuthorityParent(targetId, authorization);
+      const releaseAuthorityParent = this.beginAuthorityParent(
+        targetId,
+        authorization,
+        relayCallerScope?.authorizingCaller ?? attributedCaller
+      );
       try {
         const result = await postToDurableObject(
           ref,
@@ -4139,7 +4156,11 @@ export class RpcServer {
       throw createRelayError("Handle-producing RPC methods cannot stream responses", "EACCES");
     }
     const dispatchedArgs = this.resolveOpaqueHandleArgument(request.args, authorization);
-    const releaseAuthorityParent = this.beginAuthorityParent(targetId, authorization);
+    const releaseAuthorityParent = this.beginAuthorityParent(
+      targetId,
+      authorization,
+      invocationCaller
+    );
     try {
       const response = await streamFromDurableObject(
         ref,

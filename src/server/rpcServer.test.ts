@@ -141,7 +141,8 @@ type TestRpcServer = {
   ): ReturnType<typeof createVerifiedCaller>;
   beginAuthorityParent(
     receiverRuntimeId: string,
-    authorization: import("@vibestudio/rpc/internal").DirectAuthorityAttestation
+    authorization: import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+    authorizingCaller?: ReturnType<typeof createVerifiedCaller> | null
   ): () => void;
   authorityParentFor(
     callerRuntimeId: string,
@@ -149,6 +150,7 @@ type TestRpcServer = {
   ): {
     testPolicy: import("@vibestudio/rpc").AgentExecutionTestPolicy | null;
     requested: readonly import("@vibestudio/rpc").CapabilityScope[] | null;
+    authorizingCaller: ReturnType<typeof createVerifiedCaller> | null;
   } | null;
   connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
   reconnectWaiters: Map<
@@ -2940,6 +2942,38 @@ describe("RpcServer relay behavior", () => {
     );
     expect(caller.executionSession).toBeUndefined();
     expect(caller.testPolicy).toEqual(policy);
+
+    release();
+    expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(/not active/);
+  });
+
+  it("retains the verified initiator only for the exact active receiver invocation", () => {
+    const { server } = createServer();
+    const receiver = "do:vibestudio/internal:DevelopmentDO:workspace";
+    const initiator = createVerifiedCaller("shell:device-one", "shell", null, null, {
+      userId: "user-1",
+      handle: "user1",
+    });
+    const nonce = "host-minted-development-initiator-nonce";
+    const release = testServer(server).beginAuthorityParent(
+      receiver,
+      {
+        nonce,
+        method: "listClientExecutors",
+        context: {},
+      } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation,
+      initiator
+    );
+
+    expect(testServer(server).authorityParentFor(receiver, nonce)?.authorizingCaller).toBe(
+      initiator
+    );
+    expect(() =>
+      testServer(server).authorityParentFor(
+        "do:vibestudio/internal:DevelopmentDO:another-workspace",
+        nonce
+      )
+    ).toThrow(/another runtime/);
 
     release();
     expect(() => testServer(server).authorityParentFor(receiver, nonce)).toThrow(/not active/);
