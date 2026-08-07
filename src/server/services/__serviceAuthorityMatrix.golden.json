@@ -2681,6 +2681,26 @@
         "capability": null,
         "presentation": null
       },
+      "listClientExecutors": {
+        "authority": {
+          "principals": [
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "native-effect",
+          "family": "development-native.discovery",
+          "rationale": "Returns explicit executor coordinates without launching native code"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "describeTool": {
         "authority": {
           "principals": [

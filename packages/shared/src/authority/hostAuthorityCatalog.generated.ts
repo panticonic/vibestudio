@@ -2188,6 +2188,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "developmentNative.listClientExecutors": {
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "development-native.discovery",
+      rationale: "Returns explicit executor coordinates without launching native code",
+    },
+    capability: null,
+    presentation: null,
+  },
   "developmentNative.openTool": {
     tier: {
       tier: "gated",

@@ -3080,6 +3080,50 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/development/DevelopmentDO.ts:listClientExecutors",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/development/DevelopmentDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listClientExecutors",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/development/DevelopmentDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "service:development.listClientExecutors",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "user-owned-client-executor-discovery",
+        "change": "Adds a read-only typed discovery surface for live reviewed Electron executors owned by the authenticated user. It exposes opaque executor coordinates and platform metadata, not credentials, process handles, or authority."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/development/DevelopmentDO.ts:listNativeTools",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/development/DevelopmentDO.ts",
@@ -15951,12 +15995,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -15993,12 +16038,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16035,12 +16081,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16161,12 +16208,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16203,12 +16251,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16287,12 +16336,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16371,12 +16421,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16455,12 +16506,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16497,12 +16549,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16539,12 +16592,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16665,12 +16719,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16707,12 +16762,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16749,12 +16805,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16791,12 +16848,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16833,12 +16891,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16917,12 +16976,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -16959,12 +17019,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -17001,12 +17062,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -17085,12 +17147,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -17127,12 +17190,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -17169,12 +17233,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -17295,12 +17360,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -17337,12 +17403,13 @@
         "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "admin",
       "tier": "open",
       "sessionAdmission": "family",
-      "capability": "workspace.source.admin",
+      "capability": "workspace-service:gad.workspace",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -24781,6 +24848,51 @@
         "change": null
       },
       "capability": "service:developmentNative.keepTool",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:developmentNative.listClientExecutors",
+      "rpcPlane": "host-service",
+      "owner": "developmentNative",
+      "method": "listClientExecutors",
+      "tier": "open",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "development-native.discovery",
+      "reviewRationale": "Returns explicit executor coordinates without launching native code",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:developmentNative.listClientExecutors"
+      },
+      "authorityPrincipals": [
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:developmentNative.listClientExecutors),allOf(capability(code,service:developmentNative.listClientExecutors),workspace-member))",
+      "r3b": {
+        "review": "user-owned-native-executor-discovery",
+        "change": "Projects only the authenticated user's unexpired reviewed executor leases into explicit device-selection coordinates. Selection remains owner-bound and exact; discovery performs no launch or native effect."
+      },
+      "capability": "service:developmentNative.listClientExecutors",
       "parityAssertion": "generated-census:host-authority"
     },
     {

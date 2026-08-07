@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:309a63225c84476d2615f9b84d3cc7bc6304eb2b2cb0e8a88d8fb64c9c5c5ccd",
+  "censusDigest": "sha256:d50a0b697bc167ded859d274887f1464a6a741443ba2cfaf057f416d090e9113",
   "decisions": {
     "host:credentials.resolveCredential": {
       "review": "handler-owned-exact-credential-use-approval",
@@ -365,6 +365,14 @@
     "direct:workspace/workers/pubsub-channel/channel-do.ts:settleReadyWork": {
       "review": "host-only-channel-claim-settlement",
       "change": "Requires exact worker/generation settlement and a complete gap-free per-row acknowledgement for recipient batches."
+    },
+    "direct:packages/builtin/src/development/DevelopmentDO.ts:listClientExecutors": {
+      "review": "user-owned-client-executor-discovery",
+      "change": "Adds a read-only typed discovery surface for live reviewed Electron executors owned by the authenticated user. It exposes opaque executor coordinates and platform metadata, not credentials, process handles, or authority."
+    },
+    "host:developmentNative.listClientExecutors": {
+      "review": "user-owned-native-executor-discovery",
+      "change": "Projects only the authenticated user's unexpired reviewed executor leases into explicit device-selection coordinates. Selection remains owner-bound and exact; discovery performs no launch or native effect."
     },
     "host:developmentClientExecutor.register": {
       "review": "authenticated-current-device-executor-lease",
