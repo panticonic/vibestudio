@@ -264,15 +264,19 @@ describe("attached-host HTTP routed connectivity", () => {
     });
     const close = vi.fn(async () => undefined);
     const revoke = vi.fn(async () => ({ revoked: true, closedSessions: 1 }));
-    const port = new CliAttachedHostBootstrapPort("/private/bootstrap.json", {
-      load: () => credentials,
-      createClient: () => ({ call, close }) as never,
-      revoke: revoke as never,
-      exists: () => exists,
-      unlink: () => {
-        exists = false;
-      },
-    });
+    const port = new CliAttachedHostBootstrapPort(
+      "/private/bootstrap.json",
+      "http://127.0.0.1:4242",
+      {
+        load: () => credentials,
+        createClient: () => ({ call, close }) as never,
+        revoke: revoke as never,
+        exists: () => exists,
+        unlink: () => {
+          exists = false;
+        },
+      }
+    );
     const acceptance = await port.exchange(hello);
     await port.confirm(parent.confirmParent(acceptance));
     await port.revoke();
@@ -281,7 +285,7 @@ describe("attached-host HTTP routed connectivity", () => {
       code: "EATTACHED_BOOTSTRAP_REVOKED",
     });
     expect(close).toHaveBeenCalledOnce();
-    expect(revoke).toHaveBeenCalledWith(credentials, credentials.deviceId);
+    expect(revoke).toHaveBeenCalledWith(credentials, credentials.deviceId, "http://127.0.0.1:4242");
     expect(exists).toBe(false);
   });
 

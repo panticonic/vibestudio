@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { selectedWorkspacePath } from "@vibestudio/shared/connect";
 import {
   attachedHostChildAcceptanceSchema,
   attachedHostApprovalChallengeSchema,
@@ -15,7 +16,6 @@ import {
 } from "@vibestudio/service-schemas/attachedHosts";
 import { loadCliCredentials, type CliCredentials } from "../../cli/credentialStore.js";
 import { RpcClient } from "../../cli/rpcClient.js";
-import { revokeRemoteDevice } from "../../cli/remoteClient.js";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { AttachedHostBootstrapPort, AttachedHostRoutePort } from "./attachedHostController.js";
 import { AttachedHostEndpoint } from "./attachedHostProtocol.js";
@@ -36,16 +36,40 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
 
   constructor(
     private readonly credentialFile: string,
+    private readonly childGatewayUrl: string,
     private readonly operations: {
       load: typeof loadCliCredentials;
-      createClient: (credentials: CliCredentials) => Pick<RpcClient, "call" | "close">;
-      revoke: typeof revokeRemoteDevice;
+      createClient: (
+        credentials: CliCredentials,
+        childGatewayUrl: string
+      ) => Pick<RpcClient, "call" | "close">;
+      revoke: (
+        credentials: CliCredentials,
+        deviceId: string,
+        childGatewayUrl: string
+      ) => Promise<{ revoked: boolean }>;
       exists: typeof fs.existsSync;
       unlink: typeof fs.unlinkSync;
     } = {
       load: loadCliCredentials,
-      createClient: (credentials) => new RpcClient(credentials),
-      revoke: revokeRemoteDevice,
+      createClient: (credentials, childGatewayUrl) =>
+        new RpcClient({
+          url: workspaceGatewayEndpoint(childGatewayUrl, credentials.workspaceName),
+          deviceId: credentials.deviceId,
+          refreshToken: credentials.refreshToken,
+        }),
+      revoke: async (credentials, deviceId, childGatewayUrl) => {
+        const rpc = new RpcClient({
+          url: childGatewayUrl,
+          deviceId: credentials.deviceId,
+          refreshToken: credentials.refreshToken,
+        });
+        try {
+          return await rpc.call<{ revoked: boolean }>("hubControl.revokeDevice", [deviceId]);
+        } finally {
+          await rpc.close();
+        }
+      },
       exists: fs.existsSync,
       unlink: fs.unlinkSync,
     }
@@ -82,7 +106,11 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     const credentials = this.loadCredentials();
     await this.client?.close();
     this.client = null;
-    const result = await this.operations.revoke(credentials, credentials.deviceId);
+    const result = await this.operations.revoke(
+      credentials,
+      credentials.deviceId,
+      this.childGatewayUrl
+    );
     if (!result.revoked) {
       throw transportError(
         "EATTACHED_BOOTSTRAP",
@@ -107,7 +135,10 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
 
   private rpc(): Pick<RpcClient, "call" | "close"> {
     this.assertUsable();
-    return (this.client ??= this.operations.createClient(this.loadCredentials()));
+    return (this.client ??= this.operations.createClient(
+      this.loadCredentials(),
+      this.childGatewayUrl
+    ));
   }
 
   private loadCredentials(): CliCredentials {
@@ -147,13 +178,21 @@ export function createAttachedHostPublicationPorts(input: {
   route: AttachedHostRoutePort;
 } {
   return {
-    bootstrap: new CliAttachedHostBootstrapPort(input.credentialFile),
+    bootstrap: new CliAttachedHostBootstrapPort(input.credentialFile, input.childGatewayUrl),
     route: new HttpAttachedHostRoutePort({
       gatewayUrl: input.childGatewayUrl,
       childGenerationId: input.childGenerationId,
       endpoint: input.parentEndpoint,
     }),
   };
+}
+
+export function workspaceGatewayEndpoint(gatewayUrl: string, workspaceName: string): string {
+  const endpoint = new URL(gatewayUrl);
+  endpoint.pathname = selectedWorkspacePath(workspaceName);
+  endpoint.search = "";
+  endpoint.hash = "";
+  return endpoint.toString().replace(/\/$/u, "");
 }
 
 /**

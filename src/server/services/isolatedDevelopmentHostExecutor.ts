@@ -30,6 +30,7 @@ import type {
   PreparedDevelopmentBuild,
 } from "./developmentExecutor.js";
 import type { AttachedHostBootstrapPort, AttachedHostRoutePort } from "./attachedHostController.js";
+import { workspaceGatewayEndpoint } from "./attachedHostTransport.js";
 
 const REDACT = /(?:token|password|secret|authorization|cookie|private[_-]?key)\s*[=:]\s*[^\s]+/giu;
 const PROCESS_MARKER = "development-process.json";
@@ -365,7 +366,10 @@ export class IsolatedDevelopmentHostExecutor {
     );
   }
 
-  takeAttachmentPorts(runId: string, instance: DevelopmentInstance): {
+  takeAttachmentPorts(
+    runId: string,
+    instance: DevelopmentInstance
+  ): {
     bootstrap: AttachedHostBootstrapPort;
     route: AttachedHostRoutePort;
   } {
@@ -658,7 +662,11 @@ async function createIsolatedDevelopmentManager(input: {
       code: "ECLI_BOOTSTRAP",
     });
   }
-  const client = new RpcClient(credentials);
+  const client = new RpcClient({
+    url: workspaceGatewayEndpoint(input.childGatewayUrl, credentials.workspaceName),
+    deviceId: credentials.deviceId,
+    refreshToken: credentials.refreshToken,
+  });
   try {
     await client.call("developmentClientExecutor.bindIsolatedManager", [
       { instanceId: input.instance.id, generationId: input.instance.generationId },
