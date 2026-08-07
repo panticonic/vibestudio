@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:0d685e84f0df74b38df8049686276cd4f4f1ab174b8743713dbe0b647187a1b5",
+  "censusDigest": "sha256:3049e173f9bbbedecce3b40e8a83300fc1db54720419b513f5b5c556927c66e7",
   "decisions": {
     "host:panelRuntime.awaitAttempt": {
       "review": "exact-panel-attempt-readiness-read",
@@ -65,6 +65,10 @@
     "host:view.getPresentation": {
       "review": "trusted-chrome-local-panel-presentation-read",
       "change": "Adds an open, read-only lookup of one exact panel's Electron-local presentation projection. The service handler additionally requires the trusted panel-hosting app capability; it exposes no cross-panel mutation or server lifecycle authority."
+    },
+    "host:view.getPresentations": {
+      "review": "trusted-chrome-bounded-local-panel-presentation-read",
+      "change": "Adds an open, read-only batch over at most 2,000 exact panel identifiers. The receiver deduplicates the request, returns only existing Electron-local presentation projections, and retains the panel-hosting app requirement; it grants no panel mutation or runtime lifecycle authority."
     },
     "host:view.ensurePanelLoaded": {
       "review": "trusted-chrome-local-panel-materialization",

@@ -36059,7 +36059,7 @@
       "sessionAdmission": "family",
       "residency": "native-effect",
       "mechanismFamily": "panel.control",
-      "reviewRationale": "Shell-owned panel creation commits the durable slot and attaches the native view as one host operation",
+      "reviewRationale": "Shell-owned panel creation commits and presents the durable slot promptly; native readiness follows through the panel presentation lifecycle",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:view.createPanel"
@@ -36588,6 +36588,51 @@
         "change": "Adds an open, read-only lookup of one exact panel's Electron-local presentation projection. The service handler additionally requires the trusted panel-hosting app capability; it exposes no cross-panel mutation or server lifecycle authority."
       },
       "capability": "service:view.getPresentation",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:view.getPresentations",
+      "rpcPlane": "host-service",
+      "owner": "view",
+      "method": "getPresentations",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "panel.read",
+      "reviewRationale": "P-panels: batched read-only Electron-local presentation state for trusted panel-hosting chrome",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:view.getPresentations"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getPresentations),workspace-member),allOf(capability(code,service:view.getPresentations),workspace-member))",
+      "r3b": {
+        "review": "trusted-chrome-bounded-local-panel-presentation-read",
+        "change": "Adds an open, read-only batch over at most 2,000 exact panel identifiers. The receiver deduplicates the request, returns only existing Electron-local presentation projections, and retains the panel-hosting app requirement; it grants no panel mutation or runtime lifecycle authority."
+      },
+      "capability": "service:view.getPresentations",
       "parityAssertion": "generated-census:host-authority"
     },
     {

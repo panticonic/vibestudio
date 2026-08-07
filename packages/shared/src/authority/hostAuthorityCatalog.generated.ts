@@ -5384,7 +5384,7 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "native-effect",
       family: "panel.control",
       rationale:
-        "Shell-owned panel creation commits the durable slot and attaches the native view as one host operation",
+        "Shell-owned panel creation commits and presents the durable slot promptly; native readiness follows through the panel presentation lifecycle",
     },
     capability: null,
     presentation: null,
@@ -5514,6 +5514,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.read",
       rationale:
         "P-panels: read-only Electron-local presentation state for trusted panel-hosting chrome",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "view.getPresentations": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale:
+        "P-panels: batched read-only Electron-local presentation state for trusted panel-hosting chrome",
     },
     capability: null,
     presentation: null,
