@@ -268,6 +268,7 @@ describe("building rows from a declaration", () => {
     const { notableRows, everydayRows } = installReviewRows({
       requests: [
         request("workspace-service:channel"),
+        request("workspace-service:development"),
         request("workspace-service:models"),
         request("workspace-service:missions"),
         request("workspace-service:testkit-driver"),
@@ -276,7 +277,7 @@ describe("building rows from a declaration", () => {
     });
 
     expect(notableRows).toEqual([]);
-    expect(everydayRows).toHaveLength(5);
+    expect(everydayRows).toHaveLength(6);
     expect(everydayRows.every((row) => row.timing === "on-add" && row.selectable)).toBe(true);
   });
 

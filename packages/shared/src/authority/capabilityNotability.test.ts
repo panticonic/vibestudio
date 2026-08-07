@@ -93,6 +93,7 @@ describe("capability notability", () => {
       "internal-model-runtime.use",
       "notifications",
       "workspace-service:channel",
+      "workspace-service:development",
       "workspace-service:models",
       "workspace-service:missions",
       "workspace-service:testkit-driver",

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { parse as parseYaml } from "yaml";
+import { PRODUCT_BUILTIN_CATALOG } from "../packages/shared/src/productBuiltinCatalog.node.generated.mjs";
 import {
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
@@ -175,6 +177,28 @@ const hostCapabilities = new Set(
   )
 );
 const methodCapabilityDependencies = declaredMethodCapabilityDependencies(matrix);
+const workspaceServiceSelectors = new Map();
+const recordWorkspaceService = (service, source) => {
+  if (!service || typeof service.name !== "string" || service.name.length === 0) return;
+  const capability = `workspace-service:${service.name}`;
+  for (const selector of [service.name, ...(service.protocols ?? [])]) {
+    if (typeof selector !== "string" || selector.length === 0) continue;
+    const existing = workspaceServiceSelectors.get(selector);
+    if (existing && existing !== capability) {
+      throw new Error(`${source} selector ${selector} aliases ${existing} and ${capability}`);
+    }
+    workspaceServiceSelectors.set(selector, capability);
+  }
+};
+for (const service of PRODUCT_BUILTIN_CATALOG) {
+  if (service.kind === "service") recordWorkspaceService(service, "product builtin catalog");
+}
+for (const configName of ["template.yml", "vibestudio.yml"]) {
+  const config = parseYaml(fs.readFileSync(path.join(workspaceRoot, "meta", configName), "utf8"));
+  for (const service of config?.services ?? []) {
+    recordWorkspaceService(service, `workspace/meta/${configName}`);
+  }
+}
 const directCapabilityMap = new Map();
 for (const row of authorityLedger.rows.filter(
   (candidate) => candidate.rpcPlane === "workspace-do" && candidate.tier !== "open"
@@ -579,6 +603,7 @@ function inferCapabilities(pkg) {
   const capabilities = inferUnitTransportCapabilities(source, {
     hostCapabilities,
     serviceMethods,
+    workspaceServiceSelectors,
   });
 
   for (const capability of pkg.manifest.vibestudio?.app?.capabilities ?? []) {

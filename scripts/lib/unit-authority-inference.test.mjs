@@ -7,9 +7,46 @@ import {
   inferExtensionContextCapabilities,
   inferHostedRuntimeCapabilities,
   inferTypedServiceClientCapabilities,
+  inferWorkspaceServiceCapabilities,
   declaredMethodCapabilityDependencies,
   expandCapabilityDependencies,
 } from "@vibestudio/shared/unitAuthorityInference";
+
+describe("inferWorkspaceServiceCapabilities", () => {
+  const selectors = new Map([
+    ["development", "workspace-service:development"],
+    ["vibestudio.development.v1", "workspace-service:development"],
+    ["vibestudio.channel.v1", "workspace-service:channel"],
+  ]);
+
+  it("charges known protocol literals hidden behind Durable Object clients", () => {
+    assert.deepEqual(
+      [
+        ...inferWorkspaceServiceCapabilities(
+          `createDurableObjectServiceClient(rpc, "vibestudio.development.v1")`,
+          selectors
+        ),
+      ],
+      ["workspace-service:development"]
+    );
+  });
+
+  it("resolves local protocol constants and direct resolver calls", () => {
+    assert.deepEqual(
+      [
+        ...inferWorkspaceServiceCapabilities(
+          `
+            const CHANNEL_PROTOCOL = "vibestudio.channel.v1";
+            const channel = createDurableObjectServiceClient(CHANNEL_PROTOCOL, objectKey);
+            await workers.resolveService("development");
+          `,
+          selectors
+        ),
+      ].sort(),
+      ["workspace-service:channel", "workspace-service:development"]
+    );
+  });
+});
 
 function sourceTreeContains(directory, pattern) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {

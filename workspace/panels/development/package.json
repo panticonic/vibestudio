@@ -127,6 +127,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "workspace-service:development",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "workspace-service:models",
           "resource": {
             "kind": "prefix",

@@ -152,6 +152,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // lets initial manifest acceptance clear routine panel startup without
   // turning any protected provider method into an open effect.
   { key: "workspace-service:channel", notability: "everyday" },
+  { key: "workspace-service:development", notability: "everyday" },
   { key: "workspace-service:models", notability: "everyday" },
   { key: "workspace-service:missions", notability: "everyday" },
   { key: "workspace-service:testkit-driver", notability: "everyday" },

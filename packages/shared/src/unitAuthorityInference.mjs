@@ -292,6 +292,72 @@ export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
 }
 
 /**
+ * Infer canonical workspace-service capabilities from public resolver calls.
+ * Durable Object clients deliberately hide the workers.resolveService RPC, so
+ * the selected service protocol must remain visible to the manifest audit at
+ * the client construction site.
+ */
+export function inferWorkspaceServiceCapabilities(source, serviceSelectors) {
+  const capabilities = new Set();
+  for (const scriptKind of [ts.ScriptKind.TS, ts.ScriptKind.TSX]) {
+    const parsed = ts.createSourceFile(
+      scriptKind === ts.ScriptKind.TS ? "workspace-services.ts" : "workspace-services.tsx",
+      source,
+      ts.ScriptTarget.Latest,
+      false,
+      scriptKind
+    );
+    const literalBindings = new Map();
+    const collect = (node) => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        ts.isStringLiteralLike(node.initializer)
+      ) {
+        const values = literalBindings.get(node.name.text) ?? new Set();
+        values.add(node.initializer.text);
+        literalBindings.set(node.name.text, values);
+      }
+      ts.forEachChild(node, collect);
+    };
+    collect(parsed);
+
+    const addSelector = (argument) => {
+      const selectors = ts.isStringLiteralLike(argument)
+        ? [argument.text]
+        : ts.isIdentifier(argument)
+          ? [...(literalBindings.get(argument.text) ?? [])]
+          : [];
+      for (const selector of selectors) {
+        const capability = serviceSelectors.get(selector);
+        if (capability) capabilities.add(capability);
+      }
+    };
+    const inspect = (node) => {
+      if (ts.isCallExpression(node)) {
+        if (
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === "createDurableObjectServiceClient"
+        ) {
+          // The host helper accepts (rpc, query, objectKey), while hosted
+          // runtimes expose (query, objectKey). Only known selectors match.
+          for (const argument of node.arguments.slice(0, 2)) addSelector(argument);
+        } else if (
+          ts.isPropertyAccessExpression(node.expression) &&
+          node.expression.name.text === "resolveService"
+        ) {
+          addSelector(node.arguments[0]);
+        }
+      }
+      ts.forEachChild(node, inspect);
+    };
+    inspect(parsed);
+  }
+  return capabilities;
+}
+
+/**
  * Resolve local package references from executable module syntax. Authority is
  * part of a built unit's transitive code, so the manifest generator must fold
  * every imported workspace package instead of maintaining a hand-written list
@@ -439,7 +505,10 @@ export function inferExtensionContextCapabilities(source, hostCapabilities) {
  * explicit manifest. Keeping the syntactic recognition here gives checkout
  * audits and exact-state builds one inference implementation.
  */
-export function inferUnitTransportCapabilities(source, { hostCapabilities, serviceMethods }) {
+export function inferUnitTransportCapabilities(
+  source,
+  { hostCapabilities, serviceMethods, workspaceServiceSelectors = new Map() }
+) {
   const capabilities = new Set(["context.boundary"]);
 
   for (const capability of inferExtensionContextCapabilities(source, hostCapabilities)) {
@@ -462,6 +531,9 @@ export function inferUnitTransportCapabilities(source, { hostCapabilities, servi
     capabilities.add(capability);
   }
   for (const capability of inferTypedServiceClientCapabilities(source, hostCapabilities)) {
+    capabilities.add(capability);
+  }
+  for (const capability of inferWorkspaceServiceCapabilities(source, workspaceServiceSelectors)) {
     capabilities.add(capability);
   }
 
