@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "recordedAt": "2026-07-30",
+  "measurements": {
+    "kernelMethods": {
+      "value": 450,
+      "direction": "advisory",
+      "rationale": "Descriptive reviewed host-method census; structural residency invariants are gated separately"
+    },
+    "kernelServices": {
+      "value": 57,
+      "direction": "advisory",
+      "rationale": "Descriptive reviewed host-service census; not a method-count quota"
+    },
+    "dualPlaneMethods": {
+      "value": 0,
+      "direction": "stay-zero",
+      "rationale": "Server/main authority matrices have no duplicate qualified method"
+    },
+    "panelFamilyKernelMethods": {
+      "value": 65,
+      "direction": "advisory",
+      "rationale": "Descriptive panel, panelCdp, panelRuntime, panelTree, and view census"
+    },
+    "uncatalogedInternalDoClasses": {
+      "value": 0,
+      "direction": "stay-zero",
+      "rationale": "P2 must classify every class in internalDoLoader"
+    },
+    "handwrittenAuthorityMetadataLines": {
+      "value": 0,
+      "direction": "stay-zero",
+      "rationale": "tier, presentation, method-capability, and domain tables before P3 generation"
+    },
+    "residencyMixedServiceFamilies": {
+      "value": 0,
+      "direction": "stay-zero",
+      "rationale": "Every mechanism family has one irreducible kernel-residency reason"
+    },
+    "hostTreeNonTestLines": {
+      "value": 128649,
+      "direction": "advisory",
+      "rationale": "Descriptive handwritten host footprint; raw line count is not an architectural acceptance gate"
+    },
+    "serverIndexLines": {
+      "value": 5792,
+      "direction": "advisory",
+      "rationale": "Descriptive src/server/index.ts footprint; wiring line count is not an architectural acceptance gate"
+    },
+    "builtinTreeLines": {
+      "value": 11633,
+      "direction": "advisory",
+      "rationale": "Descriptive product builtin implementation footprint"
+    }
+  }
+}
