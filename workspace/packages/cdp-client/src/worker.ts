@@ -550,7 +550,7 @@ async function nsWaitForState(descriptor, state, timeout){
   }
 }
 async function nsActionable(descriptor, timeout, retainToken){
-  var deadline=Date.now()+timeout; var prev=null;
+  var deadline=Date.now()+timeout; var prev=null; var reason="not found";
   for(;;){
     var matches=nsLocate(descriptor), el=null, visible=null;
     for(var mi=0;mi<matches.length;mi++){ if(nsVisible(matches[mi])){ if(!visible) visible=matches[mi]; if(nsEnabled(matches[mi])){ el=matches[mi]; break; } } }
@@ -559,12 +559,20 @@ async function nsActionable(descriptor, timeout, retainToken){
       try{ el.scrollIntoView({block:"center",inline:"center"}); }catch(e){}
       var b=nsBox(el);
       if(prev && Math.abs(prev.x-b.x)<1 && Math.abs(prev.y-b.y)<1 && prev.width===b.width && prev.height===b.height){
-        if(retainToken) nsRetainedElements().set(retainToken,el);
-        return {ok:true, x:b.x+b.width/2, y:b.y+b.height/2, box:b};
+        var x=b.x+b.width/2, y=b.y+b.height/2;
+        var hit=document.elementFromPoint(x,y);
+        if(hit && (hit===el || el.contains(hit))){
+          if(retainToken) nsRetainedElements().set(retainToken,el);
+          return {ok:true, x:x, y:y, box:b};
+        }
+        reason="not receiving pointer events";
       }
       prev=b;
-    } else { prev=null; }
-    if(Date.now()>deadline) return {ok:false, reason: el?(nsVisible(el)?"not enabled":"not visible"):"not found"};
+    } else {
+      reason=el?(nsVisible(el)?"not enabled":"not visible"):"not found";
+      prev=null;
+    }
+    if(Date.now()>deadline) return {ok:false, reason:reason};
     await nsSleep(30);
   }
 }

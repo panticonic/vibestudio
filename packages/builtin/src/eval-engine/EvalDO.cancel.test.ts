@@ -2090,19 +2090,25 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).toHaveLength(1);
   });
 
-  it("loads CDP for a retained cell-A panel handle through cell B's active execution", async () => {
+  it("routes a retained cell-A panel handle through cell B's active execution", async () => {
     const { instance } = await createTestDO(EvalDO);
     const env = (instance as unknown as { env: Record<string, unknown> }).env;
     env["EVAL_CDP_CLIENT_SOURCE"] = "@workspace/cdp-client";
-    const executionA = { contextId: "ctx", marker: "cell-a", rpc: {} };
-    const executionB = { contextId: "ctx", marker: "cell-b", rpc: {} };
+    const rpcA = { call: vi.fn(async () => "cell-a") };
+    const rpcB = { call: vi.fn(async () => "cell-b") };
+    const executionA = { contextId: "ctx", marker: "cell-a", rpc: rpcA };
+    const executionB = { contextId: "ctx", marker: "cell-b", rpc: rpcB };
     let retainedLoadModule!: (id: string) => Promise<unknown>;
     const support = {
       createPanelRuntime: (options: Record<string, unknown>) => {
         retainedLoadModule = options["loadModule"] as (id: string) => Promise<unknown>;
+        const retainedRpc = options["rpc"] as {
+          call(targetId: string, method: string, args: unknown[]): Promise<unknown>;
+        };
         return {
           getPanelHandle: () => ({
             cdp: { page: () => retainedLoadModule("@workspace/cdp-client") },
+            rebuild: () => retainedRpc.call("main", "panel.rebuild", []),
           }),
         };
       },
@@ -2129,7 +2135,12 @@ describe("EvalDO cancellation + forced recovery", () => {
         execution: unknown,
         gatewayToken: string,
         parent: null
-      ) => { getPanelHandle(id: string): { cdp: { page(): Promise<unknown> } } }
+      ) => {
+        getPanelHandle(id: string): {
+          cdp: { page(): Promise<unknown> };
+          rebuild(): Promise<unknown>;
+        };
+      }
     >(instance, "createRunHostedRuntime").call(
       instance,
       support,
@@ -2140,12 +2151,18 @@ describe("EvalDO cancellation + forced recovery", () => {
     const retainedHandle = runtime.getPanelHandle("panel:tree/retained");
 
     await expect(retainedHandle.cdp.page()).rejects.toThrow(/actively executing/);
+    expect(() => retainedHandle.rebuild()).toThrow(/actively executing/);
     const activeExecution = priv<{
       run<T>(store: unknown, callback: () => T): T;
     }>(instance, "activeEvalExecution");
     await expect(activeExecution.run(executionB, () => retainedHandle.cdp.page())).resolves.toBe(
       loaded
     );
+    await expect(activeExecution.run(executionB, () => retainedHandle.rebuild())).resolves.toBe(
+      "cell-b"
+    );
+    expect(rpcA.call).not.toHaveBeenCalled();
+    expect(rpcB.call).toHaveBeenCalledWith("main", "panel.rebuild", [], undefined);
     expect(loadLibraryModule).toHaveBeenCalledOnce();
   });
 

@@ -2612,9 +2612,11 @@ export class EvalDO extends DurableObjectBase {
     const support = await this.ensureRuntimeSupport(execution);
     const scopeManager = await this.ensureScopeManager(engine, scopeGeneration);
 
-    // Every runtime/client below closes over this immutable run context. A force
-    // reset may orphan this execution and start another one, but neither run can
-    // replace or clear the other's causal edge, containment, or abort signal.
+    // Ordinary runtime clients below close over this immutable run context. A
+    // force reset may orphan this execution and start another one, but neither
+    // run can replace or clear the other's causal edge, containment, or abort
+    // signal. Retainable panel handles are the deliberate exception documented
+    // in createRunHostedRuntime: they borrow the invoking cell's context.
     const rt = hardenBoundary(
       this.createRunHostedRuntime(support, execution, args.gatewayToken, args.parent ?? null)
     );
@@ -3302,9 +3304,9 @@ export class EvalDO extends DurableObjectBase {
 
   /**
    * Build one run-local portable runtime surface via the shared stateless
-   * factories. `host.rpc`, filesystem clients, services, imported runtime
-   * bindings, and parent resolution all close over one immutable execution
-   * context; only the factories and owner identity are cached.
+   * factories. Ordinary clients close over one immutable execution context.
+   * Retainable panel handles resolve the active execution at invocation time;
+   * only the factories and owner identity are cached.
    */
   private createRunHostedRuntime(
     support: RuntimeSupportModule,
@@ -3335,12 +3337,35 @@ export class EvalDO extends DurableObjectBase {
       gatewayToken: token,
     };
     const rpc = execution.rpc;
+    // Panel handles are deliberately retainable in `scope` across notebook
+    // cells. Their operations must therefore borrow the RPC context of the
+    // cell invoking them, not retain the context (and liveness lease) of the
+    // cell that created the handle. Keep this boundary narrow: the rest of the
+    // run-local runtime continues to close over this run's immutable context.
+    const activePanelExecution = (): EvalExecutionContext => {
+      const active = this.activeEvalExecution.getStore();
+      if (!active) {
+        throw new Error("eval: retained panel handles require an actively executing eval cell");
+      }
+      return active;
+    };
+    const activePanelRpc: Pick<RpcClient, "call" | "emit" | "on"> = {
+      call: <T = unknown>(
+        targetId: string,
+        method: string,
+        args: unknown[],
+        options?: RpcCallOptions
+      ) => activePanelExecution().rpc.call<T>(targetId, method, args, options),
+      emit: (targetId, event, payload, options) =>
+        activePanelExecution().rpc.emit(targetId, event, payload, options),
+      on: (event, listener) => activePanelExecution().rpc.on(event, listener),
+    };
     const gatewayConfig = {
       serverUrl: String(this.env["GATEWAY_URL"] ?? ""),
       token,
     };
     const panelRuntime = support.createPanelRuntime({
-      rpc,
+      rpc: activePanelRpc,
       selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
       defaultOpenParentId: () => parent?.parentId ?? null,
       loadModule: async (id: string) => {

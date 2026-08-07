@@ -576,6 +576,12 @@ describe("worker CDP client", () => {
 
     await page.getByRole("button", { name: "Go" }).click();
 
+    const probeEvaluation = FakeWebSocket.sent
+      .filter((entry) => entry.method === "Runtime.evaluate")
+      .map((entry) => String(entry.params?.["expression"] ?? ""))
+      .find((expression) => expression.includes('"op":"probe"'));
+    expect(probeEvaluation).toContain("document.elementFromPoint(x,y)");
+    expect(probeEvaluation).toContain("hit===el || el.contains(hit)");
     const mouse = FakeWebSocket.sent.filter((s) => s.method === "Input.dispatchMouseEvent");
     expect(mouse.map((m) => m.params?.["type"])).toEqual([
       "mouseMoved",
