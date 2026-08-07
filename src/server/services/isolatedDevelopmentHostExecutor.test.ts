@@ -59,6 +59,10 @@ function fixture() {
     unregister,
     bootstrap: vi.fn(async () => ({ status: "paired" as const, workspaceName: "main" })),
     createManager: vi.fn(async () => manager),
+    createAttachmentPorts: vi.fn(() => ({
+      bootstrap: { kind: "test-bootstrap" } as never,
+      route: { kind: "test-route" } as never,
+    })),
     supervisor(options) {
       supervisorOptions = options;
       const childProcess = {
@@ -193,7 +197,12 @@ describe("IsolatedDevelopmentHostExecutor", () => {
     const f = fixture();
     const { run, plan } = runAndPlan();
     let registered: DevelopmentRun["instance"] = null;
-    const ready = vi.fn();
+    const ready = vi.fn((receipt) => {
+      expect(f.executor.takeAttachmentPorts(run.runId, receipt)).toEqual({
+        bootstrap: { kind: "test-bootstrap" },
+        route: { kind: "test-route" },
+      });
+    });
     const instance = await f.executor.start(run, plan, {
       onRegistered(value) {
         registered = value;
@@ -232,11 +241,15 @@ describe("IsolatedDevelopmentHostExecutor", () => {
       instance: registered,
       hostReadiness: "ready",
     };
-    await expect(f.executor.mintClientInvite(managedRun)).resolves.toBe(
+    await expect(f.executor.mintClientInvite(managedRun.runId, instance)).resolves.toBe(
       "vibestudio://connect?child"
     );
     await expect(
-      f.executor.waitForClientAttestation(managedRun, `development-client-${"2".repeat(32)}`)
+      f.executor.waitForClientAttestation(
+        managedRun.runId,
+        instance,
+        `development-client-${"2".repeat(32)}`
+      )
     ).resolves.toMatchObject({ childRuntimeId: "shell:child" });
   });
 

@@ -344,27 +344,32 @@ export class IsolatedDevelopmentHostExecutor {
     return { ...recorded, state: "stopped", stoppedAt };
   }
 
-  async mintClientInvite(run: DevelopmentRun, ttlMs = 5 * 60_000): Promise<string> {
-    const active = this.requireManagedHost(run);
+  async mintClientInvite(
+    runId: string,
+    instance: DevelopmentInstance,
+    ttlMs = 5 * 60_000
+  ): Promise<string> {
+    const active = this.requireManagedHost(runId, instance);
     return active.manager.mintClientInvite(ttlMs);
   }
 
   async waitForClientAttestation(
-    run: DevelopmentRun,
+    runId: string,
+    instance: DevelopmentInstance,
     requestId: string,
     timeoutMs = 5 * 60_000
   ): Promise<{ requestId: string; childRuntimeId: string; attestedAt: number }> {
-    const active = this.requireManagedHost(run);
+    const active = this.requireManagedHost(runId, instance);
     return active.manager.waitForClientAttestation(requestId, timeoutMs, () =>
-      this.assertExactActive(run, active)
+      this.assertExactActive(runId, instance, active)
     );
   }
 
-  takeAttachmentPorts(run: DevelopmentRun): {
+  takeAttachmentPorts(runId: string, instance: DevelopmentInstance): {
     bootstrap: AttachedHostBootstrapPort;
     route: AttachedHostRoutePort;
   } {
-    const active = this.requireManagedHost(run);
+    const active = this.requireManagedHost(runId, instance);
     if (!active.attachmentPorts) {
       throw Object.assign(new Error("Attached-host publication transport is unavailable"), {
         code: "EATTACHED_ROUTE",
@@ -373,9 +378,9 @@ export class IsolatedDevelopmentHostExecutor {
     return active.attachmentPorts;
   }
 
-  retireManagementChannel(run: DevelopmentRun): void {
-    const active = this.active.get(run.runId);
-    this.assertExactActive(run, active);
+  retireManagementChannel(runId: string, instance: DevelopmentInstance): void {
+    const active = this.active.get(runId);
+    this.assertExactActive(runId, instance, active);
     if (active) {
       active.manager = null;
       active.attachmentPorts = null;
@@ -501,10 +506,11 @@ export class IsolatedDevelopmentHostExecutor {
   }
 
   private requireManagedHost(
-    run: DevelopmentRun
+    runId: string,
+    instance: DevelopmentInstance
   ): ActiveIsolatedHost & { manager: IsolatedDevelopmentManager } {
-    const active = this.active.get(run.runId);
-    this.assertExactActive(run, active);
+    const active = this.active.get(runId);
+    this.assertExactActive(runId, instance, active);
     if (!active?.ready || !active.manager) {
       throw Object.assign(new Error("Exact isolated management channel is not ready"), {
         code: "ESTATE",
@@ -513,12 +519,15 @@ export class IsolatedDevelopmentHostExecutor {
     return active as ActiveIsolatedHost & { manager: IsolatedDevelopmentManager };
   }
 
-  private assertExactActive(run: DevelopmentRun, active: ActiveIsolatedHost | undefined): void {
+  private assertExactActive(
+    runId: string,
+    instance: DevelopmentInstance,
+    active: ActiveIsolatedHost | undefined
+  ): void {
     if (
-      !run.instance ||
       !active ||
-      active.instance.id !== run.instance.instanceId ||
-      active.instance.generationId !== run.instance.generationId
+      active.instance.id !== instance.instanceId ||
+      active.instance.generationId !== instance.generationId
     ) {
       throw Object.assign(new Error("Exact isolated instance generation is not active"), {
         code: "EOWNERSHIP",

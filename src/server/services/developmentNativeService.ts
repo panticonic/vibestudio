@@ -244,7 +244,7 @@ export function createDevelopmentNativeService(deps: {
             });
           }
           const artifactSource = await deps.executor.resolveClientArtifactSource(run, plan);
-          const pairingDeepLink = await deps.isolatedExecutor!.mintClientInvite(run);
+          const pairingDeepLink = await deps.isolatedExecutor!.mintClientInvite(run.runId, receipt);
           const launch = deps.clientExecutors.launch({
             runId: run.runId,
             binding: plan.clientExecutor,
@@ -271,7 +271,8 @@ export function createDevelopmentNativeService(deps: {
             },
           });
           const child = await deps.isolatedExecutor!.waitForClientAttestation(
-            run,
+            run.runId,
+            receipt,
             launch.requestId
           );
           deps.clientExecutors.acceptManagedChildAttestation(child);
@@ -287,7 +288,7 @@ export function createDevelopmentNativeService(deps: {
           };
         }
         if (deps.attachedHostPublisher && deps.attachedHostParentId) {
-          const ports = deps.isolatedExecutor!.takeAttachmentPorts(run);
+          const ports = deps.isolatedExecutor!.takeAttachmentPorts(run.runId, receipt);
           const publication = await deps.attachedHostPublisher.attach({
             run,
             instance: receipt,
@@ -298,7 +299,7 @@ export function createDevelopmentNativeService(deps: {
             ),
             ...ports,
           });
-          deps.isolatedExecutor!.retireManagementChannel(run);
+          deps.isolatedExecutor!.retireManagementChannel(run.runId, receipt);
           attachedHost = {
             sessionId: publication.attachedHostSessionId,
             childGenerationId: publication.childGenerationId,
