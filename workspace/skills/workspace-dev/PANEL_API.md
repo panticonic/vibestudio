@@ -8,8 +8,9 @@ panels, workers, Durable Objects, and server-side eval.
 Readiness-waiting panel operations have one meaning:
 
 - `await createPanelSlot(...)` commits creation and returns the durable handle
-  without requesting a presentation lease or waiting for build or boot. The
-  panel remains unloaded until a consumer explicitly presents or inspects it.
+  without requesting a presentation lease or waiting for activation, build, or
+  boot. The panel remains unloaded until a consumer explicitly presents or
+  inspects it.
   It is the receipt-oriented primitive for
   navigation workflows whose caller may have a shorter lifetime than the
   panel build. Its `CreatePanelSlotOptions` deliberately has no `focus` or
@@ -38,11 +39,17 @@ reach `ready`. Readiness is observed once and then follows that exact
 server-minted attempt through `awaitAttempt`; a ready observation resolves
 without another sample, and failed/stopped observations reject immediately.
 
-Execution activation is not presentation. Code-panel creation explicitly
-seals the reserved runtime entity after committing the slot so it cannot be
-stranded in `preparing`, but that transition does not allocate a renderer.
-Current-entity reconciliation only advances a lease that already exists; it
-never turns an unloaded slot into a resident one.
+Execution activation is not presentation. Committing a code-panel slot emits a
+level-triggered durable intent; the server execution reconciler owns the
+reserved entity's activation, retries transient failures, and recovers
+`preparing` reservations after restart. `createPanelSlot(...)` does not await
+that work. `openPanel(...)` joins the same idempotent activation and then
+materializes and waits for boot, so it reports activation failures while
+preserving the already committed slot. Materialization must follow activation:
+connection grants require the panel principal registered by that transition.
+Activation itself does not allocate a renderer. Presentation
+reconciliation advances only a lease that already exists; it never turns an
+unloaded slot into a resident one.
 
 Readiness-bearing operations also ensure presentation before they wait. This
 uses the idempotent `panelRuntime.ensureSlot` transition for programmatic

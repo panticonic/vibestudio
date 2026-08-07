@@ -53,6 +53,9 @@ state all see the same canonical event.
 - Use `openExternal(url)` for system-browser links. This is approval-gated.
 - OAuth authorize URLs should use `openExternal(url, { expectedRedirectUri })`.
 - Event handlers may call imported trusted skill/runtime helpers directly.
+- Await asynchronous helpers inside a handler that catches failure. Disable only
+  the action in flight; an approval prompt or panel boot must not block unrelated
+  controls.
 - Surface pending, failure, retry, and verified states locally.
 - Secrets must be collected by host-owned credential prompts, never ordinary
   React inputs or component state.
@@ -60,24 +63,61 @@ state all see the same canonical event.
 ## Workflow Link Pattern
 
 ```tsx
+import { useState } from "react";
 import { Button, Flex, Text } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
 import { openPanel, openExternal } from "@workspace/runtime";
 
 export default function LinkActions({ props = {} }) {
   const url = props.url ?? "https://console.cloud.google.com/apis/credentials";
+  const [status, setStatus] = useState({});
+
+  async function run(kind, action) {
+    setStatus((current) => ({ ...current, [kind]: "pending" }));
+    try {
+      await action();
+      setStatus((current) => ({ ...current, [kind]: "done" }));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setStatus((current) => ({ ...current, [kind]: message }));
+    }
+  }
+
+  const error = [status.internal, status.external].find(
+    (value) => value && value !== "pending" && value !== "done"
+  );
 
   return (
-    <Flex align="center" justify="between" gap="3" p="2" wrap="wrap">
-      <Text size="2" weight="medium">{props.label ?? "Open setup page"}</Text>
-      <Flex gap="2">
-        <Button size="1" variant="soft" onClick={() => openPanel(url, { focus: true })}>
-          <GlobeIcon /> Internal
-        </Button>
-        <Button size="1" variant="soft" onClick={() => openExternal(url)}>
-          <OpenInNewWindowIcon /> External
-        </Button>
+    <Flex direction="column" gap="2" p="2" style={{ width: "100%", minWidth: 0 }}>
+      <Flex align="center" justify="between" gap="3" wrap="wrap">
+        <Text size="2" weight="medium">
+          {props.label ?? "Open setup page"}
+        </Text>
+        <Flex gap="2">
+          <Button
+            size="1"
+            variant="soft"
+            disabled={status.internal === "pending"}
+            onClick={async () => run("internal", () => openPanel(url, { focus: true }))}
+          >
+            <GlobeIcon /> {status.internal === "pending" ? "Opening…" : "Internal"}
+          </Button>
+          <Button
+            size="1"
+            variant="soft"
+            disabled={status.external === "pending"}
+            onClick={async () => run("external", () => openExternal(url))}
+          >
+            <OpenInNewWindowIcon />{" "}
+            {status.external === "pending" ? "Awaiting approval…" : "External"}
+          </Button>
+        </Flex>
       </Flex>
+      {error && (
+        <Text size="1" color="red">
+          {error} — retry when ready.
+        </Text>
+      )}
     </Flex>
   );
 }
@@ -102,32 +142,69 @@ const steps = [
 
 export default function SetupChecklist() {
   const [done, setDone] = useState({});
+  const [status, setStatus] = useState({});
   const count = steps.filter(([id]) => done[id]).length;
+
+  async function run(key, action) {
+    setStatus((current) => ({ ...current, [key]: "pending" }));
+    try {
+      await action();
+      setStatus((current) => ({ ...current, [key]: "done" }));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setStatus((current) => ({ ...current, [key]: message }));
+    }
+  }
+  const error = Object.values(status).find((value) => value !== "pending" && value !== "done");
 
   return (
     <Flex direction="column" gap="3" p="2">
       <Flex justify="between" align="center">
-        <Text size="2" weight="bold">Setup checklist</Text>
-        <Badge variant="soft">{count}/{steps.length}</Badge>
+        <Text size="2" weight="bold">
+          Setup checklist
+        </Text>
+        <Badge variant="soft">
+          {count}/{steps.length}
+        </Badge>
       </Flex>
       {steps.map(([id, label, url]) => (
         <Box key={id} style={{ border: "1px solid var(--gray-6)", borderRadius: 8, padding: 10 }}>
           <Flex align="center" justify="between" gap="3" wrap="wrap">
             <Flex align="center" gap="2">
-              <Checkbox checked={Boolean(done[id])} onCheckedChange={(checked) => setDone((prev) => ({ ...prev, [id]: checked === true }))} />
+              <Checkbox
+                checked={Boolean(done[id])}
+                onCheckedChange={(checked) =>
+                  setDone((prev) => ({ ...prev, [id]: checked === true }))
+                }
+              />
               <Text size="2">{label}</Text>
             </Flex>
             <Flex gap="2">
-              <Button size="1" variant="soft" onClick={() => openPanel(url, { focus: true })}>
+              <Button
+                size="1"
+                variant="soft"
+                disabled={status[`${id}:internal`] === "pending"}
+                onClick={async () => run(`${id}:internal`, () => openPanel(url, { focus: true }))}
+              >
                 <GlobeIcon /> Internal
               </Button>
-              <Button size="1" variant="soft" onClick={() => openExternal(url)}>
+              <Button
+                size="1"
+                variant="soft"
+                disabled={status[`${id}:external`] === "pending"}
+                onClick={async () => run(`${id}:external`, () => openExternal(url))}
+              >
                 <OpenInNewWindowIcon /> External
               </Button>
             </Flex>
           </Flex>
         </Box>
       ))}
+      {error && (
+        <Text size="1" color="red">
+          {error} — retry the action when ready.
+        </Text>
+      )}
     </Flex>
   );
 }

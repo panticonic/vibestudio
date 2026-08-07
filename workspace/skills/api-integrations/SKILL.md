@@ -305,7 +305,23 @@ import { openPanel, openExternal } from "@workspace/runtime";
 
 export default function ProviderSetup({ onSubmit, onCancel }) {
   const [done, setDone] = useState(false);
+  const [status, setStatus] = useState({});
   const consoleUrl = "https://provider.example.com/developer/apps";
+
+  async function run(kind, action) {
+    setStatus((current) => ({ ...current, [kind]: "pending" }));
+    try {
+      await action();
+      setStatus((current) => ({ ...current, [kind]: "done" }));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setStatus((current) => ({ ...current, [kind]: message }));
+    }
+  }
+
+  const actionError = [status.internal, status.external].find(
+    (value) => value && value !== "pending" && value !== "done"
+  );
 
   return (
     <Flex direction="column" gap="3" p="2">
@@ -318,14 +334,30 @@ export default function ProviderSetup({ onSubmit, onCancel }) {
           <Text size="2">Create an OAuth app and copy the client ID into Vibestudio.</Text>
         </Flex>
         <Flex gap="2">
-          <Button size="1" variant="soft" onClick={() => openPanel(consoleUrl, { focus: true })}>
-            <GlobeIcon /> Internal
+          <Button
+            size="1"
+            variant="soft"
+            disabled={status.internal === "pending"}
+            onClick={async () => run("internal", () => openPanel(consoleUrl, { focus: true }))}
+          >
+            <GlobeIcon /> {status.internal === "pending" ? "Opening…" : "Internal"}
           </Button>
-          <Button size="1" variant="soft" onClick={() => openExternal(consoleUrl)}>
-            <OpenInNewWindowIcon /> External
+          <Button
+            size="1"
+            variant="soft"
+            disabled={status.external === "pending"}
+            onClick={async () => run("external", () => openExternal(consoleUrl))}
+          >
+            <OpenInNewWindowIcon />{" "}
+            {status.external === "pending" ? "Awaiting approval…" : "External"}
           </Button>
         </Flex>
       </Flex>
+      {actionError && (
+        <Text size="1" color="red">
+          {actionError} — retry when ready.
+        </Text>
+      )}
       <Flex justify="end" gap="2">
         <Button variant="soft" color="gray" onClick={onCancel}>
           Cancel

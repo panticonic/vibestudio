@@ -43,17 +43,17 @@ Agents read skills by the path shown in the generated skill index, for example
 
 ## Files
 
-| Document                                 | Content                                                                                                                                                          |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [WORKFLOW.md](WORKFLOW.md)               | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                                                   |
+| Document                                   | Content                                                                                                                                                          |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [WORKFLOW.md](WORKFLOW.md)                 | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                                                   |
 | [PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) | Short canonical create/build/screenshot/rebuild/interact/publish recipe for panel debugging and polish tasks                                                     |
-| [PANEL_API.md](PANEL_API.md)             | Runtime panel API reference                                                                                                                                      |
-| [WORKERS.md](WORKERS.md)                 | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
-| [capabilities](../capabilities/SKILL.md) | Explicit requests and provided capabilities, dynamic workspace service discovery, host grants, receiver-owned acquisition, and content provenance                |
-| [RPC.md](RPC.md)                         | Typed parent-child contracts                                                                                                                                     |
-| [BROWSER.md](BROWSER.md)                 | Browser automation (Playwright/CDP)                                                                                                                              |
-| [TOOLS.md](TOOLS.md)                     | Agent tools reference                                                                                                                                            |
-| [create-project.ts](create-project.ts)   | Project scaffolding helpers (importable via eval `imports` parameter)                                                                                            |
+| [PANEL_API.md](PANEL_API.md)               | Runtime panel API reference                                                                                                                                      |
+| [WORKERS.md](WORKERS.md)                   | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
+| [capabilities](../capabilities/SKILL.md)   | Explicit requests and provided capabilities, dynamic workspace service discovery, host grants, receiver-owned acquisition, and content provenance                |
+| [RPC.md](RPC.md)                           | Typed parent-child contracts                                                                                                                                     |
+| [BROWSER.md](BROWSER.md)                   | Browser automation (Playwright/CDP)                                                                                                                              |
+| [TOOLS.md](TOOLS.md)                       | Agent tools reference                                                                                                                                            |
+| [create-project.ts](create-project.ts)     | Project scaffolding helpers (importable via eval `imports` parameter)                                                                                            |
 
 For host-process debugging while developing workspace units, pair the relevant
 unit/panel diagnostics below with the [server-logs](../server-logs/SKILL.md)
@@ -171,7 +171,8 @@ When building functionality that needs both a panel and a backing service,
 create them together with `createProjects` — one call, one approval prompt:
 
 ```ts
-eval({ code: `
+eval({
+  code: `
   import { createProjects } from "@workspace-skills/workspace-dev";
   import { openPanel } from "@workspace/runtime";
 
@@ -185,8 +186,8 @@ eval({ code: `
     observation: await scope.createdPanel.observe(),
     snapshot: await scope.createdPanel.snapshot(),
   };
-`
-})
+`,
+});
 ```
 
 Even for a single project, use `createProjects` with a one-element array.
@@ -300,8 +301,10 @@ return { panelId: local.id, observation, snapshot };
 Use `createPanelSlot(source, options)` when the authoritative result is the
 durable panel-tree receipt rather than a ready renderer. It returns promptly,
 never focuses, and has no readiness option; call `handle.observe()` later when
-live runtime state matters. `openPanel` observes immediately and polls for
-readiness without a fixed deadline. Pass a caller-owned `AbortSignal` when the
+live runtime state matters. Slot commit starts server-owned, level-triggered
+activation; it is recovered after transient failure or restart independently of
+the creator. `openPanel` joins that activation and waits on the exact attempt's
+event stream without a fixed deadline. Pass a caller-owned `AbortSignal` when the
 workflow supports cancellation and a stable `operationId` when it may retry.
 
 Boot readiness and rendered verification are deliberately distinct. A
@@ -321,23 +324,23 @@ key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
 
 ## Common Tasks
 
-| Task                        | How                                                                                                                                                                                                                                                                                                                                                                  |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Task                        | How                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Create projects             | `eval` — `import { createProjects } from "@workspace-skills/workspace-dev"` then `return await createProjects([{ projectType, name, title }, ...])`. Create related units (e.g. a DO store + its panel) in one call for one approval prompt. Even for a single project, pass a one-element array. Retain the exact `publication`; recover from `scaffold_publication_failed` data without rerunning creation |
-| Fork panel                  | `eval` — `import { forkPanel } from "@workspace-skills/workspace-dev"`; store the `dryRun: true` plan, then assign the applied receipt to `scope.forkedProject` **before** opening `scope.forkedProject.created`. Store the handle too, and return the structured observation and snapshot without string-coercing either. If open/snapshot fails, resume from scope; never fork again. |
-| Fork worker                 | `eval` — `import { forkWorker } from "@workspace-skills/workspace-dev"` then `forkWorker({ from: "workers/source", name: "new-worker", title, dryRun: true })`; pass `classMap` for multi-class workers                                                                                                                                                              |
-| Build app database          | Create a worker DO with `DurableObjectBase` + `this.sql` — include it in the same `createProjects` call as its panel. Declare it as a live service with `authority.principals` and explicit `@rpc` receiver policies, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases). |
-| Add repo guidance           | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages                                                                                                                                                                                               |
-| Launch panel                | `eval` — `const handle = await openPanel(source)` for pushed/main code, or `openPanel(source, { contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })`for intentional context-local code; return both`await handle.observe()`and`await handle.snapshot()` before reporting success.                                                                             |
-| Inspect panel console       | `eval` — `const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 100 })`; read `history.errors`, `history.entries`, `history.dropped`, and `history.capacity`. The return value is an object, not an array.                                                                                                                                       |
-| Launch worker               | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId }])`; the owning context is the default code ref. Pass `ref: "main"` only for protected-main code. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id`                   |
-| Read a file                 | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                                                                                                                                                                                                                                     |
-| Edit a file                 | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                                                                                                                                                                                                                               |
-| Check compiler/build        | `eval` — `return await services.build.getBuildReport("panels/my-app", \`ctx:${ctx.contextId}\`)`; inspect its structured target diagnostics and rerun after repairs.                                                                                                                                                                                                 |
-| Run tests                   | `eval` — `await extensions.invoke("@workspace-extensions/test-runner", "run", [{ target: "packages/my-lib" }])`                                                                                                                                                                                                                                                      |
-| Operate workspace VCS       | Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md); retain the exact working head, merge stable-coordinate pages, review intents/composed results, commit the complete chain, then publish |
-| Move/copy managed files     | Use `vcs.move` or `vcs.copy`; runtime `fs.rename`/`fs.copyFile` and agent `move_file`/`copy_file` route through the same identity-aware adapter                                                                                                                                                                                                                      |
-| Import an external snapshot | Use `vcs.importSnapshot` with a canonical credential-free source URI, exact source revision, and complete repository/file descriptors; the semantic workspace verifies host-observed CAS descriptors, derives the snapshot digest, and atomically returns the committed event/application/work-unit/repository/snapshot evidence                                     |
+| Fork panel                  | `eval` — `import { forkPanel } from "@workspace-skills/workspace-dev"`; store the `dryRun: true` plan, then assign the applied receipt to `scope.forkedProject` **before** opening `scope.forkedProject.created`. Store the handle too, and return the structured observation and snapshot without string-coercing either. If open/snapshot fails, resume from scope; never fork again.                      |
+| Fork worker                 | `eval` — `import { forkWorker } from "@workspace-skills/workspace-dev"` then `forkWorker({ from: "workers/source", name: "new-worker", title, dryRun: true })`; pass `classMap` for multi-class workers                                                                                                                                                                                                      |
+| Build app database          | Create a worker DO with `DurableObjectBase` + `this.sql` — include it in the same `createProjects` call as its panel. Declare it as a live service with `authority.principals` and explicit `@rpc` receiver policies, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).             |
+| Add repo guidance           | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages                                                                                                                                                                                                                                       |
+| Launch panel                | `eval` — `const handle = await openPanel(source)` for pushed/main code, or `openPanel(source, { contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })`for intentional context-local code; return both`await handle.observe()`and`await handle.snapshot()` before reporting success.                                                                                                                     |
+| Inspect panel console       | `eval` — `const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 100 })`; read `history.errors`, `history.entries`, `history.dropped`, and `history.capacity`. The return value is an object, not an array.                                                                                                                                                                               |
+| Launch worker               | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId }])`; the owning context is the default code ref. Pass `ref: "main"` only for protected-main code. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id`                                                           |
+| Read a file                 | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                                                                                                                                                                                                                                                                             |
+| Edit a file                 | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                                                                                                                                                                                                                                                                       |
+| Check compiler/build        | `eval` — `return await services.build.getBuildReport("panels/my-app", \`ctx:${ctx.contextId}\`)`; inspect its structured target diagnostics and rerun after repairs.                                                                                                                                                                                                                                         |
+| Run tests                   | `eval` — `await extensions.invoke("@workspace-extensions/test-runner", "run", [{ target: "packages/my-lib" }])`                                                                                                                                                                                                                                                                                              |
+| Operate workspace VCS       | Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md); retain the exact working head, merge stable-coordinate pages, review intents/composed results, commit the complete chain, then publish                                                                                                                                                                                                                    |
+| Move/copy managed files     | Use `vcs.move` or `vcs.copy`; runtime `fs.rename`/`fs.copyFile` and agent `move_file`/`copy_file` route through the same identity-aware adapter                                                                                                                                                                                                                                                              |
+| Import an external snapshot | Use `vcs.importSnapshot` with a canonical credential-free source URI, exact source revision, and complete repository/file descriptors; the semantic workspace verifies host-observed CAS descriptors, derives the snapshot digest, and atomically returns the committed event/application/work-unit/repository/snapshot evidence                                                                             |
 
 (`extensions` is a runtime client — the same surface bare, as
 `services.extensions`, or imported from `@workspace/runtime`.

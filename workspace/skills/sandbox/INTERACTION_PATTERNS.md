@@ -52,23 +52,58 @@ call containing those choices.
 Use direct link buttons in the UI:
 
 ```tsx
+import { useState } from "react";
 import { Button, Flex, Text } from "@radix-ui/themes";
 import { GlobeIcon, OpenInNewWindowIcon } from "@radix-ui/react-icons";
 import { openPanel, openExternal } from "@workspace/runtime";
 
 export default function SetupStep() {
   const url = "https://console.cloud.google.com/apis/credentials";
+  const [status, setStatus] = useState({});
+
+  async function run(kind, action) {
+    setStatus((current) => ({ ...current, [kind]: "pending" }));
+    try {
+      await action();
+      setStatus((current) => ({ ...current, [kind]: "done" }));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setStatus((current) => ({ ...current, [kind]: message }));
+    }
+  }
+
+  const error = [status.internal, status.external].find(
+    (value) => value && value !== "pending" && value !== "done"
+  );
   return (
-    <Flex direction="column" gap="3" p="2">
-      <Text size="2" weight="bold">Open the credentials page</Text>
+    <Flex direction="column" gap="3" p="2" style={{ width: "100%", minWidth: 0 }}>
+      <Text size="2" weight="bold">
+        Open the credentials page
+      </Text>
       <Flex gap="2">
-        <Button size="1" variant="soft" onClick={() => openPanel(url, { focus: true })}>
-          <GlobeIcon /> Internal
+        <Button
+          size="1"
+          variant="soft"
+          disabled={status.internal === "pending"}
+          onClick={async () => run("internal", () => openPanel(url, { focus: true }))}
+        >
+          <GlobeIcon /> {status.internal === "pending" ? "Opening…" : "Internal"}
         </Button>
-        <Button size="1" variant="soft" onClick={() => openExternal(url)}>
-          <OpenInNewWindowIcon /> External
+        <Button
+          size="1"
+          variant="soft"
+          disabled={status.external === "pending"}
+          onClick={async () => run("external", () => openExternal(url))}
+        >
+          <OpenInNewWindowIcon />{" "}
+          {status.external === "pending" ? "Awaiting approval…" : "External"}
         </Button>
       </Flex>
+      {error && (
+        <Text size="1" color="red">
+          {error} — retry when ready.
+        </Text>
+      )}
     </Flex>
   );
 }
@@ -112,6 +147,10 @@ File-oriented APIs also accept `panels/action-bar-review.tsx` as shorthand for
 - Internal browser panels: `openPanel(url, { focus: true })`
 - System browser: `openExternal(url)`
 - OAuth authorize URLs: `openExternal(url, { expectedRedirectUri })`
+
+Await these helpers in a caught async handler, show action-scoped pending and
+failure state, and keep unrelated controls enabled. An approval prompt is
+workflow progress, not a reason to block the component or panel tree.
 
 `openExternal` is approval-gated. Do not invent provider-specific browser-open
 bridges.

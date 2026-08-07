@@ -323,6 +323,12 @@ settlement is authoritative and finite, while changed-unit cache warming runs
 downstream. If opening a newly published panel blocks all later VCS/filesystem
 calls, treat that as build-settlement head-of-line blocking, not as an agent
 prompt or validator problem.
+Shell `createPanel` has a similarly narrow completion boundary: it proves the
+durable slot was committed and may emit `panel-created` before its RPC response,
+but it does not prove activation, attachment, or boot. Tests that need a ready
+application must use testkit `openPanel`/`withPanel` or await the exact runtime
+attempt; tests of creation responsiveness should assert the slot receipt and
+later lifecycle projection as separate facts. Never add a sleep between them.
 
 Repository fixtures are also complete authority fixtures. The runner grants
 gated `workspace-main-advance` to the immutable atomic

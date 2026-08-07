@@ -66,6 +66,10 @@ Deep-link every Google Console step where possible. Offer both:
 - **Internal**: `openPanel(url, { focus: true })`
 - **External**: `openExternal(url)` through the approval-gated browser-open API
 
+In component handlers, await and catch either helper, show action-scoped
+pending/error state, and keep unrelated controls enabled while panel boot or an
+approval decision is pending.
+
 If the agent opens an internal browser panel only for setup guidance,
 verification, or diagnostics, keep the handle and close it when that step is
 complete. Leave it open only when the user needs to continue interacting with
@@ -108,17 +112,17 @@ actions, warnings, and checklist state.
 
 ## Files
 
-| Document | Content |
-|----------|---------|
-| [ONBOARDING.md](ONBOARDING.md) | Agent-facing guided onboarding flow |
-| [SETUP.md](SETUP.md) | Step-by-step Google Cloud setup |
-| [TESTING.md](TESTING.md) | Runtime verification snippets |
-| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common errors and fixes |
-| [index.ts](index.ts) | Importable onboarding helpers |
+| Document                                 | Content                             |
+| ---------------------------------------- | ----------------------------------- |
+| [ONBOARDING.md](ONBOARDING.md)           | Agent-facing guided onboarding flow |
+| [SETUP.md](SETUP.md)                     | Step-by-step Google Cloud setup     |
+| [TESTING.md](TESTING.md)                 | Runtime verification snippets       |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common errors and fixes             |
+| [index.ts](index.ts)                     | Importable onboarding helpers       |
 
 ## Related Follow-Up
 
-| Skill | When to use |
-|-------|-------------|
-| `google-drive` | Browse, upload, share, export, or sync Google Drive files after Google Workspace is verified |
-| `gmail` | Set up the Gmail channel agent, custom message pills, action bar, and Gmail-specific workflows after Google Workspace is verified |
+| Skill          | When to use                                                                                                                       |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `google-drive` | Browse, upload, share, export, or sync Google Drive files after Google Workspace is verified                                      |
+| `gmail`        | Set up the Gmail channel agent, custom message pills, action bar, and Gmail-specific workflows after Google Workspace is verified |

@@ -281,8 +281,11 @@ Failures throw `PanelOperationError` with the same provenance fields.
 Slot creation itself is durable and immediately observable; runtime preparation
 continues asynchronously so one broken panel cannot hold the panel-tree queue.
 `createPanelSlot` exposes that durable boundary without focusing or waiting.
-`openPanel` bridges the two boundaries by observing immediately and polling for
-the created attempt's readiness. It returns on the first valid ready
+The server's level-triggered execution reconciler owns activation after the
+commit and resumes preparing reservations after transient failures or restart.
+`openPanel` joins that same idempotent activation, materializes the registered
+panel principal, then waits on the exact server-minted attempt through
+`awaitAttempt`; it does not poll. It returns on the first valid ready
 observation, rejects terminal failures immediately, and otherwise waits until
 caller cancellation. Use a stable `operationId` to make retried creation address
 the same slot. The retry identity also contains the source, context, parent, and

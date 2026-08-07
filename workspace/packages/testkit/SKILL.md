@@ -71,6 +71,7 @@ eval({
 ```
 
 Key facts:
+
 - `suite(name, { timeoutMs?, failOnSupervision? })`; default test timeout 30s.
 - Tests fail automatically if supervision sees console errors or crashes in
   panels the test opened (`failOnSupervision: false` or
@@ -83,6 +84,9 @@ Key facts:
 ## Panel automation
 
 - `openPanel(source, { stateArgs? })` / `withPanel(source, fn)` (boot-ready; auto-close)
+- Shell `createPanel` is deliberately only slot-committed. Do not substitute it
+  when a test requires a boot-ready app, and do not sleep after it; observe the
+  exact lifecycle projection instead.
 - Existing panels: obtain handles through bounded `panelTree.page`,
   `panelTree.search`, or addressed `panelTree.get`; do not
   call `handle.close`, `handle.navigate`, or `handle.reload` unless that is the
@@ -139,6 +143,7 @@ const doRef = await profileDO("vibestudio.gad.workspace.v1", async () => { /* DO
 ```
 
 Caveats:
+
 - First `getEndpoint` per caller raises a one-time `workerd.inspector`
   approval. The inspector is always on (loopback-bound; disable with
   `VIBESTUDIO_DISABLE_WORKERD_INSPECTOR=1`).
@@ -162,11 +167,11 @@ const last = await tb.call.lastRun();
 
 ## Approvals to expect
 
-| Prompt | When | Scope |
-| --- | --- | --- |
+| Prompt                      | When                                            | Scope                           |
+| --------------------------- | ----------------------------------------------- | ------------------------------- |
 | Panel access (CDP/automate) | first driver-DO automation of a workspace panel | per target/requester, grantable |
-| `workerd.inspector` | first workerd profiling per caller | per caller, grantable |
-| Panel open (structural) | first `openPanel` from a new entity | standard panelTree flow |
+| `workerd.inspector`         | first workerd profiling per caller              | per caller, grantable           |
+| Panel open (structural)     | first `openPanel` from a new entity             | standard panelTree flow         |
 
 Pre-grant by running one small eval and approving the prompts before kicking
 off long suites.
@@ -176,10 +181,10 @@ For copy-paste helpers that cover the flows above, read
 
 ## Files
 
-| File | Content |
-| --- | --- |
-| [references/examples.ts](references/examples.ts) | Copy-paste eval snippets for every flow above |
-| [src/index.ts](src/index.ts) | The SDK public exports |
-| [src/suites/](src/suites/) | Built-in deterministic suites |
-| [../../workers/testkit-driver](../../workers/testkit-driver) | Driver DO for workspace-panel CDP |
-| [../../panels/testbench](../../panels/testbench) | Test runner / profile viewer panel |
+| File                                                         | Content                                       |
+| ------------------------------------------------------------ | --------------------------------------------- |
+| [references/examples.ts](references/examples.ts)             | Copy-paste eval snippets for every flow above |
+| [src/index.ts](src/index.ts)                                 | The SDK public exports                        |
+| [src/suites/](src/suites/)                                   | Built-in deterministic suites                 |
+| [../../workers/testkit-driver](../../workers/testkit-driver) | Driver DO for workspace-panel CDP             |
+| [../../panels/testbench](../../panels/testbench)             | Test runner / profile viewer panel            |
