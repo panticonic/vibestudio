@@ -88,6 +88,7 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // of their explicit built-in panels. Launching a downloaded file or exposing
   // it in the OS crosses out of the workspace and remains prominent.
   { key: "service:browserEnvironment.cancelDownload", notability: "everyday" },
+  { key: "service:browserEnvironment.cancelImportRead", notability: "everyday" },
   { key: "service:browserEnvironment.flushCookieProjection", notability: "everyday" },
   {
     key: "service:browserEnvironment.getCookieProjectionDiagnostics",
@@ -95,10 +96,15 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   },
   { key: "service:browserEnvironment.getImportHost", notability: "headline" },
   { key: "service:browserEnvironment.listDownloads", notability: "everyday" },
+  { key: "service:browserEnvironment.listImportOpenTabs", notability: "headline" },
+  { key: "service:browserEnvironment.listImportSources", notability: "headline" },
+  { key: "service:browserEnvironment.nextImportFrame", notability: "headline" },
   { key: "service:browserEnvironment.openDownload", notability: "headline" },
   { key: "service:browserEnvironment.pauseDownload", notability: "everyday" },
+  { key: "service:browserEnvironment.previewImportSource", notability: "headline" },
   { key: "service:browserEnvironment.resumeDownload", notability: "everyday" },
   { key: "service:browserEnvironment.revealDownload", notability: "headline" },
+  { key: "service:browserEnvironment.startImportRead", notability: "headline" },
   { key: "runtime.code-execution.manage", notability: "headline" },
   { key: "runtime.execution.recover", notability: "headline" },
   { key: "runtime.supervision.manage", notability: "headline" },

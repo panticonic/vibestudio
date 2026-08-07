@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:309a63225c84476d2615f9b84d3cc7bc6304eb2b2cb0e8a88d8fb64c9c5c5ccd",
+  "censusDigest": "sha256:af7ddebc8a2ae0304c4bdfcf7be5e38c80072594563df84247cd0127eb2d137a",
   "decisions": {
     "host:credentials.resolveCredential": {
       "review": "handler-owned-exact-credential-use-approval",

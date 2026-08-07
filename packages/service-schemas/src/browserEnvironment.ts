@@ -3,6 +3,7 @@ import {
   defineServiceMethods,
   selectedPreparedAuthorityRequirement,
 } from "@vibestudio/shared/typedServiceClient";
+import type { CapabilityPresentation } from "@vibestudio/shared/authorityPresentation";
 import {
   BrowserImportDataTypeSchema,
   BrowserImportSourceSchema,
@@ -13,20 +14,24 @@ import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 export const BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX = "browserEnvironment.broker";
 
-function brokerAuthority(method: string) {
+function brokerPolicy(method: string, presentation: CapabilityPresentation) {
   const capability = `service:browserEnvironment.${method}`;
   return {
-    requirement: requirementForPrincipals(["host", "code"], capability),
-    resource: { kind: "literal" as const, key: capability },
-    prepared: {
-      resolver: `${BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX}.${method}`,
-      leaves: [
-        {
-          capability,
-          requirement: selectedPreparedAuthorityRequirement(["code"]),
-          tier: "gated" as const,
-        },
-      ],
+    capability,
+    presentation,
+    authority: {
+      requirement: requirementForPrincipals(["host", "code"], capability),
+      resource: { kind: "literal" as const, key: capability },
+      prepared: {
+        resolver: `${BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX}.${method}`,
+        leaves: [
+          {
+            capability,
+            requirement: selectedPreparedAuthorityRequirement(["code"]),
+            tier: "gated" as const,
+          },
+        ],
+      },
     },
   };
 }
@@ -100,7 +105,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: ImportHostSummarySchema,
     access: { sensitivity: "read" },
-    authority: brokerAuthority("getImportHost"),
+    ...brokerPolicy("getImportHost", {
+      title: "Access browser import details",
+      action: "access browser import details",
+      description: "Allows {requesterKind} to inspect the available browser import provider.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   listImportSources: {
     tier: {
@@ -115,7 +126,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(BrowserImportSourceSchema),
     access: { sensitivity: "read" },
-    authority: brokerAuthority("listImportSources"),
+    ...brokerPolicy("listImportSources", {
+      title: "Find browser profiles to import",
+      action: "find browser profiles to import",
+      description: "Allows {requesterKind} to find browser profiles available for import.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   previewImportSource: {
     tier: {
@@ -134,7 +151,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
       localDataSetCount: z.number().int().nonnegative(),
     }),
     access: { sensitivity: "read" },
-    authority: brokerAuthority("previewImportSource"),
+    ...brokerPolicy("previewImportSource", {
+      title: "Preview browser data for import",
+      action: "preview browser data for import",
+      description: "Allows {requesterKind} to preview browser data available for import.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   startImportRead: {
     tier: {
@@ -149,7 +172,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1), z.array(BrowserImportDataTypeSchema).min(1)]),
     returns: z.string().min(1),
     access: { sensitivity: "read" },
-    authority: brokerAuthority("startImportRead"),
+    ...brokerPolicy("startImportRead", {
+      title: "Read browser data for import",
+      action: "read browser data for import",
+      description: "Allows {requesterKind} to read browser data selected for import.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   nextImportFrame: {
     tier: {
@@ -163,7 +192,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1)]),
     returns: ImportProviderFrameSchema,
     access: { sensitivity: "read" },
-    authority: brokerAuthority("nextImportFrame"),
+    ...brokerPolicy("nextImportFrame", {
+      title: "Continue reading browser data",
+      action: "continue reading browser data for import",
+      description: "Allows {requesterKind} to continue a browser data import read.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   cancelImportRead: {
     tier: {
@@ -177,7 +212,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1)]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    authority: brokerAuthority("cancelImportRead"),
+    ...brokerPolicy("cancelImportRead", {
+      title: "Cancel browser data reading",
+      action: "cancel browser data reading",
+      description: "Allows {requesterKind} to cancel an active browser data import read.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "manage" },
+    }),
   },
   listImportOpenTabs: {
     tier: {
@@ -192,7 +233,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
     args: z.tuple([z.string().min(1)]),
     returns: z.array(ImportedOpenTabSchema),
     access: { sensitivity: "read" },
-    authority: brokerAuthority("listImportOpenTabs"),
+    ...brokerPolicy("listImportOpenTabs", {
+      title: "View browser tabs available to import",
+      action: "view browser tabs available to import",
+      description: "Allows {requesterKind} to view browser tabs available for import.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   flushCookieProjection: {
     tier: {
@@ -201,13 +248,19 @@ export const browserEnvironmentMethods = defineServiceMethods({
       residency: "native-effect",
       family: "browserEnvironment.control",
       rationale:
-        "Host-principal-only browser environment maintenance; the authority principal gate keeps prompts/code out.",
+        "Host maintenance proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
     description: "Flush local cookie changes and reconcile the canonical browser jar.",
     args: z.tuple([z.array(z.string().url()).max(50)]),
     returns: z.object({ revision: z.number().int().nonnegative() }),
     access: { sensitivity: "write" },
-    authority: brokerAuthority("flushCookieProjection"),
+    ...brokerPolicy("flushCookieProjection", {
+      title: "Synchronize website cookies",
+      action: "synchronize website cookies",
+      description: "Allows {requesterKind} to reconcile website cookies with the browser host.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "manage" },
+    }),
   },
   getCookieProjectionDiagnostics: {
     tier: {
@@ -216,7 +269,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
       residency: "native-effect",
       family: "browserEnvironment.read",
       rationale:
-        "Host-principal-only diagnostics read for the browser environment cookie projection.",
+        "Host diagnostics proceed directly; installed code requires the method's gated browser-environment capability.",
     },
     description: "Read cookie-projection convergence diagnostics for this browser host.",
     args: z.tuple([]),
@@ -229,7 +282,13 @@ export const browserEnvironmentMethods = defineServiceMethods({
       lastError: z.string().optional(),
     }),
     access: { sensitivity: "read" },
-    authority: brokerAuthority("getCookieProjectionDiagnostics"),
+    ...brokerPolicy("getCookieProjectionDiagnostics", {
+      title: "View cookie synchronization diagnostics",
+      action: "view cookie synchronization diagnostics",
+      description: "Allows {requesterKind} to inspect website cookie synchronization status.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   listDownloads: {
     tier: {
@@ -237,13 +296,20 @@ export const browserEnvironmentMethods = defineServiceMethods({
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.read",
-      rationale: "Host-principal-only read of the browser environment download ledger.",
+      rationale:
+        "Host reads proceed directly; installed code requires the method's gated browser-environment capability.",
     },
     description: "List current and recent downloads for this browser host.",
     args: z.tuple([]),
     returns: z.array(DownloadRecordSchema),
     access: { sensitivity: "read" },
-    authority: brokerAuthority("listDownloads"),
+    ...brokerPolicy("listDownloads", {
+      title: "View browser downloads",
+      action: "view browser downloads",
+      description: "Allows {requesterKind} to view current and recent browser downloads.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "see" },
+    }),
   },
   pauseDownload: {
     tier: {
@@ -251,13 +317,20 @@ export const browserEnvironmentMethods = defineServiceMethods({
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.control",
-      rationale: "Host-principal-only download control driven by explicit shell UI.",
+      rationale:
+        "Host control proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
     description: "Pause an active browser download.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    authority: brokerAuthority("pauseDownload"),
+    ...brokerPolicy("pauseDownload", {
+      title: "Pause browser downloads",
+      action: "pause browser downloads",
+      description: "Allows {requesterKind} to pause active browser downloads.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "manage" },
+    }),
   },
   resumeDownload: {
     tier: {
@@ -265,13 +338,20 @@ export const browserEnvironmentMethods = defineServiceMethods({
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.control",
-      rationale: "Host-principal-only download control driven by explicit shell UI.",
+      rationale:
+        "Host control proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
     description: "Resume a paused browser download.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    authority: brokerAuthority("resumeDownload"),
+    ...brokerPolicy("resumeDownload", {
+      title: "Resume browser downloads",
+      action: "resume browser downloads",
+      description: "Allows {requesterKind} to resume paused browser downloads.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "manage" },
+    }),
   },
   cancelDownload: {
     tier: {
@@ -279,13 +359,20 @@ export const browserEnvironmentMethods = defineServiceMethods({
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.retire",
-      rationale: "Host-principal-only download control driven by explicit shell UI.",
+      rationale:
+        "Host control proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
     description: "Cancel an active browser download.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "destructive" },
-    authority: brokerAuthority("cancelDownload"),
+    ...brokerPolicy("cancelDownload", {
+      title: "Cancel browser downloads",
+      action: "cancel browser downloads",
+      description: "Allows {requesterKind} to cancel active browser downloads.",
+      group: "network",
+      authorityCategory: { domain: "web", verb: "manage" },
+    }),
   },
   openDownload: {
     tier: {
@@ -293,13 +380,20 @@ export const browserEnvironmentMethods = defineServiceMethods({
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.create",
-      rationale: "Host-principal-only open of a completed download, driven by explicit shell UI.",
+      rationale:
+        "Host open proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
     description: "Open a completed browser download with the operating system.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    authority: brokerAuthority("openDownload"),
+    ...brokerPolicy("openDownload", {
+      title: "Open downloaded files",
+      action: "open downloaded files",
+      description: "Allows {requesterKind} to open downloaded files on this computer.",
+      group: "network",
+      authorityCategory: { domain: "computer", verb: "act" },
+    }),
   },
   revealDownload: {
     tier: {
@@ -308,12 +402,18 @@ export const browserEnvironmentMethods = defineServiceMethods({
       residency: "native-effect",
       family: "browserEnvironment.control",
       rationale:
-        "Host-principal-only reveal of a completed download in the file manager, driven by explicit shell UI.",
+        "Host reveal proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
     description: "Reveal a browser download in the operating system file manager.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    authority: brokerAuthority("revealDownload"),
+    ...brokerPolicy("revealDownload", {
+      title: "Show downloaded files",
+      action: "show downloaded files on this computer",
+      description: "Allows {requesterKind} to reveal downloaded files in the file manager.",
+      group: "network",
+      authorityCategory: { domain: "computer", verb: "act" },
+    }),
   },
 });

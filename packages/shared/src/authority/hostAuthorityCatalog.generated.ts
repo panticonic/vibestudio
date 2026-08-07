@@ -959,10 +959,20 @@ export const HOST_AUTHORITY_METHODS = {
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.retire",
-      rationale: "Host-principal-only download control driven by explicit shell UI.",
+      rationale:
+        "Host control proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.cancelDownload",
+    presentation: {
+      title: "Cancel browser downloads",
+      action: "cancel browser downloads",
+      description: "Allows {requesterKind} to cancel active browser downloads.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "manage",
+      },
+    },
   },
   "browserEnvironment.cancelImportRead": {
     tier: {
@@ -972,8 +982,17 @@ export const HOST_AUTHORITY_METHODS = {
       family: "browserEnvironment.retire",
       rationale: "Cancels a streamed browser-profile import read; gated by authority principals.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.cancelImportRead",
+    presentation: {
+      title: "Cancel browser data reading",
+      action: "cancel browser data reading",
+      description: "Allows {requesterKind} to cancel an active browser data import read.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "manage",
+      },
+    },
   },
   "browserEnvironment.flushCookieProjection": {
     tier: {
@@ -982,10 +1001,19 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "native-effect",
       family: "browserEnvironment.control",
       rationale:
-        "Host-principal-only browser environment maintenance; the authority principal gate keeps prompts/code out.",
+        "Host maintenance proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.flushCookieProjection",
+    presentation: {
+      title: "Synchronize website cookies",
+      action: "synchronize website cookies",
+      description: "Allows {requesterKind} to reconcile website cookies with the browser host.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "manage",
+      },
+    },
   },
   "browserEnvironment.getCookieProjectionDiagnostics": {
     tier: {
@@ -994,10 +1022,19 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "native-effect",
       family: "browserEnvironment.read",
       rationale:
-        "Host-principal-only diagnostics read for the browser environment cookie projection.",
+        "Host diagnostics proceed directly; installed code requires the method's gated browser-environment capability.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.getCookieProjectionDiagnostics",
+    presentation: {
+      title: "View cookie synchronization diagnostics",
+      action: "view cookie synchronization diagnostics",
+      description: "Allows {requesterKind} to inspect website cookie synchronization status.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.getImportHost": {
     tier: {
@@ -1008,8 +1045,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "Host/code read of the browser-import host descriptor; per-method authority principals gate callers.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.getImportHost",
+    presentation: {
+      title: "Access browser import details",
+      action: "access browser import details",
+      description: "Allows {requesterKind} to inspect the available browser import provider.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.listDownloads": {
     tier: {
@@ -1017,10 +1063,20 @@ export const HOST_AUTHORITY_METHODS = {
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.read",
-      rationale: "Host-principal-only read of the browser environment download ledger.",
+      rationale:
+        "Host reads proceed directly; installed code requires the method's gated browser-environment capability.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.listDownloads",
+    presentation: {
+      title: "View browser downloads",
+      action: "view browser downloads",
+      description: "Allows {requesterKind} to view current and recent browser downloads.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.listImportOpenTabs": {
     tier: {
@@ -1031,8 +1087,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "Reads open tabs from an external browser profile for import; gated by authority principals.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.listImportOpenTabs",
+    presentation: {
+      title: "View browser tabs available to import",
+      action: "view browser tabs available to import",
+      description: "Allows {requesterKind} to view browser tabs available for import.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.listImportSources": {
     tier: {
@@ -1043,8 +1108,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "Enumerates importable external browser profiles; read-only discovery gated by authority principals.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.listImportSources",
+    presentation: {
+      title: "Find browser profiles to import",
+      action: "find browser profiles to import",
+      description: "Allows {requesterKind} to find browser profiles available for import.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.nextImportFrame": {
     tier: {
@@ -1054,8 +1128,17 @@ export const HOST_AUTHORITY_METHODS = {
       family: "browserEnvironment.control",
       rationale: "Continues a streamed browser-profile import read; gated by authority principals.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.nextImportFrame",
+    presentation: {
+      title: "Continue reading browser data",
+      action: "continue reading browser data for import",
+      description: "Allows {requesterKind} to continue a browser data import read.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.openDownload": {
     tier: {
@@ -1063,10 +1146,20 @@ export const HOST_AUTHORITY_METHODS = {
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.create",
-      rationale: "Host-principal-only open of a completed download, driven by explicit shell UI.",
+      rationale:
+        "Host open proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.openDownload",
+    presentation: {
+      title: "Open downloaded files",
+      action: "open downloaded files",
+      description: "Allows {requesterKind} to open downloaded files on this computer.",
+      group: "network",
+      authorityCategory: {
+        domain: "computer",
+        verb: "act",
+      },
+    },
   },
   "browserEnvironment.pauseDownload": {
     tier: {
@@ -1074,10 +1167,20 @@ export const HOST_AUTHORITY_METHODS = {
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.control",
-      rationale: "Host-principal-only download control driven by explicit shell UI.",
+      rationale:
+        "Host control proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.pauseDownload",
+    presentation: {
+      title: "Pause browser downloads",
+      action: "pause browser downloads",
+      description: "Allows {requesterKind} to pause active browser downloads.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "manage",
+      },
+    },
   },
   "browserEnvironment.previewImportSource": {
     tier: {
@@ -1088,8 +1191,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "Read-only preview of an external browser profile import; gated by authority principals.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.previewImportSource",
+    presentation: {
+      title: "Preview browser data for import",
+      action: "preview browser data for import",
+      description: "Allows {requesterKind} to preview browser data available for import.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserEnvironment.resumeDownload": {
     tier: {
@@ -1097,10 +1209,20 @@ export const HOST_AUTHORITY_METHODS = {
       session: "family",
       residency: "native-effect",
       family: "browserEnvironment.control",
-      rationale: "Host-principal-only download control driven by explicit shell UI.",
+      rationale:
+        "Host control proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.resumeDownload",
+    presentation: {
+      title: "Resume browser downloads",
+      action: "resume browser downloads",
+      description: "Allows {requesterKind} to resume paused browser downloads.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "manage",
+      },
+    },
   },
   "browserEnvironment.revealDownload": {
     tier: {
@@ -1109,10 +1231,19 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "native-effect",
       family: "browserEnvironment.control",
       rationale:
-        "Host-principal-only reveal of a completed download in the file manager, driven by explicit shell UI.",
+        "Host reveal proceeds directly; installed code requires the method's gated browser-environment capability.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.revealDownload",
+    presentation: {
+      title: "Show downloaded files",
+      action: "show downloaded files on this computer",
+      description: "Allows {requesterKind} to reveal downloaded files in the file manager.",
+      group: "network",
+      authorityCategory: {
+        domain: "computer",
+        verb: "act",
+      },
+    },
   },
   "browserEnvironment.startImportRead": {
     tier: {
@@ -1123,8 +1254,17 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "Starts a streamed read of an external browser profile for import; gated by authority principals.",
     },
-    capability: null,
-    presentation: null,
+    capability: "service:browserEnvironment.startImportRead",
+    presentation: {
+      title: "Read browser data for import",
+      action: "read browser data for import",
+      description: "Allows {requesterKind} to read browser data selected for import.",
+      group: "network",
+      authorityCategory: {
+        domain: "web",
+        verb: "see",
+      },
+    },
   },
   "browserPermissions.request": {
     tier: {
@@ -7031,6 +7171,66 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "computer",
     verb: "see",
   },
+  "service:browserEnvironment.cancelDownload": {
+    domain: "web",
+    verb: "manage",
+  },
+  "service:browserEnvironment.cancelImportRead": {
+    domain: "web",
+    verb: "manage",
+  },
+  "service:browserEnvironment.flushCookieProjection": {
+    domain: "web",
+    verb: "manage",
+  },
+  "service:browserEnvironment.getCookieProjectionDiagnostics": {
+    domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.getImportHost": {
+    domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.listDownloads": {
+    domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.listImportOpenTabs": {
+    domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.listImportSources": {
+    domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.nextImportFrame": {
+    domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.openDownload": {
+    domain: "computer",
+    verb: "act",
+  },
+  "service:browserEnvironment.pauseDownload": {
+    domain: "web",
+    verb: "manage",
+  },
+  "service:browserEnvironment.previewImportSource": {
+    domain: "web",
+    verb: "see",
+  },
+  "service:browserEnvironment.resumeDownload": {
+    domain: "web",
+    verb: "manage",
+  },
+  "service:browserEnvironment.revealDownload": {
+    domain: "computer",
+    verb: "act",
+  },
+  "service:browserEnvironment.startImportRead": {
+    domain: "web",
+    verb: "see",
+  },
   "subagents.create": {
     domain: "automation",
     verb: "act",
@@ -7654,6 +7854,156 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     group: "host",
     authorityCategory: {
       domain: "computer",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.cancelDownload": {
+    title: "Cancel browser downloads",
+    action: "cancel browser downloads",
+    description: "Allows {requesterKind} to cancel active browser downloads.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "manage",
+    },
+  },
+  "service:browserEnvironment.cancelImportRead": {
+    title: "Cancel browser data reading",
+    action: "cancel browser data reading",
+    description: "Allows {requesterKind} to cancel an active browser data import read.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "manage",
+    },
+  },
+  "service:browserEnvironment.flushCookieProjection": {
+    title: "Synchronize website cookies",
+    action: "synchronize website cookies",
+    description: "Allows {requesterKind} to reconcile website cookies with the browser host.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "manage",
+    },
+  },
+  "service:browserEnvironment.getCookieProjectionDiagnostics": {
+    title: "View cookie synchronization diagnostics",
+    action: "view cookie synchronization diagnostics",
+    description: "Allows {requesterKind} to inspect website cookie synchronization status.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.getImportHost": {
+    title: "Access browser import details",
+    action: "access browser import details",
+    description: "Allows {requesterKind} to inspect the available browser import provider.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.listDownloads": {
+    title: "View browser downloads",
+    action: "view browser downloads",
+    description: "Allows {requesterKind} to view current and recent browser downloads.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.listImportOpenTabs": {
+    title: "View browser tabs available to import",
+    action: "view browser tabs available to import",
+    description: "Allows {requesterKind} to view browser tabs available for import.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.listImportSources": {
+    title: "Find browser profiles to import",
+    action: "find browser profiles to import",
+    description: "Allows {requesterKind} to find browser profiles available for import.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.nextImportFrame": {
+    title: "Continue reading browser data",
+    action: "continue reading browser data for import",
+    description: "Allows {requesterKind} to continue a browser data import read.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.openDownload": {
+    title: "Open downloaded files",
+    action: "open downloaded files",
+    description: "Allows {requesterKind} to open downloaded files on this computer.",
+    group: "network",
+    authorityCategory: {
+      domain: "computer",
+      verb: "act",
+    },
+  },
+  "service:browserEnvironment.pauseDownload": {
+    title: "Pause browser downloads",
+    action: "pause browser downloads",
+    description: "Allows {requesterKind} to pause active browser downloads.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "manage",
+    },
+  },
+  "service:browserEnvironment.previewImportSource": {
+    title: "Preview browser data for import",
+    action: "preview browser data for import",
+    description: "Allows {requesterKind} to preview browser data available for import.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "see",
+    },
+  },
+  "service:browserEnvironment.resumeDownload": {
+    title: "Resume browser downloads",
+    action: "resume browser downloads",
+    description: "Allows {requesterKind} to resume paused browser downloads.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
+      verb: "manage",
+    },
+  },
+  "service:browserEnvironment.revealDownload": {
+    title: "Show downloaded files",
+    action: "show downloaded files on this computer",
+    description: "Allows {requesterKind} to reveal downloaded files in the file manager.",
+    group: "network",
+    authorityCategory: {
+      domain: "computer",
+      verb: "act",
+    },
+  },
+  "service:browserEnvironment.startImportRead": {
+    title: "Read browser data for import",
+    action: "read browser data for import",
+    description: "Allows {requesterKind} to read browser data selected for import.",
+    group: "network",
+    authorityCategory: {
+      domain: "web",
       verb: "see",
     },
   },
