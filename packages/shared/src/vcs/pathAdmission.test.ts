@@ -26,6 +26,7 @@ describe("semanticVcsPathAdmission", () => {
       ".git/config",
       "nested/.gad/CHECKOUT.json",
       "src/.env",
+      "packages/example/.npmrc",
       `nested/${CONTEXT_BINDING_FILE}`,
     ]) {
       expect(semanticVcsPathAdmission(value), value).toMatchObject({

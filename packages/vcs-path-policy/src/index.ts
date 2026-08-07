@@ -7,6 +7,7 @@ export const SEMANTIC_VCS_MAX_PATH_SEGMENT_UTF8_BYTES = 255;
 const RESERVED_DIRECTORIES: ReadonlySet<string> = new Set([".git", ".gad"]);
 const RESERVED_FILES: ReadonlySet<string> = new Set([
   ".env",
+  ".npmrc",
   ".secrets.yml",
   "firebase-service-account.json",
   CONTEXT_BINDING_FILE,
