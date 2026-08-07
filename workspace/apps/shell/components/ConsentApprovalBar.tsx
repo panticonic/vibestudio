@@ -731,7 +731,7 @@ function ApprovalMinimizedPill({
             {count}
           </Badge>
         ) : null}
-        <Flex align="center" gap="1" style={{ flexShrink: 0, color: "var(--gray-11)" }}>
+        <Flex align="center" gap="1" className="approval-pill-cta">
           <Text size="1" weight="medium">
             Review
           </Text>

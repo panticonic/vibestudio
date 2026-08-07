@@ -522,7 +522,34 @@ html[data-overlay-dragging] * {
   cursor: pointer;
   flex-shrink: 0;
   transition: background var(--motion-fast) var(--ease-standard);
-  animation: approval-pill-in var(--motion-base) var(--ease-decelerate);
+  /* Entrance, then a breath that never stops: the pill is the only thing left on
+     screen saying a decision is outstanding, so it has to keep asking. The
+     entrance animates opacity/transform and the breath animates box-shadow, so
+     the two compose instead of fighting. Both collapse under the centralized
+     reduced-motion block, which leaves the static rail declared above. */
+  animation:
+    approval-pill-in var(--motion-base) var(--ease-decelerate),
+    approval-pill-breathe 1800ms var(--ease-standard) infinite;
+}
+
+/* The breath widens the tone rail and lets it bleed inward as a glow — the wash
+   stays anchored to the rail rather than flooding the row, so the pill still
+   reads as a neutral surface with a tone marker. Both stops carry the same three
+   shadows so they interpolate. */
+@keyframes approval-pill-breathe {
+  0%,
+  100% {
+    box-shadow:
+      inset 3px 0 0 0 var(--approval-accent),
+      inset 16px 0 24px -24px var(--approval-accent),
+      inset 0 0 0 0 var(--approval-accent-quiet);
+  }
+  50% {
+    box-shadow:
+      inset 6px 0 0 0 var(--approval-accent),
+      inset 16px 0 24px -4px var(--approval-accent-quiet),
+      inset 0 0 0 1px var(--approval-accent-quiet);
+  }
 }
 
 .approval-pill:hover {
@@ -555,6 +582,40 @@ html[data-overlay-dragging] * {
   flex-shrink: 0;
   background: var(--approval-icon-bg);
   color: var(--approval-icon);
+  /* Same beacon the expanded card's icon box runs, on the pill's smaller icon
+     and in step with the row's breath. */
+  animation: approval-pill-icon-beacon 1800ms var(--ease-standard) infinite;
+}
+
+@keyframes approval-pill-icon-beacon {
+  0% {
+    box-shadow: 0 0 0 0 var(--approval-accent-quiet);
+  }
+  65% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* "Review →" keeps time with the rest so the affordance itself looks live. */
+.approval-pill-cta {
+  flex-shrink: 0;
+  color: var(--gray-11);
+  animation: approval-pill-cta 1800ms var(--ease-standard) infinite;
+}
+
+@keyframes approval-pill-cta {
+  0%,
+  100% {
+    color: var(--gray-11);
+    transform: none;
+  }
+  50% {
+    color: var(--approval-icon);
+    transform: translateX(2px);
+  }
 }
 
 .approval-pill-pulse {
