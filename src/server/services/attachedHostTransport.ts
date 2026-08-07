@@ -45,7 +45,6 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
       ) => Pick<RpcClient, "call" | "close">;
       revoke: (
         credentials: CliCredentials,
-        deviceId: string,
         childGatewayUrl: string
       ) => Promise<{ revoked: boolean }>;
       exists: typeof fs.existsSync;
@@ -58,14 +57,14 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
           deviceId: credentials.deviceId,
           refreshToken: credentials.refreshToken,
         }),
-      revoke: async (credentials, deviceId, childGatewayUrl) => {
+      revoke: async (credentials, childGatewayUrl) => {
         const rpc = new RpcClient({
           url: childGatewayUrl,
           deviceId: credentials.deviceId,
           refreshToken: credentials.refreshToken,
         });
         try {
-          return await rpc.call<{ revoked: boolean }>("hubControl.revokeDevice", [deviceId]);
+          return await rpc.call<{ revoked: boolean }>("hubControl.retireCurrentDevice", []);
         } finally {
           await rpc.close();
         }
@@ -106,11 +105,7 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     const credentials = this.loadCredentials();
     const client = this.client;
     this.client = null;
-    const result = await this.operations.revoke(
-      credentials,
-      credentials.deviceId,
-      this.childGatewayUrl
-    );
+    const result = await this.operations.revoke(credentials, this.childGatewayUrl);
     if (!result.revoked) {
       throw transportError(
         "EATTACHED_BOOTSTRAP",

@@ -1255,6 +1255,7 @@ export async function revokeHubDevice(
 async function executeHubControl(
   state: HubRuntimeState,
   subject: HubSubject,
+  callerId: string,
   method: string,
   args: unknown[],
   respond: (result: unknown) => void
@@ -1686,6 +1687,13 @@ async function executeHubControl(
     });
     return;
   }
+  if (method === "retireCurrentDevice") {
+    if (!callerId.startsWith(SHELL_CALLER_PREFIX)) {
+      throw new Error("Only an authenticated device can retire itself");
+    }
+    respond(await revokeHubDevice(state, subject, callerId.slice(SHELL_CALLER_PREFIX.length)));
+    return;
+  }
   if (method === "revokeDevice") {
     const deviceId = typeof args[0] === "string" ? args[0] : "";
     respond(await revokeHubDevice(state, subject, deviceId));
@@ -1708,7 +1716,7 @@ function createDirectHubControlService(state: HubRuntimeState): ServiceDefinitio
     const definition = hubControlMethods[method];
     let responded = false;
     let result: unknown;
-    await executeHubControl(state, subject, method, args, (value) => {
+    await executeHubControl(state, subject, ctx.caller.runtime.id, method, args, (value) => {
       responded = true;
       result = definition.returns?.parse(value) ?? value;
     });

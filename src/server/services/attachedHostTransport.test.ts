@@ -285,7 +285,7 @@ describe("attached-host HTTP routed connectivity", () => {
       code: "EATTACHED_BOOTSTRAP_REVOKED",
     });
     expect(close).toHaveBeenCalledOnce();
-    expect(revoke).toHaveBeenCalledWith(credentials, credentials.deviceId, "http://127.0.0.1:4242");
+    expect(revoke).toHaveBeenCalledWith(credentials, "http://127.0.0.1:4242");
     expect(exists).toBe(false);
   });
 
