@@ -4,7 +4,7 @@ import {
   type SessionSnapshot,
 } from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { blobstore, gad, rpc, vcs } from "@workspace/runtime";
+import { blobstore, gad, rpc, vcs, workers } from "@workspace/runtime";
 import {
   SYSTEM_TEST_AGENT_MODEL,
   systemTestModelRoute,
@@ -168,6 +168,7 @@ export class HeadlessRunner {
     | null;
   private readonly workspaceRepoFixtureLifecycle: WorkspaceRepoFixtureLifecycle | null;
   private readonly testAuthorityPolicy: AgentExecutionTestPolicySpec | null;
+  private developmentTargetPromise: Promise<string> | null = null;
 
   /**
    * Model is per-agent, so each spawned headless agent is created with the
@@ -685,7 +686,22 @@ export class HeadlessRunner {
       | "closeSession",
     input?: unknown
   ): Promise<T> {
-    return rpc.call<T>("main", `development.${method}`, input === undefined ? [] : [input]);
+    this.developmentTargetPromise ??= workers
+      .resolveService("vibestudio.development.v1")
+      .then((service) => {
+        if (service.kind !== "durable-object" || !service.targetId) {
+          throw new Error(
+            "vibestudio.development.v1 did not resolve to a Durable Object service"
+          );
+        }
+        return service.targetId;
+      })
+      .catch((error: unknown) => {
+        this.developmentTargetPromise = null;
+        throw error;
+      });
+    const targetId = await this.developmentTargetPromise;
+    return rpc.call<T>(targetId, method, input === undefined ? [] : [input]);
   }
 
   /** Invoke the owner-scoped ordinary attached-host client surface. */
