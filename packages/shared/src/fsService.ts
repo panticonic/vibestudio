@@ -2376,6 +2376,11 @@ export class FsService {
     if (p === null) return;
     const fileOrSearchMethod = method !== "readdir" && method !== "glob";
     const wsRel = (fileOrSearchMethod ? canonicalizeWorkspaceFilePath(p) : p).replace(/^\/+/, "");
+    // Resolving the already-ready context root exposes no repository bytes.
+    // Callers such as native file tools follow it with one explicit, narrowly
+    // scoped ensureMaterialized request; treating this metadata lookup as an
+    // all-repository read creates a redundant semantic round trip per tool.
+    if (method === "realpath" && wsRel === "") return;
     const repos = scopeForPath(wsRel);
     if (repos === null) return;
     if (repos !== "all" && !(await bridge.isTracked(wsRel.replace(/\/+$/, "")))) {

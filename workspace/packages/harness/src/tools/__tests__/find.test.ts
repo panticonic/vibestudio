@@ -62,6 +62,7 @@ describe("createFindTool", () => {
 
   it("uses the context-scoped host glob when RPC is available", async () => {
     const fs = new StubFs({ files: { [`${CWD}/src/a.ts`]: "x" } });
+    const stat = vi.spyOn(fs, "stat");
     const rpc = {
       call: vi.fn().mockResolvedValue([`${CWD}/src/a.ts`]),
       stream: vi.fn(async () => new Response()),
@@ -77,6 +78,7 @@ describe("createFindTool", () => {
       ["**/*.ts", { path: CWD }],
       undefined
     );
+    expect(stat).not.toHaveBeenCalled();
   });
 
   it("bounds host glob results without issuing per-directory RPC calls", async () => {

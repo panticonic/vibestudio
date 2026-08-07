@@ -163,6 +163,7 @@ describe("createReadTool", () => {
         [`${CWD}/skills/README.md`]: "skills",
       },
     });
+    const stat = vi.spyOn(fs, "stat");
     const tool = createReadTool(CWD, fs);
 
     const result = await tool.execute("call-1", { path: "skills" });
@@ -173,6 +174,7 @@ describe("createReadTool", () => {
       directory: true,
     });
     expect((result.content[0] as { text: string }).text).toBe("README.md\ngit/");
+    expect(stat).not.toHaveBeenCalled();
   });
 
   it("returns a successful discovery diagnostic with nearby entries for a missing path", async () => {
@@ -288,6 +290,9 @@ describe("createReadTool", () => {
 
   it("reads text through the scoped runtime filesystem even when context rpc is available", async () => {
     const fs = new StubFs({ files: { [`${CWD}/big.txt`]: "line 1\nline 2\nline 3\nline 4" } });
+    const readFile = vi.spyOn(fs, "readFile");
+    const stat = vi.spyOn(fs, "stat");
+    const access = vi.spyOn(fs, "access");
     const rpc = {
       call: vi.fn().mockResolvedValue([]),
       stream: vi.fn(async () => new Response()),
@@ -302,6 +307,9 @@ describe("createReadTool", () => {
 
     expect((result.content[0] as { text: string }).text).toBe("line 3\nline 4");
     expect(result.details).toMatchObject({ path: "big.txt", engine: "runtime-fs" });
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(stat).not.toHaveBeenCalled();
+    expect(access).not.toHaveBeenCalled();
     expect(rpc.call).not.toHaveBeenCalledWith(
       "main",
       "extensions.invoke",

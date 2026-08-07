@@ -91,7 +91,40 @@ export function createFindTool(
       const searchPath = resolveToCwd(searchDir || ".", cwd);
       const effectiveLimit = limit ?? DEFAULT_LIMIT;
 
-      // Verify the search root exists.
+      if (deps?.rpc) {
+        let found: string[];
+        try {
+          found = await deps.rpc.call<string[]>(
+            "main",
+            "fs.glob",
+            [pattern, { path: searchPath }],
+            signal ? { signal } : undefined
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT" && !/\bENOENT\b/u.test(message)) {
+            throw error;
+          }
+          const displayPath = searchDir || ".";
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No files found matching pattern (search path does not exist: ${displayPath})`,
+              },
+            ],
+            details: { engine: "runtime-fs", missingSearchPath: displayPath },
+          };
+        }
+        const resultLimitReached = found.length > effectiveLimit;
+        const matches = found
+          .slice(0, effectiveLimit)
+          .map((file) => path.relative(searchPath, file).replace(/\\/g, "/"));
+        return renderMatches(matches, effectiveLimit, resultLimitReached);
+      }
+
+      // The in-memory fallback needs an explicit root probe; the host glob
+      // service already combines this with its traversal in one RPC above.
       try {
         await fs.stat(searchPath);
       } catch {
@@ -103,25 +136,8 @@ export function createFindTool(
               text: `No files found matching pattern (search path does not exist: ${displayPath})`,
             },
           ],
-          details: {
-            engine: "runtime-fs",
-            missingSearchPath: displayPath,
-          },
+          details: { engine: "runtime-fs", missingSearchPath: displayPath },
         };
-      }
-
-      if (deps?.rpc) {
-        const found = await deps.rpc.call<string[]>(
-          "main",
-          "fs.glob",
-          [pattern, { path: searchPath }],
-          signal ? { signal } : undefined
-        );
-        const resultLimitReached = found.length > effectiveLimit;
-        const matches = found
-          .slice(0, effectiveLimit)
-          .map((file) => path.relative(searchPath, file).replace(/\\/g, "/"));
-        return renderMatches(matches, effectiveLimit, resultLimitReached);
       }
 
       const regex = globToRegex(pattern);

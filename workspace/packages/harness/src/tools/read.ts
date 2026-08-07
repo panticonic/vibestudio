@@ -277,57 +277,6 @@ export function createReadTool(
         throw new Error("Operation aborted");
       }
       const absolutePath = resolveToCwd(path, cwd);
-      // A file-or-directory probe is a reasonable discovery action. Return a
-      // bounded listing here so callers do not need to recover from EISDIR and
-      // repeat the same request through another tool.
-      try {
-        const stats = await retryTransientRuntimeFs(() => fs.stat(absolutePath), signal);
-        if (stats.isDirectory()) {
-          const entries = (await retryTransientRuntimeFs(() => fs.readdir(absolutePath), signal))
-            .map(String)
-            .sort();
-          const shown = entries.slice(0, 200);
-          const rendered = await Promise.all(
-            shown.map(async (name) => {
-              try {
-                const child = await retryTransientRuntimeFs(
-                  () => fs.stat(`${absolutePath.replace(/\/$/, "")}/${name}`),
-                  signal
-                );
-                return child.isDirectory() ? `${name}/` : name;
-              } catch {
-                return name;
-              }
-            })
-          );
-          const omitted = entries.length - shown.length;
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  rendered.join("\n") +
-                  (omitted > 0 ? `\n... ${omitted} more entries omitted` : ""),
-              },
-            ],
-            details: { path, engine: "runtime-fs", directory: true },
-          };
-        }
-      } catch {
-        // stat failures fall through — the read below reports them naturally.
-      }
-      // Check that the file exists / is readable; preserve ENOENT semantics.
-      try {
-        await retryTransientRuntimeFs(() => fs.access(absolutePath, fs.constants.R_OK), signal);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          return missingResult(path, absolutePath);
-        }
-        throw err;
-      }
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
-      }
       // --- Image/text read ---------------------------------------------------------------
       // Text with a recognizable filename remains a single compact UTF-8 RPC
       // response. Runtime artifacts such as screenshots intentionally use
@@ -341,6 +290,34 @@ export function createReadTool(
           signal
         );
       } catch (err) {
+        // The common file path is intentionally one filesystem round trip.
+        // If it is a directory, recover with one typed listing instead of a
+        // stat + readdir + one stat per child sequence.
+        try {
+          const entries = await retryTransientRuntimeFs(
+            () => fs.readdir(absolutePath, { withFileTypes: true }),
+            signal
+          );
+          const shown = entries
+            .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
+            .sort()
+            .slice(0, 200);
+          const omitted = entries.length - shown.length;
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  shown.join("\n") +
+                  (omitted > 0 ? `\n... ${omitted} more entries omitted` : ""),
+              },
+            ],
+            details: { path, engine: "runtime-fs", directory: true },
+          };
+        } catch {
+          // Preserve the original file-read failure below. The directory
+          // probe is only a successful alternate interpretation.
+        }
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           return missingResult(path, absolutePath);
         }

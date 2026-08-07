@@ -2391,6 +2391,19 @@ describe("FsService", () => {
       expect(calls).toEqual([]);
     });
 
+    it("resolves the ready context root without a blanket materialization", async () => {
+      mkdirSync(path.join(tmpRoot, "ctx-root-realpath"), { recursive: true });
+      const { bridge, calls } = makeMaterializeBridge({ materialize: true });
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-root-realpath");
+
+      await expect(svc.handleCall(ctx, "realpath", ["/"])).resolves.toBe("/");
+      expect(calls).toEqual([]);
+    });
+
     it("an existing empty semantic repository lists without a disk projection", async () => {
       // A bridge that declines to materialize — simulates a non-existent repo
       // (nothing to project) or a consumer/path that slipped past demand. Every
