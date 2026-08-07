@@ -225,12 +225,10 @@ describe("HeadlessSession", () => {
 
     await session.interrupt("agent-direct", { timeoutMs: 2_000, signal });
 
-    expect(rpcCall).toHaveBeenCalledWith(
-      "agent-direct",
-      "interruptChannel",
-      ["ch-direct"],
-      { timeoutMs: 2_000, signal }
-    );
+    expect(rpcCall).toHaveBeenCalledWith("agent-direct", "interruptChannel", ["ch-direct"], {
+      timeoutMs: 2_000,
+      signal,
+    });
   });
 
   it("finishes shared-context unsubscribe before retiring the agent entity", async () => {
@@ -1065,6 +1063,68 @@ describe("HeadlessSession", () => {
     (session as any)._chatMessages.set(successMessage.id, successMessage);
     (session as any)._chatMessageOrder.push(successMessage.id);
     (session as any).notifyListeners();
+    (session as any)._channelView.turns[turnId] = {
+      ...(session as any)._channelView.turns[turnId],
+      status: "closed",
+      closedAt: "2026-05-27T00:00:01.000Z",
+    };
+    (session as any).notifyListeners();
+    await vi.advanceTimersByTimeAsync(5);
+
+    await expect(wait).resolves.toBe(successMessage);
+    vi.useRealTimers();
+  });
+
+  it("waitForIdle does not terminalize an attempt failure before its turn projection arrives", async () => {
+    vi.useFakeTimers();
+    const session = HeadlessSession.create({ config: createConfig() });
+    const turnId = brandId<TurnId>("turn-late-projection-fallback");
+    const failureMessage = {
+      id: "diagnostic:failed-before-turn-projection",
+      senderId: "agent-1",
+      content: "Codex error: usage limit",
+      contentType: "diagnostic",
+      kind: "system" as const,
+      complete: true,
+      error: "Codex error: usage limit",
+    } satisfies ChatMessage;
+    const successMessage = {
+      id: "late-projection-fallback-success",
+      senderId: "agent-1",
+      content: "fallback succeeded",
+      kind: "message" as const,
+      complete: true,
+    } satisfies ChatMessage;
+
+    const wait = session.waitForIdle({ debounce: 5, timeoutMs: 1_000 });
+    (session as any)._chatMessages = new Map([[failureMessage.id, failureMessage]]);
+    (session as any)._chatMessageOrder = [failureMessage.id];
+    (session as any).notifyListeners();
+    let settled = false;
+    void wait.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    (session as any)._channelView = {
+      ...(session as any)._channelView,
+      turns: {
+        [turnId]: {
+          turnId,
+          actor: { kind: "agent", id: "agent-1" },
+          status: "open",
+          openedAt: "2026-05-27T00:00:00.000Z",
+        },
+      },
+    };
+    (session as any)._chatMessages.set(successMessage.id, successMessage);
+    (session as any)._chatMessageOrder.push(successMessage.id);
     (session as any)._channelView.turns[turnId] = {
       ...(session as any)._channelView.turns[turnId],
       status: "closed",

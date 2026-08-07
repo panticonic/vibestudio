@@ -191,11 +191,7 @@ export class HeadlessTurnObserver {
       ...(this.latestResponse ? { response: this.latestResponse } : {}),
     };
 
-    if (
-      turn?.status === "waiting" &&
-      turn.reason &&
-      this.terminalWaitingReasons.has(turn.reason)
-    ) {
+    if (turn?.status === "waiting" && turn.reason && this.terminalWaitingReasons.has(turn.reason)) {
       observation.terminal = {
         kind: "failed",
         reason: `Agent turn requires unavailable external action (${turn.reason})`,
@@ -218,8 +214,6 @@ export class HeadlessTurnObserver {
       // Older/custom publishers may emit a completed agent response without
       // durable turn events. A response is still a valid terminal observation.
       observation.terminal = { kind: "succeeded", message: this.latestResponse };
-    } else if (!turn && this.pendingFailure) {
-      observation.terminal = { kind: "failed", reason: this.pendingFailure };
     }
 
     return observation;
