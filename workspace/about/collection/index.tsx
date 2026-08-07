@@ -662,6 +662,7 @@ export default function CollectionPanel() {
                     handle: "collection",
                   }}
                   theme={theme}
+                  heightMode="container"
                   installedAgents={[
                     { agentId: COLLECTION_AGENT_CLASS, handle: COLLECTION_AGENT_HANDLE },
                   ]}

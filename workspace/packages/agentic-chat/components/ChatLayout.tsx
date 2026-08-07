@@ -38,7 +38,7 @@ export const ChatLayout = React.memo(function ChatLayout() {
         className="agentic-chat-root"
         direction="column"
         style={{
-          height: "100dvh",
+          height: "100%",
           minWidth: 0,
           width: "100%",
           boxSizing: "border-box",

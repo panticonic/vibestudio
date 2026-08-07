@@ -1683,6 +1683,7 @@ export default function NewsPanel() {
                   channelName={channelName}
                   contextId={resolvedContextId}
                   theme={theme}
+                  heightMode="container"
                   installedAgents={installedAgents}
                   sandbox={sandboxConfig}
                 />

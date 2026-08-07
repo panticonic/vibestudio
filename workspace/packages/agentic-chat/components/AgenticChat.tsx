@@ -41,6 +41,8 @@ export interface AgenticChatProps {
   actions?: AgenticChatActions;
   /** Theme */
   theme?: "light" | "dark";
+  /** Whether this chat owns the viewport or fills an embedding container. */
+  heightMode?: "viewport" | "container";
   /** Agents installed for this channel; shown as pending until they join the roster */
   installedAgents?: Array<{ agentId: string; handle: string }>;
   /** If set, automatically sent as the first user message once connected */
@@ -85,6 +87,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     tools,
     actions,
     theme,
+    heightMode = "viewport",
     installedAgents: installedAgentInfos,
     initialPrompt,
     forceInitialPrompt,
@@ -141,7 +144,14 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
           Appearance flows from the explicitly-passed `theme` prop OR, when
           absent, the system / centralized appearance (resolved in useChatCore
           via resolveSystemTheme) — NEVER a hardcoded "dark" literal. */}
-      <Theme appearance={contextValue.theme} style={{ minWidth: 0, width: "100%", height: "100%" }}>
+      <Theme
+        appearance={contextValue.theme}
+        style={{
+          minWidth: 0,
+          width: "100%",
+          height: heightMode === "container" ? "100%" : "100dvh",
+        }}
+      >
         <ChatProvider value={contextValue} inputValue={inputContextValue}>
           <ChatPaletteCommands />
           <ChatLayout />
