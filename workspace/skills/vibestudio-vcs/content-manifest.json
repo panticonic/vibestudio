@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "240423d9e96ebf9ae367f0333a954b1bf863051a5d019ee770698ebae82945b5"
+      "sha256": "be7e8b8d9768ce77e05b059cdacd19cd13417291e399753899f0f5324b1b7032"
     },
     {
       "path": "agents/openai.yaml",
@@ -28,7 +28,7 @@
     },
     {
       "path": "references/compare-and-merge.md",
-      "sha256": "ee64970712f46d25d221452a8c68e93704a1d5aae3bce4a0cf3072339ac4e715"
+      "sha256": "a000d817828662b30aec76ab3b55b427adbc44fae72e9a87725cec8f64a1522e"
     },
     {
       "path": "references/contexts-and-state.md",
@@ -71,5 +71,5 @@
       "sha256": "d22ad51daf013c5d22dd9a08b52c995b53d0d8c49ba13354af8d289aa890dbc8"
     }
   ],
-  "packageDigest": "fd09574545a7b974bafe7b81e813fc09cfc77a18a4a286f7a4204e615f4e6bdd"
+  "packageDigest": "75685e4a72e37cbdbf71ef3c6c86d094fd5776e3024fc5abe35cb21328be5794"
 }

@@ -70,8 +70,22 @@ function fixture() {
     decisionId: "decision:merge",
     outcomes: [],
     resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
-    intents: [],
-    composed: [],
+    intents: [
+      {
+        workUnitId: "work:source",
+        side: "theirs" as const,
+        state: "merged" as const,
+        intent: { text: "Update the source", tier: "stated" as const },
+        coordinates: [{ kind: "file" as const, id: "file:source" }],
+      },
+    ],
+    composed: [
+      {
+        coordinate: { kind: "file" as const, id: "file:source" },
+        ours: { text: "Preserve the local validation", tier: "stated" as const },
+        theirs: { text: "Update the source", tier: "stated" as const },
+      },
+    ],
   }));
   const revert = vi.fn();
   const discard = vi.fn(async (input: Parameters<ToolWorkflowVcs["discard"]>[0]) => ({
@@ -282,7 +296,9 @@ describe("workspace VCS agent tool", () => {
     });
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("Decision decision:merge"),
+      text: expect.stringMatching(
+        /Decision decision:merge[\s\S]*Resolution: complete=true; concluded=true; remaining=0[\s\S]*Intent: theirs\/merged[\s\S]*Composed: file:file:source/
+      ),
     });
   });
 

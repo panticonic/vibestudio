@@ -173,7 +173,6 @@ function validateCheapFixtureFanout(result: TestExecutionResult) {
   }
 
   const orchestration = requireCompletedTools(result, {
-    inspect_subagent: 3,
     merge_subagent: 1,
     close_subagent: 3,
     provenance: 1,
@@ -453,7 +452,7 @@ export const agentOrchestrationTests: TestCase[] = [
     prompt: [
       "Build an extensive generated-fixture suite in the disposable package by delegating three independent workstreams to Pi subagents.",
       "Use a deliberately cheap generation model: for every spawn_subagent call, set agentKind:'pi' and the runtime config object exactly to { model:'openai-codex:gpt-5.3-codex-spark', thinkingLevel:'minimal' }; putting the model name in task text does not configure the child. Confirm each spawn result's launchConfig before supervising it. One child should generate Unicode and serialization edge cases, one state-machine transition cases, and one causality/provenance cases. Each corpus must be substantive, deterministic, typed, and committed in its child context.",
-      "Supervise all three runs, inspect both their workspace status and useful task-channel progress, integrate every corpus into this parent context, and close the children only after integration.",
+      "Supervise all three runs through their pushed progress and terminal results. After terminal delivery, integrate each corpus directly with merge_subagent; use inspect_subagent or read_subagent only if a merge or runtime result gives a concrete diagnostic reason. Close the children only after integration.",
       "Add a small typed index or test that proves all corpora load and have meaningful counts, run the package's focused verification, and commit the integrated result.",
       "Finally inspect provenance for at least one generated fixture file and use the causal evidence to explain which delegated run authored it. Report concrete child run IDs, files, counts, verification, and provenance.",
     ].join(" "),

@@ -96,6 +96,7 @@ import {
 
 import {
   vcsMethods,
+  type VcsCompareResult,
   type VcsMergeInput,
   type VcsMergeResult,
   type VcsNeighborsResult,
@@ -241,6 +242,62 @@ function sameState(left: VcsStateNodeRef, right: VcsStateNodeRef): boolean {
       ? right.kind === "event" && left.eventId === right.eventId
       : right.kind === "application" && left.applicationId === right.applicationId)
   );
+}
+
+const MAX_MODEL_VISIBLE_MERGE_REVIEW_ITEMS = 20;
+
+function appendBoundedReview<T>(
+  lines: string[],
+  label: string,
+  values: readonly T[],
+  render: (value: T) => string
+): void {
+  for (const value of values.slice(0, MAX_MODEL_VISIBLE_MERGE_REVIEW_ITEMS)) {
+    lines.push(`${label} ${render(value)}`);
+  }
+  if (values.length > MAX_MODEL_VISIBLE_MERGE_REVIEW_ITEMS) {
+    lines.push(
+      `${label} … ${values.length - MAX_MODEL_VISIBLE_MERGE_REVIEW_ITEMS} more in structured details`
+    );
+  }
+}
+
+function subagentMergeReviewText(input: {
+  headline: string;
+  sourceHeadline?: string;
+  intents: VcsMergeResult["intents"];
+  composed: VcsMergeResult["composed"];
+  conflicts: VcsCompareResult["coordinates"];
+  resolution: VcsMergeResult["resolution"];
+}): string {
+  const { resolution } = input;
+  const lines = [
+    input.headline,
+    `Resolution: complete=${resolution.complete}; concluded=${resolution.concluded}; remaining=${resolution.remainingCoordinateCount}.`,
+  ];
+  if (input.sourceHeadline) lines.push(`Source intent: ${input.sourceHeadline}`);
+  appendBoundedReview(
+    lines,
+    "Intent:",
+    input.intents,
+    (entry) =>
+      `${entry.side}${entry.state ? `/${entry.state}` : ""} · ${entry.intent.tier} · ${entry.intent.text}`
+  );
+  appendBoundedReview(
+    lines,
+    "Composed:",
+    input.composed,
+    (entry) =>
+      `${entry.coordinate.kind}:${entry.coordinate.id} · ours: ${entry.ours.text} · theirs: ${entry.theirs.text}`
+  );
+  appendBoundedReview(
+    lines,
+    "Conflict:",
+    input.conflicts,
+    (entry) =>
+      `${entry.coordinate.kind}:${entry.coordinate.id} · ${entry.summary} · resolutions: ${entry.resolutions.join("/")}`
+  );
+  return lines.join("\n");
 }
 
 function createSubagentVcsClient(rpcClient: RpcClient) {
@@ -6371,8 +6428,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.subagentRuns.touch(run.runId, Date.now());
 
     if (needsDecision) {
+      const headline =
+        `Merged the clean subagent coordinates; ` +
+        `${comparison.resolution.remainingCoordinateCount} coordinates require decisions.`;
       return this.toolText(
-        `merged the clean subagent coordinates; ${comparison.resolution.remainingCoordinateCount} coordinates require decisions`,
+        subagentMergeReviewText({
+          headline,
+          ...(sourceHeadline ? { sourceHeadline } : {}),
+          intents: comparison.intents,
+          composed: [...composed.values()],
+          conflicts,
+          resolution: comparison.resolution,
+        }),
         {
           protocol: SUBAGENT_MERGE_PROTOCOL,
           runId: subagentRunHandle(run.runId),
@@ -6391,10 +6458,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
 
     const changed = !sameState(workingHead, initialWorkingHead);
+    const headline = changed
+      ? `Merged subagent work into the local working chain; review ${composed.size} mechanically composed coordinates.`
+      : `Subagent ${subagentRunHandle(run.runId)} was already merged.`;
     return this.toolText(
-      changed
-        ? `merged subagent work into the local working chain; review ${composed.size} mechanically composed coordinates`
-        : `subagent ${run.runId} was already merged`,
+      subagentMergeReviewText({
+        headline,
+        ...(sourceHeadline ? { sourceHeadline } : {}),
+        intents: comparison.intents,
+        composed: [...composed.values()],
+        conflicts,
+        resolution: comparison.resolution,
+      }),
       {
         protocol: SUBAGENT_MERGE_PROTOCOL,
         runId: subagentRunHandle(run.runId),
@@ -6799,6 +6874,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             protocol: AGENTIC_PROTOCOL_VERSION,
             terminalOutcome: "success",
             summary: text,
+            result: {
+              protocolContent: [{ type: "text", text }],
+              details: {
+                runId: subagentRunHandle(run.runId),
+                outcome: "success",
+                ...(integration ? { integration } : {}),
+              },
+            },
             subagent,
           }
         : {

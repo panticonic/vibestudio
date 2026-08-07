@@ -19,17 +19,16 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
 
 ## Core workflow
 
-1. Run `vcs({ operation: "status" })` and keep the exact `workingHead`.
+1. Run `vcs({ operation: "status" })` when you need to orient to the current chain. Agent-facing mutations derive and bind the exact live `workingHead`; a separate status preflight is not required for every call.
 2. Inspect or read the smallest relevant surface. Managed reads may include a bounded memory attachment with intent and causality.
 3. Author with `edit`, `write`, `move_file`, or `copy_file`. Give `intent` only when it adds purpose beyond the request.
-4. For incoming work, compare the exact target with the event:
+4. For incoming work, call merge directly in the normal case. It safely selects one bounded clean page, never selects a conflict implicitly, and returns model-visible resolution, intents, and composed-review evidence. Use compare first only when you deliberately need a read-only preview:
 
    ```js
    vcs({ operation: "compare", sourceEventId: "event:...", limit: 500 })
    ```
 
-5. Review both views in the result:
-
+5. When you compare, review both views in the result:
    - `coordinates` is the mechanical surface: `adopt`, `convergent`, `composed`, `conflict`, or `resolved`, with aspect values and full attribution.
    - `intents` is the semantic surface. Its visible tier is `stated`, `trigger`, or `mechanical`; `split` and `contested` are prompts to inspect more deeply, never machine gates.
 
@@ -45,7 +44,6 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
 
 7. Review every returned `composed` entry. Deterministic non-overlapping text composition is mechanically safe, not a semantic approval.
 8. Resolve conflicts per coordinate:
-
    - `theirs`: accept the source coordinate;
    - `ours`: keep ours and explicitly decline the source coordinate;
    - `current`: accept the current head after you author the truthful combined result with ordinary edit tools.
@@ -63,8 +61,8 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
    })
    ```
 
-9. Compare again. Continue only until `complete` and `concluded` are both true. A convergent or net-zero source still needs one decision-only merge call to establish conclusion and ancestry.
-10. Run focused tests, commit the complete application chain, verify clean status, then push if requested.
+9. Use the merge result as the normal completion receipt. If it is incomplete, compare the remaining coordinates for conflict details or another clean page, then continue until `complete` and `concluded` are both true. A convergent or net-zero source still needs one decision-only merge call to establish conclusion and ancestry.
+10. Run focused tests and commit the complete application chain. The compact commit operation verifies that the context is clean at the committed event; request status separately only when you need additional orientation, then push if requested.
 
 ## Commit and publication
 

@@ -7,6 +7,7 @@ import type {
   VcsCommitResult,
   VcsDiscardResult,
   VcsInspectResult,
+  VcsMergeResult,
   VcsNeighborsResult,
   VcsSemanticNodeRef,
   VcsStatusResult,
@@ -204,6 +205,34 @@ function mutationText(verb: string, result: VcsWorkingMutationResult): string {
   );
 }
 
+function mergeText(result: VcsMergeResult): string {
+  const lines = [
+    `${mutationText("Merged coordinate page", result)} Decision ${result.decisionId}.`,
+    `Resolution: complete=${result.resolution.complete}; concluded=${result.resolution.concluded}; remaining=${result.resolution.remainingCoordinateCount}.`,
+  ];
+  const limit = 20;
+  for (const intent of result.intents.slice(0, limit)) {
+    lines.push(
+      `Intent: ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`
+    );
+  }
+  for (const entry of result.composed.slice(0, limit)) {
+    lines.push(
+      `Composed: ${entry.coordinate.kind}:${entry.coordinate.id} · ours: ${entry.ours.text} · theirs: ${entry.theirs.text}`
+    );
+  }
+  if (result.intents.length > limit) {
+    lines.push(`Intent: … ${result.intents.length - limit} more in structured details`);
+  }
+  if (result.composed.length > limit) {
+    lines.push(`Composed: … ${result.composed.length - limit} more in structured details`);
+  }
+  if (!result.resolution.complete || !result.resolution.concluded) {
+    lines.push("Compare the remaining coordinates for conflicts or another clean merge page.");
+  }
+  return lines.join("\n");
+}
+
 function edgeText(result: Pick<VcsInspectResult | VcsNeighborsResult, "edges">): string[] {
   return result.edges.map(
     (edge) =>
@@ -301,11 +330,7 @@ export function createWorkspaceVcsTool(
           ...(command.resolutions ? { resolutions: command.resolutions } : {}),
           ...(command.intent ? { intentSummary: command.intent } : {}),
         });
-        return resultOf(
-          command.operation,
-          `${mutationText("Merged coordinate page", result)} Decision ${result.decisionId}; ${result.resolution.remainingCoordinateCount} coordinates remain.`,
-          result
-        );
+        return resultOf(command.operation, mergeText(result), result);
       }
 
       if (command.operation === "revert") {

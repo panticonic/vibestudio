@@ -40,6 +40,8 @@ Treat `split` as the highest-priority semantic review signal. These states guide
 
 A merge call acts on at most one normalized result per coordinate and persists one decision even when it changes no facts. With no explicit coordinate list, it selects the first mergeable bounded page. Conflicts are never selected implicitly.
 
+For the agent-facing tool, direct merge is the normal happy path: it derives the exact live target and returns a bounded, model-visible review packet. A separate status or compare preflight is optional. Compare first when you need a read-only preview, and compare after merge only when its resolution is incomplete or you need deeper coordinate evidence.
+
 ```js
 vcs({
   operation: "merge",
@@ -50,7 +52,7 @@ vcs({
 
 For direct service callers, the source is `{ kind: "event", eventId }` or `{ kind: "external-delta", deltaId }`. The compact tool exposes `sourceEventId` and maps it to the event source.
 
-Always inspect `composed`. Each item names the coordinate and both resolved intents. Hunk-composed content is a new authored merge change with exact mapped content lineage to both parents.
+Always inspect the merge result's model-visible `composed` entries. Each item names the coordinate and both resolved intents; the full packet also remains in structured details. Hunk-composed content is a new authored merge change with exact mapped content lineage to both parents.
 
 ## Resolve a coordinate
 

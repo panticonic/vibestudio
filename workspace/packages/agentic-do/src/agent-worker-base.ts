@@ -579,7 +579,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "inspect_subagent",
         label: "inspect_subagent",
         description:
-          "Inspect a subagent. Use 'status', bounded parent-relative 'diff'/'log', or a file path for semantic workspace state. 'diff' compares the parent's current working head with the child's committed event and reports any additional uncommitted child counts separately. Use 'runtime' for bounded process/log diagnostics from an external engine such as Claude. Use read_subagent for what the child said.",
+          "Optional subagent diagnostics; no inspection preflight is required before merge_subagent. Use 'status', bounded parent-relative 'diff'/'log', or a file path for semantic workspace state when a merge result or investigation gives a concrete reason. 'diff' compares the parent's current working head with the child's committed event and reports any additional uncommitted child counts separately. Use 'runtime' for bounded process/log diagnostics from an external engine such as Claude. Use read_subagent for what the child said.",
         parameters: {
           type: "object",
           properties: {
@@ -631,7 +631,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "merge_subagent",
         label: "merge_subagent",
         description:
-          "Merge a subagent's committed net effect into your local working state. Returns intents first, a composed-review checklist, and any coordinate conflicts. Pass resolutions after editing a truthful combined result or choosing ours/theirs. This does not commit or publish your work.",
+          "Merge a subagent's committed net effect into your local working state. Call this directly after terminal delivery; it derives exact child/parent status and comparison without an inspect preflight. Returns model-visible resolution, intents, a composed-review checklist, and coordinate conflicts. Pass resolutions after editing a truthful combined result or choosing ours/theirs. This does not commit or publish your work.",
         parameters: {
           type: "object",
           properties: {

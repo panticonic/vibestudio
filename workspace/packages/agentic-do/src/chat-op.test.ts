@@ -2792,7 +2792,13 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       outcomes: [],
       resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
       intents: [],
-      composed: [],
+      composed: [
+        {
+          coordinate: { kind: "file", id: "one" },
+          ours: { tier: "mechanical", text: "Keep the parent index" },
+          theirs: { tier: "trigger", text: "Build the fixture corpus" },
+        },
+      ],
     });
 
     const result = await probe.mergeSubagentForTest(runId);
@@ -2806,6 +2812,12 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       workingHead: integrated,
       merges: [expect.objectContaining({ decisionId: "decision:1" })],
       sourceHeadline: "asked by user:owner: Build the fixture corpus",
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(
+        /Resolution: complete=true; concluded=true; remaining=0[\s\S]*Source intent: asked by user:owner[\s\S]*Composed: file:one/
+      ),
     });
     expect(probe.subagentRunForTest(runId)?.integration).toBe("merged");
     const vcsCalls = probe.rpcCalls.filter(
@@ -3395,6 +3407,15 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(
       probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-terminal:inv-1")
     ).toBe(true);
+    expect(
+      probe.channelStub.published.find((p) => p.idempotencyKey === "subagent-terminal:inv-1")?.event
+        .payload
+    ).toMatchObject({
+      result: {
+        protocolContent: [{ type: "text", text: "All checks passed." }],
+        details: { runId: "inv-1", outcome: "success" },
+      },
+    });
     expect(probe.handleIncomingSpy).toHaveBeenCalledWith(
       CHANNEL,
       expect.objectContaining({
