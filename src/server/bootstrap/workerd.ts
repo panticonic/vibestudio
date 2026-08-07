@@ -18,6 +18,7 @@ import type { DORef } from "../workerdRpcRelay.js";
 import type { RpcServer } from "../rpcServer.js";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
+import { WorkspaceRpcMethodUndeclaredError } from "../workspaceRpcCatalogMismatch.js";
 
 export interface WorkerdGatewayBootstrapConfig {
   getPort(): number | null;
@@ -105,7 +106,7 @@ export function resolveWorkerdServerAliasUrls(config: WorkerdGatewayBootstrapCon
  * fail before crossing the receiver boundary.
  */
 export function createHostDoAuthorityAttester(input: {
-  manager: Pick<WorkerdManager, "resolveDoRpcMethodAuthority">;
+  manager: Pick<WorkerdManager, "resolveDoRpcMethodAuthority" | "describeDoRpcCatalog">;
   workspaceId: string;
   services: WorkspaceDeclarations["services"];
   callerId?: string;
@@ -165,9 +166,15 @@ export function createHostDoAuthorityAttester(input: {
             method
           );
     if (!methodAuthority) {
-      throw new Error(
-        `Live workspace service ${ref.source}:${ref.className}.${method} has no exact build-catalog declaration`
-      );
+      const catalog = input.manager.describeDoRpcCatalog(ref.source, ref.className, ref.objectKey);
+      throw new WorkspaceRpcMethodUndeclaredError({
+        source: ref.source,
+        className: ref.className,
+        objectKey: ref.objectKey,
+        method,
+        serviceName: service.name,
+        ...catalog,
+      });
     }
     const receiver = methodAuthority.userlandCapability;
     const resolvedHandle =

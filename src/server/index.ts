@@ -57,6 +57,7 @@ import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot
 import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import { hostBuildOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
+import { WorkspaceRpcMethodUndeclaredError } from "./workspaceRpcCatalogMismatch.js";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
@@ -4409,9 +4410,20 @@ async function main() {
                 : undefined;
             const hostIntrinsic = isHostIntrinsicDirectMethod(method);
             if (!catalogMethod && !hostIntrinsic) {
-              throw new Error(
-                `Live workspace service ${source}:${className}.${method} has no exact build-catalog declaration`
-              );
+              throw new WorkspaceRpcMethodUndeclaredError({
+                source,
+                className,
+                objectKey,
+                method,
+                serviceName: matches[0]?.name,
+                activeBuildKey: active?.activeBuildKey ?? null,
+                declaredMethods:
+                  build && "metadata" in build && build.metadata.kind === "worker"
+                    ? (build.metadata.workspaceRpcCatalog ?? [])
+                        .filter((entry) => entry.className === className)
+                        .map((entry) => entry.name)
+                    : [],
+              });
             }
             if (
               catalogMethod?.effect.kind === "userland-capability" &&

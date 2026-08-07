@@ -1967,6 +1967,29 @@ export class WorkerdManager {
       : null;
   }
 
+  describeDoRpcCatalog(
+    source: string,
+    className: string,
+    objectKey: string
+  ): { activeBuildKey: string | null; declaredMethods: string[] } {
+    if (isInternalDOSource(source)) return { activeBuildKey: null, declaredMethods: [] };
+    const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
+    const service = this.doServices.get(doServiceKey(source, className));
+    const activeBuildKey = objectBuild?.buildKey ?? service?.buildKey ?? null;
+    if (!activeBuildKey) return { activeBuildKey, declaredMethods: [] };
+    const build = this.requireWorkspaceProvider("direct DO catalog").getBuildByKey(activeBuildKey);
+    if (!build || build.metadata.kind !== "worker") {
+      return { activeBuildKey, declaredMethods: [] };
+    }
+    return {
+      activeBuildKey,
+      declaredMethods: (build.metadata.workspaceRpcCatalog ?? [])
+        .filter((entry) => entry.className === className)
+        .map((entry) => entry.name)
+        .sort(),
+    };
+  }
+
   /**
    * Serializable code + env for a userland DO class, for the UniversalDO facet
    * host. Mirrors the per-class DO service bindings the old static config
