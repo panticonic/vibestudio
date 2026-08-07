@@ -33,6 +33,7 @@ let typecheckDiagnostics: (unitRelativePath: string) => Array<{
   column: number;
   message: string;
 }> = () => [];
+let typecheckCalls = 0;
 // Records every non-cache-hit build the mock actually performs.
 let buildCalls: Array<{ name: string; key: string; stateRef: string }> = [];
 
@@ -120,9 +121,10 @@ async function loadWithMocks(): Promise<{
   });
 
   vi.doMock("./typecheckFold.js", () => ({
-    typecheckUnit: vi.fn(async (unitRelativePath: string) =>
-      typecheckDiagnostics(unitRelativePath)
-    ),
+    typecheckUnit: vi.fn(async (unitRelativePath: string) => {
+      typecheckCalls += 1;
+      return typecheckDiagnostics(unitRelativePath);
+    }),
   }));
 
   vi.doMock("./builder.js", async () => {
@@ -208,6 +210,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
   beforeEach(() => {
     shouldFail = () => false;
     typecheckDiagnostics = () => [];
+    typecheckCalls = 0;
     buildCalls = [];
   });
 
@@ -223,6 +226,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
 
     const first = await buildSystem.getBuildReport("@workspace/lib", CANDIDATE_VIEW);
     const buildsAfterFirst = buildCalls.length;
+    const typechecksAfterFirst = typecheckCalls;
     expect(buildsAfterFirst).toBeGreaterThan(0);
     expect(first).toMatchObject({
       repoPath: "packages/lib",
@@ -239,7 +243,50 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(second).toEqual(first);
     expect(persistEvState).not.toHaveBeenCalled();
     expect(buildCalls.length).toBe(buildsAfterFirst);
+    expect(typecheckCalls).toBe(typechecksAfterFirst);
   }, 15_000);
+
+  it("coalesces concurrent reports for the same immutable unit view", async () => {
+    env = await loadWithMocks();
+
+    const [first, second, third] = await Promise.all([
+      env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW),
+      env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW),
+      env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW),
+    ]);
+
+    expect(second).toEqual(first);
+    expect(third).toEqual(first);
+    expect(typecheckCalls).toBe(1);
+  });
+
+  it("does not retain reports produced by transient validation failures", async () => {
+    let attempt = 0;
+    typecheckDiagnostics = () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error("temporary typecheck worker failure");
+      return [];
+    };
+    env = await loadWithMocks();
+
+    const first = await env.buildSystem.getBuildReport(
+      "@workspace-panels/app",
+      CANDIDATE_VIEW
+    );
+    const second = await env.buildSystem.getBuildReport(
+      "@workspace-panels/app",
+      CANDIDATE_VIEW
+    );
+
+    expect(first).toMatchObject({
+      status: "failed",
+      diagnostics: [
+        expect.objectContaining({ message: expect.stringContaining("temporary typecheck") }),
+      ],
+    });
+    expect(second).toMatchObject({ status: "ok", diagnostics: [] });
+    expect(typecheckCalls).toBe(2);
+  });
 
   it("resolves context selectors to exact content before building a report", async () => {
     env = await loadWithMocks();

@@ -1223,7 +1223,7 @@ export async function initBuildSystemV2(
     graphAtView: PackageGraph,
     viewStateHash: string,
     spec: { target: "runtime" } | { target: "library:panel" | "library:worker"; exportPath: string }
-  ): Promise<UnitBuildTarget> => {
+  ): Promise<{ target: UnitBuildTarget; reusable: boolean }> => {
     const libraryTarget: LibraryBuildTarget | null =
       spec.target === "library:panel"
         ? "panel"
@@ -1243,10 +1243,14 @@ export async function initBuildSystemV2(
     let diagnostics: BuildDiagnostic[] = [];
     let buildError: unknown = null;
     let built: BuildResult | null = null;
+    let reusable = true;
     try {
       built = await buildUnit(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
     } catch (error) {
       buildError = error;
+      // Build failures can include transient storage or dependency provisioning
+      // faults. Keep the fail-closed report, but let the next request retry it.
+      reusable = false;
     }
 
     // Fold typecheck diagnostics from the exact materialized source. This is
@@ -1281,6 +1285,7 @@ export async function initBuildSystemV2(
           (await viewAt(viewStateHash)).evMap
         );
       } catch (error) {
+        reusable = false;
         diagnostics.push({
           source: "authority",
           severity: "error",
@@ -1307,6 +1312,7 @@ export async function initBuildSystemV2(
       );
       diagnostics = [...diagnostics, ...tsc];
     } catch (err) {
+      reusable = false;
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[BuildV2] typecheck materialize failed for ${node.name}:`, message);
       diagnostics.push({
@@ -1327,12 +1333,15 @@ export async function initBuildSystemV2(
 
     recordDiagnostics(node.name, buildKey, diagnostics);
     return {
-      target: spec.target,
-      ...(spec.target !== "runtime"
-        ? { exportPath: (spec as { exportPath: string }).exportPath }
-        : {}),
-      buildKey,
-      diagnostics,
+      target: {
+        target: spec.target,
+        ...(spec.target !== "runtime"
+          ? { exportPath: (spec as { exportPath: string }).exportPath }
+          : {}),
+        buildKey,
+        diagnostics,
+      },
+      reusable,
     };
   };
 
@@ -1389,7 +1398,7 @@ export async function initBuildSystemV2(
     node: GraphNode,
     view: GraphView,
     viewStateHash: string
-  ): Promise<UnitBuildReport> => {
+  ): Promise<{ report: UnitBuildReport; reusable: boolean }> => {
     const ev = view.evMap[node.name];
     const base: Omit<UnitBuildReport, "status" | "diagnostics" | "builds"> = {
       repoPath: node.relativePath,
@@ -1397,30 +1406,63 @@ export async function initBuildSystemV2(
       kind: node.kind,
     };
     if (!ev) {
-      return { ...base, status: "skipped", diagnostics: [], builds: [] };
+      return {
+        report: { ...base, status: "skipped", diagnostics: [], builds: [] },
+        reusable: true,
+      };
     }
     if (node.kind === "template") {
-      return { ...base, status: "skipped", diagnostics: [], builds: [] };
+      return {
+        report: { ...base, status: "skipped", diagnostics: [], builds: [] },
+        reusable: true,
+      };
     }
 
-    const builds: UnitBuildTarget[] = [];
+    const outcomes: Array<{ target: UnitBuildTarget; reusable: boolean }> = [];
     if (node.kind === "package") {
       const targets = libraryTargetsForDependents(node.name, view.graph);
       const exports = packageExportPaths(node);
       for (const target of targets) {
         for (const exportPath of exports) {
-          builds.push(
+          outcomes.push(
             await buildOneTarget(node, ev, view.graph, viewStateHash, { target, exportPath })
           );
         }
       }
     } else {
-      builds.push(await buildOneTarget(node, ev, view.graph, viewStateHash, { target: "runtime" }));
+      outcomes.push(
+        await buildOneTarget(node, ev, view.graph, viewStateHash, { target: "runtime" })
+      );
     }
 
+    const builds = outcomes.map((outcome) => outcome.target);
     const diagnostics = builds.flatMap((build) => build.diagnostics);
     const failed = hasErrors(diagnostics);
-    return { ...base, status: failed ? "failed" : "ok", diagnostics, builds };
+    return {
+      report: { ...base, status: failed ? "failed" : "ok", diagnostics, builds },
+      reusable: outcomes.every((outcome) => outcome.reusable),
+    };
+  };
+
+  // A report is a pure projection of an immutable workspace state and unit.
+  // Successful validation is substantially more expensive than artifact reuse,
+  // so retain the complete projection instead of rerunning materialization,
+  // authority analysis, and TypeScript on every diagnostics read. Transient
+  // infrastructure failures are marked non-reusable by buildUnitReport.
+  const MAX_BUILD_REPORTS = 256;
+  const buildReportCache = new Map<string, UnitBuildReport>();
+  const buildReportFlights = new Map<string, Promise<UnitBuildReport>>();
+  const reportCacheKey = (viewStateHash: string, unitName: string): string =>
+    `${viewStateHash}\0${unitName}`;
+  const cacheBuildReport = (key: string, report: UnitBuildReport): UnitBuildReport => {
+    buildReportCache.delete(key);
+    buildReportCache.set(key, report);
+    while (buildReportCache.size > MAX_BUILD_REPORTS) {
+      const oldest = buildReportCache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      buildReportCache.delete(oldest);
+    }
+    return report;
   };
 
   const getBuild = async function getBuild(
@@ -2065,7 +2107,26 @@ export async function initBuildSystemV2(
           builds: [],
         };
       }
-      return buildUnitReport(node, view, viewStateHash);
+      const cacheKey = reportCacheKey(viewStateHash, node.name);
+      const cached = buildReportCache.get(cacheKey);
+      if (cached) {
+        // Map insertion order is the LRU order.
+        buildReportCache.delete(cacheKey);
+        buildReportCache.set(cacheKey, cached);
+        return cached;
+      }
+      const pending = buildReportFlights.get(cacheKey);
+      if (pending) return pending;
+
+      const flight = buildUnitReport(node, view, viewStateHash)
+        .then(({ report, reusable }) =>
+          reusable ? cacheBuildReport(cacheKey, report) : report
+        )
+        .finally(() => {
+          buildReportFlights.delete(cacheKey);
+        });
+      buildReportFlights.set(cacheKey, flight);
+      return flight;
     },
 
     getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null {
