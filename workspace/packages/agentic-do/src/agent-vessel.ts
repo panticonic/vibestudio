@@ -59,6 +59,7 @@ import {
 } from "@workspace/agentic-protocol";
 import { sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import {
   createDeferredEvalExecutor,
   evalAuthorityInputSchema,
@@ -639,6 +640,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   private blobTextCacheBytes = 0;
   private readonly alarmSources = new Map<string, AgentAlarmSource>();
   private readonly alarmDeadlines = new Map<string, number>();
+  private readonly subagentTerminalChains = new Map<string, Promise<unknown>>();
   /** Derived scheduling state only; the durable trace rows remain authoritative. */
   private readonly hotPathTraceInsertsSinceSweep = new Map<string, number>();
   /**
@@ -6708,24 +6710,39 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     report?: unknown;
     outcome?: "success" | "failed";
   }): Promise<void> {
+    const callerId = this.rpcCallerId;
     const run = await this.resolveSubagentRun(payload.runId, payload.channelId);
     if (!run) return; // unknown / already torn down — idempotent
-    if (this.rpcCallerId !== run.childEntityId) {
+    await serializeByKey(this.subagentTerminalChains, run.parentChannelId, async () => {
+      const current = await this.resolveSubagentRun(payload.runId, payload.channelId);
+      if (!current) return;
+      await this.onSubagentCompleteSerial(current, payload, callerId);
+    });
+  }
+
+  /** Serialize terminal delivery per supervisor channel so concurrent siblings
+   *  observe one another's settled status and produce a truthful live snapshot. */
+  private async onSubagentCompleteSerial(
+    run: SubagentRunRow,
+    payload: { report?: unknown; outcome?: "success" | "failed" },
+    callerId: string | null
+  ): Promise<void> {
+    if (callerId !== run.childEntityId) {
       throw new Error(
-        `onSubagentComplete: refusing caller ${this.rpcCallerId ?? "unknown"} — not the owning subagent for ${payload.runId}`
+        `onSubagentComplete: refusing caller ${callerId ?? "unknown"} — not the owning subagent for ${run.runId}`
       );
     }
     if (run.status !== "starting" && run.status !== "running") return; // already terminal
     const outcome: "completed" | "failed" = payload.outcome === "failed" ? "failed" : "completed";
     const reportText =
       typeof payload.report === "string" ? payload.report : JSON.stringify(payload.report ?? null);
-    this.subagentRuns.touch(payload.runId, Date.now());
+    this.subagentRuns.touch(run.runId, Date.now());
     await this.settleSubagentTerminal(run, outcome, reportText, run.integration ?? undefined, {
-      wakeParent: true,
+      notifyParent: true,
     });
   }
 
-  /** Publish the terminal subagent card and wake the parent, then mark the run
+  /** Publish the terminal subagent card and notify the parent, then mark the run
    *  terminal to keep delivery retryable if either terminal side effect fails.
    *  `spawn_subagent`
    *  returns when the child is launched; child completion is a later event, not
@@ -6736,28 +6753,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     outcome: "completed" | "failed" | "cancelled" | "abandoned",
     text: string,
     integration?: SubagentRunIntegration,
-    opts: { wakeParent?: boolean } = {}
+    opts: { notifyParent?: boolean } = {}
   ): Promise<void> {
     await this.publishSubagentTerminal(run, outcome, text, integration);
-    if (opts.wakeParent) {
-      const liveSiblings = this.subagentRuns
-        .listLive()
-        .filter(
-          (candidate) =>
-            candidate.runId !== run.runId && candidate.parentChannelId === run.parentChannelId
-        );
-      // A supervisor delegates one user goal across a sibling group. Individual
-      // terminals update their invocation cards immediately, but resuming the
-      // model for the first finisher encourages it to finalize the whole goal.
-      // The final sibling is the aggregate lifecycle barrier.
-      if (liveSiblings.length === 0) {
-        await this.wakeParentForSubagentTerminal(run, outcome, text);
-      }
+    if (opts.notifyParent) {
+      await this.notifyParentOfSubagentTerminal(run, outcome, text);
     }
     this.subagentRuns.setStatus(run.runId, outcome === "completed" ? "completed" : outcome);
   }
 
-  private async wakeParentForSubagentTerminal(
+  private async notifyParentOfSubagentTerminal(
     run: SubagentRunRow,
     outcome: "completed" | "failed" | "cancelled" | "abandoned",
     text: string
@@ -6765,9 +6770,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const outcomeLabel = outcome === "completed" ? "completed" : outcome;
     const label = run.label ? `"${run.label}"` : run.runId;
     const report = text.trim();
+    const liveSiblings = this.subagentRuns
+      .listLive()
+      .filter(
+        (candidate) =>
+          candidate.runId !== run.runId && candidate.parentChannelId === run.parentChannelId
+      );
     const siblingSummary = this.subagentRuns
       .listAll()
-      .filter((candidate) => candidate.parentChannelId === run.parentChannelId)
+      .filter(
+        (candidate) =>
+          candidate.status !== "closed" && candidate.parentChannelId === run.parentChannelId
+      )
       .map((candidate) => {
         const status =
           candidate.runId === run.runId
@@ -6778,14 +6792,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         return `- ${subagentRunHandle(candidate.runId)} (${candidate.label || "unlabeled"}): ${status}`;
       })
       .join("\n");
+    const next =
+      liveSiblings.length > 0
+        ? `${liveSiblings.length} other supervised subagent${liveSiblings.length === 1 ? " remains" : "s remain"} live. ` +
+          `Handle this terminal result now: merge or otherwise resolve its work, then close the run. ` +
+          `Do not finalize the user's goal while the remaining subagents are live. Continue useful ` +
+          `foreground work, or call suspend_turn again if only background work remains.`
+        : `No other supervised subagents remain live. Handle this terminal result now, finish ` +
+          `integrating and closing the supervised runs, then continue the full user goal.`;
     const content = [`Subagent ${label} ${outcomeLabel}.`, report ? `Report:\n${report}` : ""]
       .filter(Boolean)
       .concat(
-        `This is a lifecycle result for the existing user request, not a new request. ` +
-          `All subagents currently owned by this supervisor channel are now terminal.`,
+        `This is a lifecycle result for the existing user request, not a new request.`,
         siblingSummary ? `Supervised runs:\n${siblingSummary}` : "",
-        `Next: continue the full user goal. Inspect, integrate as needed, and close every ` +
-          `supervised run before finalizing. A read-only or unchanged subagent can be closed directly.`
+        `Next: ${next}`
       )
       .filter(Boolean)
       .join("\n\n");

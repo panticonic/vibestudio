@@ -205,7 +205,7 @@ Add a per-subscription **`wakePolicy`** to the subscription config (`Subscriptio
 - `"explicit"` — retain envelopes without turning ordinary child output or `turn.closed` into prompts; wake only on `say`-flagged or directly addressed messages. The full transcript stays in the task channel for inspection, while bounded progress is projected onto the parent invocation card.
 - `"manual"` — never auto-wake; the parent reads the channel only when its own turn logic asks, via a `read_subagent` local tool (returns the task channel's envelopes since the parent's cursor).
 
-Supervisor default: `"explicit"`. This prevents background progress from replacing the supervisor's user goal while preserving intentional child-to-parent updates. Each terminal updates its invocation card, but a sibling group forms one lifecycle barrier: only the final terminal sibling resumes the supervisor with the aggregate run summary.
+Supervisor default: `"explicit"`. This prevents background progress from replacing the supervisor's user goal while preserving intentional child-to-parent updates. Each terminal updates its invocation card and resumes the supervisor so the completed run can be integrated and closed immediately. If sibling runs remain live, the supervisor continues useful foreground work or suspends again without finalizing the user's goal.
 
 ### B4. Subagent chattiness: publish policy + `say` tool
 

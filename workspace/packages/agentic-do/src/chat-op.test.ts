@@ -3489,14 +3489,12 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     );
     expect(probe.handleIncomingSpy.mock.calls[0]?.[1]).toMatchObject({
       command: {
-        content: expect.stringContaining(
-          "All subagents currently owned by this supervisor channel are now terminal"
-        ),
+        content: expect.stringContaining("No other supervised subagents remain live"),
       },
     });
   });
 
-  it("resumes the supervisor only after the whole sibling group is terminal", async () => {
+  it("resumes the supervisor after every sibling terminal", async () => {
     const probe = await makeSubagentSpawnProbe();
     await probe.spawnForTest(CHANNEL, "inv-1", {
       mode: "fresh",
@@ -3513,23 +3511,99 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
 
     expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
     expect(probe.subagentRunForTest("inv-2")).toMatchObject({ status: "running" });
-    expect(probe.handleIncomingSpy).not.toHaveBeenCalled();
+    expect(probe.handleIncomingSpy).toHaveBeenCalledOnce();
+    const firstWake = probe.handleIncomingSpy.mock.calls[0]?.[1] as {
+      command?: { source?: { envelopeId?: string }; content?: string };
+    };
+    expect(firstWake.command?.source?.envelopeId).toBe("subagent-terminal:inv-1:completed");
+    expect(firstWake.command?.content).toContain("First result.");
+    expect(firstWake.command?.content).toContain("1 other supervised subagent remains live");
+    expect(firstWake.command?.content).toContain("inv-1 (first audit): completed");
+    expect(firstWake.command?.content).toContain("inv-2 (second audit): running");
+    expect(firstWake.command?.content).toContain(
+      "Do not finalize the user's goal while the remaining subagents are live"
+    );
 
     await probe.completeSubagentForTest("inv-2", "Second result.", "success");
 
     expect(probe.subagentRunForTest("inv-2")).toMatchObject({ status: "completed" });
+    expect(probe.handleIncomingSpy).toHaveBeenCalledTimes(2);
+    const secondWake = probe.handleIncomingSpy.mock.calls[1]?.[1] as {
+      command?: { source?: { envelopeId?: string }; content?: string };
+    };
+    expect(secondWake.command?.source?.envelopeId).toBe("subagent-terminal:inv-2:completed");
+    expect(secondWake.command?.content).toContain("Second result.");
+    expect(secondWake.command?.content).toContain("No other supervised subagents remain live");
+    expect(secondWake.command?.content).toContain("inv-1 (first audit): completed");
+    expect(secondWake.command?.content).toContain("inv-2 (second audit): completed");
+  });
+
+  it("notifies the supervisor for a failed child while a sibling remains live", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "blocked audit",
+      task: "audit the blocked area",
+    });
+    await probe.spawnForTest(CHANNEL, "inv-2", {
+      mode: "fresh",
+      label: "continuing audit",
+      task: "audit the continuing area",
+    });
+
+    await probe.completeSubagentForTest("inv-1", "Blocked by invalid input.", "failed");
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "failed" });
+    expect(probe.subagentRunForTest("inv-2")).toMatchObject({ status: "running" });
     expect(probe.handleIncomingSpy).toHaveBeenCalledOnce();
     expect(probe.handleIncomingSpy.mock.calls[0]?.[1]).toMatchObject({
       command: {
-        channelId: CHANNEL,
-        content: expect.stringContaining("All subagents currently owned"),
+        source: { envelopeId: "subagent-terminal:inv-1:failed" },
+        content: expect.stringContaining("Blocked by invalid input."),
       },
     });
-    const wake = probe.handleIncomingSpy.mock.calls[0]?.[1] as {
-      command?: { content?: string };
-    };
-    expect(wake.command?.content).toContain("inv-1 (first audit): completed");
-    expect(wake.command?.content).toContain("inv-2 (second audit): completed");
+  });
+
+  it("delivers each near-simultaneous sibling terminal exactly once", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "first audit",
+      task: "audit the first area",
+    });
+    await probe.spawnForTest(CHANNEL, "inv-2", {
+      mode: "fresh",
+      label: "second audit",
+      task: "audit the second area",
+    });
+
+    await Promise.all([
+      probe.completeSubagentForTest("inv-1", "First result.", "success"),
+      probe.completeSubagentForTest("inv-2", "Second result.", "success"),
+    ]);
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
+    expect(probe.subagentRunForTest("inv-2")).toMatchObject({ status: "completed" });
+    expect(probe.handleIncomingSpy).toHaveBeenCalledTimes(2);
+    const envelopeIds = probe.handleIncomingSpy.mock.calls.map(
+      (call) =>
+        (call[1] as { command?: { source?: { envelopeId?: string } } }).command?.source?.envelopeId
+    );
+    expect(envelopeIds).toEqual(
+      expect.arrayContaining([
+        "subagent-terminal:inv-1:completed",
+        "subagent-terminal:inv-2:completed",
+      ])
+    );
+    const wakeContents = probe.handleIncomingSpy.mock.calls.map(
+      (call) => (call[1] as { command?: { content?: string } }).command?.content
+    );
+    expect(wakeContents).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("1 other supervised subagent remains live"),
+        expect.stringContaining("No other supervised subagents remain live"),
+      ])
+    );
   });
 
   it("keeps child completion retryable when waking the parent fails", async () => {

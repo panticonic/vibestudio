@@ -5,7 +5,7 @@ Subagents are supervised child agents with their own task channel and semantic w
 ## Parent workflow
 
 1. `spawn_subagent` with one bounded task and a useful label. Use `fresh` for independent work and `fork` when the child needs the current trajectory context.
-2. Keep doing useful foreground work. Child progress is pushed to the parent; do not poll an empty transcript.
+2. Keep doing useful foreground work. Child progress is pushed to the parent; do not poll an empty transcript. Every terminal child result resumes the supervisor so that run can be integrated and closed immediately. If sibling runs remain live afterward, continue useful foreground work or suspend again; do not finalize the user's goal while supervised runs remain live.
 3. Use `send_to_subagent` only for new instructions. The child must commit its semantic work and call `complete` with a concise result; that report arrives in the terminal tool result. Uncommitted child work cannot merge.
 4. After terminal delivery, call `merge_subagent({ runId })` directly. No status, diff, log, or transcript preflight is required. The helper derives both exact states, compares them, and invokes the ordinary coordinate merge engine.
 5. Review the model-visible resolution, `intents`, and every `composed` entry. A mechanically composed coordinate still needs semantic review.
