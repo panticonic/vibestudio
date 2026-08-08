@@ -55,6 +55,24 @@ function safeWorktreeJoin(dir: string, relPath: string): string {
 
 const SIDECAR_DIR = ".gad";
 const SIDECAR_FILE = "CHECKOUT.json";
+const FILE_INGEST_CONCURRENCY = 8;
+
+async function mapConcurrent<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  project: (value: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next++;
+      results[index] = await project(values[index]!, index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 interface ContentFileEntry {
   path: string;
@@ -318,10 +336,8 @@ export class ContentProjectionStore {
     scanned: ScannedFile[],
     sidecar: SidecarState
   ): Promise<{ files: ContentFileEntry[]; entries: Record<string, SidecarEntry> }> {
-    const files: ContentFileEntry[] = [];
-    const entries: Record<string, SidecarEntry> = {};
     const trustedBefore = sidecar.scannedAtMs - ContentProjectionStore.RACY_MTIME_WINDOW_MS;
-    for (const file of scanned) {
+    const hashed = await mapConcurrent(scanned, FILE_INGEST_CONCURRENCY, async (file) => {
       const cached = sidecar.files[file.path];
       let contentHash: string;
       if (
@@ -334,14 +350,19 @@ export class ContentProjectionStore {
       } else {
         contentHash = (await putFile(this.deps.blobsDir, file.absPath)).digest;
       }
-      files.push({ path: file.path, contentHash, size: file.size, mode: file.mode });
-      entries[file.path] = {
-        contentHash,
-        size: file.size,
-        mtimeMs: file.mtimeMs,
-        mode: file.mode,
+      return {
+        file: { path: file.path, contentHash, size: file.size, mode: file.mode },
+        sidecar: {
+          contentHash,
+          size: file.size,
+          mtimeMs: file.mtimeMs,
+          mode: file.mode,
+        },
       };
-    }
+    });
+    const entries: Record<string, SidecarEntry> = {};
+    for (const [index, result] of hashed.entries()) entries[scanned[index]!.path] = result.sidecar;
+    const files = hashed.map((result) => result.file);
     return { files, entries };
   }
 
