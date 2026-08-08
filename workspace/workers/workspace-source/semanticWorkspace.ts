@@ -1255,15 +1255,19 @@ export class SemanticWorkspace {
         const method = String(pending.payload["method"]);
         const commandInput = pending.payload["input"] as Row;
         if (method === "importSnapshot") {
+          const profileStartedAt = Date.now();
           const importInput = parseVcsSemanticRequest("importSnapshot", commandInput)
             .input as VcsImportSnapshotInput;
+          const parseCompletedAt = Date.now();
           const planned = this.planImportSnapshot(importInput, input.receipt);
+          const planCompletedAt = Date.now();
           const working = this.persistWorkingMutation(
             importInput,
             planned.draft,
             pending.commandId,
             persistedEffectIntegrity(pending.payload)
           );
+          const persistCompletedAt = Date.now();
           const committed = this.deps.store.commit({
             contextId: importInput.contextId,
             expectedWorkingHead: working.workingHead,
@@ -1278,6 +1282,7 @@ export class SemanticWorkspace {
             integratesEventIds: [],
             maxApplications: MAX_WORKING_APPLICATIONS,
           });
+          const commitCompletedAt = Date.now();
           const result = {
             contextId: importInput.contextId,
             eventId: committed.event.eventId,
@@ -1294,6 +1299,7 @@ export class SemanticWorkspace {
             [],
             planned.draft
           );
+          const materializationPlanCompletedAt = Date.now();
           this.deps.store.updatePendingCommandResult({
             scopeKind: "context",
             scopeId: importInput.contextId,
@@ -1301,6 +1307,24 @@ export class SemanticWorkspace {
             result,
           });
           this.deps.store.compactAppliedObservation(pending.effectId);
+          const journalCompletedAt = Date.now();
+          const totalMs = journalCompletedAt - profileStartedAt;
+          if (totalMs >= 100) {
+            console.info("[VcsProfile] import snapshot acknowledgement", {
+              repositories: importInput.repositories.length,
+              files: importInput.repositories.reduce(
+                (count, repository) => count + repository.files.length,
+                0
+              ),
+              parseMs: parseCompletedAt - profileStartedAt,
+              planMs: planCompletedAt - parseCompletedAt,
+              persistMs: persistCompletedAt - planCompletedAt,
+              commitMs: commitCompletedAt - persistCompletedAt,
+              materializationPlanMs: materializationPlanCompletedAt - commitCompletedAt,
+              journalMs: journalCompletedAt - materializationPlanCompletedAt,
+              totalMs,
+            });
+          }
           return { kind: "effects-pending", result, effects: [projection] };
         }
         if (method === "registerExternalDelta") {
