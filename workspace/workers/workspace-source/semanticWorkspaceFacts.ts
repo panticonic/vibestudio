@@ -582,6 +582,7 @@ export class SemanticWorkspaceFacts {
   }
 
   apply(prepared: PreparedWorkspaceFactChange): WorkspaceFactPersistence {
+    const profileStartedAt = Date.now();
     const { changeSet, persistence: proof } = prepared;
     for (const update of changeSet.repositoryUpdates) {
       if (
@@ -610,9 +611,27 @@ export class SemanticWorkspaceFacts {
         );
       }
     }
+    const resultValidationCompletedAt = Date.now();
     this.persistNodes(proof.createdNodes);
+    const nodesCompletedAt = Date.now();
     for (const manifest of changeSet.manifestUpdates) this.persistManifest(manifest.resultManifest);
+    const manifestsCompletedAt = Date.now();
     this.persistRoot(proof.resultRoot);
+    const profileCompletedAt = Date.now();
+    const totalMs = profileCompletedAt - profileStartedAt;
+    if (totalMs >= 100) {
+      console.info("[VcsProfile] workspace fact persistence", {
+        repositoryUpdates: changeSet.repositoryUpdates.length,
+        fileUpdates: changeSet.fileUpdates.length,
+        manifests: changeSet.manifestUpdates.length,
+        createdNodes: proof.createdNodes.length,
+        resultValidationMs: resultValidationCompletedAt - profileStartedAt,
+        nodesMs: nodesCompletedAt - resultValidationCompletedAt,
+        manifestsMs: manifestsCompletedAt - nodesCompletedAt,
+        rootMs: profileCompletedAt - manifestsCompletedAt,
+        totalMs,
+      });
+    }
     return proof;
   }
 

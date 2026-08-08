@@ -785,7 +785,9 @@ export class SemanticVcsStore {
   }
 
   private persistApplicationGraph(plan: ApplicationPersistencePlan): void {
+    const profileStartedAt = Date.now();
     this.validateApplicationPlan(plan);
+    const validationCompletedAt = Date.now();
     execBatchedInsert(
       this.sql,
       `INSERT INTO vcs_repositories (repository_id, created_work_unit_id, created_at)`,
@@ -807,11 +809,23 @@ export class SemanticVcsStore {
         plan.workUnit.createdAt,
       ])
     );
+    const identityRowsCompletedAt = Date.now();
+    let factsCompletedAt = identityRowsCompletedAt;
     if (plan.workspaceFacts) {
       this.persistResultStates(plan.workspaceFacts.changeSet);
+      const resultStatesCompletedAt = Date.now();
       const proof = this.facts.apply(plan.workspaceFacts);
+      factsCompletedAt = Date.now();
       if (proof.resultRoot.workspaceFactRootId !== plan.application.resultWorkspaceFactRootId) {
         throw new SemanticVcsError("IntegrityFailure", "Application result root is not exact");
+      }
+      if (factsCompletedAt - profileStartedAt >= 100) {
+        console.info("[VcsProfile] application fact persistence", {
+          repositoryStates: plan.workspaceFacts.changeSet.repositoryUpdates.length,
+          fileStates: plan.workspaceFacts.changeSet.fileUpdates.length,
+          resultStateRowsMs: resultStatesCompletedAt - identityRowsCompletedAt,
+          factProofMs: factsCompletedAt - resultStatesCompletedAt,
+        });
       }
     } else if (
       this.stateRoot(plan.application.basis) !== plan.application.resultWorkspaceFactRootId
@@ -822,11 +836,34 @@ export class SemanticVcsStore {
       );
     }
     this.persistWorkUnit(plan.workUnit);
+    const workUnitCompletedAt = Date.now();
     this.persistChanges(plan.changes);
+    const changesCompletedAt = Date.now();
     this.persistApplication(plan.application);
+    const applicationCompletedAt = Date.now();
     this.persistAppliedChanges(plan.appliedChanges);
+    const appliedChangesCompletedAt = Date.now();
     for (const edge of plan.contentEdges) this.persistContentEdge(edge);
     for (const decision of plan.decisions) this.persistDecision(decision);
+    const profileCompletedAt = Date.now();
+    const totalMs = profileCompletedAt - profileStartedAt;
+    if (totalMs >= 100) {
+      console.info("[VcsProfile] application graph persistence", {
+        changes: plan.changes.length,
+        appliedChanges: plan.appliedChanges.length,
+        contentEdges: plan.contentEdges.length,
+        decisions: plan.decisions.length,
+        validationMs: validationCompletedAt - profileStartedAt,
+        identityRowsMs: identityRowsCompletedAt - validationCompletedAt,
+        factsMs: factsCompletedAt - identityRowsCompletedAt,
+        workUnitMs: workUnitCompletedAt - factsCompletedAt,
+        changesMs: changesCompletedAt - workUnitCompletedAt,
+        applicationMs: applicationCompletedAt - changesCompletedAt,
+        appliedChangesMs: appliedChangesCompletedAt - applicationCompletedAt,
+        edgesAndDecisionsMs: profileCompletedAt - appliedChangesCompletedAt,
+        totalMs,
+      });
+    }
   }
 
   commit(input: {

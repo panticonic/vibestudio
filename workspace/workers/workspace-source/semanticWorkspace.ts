@@ -5659,6 +5659,7 @@ export class SemanticWorkspace {
     workingHead: StateNodeRef;
     decisionIds: string[];
   } {
+    const profileStartedAt = Date.now();
     const basis = asState(input.expectedWorkingHead);
     const basisRoot = this.deps.store.stateRoot(basis);
     const createdAt = this.deps.now();
@@ -5996,7 +5997,20 @@ export class SemanticWorkspace {
           changeId: value.changeId,
         })),
     };
+    const applicationPersistenceStartedAt = Date.now();
     const context = this.deps.store.applyApplication(plan);
+    const profileCompletedAt = Date.now();
+    const totalMs = profileCompletedAt - profileStartedAt;
+    if (totalMs >= 100) {
+      console.info("[VcsProfile] working mutation persistence", {
+        changes: changes.length,
+        repositories: repoTransitions.length,
+        files: fileTransitions.length,
+        prepareMs: applicationPersistenceStartedAt - profileStartedAt,
+        applicationPersistenceMs: profileCompletedAt - applicationPersistenceStartedAt,
+        totalMs,
+      });
+    }
     return {
       commandId,
       contextId: input.contextId,
