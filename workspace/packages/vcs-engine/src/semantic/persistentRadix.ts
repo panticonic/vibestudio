@@ -585,6 +585,31 @@ const canonicalPersistentRadixUpdates = (
     .map((update) => ({ ...update }))
     .sort((left, right) => compareUtf16CodeUnits(left.key, right.key));
 
+/**
+ * Point updates repeatedly replace the immutable path from the changed leaf to
+ * the root. Earlier paths remain in the composition cache so later updates can
+ * read them, but they are not part of the final tree and therefore are not
+ * part of the mutation proof that must be persisted.
+ */
+function reachableCreatedNodes(
+  rootNodeId: string,
+  created: ReadonlyMap<string, PersistentRadixNode>
+): PersistentRadixNode[] {
+  const reachable = new Set<string>();
+  const pending = [rootNodeId];
+  while (pending.length > 0) {
+    const nodeId = pending.pop()!;
+    if (reachable.has(nodeId)) continue;
+    const node = created.get(nodeId);
+    if (!node) continue;
+    reachable.add(nodeId);
+    if (node.shape.kind === "branch") {
+      for (const child of node.shape.children) pending.push(child.childNodeId);
+    }
+  }
+  return [...created.values()].filter((node) => reachable.has(node.nodeId));
+}
+
 export function composePersistentRadix(input: {
   basis: PersistentRadixRoot;
   updates: readonly PersistentRadixUpdate[];
@@ -664,7 +689,7 @@ export function composePersistentRadix(input: {
     basisRootNodeId: input.basis.rootNodeId,
     resultRoot,
     updates,
-    createdNodes: [...composition.created.values()],
+    createdNodes: reachableCreatedNodes(resultRoot.rootNodeId, composition.created),
     reusedNodeIds: [...composition.reused]
       .filter((nodeId) => !createdIds.has(nodeId))
       .sort(compareUtf16CodeUnits),
