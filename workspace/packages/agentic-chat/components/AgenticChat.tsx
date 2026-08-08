@@ -1,6 +1,6 @@
 import type { ChannelConfig } from "@workspace/pubsub";
 import { Theme } from "@radix-ui/themes";
-import { forwardRef, useImperativeHandle } from "react";
+import { forwardRef, useEffect, useImperativeHandle } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ChatLayout } from "./ChatLayout";
 import { ChatPaletteCommands } from "./ChatPaletteCommands";
@@ -15,6 +15,7 @@ import type {
   ForkNavHandlers,
   ChatSandboxValue,
 } from "../types";
+import { scheduleChatCapabilityWarmup } from "../utils/chatCapabilityWarmup";
 
 export interface AgenticChatHandle {
   /**
@@ -121,6 +122,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     onActionBarFileChange,
     connectionRetrySignal,
   });
+  useEffect(() => scheduleChatCapabilityWarmup(), []);
   useImperativeHandle(
     ref,
     () => ({
