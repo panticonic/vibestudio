@@ -4064,8 +4064,11 @@ export class SemanticWorkspace {
     const workspaceChangeSet = fileTransitions.length
       ? this.planWorkspaceFacts(root, fileTransitions, [])
       : null;
-    const resultRoot = workspaceChangeSet
-      ? this.deps.store.facts.compose(workspaceChangeSet).resultRoot.workspaceFactRootId
+    const workspaceFacts = workspaceChangeSet
+      ? this.deps.store.facts.prepare(workspaceChangeSet)
+      : null;
+    const resultRoot = workspaceFacts
+      ? workspaceFacts.persistence.resultRoot.workspaceFactRootId
       : root;
     const transitionByChangeId = new Map(
       fileTransitions.map((transition) => [transition.changeId, transition])
@@ -4110,7 +4113,7 @@ export class SemanticWorkspace {
       appliedChanges,
       contentEdges: [],
       decisions: [],
-      workspaceChangeSet,
+      workspaceFacts,
       newRepositories: [],
       newFiles: [...newFileIds].map((fileId) => {
         const change = changes.find(
@@ -5725,8 +5728,11 @@ export class SemanticWorkspace {
       fileTransitions.length || repoTransitions.length
         ? this.planWorkspaceFacts(basisRoot, fileTransitions, repoTransitions)
         : null;
-    const resultRoot = workspaceChangeSet
-      ? this.deps.store.facts.compose(workspaceChangeSet).resultRoot.workspaceFactRootId
+    const workspaceFacts = workspaceChangeSet
+      ? this.deps.store.facts.prepare(workspaceChangeSet)
+      : null;
+    const resultRoot = workspaceFacts
+      ? workspaceFacts.persistence.resultRoot.workspaceFactRootId
       : basisRoot;
     const appliedChangeSources = [...changes, ...(draft.appliedSourceChanges ?? [])];
     const predicatesByChangeId = new Map<string, StatePredicateRecord[]>();
@@ -5978,7 +5984,7 @@ export class SemanticWorkspace {
       appliedChanges,
       contentEdges,
       decisions,
-      workspaceChangeSet,
+      workspaceFacts,
       newRepositories: repoTransitions
         .filter((value) => value.newRepository)
         .map(({ repositoryId }) => ({ repositoryId })),
@@ -6377,31 +6383,35 @@ export class SemanticWorkspace {
     root: string,
     repository: PresentRepositoryState
   ): Array<{ path: string; contentHash: string; mode: number }> {
-    const files: Array<{ path: string; contentHash: string; mode: number }> = [];
+    const entries: Array<{ path: string; fileId: string }> = [];
     let afterPath: string | undefined;
     do {
       const page = this.deps.store.facts.pageManifest(repository.fileManifestId, {
         ...(afterPath ? { afterPath } : {}),
         limit: 500,
       });
-      for (const { fileId, path } of page.values) {
-        const state = this.deps.store.facts.file(root, fileId)?.state;
-        if (
-          !state ||
-          state.presence !== "placed" ||
-          state.repositoryId !== repository.repositoryId ||
-          state.path !== path
-        ) {
-          throw new SemanticVcsError(
-            "IntegrityFailure",
-            `Manifest ${repository.fileManifestId} has no exact file state for ${fileId}`
-          );
-        }
-        files.push({ path, contentHash: state.contentHash, mode: state.mode });
-      }
+      entries.push(...page.values);
       afterPath = page.next ?? undefined;
     } while (afterPath !== undefined);
-    return files;
+    const states = this.deps.store.facts.fileStatesAt(
+      root,
+      entries.map(({ fileId }) => fileId)
+    );
+    return entries.map(({ fileId, path }) => {
+      const state = states.get(fileId);
+      if (
+        !state ||
+        state.presence !== "placed" ||
+        state.repositoryId !== repository.repositoryId ||
+        state.path !== path
+      ) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `Manifest ${repository.fileManifestId} has no exact file state for ${fileId}`
+        );
+      }
+      return { path, contentHash: state.contentHash, mode: state.mode };
+    });
   }
 
   private lastRepositoryPath(repositoryStateId: string): string {

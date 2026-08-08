@@ -20,7 +20,10 @@ import {
   readWorkingApplicationBasisChain,
   type WorkingApplicationBasisChain,
 } from "./semanticVcsApplicationBasisChain.js";
-import { SemanticWorkspaceFacts } from "./semanticWorkspaceFacts.js";
+import {
+  SemanticWorkspaceFacts,
+  type PreparedWorkspaceFactChange,
+} from "./semanticWorkspaceFacts.js";
 import {
   contentMappingRowValues,
   encodeContentMappingRow,
@@ -256,7 +259,7 @@ export interface ApplicationPersistencePlan {
   appliedChanges: readonly AppliedChangeRecord[];
   contentEdges: readonly ContentEdgeRecord[];
   decisions: readonly IntegrationDecisionRecord[];
-  workspaceChangeSet: WorkspaceFactChangeSet | null;
+  workspaceFacts: PreparedWorkspaceFactChange | null;
   newRepositories: readonly { repositoryId: string }[];
   newFiles: readonly { fileId: string; repositoryId: string; changeId: string }[];
 }
@@ -506,17 +509,18 @@ export class SemanticVcsStore {
   }
 
   listContexts(prefix?: string): string[] {
-    const rows = prefix === undefined
-      ? this.sql.exec(`SELECT context_id FROM vcs_contexts ORDER BY context_id`).toArray()
-      : this.sql
-          .exec(
-            `SELECT context_id FROM vcs_contexts
+    const rows =
+      prefix === undefined
+        ? this.sql.exec(`SELECT context_id FROM vcs_contexts ORDER BY context_id`).toArray()
+        : this.sql
+            .exec(
+              `SELECT context_id FROM vcs_contexts
               WHERE substr(context_id, 1, ?) = ?
               ORDER BY context_id`,
-            prefix.length,
-            prefix
-          )
-          .toArray();
+              prefix.length,
+              prefix
+            )
+            .toArray();
     return (rows as Row[]).map((row) => text(row, "context_id"));
   }
 
@@ -803,9 +807,9 @@ export class SemanticVcsStore {
         plan.workUnit.createdAt,
       ])
     );
-    if (plan.workspaceChangeSet) {
-      this.persistResultStates(plan.workspaceChangeSet);
-      const proof = this.facts.apply(plan.workspaceChangeSet);
+    if (plan.workspaceFacts) {
+      this.persistResultStates(plan.workspaceFacts.changeSet);
+      const proof = this.facts.apply(plan.workspaceFacts);
       if (proof.resultRoot.workspaceFactRootId !== plan.application.resultWorkspaceFactRootId) {
         throw new SemanticVcsError("IntegrityFailure", "Application result root is not exact");
       }

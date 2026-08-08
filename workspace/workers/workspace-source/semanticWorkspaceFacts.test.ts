@@ -87,7 +87,7 @@ describe("SemanticWorkspaceFacts", () => {
     });
     expect(planned.kind).toBe("planned");
     if (planned.kind !== "planned") return;
-    const proof = facts.apply(planned.changeSet);
+    const proof = facts.apply(facts.prepare(planned.changeSet));
 
     expect(proof.resultRoot.entryCount).toBe(3);
     expect(facts.member(proof.resultRoot.workspaceFactRootId, "repo-1")).toEqual(repository);
@@ -160,7 +160,7 @@ describe("SemanticWorkspaceFacts", () => {
     });
     expect(planned.kind).toBe("planned");
     if (planned.kind !== "planned") return;
-    const proof = facts.apply(planned.changeSet);
+    const proof = facts.apply(facts.prepare(planned.changeSet));
     expect(proof.resultRoot).toMatchObject({
       entryCount: repositoryCount * 2,
       repositoryCount,

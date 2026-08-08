@@ -97,7 +97,7 @@ function noEffectApplication(input: {
     appliedChanges: [],
     contentEdges: [],
     decisions: [],
-    workspaceChangeSet: null,
+    workspaceFacts: null,
     newRepositories: [],
     newFiles: [],
   };

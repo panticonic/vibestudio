@@ -229,12 +229,12 @@ describe("SemanticWorkspace repository counteractions", () => {
         ],
       },
     } satisfies SemanticDispatchRequest;
-    const compose = store.facts.compose.bind(store.facts);
-    vi.spyOn(store.facts, "compose")
+    const prepare = store.facts.prepare.bind(store.facts);
+    vi.spyOn(store.facts, "prepare")
       .mockImplementationOnce(() => {
         throw new Error("injected fact composition failure");
       })
-      .mockImplementation(compose);
+      .mockImplementation(prepare);
     const observationDispatch = await semantic.dispatch("importSnapshot", importRequest);
     if (observationDispatch.kind !== "effects-pending") {
       throw new Error("import did not request content observation");

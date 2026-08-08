@@ -63,6 +63,17 @@ export interface WorkspaceFactPersistence extends WorkspaceFactMutation {
   manifestProofs: readonly FileManifestMutationProof[];
 }
 
+/**
+ * One exact in-memory workspace-fact transition. Composition authenticates the
+ * basis and derives the immutable radix proof; application persists that same
+ * proof in the surrounding semantic transaction. Keeping the two together
+ * prevents callers from paying to derive an identical proof twice.
+ */
+export interface PreparedWorkspaceFactChange {
+  changeSet: WorkspaceFactChangeSet;
+  persistence: WorkspaceFactPersistence;
+}
+
 export type WorkspaceAggregateIndexKind = "repository" | "live-path" | "file";
 
 /** Point-first SQL adapter over one immutable workspace facts and the
@@ -414,7 +425,7 @@ export class SemanticWorkspaceFacts {
     return manifest;
   }
 
-  compose(changeSet: WorkspaceFactChangeSet): WorkspaceFactPersistence {
+  private compose(changeSet: WorkspaceFactChangeSet): WorkspaceFactPersistence {
     const validity = validateWorkspaceFactChangeSet(changeSet);
     if (validity.kind === "invalid") {
       throw new SemanticWorkspaceFactsError("InvalidRoot", validity.failure.message, [
@@ -566,7 +577,12 @@ export class SemanticWorkspaceFacts {
     return { ...mutation, createdNodes: [...created.values()], manifestProofs };
   }
 
-  apply(changeSet: WorkspaceFactChangeSet): WorkspaceFactPersistence {
+  prepare(changeSet: WorkspaceFactChangeSet): PreparedWorkspaceFactChange {
+    return { changeSet, persistence: this.compose(changeSet) };
+  }
+
+  apply(prepared: PreparedWorkspaceFactChange): WorkspaceFactPersistence {
+    const { changeSet, persistence: proof } = prepared;
     for (const update of changeSet.repositoryUpdates) {
       if (
         canonicalJson(this.memberByStateId(update.result.repositoryStateId)) !==
@@ -594,7 +610,6 @@ export class SemanticWorkspaceFacts {
         );
       }
     }
-    const proof = this.compose(changeSet);
     this.persistNodes(proof.createdNodes);
     for (const manifest of changeSet.manifestUpdates) this.persistManifest(manifest.resultManifest);
     this.persistRoot(proof.resultRoot);
