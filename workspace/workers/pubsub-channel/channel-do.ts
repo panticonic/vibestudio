@@ -489,6 +489,13 @@ export class PubSubChannel extends DurableObjectBase {
         )
     `);
     this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_channel_delivery_lane
+        ON channel_delivery_queue(
+          target_participant_id, target_incarnation, channel_seq,
+          disposition, next_attempt_at
+        )
+    `);
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS channel_maintenance_queue (
         item_id TEXT PRIMARY KEY,
         kind TEXT NOT NULL
@@ -963,11 +970,26 @@ export class PubSubChannel extends DurableObjectBase {
       if (remaining < 1) return claims;
       const candidates = this.sql
         .exec(
-          `SELECT *
-             FROM channel_delivery_queue
-            WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
-            ORDER BY created_at, target_participant_id, target_incarnation, channel_seq
+          `SELECT current.*
+             FROM channel_delivery_queue AS current
+            WHERE current.disposition IN ('ready', 'retrying')
+              AND current.next_attempt_at <= ?
+              AND NOT EXISTS (
+                SELECT 1
+                  FROM channel_delivery_queue AS blocker
+                 WHERE blocker.target_participant_id = current.target_participant_id
+                   AND blocker.target_incarnation = current.target_incarnation
+                   AND blocker.channel_seq < current.channel_seq
+                   AND blocker.disposition NOT LIKE 'terminal-%'
+                   AND (
+                     blocker.disposition = 'leased'
+                     OR blocker.next_attempt_at > ?
+                   )
+              )
+            ORDER BY current.created_at, current.target_participant_id,
+                     current.target_incarnation, current.channel_seq
             LIMIT ?`,
+          input.now,
           input.now,
           Math.min(remaining * STRUCTURED_DELIVERY_BATCH_SIZE, 1_000)
         )

@@ -51,6 +51,32 @@ describe("consolidateSubagentActivity", () => {
     expect(call.endedAt).toBe(at(2));
   });
 
+  it("repairs a persisted terminal that was relayed before its start", () => {
+    const items = consolidateSubagentActivity([
+      entry({
+        kind: "tool-completed",
+        callId: "c1",
+        result: { bytes: 12 },
+        messageSeq: 11,
+      }),
+      entry({
+        kind: "tool-started",
+        tool: "Read",
+        callId: "c1",
+        args: { path: "index.ts" },
+        messageSeq: 8,
+      }),
+    ]);
+
+    expect(items).toHaveLength(1);
+    const call = items[0]!;
+    if (call.kind !== "tool") throw new Error("expected a tool item");
+    expect(call.payload.name).toBe("Read");
+    expect(call.payload.arguments).toEqual({ path: "index.ts" });
+    expect(call.payload.execution.status).toBe("complete");
+    expect(call.payload.execution.result).toEqual({ bytes: 12 });
+  });
+
   it("keeps concurrent calls distinct and pairs each with its own terminal", () => {
     const items = consolidateSubagentActivity([
       entry({ kind: "tool-started", tool: "Read", callId: "a", messageSeq: 1 }),

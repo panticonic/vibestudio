@@ -179,8 +179,17 @@ export function consolidateSubagentActivity(
 ): SubagentActivityItem[] {
   const items: SubagentActivityItem[] = [];
   const openCalls = createOpenCallIndex();
+  // The child channel sequence is the authoritative causal order. Older
+  // runtimes could persist relayed progress out of order when a delivery lane
+  // retried, so repair those existing feeds on replay. Keep the common path
+  // linear and allocation-free now that the delivery queue preserves order.
+  const orderedFeed = feed.every(
+    (entry, index) => index === 0 || feed[index - 1]!.messageSeq <= entry.messageSeq
+  )
+    ? feed
+    : [...feed].sort((left, right) => left.messageSeq - right.messageSeq);
 
-  feed.forEach((entry, index) => {
+  orderedFeed.forEach((entry, index) => {
     if (entry.kind === "title-changed") return;
 
     if (entry.kind === "turn-started" || entry.kind === "turn-finished") {

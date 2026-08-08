@@ -1282,7 +1282,7 @@ describe("PubSubChannel", () => {
     }
   });
 
-  it("records structured delivery failure as a generation-fenced retry", async () => {
+  it("keeps later structured deliveries behind a lane head in retry backoff", async () => {
     const agentId = "do:workers/agent-worker:AiChatWorker:headless-denied";
     const { instance } = await createGadBackedChannel({
       rpcCall: async (target, method, args) => {
@@ -1316,6 +1316,11 @@ describe("PubSubChannel", () => {
     });
     expect(claim).toBeDefined();
     expect(JSON.parse(claim!.itemId)[0]).toBe(agentId);
+    const initialRowCount = (
+      claim!.payload as {
+        batch: { rows: Array<{ channelSeq: number }> };
+      }
+    ).batch.rows.length;
     const failed = instance.failReadyWork("channel-delivery", {
       workerId: "driver-1",
       itemId: claim!.itemId,
@@ -1323,6 +1328,34 @@ describe("PubSubChannel", () => {
     });
     expect(failed).toEqual({ retryAt: expect.any(Number) });
     expect(instance.durableWorkStatus().nextRecoveryAt).toEqual(expect.any(Number));
+
+    // A newly published envelope is ready immediately, but allowing it to
+    // overtake the failed lane head would make lifecycle terminals observable
+    // before their corresponding starts.
+    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+    expect(
+      instance.claimReadyWork("channel-delivery", {
+        workerId: "driver-1",
+        now: Date.now(),
+        limit: 1,
+      })
+    ).toEqual([]);
+
+    const retryAt = (failed as { retryAt: number }).retryAt;
+    const [retry] = instance.claimReadyWork("channel-delivery", {
+      workerId: "driver-1",
+      now: retryAt,
+      limit: 1,
+    });
+    const rows = (
+      retry!.payload as {
+        batch: { rows: Array<{ channelSeq: number }> };
+      }
+    ).batch.rows;
+    expect(rows).toHaveLength(initialRowCount + 1);
+    expect(rows.map((row) => row.channelSeq)).toEqual(
+      [...rows].map((row) => row.channelSeq).sort((a, b) => a - b)
+    );
   });
 
   it("settles only an exact, gap-free acknowledgement of the leased delivery batch", async () => {
