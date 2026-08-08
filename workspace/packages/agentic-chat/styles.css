@@ -720,8 +720,7 @@
 }
 
 .subagent-mode-badge,
-.subagent-status-badge,
-.subagent-merge-badge {
+.subagent-status-badge {
   border-radius: 4px;
   text-transform: none;
 }

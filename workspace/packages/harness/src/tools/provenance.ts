@@ -5,7 +5,8 @@ import type { AgentTool } from "@workspace/pi-core";
 import { vcsSemanticNodeRefSchema, type VcsSemanticNodeRef } from "@vibestudio/service-schemas/vcs";
 import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import type { ToolVcs } from "./tool-vcs.js";
-import { resolveToolFile, resolveToolWorkingState, toVcsPath } from "./tool-vcs.js";
+import { resolveToolFile } from "../semantic-file-resolution.js";
+import { resolveToolWorkingState, toVcsPath } from "./tool-vcs.js";
 import {
   renderProvenanceBlock,
   type CanonicalProvenanceHistory,

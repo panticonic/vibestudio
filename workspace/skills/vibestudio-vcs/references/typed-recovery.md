@@ -14,13 +14,15 @@ Treat the structured error code and fields as authoritative. Messages are explan
 - `ConflictPresent`: one or more explicitly selected coordinates are conflicted. Read every returned aspect, attribution chain, resolution list, and both intent projections. Choose `theirs` or `ours`, or author the truthful combined state and choose `current`.
 - `CoupledGroupIncomplete`: use the returned group and coordinates. Select all members together or omit the explicit list so the planner chooses a valid bounded page.
 - `ScopeTooLarge`: page compare or narrow the coordinate selection. A structural group is indivisible; never trim its members to fit.
-- `IntegrationIncomplete`: a commit, finalization, or publication revalidation found source coordinates without reachable accounting. Compare the named source against the exact current head, merge or resolve the remaining coordinates, verify `complete && concluded`, and commit again.
+- `IntegrationIncomplete`: a commit, finalization, or publication revalidation found source coordinates without reachable accounting. Execute the returned raw `vcs merge` or run-level `merge_subagent` recipe. Use literal `allRemaining: ours` to decline the remainder, or `current` with a rationale for a reviewed combined parent state, then commit again.
+- `MergeDriverError`: inspect `errorData.merges` and `errorData.review`. Earlier pages are durable and must not be replayed; resolve from the reported current review.
 - `IntegrityFailure`: stop. The fact difference cannot be fully attributed or a durable edge is inconsistent. Capture the typed handle and exact coordinate; do not create a compensating write or broaden a prompt.
 
 ## Authoring and lifecycle
 
 - `DestinationOccupied`: inspect the current stable identity at the destination. Choose a genuinely free path or deliberately edit/move the existing identity.
-- `NoEffect`: inspect current state. Treat it as success only when the intended semantic result already holds; otherwise the planned operation was wrong.
+- Merge re-entry reports structured `status: "unchanged"`; it is not a `NoEffect` error. `NoEffect` remains meaningful for other authoring operations.
+- `SubagentPollingBlocked`: no new child event exists. Stop calling `read_subagent`; pushed progress reopens the gate.
 - `WorkingChangesPresent`: finish, commit, or discard the exact local chain before the requested clean-state operation.
 - `ConflictPresent` from revert: newer live state makes the counteraction untruthful. Inspect the coordinate and author a deliberate current result rather than forcing old bytes.
 

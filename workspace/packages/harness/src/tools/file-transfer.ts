@@ -8,16 +8,18 @@ import {
   splitRepoPath,
 } from "@vibestudio/shared/runtime/entitySpec";
 import {
-  resolveToolFile,
-  resolveToolRepository,
   resolveToolWorkingState,
   toVcsPath,
   toolCommandId,
   toolContextId,
-  type ToolFileResolution,
   type ToolFileTransferVcs,
   type ToolMutationContext,
 } from "./tool-vcs.js";
+import {
+  resolveToolFile,
+  resolveToolRepository,
+  type ToolFileResolution,
+} from "../semantic-file-resolution.js";
 import type { RuntimeFs } from "./runtime-fs.js";
 
 const fileTransferSchema = Type.Object(
@@ -32,7 +34,8 @@ const fileTransferSchema = Type.Object(
     intent: Type.Optional(
       Type.String({
         minLength: 1,
-        description: "Optional purpose when it is not already clear from the request; preserved as stated provenance.",
+        description:
+          "Optional purpose when it is not already clear from the request; preserved as stated provenance.",
       })
     ),
   },
@@ -166,8 +169,7 @@ function createFileTransferTool(
           content: [
             {
               type: "text",
-              text:
-                "No file transferred: source and destination must both be managed workspace files or both be context-local scratch paths.",
+              text: "No file transferred: source and destination must both be managed workspace files or both be context-local scratch paths.",
             },
           ],
           details: {

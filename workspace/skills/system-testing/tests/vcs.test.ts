@@ -77,6 +77,7 @@ function status(eventId: string) {
       mainEventId: "event:main",
       mainRelation: "ahead",
       workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
     },
   };
 }
@@ -146,6 +147,7 @@ describe("joined VCS scenario validators", () => {
           ...status(eventId).result,
           clean: false,
           workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+          integrating: [],
         },
       }
     );

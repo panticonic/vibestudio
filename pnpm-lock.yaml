@@ -1917,6 +1917,9 @@ importers:
       '@sinclair/typebox':
         specifier: ^0.27.8
         version: 0.27.10
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
       '@vibestudio/extension':
         specifier: workspace:*
         version: link:../../../packages/extension

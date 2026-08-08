@@ -22,7 +22,7 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
 1. Run `vcs({ operation: "status" })` when you need to orient to the current chain. Agent-facing mutations derive and bind the exact live `workingHead`; a separate status preflight is not required for every call.
 2. Inspect or read the smallest relevant surface. Managed reads may include a bounded memory attachment with intent and causality.
 3. Author with `edit`, `write`, `move_file`, or `copy_file`. Give `intent` only when it adds purpose beyond the request.
-4. For incoming work, call merge directly in the normal case. It safely selects one bounded clean page, never selects a conflict implicitly, and returns model-visible resolution, intents, and composed-review evidence. Use compare first only when you deliberately need a read-only preview:
+4. For incoming work, call merge directly in the normal case. The agent-facing tool drains every clean page in one call, never selects a conflict implicitly, and returns final global resolution, counts, intents, composed-review evidence, and a bounded conflict page. Use compare first only when you deliberately need a read-only preview:
 
    ```js
    vcs({ operation: "compare", sourceEventId: "event:...", limit: 500 })
@@ -32,7 +32,7 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
    - `coordinates` is the mechanical surface: `adopt`, `convergent`, `composed`, `conflict`, or `resolved`, with aspect values and full attribution.
    - `intents` is the semantic surface. Its visible tier is `stated`, `trigger`, or `mechanical`; `split` and `contested` are prompts to inspect more deeply, never machine gates.
 
-6. Merge a clean page. Omitting `coordinates` selects the first bounded mergeable page and never selects a conflict implicitly:
+6. Merge clean work. Omitting `coordinates` lets the shared driver drain bounded engine pages; explicit `coordinates` deliberately performs one selected page only:
 
    ```js
    vcs({
@@ -61,7 +61,9 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
    })
    ```
 
-9. Use the merge result as the normal completion receipt. If it is incomplete, compare the remaining coordinates for conflict details or another clean page, then continue until `complete` and `concluded` are both true. A convergent or net-zero source still needs one decision-only merge call to establish conclusion and ancestry.
+   To explicitly decline every unseen remainder, including clean coordinates, use `resolutions: { allRemaining: { resolution: "ours" } }`. After authoring and reviewing a combined parent result, use `current` with a required rationale. The blanket is repeated safely across whole-group pages and never accepts source content implicitly.
+
+9. Use the merge result as the normal completion receipt. `status: "unchanged"` is an idempotent structured receipt, not an error; still inspect `resolution.complete`. If conflicts exceed the bounded result, continue only the filtered sequence with the returned cursor. A convergent or net-zero source still gets one decision-only merge call to establish conclusion and ancestry.
 10. Run focused tests and commit the complete application chain. The compact commit operation verifies that the context is clean at the committed event; request status separately only when you need additional orientation, then push if requested.
 
 ## Commit and publication
@@ -76,7 +78,7 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
 - `CoupledGroupIncomplete`: the selection split one structural group. Select the entire named group or omit `coordinates` and let the planner select a valid page.
 - `ScopeTooLarge`: narrow the compare page or coordinate selection; never split a coupled group.
 - `IntegrityFailure`: stop. The state cannot be fully explained by reachable provenance; do not route around it.
-- `IntegrationIncomplete`: compare every named source again and finish coordinate accounting before commit/finalization.
+- `IntegrationIncomplete`: follow the returned exact merge recipe. Use `allRemaining: ours` to decline the source remainder, or `current` with a rationale after reviewing a truthful combined parent state.
 - `NoEffect`: inspect current state. Report success only when the requested semantic outcome is already true.
 
 ## Reference map

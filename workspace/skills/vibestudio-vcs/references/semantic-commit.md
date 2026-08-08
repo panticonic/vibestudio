@@ -27,6 +27,12 @@ an ordered additional parent.
 After success the context is clean: both the committed pointer and working head
 name the returned event.
 
+`vcs.status.integrating` is the O(1) read model for integration debt. Each row
+reports its source, remaining/mergeable/conflict counts, conclusion, snapshot
+head, and `stale`. A stale row is explicitly only the last merge-decision
+snapshot; the commit gate remains exact. Successful commit clears the live rows
+it integrates.
+
 ## Discard the complete local chain
 
 Inside an agent, call `vcs({ operation: "discard" })` only when all uncommitted
@@ -58,8 +64,12 @@ A content-identical committed event is still a real semantic-main advance and
 still requires approval. Expect an event-level approval rather than a fabricated
 file diff. Only replay of the same already-applied publication is approval-free.
 
-On `RevisionChanged`, re-read status and compare with the new main when needed.
-On `IntegrationIncomplete`, compare the source, finish its coordinate merge, and commit again. On
+On `RevisionChanged`, re-read status and merge the new main when needed.
+On `IntegrationIncomplete`, follow the structured recovery recipe: use
+`allRemaining: ours` to decline the literal remainder, or `current` with a
+rationale after reviewing the combined present state, then commit again. In a
+supervising agent the same refusal names the corresponding `merge_subagent`
+run; elsewhere it names raw `vcs merge` with the retained source event. On
 `Unauthorized`, stop and use the declared approval flow. On
 `ExternalEffectFailed`, retain the same command ID only for an identical
 uncertain retry.

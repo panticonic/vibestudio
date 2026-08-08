@@ -2,7 +2,7 @@
 
 ## Child work with an undo chain
 
-The child edits one file through several intermediate values and changes an independent file. Compare reports at most one row per stable coordinate, while attribution names every touch, including undone intermediates. One default merge call adopts the clean page. Review `intents` and `composed`, compare again for `complete && concluded`, then commit. Never replay the intermediate values.
+The child edits one file through several intermediate values and changes an independent file. Compare reports at most one row per stable coordinate, while attribution names every touch, including undone intermediates. One default agent-tool merge drains the clean pages. Review its final `resolution`, `intents`, and `composed`, then commit. Never replay the intermediate values or add a post-merge compare.
 
 ## Same-file conflict with stated intent
 
@@ -23,3 +23,20 @@ Parent changes the header and child changes the footer. Compare requests exact c
 ## Structural group
 
 The source creates a repository and places a file in it. Compare gives the repository and file one group. Select both or let the default page choose them. Selecting only the file returns `CoupledGroupIncomplete`; it is never repaired by ordering two partial calls.
+
+## Parent already hand-composed child behavior
+
+Do not replay child edits. If the parent already truthfully combines or
+supersedes the child's result, call `merge_subagent` with
+`allRemaining: current` and a rationale that describes that reviewed combined
+state. The decision accounts for every clean and conflicted remainder, then the
+ordinary commit records the child source in ancestry.
+
+## Decline a supervised child
+
+Before any integration decision, `close_subagent({discard:true})` records only
+the lifecycle disposition. After integration begins it refuses because close
+never mutates the workspace. Call `merge_subagent` with `allRemaining: ours`
+to decline every remainder explicitly, then close normally. If the child is
+already closed, use the receipt's retained `sourceEventId` with the raw VCS
+recipe returned by the refusal.

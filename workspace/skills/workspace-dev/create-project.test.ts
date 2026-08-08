@@ -96,6 +96,7 @@ function resetRuntimeMocks(): void {
     mainEventId: "event:main",
     mainRelation: "ahead",
     workingCounts: { applications: 1, workUnits: 0, changes: 0 },
+    integrating: [],
   });
   mocks.edit.mockImplementation(
     async (input: {
@@ -369,6 +370,7 @@ describe("createProjects", () => {
       mainEventId: "event:main",
       mainRelation: "ahead",
       workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
     });
 
     await expect(recoverProjectPublication(typedFailure)).resolves.toEqual({
@@ -404,6 +406,7 @@ describe("createProjects", () => {
       mainEventId: "event:new-main",
       mainRelation: "ahead",
       workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
     });
 
     await recoverProjectPublication(failure);
@@ -465,6 +468,7 @@ describe("createProjects", () => {
       mainEventId: "event:new-main",
       mainRelation: "diverged",
       workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+      integrating: [],
     });
 
     await expect(

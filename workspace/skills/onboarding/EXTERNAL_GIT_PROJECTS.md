@@ -105,8 +105,8 @@ source URI, revision, digest, and target repository identities.
 
 The returned candidate is committed in its dedicated import context, but it is
 not protected `main`. From the working context where the project should land,
-compare against `imported.candidate.eventId`, merge ordinary coordinates in
-small local steps, run checks, commit the complete chain with that event as the
+merge `imported.candidate.eventId` directly through the agent-facing VCS driver,
+review its final packet, run checks, commit the complete chain with that event as the
 integrated source, and call `vcs.push` explicitly only when publication is
 intended. `autoPush: false` is an outgoing Git setting; changing it never
 publishes an incoming candidate.

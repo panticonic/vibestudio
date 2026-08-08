@@ -114,7 +114,7 @@ function envelope(payload: AgenticEvent, seq = 1): ChannelEnvelope<AgenticEvent>
 }
 
 describe("@workspace/agentic-protocol schemas", () => {
-  it("uses one destructive semantic integration vocabulary for subagent terminals", () => {
+  it("keeps semantic integration out of subagent lifecycle terminals", () => {
     const terminal = {
       kind: "invocation.completed",
       actor: agent,
@@ -122,7 +122,6 @@ describe("@workspace/agentic-protocol schemas", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         terminalOutcome: "success",
-        subagent: { integration: "merged" },
       },
       createdAt: "2026-07-14T00:00:00.000Z",
     };
@@ -132,7 +131,7 @@ describe("@workspace/agentic-protocol schemas", () => {
         ...terminal,
         payload: {
           ...terminal.payload,
-          subagent: { merge: "merged" },
+          subagent: { integration: "merged" },
         },
       }).success
     ).toBe(false);

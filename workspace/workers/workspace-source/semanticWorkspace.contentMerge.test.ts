@@ -330,8 +330,8 @@ describe("SemanticWorkspace hunk composition", () => {
           attribution: { theirs: Array<{ changeId: string }> };
         }>;
       }
-    ).coordinates.find((coordinate) => coordinate.coordinate.id === file.state.fileId)
-      ?.attribution.theirs;
+    ).coordinates.find((coordinate) => coordinate.coordinate.id === file.state.fileId)?.attribution
+      .theirs;
     expect(offSpineAttribution?.map((entry) => entry.changeId)).toEqual(
       expect.arrayContaining([sourceEdit.changeIds[0], targetEdit.changeIds[0]])
     );
@@ -567,28 +567,25 @@ describe("SemanticWorkspace hunk composition", () => {
     if (repeatedDecisionRead.kind !== "host-read") {
       throw new Error("repeated conflict-only merge did not request exact content");
     }
-    expect(() =>
-      semantic.acknowledgeHostRead({
-        request: repeatedDecisionRead.request,
-        files: (repeatedDecisionRead.request["contentHashes"] as string[]).map((contentHash) => ({
-          contentHash,
-          text: conflictBytes.get(contentHash)!,
-        })),
-      })
-    ).toThrow(expect.objectContaining({ code: "NoEffect" }));
+    const repeatedConflict = semantic.acknowledgeHostRead({
+      request: repeatedDecisionRead.request,
+      files: (repeatedDecisionRead.request["contentHashes"] as string[]).map((contentHash) => ({
+        contentHash,
+        text: conflictBytes.get(contentHash)!,
+      })),
+    });
+    expect(repeatedConflict).toMatchObject({
+      kind: "complete",
+      result: { status: "unchanged", resolution: { complete: false, concluded: true } },
+    });
     const conflictMergeRead = await semantic.dispatch("merge", {
       ingress,
       input: {
         contextId: "context:conflict",
-        commandId: "command:conflict-take-theirs",
+        commandId: "command:conflict-decline-remainder",
         expectedWorkingHead: conflictEdit.workingHead,
         source: { kind: "event", eventId: sourceCommit.event.eventId },
-        resolutions: [
-          {
-            coordinate: { kind: "file", id: file.state.fileId },
-            resolution: "theirs",
-          },
-        ],
+        resolutions: { allRemaining: { resolution: "ours" } },
       },
     });
     if (conflictMergeRead.kind !== "host-read") {
@@ -609,8 +606,8 @@ describe("SemanticWorkspace hunk composition", () => {
       file.state.fileId
     );
     expect(conflictResult?.state).toMatchObject({
-      path: "index.ts",
-      contentHash: hash(theirsText),
+      path: "conflict.ts",
+      contentHash: hash(localConflictText),
     });
   });
 });

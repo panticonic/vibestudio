@@ -86,14 +86,18 @@ describe("SemanticWorkspace net-effect merge", () => {
         commandId: "command:base",
         expectedWorkingHead: sourceInitial.working.ref,
         intentSummary: "Create the fixture coordinate",
-        changes: [{
-          kind: "repository-create",
-          repoPath: "packages/fixture",
-          files: [{ path: "index.ts", content: { kind: "text", text: "base\n" }, mode: 0o644 }],
-        }],
+        changes: [
+          {
+            kind: "repository-create",
+            repoPath: "packages/fixture",
+            files: [{ path: "index.ts", content: { kind: "text", text: "base\n" }, mode: 0o644 }],
+          },
+        ],
       },
     });
-    const baseEdit = pending<{ workingHead: { kind: "application"; applicationId: string } }>(baseEditDispatch);
+    const baseEdit = pending<{ workingHead: { kind: "application"; applicationId: string } }>(
+      baseEditDispatch
+    );
     acknowledge(baseEditDispatch);
     const baseCommitDispatch = await semantic.dispatch("commit", {
       ingress,
@@ -126,10 +130,20 @@ describe("SemanticWorkspace net-effect merge", () => {
         commandId: "command:first-mode",
         expectedWorkingHead: baseCommit.event,
         intentSummary: "Make the fixture executable while evaluating deployment",
-        changes: [{ kind: "file-mode", repositoryId: repository.repositoryId, fileId: file.state.fileId, mode: 0o755 }],
+        changes: [
+          {
+            kind: "file-mode",
+            repositoryId: repository.repositoryId,
+            fileId: file.state.fileId,
+            mode: 0o755,
+          },
+        ],
       },
     });
-    const first = pending<{ workingHead: { kind: "application"; applicationId: string }; changeIds: string[] }>(firstDispatch);
+    const first = pending<{
+      workingHead: { kind: "application"; applicationId: string };
+      changeIds: string[];
+    }>(firstDispatch);
     acknowledge(firstDispatch);
     const secondDispatch = await semantic.dispatch("edit", {
       ingress,
@@ -138,10 +152,20 @@ describe("SemanticWorkspace net-effect merge", () => {
         commandId: "command:second-mode",
         expectedWorkingHead: first.workingHead,
         intentSummary: "Set the final restricted deployment mode",
-        changes: [{ kind: "file-mode", repositoryId: repository.repositoryId, fileId: file.state.fileId, mode: 0o600 }],
+        changes: [
+          {
+            kind: "file-mode",
+            repositoryId: repository.repositoryId,
+            fileId: file.state.fileId,
+            mode: 0o600,
+          },
+        ],
       },
     });
-    const second = pending<{ workingHead: { kind: "application"; applicationId: string }; changeIds: string[] }>(secondDispatch);
+    const second = pending<{
+      workingHead: { kind: "application"; applicationId: string };
+      changeIds: string[];
+    }>(secondDispatch);
     acknowledge(secondDispatch);
     const moveDispatch = await semantic.dispatch("move", {
       ingress,
@@ -150,10 +174,19 @@ describe("SemanticWorkspace net-effect merge", () => {
         commandId: "command:move-repository",
         expectedWorkingHead: second.workingHead,
         intentSummary: "Move the fixture under its final package name",
-        moves: [{ kind: "repository", repositoryId: repository.repositoryId, destinationPath: "packages/final-fixture" }],
+        moves: [
+          {
+            kind: "repository",
+            repositoryId: repository.repositoryId,
+            destinationPath: "packages/final-fixture",
+          },
+        ],
       },
     });
-    const moved = pending<{ workingHead: { kind: "application"; applicationId: string }; changeIds: string[] }>(moveDispatch);
+    const moved = pending<{
+      workingHead: { kind: "application"; applicationId: string };
+      changeIds: string[];
+    }>(moveDispatch);
     acknowledge(moveDispatch);
     const sourceCommitDispatch = await semantic.dispatch("commit", {
       ingress,
@@ -164,7 +197,9 @@ describe("SemanticWorkspace net-effect merge", () => {
         message: "Finish source work",
       },
     });
-    const sourceCommit = pending<{ event: { kind: "event"; eventId: string } }>(sourceCommitDispatch);
+    const sourceCommit = pending<{ event: { kind: "event"; eventId: string } }>(
+      sourceCommitDispatch
+    );
     acknowledge(sourceCommitDispatch);
 
     const compared = await semantic.dispatch("compare", {
@@ -181,14 +216,60 @@ describe("SemanticWorkspace net-effect merge", () => {
       counts: { adopt: 2, conflict: 0 },
       intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 3 },
     });
+    const firstUnfilteredPage = await semantic.dispatch("compare", {
+      ingress,
+      input: {
+        target: baseCommit.event,
+        source: { kind: "event", eventId: sourceCommit.event.eventId },
+        limit: 1,
+      },
+    });
+    if (firstUnfilteredPage.kind !== "complete") throw new Error("compare did not complete");
+    const unfilteredCursor = (firstUnfilteredPage.result as { nextCursor: string | null })
+      .nextCursor;
+    expect(unfilteredCursor).toEqual(expect.any(String));
+    const conflictOnly = await semantic.dispatch("compare", {
+      ingress,
+      input: {
+        target: baseCommit.event,
+        source: { kind: "event", eventId: sourceCommit.event.eventId },
+        statusFilter: "conflict",
+        limit: 1,
+      },
+    });
+    expect(conflictOnly).toMatchObject({
+      kind: "complete",
+      result: { counts: { adopt: 2, conflict: 0 }, coordinates: [], nextCursor: null },
+    });
+    await expect(
+      semantic.dispatch("compare", {
+        ingress,
+        input: {
+          target: baseCommit.event,
+          source: { kind: "event", eventId: sourceCommit.event.eventId },
+          statusFilter: "conflict",
+          cursor: unfilteredCursor!,
+          limit: 1,
+        },
+      })
+    ).rejects.toMatchObject({ code: "InvalidReference" });
     expect(
       (compared.result as { intents: Array<{ side: string; state?: string }> }).intents
         .filter((intent) => intent.side === "theirs")
         .map((intent) => intent.state)
     ).toEqual(["pending", "pending", "pending"]);
-    const coordinates = (compared.result as { coordinates: Array<{ coordinate: { id: string }; attribution: { theirs: Array<{ changeId: string }> } }> }).coordinates;
+    const coordinates = (
+      compared.result as {
+        coordinates: Array<{
+          coordinate: { id: string };
+          attribution: { theirs: Array<{ changeId: string }> };
+        }>;
+      }
+    ).coordinates;
     expect(coordinates.every((coordinate) => !("group" in coordinate))).toBe(true);
-    expect(coordinates.find((row) => row.coordinate.id === file.state.fileId)?.attribution.theirs).toEqual([
+    expect(
+      coordinates.find((row) => row.coordinate.id === file.state.fileId)?.attribution.theirs
+    ).toEqual([
       { changeId: first.changeIds[0], workUnitId: expect.any(String), undone: true },
       { changeId: second.changeIds[0], workUnitId: expect.any(String) },
     ]);
@@ -211,7 +292,11 @@ describe("SemanticWorkspace net-effect merge", () => {
     }>(mergeDispatch);
     acknowledge(mergeDispatch);
     expect(merged.outcomes).toHaveLength(2);
-    expect(merged.resolution).toEqual({ complete: true, remainingCoordinateCount: 0, concluded: true });
+    expect(merged.resolution).toEqual({
+      complete: true,
+      remainingCoordinateCount: 0,
+      concluded: true,
+    });
     expect(
       (merged as unknown as { intents: Array<{ side: string; state?: string }> }).intents
         .filter((intent) => intent.side === "theirs")
@@ -219,9 +304,16 @@ describe("SemanticWorkspace net-effect merge", () => {
     ).toEqual(["merged", "merged", "merged"]);
     const mergedRoot = store.stateRoot(merged.workingHead);
     expect(store.facts.file(mergedRoot, file.state.fileId)?.state).toMatchObject({ mode: 0o600 });
-    expect(store.facts.member(mergedRoot, repository.repositoryId)).toMatchObject({ repoPath: "packages/final-fixture" });
+    expect(store.facts.member(mergedRoot, repository.repositoryId)).toMatchObject({
+      repoPath: "packages/final-fixture",
+    });
     expect(
-      sql.exec(`SELECT coordinate_kind, coordinate_id FROM gad_merge_decision_entries WHERE decision_id = ? ORDER BY coordinate_kind, coordinate_id`, merged.decisionId).toArray()
+      sql
+        .exec(
+          `SELECT coordinate_kind, coordinate_id FROM gad_merge_decision_entries WHERE decision_id = ? ORDER BY coordinate_kind, coordinate_id`,
+          merged.decisionId
+        )
+        .toArray()
     ).toEqual([
       { coordinate_kind: "file", coordinate_id: file.state.fileId },
       { coordinate_kind: "repository", coordinate_id: repository.repositoryId },
@@ -235,14 +327,17 @@ describe("SemanticWorkspace net-effect merge", () => {
         limit: 100,
       },
     });
-    if (resolvedComparison.kind !== "complete") throw new Error("resolved compare did not complete");
-    const resolvedFile = (resolvedComparison.result as {
-      coordinates: Array<{
-        coordinate: { id: string };
-        status: string;
-        attribution: { ours: unknown[]; theirs: Array<{ changeId: string }> };
-      }>;
-    }).coordinates.find((coordinate) => coordinate.coordinate.id === file.state.fileId);
+    if (resolvedComparison.kind !== "complete")
+      throw new Error("resolved compare did not complete");
+    const resolvedFile = (
+      resolvedComparison.result as {
+        coordinates: Array<{
+          coordinate: { id: string };
+          status: string;
+          attribution: { ours: unknown[]; theirs: Array<{ changeId: string }> };
+        }>;
+      }
+    ).coordinates.find((coordinate) => coordinate.coordinate.id === file.state.fileId);
     expect(resolvedFile).toMatchObject({
       status: "resolved",
       attribution: {
@@ -276,7 +371,9 @@ describe("SemanticWorkspace net-effect merge", () => {
         message: "Commit reviewed merge",
       },
     });
-    const integrationCommit = pending<{ event: { kind: "event"; eventId: string } }>(integrationCommitDispatch);
+    const integrationCommit = pending<{ event: { kind: "event"; eventId: string } }>(
+      integrationCommitDispatch
+    );
     acknowledge(integrationCommitDispatch);
     expect(store.event(integrationCommit.event.eventId)?.parentEventIds).toEqual([
       baseCommit.event.eventId,
@@ -343,9 +440,10 @@ describe("SemanticWorkspace net-effect merge", () => {
               .map((repository) => ({
                 repositoryId: repository.repositoryId,
                 repoPath: repository.repoPath,
-                contentRoot: repository.source.kind === "content-root"
-                  ? repository.source.contentRoot
-                  : `state:${sha256Hex(new TextEncoder().encode(JSON.stringify(repository)))}`,
+                contentRoot:
+                  repository.source.kind === "content-root"
+                    ? repository.source.contentRoot
+                    : `state:${sha256Hex(new TextEncoder().encode(JSON.stringify(repository)))}`,
               })),
             payloadDigest: effect.payloadDigest,
           },
@@ -360,14 +458,18 @@ describe("SemanticWorkspace net-effect merge", () => {
         contextId: "context:source-zero",
         commandId: "command:zero-base",
         expectedWorkingHead: initial.working.ref,
-        changes: [{
-          kind: "repository-create",
-          repoPath: "packages/zero",
-          files: [{ path: "index.ts", content: { kind: "text", text: "base\n" }, mode: 0o644 }],
-        }],
+        changes: [
+          {
+            kind: "repository-create",
+            repoPath: "packages/zero",
+            files: [{ path: "index.ts", content: { kind: "text", text: "base\n" }, mode: 0o644 }],
+          },
+        ],
       },
     });
-    const created = pending<{ workingHead: { kind: "application"; applicationId: string } }>(createdDispatch);
+    const created = pending<{ workingHead: { kind: "application"; applicationId: string } }>(
+      createdDispatch
+    );
     acknowledge(createdDispatch);
     const baseCommitDispatch = await semantic.dispatch("commit", {
       ingress,
@@ -393,10 +495,19 @@ describe("SemanticWorkspace net-effect merge", () => {
         contextId: "context:source-zero",
         commandId: "command:zero-change",
         expectedWorkingHead: base.event,
-        changes: [{ kind: "file-mode", repositoryId: repository.repositoryId, fileId: file.state.fileId, mode: 0o755 }],
+        changes: [
+          {
+            kind: "file-mode",
+            repositoryId: repository.repositoryId,
+            fileId: file.state.fileId,
+            mode: 0o755,
+          },
+        ],
       },
     });
-    const changed = pending<{ workingHead: { kind: "application"; applicationId: string } }>(changedDispatch);
+    const changed = pending<{ workingHead: { kind: "application"; applicationId: string } }>(
+      changedDispatch
+    );
     acknowledge(changedDispatch);
     const restoredDispatch = await semantic.dispatch("edit", {
       ingress,
@@ -404,10 +515,19 @@ describe("SemanticWorkspace net-effect merge", () => {
         contextId: "context:source-zero",
         commandId: "command:zero-restore",
         expectedWorkingHead: changed.workingHead,
-        changes: [{ kind: "file-mode", repositoryId: repository.repositoryId, fileId: file.state.fileId, mode: 0o644 }],
+        changes: [
+          {
+            kind: "file-mode",
+            repositoryId: repository.repositoryId,
+            fileId: file.state.fileId,
+            mode: 0o644,
+          },
+        ],
       },
     });
-    const restored = pending<{ workingHead: { kind: "application"; applicationId: string } }>(restoredDispatch);
+    const restored = pending<{ workingHead: { kind: "application"; applicationId: string } }>(
+      restoredDispatch
+    );
     acknowledge(restoredDispatch);
     const sourceCommitDispatch = await semantic.dispatch("commit", {
       ingress,
@@ -427,10 +547,19 @@ describe("SemanticWorkspace net-effect merge", () => {
         contextId: "context:target-zero",
         commandId: "command:zero-target-change",
         expectedWorkingHead: base.event,
-        changes: [{ kind: "file-mode", repositoryId: repository.repositoryId, fileId: file.state.fileId, mode: 0o600 }],
+        changes: [
+          {
+            kind: "file-mode",
+            repositoryId: repository.repositoryId,
+            fileId: file.state.fileId,
+            mode: 0o600,
+          },
+        ],
       },
     });
-    const target = pending<{ workingHead: { kind: "application"; applicationId: string } }>(targetDispatch);
+    const target = pending<{ workingHead: { kind: "application"; applicationId: string } }>(
+      targetDispatch
+    );
     acknowledge(targetDispatch);
 
     const comparison = await semantic.dispatch("compare", {
@@ -466,29 +595,100 @@ describe("SemanticWorkspace net-effect merge", () => {
     acknowledge(mergeDispatch);
     expect(merged).toMatchObject({ changeCount: 0, resolution: { concluded: true } });
 
-    await expect(
-      semantic.dispatch("merge", {
-        ingress,
-        input: {
-          contextId: "context:target-zero",
-          commandId: "command:repeat-zero-merge",
-          expectedWorkingHead: merged.workingHead,
-          source: { kind: "event", eventId: source.event.eventId },
-        },
-      })
-    ).rejects.toMatchObject({ code: "NoEffect" });
+    const repeated = await semantic.dispatch("merge", {
+      ingress,
+      input: {
+        contextId: "context:target-zero",
+        commandId: "command:repeat-zero-merge",
+        expectedWorkingHead: merged.workingHead,
+        source: { kind: "event", eventId: source.event.eventId },
+      },
+    });
+    expect(repeated).toMatchObject({
+      kind: "complete",
+      result: { status: "unchanged", workingHead: merged.workingHead },
+    });
+    // Driver re-entry derives the identical command id (same head, source, and
+    // resolutions), so an unchanged merge must be replayable under the SAME id
+    // rather than leaving its command pending.
+    const replayedSameCommand = await semantic.dispatch("merge", {
+      ingress,
+      input: {
+        contextId: "context:target-zero",
+        commandId: "command:repeat-zero-merge",
+        expectedWorkingHead: merged.workingHead,
+        source: { kind: "event", eventId: source.event.eventId },
+      },
+    });
+    expect(replayedSameCommand).toMatchObject({
+      kind: "complete",
+      result: { status: "unchanged", workingHead: merged.workingHead },
+    });
+    const integratingStatus = await semantic.dispatch("status", {
+      ingress,
+      input: { contextId: "context:target-zero" },
+    });
+    expect(integratingStatus).toMatchObject({
+      kind: "complete",
+      result: {
+        integrating: [
+          {
+            source: { kind: "event", eventId: source.event.eventId },
+            remainingCoordinateCount: 0,
+            concluded: true,
+            stale: false,
+          },
+        ],
+      },
+    });
+
+    const unrelatedEditDispatch = await semantic.dispatch("edit", {
+      ingress,
+      input: {
+        contextId: "context:target-zero",
+        commandId: "command:unrelated-after-integration",
+        expectedWorkingHead: merged.workingHead,
+        changes: [
+          {
+            kind: "repository-create",
+            repoPath: "packages/unrelated",
+            files: [{ path: "README.md", content: { kind: "text", text: "ok\n" } }],
+          },
+        ],
+      },
+    });
+    const unrelatedEdit = pending<{
+      workingHead: { kind: "application"; applicationId: string };
+    }>(unrelatedEditDispatch);
+    acknowledge(unrelatedEditDispatch);
+    const staleStatus = await semantic.dispatch("status", {
+      ingress,
+      input: { contextId: "context:target-zero" },
+    });
+    expect(staleStatus).toMatchObject({
+      kind: "complete",
+      result: { integrating: [{ stale: true, asOfWorkingHead: merged.workingHead }] },
+    });
 
     const committedDispatch = await semantic.dispatch("commit", {
       ingress,
       input: {
         contextId: "context:target-zero",
         commandId: "command:zero-integration-commit",
-        expectedWorkingHead: merged.workingHead,
+        expectedWorkingHead: unrelatedEdit.workingHead,
         message: "Record reviewed zero-effect source",
       },
     });
     const committed = pending<{ event: { kind: "event"; eventId: string } }>(committedDispatch);
     acknowledge(committedDispatch);
+    const committedStatus = await semantic.dispatch("status", {
+      ingress,
+      input: { contextId: "context:target-zero" },
+    });
+    expect(committedStatus).toMatchObject({
+      kind: "complete",
+      result: { integrating: [] },
+    });
     expect(store.event(committed.event.eventId)?.parentEventIds).toEqual([
       base.event.eventId,
       source.event.eventId,

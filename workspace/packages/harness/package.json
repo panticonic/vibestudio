@@ -5,11 +5,13 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./semantic-file-resolution": "./src/semantic-file-resolution.ts",
     "./types": "./src/types.ts",
     "./web": "./src/web/index.ts",
     "./web-extract": "./src/web-extract.ts"
   },
   "dependencies": {
+    "@vibestudio/content-addressing": "workspace:*",
     "@earendil-works/pi-ai": "^0.82.0",
     "@mozilla/readability": "^0.6.0",
     "@vibestudio/extension": "workspace:*",

@@ -312,6 +312,7 @@ describe("HeadlessRunner", () => {
       mainEventId,
       mainRelation: eventId === mainEventId ? ("at" as const) : ("ahead" as const),
       workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
     });
     mocks.rpc.call
       .mockResolvedValueOnce({ contextId: "ctx-fixture" })
@@ -524,6 +525,7 @@ describe("HeadlessRunner", () => {
         mainEventId: "event:main",
         mainRelation: "at",
         workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+        integrating: [],
       })
       .mockResolvedValueOnce({
         contextId: "ctx-created",
@@ -533,6 +535,7 @@ describe("HeadlessRunner", () => {
         mainEventId: "event:main",
         mainRelation: "at",
         workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+        integrating: [],
       });
 
     const state = await runner.prepareWorkspaceRepoFixture();

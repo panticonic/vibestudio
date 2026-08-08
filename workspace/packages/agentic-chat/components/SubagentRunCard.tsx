@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Badge, Box, Flex, IconButton, Popover, Text } from "@radix-ui/themes";
 import { ChevronDownIcon, ExternalLinkIcon, InfoCircledIcon } from "@radix-ui/react-icons";
-import type { ChatMessage, SubagentRunState } from "@workspace/agentic-core";
+import type { ChatMessage } from "@workspace/agentic-core";
 import { useOptionalChatMessageActions } from "../context/ChatContext";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { MessageContent } from "./MessageContent";
@@ -37,15 +37,6 @@ import {
  * lookalikes: a child's `Read` call is the same pill, with the same name and
  * the same argument/result inspection, as a `Read` in the parent conversation.
  */
-
-const INTEGRATION_LABEL: Record<
-  NonNullable<SubagentRunState["integration"]>,
-  { label: string; color: "green" | "amber" | "gray" }
-> = {
-  merged: { label: "Merged", color: "green" },
-  "needs-decision": { label: "Needs decision", color: "amber" },
-  discarded: { label: "Discarded", color: "gray" },
-};
 
 type BodyView = "activity" | "transcript";
 
@@ -161,7 +152,6 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
     .reverse()
     .find((entry) => entry.kind === "title-changed" && entry.text?.trim())?.text;
   const label = channelTitle || subagent.label || invocation.name || "Subagent";
-  const integration = subagent.integration ? INTEGRATION_LABEL[subagent.integration] : undefined;
   const canOpenPanel = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
   const canObserve = Boolean(childTranscript && subagent.taskChannelId);
 
@@ -240,16 +230,6 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                   title="Claude Code subagent"
                 >
                   Claude Code
-                </Badge>
-              )}
-              {integration && (
-                <Badge
-                  className="subagent-merge-badge"
-                  size="1"
-                  variant="soft"
-                  color={integration.color}
-                >
-                  {integration.label}
                 </Badge>
               )}
             </button>

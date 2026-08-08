@@ -1,17 +1,14 @@
 import { SilentAgentWorker } from "../silent-agent-worker/index.js";
 import { installMessageTypes, type AgentToolExecutionContext } from "@workspace/agentic-do";
-import type { ParticipantDescriptor } from "@workspace/harness";
+import { driveMerge, type ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import { defaultPolicies } from "@workspace/agent-loop";
 import type { RespondPolicy, StepPolicy } from "@workspace/agent-loop";
 import { rpc } from "@workspace/runtime/worker";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
-import type {
-  VcsCompareResult,
-  VcsMergeResult,
-  VcsStateNodeRef,
-  VcsStatusResult,
-} from "@vibestudio/service-schemas/vcs";
+import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
+import { vcsMethods, type VcsStatusResult } from "@vibestudio/service-schemas/vcs";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { EXPLORER_SYSTEM_PROMPT, SCHEDULED_SWEEP_PROMPT } from "./prompts.js";
 import {
   buildCardState,
@@ -472,41 +469,24 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
     }
 
     const sourceEventId = status.mainEventId;
-    let workingHead: VcsStateNodeRef = status.workingHead;
-    for (;;) {
-      const comparison = await toolRpc.call<VcsCompareResult>("main", "vcs.compare", [{
-        target: workingHead,
-        source: { kind: "event", eventId: sourceEventId },
-        limit: 500,
-      }]);
-      if (comparison.counts.conflict > 0) {
-        const conflicts = comparison.coordinates.filter(
-          (coordinate) => coordinate.status === "conflict"
-        );
-        let cursor = comparison.nextCursor;
-        while (cursor) {
-          const page = await toolRpc.call<VcsCompareResult>("main", "vcs.compare", [{
-            target: workingHead,
-            source: { kind: "event", eventId: sourceEventId },
-            limit: 500,
-            cursor,
-          }]);
-          conflicts.push(
-            ...page.coordinates.filter((coordinate) => coordinate.status === "conflict")
-          );
-          cursor = page.nextCursor;
-        }
-        throw new Error(`finding publication cannot safely merge protected main coordinates: ${conflicts.map((coordinate) => coordinate.coordinate.id).join(", ")}`);
-      }
-      if (comparison.resolution.complete && comparison.resolution.concluded) break;
-      const merged = await toolRpc.call<VcsMergeResult>("main", "vcs.merge", [{
-        commandId: command("merge", `${sourceEventId}:${comparison.resolution.remainingCoordinateCount}`),
-        contextId,
-        expectedWorkingHead: workingHead,
-        source: { kind: "event", eventId: sourceEventId },
-      }]);
-      workingHead = merged.workingHead;
-    }
+    const source = { kind: "event" as const, eventId: sourceEventId };
+    const vcs = createTypedServiceClient("vcs", vcsMethods, (_service, method, args) =>
+      toolRpc.call("main", `vcs.${method}`, args)
+    );
+    const driven = await driveMerge({
+      vcs,
+      contextId,
+      expectedWorkingHead: status.workingHead,
+      source,
+      policy: "require-conflict-free",
+      headline: "Integrate protected main into finding publication",
+      commandIdForPage: ({ expectedWorkingHead }) =>
+        command(
+          "merge",
+          sha256HexSyncText(canonicalJson({ contextId, expectedWorkingHead, source }))
+        ),
+    });
+    const workingHead = driven.workingHead;
 
     const committed = await toolRpc.call<{ event: { kind: "event"; eventId: string } }>(
       "main",

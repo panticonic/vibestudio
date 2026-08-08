@@ -15,8 +15,8 @@ import {
 } from "@vibestudio/shared/runtime/entitySpec";
 import { semanticVcsPathAdmission } from "@vibestudio/shared/vcs/pathAdmission";
 import type { RuntimeFs } from "./runtime-fs.js";
+import { resolveToolFile } from "../semantic-file-resolution.js";
 import {
-  resolveToolFile,
   resolveToolWorkingState,
   toVcsPath,
   toolCommandId,
@@ -31,10 +31,13 @@ const writeSchema = Type.Object({
       "Workspace-relative path. Use .tmp/<name> for temporary/context-local files. Managed source paths must be inside an existing repository, for example projects/default/<file> or packages/<name>/<file>.",
   }),
   content: Type.String({ description: "Content to write to the file" }),
-  intent: Type.Optional(Type.String({
-    minLength: 1,
-    description: "Optional purpose when it is not already clear from the request; preserved as stated provenance.",
-  })),
+  intent: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Optional purpose when it is not already clear from the request; preserved as stated provenance.",
+    })
+  ),
 });
 
 export type WriteToolInput = Static<typeof writeSchema>;

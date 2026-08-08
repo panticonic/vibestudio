@@ -202,16 +202,11 @@ const failurePayloadSchema = z
 
 const invocationOutcomeSchema = z.enum(INVOCATION_OUTCOMES);
 
-const subagentTerminalSchema = z
-  .object({ integration: z.enum(["merged", "needs-decision", "discarded"]).optional() })
-  .strict();
-
 const invocationTerminalFailurePayloadSchema = failurePayloadSchema
   .extend({
     terminalOutcome: invocationOutcomeSchema.exclude(["success"]),
     terminalReasonCode: z.string().optional(),
     failure: agentToolFailureSchema.optional(),
-    subagent: subagentTerminalSchema.optional(),
   })
   .strict();
 
@@ -333,7 +328,6 @@ const invocationCompletedPayloadSchema = z
       })
       .strict()
       .optional(),
-    subagent: subagentTerminalSchema.optional(),
   })
   .strict();
 

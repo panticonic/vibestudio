@@ -161,6 +161,7 @@ function status(contextId: string, eventId: string) {
     mainEventId: eventId,
     mainRelation: "at" as const,
     workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+    integrating: [],
   };
 }
 

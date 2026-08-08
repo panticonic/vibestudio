@@ -18,6 +18,7 @@ describe("createVcsClient", () => {
       mainEventId: "event:committed",
       mainRelation: "at",
       workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
     }));
     const client = createVcsClient(
       async <T>(method: string, ...args: unknown[]) => (await call(method, args[0])) as T,
@@ -38,6 +39,7 @@ describe("createVcsClient", () => {
       mainEventId: "event:committed",
       mainRelation: "at",
       workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
     }));
     const client = createVcsClient(
       async <T>(method: string, ...args: unknown[]) => (await call(method, args[0])) as T,

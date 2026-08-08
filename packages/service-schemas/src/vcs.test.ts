@@ -168,6 +168,7 @@ describe("minimal semantic VCS surface", () => {
       mainEventId: "event:main",
       mainRelation: "ahead",
       workingCounts: { applications: 1, workUnits: 1, changes: 2 },
+      integrating: [],
     };
     expect(vcsStatusResultSchema.parse(status)).toEqual(status);
     expect(vcsStatusResultSchema.safeParse({ ...status, frontierId: "frontier:1" }).success).toBe(
@@ -398,6 +399,28 @@ describe("simple local mutations", () => {
       vcsMergeInputSchema.safeParse({
         ...merge,
         resolutions: [{ coordinate: { kind: "file", id: "file:1" }, resolution: "manual" }],
+      }).success
+    ).toBe(false);
+    expect(
+      vcsMergeInputSchema.parse({
+        ...commonMutation,
+        source: { kind: "event", eventId: "event:source" },
+        resolutions: { allRemaining: { resolution: "ours" } },
+      })
+    ).toMatchObject({ resolutions: { allRemaining: { resolution: "ours" } } });
+    expect(
+      vcsMergeInputSchema.safeParse({
+        ...commonMutation,
+        source: { kind: "event", eventId: "event:source" },
+        resolutions: { allRemaining: { resolution: "current" } },
+      }).success
+    ).toBe(false);
+    expect(
+      vcsMergeInputSchema.safeParse({
+        ...commonMutation,
+        source: { kind: "event", eventId: "event:source" },
+        coordinates: [{ kind: "file", id: "file:source" }],
+        resolutions: { allRemaining: { resolution: "ours" } },
       }).success
     ).toBe(false);
     expect(vcsMergeInputSchema.safeParse({ ...merge, mergeSessionId: "session:1" }).success).toBe(

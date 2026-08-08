@@ -20,7 +20,10 @@ describe("SubagentRunStore schema", () => {
       label: "child",
       depth: 1,
       status: "running",
-      integration: "merged",
+      sourceEventId: null,
+      discardedBeforeIntegration: false,
+      emptyReadAfterSeq: null,
+      semanticIntegrationSnapshot: { state: "complete" },
       startedAt: 1,
       lastActivityAt: 2,
       agentKind: "pi",
@@ -35,7 +38,7 @@ describe("SubagentRunStore schema", () => {
     expect(store.countAllocated()).toBe(0);
     expect(store.resolveReference("run-1")).toMatchObject({
       kind: "exact",
-      run: { status: "closed", integration: "merged" },
+      run: { status: "closed", semanticIntegrationSnapshot: { state: "complete" } },
     });
   });
 
@@ -67,6 +70,36 @@ describe("SubagentRunStore schema", () => {
     );
   });
 
+  it("rejects the previous hand-maintained integration_status shape", async () => {
+    const sql = (await createInMemorySql()) as unknown as SqlStorage;
+    sql.exec(`
+      CREATE TABLE subagent_runs (
+        run_id TEXT PRIMARY KEY,
+        task_channel_id TEXT NOT NULL,
+        parent_context_id TEXT,
+        child_context_id TEXT NOT NULL,
+        child_entity_id TEXT NOT NULL,
+        child_participant_id TEXT,
+        parent_channel_id TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        label TEXT NOT NULL,
+        depth INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        integration_status TEXT,
+        started_at INTEGER NOT NULL,
+        last_activity_at INTEGER NOT NULL,
+        agent_kind TEXT NOT NULL,
+        launch_config_json TEXT,
+        external_session_entity_id TEXT,
+        external_generation_id TEXT
+      )
+    `);
+    const store = new SubagentRunStore(sql);
+    expect(() => store.createTables()).toThrow(
+      "Unsupported subagent_runs schema; delete this pre-release state"
+    );
+  });
+
   it.each([
     ["mode", "sideways"],
     ["status", "almost-done"],
@@ -87,7 +120,10 @@ describe("SubagentRunStore schema", () => {
       label: "child",
       depth: 1,
       status: "running",
-      integration: null,
+      sourceEventId: null,
+      discardedBeforeIntegration: false,
+      emptyReadAfterSeq: null,
+      semanticIntegrationSnapshot: null,
       startedAt: 1,
       lastActivityAt: 2,
       agentKind: "pi",

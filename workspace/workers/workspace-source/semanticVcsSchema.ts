@@ -39,6 +39,7 @@ export const SEMANTIC_VCS_REQUIRED_TABLES = [
   "gad_content_edges",
   "gad_content_edge_mappings",
   "gad_integration_decisions",
+  "gad_integration_projection",
   "gad_merge_decision_entries",
   "gad_workspace_event_external_sources",
   "gad_decision_source_changes",
@@ -439,6 +440,18 @@ export function createSemanticVcsSchema(sql: SqlStorage): void {
       ON gad_integration_decisions(source_delta_id, decision_id);
     CREATE INDEX IF NOT EXISTS idx_gad_decisions_target
       ON gad_integration_decisions(target_state_kind, target_state_id, decision_id);
+    CREATE TABLE IF NOT EXISTS gad_integration_projection (
+      context_id TEXT NOT NULL,
+      source_kind TEXT NOT NULL CHECK (source_kind IN ('event', 'external-delta')),
+      source_id TEXT NOT NULL,
+      remaining_coordinate_count INTEGER NOT NULL CHECK (remaining_coordinate_count >= 0),
+      mergeable_coordinate_count INTEGER NOT NULL CHECK (mergeable_coordinate_count >= 0),
+      conflict_coordinate_count INTEGER NOT NULL CHECK (conflict_coordinate_count >= 0),
+      concluded INTEGER NOT NULL CHECK (concluded IN (0, 1)),
+      as_of_working_head_kind TEXT NOT NULL CHECK (as_of_working_head_kind IN ('event', 'application')),
+      as_of_working_head_id TEXT NOT NULL,
+      PRIMARY KEY (context_id, source_kind, source_id)
+    );
     CREATE TABLE IF NOT EXISTS gad_merge_decision_entries (
       decision_id TEXT NOT NULL,
       coordinate_kind TEXT NOT NULL CHECK (coordinate_kind IN ('file', 'repository')),

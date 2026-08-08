@@ -355,9 +355,6 @@ export type InvocationCompletedPayload = {
     reason: string;
     summary: string;
   };
-  /** Present when this invocation is a subagent run terminating on the parent
-   *  trajectory; `integration` records its semantic disposition. */
-  subagent?: { integration?: "merged" | "needs-decision" | "discarded" };
 };
 
 export type InvocationTerminalFailureOutcome = Exclude<InvocationOutcome, "success">;
@@ -372,9 +369,6 @@ type InvocationFailurePayloadBase<Outcome extends InvocationTerminalFailureOutco
   /** Canonical machine-readable failure. Human prose is rendered from this
    * object; agents and validators branch only on its typed fields. */
   failure?: AgentToolFailure;
-  /** Present when this invocation is a subagent run terminating on the parent
-   *  trajectory; `integration` records its semantic disposition. */
-  subagent?: { integration?: "merged" | "needs-decision" | "discarded" };
 };
 
 export type InvocationFailedPayload = InvocationFailurePayloadBase<

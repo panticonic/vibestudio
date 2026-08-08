@@ -1,21 +1,22 @@
 /** Compact agent workflow over the canonical semantic VCS methods. */
 
 import { Type } from "@sinclair/typebox";
+import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import type {
   VcsCompareResult,
   VcsCommitResult,
   VcsDiscardResult,
   VcsInspectResult,
-  VcsMergeResult,
   VcsNeighborsResult,
   VcsSemanticNodeRef,
   VcsStatusResult,
   VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
+import { driveMerge, renderMergeReview } from "../merge-driver.js";
 import { semanticRootSchema } from "./provenance.js";
+import { resolveToolFile } from "../semantic-file-resolution.js";
 import {
-  resolveToolFile,
   resolveToolWorkingState,
   toVcsPath,
   toolCommandId,
@@ -25,8 +26,14 @@ import {
 } from "./tool-vcs.js";
 
 const coordinateSchema = Type.Union([
-  Type.Object({ kind: Type.Literal("file"), id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
-  Type.Object({ kind: Type.Literal("repository"), id: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+  Type.Object(
+    { kind: Type.Literal("file"), id: Type.String({ minLength: 1 }) },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    { kind: Type.Literal("repository"), id: Type.String({ minLength: 1 }) },
+    { additionalProperties: false }
+  ),
 ]);
 
 const workspaceVcsSchema = Type.Union([
@@ -52,6 +59,7 @@ const workspaceVcsSchema = Type.Union([
     {
       operation: Type.Literal("compare"),
       sourceEventId: Type.String({ minLength: 1 }),
+      status: Type.Optional(Type.Literal("conflict")),
       after: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     },
@@ -62,16 +70,38 @@ const workspaceVcsSchema = Type.Union([
       operation: Type.Literal("merge"),
       sourceEventId: Type.String({ minLength: 1 }),
       coordinates: Type.Optional(Type.Array(coordinateSchema, { maxItems: 500 })),
-      resolutions: Type.Optional(Type.Array(Type.Object({
-        coordinate: coordinateSchema,
-        resolution: Type.Union([
-          Type.Literal("composed"),
-          Type.Literal("theirs"),
-          Type.Literal("ours"),
-          Type.Literal("current"),
-        ]),
-        rationale: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
-      }, { additionalProperties: false }), { maxItems: 500 })),
+      resolutions: Type.Optional(
+        Type.Union([
+          Type.Array(
+            Type.Object(
+              {
+                coordinate: coordinateSchema,
+                resolution: Type.Union([
+                  Type.Literal("composed"),
+                  Type.Literal("theirs"),
+                  Type.Literal("ours"),
+                  Type.Literal("current"),
+                ]),
+                rationale: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+              },
+              { additionalProperties: false }
+            ),
+            { maxItems: 500 }
+          ),
+          Type.Object(
+            {
+              allRemaining: Type.Object(
+                {
+                  resolution: Type.Union([Type.Literal("ours"), Type.Literal("current")]),
+                  rationale: Type.Optional(Type.String({ minLength: 1, maxLength: 2000 })),
+                },
+                { additionalProperties: false }
+              ),
+            },
+            { additionalProperties: false }
+          ),
+        ])
+      ),
       intent: Type.Optional(Type.String({ minLength: 1 })),
     },
     { additionalProperties: false }
@@ -129,6 +159,7 @@ export type WorkspaceVcsToolInput =
   | {
       operation: "compare";
       sourceEventId: string;
+      status?: "conflict";
       after?: string;
       limit?: number;
     }
@@ -136,7 +167,13 @@ export type WorkspaceVcsToolInput =
       operation: "merge";
       sourceEventId: string;
       coordinates?: Array<{ kind: "file" | "repository"; id: string }>;
-      resolutions?: Array<{ coordinate: { kind: "file" | "repository"; id: string }; resolution: "composed" | "theirs" | "ours" | "current"; rationale?: string }>;
+      resolutions?:
+        | Array<{
+            coordinate: { kind: "file" | "repository"; id: string };
+            resolution: "composed" | "theirs" | "ours" | "current";
+            rationale?: string;
+          }>
+        | { allRemaining: { resolution: "ours" | "current"; rationale?: string } };
       intent?: string;
     }
   | { operation: "revert"; changeIds: string[]; intent?: string }
@@ -186,10 +223,16 @@ function compareText(result: VcsCompareResult): string {
       `${counts.conflict} conflict, ${counts.resolved} resolved.`,
   ];
   for (const intent of result.intents) {
-    lines.push(`intent ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`);
+    lines.push(
+      `intent ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`
+    );
   }
-  for (const coordinate of result.coordinates) lines.push(`${coordinate.coordinate.kind}:${coordinate.coordinate.id} · ${coordinate.status} · ${coordinate.summary}`);
-  if (result.nextCursor) lines.push(`More coordinates: rerun compare with after=${result.nextCursor}`);
+  for (const coordinate of result.coordinates)
+    lines.push(
+      `${coordinate.coordinate.kind}:${coordinate.coordinate.id} · ${coordinate.status} · ${coordinate.summary}`
+    );
+  if (result.nextCursor)
+    lines.push(`More coordinates: rerun compare with after=${result.nextCursor}`);
   return lines.join("\n");
 }
 
@@ -203,34 +246,6 @@ function mutationText(verb: string, result: VcsWorkingMutationResult): string {
       ? ` Incorporated changes: ${result.incorporatedChangeIds.join(", ")}.`
       : "")
   );
-}
-
-function mergeText(result: VcsMergeResult): string {
-  const lines = [
-    `${mutationText("Merged coordinate page", result)} Decision ${result.decisionId}.`,
-    `Resolution: complete=${result.resolution.complete}; concluded=${result.resolution.concluded}; remaining=${result.resolution.remainingCoordinateCount}.`,
-  ];
-  const limit = 20;
-  for (const intent of result.intents.slice(0, limit)) {
-    lines.push(
-      `Intent: ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`
-    );
-  }
-  for (const entry of result.composed.slice(0, limit)) {
-    lines.push(
-      `Composed: ${entry.coordinate.kind}:${entry.coordinate.id} · ours: ${entry.ours.text} · theirs: ${entry.theirs.text}`
-    );
-  }
-  if (result.intents.length > limit) {
-    lines.push(`Intent: … ${result.intents.length - limit} more in structured details`);
-  }
-  if (result.composed.length > limit) {
-    lines.push(`Composed: … ${result.composed.length - limit} more in structured details`);
-  }
-  if (!result.resolution.complete || !result.resolution.concluded) {
-    lines.push("Compare the remaining coordinates for conflicts or another clean merge page.");
-  }
-  return lines.join("\n");
 }
 
 function edgeText(result: Pick<VcsInspectResult | VcsNeighborsResult, "edges">): string[] {
@@ -264,12 +279,31 @@ export function createWorkspaceVcsTool(
 
       if (command.operation === "status") {
         const result = await vcs.status({ contextId });
+        const integrationText = result.integrating
+          .map((entry) => {
+            const source =
+              entry.source.kind === "event" ? entry.source.eventId : entry.source.deltaId;
+            const state =
+              entry.remainingCoordinateCount === 0 && entry.concluded
+                ? "complete"
+                : entry.mergeableCoordinateCount > 0
+                  ? "integrating"
+                  : "needs-decision";
+            const consequence = entry.stale
+              ? "snapshot is stale; commit will revalidate exactly"
+              : state === "complete"
+                ? "ready to commit"
+                : "commit will refuse until complete";
+            return `${state} ${entry.source.kind}:${source} — ${entry.remainingCoordinateCount} coordinates unaccounted, ${entry.conflictCoordinateCount} conflicts; ${consequence}`;
+          })
+          .join("\n");
         return resultOf(
           command.operation,
           `Context ${contextId} is ${result.clean ? "clean" : "dirty"}; ` +
             `${result.mainRelation} main at ${result.mainEventId}; committed ${stateLabel(result.committed)}; ` +
             `working ${stateLabel(result.workingHead)} (${result.workingCounts.applications} applications, ` +
-            `${result.workingCounts.changes} changes).`,
+            `${result.workingCounts.changes} changes).` +
+            (integrationText ? `\n${integrationText}` : ""),
           result
         );
       }
@@ -313,6 +347,7 @@ export function createWorkspaceVcsTool(
         const result = await vcs.compare({
           target,
           source: { kind: "event", eventId: command.sourceEventId },
+          ...(command.status ? { statusFilter: command.status } : {}),
           ...(command.after ? { cursor: command.after } : {}),
           limit: command.limit ?? 100,
         });
@@ -321,16 +356,25 @@ export function createWorkspaceVcsTool(
 
       if (command.operation === "merge") {
         const expectedWorkingHead = await resolveToolWorkingState(vcs, context);
-        const result = await vcs.merge({
+        const baseCommandId = toolCommandId(context);
+        const source = { kind: "event" as const, eventId: command.sourceEventId };
+        const driven = await driveMerge({
+          vcs,
           contextId,
           expectedWorkingHead,
-          commandId: toolCommandId(context),
-          source: { kind: "event", eventId: command.sourceEventId },
+          source,
           ...(command.coordinates ? { coordinates: command.coordinates } : {}),
           ...(command.resolutions ? { resolutions: command.resolutions } : {}),
           ...(command.intent ? { intentSummary: command.intent } : {}),
+          headline: `Merge ${command.sourceEventId}`,
+          commandIdForPage: ({ expectedWorkingHead: pageHead }) =>
+            `${baseCommandId}:merge:${sha256HexSyncText(canonicalJson({ contextId, expectedWorkingHead: pageHead, source, coordinates: command.coordinates, resolutions: command.resolutions, intentSummary: command.intent }))}`,
         });
-        return resultOf(command.operation, mergeText(result), result);
+        return resultOf(
+          command.operation,
+          renderMergeReview(driven.review, command.sourceEventId),
+          driven
+        );
       }
 
       if (command.operation === "revert") {
@@ -353,13 +397,46 @@ export function createWorkspaceVcsTool(
         const message = command.message.trim();
         if (!message) throw new Error("vcs commit requires a non-empty message");
         const expectedWorkingHead = await resolveToolWorkingState(vcs, context);
-        const result: VcsCommitResult = await vcs.commit({
-          contextId,
-          expectedWorkingHead,
-          commandId: toolCommandId(context),
-          message,
-          ...(command.intent ? { intentSummary: command.intent } : {}),
-        });
+        let result: VcsCommitResult;
+        try {
+          result = await vcs.commit({
+            contextId,
+            expectedWorkingHead,
+            commandId: toolCommandId(context),
+            message,
+            ...(command.intent ? { intentSummary: command.intent } : {}),
+          });
+        } catch (error) {
+          const failure = error as {
+            code?: unknown;
+            errorData?: { code?: unknown; source?: { kind?: unknown; eventId?: unknown } };
+          };
+          const source = failure.errorData?.source;
+          if (
+            (failure.code === "IntegrationIncomplete" ||
+              failure.errorData?.code === "IntegrationIncomplete") &&
+            source?.kind === "event" &&
+            typeof source.eventId === "string"
+          ) {
+            const run = context.integrationSourceResolver?.(source.eventId);
+            if (run) {
+              const message =
+                `Integration of subagent ${run.runId} is incomplete. ` +
+                `Call merge_subagent({runId:"${run.runId}", resolutions:{allRemaining:{resolution:"ours"}}}) to decline the remainder, ` +
+                `or merge_subagent({runId:"${run.runId}", resolutions:{allRemaining:{resolution:"current", rationale:"…"}}}) after reviewing the combined parent state.`;
+              throw Object.assign(new Error(message), {
+                code: "IntegrationIncomplete",
+                errorData: {
+                  ...failure.errorData,
+                  code: "IntegrationIncomplete",
+                  runId: run.runId,
+                  recoveryTool: "merge_subagent",
+                },
+              });
+            }
+          }
+          throw error;
+        }
         if (result.event.kind !== "event") throw new Error("vcs commit returned a non-event state");
         const status = await vcs.status({ contextId });
         if (
@@ -371,6 +448,7 @@ export function createWorkspaceVcsTool(
         ) {
           throw new Error("vcs commit did not leave the context clean at the committed event");
         }
+        context.onIntegrationSourcesCommitted?.(result);
         return {
           content: [
             {

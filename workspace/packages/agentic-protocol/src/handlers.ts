@@ -104,8 +104,9 @@ export interface ProjectedInvocation {
   terminalOutcome?: InvocationOutcome;
   terminalReasonCode?: string;
   failure?: AgentToolFailure;
-  /** Present when this invocation is a subagent run. The spawn fields are folded
-   *  from `invocation.started`; `integration` from the terminal envelope. */
+  /** Present when this invocation is a subagent run. Spawn fields are folded
+   *  from `invocation.started`; semantic integration lives in the engine-owned
+   *  VCS projection rather than this lifecycle event. */
   subagent?: {
     runId?: string;
     mode?: "fresh" | "fork";
@@ -114,7 +115,6 @@ export interface ProjectedInvocation {
     parentContextId?: string | null;
     childEntityId?: string;
     label?: string;
-    integration?: "merged" | "needs-decision" | "discarded";
     /** Reasoning engine of the child run — SubagentRunCard badge. */
     agentKind?: string;
   };
@@ -611,9 +611,6 @@ export function applyInvocationEvent(
             : existing.terminalReasonCode,
         completedAt: event.createdAt,
         updatedAt: event.createdAt,
-        ...("subagent" in payload && payload.subagent
-          ? { subagent: { ...existing.subagent, ...payload.subagent } }
-          : {}),
       },
     };
   }
@@ -641,9 +638,6 @@ export function applyInvocationEvent(
       terminalReasonCode:
         "terminalReasonCode" in payload ? payload.terminalReasonCode : existing.terminalReasonCode,
       failure: "failure" in payload ? payload.failure : existing.failure,
-      ...("subagent" in payload && payload.subagent
-        ? { subagent: { ...existing.subagent, ...payload.subagent } }
-        : {}),
     },
   };
 }

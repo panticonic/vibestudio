@@ -25,8 +25,6 @@ export type SubagentRunStatus =
    * durable, handle-resolvable lifecycle receipt. */
   | "closed";
 
-export type SubagentRunIntegration = "merged" | "needs-decision" | "discarded";
-
 /** The reasoning engine behind a subagent: "pi" is the in-process vessel; any
  *  other string names an extension-owned external launcher. */
 export type SubagentAgentKind = string;
@@ -43,7 +41,10 @@ export interface SubagentRunRow {
   label: string;
   depth: number;
   status: SubagentRunStatus;
-  integration: SubagentRunIntegration | null;
+  sourceEventId: string | null;
+  discardedBeforeIntegration: boolean;
+  emptyReadAfterSeq: number | null;
+  semanticIntegrationSnapshot: Record<string, unknown> | null;
   startedAt: number;
   lastActivityAt: number;
   /** Reasoning engine kind (default "pi"). */
@@ -71,12 +72,6 @@ const SUBAGENT_RUN_STATUSES = [
   "abandoned",
   "closed",
 ] as const satisfies readonly SubagentRunStatus[];
-const SUBAGENT_RUN_INTEGRATIONS = [
-  "merged",
-  "needs-decision",
-  "discarded",
-] as const satisfies readonly SubagentRunIntegration[];
-
 function normalizeAbbreviatedReference(reference: string): string {
   const trimmed = reference.trim();
   if (trimmed.endsWith("...")) return trimmed.slice(0, -3).trimEnd();
@@ -132,7 +127,10 @@ interface SubagentRunSqlRow {
   label: string;
   depth: number;
   status: string;
-  integration_status: string | null;
+  source_event_id: string | null;
+  discarded_before_integration: number;
+  empty_read_after_seq: number | null;
+  semantic_integration_json: string | null;
   started_at: number;
   last_activity_at: number;
   agent_kind: string;
@@ -201,10 +199,6 @@ function toProgressOutboxEntry(row: SubagentProgressOutboxSqlRow): SubagentProgr
 function toRow(row: SubagentRunSqlRow): SubagentRunRow {
   const mode = exactEnum("mode", row.mode, ["fresh", "fork"] as const);
   const status = exactEnum("status", row.status, SUBAGENT_RUN_STATUSES);
-  const integration =
-    row.integration_status === null
-      ? null
-      : exactEnum("integration_status", row.integration_status, SUBAGENT_RUN_INTEGRATIONS);
   if (typeof row.agent_kind !== "string" || row.agent_kind.trim().length === 0) {
     throw new Error(`Invalid subagent_runs.agent_kind: ${JSON.stringify(row.agent_kind)}`);
   }
@@ -232,7 +226,13 @@ function toRow(row: SubagentRunSqlRow): SubagentRunRow {
     label: row.label,
     depth: Number(row.depth),
     status,
-    integration,
+    sourceEventId: row.source_event_id ?? null,
+    discardedBeforeIntegration: Number(row.discarded_before_integration) === 1,
+    emptyReadAfterSeq: row.empty_read_after_seq === null ? null : Number(row.empty_read_after_seq),
+    semanticIntegrationSnapshot:
+      row.semantic_integration_json === null
+        ? null
+        : (JSON.parse(row.semantic_integration_json) as Record<string, unknown>),
     startedAt: Number(row.started_at),
     lastActivityAt: Number(row.last_activity_at),
     agentKind: row.agent_kind,
@@ -268,13 +268,16 @@ export class SubagentRunStore {
         label TEXT NOT NULL,
         depth INTEGER NOT NULL,
         status TEXT NOT NULL,
-        integration_status TEXT,
         started_at INTEGER NOT NULL,
         last_activity_at INTEGER NOT NULL,
         agent_kind TEXT NOT NULL,
         launch_config_json TEXT,
         external_session_entity_id TEXT,
-        external_generation_id TEXT
+        external_generation_id TEXT,
+        source_event_id TEXT,
+        discarded_before_integration INTEGER NOT NULL DEFAULT 0,
+        empty_read_after_seq INTEGER,
+        semantic_integration_json TEXT
       )
     `);
     assertExactSqlTableSchema(sql, {
@@ -291,13 +294,16 @@ export class SubagentRunStore {
         ["label", "TEXT", true],
         ["depth", "INTEGER", true],
         ["status", "TEXT", true],
-        ["integration_status", "TEXT", false],
         ["started_at", "INTEGER", true],
         ["last_activity_at", "INTEGER", true],
         ["agent_kind", "TEXT", true],
         ["launch_config_json", "TEXT", false],
         ["external_session_entity_id", "TEXT", false],
         ["external_generation_id", "TEXT", false],
+        ["source_event_id", "TEXT", false],
+        ["discarded_before_integration", "INTEGER", true, "0"],
+        ["empty_read_after_seq", "INTEGER", false],
+        ["semantic_integration_json", "TEXT", false],
       ],
       primaryKey: ["run_id"],
     });
@@ -348,9 +354,11 @@ export class SubagentRunStore {
     this.sql.exec(
       `INSERT OR IGNORE INTO subagent_runs
          (run_id, task_channel_id, parent_context_id, child_context_id, child_entity_id, child_participant_id, parent_channel_id,
-          mode, label, depth, status, integration_status, started_at, last_activity_at, agent_kind,
+          mode, label, depth, status, source_event_id,
+          discarded_before_integration, empty_read_after_seq, semantic_integration_json,
+          started_at, last_activity_at, agent_kind,
           launch_config_json, external_session_entity_id, external_generation_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.runId,
       row.taskChannelId,
       row.parentContextId,
@@ -362,7 +370,10 @@ export class SubagentRunStore {
       row.label,
       row.depth,
       row.status,
-      row.integration,
+      row.sourceEventId,
+      row.discardedBeforeIntegration ? 1 : 0,
+      row.emptyReadAfterSeq,
+      row.semanticIntegrationSnapshot ? JSON.stringify(row.semanticIntegrationSnapshot) : null,
       row.startedAt,
       row.lastActivityAt,
       row.agentKind,
@@ -375,6 +386,16 @@ export class SubagentRunStore {
   get(runId: string): SubagentRunRow | null {
     const rows = this.sql
       .exec(`SELECT * FROM subagent_runs WHERE run_id = ?`, runId)
+      .toArray() as unknown as SubagentRunSqlRow[];
+    return rows.length > 0 ? toRow(rows[0]!) : null;
+  }
+
+  getBySourceEvent(sourceEventId: string): SubagentRunRow | null {
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM subagent_runs WHERE source_event_id = ? ORDER BY started_at DESC LIMIT 1`,
+        sourceEventId
+      )
       .toArray() as unknown as SubagentRunSqlRow[];
     return rows.length > 0 ? toRow(rows[0]!) : null;
   }
@@ -448,10 +469,42 @@ export class SubagentRunStore {
     this.sql.exec(`UPDATE subagent_runs SET status = ? WHERE run_id = ?`, status, runId);
   }
 
-  setIntegration(runId: string, integration: SubagentRunIntegration): void {
+  setSourceEventId(runId: string, sourceEventId: string): void {
     this.sql.exec(
-      `UPDATE subagent_runs SET integration_status = ? WHERE run_id = ?`,
-      integration,
+      `UPDATE subagent_runs SET source_event_id = ? WHERE run_id = ?`,
+      sourceEventId,
+      runId
+    );
+  }
+
+  setDiscardedBeforeIntegration(runId: string): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET discarded_before_integration = 1 WHERE run_id = ?`,
+      runId
+    );
+  }
+
+  setEmptyReadAfterSeq(runId: string, sequence: number | null): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET empty_read_after_seq = ? WHERE run_id = ?`,
+      sequence,
+      runId
+    );
+  }
+
+  clearEmptyReadAfterNewEvent(runId: string, sequence: number): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET empty_read_after_seq = NULL
+        WHERE run_id = ? AND empty_read_after_seq IS NOT NULL AND empty_read_after_seq < ?`,
+      runId,
+      sequence
+    );
+  }
+
+  setSemanticIntegrationSnapshot(runId: string, value: Record<string, unknown>): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET semantic_integration_json = ? WHERE run_id = ?`,
+      JSON.stringify(value),
       runId
     );
   }

@@ -50,6 +50,7 @@ describe("workspace VCS commit operation", () => {
       committed: committed.event,
       workingHead: committed.event,
       workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
     });
     expect(result.content[0]).toMatchObject({
       type: "text",

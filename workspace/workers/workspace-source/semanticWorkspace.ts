@@ -2401,6 +2401,7 @@ export class SemanticWorkspace {
     observed?: ReadonlyMap<string, string>
   ): SemanticDispatchResult {
     const apply = (): SemanticDispatchResult => {
+      const mergeStartedAt = performance.now();
       const source =
         input.source.kind === "event"
           ? { kind: "event" as const, eventId: input.source.eventId }
@@ -2424,6 +2425,7 @@ export class SemanticWorkspace {
         source,
         observed ?? new Map()
       );
+      const planningCompletedAt = performance.now();
       if (!observed) {
         const contentHashes = this.mergeTextContentHashes(comparison);
         if (contentHashes.length > 0) {
@@ -2445,8 +2447,13 @@ export class SemanticWorkspace {
           coordinate,
         ])
       );
-      const resolutions = new Map<string, NonNullable<VcsMergeInput["resolutions"]>[number]>();
-      for (const resolution of input.resolutions ?? []) {
+      const coordinateResolutions = Array.isArray(input.resolutions) ? input.resolutions : [];
+      const blanket =
+        input.resolutions && !Array.isArray(input.resolutions)
+          ? input.resolutions.allRemaining
+          : null;
+      const resolutions = new Map<string, (typeof coordinateResolutions)[number]>();
+      for (const resolution of coordinateResolutions) {
         const key = `${resolution.coordinate.kind}:${resolution.coordinate.id}`;
         if (resolutions.has(key)) {
           throw new SemanticVcsError(
@@ -2470,7 +2477,7 @@ export class SemanticWorkspace {
         selectedKeys.add(key);
         selected.push(row);
       }
-      for (const resolution of input.resolutions ?? []) {
+      for (const resolution of coordinateResolutions) {
         const key = `${resolution.coordinate.kind}:${resolution.coordinate.id}`;
         const row = byKey.get(key);
         if (!row || row.status === "resolved") {
@@ -2490,7 +2497,7 @@ export class SemanticWorkspace {
           selected.push(row);
         }
       }
-      if (!input.coordinates) {
+      if (!input.coordinates && !blanket) {
         for (let index = 0; index < selected.length; index += 1) {
           const coordinate = selected[index]!;
           if (!coordinate.group) continue;
@@ -2515,7 +2522,41 @@ export class SemanticWorkspace {
           }
         }
       }
-      if (!input.coordinates) {
+      if (!input.coordinates && blanket) {
+        const seenGroups = new Set<string>();
+        for (const coordinate of comparison.coordinates) {
+          if (coordinate.status === "resolved") continue;
+          const groupKey =
+            coordinate.group ?? `${coordinate.coordinate.kind}:${coordinate.coordinate.id}`;
+          if (seenGroups.has(groupKey)) continue;
+          seenGroups.add(groupKey);
+          const group = coordinate.group
+            ? comparison.coordinates.filter(
+                (candidate) =>
+                  candidate.group === coordinate.group && candidate.status !== "resolved"
+              )
+            : [coordinate];
+          if (group.length > 500) {
+            throw new SemanticVcsError(
+              "ScopeTooLarge",
+              `Coupled merge group ${coordinate.group} exceeds one page`,
+              { maximum: 500 }
+            );
+          }
+          if (selected.length + group.length > 500) break;
+          for (const member of group) {
+            const memberKey = `${member.coordinate.kind}:${member.coordinate.id}`;
+            selectedKeys.add(memberKey);
+            selected.push(member);
+            resolutions.set(memberKey, {
+              coordinate: member.coordinate,
+              resolution: blanket.resolution,
+              ...(blanket.rationale ? { rationale: blanket.rationale } : {}),
+            });
+          }
+        }
+      }
+      if (!input.coordinates && !blanket) {
         for (const coordinate of comparison.coordinates) {
           const key = `${coordinate.coordinate.kind}:${coordinate.coordinate.id}`;
           if (
@@ -2590,10 +2631,34 @@ export class SemanticWorkspace {
         });
       }
       if (selected.length === 0 && comparison.concluded) {
-        throw new SemanticVcsError(
-          "NoEffect",
-          "Merge source is already concluded at the expected working head"
+        const review = this.mergeReviewProjection(
+          comparison,
+          asState(input.expectedWorkingHead),
+          source
         );
+        const totalMs = performance.now() - mergeStartedAt;
+        if (totalMs >= 100) {
+          console.info("[VcsProfile] merge comparison", {
+            planningComparisonMs: planningCompletedAt - mergeStartedAt,
+            postMergeComparisonMs: 0,
+            totalMs,
+            selectedCoordinateCount: 0,
+          });
+        }
+        const unchangedResult = {
+          status: "unchanged",
+          contextId: input.contextId,
+          workingHead: input.expectedWorkingHead,
+          ...review,
+        };
+        this.deps.store.finishCommand({
+          scopeKind: "context",
+          scopeId: input.contextId,
+          commandId: input.commandId,
+          result: unchangedResult,
+          effectPending: false,
+        });
+        return { kind: "complete", result: unchangedResult };
       }
       const root = this.deps.store.stateRoot(asState(input.expectedWorkingHead));
       const sourceRoot =
@@ -2899,14 +2964,16 @@ export class SemanticWorkspace {
       const decisionIdValue = result.decisionIds[0];
       if (!decisionIdValue)
         throw new SemanticVcsError("IntegrityFailure", "Merge did not persist its decision");
+      const postComparisonStartedAt = performance.now();
       const after = this.mergeComparison(result.workingHead, source);
-      const intent = this.intentProjection(after);
+      const postComparisonCompletedAt = performance.now();
+      this.persistIntegrationProjection(input.contextId, source, result.workingHead, after);
       const publicResult = {
         ...result,
+        status: "working" as const,
         decisionId: decisionIdValue,
         outcomes: selected.map((coordinate) => this.publicMergeCoordinate(coordinate)),
-        resolution: this.comparisonResolution(after),
-        intents: intent.intents,
+        ...this.mergeReviewProjection(after, result.workingHead, source),
         composed: selected
           .filter((coordinate) => coordinate.status === "composed")
           .map((coordinate) => ({
@@ -2921,6 +2988,15 @@ export class SemanticWorkspace {
             ),
           })),
       };
+      const totalMs = performance.now() - mergeStartedAt;
+      if (totalMs >= 100) {
+        console.info("[VcsProfile] merge comparison", {
+          planningComparisonMs: planningCompletedAt - mergeStartedAt,
+          postMergeComparisonMs: postComparisonCompletedAt - postComparisonStartedAt,
+          totalMs,
+          selectedCoordinateCount: selected.length,
+        });
+      }
       const effect = this.queueMaterialization(
         input.contextId,
         input.commandId,
@@ -3347,6 +3423,16 @@ export class SemanticWorkspace {
             {
               source: { kind: "event", eventId: sourceEventId },
               unaccountedCoordinates: remaining,
+              recovery: {
+                operation: "merge",
+                sourceEventId,
+                resolutions: {
+                  allRemaining: {
+                    resolution: "ours",
+                    rationale: "Explicitly decline the remaining source coordinates",
+                  },
+                },
+              },
             }
           );
         }
@@ -3385,6 +3471,22 @@ export class SemanticWorkspace {
         integratesDeltaIds: derivedDeltaSources,
         maxApplications: MAX_WORKING_APPLICATIONS,
       });
+      for (const sourceEventId of integrationSourceEventIds) {
+        this.deps.sql.exec(
+          `DELETE FROM gad_integration_projection
+            WHERE context_id = ? AND source_kind = 'event' AND source_id = ?`,
+          input.contextId,
+          sourceEventId
+        );
+      }
+      for (const sourceDeltaId of derivedDeltaSources) {
+        this.deps.sql.exec(
+          `DELETE FROM gad_integration_projection
+            WHERE context_id = ? AND source_kind = 'external-delta' AND source_id = ?`,
+          input.contextId,
+          sourceDeltaId
+        );
+      }
       const result = {
         contextId: input.contextId,
         event: { kind: "event", eventId: committed.event.eventId },
@@ -3417,6 +3519,10 @@ export class SemanticWorkspace {
     return this.runMutation("discard", input, request, () => {
       const chain = this.deps.store.workingChain(input.contextId, MAX_WORKING_APPLICATIONS);
       const context = this.deps.store.discard(input.contextId, asState(input.expectedWorkingHead));
+      this.deps.sql.exec(
+        `DELETE FROM gad_integration_projection WHERE context_id = ?`,
+        input.contextId
+      );
       const result = {
         contextId: input.contextId,
         workingHead: context.working.ref,
@@ -4375,6 +4481,39 @@ export class SemanticWorkspace {
       0
     );
     const main = this.deps.store.mainEventId();
+    const integrating = this.deps.sql
+      .exec(
+        `SELECT source_kind, source_id, remaining_coordinate_count,
+                mergeable_coordinate_count, conflict_coordinate_count, concluded,
+                as_of_working_head_kind, as_of_working_head_id
+           FROM gad_integration_projection
+          WHERE context_id = ? ORDER BY source_kind, source_id`,
+        input.contextId
+      )
+      .toArray()
+      .map((row) => {
+        const value = row as Row;
+        const source =
+          value["source_kind"] === "event"
+            ? { kind: "event" as const, eventId: String(value["source_id"]) }
+            : { kind: "external-delta" as const, deltaId: String(value["source_id"]) };
+        const asOfWorkingHead =
+          value["as_of_working_head_kind"] === "event"
+            ? { kind: "event" as const, eventId: String(value["as_of_working_head_id"]) }
+            : {
+                kind: "application" as const,
+                applicationId: String(value["as_of_working_head_id"]),
+              };
+        return {
+          source,
+          remainingCoordinateCount: Number(value["remaining_coordinate_count"]),
+          mergeableCoordinateCount: Number(value["mergeable_coordinate_count"]),
+          conflictCoordinateCount: Number(value["conflict_coordinate_count"]),
+          concluded: Number(value["concluded"]) === 1,
+          asOfWorkingHead,
+          stale: stateNodeKey(asOfWorkingHead) !== stateNodeKey(context.working.ref),
+        };
+      });
     return {
       contextId: input.contextId,
       committed: context.committed.ref,
@@ -4404,6 +4543,7 @@ export class SemanticWorkspace {
         workUnits: workUnits.size,
         changes,
       },
+      integrating,
     };
   }
 
@@ -4601,6 +4741,73 @@ export class SemanticWorkspace {
     };
   }
 
+  private mergeReviewProjection(
+    comparison: NetMergeComparison,
+    target: StateNodeRef,
+    source: VcsMergeInput["source"]
+  ) {
+    const intent = this.intentProjection(comparison);
+    const counts = { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 0 };
+    for (const coordinate of comparison.coordinates) counts[coordinate.status] += 1;
+    const conflicts = comparison.coordinates.filter(
+      (coordinate) => coordinate.status === "conflict"
+    );
+    const cursorBasis = { target, source, statusFilter: "conflict" };
+    return {
+      resolution: this.comparisonResolution(comparison),
+      counts,
+      intents: intent.intents,
+      intentsTruncated: intent.truncated,
+      conflicts: conflicts
+        .slice(0, 500)
+        .map((coordinate) => this.publicMergeCoordinate(coordinate)),
+      nextConflictCursor:
+        conflicts.length > 500 ? semanticCursor("compare", cursorBasis, { offset: 500 }) : null,
+    };
+  }
+
+  private persistIntegrationProjection(
+    contextId: string,
+    source: VcsMergeInput["source"],
+    workingHead: StateNodeRef,
+    comparison: NetMergeComparison
+  ): void {
+    const remaining = comparison.coordinates.filter(
+      (coordinate) => coordinate.status !== "resolved" && coordinate.status !== "convergent"
+    );
+    const mergeableCoordinateCount = comparison.coordinates.filter(
+      (coordinate) =>
+        coordinate.status === "adopt" ||
+        coordinate.status === "composed" ||
+        (coordinate.status === "convergent" && !comparison.concluded)
+    ).length;
+    const sourceId = source.kind === "event" ? source.eventId : source.deltaId;
+    const headId = workingHead.kind === "event" ? workingHead.eventId : workingHead.applicationId;
+    this.deps.sql.exec(
+      `INSERT INTO gad_integration_projection
+       (context_id, source_kind, source_id, remaining_coordinate_count,
+        mergeable_coordinate_count, conflict_coordinate_count, concluded,
+        as_of_working_head_kind, as_of_working_head_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(context_id, source_kind, source_id) DO UPDATE SET
+         remaining_coordinate_count = excluded.remaining_coordinate_count,
+         mergeable_coordinate_count = excluded.mergeable_coordinate_count,
+         conflict_coordinate_count = excluded.conflict_coordinate_count,
+         concluded = excluded.concluded,
+         as_of_working_head_kind = excluded.as_of_working_head_kind,
+         as_of_working_head_id = excluded.as_of_working_head_id`,
+      contextId,
+      source.kind,
+      sourceId,
+      remaining.length,
+      mergeableCoordinateCount,
+      comparison.coordinates.filter((coordinate) => coordinate.status === "conflict").length,
+      comparison.concluded ? 1 : 0,
+      workingHead.kind,
+      headId
+    );
+  }
+
   private compare(
     input: VcsCompareInput,
     request: SemanticDispatchRequest,
@@ -4629,8 +4836,15 @@ export class SemanticWorkspace {
     const intent = this.intentProjection(comparison);
     const counts = { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 0 };
     for (const coordinate of comparison.coordinates) counts[coordinate.status] += 1;
-    const cursorBasis = { target: input.target, source: input.source };
+    const cursorBasis = {
+      target: input.target,
+      source: input.source,
+      ...(input.statusFilter ? { statusFilter: input.statusFilter } : {}),
+    };
     const offset = cursorOffset(input.cursor, cursorBasis);
+    const pageCoordinates = input.statusFilter
+      ? comparison.coordinates.filter((coordinate) => coordinate.status === input.statusFilter)
+      : comparison.coordinates;
     return {
       kind: "complete",
       result: {
@@ -4641,13 +4855,13 @@ export class SemanticWorkspace {
         resolution: this.comparisonResolution(comparison),
         counts,
         intentCounts: intent.intentCounts,
-        coordinates: comparison.coordinates
+        coordinates: pageCoordinates
           .slice(offset, offset + input.limit)
           .map((coordinate) => this.publicMergeCoordinate(coordinate)),
         intents: intent.intents,
         intentsTruncated: intent.truncated,
         nextCursor:
-          offset + input.limit < comparison.coordinates.length
+          offset + input.limit < pageCoordinates.length
             ? semanticCursor("compare", cursorBasis, { offset: offset + input.limit })
             : null,
       },

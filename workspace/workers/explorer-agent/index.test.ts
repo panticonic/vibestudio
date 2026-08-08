@@ -213,23 +213,40 @@ describe("ExplorerAgentWorker", () => {
         if (method === "vcs.compare") {
           compareCalls += 1;
           return {
-            coordinates:
-              compareCalls === 1
-                ? [
-                    {
-                      coordinate: { kind: "file", id: "file:main-1", paths: {} },
-                      status: "adopt",
-                    },
-                  ]
-                : [],
-            counts: { adopt: compareCalls === 1 ? 1 : 0, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
-            resolution: { complete: compareCalls > 1, remainingCoordinateCount: compareCalls === 1 ? 1 : 0, concluded: compareCalls > 1 },
+            target: { kind: "event", eventId: "commit-1" },
+            source: { kind: "event", eventId: "main-1" },
+            base: { kind: "event", eventId: "base" },
+            coordinates: [],
+            counts: { adopt: 1, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+            intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 1 },
+            resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
+            intents: [],
+            intentsTruncated: false,
             nextCursor: null,
           } as T;
         }
         if (method === "vcs.merge") {
           return {
+            status: "working",
+            commandId: "command:merge",
+            contextId: "run-1",
+            workUnitId: "work:merge",
+            applicationId: "app-merged",
+            changeCount: 0,
+            changeIds: [],
+            incorporatedChangeCount: 1,
+            incorporatedChangeIds: ["change:main-1"],
+            decisionIds: ["decision:merge"],
             workingHead: { kind: "application", applicationId: "app-merged" },
+            decisionId: "decision:merge",
+            outcomes: [],
+            resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+            counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 1 },
+            intents: [],
+            intentsTruncated: false,
+            composed: [],
+            conflicts: [],
+            nextConflictCursor: null,
           } as T;
         }
         return undefined as T;

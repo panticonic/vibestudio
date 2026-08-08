@@ -98,6 +98,7 @@ function makeProjectedReadBridge(root: string): FsVcsBridge {
         mainEventId: "event:main",
         mainRelation: "ahead",
         workingCounts: { applications: 1, workUnits: 0, changes: 0 },
+        integrating: [],
       };
     },
     neighbors: async ({ root: requestedState }) => {
@@ -294,6 +295,7 @@ function makeCanonicalSemanticBridge(
         workUnits: heads.get(contextId) ?? 0,
         changes: heads.get(contextId) ?? 0,
       },
+      integrating: [],
     }),
     neighbors: async ({ root }) => {
       if (root.kind !== "event" && root.kind !== "application") {

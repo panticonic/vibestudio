@@ -18,6 +18,7 @@ function revision(
       mainEventId: "event:main",
       mainRelation: overrides.mainRelation ?? "ahead",
       workingCounts: { applications: 0, workUnits: 0, changes: overrides.changes ?? 0 },
+      integrating: [],
     },
   };
 }

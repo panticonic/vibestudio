@@ -16,6 +16,7 @@ function fixture(
     mainEventId: "event:main",
     mainRelation: "ahead" as const,
     workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+    integrating: [],
   }));
   const resolveRepository = vi.fn(
     async (input: Parameters<ToolFileTransferVcs["resolveRepository"]>[0]) => ({

@@ -40,19 +40,26 @@ Treat `split` as the highest-priority semantic review signal. These states guide
 
 A merge call acts on at most one normalized result per coordinate and persists one decision even when it changes no facts. With no explicit coordinate list, it selects the first mergeable bounded page. Conflicts are never selected implicitly.
 
-For the agent-facing tool, direct merge is the normal happy path: it derives the exact live target and returns a bounded, model-visible review packet. A separate status or compare preflight is optional. Compare first when you need a read-only preview, and compare after merge only when its resolution is incomplete or you need deeper coordinate evidence.
+For the agent-facing tool, direct merge is the normal happy path: it derives the exact live target, drains every clean bounded page through the shared driver, and returns a self-sufficient review packet. Do not compare before or after a clean merge. Compare is for a read-only preview or for paging deeper conflict evidence.
 
 ```js
 vcs({
   operation: "merge",
   sourceEventId: "event:source",
-  intent: "Bring the reviewed source behavior into this context"
-})
+  intent: "Bring the reviewed source behavior into this context",
+});
 ```
 
 For direct service callers, the source is `{ kind: "event", eventId }` or `{ kind: "external-delta", deltaId }`. The compact tool exposes `sourceEventId` and maps it to the event source.
 
 Always inspect the merge result's model-visible `composed` entries. Each item names the coordinate and both resolved intents; the full packet also remains in structured details. Hunk-composed content is a new authored merge change with exact mapped content lineage to both parents.
+
+The result is discriminated by `status`. `working` carries mutation identities;
+`unchanged` honestly carries none. Both carry final global `resolution`,
+`counts`, `intents`, `intentsTruncated`, a bounded conflict-only page, and
+`nextConflictCursor`. Continue that cursor only with `compare` using the same
+target, source, and `statusFilter: "conflict"`; filtered and unfiltered cursors
+are intentionally not interchangeable.
 
 ## Resolve a coordinate
 
@@ -67,16 +74,25 @@ Resolutions apply to the whole unresolved coordinate; aspects are diagnosis, not
 vcs({
   operation: "merge",
   sourceEventId: "event:source",
-  resolutions: [{
-    coordinate: { kind: "file", id: "file:config" },
-    resolution: "current",
-    rationale: "The current value combines the source retry policy with local schema validation"
-  }],
-  intent: "Conclude the reviewed config merge"
-})
+  resolutions: [
+    {
+      coordinate: { kind: "file", id: "file:config" },
+      resolution: "current",
+      rationale: "The current value combines the source retry policy with local schema validation",
+    },
+  ],
+  intent: "Conclude the reviewed config merge",
+});
 ```
 
 `ours` is also how to take only part of a clean source: resolve unwanted clean coordinates as `ours`; omitting them leaves them pending.
+
+For one reviewed decision over the literal whole remainder, use
+`resolutions: { allRemaining: { resolution: "ours" } }`, or `current` with a
+required rationale. The driver repeats this bounded blanket decision until the
+source concludes. It applies to clean coordinates as well as conflicts and
+cannot be combined with an explicit coordinate page. There is no blanket
+`theirs`; adopting unseen source state remains coordinate-specific.
 
 ## Completion and ancestry
 
@@ -94,5 +110,5 @@ Commit then derives the source parent from the recorded decisions. Repeating the
 
 - `ConflictPresent`: you explicitly selected a conflicted coordinate without resolving it.
 - `CoupledGroupIncomplete`: the coordinate subset splits the returned group.
-- `RevisionChanged`: the target head advanced; compare the fresh head.
+- `RevisionChanged`: the target head advanced; rerun merge from the fresh live head.
 - `IntegrityFailure`: reachable operations cannot cover the state difference; stop and diagnose the graph.

@@ -61,6 +61,7 @@ export class StubVcs implements ToolEditingVcs {
       mainEventId: "event:main",
       mainRelation: "at" as const,
       workingCounts: { applications: this.version, workUnits: this.version, changes: this.version },
+      integrating: [],
     };
   }
 

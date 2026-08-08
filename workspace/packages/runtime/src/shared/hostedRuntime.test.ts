@@ -68,6 +68,7 @@ function recordingHost() {
           mainEventId: "event:committed",
           mainRelation: "at",
           workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+          integrating: [],
         };
       }
       if (method === "extensions.invokeProvider") return [];

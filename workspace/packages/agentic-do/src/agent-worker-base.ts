@@ -33,6 +33,7 @@ import type { AgentTurnContextPolicy, ThinkingLevel } from "@workspace/agent-loo
 import { ids } from "@workspace/agent-loop";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { RpcClient } from "@vibestudio/rpc";
+import type { VcsCommitResult } from "@vibestudio/service-schemas/vcs";
 import { SUPPORTED_IMAGE_TYPES } from "@workspace/pubsub";
 import {
   AgentVesselBase,
@@ -289,6 +290,23 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     const mutationContext = {
       contextId,
       commandId: execution?.commandId ?? requireBoundMutationInvocation,
+      integrationSourceResolver: (sourceEventId: string) => {
+        const run = this.subagentRuns.getBySourceEvent(sourceEventId);
+        return run ? { runId: run.runId } : null;
+      },
+      onIntegrationSourcesCommitted: (result: VcsCommitResult) => {
+        if (result.event.kind !== "event") return;
+        for (const sourceEventId of result.integrationSourceEventIds) {
+          const run = this.subagentRuns.getBySourceEvent(sourceEventId);
+          if (!run) continue;
+          this.subagentRuns.setSemanticIntegrationSnapshot(run.runId, {
+            state: "complete",
+            sourceEventId,
+            committedEventId: result.event.eventId,
+            stale: false,
+          });
+        }
+      },
     };
     const base = [
       createReadTool(cwd, fs, {
@@ -579,7 +597,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "inspect_subagent",
         label: "inspect_subagent",
         description:
-          "Optional subagent diagnostics; no inspection preflight is required before merge_subagent. Use 'status', bounded parent-relative 'diff'/'log', or a file path for semantic workspace state when a merge result or investigation gives a concrete reason. 'diff' compares the parent's current working head with the child's committed event and reports any additional uncommitted child counts separately. Use 'runtime' for bounded process/log diagnostics from an external engine such as Claude. Use read_subagent for what the child said.",
+          "Inspects a supervised child's runtime or semantic workspace state; it never exposes the model's private context window. No inspection preflight is required before merge_subagent. Use 'status', bounded parent-relative 'diff'/'log', or an exact repo-prefixed file path. 'runtime' is only for external-agent diagnostics; read_subagent returns what the child said.",
         parameters: {
           type: "object",
           properties: {
@@ -591,7 +609,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             query: {
               type: "string",
               description:
-                "'status' | 'diff' | 'log' | 'runtime' | a file path (default 'status').",
+                "'status' | 'diff' | 'log' | 'runtime' | an exact repo-prefixed file path (default 'status').",
             },
             limit: {
               type: "integer",
@@ -641,26 +659,46 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
                 "The exact subagent runId or any sufficiently long unique prefix; the display ellipsis is optional.",
             },
             resolutions: {
-              type: "array",
-              maxItems: 500,
-              items: {
-                type: "object",
-                properties: {
-                  coordinate: {
+              oneOf: [
+                {
+                  type: "array",
+                  maxItems: 500,
+                  items: {
                     type: "object",
                     properties: {
-                      kind: { enum: ["file", "repository"] },
-                      id: { type: "string", minLength: 1 },
+                      coordinate: {
+                        type: "object",
+                        properties: {
+                          kind: { enum: ["file", "repository"] },
+                          id: { type: "string", minLength: 1 },
+                        },
+                        required: ["kind", "id"],
+                        additionalProperties: false,
+                      },
+                      resolution: { enum: ["composed", "theirs", "ours", "current"] },
+                      rationale: { type: "string", minLength: 1, maxLength: 2000 },
                     },
-                    required: ["kind", "id"],
+                    required: ["coordinate", "resolution"],
                     additionalProperties: false,
                   },
-                  resolution: { enum: ["composed", "theirs", "ours", "current"] },
-                  rationale: { type: "string", minLength: 1, maxLength: 2000 },
                 },
-                required: ["coordinate", "resolution"],
-                additionalProperties: false,
-              },
+                {
+                  type: "object",
+                  properties: {
+                    allRemaining: {
+                      type: "object",
+                      properties: {
+                        resolution: { enum: ["ours", "current"] },
+                        rationale: { type: "string", minLength: 1, maxLength: 2000 },
+                      },
+                      required: ["resolution"],
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["allRemaining"],
+                  additionalProperties: false,
+                },
+              ],
             },
           },
           required: ["runId"],
@@ -670,7 +708,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           return this.mergeSubagent(
             String(p.runId ?? ""),
             channelId,
-            Array.isArray(p.resolutions) ? (p.resolutions as never) : [],
+            p.resolutions && typeof p.resolutions === "object" ? (p.resolutions as never) : [],
             toolRpc
           );
         },

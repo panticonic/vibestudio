@@ -213,6 +213,7 @@ describe("reduced VCS agentic catalog", () => {
       workingHead: { kind: "application", applicationId: "application:advanced" },
       clean: false,
       workingCounts: { applications: 2, workUnits: 2, changes: 2 },
+      integrating: [],
     };
     const recoveredHead = { kind: "application", applicationId: "application:recovered" };
     const result = execution(
@@ -249,6 +250,7 @@ describe("reduced VCS agentic catalog", () => {
               ...beforeStale,
               workingHead: recoveredHead,
               workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+              integrating: [],
             },
           }
         ),
@@ -290,6 +292,7 @@ describe("reduced VCS agentic catalog", () => {
               ...beforeStale,
               workingHead: recoveredHead,
               workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+              integrating: [],
             },
           }
         ),
@@ -329,6 +332,7 @@ describe("reduced VCS agentic catalog", () => {
               ...beforeStale,
               workingHead: { kind: "application", applicationId: "application:recovered" },
               workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+              integrating: [],
             },
           }
         ),
@@ -369,6 +373,7 @@ describe("reduced VCS agentic catalog", () => {
               ...beforeStale,
               workingHead: { kind: "application", applicationId: "application:recovered" },
               workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+              integrating: [],
             },
           }
         ),
@@ -414,6 +419,7 @@ describe("reduced VCS agentic catalog", () => {
               ...beforeStale,
               workingHead: { kind: "application", applicationId: "application:recovered" },
               workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+              integrating: [],
             },
           }
         ),
@@ -453,6 +459,7 @@ describe("reduced VCS agentic catalog", () => {
               ...beforeStale,
               workingHead: { kind: "application", applicationId: "application:recovered" },
               workingCounts: { applications: 3, workUnits: 3, changes: 3 },
+              integrating: [],
             },
           }
         ),
@@ -482,6 +489,7 @@ describe("reduced VCS agentic catalog", () => {
         contextId: "context:test",
         workingHead: { kind: "application", applicationId: "application:one" },
         workingCounts: { applications: 1, workUnits: 1, changes: 1 },
+        integrating: [],
       },
     };
     const call = (returnValue: unknown) =>
@@ -613,6 +621,7 @@ describe("reduced VCS agentic catalog", () => {
             committed: { kind: "event", eventId: "event:restored" },
             workingHead: { kind: "event", eventId: "event:restored" },
             workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+            integrating: [],
           },
         }
       ),
@@ -671,6 +680,7 @@ describe("reduced VCS agentic catalog", () => {
             committed: { kind: "event", eventId: "event:base" },
             workingHead: { kind: "event", eventId: "event:base" },
             workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+            integrating: [],
           },
         }
       )

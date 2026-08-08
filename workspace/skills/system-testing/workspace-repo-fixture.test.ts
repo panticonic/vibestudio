@@ -70,6 +70,7 @@ function createPort() {
       mainEventId: currentMainEventId,
       mainRelation: committedEventId === currentMainEventId ? ("at" as const) : ("ahead" as const),
       workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
     };
   });
   const importSnapshot = vi.fn(

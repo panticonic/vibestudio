@@ -3,7 +3,7 @@ import { createWorkspaceVcsTool, type ToolWorkflowVcs } from "../workspace-vcs.j
 
 function fixture() {
   const working = { kind: "application" as const, applicationId: "application:working" };
-  const status = vi.fn(async () => ({
+  const status = vi.fn<ToolWorkflowVcs["status"]>(async () => ({
     contextId: "context:test",
     committed: { kind: "event" as const, eventId: "event:committed" },
     workingHead: working,
@@ -11,6 +11,7 @@ function fixture() {
     mainEventId: "event:main",
     mainRelation: "ahead" as const,
     workingCounts: { applications: 2, workUnits: 2, changes: 3 },
+    integrating: [],
   }));
   const compare = vi.fn(async (input: Parameters<ToolWorkflowVcs["compare"]>[0]) => ({
     target: input.target,
@@ -58,6 +59,8 @@ function fixture() {
     nextCursor: null,
   }));
   const merge = vi.fn(async (input: Parameters<ToolWorkflowVcs["merge"]>[0]) => ({
+    status: "working" as const,
+    commandId: input.commandId,
     contextId: input.contextId,
     workUnitId: "work:merge",
     applicationId: "application:merge",
@@ -79,6 +82,10 @@ function fixture() {
         coordinates: [{ kind: "file" as const, id: "file:source" }],
       },
     ],
+    intentsTruncated: false,
+    counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 1 },
+    conflicts: [],
+    nextConflictCursor: null,
     composed: [
       {
         coordinate: { kind: "file" as const, id: "file:source" },
@@ -88,6 +95,12 @@ function fixture() {
     ],
   }));
   const revert = vi.fn();
+  const commit = vi.fn(async (input: Parameters<ToolWorkflowVcs["commit"]>[0]) => ({
+    contextId: input.contextId,
+    event: { kind: "event" as const, eventId: "event:integrated" },
+    committedApplicationIds: ["application:working"],
+    integrationSourceEventIds: ["event:source"],
+  }));
   const discard = vi.fn(async (input: Parameters<ToolWorkflowVcs["discard"]>[0]) => ({
     contextId: input.contextId,
     workingHead: { kind: "event" as const, eventId: "event:committed" },
@@ -133,6 +146,7 @@ function fixture() {
     compare,
     merge,
     revert,
+    commit,
     discard,
     blame,
     push,
@@ -182,6 +196,7 @@ function fixture() {
     status,
     compare,
     merge,
+    commit,
     discard,
     blame,
     push,
@@ -286,18 +301,19 @@ describe("workspace VCS agent tool", () => {
       coordinates: [{ kind: "file", id: "file:source" }],
       intent: "Merge the source behavior after coordinate review",
     });
-    expect(f.merge).toHaveBeenCalledWith({
-      contextId: "context:test",
-      expectedWorkingHead: f.working,
-      commandId: "command:merge",
-      source: { kind: "event", eventId: "event:source" },
-      coordinates: [{ kind: "file", id: "file:source" }],
-      intentSummary: "Merge the source behavior after coordinate review",
-    });
+    expect(f.merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextId: "context:test",
+        expectedWorkingHead: f.working,
+        source: { kind: "event", eventId: "event:source" },
+        coordinates: [{ kind: "file", id: "file:source" }],
+        intentSummary: "Merge the source behavior after coordinate review",
+      })
+    );
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: expect.stringMatching(
-        /Decision decision:merge[\s\S]*Resolution: complete=true; concluded=true; remaining=0[\s\S]*Intent: theirs\/merged[\s\S]*Composed: file:file:source/
+        /Resolution: complete=true; concluded=true; remaining=0[\s\S]*Intent: theirs\/merged[\s\S]*Composed: file:file:source/
       ),
     });
   });
@@ -321,19 +337,20 @@ describe("workspace VCS agent tool", () => {
       ],
     });
 
-    expect(f.merge).toHaveBeenCalledWith({
-      contextId: "context:test",
-      expectedWorkingHead: f.working,
-      commandId: "command:reconcile",
-      source: { kind: "event", eventId: "event:source" },
-      resolutions: [
-        {
-          coordinate: { kind: "file", id: "file:source" },
-          resolution: "current",
-          rationale: "The authored file preserves both intended behaviors.",
-        },
-      ],
-    });
+    expect(f.merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextId: "context:test",
+        expectedWorkingHead: f.working,
+        source: { kind: "event", eventId: "event:source" },
+        resolutions: [
+          {
+            coordinate: { kind: "file", id: "file:source" },
+            resolution: "current",
+            rationale: "The authored file preserves both intended behaviors.",
+          },
+        ],
+      })
+    );
   });
 
   it("passes an explicit ours resolution without filesystem evidence lookup", async () => {
@@ -409,6 +426,62 @@ describe("workspace VCS agent tool", () => {
         workingHead: { kind: "event", eventId: "event:committed" },
         discardedApplicationIds: ["application:first", "application:working"],
       },
+    });
+  });
+
+  it("reports committed integration sources only after the clean commit is verified", async () => {
+    const f = fixture();
+    const onIntegrationSourcesCommitted = vi.fn();
+    f.status.mockResolvedValueOnce({
+      ...(await f.status({ contextId: "context:test" })),
+      workingHead: f.working,
+    });
+    f.status.mockResolvedValueOnce({
+      contextId: "context:test",
+      committed: { kind: "event", eventId: "event:integrated" },
+      workingHead: { kind: "event", eventId: "event:integrated" },
+      clean: true,
+      mainEventId: "event:main",
+      mainRelation: "ahead",
+      workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      integrating: [],
+    });
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:commit",
+      onIntegrationSourcesCommitted,
+    });
+
+    await tool.execute("call:commit", { operation: "commit", message: "Integrate source" });
+
+    expect(onIntegrationSourcesCommitted).toHaveBeenCalledWith(
+      expect.objectContaining({ integrationSourceEventIds: ["event:source"] })
+    );
+  });
+
+  it("routes an incomplete integration refusal back to its supervised run", async () => {
+    const f = fixture();
+    f.commit.mockRejectedValueOnce(
+      Object.assign(new Error("integration incomplete"), {
+        errorData: {
+          code: "IntegrationIncomplete",
+          source: { kind: "event", eventId: "event:source" },
+        },
+      })
+    );
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:commit",
+      integrationSourceResolver: (sourceEventId) =>
+        sourceEventId === "event:source" ? { runId: "run:child" } : null,
+    });
+
+    await expect(
+      tool.execute("call:commit", { operation: "commit", message: "Integrate source" })
+    ).rejects.toMatchObject({
+      code: "IntegrationIncomplete",
+      message: expect.stringContaining('merge_subagent({runId:"run:child"'),
+      errorData: { runId: "run:child", recoveryTool: "merge_subagent" },
     });
   });
 

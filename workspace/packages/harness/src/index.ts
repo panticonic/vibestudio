@@ -8,6 +8,11 @@
 // the local tools, prompt composition, and shared types.
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export { driveMerge, renderMergeReview, MergeDriverError } from "./merge-driver.js";
+export type { DriveMergeInput, DriveMergeResult, MergeReview } from "./merge-driver.js";
+export { resolveToolFile, resolveToolRepository } from "./semantic-file-resolution.js";
+export type { PresentToolRepository, ToolFileResolution } from "./semantic-file-resolution.js";
+
 // Stable runner-level error codes (Phase 7).
 export { AgentWorkerError } from "./errors.js";
 export type { AgentWorkerErrorCode } from "./errors.js";

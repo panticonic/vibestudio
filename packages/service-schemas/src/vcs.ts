@@ -760,6 +760,26 @@ export const vcsMergeResolutionSchema = z
   })
   .strict();
 
+export const vcsMergeAllRemainingResolutionSchema = z
+  .object({
+    allRemaining: z
+      .object({
+        resolution: z.enum(["ours", "current"]),
+        rationale: nonEmptyText.max(2_000).optional(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.allRemaining.resolution === "current" && !value.allRemaining.rationale) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allRemaining", "rationale"],
+        message: "A current resolution requires a rationale",
+      });
+    }
+  });
+
 const uniqueMergeCoordinates = <
   T extends { coordinate: VcsMergeCoordinateRef } | VcsMergeCoordinateRef,
 >(
@@ -786,22 +806,33 @@ export const vcsMergeSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("event"), eventId: id("Exact committed source event.") }).strict(),
   z.object({ kind: z.literal("external-delta"), deltaId: id("Exact external delta.") }).strict(),
 ]);
+export type VcsMergeSource = z.infer<typeof vcsMergeSourceSchema>;
 
 export const vcsMergeInputSchema = z
   .object({
     ...mutationEnvelope,
     source: vcsMergeSourceSchema,
     coordinates: z.array(vcsMergeCoordinateRefSchema).max(500).optional(),
-    resolutions: z.array(vcsMergeResolutionSchema).max(500).optional(),
+    resolutions: z
+      .union([z.array(vcsMergeResolutionSchema).max(500), vcsMergeAllRemainingResolutionSchema])
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {
+    if (value.coordinates && value.resolutions && !Array.isArray(value.resolutions)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["coordinates"],
+        message: "allRemaining cannot be combined with an explicit coordinate page",
+      });
+    }
     uniqueMergeCoordinates(value.coordinates ?? [], context, (coordinate) => coordinate);
-    uniqueMergeCoordinates(value.resolutions ?? [], context, (resolution) => resolution.coordinate);
+    const coordinateResolutions = Array.isArray(value.resolutions) ? value.resolutions : [];
+    uniqueMergeCoordinates(coordinateResolutions, context, (resolution) => resolution.coordinate);
     const selected = new Set(
       (value.coordinates ?? []).map((coordinate) => `${coordinate.kind}:${coordinate.id}`)
     );
-    for (const resolution of value.resolutions ?? []) {
+    for (const resolution of coordinateResolutions) {
       selected.add(`${resolution.coordinate.kind}:${resolution.coordinate.id}`);
     }
     if (selected.size > 500) {
@@ -1114,6 +1145,19 @@ export type VcsPushResult = z.infer<typeof vcsPushResultSchema>;
 export const vcsStatusInputSchema = z.object({ contextId }).strict();
 export type VcsStatusInput = z.infer<typeof vcsStatusInputSchema>;
 
+export const vcsIntegrationProjectionSchema = z
+  .object({
+    source: vcsMergeSourceSchema,
+    remainingCoordinateCount: z.number().int().nonnegative(),
+    mergeableCoordinateCount: z.number().int().nonnegative(),
+    conflictCoordinateCount: z.number().int().nonnegative(),
+    concluded: z.boolean(),
+    asOfWorkingHead: vcsStateNodeRefSchema,
+    stale: z.boolean(),
+  })
+  .strict();
+export type VcsIntegrationProjection = z.infer<typeof vcsIntegrationProjectionSchema>;
+
 export const vcsStatusResultSchema = z
   .object({
     contextId,
@@ -1129,6 +1173,7 @@ export const vcsStatusResultSchema = z
         changes: z.number().int().nonnegative(),
       })
       .strict(),
+    integrating: z.array(vcsIntegrationProjectionSchema).default([]),
   })
   .strict();
 export type VcsStatusResult = z.infer<typeof vcsStatusResultSchema>;
@@ -1223,7 +1268,7 @@ export const vcsMergeResolutionStateSchema = z
     }
   });
 
-const mergeCountsSchema = z
+export const vcsMergeCountsSchema = z
   .object({
     adopt: z.number().int().nonnegative(),
     convergent: z.number().int().nonnegative(),
@@ -1245,6 +1290,7 @@ const intentCountsSchema = z
 const compareInput = {
   target: vcsStateNodeRefSchema,
   source: vcsMergeSourceSchema,
+  statusFilter: z.literal("conflict").optional(),
   cursor: cursor.optional(),
   limit: pageLimit,
 };
@@ -1258,7 +1304,7 @@ export const vcsCompareResultSchema = z
     base: vcsStateNodeRefSchema,
     bases: z.array(vcsStateNodeRefSchema).min(2).max(200).optional(),
     resolution: vcsMergeResolutionStateSchema,
-    counts: mergeCountsSchema,
+    counts: vcsMergeCountsSchema,
     intentCounts: intentCountsSchema,
     coordinates: z.array(vcsMergeCoordinateSchema).max(500),
     intents: z.array(vcsIntentProjectionSchema).max(500),
@@ -1275,13 +1321,31 @@ export const vcsComposedReviewSchema = z
     theirs: vcsIntentEvidenceSchema,
   })
   .strict();
-export const vcsMergeResultSchema = vcsWorkingMutationResultSchema.extend({
-  decisionId: id("Created merge decision."),
-  outcomes: z.array(vcsMergeCoordinateSchema).max(500),
+const vcsMergeReviewFields = {
   resolution: vcsMergeResolutionStateSchema,
   intents: z.array(vcsIntentProjectionSchema).max(500),
-  composed: z.array(vcsComposedReviewSchema).max(500),
-});
+  intentsTruncated: z.boolean(),
+  counts: vcsMergeCountsSchema,
+  conflicts: z.array(vcsMergeCoordinateSchema).max(500),
+  nextConflictCursor: cursor.nullable(),
+};
+export const vcsMergeResultSchema = z.discriminatedUnion("status", [
+  vcsWorkingMutationResultSchema.extend({
+    status: z.literal("working"),
+    decisionId: id("Created merge decision."),
+    outcomes: z.array(vcsMergeCoordinateSchema).max(500),
+    ...vcsMergeReviewFields,
+    composed: z.array(vcsComposedReviewSchema).max(500),
+  }),
+  z
+    .object({
+      status: z.literal("unchanged"),
+      contextId,
+      workingHead: vcsStateNodeRefSchema,
+      ...vcsMergeReviewFields,
+    })
+    .strict(),
+]);
 export type VcsMergeResult = z.infer<typeof vcsMergeResultSchema>;
 
 export const vcsSemanticCommandSchema = z

@@ -37,7 +37,11 @@ protected ref.
 
 Handle refusals by typed code:
 
-- compare and merge when main advanced or ancestry diverged;
+- merge from the freshly observed main when it advanced; the protected-main
+  driver performs its own conflict-only preflight and makes zero mutations if
+  conflicts exist;
+- on `IntegrationIncomplete`, execute the returned `allRemaining` recovery
+  recipe before retrying commit or publication;
 - stop for required authorization or approval;
 - preserve integrity and host-effect diagnostics;
 - for a build/typecheck refusal, consume every diagnostic, repair the cited

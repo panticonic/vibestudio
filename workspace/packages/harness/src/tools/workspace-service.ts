@@ -11,8 +11,8 @@ import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import type { VcsWorkingMutationResult } from "@vibestudio/service-schemas/vcs";
 import YAML from "yaml";
 import { generateDiffString } from "./edit-diff.js";
+import { resolveToolFile } from "../semantic-file-resolution.js";
 import {
-  resolveToolFile,
   resolveToolWorkingState,
   toolCommandId,
   toolContextId,
@@ -48,22 +48,16 @@ const workspaceServiceSchema = Type.Union(
         }),
         presentation: Type.Object(
           {
-            domain: Type.Union(
-              [
-                Type.Literal("files"),
-                Type.Literal("sharing"),
-                Type.Literal("accounts"),
-                Type.Literal("web"),
-                Type.Literal("automation"),
-                Type.Literal("people"),
-                Type.Literal("computer"),
-              ]
-            ),
-            verb: Type.Union([
-              Type.Literal("see"),
-              Type.Literal("act"),
-              Type.Literal("manage"),
+            domain: Type.Union([
+              Type.Literal("files"),
+              Type.Literal("sharing"),
+              Type.Literal("accounts"),
+              Type.Literal("web"),
+              Type.Literal("automation"),
+              Type.Literal("people"),
+              Type.Literal("computer"),
             ]),
+            verb: Type.Union([Type.Literal("see"), Type.Literal("act"), Type.Literal("manage")]),
             substanceKind: Type.Optional(
               Type.Union([
                 Type.Literal("change-set"),
@@ -212,19 +206,19 @@ export interface WorkspaceServiceToolDeps {
 function isServiceDeclaration(value: unknown): value is ServiceDeclaration {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      typeof (value as { source?: unknown }).source === "string" &&
-      typeof (value as { name?: unknown }).name === "string"
+    typeof value === "object" &&
+    typeof (value as { source?: unknown }).source === "string" &&
+    typeof (value as { name?: unknown }).name === "string"
   );
 }
 
 function isSingletonDeclaration(value: unknown): value is SingletonDeclaration {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      typeof (value as { source?: unknown }).source === "string" &&
-      typeof (value as { className?: unknown }).className === "string" &&
-      typeof (value as { key?: unknown }).key === "string"
+    typeof value === "object" &&
+    typeof (value as { source?: unknown }).source === "string" &&
+    typeof (value as { className?: unknown }).className === "string" &&
+    typeof (value as { key?: unknown }).key === "string"
   );
 }
 
@@ -239,7 +233,11 @@ export function createWorkspaceServiceTool(
     description:
       "Atomically add, update, or remove a live context-local service declaration in meta/vibestudio.yml. For Durable Objects, transport.objectKey declares the matching singleton in the same validated edit. Use this instead of splicing the services or singletonObjects YAML lists by hand; then confirm the live contract with docs_search/docs_open before eval.",
     parameters: workspaceServiceSchema,
-    execute: async (_toolCallId, input, signal): Promise<AgentToolResult<WorkspaceServiceToolDetails>> => {
+    execute: async (
+      _toolCallId,
+      input,
+      signal
+    ): Promise<AgentToolResult<WorkspaceServiceToolDetails>> => {
       if (signal?.aborted) throw new Error("Operation aborted");
       // AgentTool invokes execute only after validating the discriminated
       // TypeBox union. Keep the implementation on that exact public shape.
@@ -258,9 +256,7 @@ export function createWorkspaceServiceTool(
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
         throw new Error("meta/vibestudio.yml must contain a configuration mapping");
       }
-      const services = Array.isArray(raw.services)
-        ? raw.services.filter(isServiceDeclaration)
-        : [];
+      const services = Array.isArray(raw.services) ? raw.services.filter(isServiceDeclaration) : [];
       const singletons = Array.isArray(raw.singletonObjects)
         ? raw.singletonObjects.filter(isSingletonDeclaration)
         : [];
