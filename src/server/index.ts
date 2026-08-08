@@ -2572,6 +2572,15 @@ async function main() {
           conduitBlessingStore.seedProductSnapshot(snapshotState, identities);
         }
       }
+      // Use launch-gate and approval time to fill cold runtime artifacts, but
+      // never make service readiness wait for speculative work. The build
+      // system owns the single-lane queue and exact-state cancellation.
+      void buildSystem.prewarmWorkspaceBuilds().catch((error: unknown) => {
+        console.warn(
+          "[BuildV2] Workspace panel/worker prewarm failed:",
+          error instanceof Error ? error.message : String(error)
+        );
+      });
       return buildSystem;
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
@@ -5919,8 +5928,7 @@ async function main() {
       if (!slotId) throw new Error(`Panel entity is not current in an open slot: ${entity.id}`);
       const cdpBridge = container.get<import("./cdpBridge.js").CdpBridge>("cdpBridge");
       if (cdpBridge) {
-        const { reloadRegisteredPanelPresentation } =
-          await import("./reloadPanelPresentation.js");
+        const { reloadRegisteredPanelPresentation } = await import("./reloadPanelPresentation.js");
         if (await reloadRegisteredPanelPresentation(cdpBridge, slotId)) return;
       }
       panelRuntimeCoordinator.unloadSlot(slotId);

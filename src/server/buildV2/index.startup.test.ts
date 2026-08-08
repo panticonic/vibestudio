@@ -94,7 +94,7 @@ describe("BuildSystemV2 startup", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("does not speculatively build missing non-app units at startup", async () => {
+  it("prewarms missing panel artifacts through one coalesced background lane", async () => {
     const panelDir = path.join(workspaceRoot, "panels", "slow-panel");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
@@ -105,6 +105,17 @@ describe("BuildSystemV2 startup", () => {
         type: "module",
       })
     );
+    for (const [relativePath, name] of [
+      ["workers/warm-worker", "@workspace-workers/warm-worker"],
+      ["extensions/approval-owned", "@workspace-extensions/approval-owned"],
+    ] as const) {
+      const dir = path.join(workspaceRoot, relativePath);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ name, version: "0.1.0", type: "module" })
+      );
+    }
 
     vi.doMock("./builder.js", async () => {
       const actual = await vi.importActual<typeof import("./builder.js")>("./builder.js");
@@ -119,13 +130,31 @@ describe("BuildSystemV2 startup", () => {
     buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), []);
     expect(vi.mocked(buildUnit)).not.toHaveBeenCalled();
 
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(vi.mocked(buildUnit)).not.toHaveBeenCalled();
-    await expect(buildSystem.gc()).resolves.toMatchObject({
-      complete: true,
-      storedRootBuildKeys: [],
-      unresolvedAuthoritativeRootBuildKeys: [],
+    const first = buildSystem.prewarmWorkspaceBuilds();
+    const coalesced = buildSystem.prewarmWorkspaceBuilds();
+    expect(coalesced).toBe(first);
+    await expect(first).resolves.toMatchObject({
+      stateHash: TEST_STATE,
+      candidates: 2,
+      ready: 2,
+      failed: 0,
+      superseded: false,
     });
+    expect(vi.mocked(buildUnit)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(buildUnit).mock.calls.map((call) => call[0])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "@workspace-panels/slow-panel",
+          kind: "panel",
+          relativePath: "panels/slow-panel",
+        }),
+        expect.objectContaining({
+          name: "@workspace-workers/warm-worker",
+          kind: "worker",
+          relativePath: "workers/warm-worker",
+        }),
+      ])
+    );
   }, 15_000);
 
   it("starts authority prewarm after readiness and shares it with publication validation", async () => {
