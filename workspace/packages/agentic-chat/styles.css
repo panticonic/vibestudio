@@ -849,6 +849,27 @@
   display: block;
 }
 
+.subagent-preview-notice {
+  padding: 6px 8px;
+  border: 1px solid var(--amber-a6);
+  border-radius: var(--radius-2);
+  background: var(--amber-a2);
+}
+
+.subagent-preview-transcript-button {
+  flex: none;
+  padding: 0;
+  border: 0;
+  color: var(--amber-11);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-1);
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* ----- consolidated activity -----
    No inner scroller: the run flows at full column width and the transcript
    scrolls once. The old card nested a 260px overflow region inside the

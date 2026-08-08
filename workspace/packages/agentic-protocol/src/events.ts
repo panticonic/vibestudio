@@ -415,6 +415,10 @@ export type SubagentProgressKind =
  */
 export interface SubagentProgressUpdate {
   kind: SubagentProgressKind;
+  /** Stable address of the authoritative child event behind this inline
+   *  projection. Together with `messageSeq`, this identifies the unbounded
+   *  source in the child's transcript. */
+  sourceChannelId?: string;
   /** Child tool name, for the `tool-*` kinds. */
   tool?: string;
   /**
@@ -427,10 +431,16 @@ export interface SubagentProgressUpdate {
   callId?: string;
   /** Bounded preview of the child call's arguments, on `tool-started`. */
   args?: Record<string, unknown>;
+  /** True when `args` is only a partial projection of the source request. */
+  argsTruncated?: boolean;
   /** Bounded preview of the child call's result, on `tool-completed`. */
   result?: unknown;
+  /** True when `result` is only a partial projection of the source result. */
+  resultTruncated?: boolean;
   /** Bounded human-readable body: say text, progress message, failure reason. */
   text?: string;
+  /** True when `text` is only a partial projection of the source text. */
+  textTruncated?: boolean;
   /** Child task-channel envelope seq this update was folded from. */
   messageSeq: number;
   /** True when the child explicitly surfaced this (`saliency: "say"`) rather

@@ -6991,9 +6991,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       .join("\n");
   }
 
-  private trimSubagentProgress(text: string): string {
+  private trimSubagentProgress(text: string): { text: string; truncated: boolean } {
     const compact = text.replace(/\s+/g, " ").trim();
-    return compact.length > 360 ? `${compact.slice(0, 357)}...` : compact;
+    return compact.length > 360
+      ? { text: `${compact.slice(0, 357)}...`, truncated: true }
+      : { text: compact, truncated: false };
   }
 
   /**
@@ -7003,48 +7005,76 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * replaced by a marker the renderer shows as "truncated" — the parent panel
    * can always open the child's own transcript for the unbounded version.
    */
-  private boundedProgressValue(value: unknown, depth = 0): unknown {
+  private boundedProgressValue(value: unknown): { value: unknown; truncated: boolean } {
     const MAX_STRING = 240;
     const MAX_ENTRIES = 12;
     const MAX_DEPTH = 3;
-    if (value === null || value === undefined) return value;
-    if (typeof value === "string") {
-      return value.length > MAX_STRING ? `${value.slice(0, MAX_STRING - 1)}…` : value;
-    }
-    if (typeof value === "number" || typeof value === "boolean") return value;
-    if (depth >= MAX_DEPTH) return { __truncated: "depth" };
-    if (Array.isArray(value)) {
-      const kept = value
-        .slice(0, MAX_ENTRIES)
-        .map((item) => this.boundedProgressValue(item, depth + 1));
-      return value.length > MAX_ENTRIES
-        ? [...kept, { __truncated: value.length - MAX_ENTRIES }]
-        : kept;
-    }
-    if (typeof value === "object") {
-      const entries = Object.entries(value as Record<string, unknown>);
-      const out: Record<string, unknown> = {};
-      for (const [key, entryValue] of entries.slice(0, MAX_ENTRIES)) {
-        out[key] = this.boundedProgressValue(entryValue, depth + 1);
+    const visit = (entry: unknown, depth: number): { value: unknown; truncated: boolean } => {
+      if (entry === null || entry === undefined) return { value: entry, truncated: false };
+      if (typeof entry === "string") {
+        return entry.length > MAX_STRING
+          ? { value: `${entry.slice(0, MAX_STRING - 1)}…`, truncated: true }
+          : { value: entry, truncated: false };
       }
-      if (entries.length > MAX_ENTRIES) out["__truncated"] = entries.length - MAX_ENTRIES;
-      return out;
-    }
-    return undefined;
+      if (typeof entry === "number" || typeof entry === "boolean") {
+        return { value: entry, truncated: false };
+      }
+      if (depth >= MAX_DEPTH) return { value: { __truncated: "depth" }, truncated: true };
+      if (Array.isArray(entry)) {
+        let truncated = entry.length > MAX_ENTRIES;
+        const kept = entry.slice(0, MAX_ENTRIES).map((item) => {
+          const bounded = visit(item, depth + 1);
+          truncated ||= bounded.truncated;
+          return bounded.value;
+        });
+        return {
+          value:
+            entry.length > MAX_ENTRIES
+              ? [...kept, { __truncated: entry.length - MAX_ENTRIES }]
+              : kept,
+          truncated,
+        };
+      }
+      if (typeof entry === "object") {
+        const entries = Object.entries(entry as Record<string, unknown>);
+        let truncated = entries.length > MAX_ENTRIES;
+        const out: Record<string, unknown> = {};
+        for (const [key, entryValue] of entries.slice(0, MAX_ENTRIES)) {
+          const bounded = visit(entryValue, depth + 1);
+          truncated ||= bounded.truncated;
+          out[key] = bounded.value;
+        }
+        if (entries.length > MAX_ENTRIES) out["__truncated"] = entries.length - MAX_ENTRIES;
+        return { value: out, truncated };
+      }
+      return { value: undefined, truncated: false };
+    };
+    return visit(value, 0);
   }
 
   /** Bounded argument record for a child `tool-started` update. */
-  private boundedProgressArgs(request: unknown): Record<string, unknown> | undefined {
-    if (!request || typeof request !== "object" || Array.isArray(request)) return undefined;
+  private boundedProgressArgs(request: unknown): {
+    value?: Record<string, unknown>;
+    truncated: boolean;
+  } {
+    if (!request || typeof request !== "object" || Array.isArray(request)) {
+      return { truncated: false };
+    }
     const bounded = this.boundedProgressValue(request);
-    if (!bounded || typeof bounded !== "object" || Array.isArray(bounded)) return undefined;
-    const record = bounded as Record<string, unknown>;
-    return Object.keys(record).length > 0 ? record : undefined;
+    if (!bounded.value || typeof bounded.value !== "object" || Array.isArray(bounded.value)) {
+      return { truncated: bounded.truncated };
+    }
+    const record = bounded.value as Record<string, unknown>;
+    return {
+      ...(Object.keys(record).length > 0 ? { value: record } : {}),
+      truncated: bounded.truncated,
+    };
   }
 
   /** Fold a child task-channel event into a structured, bounded progress
    *  update for the parent card. Returns null for kinds we don't surface. */
   private subagentProgressUpdate(
+    sourceChannelId: string,
     event: ChannelEvent,
     agentic: AgenticEvent | null,
     messageSeq: number
@@ -7052,9 +7082,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (event.type === "config-update") {
       const title = (event.payload as { title?: unknown } | null)?.title;
       if (typeof title !== "string" || title.trim().length === 0) return null;
+      const bounded = this.trimSubagentProgress(title);
       return {
         kind: "title-changed",
-        text: this.trimSubagentProgress(title),
+        sourceChannelId,
+        text: bounded.text,
+        ...(bounded.truncated ? { textTruncated: true } : {}),
         messageSeq,
       };
     }
@@ -7067,37 +7100,46 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const causalityInvocationId = (agentic as { causality?: { invocationId?: unknown } } | null)
       ?.causality?.invocationId;
     const callId = typeof causalityInvocationId === "string" ? causalityInvocationId : undefined;
-    if (kind === "turn.opened") return { kind: "turn-started", messageSeq };
-    if (kind === "turn.closed") return { kind: "turn-finished", messageSeq };
+    if (kind === "turn.opened") return { kind: "turn-started", sourceChannelId, messageSeq };
+    if (kind === "turn.closed") return { kind: "turn-finished", sourceChannelId, messageSeq };
     if (kind === "invocation.started") {
       const args = this.boundedProgressArgs(payload["request"]);
       return {
         kind: "tool-started",
+        sourceChannelId,
         tool,
         ...(callId ? { callId } : {}),
-        ...(args ? { args } : {}),
+        ...(args.value ? { args: args.value } : {}),
+        ...(args.truncated ? { argsTruncated: true } : {}),
         messageSeq,
       };
     }
     if (kind === "invocation.progress") {
       const message = typeof payload["message"] === "string" ? payload["message"] : undefined;
+      const bounded = message ? this.trimSubagentProgress(message) : undefined;
       return {
         kind: "tool-progress",
+        sourceChannelId,
         tool,
         ...(callId ? { callId } : {}),
-        ...(message ? { text: this.trimSubagentProgress(message) } : {}),
+        ...(bounded?.text ? { text: bounded.text } : {}),
+        ...(bounded?.truncated ? { textTruncated: true } : {}),
         messageSeq,
       };
     }
     if (kind === "invocation.completed") {
       const result = this.boundedProgressValue(payload["result"]);
       const summary = typeof payload["summary"] === "string" ? payload["summary"] : undefined;
+      const boundedSummary = summary ? this.trimSubagentProgress(summary) : undefined;
       return {
         kind: "tool-completed",
+        sourceChannelId,
         tool,
         ...(callId ? { callId } : {}),
-        ...(result !== undefined ? { result } : {}),
-        ...(summary ? { text: this.trimSubagentProgress(summary) } : {}),
+        ...(result.value !== undefined ? { result: result.value } : {}),
+        ...(result.truncated ? { resultTruncated: true } : {}),
+        ...(boundedSummary?.text ? { text: boundedSummary.text } : {}),
+        ...(boundedSummary?.truncated ? { textTruncated: true } : {}),
         messageSeq,
       };
     }
@@ -7108,21 +7150,28 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     ) {
       const reason = typeof payload["reason"] === "string" ? payload["reason"] : undefined;
       const error = this.boundedProgressValue(payload["failure"] ?? payload["error"]);
+      const boundedReason = reason ? this.trimSubagentProgress(reason) : undefined;
       return {
         kind: kind.replace("invocation.", "tool-") as SubagentProgressUpdate["kind"],
+        sourceChannelId,
         tool,
         ...(callId ? { callId } : {}),
-        ...(error !== undefined ? { result: error } : {}),
-        ...(reason ? { text: this.trimSubagentProgress(reason) } : {}),
+        ...(error.value !== undefined ? { result: error.value } : {}),
+        ...(error.truncated ? { resultTruncated: true } : {}),
+        ...(boundedReason?.text ? { text: boundedReason.text } : {}),
+        ...(boundedReason?.truncated ? { textTruncated: true } : {}),
         messageSeq,
       };
     }
     if (agentic && kind === "message.completed") {
       const text = this.extractMessageText(agentic);
       if (!text) return null;
+      const bounded = this.trimSubagentProgress(text);
       return {
         kind: "said",
-        text: this.trimSubagentProgress(text),
+        sourceChannelId,
+        text: bounded.text,
+        ...(bounded.truncated ? { textTruncated: true } : {}),
         messageSeq,
         ...(payload["saliency"] === "say" ? { say: true } : {}),
       };
@@ -7138,7 +7187,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const run = this.subagentRuns.getByTaskChannel(channelId);
     if (!run || event.senderId === this.participantId()) return;
     const messageSeq = Number.isFinite(event.id) ? (event.id as number) : 0;
-    const update = this.subagentProgressUpdate(event, agentic, messageSeq);
+    const update = this.subagentProgressUpdate(channelId, event, agentic, messageSeq);
     if (!update) return;
     const participantId =
       this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();

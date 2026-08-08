@@ -24,7 +24,14 @@ describe("consolidateSubagentActivity", () => {
         messageSeq: 1,
       }),
       // Terminal payloads carry no tool name — the name must survive pairing.
-      entry({ kind: "tool-completed", callId: "c1", result: { bytes: 12 }, messageSeq: 2 }),
+      entry({
+        kind: "tool-completed",
+        callId: "c1",
+        result: { bytes: 12 },
+        resultTruncated: true,
+        sourceChannelId: "task-child",
+        messageSeq: 2,
+      }),
     ]);
 
     expect(items).toHaveLength(1);
@@ -35,6 +42,12 @@ describe("consolidateSubagentActivity", () => {
     expect(call.payload.arguments).toEqual({ path: "index.ts" });
     expect(call.payload.execution.status).toBe("complete");
     expect(call.payload.execution.result).toEqual({ bytes: 12 });
+    expect(call.payload.execution.resultTruncated).toBe(true);
+    expect(call.preview).toMatchObject({
+      sourceChannelId: "task-child",
+      sourceMessageSeq: 2,
+      resultTruncated: true,
+    });
     expect(call.endedAt).toBe(at(2));
   });
 

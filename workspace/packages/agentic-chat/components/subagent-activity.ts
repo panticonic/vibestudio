@@ -27,8 +27,24 @@ export type SubagentActivityItem =
       payload: InvocationCardPayload;
       startedAt: string;
       endedAt?: string;
+      preview: {
+        sourceChannelId?: string;
+        sourceMessageSeq: number;
+        argsTruncated: boolean;
+        resultTruncated: boolean;
+        textTruncated: boolean;
+      };
     }
-  | { kind: "say"; id: string; text: string; at: string; say: boolean }
+  | {
+      kind: "say";
+      id: string;
+      text: string;
+      at: string;
+      say: boolean;
+      sourceChannelId?: string;
+      sourceMessageSeq: number;
+      textTruncated: boolean;
+    }
   | { kind: "turn"; id: string; at: string; boundary: "started" | "finished" };
 
 const TERMINAL_STATUS: Record<string, ToolExecutionState["status"]> = {
@@ -110,6 +126,13 @@ function startedItem(
         description: "",
       },
     },
+    preview: {
+      sourceChannelId: entry.sourceChannelId,
+      sourceMessageSeq: entry.messageSeq,
+      argsTruncated: entry.argsTruncated === true,
+      resultTruncated: false,
+      textTruncated: entry.textTruncated === true,
+    },
   };
 }
 
@@ -138,7 +161,15 @@ function orphanTerminalItem(
         description: entry.text ?? "",
         ...(entry.result !== undefined ? { result: entry.result } : {}),
         ...(status === "error" ? { isError: true } : {}),
+        ...(entry.resultTruncated ? { resultTruncated: true } : {}),
       },
+    },
+    preview: {
+      sourceChannelId: entry.sourceChannelId,
+      sourceMessageSeq: entry.messageSeq,
+      argsTruncated: false,
+      resultTruncated: entry.resultTruncated === true,
+      textTruncated: entry.textTruncated === true,
     },
   };
 }
@@ -170,6 +201,9 @@ export function consolidateSubagentActivity(
         text: entry.text,
         at: entry.at,
         say: entry.say === true,
+        sourceChannelId: entry.sourceChannelId,
+        sourceMessageSeq: entry.messageSeq,
+        textTruncated: entry.textTruncated === true,
       });
       return;
     }
@@ -184,7 +218,12 @@ export function consolidateSubagentActivity(
     if (entry.kind === "tool-progress") {
       // Progress refines the call in place; it is never its own row.
       const open = openCalls.find(entry);
-      if (open && entry.text) open.payload.execution.description = entry.text;
+      if (open && entry.text) {
+        open.payload.execution.description = entry.text;
+        open.preview.sourceChannelId = entry.sourceChannelId ?? open.preview.sourceChannelId;
+        open.preview.sourceMessageSeq = entry.messageSeq;
+        open.preview.textTruncated ||= entry.textTruncated === true;
+      }
       return;
     }
 
@@ -199,6 +238,11 @@ export function consolidateSubagentActivity(
       open.payload.execution.status = status;
       if (status === "error") open.payload.execution.isError = true;
       if (entry.result !== undefined) open.payload.execution.result = entry.result;
+      if (entry.resultTruncated) open.payload.execution.resultTruncated = true;
+      open.preview.sourceChannelId = entry.sourceChannelId ?? open.preview.sourceChannelId;
+      open.preview.sourceMessageSeq = entry.messageSeq;
+      open.preview.resultTruncated ||= entry.resultTruncated === true;
+      open.preview.textTruncated ||= entry.textTruncated === true;
       // A terminal update names the tool only when the child's payload did;
       // otherwise the name already on the started item is the good one.
       if (entry.tool && open.payload.name === "tool") open.payload.name = entry.tool;

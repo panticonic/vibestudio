@@ -130,6 +130,26 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
     [invocation?.execution.progress]
   );
   const activity = useMemo(() => consolidateSubagentActivity(progressFeed), [progressFeed]);
+  const truncatedPreview = useMemo(() => {
+    for (let index = activity.length - 1; index >= 0; index -= 1) {
+      const item = activity[index]!;
+      if (item.kind === "tool") {
+        if (
+          item.preview.argsTruncated ||
+          item.preview.resultTruncated ||
+          item.preview.textTruncated
+        ) {
+          return {
+            channelId: item.preview.sourceChannelId,
+            messageSeq: item.preview.sourceMessageSeq,
+          };
+        }
+      } else if (item.kind === "say" && item.textTruncated) {
+        return { channelId: item.sourceChannelId, messageSeq: item.sourceMessageSeq };
+      }
+    }
+    return null;
+  }, [activity]);
 
   const subagent = invocation?.subagent;
   const status = invocation?.execution.status ?? "pending";
@@ -292,6 +312,24 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
               <div className="subagent-description">
                 <MessageContent content={invocation.execution.description} isStreaming={false} />
               </div>
+            )}
+
+            {view === "activity" && truncatedPreview && (
+              <Flex className="subagent-preview-notice" align="center" justify="between" gap="2">
+                <Text size="1" color="amber">
+                  Compact preview only. Full source: {truncatedPreview.channelId ?? "child task"}#
+                  {truncatedPreview.messageSeq}.
+                </Text>
+                {canObserve && (
+                  <button
+                    type="button"
+                    className="subagent-preview-transcript-button"
+                    onClick={() => setView("transcript")}
+                  >
+                    Open full transcript
+                  </button>
+                )}
+              </Flex>
             )}
 
             {canObserve && (

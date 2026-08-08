@@ -20,6 +20,7 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   type AgenticEvent,
   type ParticipantRef,
+  type SubagentProgressUpdate,
 } from "@workspace/agentic-protocol";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
@@ -1568,6 +1569,8 @@ class SubagentSpawnProbe extends TestVessel {
       handleIncoming: this.handleIncomingSpy,
       dropLoop: vi.fn(),
       foldCache: { delete: vi.fn() },
+      outbox: { getForChannel: vi.fn(() => undefined) },
+      channelCallMayMaterialize: vi.fn(async () => false),
     } as unknown as AgentLoopDriver;
   }
   protected override get rpc(): RpcClient {
@@ -3391,6 +3394,61 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       "subagent-progress:inv-1:43:invocation.started",
     ]);
     expect(probe.subagentProgressDiagnosticsForTest()).toMatchObject({ pending: 0, failures: [] });
+  });
+
+  it("marks bounded child results and addresses their authoritative source event", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "diagnostic audit",
+      task: "inspect the diagnostic in the child",
+    });
+
+    await probe.processChannelEvent("task-inv-1", {
+      id: 44,
+      messageId: "tool-completed-child",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: {
+        kind: "invocation.completed",
+        actor: { kind: "agent", id: "participant-child", displayName: "Child" },
+        causality: { invocationId: "child-eval-1" },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          result: {
+            protocolContent: [
+              {
+                type: "text",
+                text: `Authority diagnostic: ${"missing declaration ".repeat(30)}`,
+              },
+            ],
+            details: {
+              success: true,
+              returnValue: { status: "failed", diagnostics: [{ message: "full diagnostic" }] },
+            },
+          },
+        },
+        createdAt: new Date().toISOString(),
+      } as unknown as AgenticEvent,
+      senderId: "participant-child",
+      ts: Date.now(),
+    });
+    await probe.dispatchSubagentProgressForTest();
+
+    const projection = probe.channelStub.published.find(
+      (entry) => entry.idempotencyKey === "subagent-progress:inv-1:44:invocation.completed"
+    )?.event.payload as { subagent?: SubagentProgressUpdate } | undefined;
+    expect(projection?.subagent).toMatchObject({
+      kind: "tool-completed",
+      callId: "child-eval-1",
+      sourceChannelId: "task-inv-1",
+      messageSeq: 44,
+      resultTruncated: true,
+    });
+    expect(projection?.subagent?.result).toMatchObject({
+      details: {
+        returnValue: { status: "failed", diagnostics: { __truncated: "depth" } },
+      },
+    });
   });
 
   it("wakes the parent channel when the child completes while the parent is suspended", async () => {

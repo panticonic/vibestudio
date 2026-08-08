@@ -1015,6 +1015,62 @@ describe("SubagentRunCard", () => {
     expect(preview?.querySelector("a, button, input")).toBeNull();
   });
 
+  it("labels bounded child results and offers their authoritative transcript", () => {
+    render(
+      React.createElement(
+        ChatMessageActionsContext.Provider,
+        {
+          value: {
+            childTranscript: { config: {}, metadata: {} },
+          } as never,
+        },
+        React.createElement(SubagentRunCard, {
+          msg: subagentMessage({
+            id: "run-truncated",
+            execution: {
+              status: "running",
+              description: "",
+              progress: [
+                {
+                  kind: "tool-started",
+                  tool: "eval",
+                  callId: "child-eval",
+                  sourceChannelId: "task-run-truncated",
+                  messageSeq: 40,
+                  at: new Date().toISOString(),
+                },
+                {
+                  kind: "tool-completed",
+                  callId: "child-eval",
+                  result: { details: { returnValue: { __truncated: "depth" } } },
+                  resultTruncated: true,
+                  sourceChannelId: "task-run-truncated",
+                  messageSeq: 41,
+                  at: new Date().toISOString(),
+                },
+              ],
+            },
+            subagent: {
+              runId: "run-truncated",
+              mode: "fork",
+              taskChannelId: "task-run-truncated",
+              contextId: "ctx-run-truncated",
+              childEntityId: "do:workers/agent-worker:AiChatWorker:run-truncated",
+              label: "Truncated result audit",
+            },
+            complete: false,
+          }),
+        })
+      )
+    );
+
+    fireEvent.click(screen.getByLabelText("Expand run details"));
+
+    expect(screen.getByText(/Compact preview only/)).toBeTruthy();
+    expect(screen.getByText(/task-run-truncated#41/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open full transcript" })).toBeTruthy();
+  });
+
   it("shows useful expanded details before the child has published progress", () => {
     render(
       React.createElement(SubagentRunCard, {
