@@ -2572,15 +2572,6 @@ async function main() {
           conduitBlessingStore.seedProductSnapshot(snapshotState, identities);
         }
       }
-      // Use launch-gate and approval time to fill cold runtime artifacts, but
-      // never make service readiness wait for speculative work. The build
-      // system owns the single-lane queue and exact-state cancellation.
-      void buildSystem.prewarmWorkspaceBuilds().catch((error: unknown) => {
-        console.warn(
-          "[BuildV2] Workspace panel/worker prewarm failed:",
-          error instanceof Error ? error.message : String(error)
-        );
-      });
       return buildSystem;
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
@@ -6910,13 +6901,28 @@ async function main() {
     }
   }
 
-  // Readiness is a host lifecycle fact, not a timer heuristic. Begin the
-  // expensive authority snapshot only after the ready record is visible so
-  // synchronous TypeScript parsing cannot delay instance discovery/pairing.
-  container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem").prewarmAuthorityIndex();
+  // Readiness is a host lifecycle fact, not a timer heuristic. Only after the
+  // ready record is visible may speculative compilers enter the build lane.
+  // Starting this from the build-system service races restored foreground
+  // panels while the semantic workspace and workerd generation are still on
+  // the critical path.
+  const steadyStateBuildSystem =
+    container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+  void steadyStateBuildSystem.prewarmWorkspaceBuilds().catch((error: unknown) => {
+    console.warn(
+      "[BuildV2] Workspace panel/worker prewarm failed:",
+      error instanceof Error ? error.message : String(error)
+    );
+  });
 
-  // Eval libraries are the only intentional warmup. Panels, apps, extensions,
-  // and workers activate their own dependency graph on demand.
+  // Authority publication remains fully on-demand and durably cached. Its
+  // cold compiler snapshot uses the synchronous TypeScript bridge and can hold
+  // the server event loop for many seconds on a large workspace; running it
+  // speculatively made unrelated RPC and file tools appear hung. Do not launch
+  // that CPU-bound pass until it can be moved off the server thread.
+
+  // Eval libraries are additionally warmed for persistent workspaces. Apps and
+  // extensions continue to activate their own dependency graphs on demand.
   if (!workspaceIsEphemeral) {
     container.get<() => void>("evalEnginePrewarm")();
   }
