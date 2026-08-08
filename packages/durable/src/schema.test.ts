@@ -14,6 +14,41 @@ function storage(sql: Awaited<ReturnType<typeof createInMemorySql>>) {
 }
 
 describe("exact durable-object schema identity", () => {
+  it("rejects descriptors whose production baseline does not reach the current version", async () => {
+    const sql = await createInMemorySql();
+    const definition = {
+      className: "InheritedBaselineDO",
+      version: 7,
+      productionBaseline: { version: 3, name: "inherited-v3" },
+      storage: storage(sql),
+      createSchema: () => undefined,
+      validateSchema: () => undefined,
+    };
+
+    expect(() => durableObjectSchemaDescriptor(definition)).toThrow(
+      /must declare every version from 4 through 7/u
+    );
+  });
+
+  it("accepts a current production baseline without historical migrations", async () => {
+    const sql = await createInMemorySql();
+    const descriptor = durableObjectSchemaDescriptor({
+      className: "CurrentBaselineDO",
+      version: 7,
+      productionBaseline: { version: 7, name: "current-v7" },
+      storage: storage(sql),
+      createSchema: () => undefined,
+      validateSchema: () => undefined,
+    });
+
+    expect(descriptor).toMatchObject({
+      className: "CurrentBaselineDO",
+      version: 7,
+      baseline: { version: 7, name: "current-v7" },
+      migrations: [],
+    });
+  });
+
   it("normalizes exact fixture keys and rejects reserved probe identities", async () => {
     const sql = await createInMemorySql();
     sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);

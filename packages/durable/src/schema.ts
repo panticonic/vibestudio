@@ -187,6 +187,7 @@ export function durableObjectSchemaDescriptor(
   definition: DurableObjectSchemaDefinition,
   fixtureObjectKeys: readonly string[] = []
 ): DurableObjectSchemaDescriptor {
+  validateDurableObjectSchemaDefinition(definition);
   const normalizedFixtureKeys = fixtureObjectKeys.map((key) => key.trim());
   for (const key of normalizedFixtureKeys) {
     if (key.length === 0 || key.length > 512 || key.startsWith("__vibestudio_schema_probe:")) {
@@ -263,7 +264,13 @@ function incompatible(
   });
 }
 
-function validateDefinition(definition: DurableObjectSchemaDefinition): void {
+/**
+ * Assert that a worker's declared production baseline and migration chain
+ * reach its current schema version without gaps.
+ */
+export function validateDurableObjectSchemaDefinition(
+  definition: DurableObjectSchemaDefinition
+): void {
   const { className, version, productionBaseline, migrations = [] } = definition;
   if (!Number.isSafeInteger(version) || version < 1) {
     throw new Error(`${className} has invalid schema version ${version}`);
@@ -474,7 +481,7 @@ function validateLedger(
  * application changes are committed by one storage transaction.
  */
 export function installDurableObjectSchema(definition: DurableObjectSchemaDefinition): void {
-  validateDefinition(definition);
+  validateDurableObjectSchemaDefinition(definition);
   const migrations = new Map(
     (definition.migrations ?? []).map((migration) => [migration.version, migration] as const)
   );
