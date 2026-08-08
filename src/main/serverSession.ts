@@ -260,7 +260,9 @@ export async function establishServerSession(args: {
     args.onStartupProgress
   );
   phase("start-local-server");
-  const target = await hubProcessManager.attachOrSpawn();
+  const target = await hubProcessManager.attachOrSpawn({
+    onHubReady: () => phase("connect-workspace"),
+  });
   log.info(
     `[Server] ${target.attached ? "Attached to" : "Spawned"} local hub and routed ${mode.workspaceName}`
   );
@@ -292,7 +294,6 @@ export async function establishServerSession(args: {
     }
   };
 
-  phase("connect-workspace");
   const serverClient = await createServerClient(target.gatewayPort, target.authToken, {
     reconnect: true,
     clientPlatform: "desktop",

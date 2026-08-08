@@ -213,6 +213,7 @@ describe("HubProcessManager", () => {
   });
 
   it("attaches to the hub and routes the global device into the selected child", async () => {
+    const lifecycle: string[] = [];
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
       serverId: RECORD.serverId,
       transport: "loopback",
@@ -259,12 +260,15 @@ describe("HubProcessManager", () => {
         method: "hubControl.routeWorkspace",
         args: [{ workspaceId: "ws_alpha" }],
       });
+      lifecycle.push("route-workspace");
       return rpcResult(request.body, workspaceRoute("alpha", "ws_alpha"));
     });
     vi.stubGlobal("fetch", fetchMock);
     const centralData = makeCentralData();
 
-    const target = await manager(centralData).attachOrSpawn();
+    const target = await manager(centralData).attachOrSpawn({
+      onHubReady: () => lifecycle.push("hub-ready"),
+    });
 
     expect(target).toMatchObject({
       attached: true,
@@ -273,6 +277,7 @@ describe("HubProcessManager", () => {
       wsUrl: "ws://127.0.0.1:5000/_r/ws/alpha/rpc",
     });
     expect(spawnMock).not.toHaveBeenCalled();
+    expect(lifecycle).toEqual(["hub-ready", "route-workspace"]);
   });
 
   it("replaces a live hub built from a different server artifact", async () => {

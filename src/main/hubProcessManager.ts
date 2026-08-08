@@ -224,7 +224,7 @@ export class HubProcessManager {
     this.ephemeralReplacementPending = config.ephemeralLifecycle === "replace";
   }
 
-  async attachOrSpawn(): Promise<HubWorkspaceTarget> {
+  async attachOrSpawn(options: { onHubReady?: () => void } = {}): Promise<HubWorkspaceTarget> {
     const existing = this.liveLease();
     let processTarget: HubProcessTarget | null = null;
     if (existing) {
@@ -247,6 +247,11 @@ export class HubProcessManager {
       processTarget = await this.spawnDetached();
     }
     const credential = await this.ensureDeviceCredential(processTarget);
+    // Hub process readiness and selected-workspace readiness are distinct
+    // lifecycle facts. Routing may coalesce onto a cold workspace child for
+    // many seconds; expose the boundary so the desktop does not misleadingly
+    // attribute that wait to starting the local server.
+    options.onHubReady?.();
     const target = await this.routeWorkspace(processTarget, credential);
     this.current = target;
     this.currentHubPid = processTarget.record.pid;
