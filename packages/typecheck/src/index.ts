@@ -38,6 +38,8 @@ export {
   type ReferenceInfo,
 } from "./service.js";
 
+export { USERLAND_TYPECHECK_BASELINE } from "./userland-policy.js";
+
 export {
   usingTypeScriptProject,
   TypeScriptSyntaxService,

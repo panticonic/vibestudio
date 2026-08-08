@@ -106,6 +106,42 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     }
   });
 
+  it("does not let a repository tsconfig weaken the publication baseline", async () => {
+    const configPath = path.join(sourceRoot, "panels/hello/tsconfig.json");
+    const unsafePath = path.join(sourceRoot, "panels/hello/unsafe-index.ts");
+    await fsp.writeFile(
+      configPath,
+      JSON.stringify({
+        compilerOptions: {
+          strict: false,
+          noUncheckedIndexedAccess: false,
+          noPropertyAccessFromIndexSignature: false,
+        },
+      })
+    );
+    await fsp.writeFile(
+      unsafePath,
+      [
+        "const values: Record<string, string> = {};",
+        "export const value: string = values.missing;",
+      ].join("\n")
+    );
+    try {
+      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      expect(diags).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: "tsc",
+            severity: "error",
+            file: "panels/hello/unsafe-index.ts",
+          }),
+        ])
+      );
+    } finally {
+      await Promise.all([fsp.rm(configPath, { force: true }), fsp.rm(unsafePath, { force: true })]);
+    }
+  });
+
   it("folds missing capability requests into the exact-context build diagnostics", async () => {
     const authorityPath = path.join(sourceRoot, "panels/hello/authority-use.ts");
     await fsp.writeFile(

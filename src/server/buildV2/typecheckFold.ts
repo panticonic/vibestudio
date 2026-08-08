@@ -103,7 +103,7 @@ export async function typecheckUnit(
   const unitDir = path.join(sourceRoot, unitRelativePath);
   let service: import("@vibestudio/typecheck").TypeCheckService | undefined;
   try {
-    const { TypeCheckService, createDiskFileSource, loadSourceFiles } =
+    const { TypeCheckService, USERLAND_TYPECHECK_BASELINE, createDiskFileSource, loadSourceFiles } =
       await import("@vibestudio/typecheck");
     const packages = new Map<string, WorkspacePackageInfo>();
     for (const dep of internalDeps) {
@@ -122,6 +122,10 @@ export async function typecheckUnit(
       panelPath: unitDir,
       workspaceContext,
       nodeModulesPaths,
+      // Protected publication enforces one platform safety floor. A unit's
+      // tsconfig may describe its environment or add stricter checks, but it
+      // cannot weaken the checks required for code admitted to main.
+      compilerOptions: USERLAND_TYPECHECK_BASELINE,
       // Repository-view builds are hermetic at the unit/dependency closure.
       // A unit without its own config uses deterministic defaults; it must not
       // walk into a broader checkout and inherit unrelated workspace settings.
