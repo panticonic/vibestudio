@@ -52,11 +52,13 @@ describe("headless transcript pipeline", () => {
       />
     );
 
-    await panel.ready();
-    await agent.ready();
-
-    const sent = await panel.send("The user just opened this workspace for the first time");
     await act(async () => {
+      await Promise.all([panel.ready(), agent.ready()]);
+    });
+
+    let sent: Awaited<ReturnType<typeof panel.send>>;
+    await act(async () => {
+      sent = await panel.send("The user just opened this workspace for the first time");
       await latest!.backfillAfterLocalPublish(sent.pubsubId);
     });
 
@@ -67,7 +69,9 @@ describe("headless transcript pipeline", () => {
     });
 
     const assistant = assistantMessage("assistant-1", "Welcome to Vibestudio.");
-    await agent.publish(AGENTIC_EVENT_PAYLOAD_KIND, agenticPublication(assistant));
+    await act(async () => {
+      await agent.publish(AGENTIC_EVENT_PAYLOAD_KIND, agenticPublication(assistant));
+    });
 
     await waitFor(() => {
       expect(latest!.messages.map((message) => message.content)).toEqual(
@@ -120,15 +124,18 @@ describe("headless transcript pipeline", () => {
       />
     );
 
-    await panel.ready();
-    await agent.ready();
+    await act(async () => {
+      await Promise.all([panel.ready(), agent.ready()]);
+    });
 
-    await agent.publish(
-      AGENTIC_EVENT_PAYLOAD_KIND,
-      agenticPublication(
-        invocationStarted("call-eval", "eval", { code: "read('skills/onboarding/SKILL.md')" })
-      )
-    );
+    await act(async () => {
+      await agent.publish(
+        AGENTIC_EVENT_PAYLOAD_KIND,
+        agenticPublication(
+          invocationStarted("call-eval", "eval", { code: "read('skills/onboarding/SKILL.md')" })
+        )
+      );
+    });
 
     await waitFor(() => {
       expect(latest!.messages).toContainEqual(
@@ -146,17 +153,19 @@ describe("headless transcript pipeline", () => {
       );
     });
 
-    await agent.publish(
-      AGENTIC_EVENT_PAYLOAD_KIND,
-      agenticPublication(
-        invocationCompleted("call-eval", {
-          toolCallId: "call-eval",
-          toolName: "eval",
-          details: { input: { code: "read('skills/onboarding/SKILL.md')" } },
-          content: [{ type: "text", text: "docs" }],
-        })
-      )
-    );
+    await act(async () => {
+      await agent.publish(
+        AGENTIC_EVENT_PAYLOAD_KIND,
+        agenticPublication(
+          invocationCompleted("call-eval", {
+            toolCallId: "call-eval",
+            toolName: "eval",
+            details: { input: { code: "read('skills/onboarding/SKILL.md')" } },
+            content: [{ type: "text", text: "docs" }],
+          })
+        )
+      );
+    });
 
     await waitFor(() => {
       expect(latest!.messages).toContainEqual(
@@ -197,7 +206,9 @@ describe("headless transcript pipeline", () => {
       />
     );
 
-    await panel.ready();
+    await act(async () => {
+      await panel.ready();
+    });
 
     await act(async () => {
       await appendTrajectoryEventsAndBroadcast(harness, [

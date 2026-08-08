@@ -93,7 +93,9 @@ describe("transcript UX smoke", () => {
     });
 
     render(<TranscriptView client={panel} />);
-    await panel.ready();
+    await act(async () => {
+      await panel.ready();
+    });
 
     await act(async () => {
       await appendTrajectoryEventsAndBroadcast(harness, [
@@ -127,7 +129,9 @@ describe("transcript UX smoke", () => {
     });
 
     render(<TranscriptView client={panel} />);
-    await panel.ready();
+    await act(async () => {
+      await panel.ready();
+    });
 
     const failed: AgenticEvent<"invocation.failed"> = {
       kind: "invocation.failed",

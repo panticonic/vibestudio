@@ -34,6 +34,7 @@ import { activate, parseClaudeStreamCompletion } from "./index.js";
 
 const CHANNEL = "chan-1";
 const CONTEXT = "ctx-1";
+const activationSubscriptions: Array<Array<{ dispose(): void }>> = [];
 
 function makeCtx(tmpRoot: string) {
   const contextProjectionsPath = path.join(tmpRoot, ".context-projections", "v5");
@@ -73,6 +74,8 @@ function makeCtx(tmpRoot: string) {
   });
 
   const approvalsRequest = vi.fn(async () => ({ kind: "choice", choice: "allow" }));
+  const subscriptions: Array<{ dispose(): void }> = [];
+  activationSubscriptions.push(subscriptions);
 
   const ctx = {
     rpc: { call: rpcCall },
@@ -105,6 +108,7 @@ function makeCtx(tmpRoot: string) {
     approvals: { request: approvalsRequest },
     extensions: { invoke: vi.fn(async () => {}) },
     invocation: { current: vi.fn<() => unknown>(() => null) },
+    subscriptions,
     health: { healthy: vi.fn() },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   };
@@ -119,6 +123,9 @@ beforeEach(() => {
   vi.stubEnv("CLAUDE_CONFIG_DIR", path.join(tmpRoot, "missing-host-claude-config"));
 });
 afterEach(() => {
+  for (const subscriptions of activationSubscriptions.splice(0)) {
+    while (subscriptions.length > 0) subscriptions.pop()!.dispose();
+  }
   rmSync(tmpRoot, { recursive: true, force: true });
   childProcessMock.spawn.mockClear();
   childProcessMock.child.on.mockClear();
@@ -128,6 +135,17 @@ afterEach(() => {
 });
 
 describe("@workspace-extensions/claude-code prepare", () => {
+  it("releases its process-exit cleanup through the extension lifecycle", async () => {
+    const { ctx } = makeCtx(tmpRoot);
+    const initialExitListeners = process.listenerCount("exit");
+
+    await activate(ctx as never);
+    expect(process.listenerCount("exit")).toBe(initialExitListeners + 1);
+
+    ctx.subscriptions.pop()!.dispose();
+    expect(process.listenerCount("exit")).toBe(initialExitListeners);
+  });
+
   it("extracts only an outer typed stream result as supervised completion", () => {
     const log = [
       "[channel-host] attached",

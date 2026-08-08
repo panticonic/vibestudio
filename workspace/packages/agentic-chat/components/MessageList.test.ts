@@ -871,7 +871,7 @@ describe("SubagentRunCard", () => {
     };
   }
 
-  it("is compact by default and expands into consolidated child tool calls", () => {
+  it("is compact by default and expands into consolidated child tool calls", async () => {
     const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString();
     render(
       React.createElement(SubagentRunCard, {
@@ -965,6 +965,9 @@ describe("SubagentRunCard", () => {
     fireEvent.click(pill as HTMLElement);
     expect(screen.getByText("Arguments")).toBeTruthy();
     expect(screen.getAllByText("Result").length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(document.body.querySelector(".ns-codeblock .hljs")).toBeTruthy();
+    });
 
     // What the child said is prose, not a log row.
     expect(screen.getAllByText("Writing normalized catalog").length).toBeGreaterThan(0);

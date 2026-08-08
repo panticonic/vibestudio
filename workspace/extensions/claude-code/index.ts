@@ -249,7 +249,7 @@ export async function activate(ctx: ExtensionContext) {
   const headlessLaunches = new Map<string, HeadlessLaunch>();
   const terminalLaunches = new Map<string, InspectLaunchResult>();
   const materializedLaunches = new Map<string, MaterializedClaudeLaunch>();
-  process.once("exit", () => {
+  const terminateHeadlessLaunches = () => {
     for (const launch of headlessLaunches.values()) {
       try {
         launch.child.kill("SIGTERM");
@@ -257,6 +257,13 @@ export async function activate(ctx: ExtensionContext) {
         /* process is already gone */
       }
     }
+  };
+  process.once("exit", terminateHeadlessLaunches);
+  ctx.subscriptions.push({
+    dispose() {
+      process.off("exit", terminateHeadlessLaunches);
+      terminateHeadlessLaunches();
+    },
   });
 
   const rpc: AgentLaunchRpc = {
