@@ -458,7 +458,7 @@ export class DevelopmentExecutor {
         contentRoot: run.snapshot.contentRoot,
       })
     );
-    const build = putBuild(
+    const build = await putBuild(
       run.snapshot.snapshotDigest,
       { entries: artifacts },
       {

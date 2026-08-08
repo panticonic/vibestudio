@@ -534,7 +534,7 @@ describe("BuildSystemV2 startup", () => {
     const first = await buildSystem.bindRuntimeImage("panels/rebound-cache");
     const build = buildSystem.getBuildByKey(first.artifact.buildKey);
     expect(build).not.toBeNull();
-    rebindSourceState(build!, `state:${"b".repeat(64)}`);
+    await rebindSourceState(build!, `state:${"b".repeat(64)}`);
 
     const rebound = await buildSystem.bindRuntimeImage("panels/rebound-cache");
 

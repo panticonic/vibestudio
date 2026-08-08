@@ -144,12 +144,12 @@ describe("build artifact helpers", () => {
     );
   });
 
-  it("computes artifact integrity from stored bytes instead of trusting caller input", () => {
+  it("computes artifact integrity from stored bytes instead of trusting caller input", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     try {
       setUserDataPath(root);
       const metadata = build().metadata;
-      const result = put(
+      const result = await put(
         "build-key",
         {
           entries: [
@@ -177,41 +177,74 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("rejects tampered cached bytes and ambiguous artifact paths", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+  it("yields the server event loop while persisting artifact bytes", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-async-"));
     try {
       setUserDataPath(root);
-      const result = put("build-key", { entries: build().artifacts }, build().metadata);
-      fs.writeFileSync(path.join(result.dir, "worker.js"), "tampered");
-      expect(get("build-key")).toBeNull();
+      let nextTurnRan = false;
+      const nextTurn = new Promise<void>((resolve) => {
+        setImmediate(() => {
+          nextTurnRan = true;
+          resolve();
+        });
+      });
 
-      for (const artifactPath of ["", ".", "assets\\chunk.js", "assets//chunk.js"]) {
-        expect(() =>
-          put(
-            `invalid-${artifactPath}`,
-            { entries: [{ ...build().artifacts[0]!, path: artifactPath }] },
-            { ...build().metadata, buildKey: `invalid-${artifactPath}` }
-          )
-        ).toThrow(/artifact path/i);
-      }
-      expect(() =>
-        put(
-          "duplicates",
-          { entries: [build().artifacts[0]!, build().artifacts[0]!] },
-          { ...build().metadata, buildKey: "duplicates" }
-        )
-      ).toThrow(/Duplicate build artifact path/);
+      const persisted = put(
+        "async-build",
+        {
+          entries: [
+            {
+              ...build().artifacts[0]!,
+              content: "x".repeat(4 * 1024 * 1024),
+            },
+          ],
+        },
+        { ...build().metadata, buildKey: "async-build" }
+      );
+
+      await nextTurn;
+      expect(nextTurnRan).toBe(true);
+      await expect(persisted).resolves.toMatchObject({ buildKey: "async-build" });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("defers full payload hashing until artifact content is consumed", () => {
+  it("rejects tampered cached bytes and ambiguous artifact paths", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
+    try {
+      setUserDataPath(root);
+      const result = await put("build-key", { entries: build().artifacts }, build().metadata);
+      fs.writeFileSync(path.join(result.dir, "worker.js"), "tampered");
+      expect(get("build-key")).toBeNull();
+
+      for (const artifactPath of ["", ".", "assets\\chunk.js", "assets//chunk.js"]) {
+        await expect(
+          put(
+            `invalid-${artifactPath}`,
+            { entries: [{ ...build().artifacts[0]!, path: artifactPath }] },
+            { ...build().metadata, buildKey: `invalid-${artifactPath}` }
+          )
+        ).rejects.toThrow(/artifact path/i);
+      }
+      await expect(
+        put(
+          "duplicates",
+          { entries: [build().artifacts[0]!, build().artifacts[0]!] },
+          { ...build().metadata, buildKey: "duplicates" }
+        )
+      ).rejects.toThrow(/Duplicate build artifact path/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("defers full payload hashing until artifact content is consumed", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     try {
       setUserDataPath(root);
       const original = build();
-      put(
+      await put(
         "lazy-build",
         { entries: original.artifacts },
         {
@@ -231,12 +264,12 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("rejects unsealed or mismatched workspace build identities", () => {
+  it("rejects unsealed or mismatched workspace build identities", async () => {
     const artifacts = { entries: build().artifacts };
-    expect(() =>
+    await expect(
       put("other-key", artifacts, { ...build().metadata, buildKey: "build-key" })
-    ).toThrow(/does not match content-addressed store key/);
-    expect(() =>
+    ).rejects.toThrow(/does not match content-addressed store key/);
+    await expect(
       put("missing-authority", artifacts, {
         ...build().metadata,
         buildKey: "missing-authority",
@@ -244,10 +277,10 @@ describe("build artifact helpers", () => {
         authority: undefined,
         sourceStateHash: `state:${"c".repeat(64)}`,
       })
-    ).toThrow(/missing sealed authority metadata/);
+    ).rejects.toThrow(/missing sealed authority metadata/);
   });
 
-  it("computes app build integrity from the stored artifact manifest", () => {
+  it("computes app build integrity from the stored artifact manifest", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     try {
       setUserDataPath(root);
@@ -263,7 +296,7 @@ describe("build artifact helpers", () => {
           provider: null,
         },
       };
-      const result = put(
+      const result = await put(
         "app-build-key",
         {
           entries: [
@@ -296,7 +329,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("seals a full execution digest from source, build inputs, and exact artifacts", () => {
+  it("seals a full execution digest from source, build inputs, and exact artifacts", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-identity-"));
     const buildKey = "a".repeat(64);
     const workspaceMetadata = {
@@ -306,7 +339,7 @@ describe("build artifact helpers", () => {
       ev: "b".repeat(64),
       sourceStateHash: `state:${"c".repeat(64)}`,
     };
-    const store = (dir: string, metadata = workspaceMetadata, content = "one") => {
+    const store = async (dir: string, metadata = workspaceMetadata, content = "one") => {
       setUserDataPath(path.join(root, dir));
       return put(
         metadata.buildKey,
@@ -326,11 +359,14 @@ describe("build artifact helpers", () => {
     };
 
     try {
-      const first = store("first");
-      const same = store("same");
-      const changedArtifact = store("artifact", workspaceMetadata, "two");
-      const changedInputs = store("inputs", { ...workspaceMetadata, buildKey: "d".repeat(64) });
-      const changedSource = store("source", { ...workspaceMetadata, ev: "e".repeat(64) });
+      const first = await store("first");
+      const same = await store("same");
+      const changedArtifact = await store("artifact", workspaceMetadata, "two");
+      const changedInputs = await store("inputs", {
+        ...workspaceMetadata,
+        buildKey: "d".repeat(64),
+      });
+      const changedSource = await store("source", { ...workspaceMetadata, ev: "e".repeat(64) });
 
       expect(first.metadata.execution?.executionDigest).toMatch(/^[0-9a-f]{64}$/);
       expect(same.metadata.execution).toEqual(first.metadata.execution);
@@ -351,7 +387,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("rebinds reusable artifact bytes to the exact current source state", () => {
+  it("rebinds reusable artifact bytes to the exact current source state", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-rebind-"));
     const buildKey = "e".repeat(64);
     const firstState = `state:${"1".repeat(64)}`;
@@ -367,7 +403,7 @@ describe("build artifact helpers", () => {
               ? { kind: "event", eventId: "event:second" }
               : null,
       });
-      put(
+      await put(
         buildKey,
         { entries: build().artifacts },
         {
@@ -381,7 +417,7 @@ describe("build artifact helpers", () => {
 
       const first = get(buildKey)!;
       const firstExecutionDigest = first.metadata.execution!.executionDigest;
-      const rebound = rebindSourceState(first, secondState);
+      const rebound = await rebindSourceState(first, secondState);
 
       expect(rebound.sourceStateHash).toBe(secondState);
       expect(rebound.metadata.sourceState).toEqual({ kind: "event", eventId: "event:second" });
@@ -405,7 +441,7 @@ describe("build artifact helpers", () => {
     const buildKey = "9".repeat(64);
     try {
       setUserDataPath(root);
-      put(
+      await put(
         buildKey,
         {
           entries: [
@@ -480,7 +516,7 @@ describe("build artifact helpers", () => {
     const buildKey = "6".repeat(64);
     try {
       setUserDataPath(root);
-      put(
+      await put(
         buildKey,
         {
           entries: [
@@ -533,7 +569,7 @@ describe("build artifact helpers", () => {
     const buildKey = "3".repeat(64);
     try {
       setUserDataPath(root);
-      put(
+      await put(
         buildKey,
         {
           entries: [
@@ -592,7 +628,7 @@ describe("build artifact helpers", () => {
     const buildKey = "2".repeat(64);
     try {
       setUserDataPath(root);
-      put(
+      await put(
         buildKey,
         { entries: build().artifacts },
         {
@@ -646,7 +682,7 @@ describe("build artifact helpers", () => {
     try {
       setUserDataPath(root);
       for (const key of [corruptKey, healthyKey]) {
-        put(
+        await put(
           key,
           { entries: build().artifacts },
           {
@@ -727,7 +763,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("refuses to remove or replace a legacy workspace cache entry online", () => {
+  it("refuses to remove or replace a legacy workspace cache entry online", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-legacy-"));
     const buildKey = "a".repeat(64);
     const metadata = {
@@ -757,7 +793,7 @@ describe("build artifact helpers", () => {
       fs.writeFileSync(path.join(dir, "metadata.json"), JSON.stringify(metadata));
       expect(get(buildKey)).toBeNull();
 
-      expect(() => put(buildKey, { entries: build().artifacts }, metadata)).toThrow(
+      await expect(put(buildKey, { entries: build().artifacts }, metadata)).rejects.toThrow(
         /stop the server and remove it/
       );
       expect(fs.readFileSync(path.join(dir, "worker.js"), "utf8")).toBe("legacy");
@@ -766,7 +802,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("deduplicates artifact bytes across workspace-local build stores", () => {
+  it("deduplicates artifact bytes across workspace-local build stores", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     const previousPool = process.env["VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR"];
     try {
@@ -778,7 +814,7 @@ describe("build artifact helpers", () => {
       setUserDataPath(stateA);
       const buildA = "a".repeat(64);
       const buildB = "b".repeat(64);
-      const resultA = put(
+      const resultA = await put(
         buildA,
         { entries: build().artifacts },
         {
@@ -790,7 +826,7 @@ describe("build artifact helpers", () => {
         }
       );
       setUserDataPath(stateB);
-      const resultB = put(
+      const resultB = await put(
         buildB,
         { entries: build().artifacts },
         {
@@ -818,7 +854,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("reuses complete immutable builds across workspace stores", () => {
+  it("reuses complete immutable builds across workspace stores", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
     const previousSharedCache = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
     try {
@@ -829,7 +865,7 @@ describe("build artifact helpers", () => {
 
       setUserDataPath(stateA);
       const buildKey = "a".repeat(64);
-      const original = put(
+      const original = await put(
         buildKey,
         { entries: build().artifacts },
         {

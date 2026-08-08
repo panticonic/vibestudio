@@ -36,8 +36,7 @@ import {
   type ExecutionSourceStateRef,
   type ExecutionSourceContentRoot,
 } from "@vibestudio/shared/execution/retention";
-import { assertPresent } from "../../lintHelpers";
-import { blobCasPath, centralBlobCasDir, putBlobBytesSync } from "../storage/blobCas.js";
+import { blobCasPath, centralBlobCasDir, putBlobBytes } from "../storage/blobCas.js";
 import { stateLayout } from "../stateLayout.js";
 export { contentTypeForPath } from "@vibestudio/shared/contentType";
 
@@ -236,18 +235,18 @@ function executionMetadataPath(dir: string, executionDigest: string): string {
   return path.join(dir, "executions", `${executionDigest}.json`);
 }
 
-function writeExecutionMetadata(dir: string, metadata: BuildMetadata): void {
+async function writeExecutionMetadata(dir: string, metadata: BuildMetadata): Promise<void> {
   const digest = metadata.execution?.executionDigest;
   if (!digest) return;
   const target = executionMetadataPath(dir, digest);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
   const tmp = `${target}.tmp.${crypto.randomBytes(12).toString("hex")}`;
   try {
-    fs.writeFileSync(tmp, `${JSON.stringify(metadata, null, 2)}\n`);
-    fs.renameSync(tmp, target);
+    await fs.promises.writeFile(tmp, `${JSON.stringify(metadata, null, 2)}\n`);
+    await fs.promises.rename(tmp, target);
   } catch (error) {
     try {
-      fs.rmSync(tmp, { force: true });
+      await fs.promises.rm(tmp, { force: true });
     } catch (cleanupError) {
       warnCleanupFailure(tmp, cleanupError);
     }
@@ -312,6 +311,27 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   );
 }
 
+async function linkBuildTree(sourceDir: string, targetDir: string): Promise<void> {
+  await fs.promises.mkdir(targetDir, { recursive: true });
+  for (const entry of await fs.promises.readdir(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      await linkBuildTree(sourcePath, targetPath);
+      continue;
+    }
+    if (!entry.isFile()) {
+      throw new Error(`Unsupported build cache entry: ${sourcePath}`);
+    }
+    try {
+      await fs.promises.link(sourcePath, targetPath);
+    } catch (error) {
+      if (!isFileSystemErrorCode(error, ["EXDEV", "EPERM", "EACCES", "EMLINK"])) throw error;
+      await fs.promises.copyFile(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+    }
+  }
+}
+
 function linkBuildTreeSync(sourceDir: string, targetDir: string): void {
   fs.mkdirSync(targetDir, { recursive: true });
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
@@ -321,9 +341,7 @@ function linkBuildTreeSync(sourceDir: string, targetDir: string): void {
       linkBuildTreeSync(sourcePath, targetPath);
       continue;
     }
-    if (!entry.isFile()) {
-      throw new Error(`Unsupported build cache entry: ${sourcePath}`);
-    }
+    if (!entry.isFile()) throw new Error(`Unsupported build cache entry: ${sourcePath}`);
     try {
       fs.linkSync(sourcePath, targetPath);
     } catch (error) {
@@ -333,23 +351,23 @@ function linkBuildTreeSync(sourceDir: string, targetDir: string): void {
   }
 }
 
-function publishSharedBuild(key: string, sourceDir: string): void {
+async function publishSharedBuild(key: string, sourceDir: string): Promise<void> {
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir || fs.existsSync(path.join(sharedDir, "metadata.json"))) return;
 
   const tmpDir = `${sharedDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
   try {
-    fs.mkdirSync(path.dirname(sharedDir), { recursive: true });
-    linkBuildTreeSync(sourceDir, tmpDir);
+    await fs.promises.mkdir(path.dirname(sharedDir), { recursive: true });
+    await linkBuildTree(sourceDir, tmpDir);
     try {
-      fs.renameSync(tmpDir, sharedDir);
+      await fs.promises.rename(tmpDir, sharedDir);
     } catch (error) {
       if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
     }
   } catch (error) {
     try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
     } catch (cleanupError) {
       warnCleanupFailure(tmpDir, cleanupError);
     }
@@ -449,21 +467,21 @@ function entryBytes(entry: BuildArtifactInput & { encoding: BuildArtifactEncodin
     : Buffer.from(entry.content, "utf-8");
 }
 
-function writeArtifactFile(
+async function writeArtifactFile(
   targetPath: string,
   entry: BuildArtifactInput & { encoding: BuildArtifactEncoding; integrity: string },
   poolDir: string | null
-): void {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+): Promise<void> {
+  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
   const bytes = entryBytes(entry);
   const blobPath = poolDir ? artifactBlobPath(poolDir, entry.integrity) : null;
   if (poolDir && blobPath) {
-    const stored = putBlobBytesSync(poolDir, bytes);
-    if (stored.filePath !== blobPath) {
+    const stored = await putBlobBytes(poolDir, bytes);
+    if (stored.digest !== integrityHex(entry.integrity)) {
       throw new Error(`Artifact integrity mismatch for ${entry.path}`);
     }
     try {
-      fs.linkSync(blobPath, targetPath);
+      await fs.promises.link(blobPath, targetPath);
       return;
     } catch (error) {
       // Custom workspace paths can place state and the central pool on
@@ -472,7 +490,23 @@ function writeArtifactFile(
       if (!isFileSystemErrorCode(error, ["EXDEV", "EPERM", "EACCES", "EMLINK"])) throw error;
     }
   }
-  fs.writeFileSync(targetPath, bytes);
+  await fs.promises.writeFile(targetPath, bytes);
+}
+
+async function runBounded<T>(
+  values: readonly T[],
+  concurrency: number,
+  work: (value: T) => Promise<void>
+): Promise<void> {
+  let cursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (cursor < values.length) {
+        const value = values[cursor++];
+        if (value !== undefined) await work(value);
+      }
+    })
+  );
 }
 
 function buildArtifactSetIntegrity(entries: BuildArtifactManifestEntry[]): string {
@@ -686,7 +720,7 @@ export function get(key: string): BuildResult | null {
   const localDir = getBuildDir(key);
   const local = readBuildDir(localDir, key);
   if (local) {
-    publishSharedBuild(key, localDir);
+    void publishSharedBuild(key, localDir);
     return local;
   }
 
@@ -733,7 +767,13 @@ export function get(key: string): BuildResult | null {
       // Execution metadata is workspace-owned provenance. Shared caches supply
       // reusable bytes, never another workspace's semantic execution variants.
       fs.rmSync(path.join(tmpDir, "executions"), { recursive: true, force: true });
-      writeExecutionMetadata(tmpDir, sharedMetadata);
+      // get() cannot await; preserve synchronous cache hydration metadata.
+      const executionDigest = sharedMetadata.execution?.executionDigest;
+      if (executionDigest) {
+        const target = executionMetadataPath(tmpDir, executionDigest);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, `${JSON.stringify(sharedMetadata, null, 2)}\n`);
+      }
       try {
         fs.renameSync(tmpDir, localDir);
       } catch (error) {
@@ -798,7 +838,10 @@ export function getByExecution(key: string, executionDigest: string): BuildResul
  * commits the source state, so reusing bytes across semantic states must update
  * the workspace-owned metadata before the result can be retained or executed.
  */
-export function rebindSourceState(build: BuildResult, sourceStateHash: string): BuildResult {
+export async function rebindSourceState(
+  build: BuildResult,
+  sourceStateHash: string
+): Promise<BuildResult> {
   if (build.sourceStateHash === sourceStateHash) return build;
   const sourceState = activeExecutionIdentityContext?.executionStateForContent(sourceStateHash);
   if (!sourceState) {
@@ -823,12 +866,12 @@ export function rebindSourceState(build: BuildResult, sourceStateHash: string): 
     const metadataPath = path.join(localDir, "metadata.json");
     const tmpPath = `${metadataPath}.tmp.${crypto.randomBytes(12).toString("hex")}`;
     try {
-      fs.writeFileSync(tmpPath, `${JSON.stringify(metadata, null, 2)}\n`);
-      writeExecutionMetadata(localDir, metadata);
-      fs.renameSync(tmpPath, metadataPath);
+      await fs.promises.writeFile(tmpPath, `${JSON.stringify(metadata, null, 2)}\n`);
+      await writeExecutionMetadata(localDir, metadata);
+      await fs.promises.rename(tmpPath, metadataPath);
     } catch (error) {
       try {
-        fs.rmSync(tmpPath, { force: true });
+        await fs.promises.rm(tmpPath, { force: true });
       } catch (cleanupError) {
         warnCleanupFailure(tmpPath, cleanupError);
       }
@@ -929,7 +972,11 @@ export function primaryArtifactFilePath(
   return artifactFilePath(build, artifact);
 }
 
-export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetadata): BuildResult {
+export async function put(
+  key: string,
+  artifacts: BuildArtifacts,
+  metadata: BuildMetadata
+): Promise<BuildResult> {
   if (metadata.execution !== undefined) {
     throw new Error("Build execution identity is derived by the store and cannot be supplied");
   }
@@ -985,26 +1032,32 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
     ...(execution ? { execution } : {}),
   };
 
-  fs.mkdirSync(tmpDir, { recursive: true });
-  for (const entry of entries) {
+  await fs.promises.mkdir(tmpDir, { recursive: true });
+  await runBounded(entries, 8, async (entry) => {
     const targetPath = path.join(tmpDir, entry.path);
-    writeArtifactFile(targetPath, entry, artifactPoolDir);
-  }
+    await writeArtifactFile(targetPath, entry, artifactPoolDir);
+  });
 
   // Ensure Node.js treats bundle.js as ESM.
   if (storedMetadata.kind === "worker" || storedMetadata.kind === "extension") {
-    fs.writeFileSync(path.join(tmpDir, "package.json"), '{"type":"module"}');
+    await fs.promises.writeFile(path.join(tmpDir, "package.json"), '{"type":"module"}');
   }
 
-  fs.writeFileSync(path.join(tmpDir, "artifacts.json"), JSON.stringify(artifactManifest, null, 2));
+  await fs.promises.writeFile(
+    path.join(tmpDir, "artifacts.json"),
+    JSON.stringify(artifactManifest, null, 2)
+  );
 
   // Write metadata (sentinel) inside tmpDir BEFORE rename so winner is always complete
-  fs.writeFileSync(path.join(tmpDir, "metadata.json"), JSON.stringify(storedMetadata, null, 2));
-  writeExecutionMetadata(tmpDir, storedMetadata);
+  await fs.promises.writeFile(
+    path.join(tmpDir, "metadata.json"),
+    JSON.stringify(storedMetadata, null, 2)
+  );
+  await writeExecutionMetadata(tmpDir, storedMetadata);
 
   // Race-safe promotion: try rename, handle concurrent winner
   try {
-    fs.renameSync(tmpDir, dir);
+    await fs.promises.rename(tmpDir, dir);
   } catch (err: unknown) {
     if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
       // Another build may have won the race. Accept it only after the same
@@ -1013,7 +1066,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
         const winner = get(key);
         if (winner) {
           try {
-            fs.rmSync(tmpDir, { recursive: true, force: true });
+            await fs.promises.rm(tmpDir, { recursive: true, force: true });
           } catch (cleanupError) {
             warnCleanupFailure(tmpDir, cleanupError);
           }
@@ -1026,7 +1079,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
       // here would be an uncoordinated artifact deletion indistinguishable from
       // retention GC to live registries.
       try {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
       } catch (cleanupError) {
         warnCleanupFailure(tmpDir, cleanupError);
       }
@@ -1036,7 +1089,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
     } else {
       // Clean up tmpDir on unexpected errors
       try {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
       } catch (cleanupError) {
         warnCleanupFailure(tmpDir, cleanupError);
       }
@@ -1044,9 +1097,15 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
     }
   }
 
-  const stored = assertPresent(readBuildDir(dir, key));
+  const stored: BuildResult = {
+    dir,
+    buildKey: key,
+    sourceStateHash: storedMetadata.sourceStateHash,
+    metadata: storedMetadata,
+    artifacts: entries.map((entry) => ({ ...manifestForEntry(entry), content: entry.content })),
+  };
   clearRetiredBuildKey(key);
-  publishSharedBuild(key, dir);
+  await publishSharedBuild(key, dir);
   return stored;
 }
 

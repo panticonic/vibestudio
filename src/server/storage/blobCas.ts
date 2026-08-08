@@ -80,7 +80,10 @@ export async function putBlobBytes(
     if (!isErrorCode(error, "ENOENT")) throw error;
   }
 
-  ensureBlobCasLayout(rootDir);
+  await Promise.all([
+    fsp.mkdir(path.join(rootDir, "tmp"), { recursive: true }),
+    fsp.mkdir(path.join(rootDir, "sha256"), { recursive: true }),
+  ]);
   const tmpPath = path.join(rootDir, "tmp", `${process.pid}-${randomUUID()}.tmp`);
   try {
     await fsp.writeFile(tmpPath, bytes, { flag: "wx" });

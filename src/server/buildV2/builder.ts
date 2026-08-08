@@ -1627,7 +1627,7 @@ export async function buildUnit(
   // Check store first
   let cached = buildStore.get(buildKey);
   if (cached && cached.sourceStateHash !== stateRef && cached.sourceStateHash !== null) {
-    cached = buildStore.rebindSourceState(cached, stateRef);
+    cached = await buildStore.rebindSourceState(cached, stateRef);
   }
   if (cached) {
     if (node.kind === "extension") {
@@ -1860,7 +1860,7 @@ async function prepareBuildEnv(
 /**
  * Store a simple bundle-only build result (used by worker builds).
  */
-function storeSimpleBuild(
+async function storeSimpleBuild(
   buildKey: string,
   bundle: string,
   node: GraphNode,
@@ -1870,7 +1870,7 @@ function storeSimpleBuild(
   authority: UnitAuthorityManifest,
   extraMetadata: Partial<BuildMetadata> = {},
   artifacts: BuildArtifacts = bundleArtifacts(bundle)
-): BuildResult {
+): Promise<BuildResult> {
   const metadata: BuildMetadata = {
     kind: node.kind as BuildMetadata["kind"],
     name: node.name,
@@ -3415,20 +3415,29 @@ async function buildExtension(
       dependencyDiagnostics,
     });
 
-    const result = storeSimpleBuild(buildKey, bundle, node, ev, true, sourceStateHash, authority, {
-      details: {
-        kind: "extension",
-        runtimeDepsKey: runtimeDeps.key,
-        runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
-        providerContracts,
-        methodAuthority,
-        dependencyMode,
-        externalDeps: runtimeExternalDeps,
-        dependencyOverrides: env.dependencyOverrides,
-        classifiedDeps,
-        smokeTest: { mode: "child-process", passed: true },
-      },
-    });
+    const result = await storeSimpleBuild(
+      buildKey,
+      bundle,
+      node,
+      ev,
+      true,
+      sourceStateHash,
+      authority,
+      {
+        details: {
+          kind: "extension",
+          runtimeDepsKey: runtimeDeps.key,
+          runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
+          providerContracts,
+          methodAuthority,
+          dependencyMode,
+          externalDeps: runtimeExternalDeps,
+          dependencyOverrides: env.dependencyOverrides,
+          classifiedDeps,
+          smokeTest: { mode: "child-process", passed: true },
+        },
+      }
+    );
     if (runtimeDeps.nodeModulesDir) {
       linkExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, node.name);
     }
