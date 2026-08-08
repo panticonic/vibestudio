@@ -6,11 +6,12 @@
 //   - HOST code (src/, packages/, apps/, scripts/, tests/, build.mjs) must never
 //     depend on or assume WORKSPACE (userland, workspace/) code beyond defined
 //     interfaces. Package scope is never residency evidence.
-//   - WORKSPACE code must never import host-private implementation roots
-//     (`src/`, `apps/`, `scripts/`, or root `tests/`). Shared public packages
-//     such as `@vibestudio/shared` are intentionally not host-private.
+//   - WORKSPACE code must never import host implementation roots by relative
+//     source path (`src/`, `packages/`, `apps/`, `scripts/`, or root `tests/`).
+//     Shared public package specifiers such as `@vibestudio/shared` remain the
+//     intentional platform boundary.
 //
-// Three finding categories are produced:
+// Four finding categories are produced:
 //
 //   1. "import-violation" - a hard dependency: an ES `import`/`export ... from`,
 //      a dynamic `import(...)`, or a CommonJS `require(...)` whose specifier
@@ -25,6 +26,11 @@
 //      declaring an @vibestudio/* package name. Workspace-owned packages use
 //      the @workspace* scopes; @vibestudio/* is reserved for host-supplied
 //      platform packages.
+//
+//   4. "workspace-host-config" - a package-local TypeScript configuration
+//      resolving compiler inputs outside workspace/. The workspace root owns
+//      the monorepo development projection; extracted packages must not regain
+//      host-source coupling through private `paths`, `extends`, or references.
 //
 // Cross-boundary integration tests live under `tests/workspace-integration/`;
 // that neutral harness is intentionally excluded from both directions.
@@ -43,7 +49,7 @@ const DEFAULT_ROOT = process.cwd();
 const HOST_SCANNED_ROOTS = ["src", "packages", "apps", "scripts", "tests"];
 const HOST_SCANNED_FILES = ["build.mjs"];
 const WORKSPACE_SCANNED_ROOTS = ["workspace"];
-const HOST_PRIVATE_IMPORT_ROOTS = ["src", "apps", "scripts", "tests"];
+const HOST_PRIVATE_IMPORT_ROOTS = ["src", "packages", "apps", "scripts", "tests"];
 const NEUTRAL_BOUNDARY_TEST_ROOTS = new Set(["tests/workspace-integration"]);
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -185,6 +191,68 @@ export function collectWorkspaceFindings({ text, absFile, root = DEFAULT_ROOT })
   return findings;
 }
 
+function configLine(text, value) {
+  const index = text.indexOf(JSON.stringify(value));
+  return index < 0 ? 1 : text.slice(0, index).split("\n").length;
+}
+
+function isInside(candidate, directory) {
+  return candidate === directory || candidate.startsWith(`${directory}${path.sep}`);
+}
+
+/**
+ * Reject package-owned compiler configuration that reaches back out of the
+ * portable workspace tree. Bare package-name `extends` values remain valid;
+ * they resolve through declared dependencies rather than repository layout.
+ */
+export function collectWorkspaceCompilerConfigFindings({ text, absFile, root = DEFAULT_ROOT }) {
+  let config;
+  try {
+    config = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Could not inspect TypeScript configuration ${absFile}`, { cause: error });
+  }
+  const workspaceRoot = path.resolve(root, "workspace");
+  const references = [];
+  const addPath = (field, value, barePackageAllowed = false) => {
+    if (typeof value !== "string" || value.length === 0) return;
+    if (barePackageAllowed && !value.startsWith(".") && !path.isAbsolute(value)) return;
+    references.push({ field, value });
+  };
+
+  const extended = Array.isArray(config.extends) ? config.extends : [config.extends];
+  for (const value of extended) addPath("extends", value, true);
+  for (const reference of config.references ?? []) {
+    addPath("references.path", reference?.path);
+  }
+
+  const compilerOptions = config.compilerOptions ?? {};
+  addPath("compilerOptions.baseUrl", compilerOptions.baseUrl);
+  for (const field of ["rootDirs", "typeRoots"]) {
+    for (const value of compilerOptions[field] ?? []) {
+      addPath(`compilerOptions.${field}`, value);
+    }
+  }
+  for (const [alias, values] of Object.entries(compilerOptions.paths ?? {})) {
+    for (const value of Array.isArray(values) ? values : []) {
+      addPath(`compilerOptions.paths[${JSON.stringify(alias)}]`, value);
+    }
+  }
+
+  return references.flatMap(({ field, value }) => {
+    const resolved = path.resolve(path.dirname(absFile), value);
+    if (isInside(resolved, workspaceRoot)) return [];
+    return [
+      {
+        file: path.relative(root, absFile).split(path.sep).join("/"),
+        line: configLine(text, value),
+        specifier: `${field}: ${value}`,
+        category: "workspace-host-config",
+      },
+    ];
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Filesystem walk.
 // ---------------------------------------------------------------------------
@@ -213,6 +281,21 @@ function* walkSourceFiles(root, scannedRoots, scannedFiles = []) {
 
   for (const file of singles) {
     if (fs.existsSync(file) && fs.statSync(file).isFile()) yield file;
+  }
+}
+
+function* walkWorkspaceCompilerConfigs(root) {
+  const packageRoot = path.join(root, "workspace", "packages");
+  if (!fs.existsSync(packageRoot)) return;
+  const stack = [packageRoot];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (shouldSkipDir(root, current)) continue;
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const absolute = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(absolute);
+      else if (entry.isFile() && /^tsconfig(?:\.[^.]+)*\.json$/u.test(entry.name)) yield absolute;
+    }
   }
 }
 
@@ -294,6 +377,15 @@ export function scanRepository(root = DEFAULT_ROOT) {
     const text = fs.readFileSync(absFile, "utf8");
     findings.push(...collectWorkspaceFindings({ text, absFile, root }));
   }
+  for (const absFile of walkWorkspaceCompilerConfigs(root)) {
+    findings.push(
+      ...collectWorkspaceCompilerConfigFindings({
+        text: fs.readFileSync(absFile, "utf8"),
+        absFile,
+        root,
+      })
+    );
+  }
   // Stable ordering: file, then line.
   findings.sort(
     (a, b) =>
@@ -337,6 +429,7 @@ function check(root) {
     "import-violation",
     "workspace-reference",
     "workspace-host-import",
+    "workspace-host-config",
     "workspace-package-identity",
   ];
   console.error("Host/workspace boundary violations:\n");
@@ -349,7 +442,7 @@ function check(root) {
   }
   const counts = countByCategory(findings);
   console.error(
-    `Summary: ${findings.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}, workspace-package-identity: ${counts["workspace-package-identity"] ?? 0}.`
+    `Summary: ${findings.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}, workspace-host-config: ${counts["workspace-host-config"] ?? 0}, workspace-package-identity: ${counts["workspace-package-identity"] ?? 0}.`
   );
   return 1;
 }

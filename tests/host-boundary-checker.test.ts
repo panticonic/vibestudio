@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   collectFindings,
+  collectWorkspaceCompilerConfigFindings,
   collectWorkspaceFindings,
   isWorkspaceImportScope,
   resolvesIntoAnyRoot,
@@ -20,7 +21,13 @@ const HOST_FILE = "/repo/src/server/foo.ts";
 const WORKSPACE_FILE = "/repo/workspace/workers/foo.ts";
 const ROOT = "/repo";
 const WS_ROOT = "/repo/workspace/";
-const HOST_PRIVATE_ROOTS = ["/repo/src/", "/repo/apps/", "/repo/scripts/", "/repo/tests/"];
+const HOST_PRIVATE_ROOTS = [
+  "/repo/src/",
+  "/repo/packages/",
+  "/repo/apps/",
+  "/repo/scripts/",
+  "/repo/tests/",
+];
 
 function findings(text: string, absFile = HOST_FILE) {
   return collectFindings({ text, absFile, root: ROOT });
@@ -144,11 +151,13 @@ describe("collectWorkspaceFindings — workspace-host-import category", () => {
   it("flags workspace files importing host-private implementation roots", () => {
     const text = [
       `import { RpcServer } from "../../src/server/rpcServer.js";`,
+      `import { shared } from "../../packages/shared/src/index.js";`,
       `const svc = await import("../../src/server/services/protectedRefStore.js");`,
       `const gate = require("../../scripts/check-host-workspace-imports.mjs");`,
     ].join("\n");
     const result = collectWorkspaceFindings({ text, absFile: WORKSPACE_FILE, root: ROOT });
     expect(result.map((f) => f.category)).toEqual([
+      "workspace-host-import",
       "workspace-host-import",
       "workspace-host-import",
       "workspace-host-import",
@@ -161,9 +170,57 @@ describe("collectWorkspaceFindings — workspace-host-import category", () => {
       `import { y } from "@workspace/runtime";`,
       `import { z } from "../workspace/packages/runtime/src/shared/vcsClient.js";`,
     ].join("\n");
-    expect(collectWorkspaceFindings({ text, absFile: WORKSPACE_FILE, root: ROOT })).toHaveLength(
-      0
+    expect(collectWorkspaceFindings({ text, absFile: WORKSPACE_FILE, root: ROOT })).toHaveLength(0);
+  });
+});
+
+describe("collectWorkspaceCompilerConfigFindings — workspace-host-config category", () => {
+  const configFile = "/repo/workspace/packages/template-composer/tsconfig.json";
+
+  it("rejects package-local aliases and inheritance that reach host source", () => {
+    const text = JSON.stringify(
+      {
+        extends: "../../../tsconfig.json",
+        compilerOptions: {
+          paths: {
+            "@vibestudio/shared/*": ["../../../packages/shared/src/*"],
+            "@workspace/peer": ["../peer/src/index.ts"],
+          },
+        },
+      },
+      null,
+      2
     );
+
+    expect(
+      collectWorkspaceCompilerConfigFindings({ text, absFile: configFile, root: ROOT })
+    ).toEqual([
+      expect.objectContaining({
+        specifier: "extends: ../../../tsconfig.json",
+        category: "workspace-host-config",
+      }),
+      expect.objectContaining({
+        specifier: 'compilerOptions.paths["@vibestudio/shared/*"]: ../../../packages/shared/src/*',
+        category: "workspace-host-config",
+      }),
+    ]);
+  });
+
+  it("allows workspace-local config paths and dependency-provided bases", () => {
+    const text = JSON.stringify({
+      extends: "@workspace/typescript-config/library",
+      references: [{ path: "../runtime" }],
+      compilerOptions: {
+        baseUrl: ".",
+        rootDirs: ["src", "../shared/src"],
+        typeRoots: ["../../types"],
+        paths: { "@workspace/peer": ["../peer/src/index.ts"] },
+      },
+    });
+
+    expect(
+      collectWorkspaceCompilerConfigFindings({ text, absFile: configFile, root: ROOT })
+    ).toEqual([]);
   });
 });
 
