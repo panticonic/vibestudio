@@ -6439,6 +6439,7 @@ async function main() {
   // Steps 1-3 (hydrate, incomplete-cleanup reconcile, GC safety sweep) are
   // factored into `runStartupReconciliation` so both the boot path and tests
   // can call them.
+  const bootstrapReconciliationStartedAt = Date.now();
   const { runStartupReconciliation } = await import("./services/startupReconciliation.js");
   const lifecycleDriver =
     container.get<import("./services/lifecycleDriver.js").LifecycleDriver>("lifecycleDriver");
@@ -6489,6 +6490,7 @@ async function main() {
     recoverLifecycle: () => lifecycleDriver.recoverStartup("server_restart"),
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });
+  const durableReconciliationCompletedAt = Date.now();
   // Runtime creation primes new panel entities. Replaying active panels after
   // durable hydration gives restored trees the same lazy dependency behavior
   // without treating manifest initPanels as a build-time special case.
@@ -6514,6 +6516,7 @@ async function main() {
   } catch (err) {
     console.warn("[Bootstrap] durable work recovery skipped:", err);
   }
+  const runtimeRecoveryStartedAt = Date.now();
 
   // Re-register bootstrap entries that don't have DO rows.
   entityCache.registerBootstrap({ id: "server", kind: "server" });
@@ -6535,17 +6538,30 @@ async function main() {
     decl,
     contextId: decl.contextId ?? canonicalSingletonContextId(workspaceId, decl),
   }));
+  const singletonPreparationMs = new Map<string, number>();
+  const singletonActivationMs = new Map<string, number>();
+  const singletonLabel = ({ decl }: (typeof singletonPlans)[number]) =>
+    `${decl.source}:${decl.className}:${decl.key}`;
   await reconcileSingletons({
     items: singletonPlans,
-    prepare: ({ decl, contextId }) =>
-      workerdManager.ensureDurableObjectEntity({
-        source: decl.source,
-        className: decl.className,
-        key: decl.key,
-        contextId,
-        ref: decl.contextId ? undefined : "main",
-      }),
+    prepare: async (plan) => {
+      const { decl, contextId } = plan;
+      const startedAt = Date.now();
+      try {
+        return await workerdManager.ensureDurableObjectEntity({
+          source: decl.source,
+          className: decl.className,
+          key: decl.key,
+          contextId,
+          ref: decl.contextId ? undefined : "main",
+        });
+      } finally {
+        singletonPreparationMs.set(singletonLabel(plan), Date.now() - startedAt);
+      }
+    },
     activate: async ({ decl, contextId }, prepared) => {
+      const label = `${decl.source}:${decl.className}:${decl.key}`;
+      const startedAt = Date.now();
       const activation = singletonEntityActivationInput(
         {
           source: decl.source,
@@ -6557,11 +6573,16 @@ async function main() {
         SYSTEM_SUBJECT.userId
       );
       const store = getEntityStore();
-      const existing = await store.resolveRecord(prepared.targetId);
-      return existing ? store.advanceExecution(activation) : store.activate(activation);
+      try {
+        const existing = await store.resolveRecord(prepared.targetId);
+        return await (existing ? store.advanceExecution(activation) : store.activate(activation));
+      } finally {
+        singletonActivationMs.set(label, Date.now() - startedAt);
+      }
     },
     onActivated: () => undefined,
   });
+  const singletonReconciliationCompletedAt = Date.now();
 
   // The bootstrap build system compiled from the filesystem snapshot only to
   // start the semantic source provider. After singleton reconciliation, every
@@ -6582,6 +6603,7 @@ async function main() {
       `[BuildV2] Discarded ${discardedBootstrapBuilds} transitional bootstrap build${discardedBootstrapBuilds === 1 ? "" : "s"}`
     );
   }
+  const bootstrapBuildDiscardCompletedAt = Date.now();
 
   // 5. Start cleanup reaper to retry partial-failed hooks.
   const { createCleanupReaper } = await import("./services/cleanupReaper.js");
@@ -6594,6 +6616,20 @@ async function main() {
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });
   cleanupReaper.start();
+  const bootstrapReconciliationCompletedAt = Date.now();
+  console.info("[StartupBootstrap] Reconciliation barrier", {
+    durableReconciliationMs: durableReconciliationCompletedAt - bootstrapReconciliationStartedAt,
+    runtimeRecoveryMs: runtimeRecoveryStartedAt - durableReconciliationCompletedAt,
+    singletonReconciliationMs: singletonReconciliationCompletedAt - runtimeRecoveryStartedAt,
+    bootstrapBuildDiscardMs: bootstrapBuildDiscardCompletedAt - singletonReconciliationCompletedAt,
+    cleanupReaperMs: bootstrapReconciliationCompletedAt - bootstrapBuildDiscardCompletedAt,
+    singletons: singletonPlans.map((plan) => ({
+      singleton: singletonLabel(plan),
+      prepareMs: singletonPreparationMs.get(singletonLabel(plan)) ?? null,
+      activateMs: singletonActivationMs.get(singletonLabel(plan)) ?? null,
+    })),
+    totalMs: bootstrapReconciliationCompletedAt - bootstrapReconciliationStartedAt,
+  });
 
   /**
    * The creation review (§7.1), held in the new workspace immediately after it
@@ -6777,16 +6813,23 @@ async function main() {
       }
     }
   };
-  startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile().then(async () => {
-    // Wait only until both declaration branches have staged their requests.
-    // publishPending starts the queue entries synchronously; its promise is the
-    // later human decision/application and therefore remains detached.
-    await Promise.resolve(startupExtensionStaging);
-    void unitInstallReviewCoordinator
-      .publishPending("startup")
-      .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
-    await prepareWorkspaceCreationReview();
-  });
+  // Calling an async function still executes its synchronous prefix inline.
+  // Unit discovery and seed verification can be substantial on a cold
+  // workspace, so cross a scheduling boundary before starting opportunistic
+  // reconciliation. Explicit mobile/Electron readiness modes await this same
+  // promise below and therefore retain their stronger startup contract.
+  startupWorkspaceUnitReconcile = Promise.resolve()
+    .then(runStartupWorkspaceUnitReconcile)
+    .then(async () => {
+      // Wait only until both declaration branches have staged their requests.
+      // publishPending starts the queue entries synchronously; its promise is the
+      // later human decision/application and therefore remains detached.
+      await Promise.resolve(startupExtensionStaging);
+      void unitInstallReviewCoordinator
+        .publishPending("startup")
+        .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
+      await prepareWorkspaceCreationReview();
+    });
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(
