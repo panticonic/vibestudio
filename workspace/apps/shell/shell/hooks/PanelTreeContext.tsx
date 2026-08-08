@@ -606,7 +606,15 @@ export function useFullPanel(panelId: string | null): {
       cancelled = true;
     };
   }, [applyPresentation, panelId]);
-  return { panel: value, loading };
+  // A presentation belongs to exactly one durable slot. Keep an earlier
+  // response cached while the next address loads, but never expose it under a
+  // different panel id: consumers use readiness from this value to decide
+  // which native WebContentsView may own the pane.
+  const currentValue = value?.id === panelId ? value : null;
+  return {
+    panel: currentValue,
+    loading: Boolean(panelId) && (loading || currentValue === null),
+  };
 }
 
 export function useSiblings(panelId: string | null): {

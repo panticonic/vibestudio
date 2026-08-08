@@ -1033,8 +1033,18 @@ export class ViewManager {
         reason: `stale native panel slot bind: ${nativeSlotId}`,
       };
     }
+    const previousSlot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     const managed = this.views.get(panelId);
     if (!managed || managed.type !== "panel") {
+      // The accepted binding sequence is now the slot's desired owner and
+      // fences every older operation. If its view is not materialized yet,
+      // the previous owner must be hidden as part of that same ownership
+      // transition; otherwise its later clear is stale and its pixels can
+      // remain indefinitely under the new logical pane.
+      if (previousSlot) {
+        this.clearPanelSlotInternal(nativeSlotId);
+        this.reconcileNativeLayerOrder();
+      }
       throw new Error(`Native panel slot target is not a panel view: ${panelId}`);
     }
 
@@ -1042,6 +1052,13 @@ export class ViewManager {
     if (existingSlotForPanel && existingSlotForPanel !== nativeSlotId) {
       const message = `Panel ${panelId} is already bound to native slot ${existingSlotForPanel}; cannot bind to ${nativeSlotId}`;
       console.warn(`[ViewManager] ${message}`);
+      // This claim still superseded the current slot owner even though its
+      // target is already presented elsewhere. Preserve one-panel/one-slot
+      // ownership without leaving unrelated stale pixels in this slot.
+      if (previousSlot) {
+        this.clearPanelSlotInternal(nativeSlotId);
+        this.reconcileNativeLayerOrder();
+      }
       throw new Error(message);
     }
 
@@ -1051,7 +1068,6 @@ export class ViewManager {
       if (pending.nativeSlotId === nativeSlotId) this.pendingSlotRestores.delete(pendingPanelId);
     }
 
-    const previousSlot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     const wasSameFocusedPanel =
       previousSlot?.panelId === panelId &&
       previousSlot.focused &&

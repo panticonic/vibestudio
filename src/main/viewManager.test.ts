@@ -703,6 +703,103 @@ describe("ViewManager", () => {
       expect(vm.isPanelSlotted("panel-b")).toBe(true);
     });
 
+    it("hides the previous surface when a newer owner is not materialized yet", () => {
+      const previousView = vm.createView({ id: "panel-old", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        bindingId: "binding-old",
+        bindingSequence: 1,
+        operationSequence: 1,
+        panelId: "panel-old",
+        bounds: { x: 10, y: 20, width: 300, height: 200 },
+      });
+
+      expect(() =>
+        vm.bindPanelSlot("@workspace-apps/shell", {
+          nativeSlotId: "panel-stack:primary",
+          bindingId: "binding-new",
+          bindingSequence: 2,
+          operationSequence: 1,
+          panelId: "panel-new",
+          bounds: { x: 10, y: 20, width: 300, height: 200 },
+        })
+      ).toThrow("Native panel slot target is not a panel view: panel-new");
+
+      expect(previousView.setVisible).toHaveBeenLastCalledWith(false);
+      expect(vm.isPanelSlotted("panel-old")).toBe(false);
+
+      // Cleanup from the superseded surface remains stale, but that is safe:
+      // accepting the newer desired owner already removed its pixels.
+      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-old", {
+        bindingSequence: 1,
+        operationSequence: 2,
+      });
+      expect(vm.isPanelSlotted("panel-old")).toBe(false);
+
+      vm.createView({ id: "panel-new", type: "panel" });
+      expect(
+        vm.bindPanelSlot("@workspace-apps/shell", {
+          nativeSlotId: "panel-stack:primary",
+          bindingId: "binding-new",
+          bindingSequence: 2,
+          operationSequence: 2,
+          panelId: "panel-new",
+          bounds: { x: 10, y: 20, width: 300, height: 200 },
+        })
+      ).toEqual({ status: "bound" });
+      expect(vm.isPanelSlotted("panel-new")).toBe(true);
+    });
+
+    it("relinquishes the previous surface when the newer owner is already slotted elsewhere", () => {
+      const previousView = vm.createView({ id: "panel-old", type: "panel" });
+      vm.createView({ id: "panel-new", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        bindingId: "binding-old",
+        bindingSequence: 1,
+        operationSequence: 1,
+        panelId: "panel-old",
+        bounds: { x: 10, y: 20, width: 300, height: 200 },
+      });
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:secondary",
+        bindingId: "binding-new-secondary",
+        bindingSequence: 2,
+        operationSequence: 1,
+        panelId: "panel-new",
+        bounds: { x: 320, y: 20, width: 300, height: 200 },
+      });
+
+      expect(() =>
+        vm.bindPanelSlot("@workspace-apps/shell", {
+          nativeSlotId: "panel-stack:primary",
+          bindingId: "binding-new-primary",
+          bindingSequence: 3,
+          operationSequence: 1,
+          panelId: "panel-new",
+          bounds: { x: 10, y: 20, width: 300, height: 200 },
+        })
+      ).toThrow(/already bound to native slot panel-stack:secondary/);
+
+      expect(previousView.setVisible).toHaveBeenLastCalledWith(false);
+      expect(vm.isPanelSlotted("panel-old")).toBe(false);
+      expect(vm.isPanelSlotted("panel-new")).toBe(true);
+    });
+
     it("starts a fresh ordering epoch for a replacement shell document", () => {
       vm.createView({ id: "panel-a", type: "panel" });
       vm.createView({ id: "panel-b", type: "panel" });

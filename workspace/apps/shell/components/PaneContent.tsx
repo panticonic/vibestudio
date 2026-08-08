@@ -111,7 +111,11 @@ export function PaneContent({
       });
   }, [panelId, resident, fullPanel?.buildKey]);
 
-  if (!fullPanel) {
+  // Never use one slot's runtime/artifact readiness to present another slot.
+  // useFullPanel enforces this identity boundary too; keep it explicit here
+  // because crossing it would grant the wrong native view ownership of this
+  // pane rather than merely render stale text.
+  if (!fullPanel || fullPanel.id !== panelId) {
     return (
       <Flex
         data-panel-content-state="loading"

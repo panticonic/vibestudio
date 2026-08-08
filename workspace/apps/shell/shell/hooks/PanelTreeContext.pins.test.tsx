@@ -217,6 +217,44 @@ afterEach(() => {
 });
 
 describe("useFullPanel local presentation", () => {
+  it("never exposes the previous panel while a different panel is loading", async () => {
+    const ready = (id: string) => ({
+      id,
+      title: id,
+      buildKey: "b".repeat(64),
+      parentId: null,
+      position: 0,
+      selectedChildId: null,
+      children: [],
+      snapshot: { source: "panels/ready", contextId: `context-${id}`, options: {} },
+      artifacts: { buildState: "ready", htmlPath: `/${id}` },
+      hostViewRevision: 1,
+    });
+    let resolveSecond!: (value: ReturnType<typeof ready>) => void;
+    getPresentation.mockImplementation((panelId: string) =>
+      panelId === "panel:tree/a"
+        ? Promise.resolve(ready(panelId))
+        : new Promise((resolve) => {
+            resolveSecond = resolve;
+          })
+    );
+
+    const { rerender } = render(<FullPanelProbe panelId="panel:tree/a" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:ready")
+    );
+
+    rerender(<FullPanelProbe panelId="panel:tree/b" />);
+
+    expect(screen.getByTestId("full-panel").textContent).toBe("");
+    expect(screen.getByTestId("full-panel").dataset["loading"]).toBe("true");
+
+    resolveSecond(ready("panel:tree/b"));
+    await waitFor(() =>
+      expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/b:ready")
+    );
+  });
+
   it("renders the Electron host's terminal presentation projection", async () => {
     getPresentation.mockResolvedValue({
       id: "panel:tree/a",
