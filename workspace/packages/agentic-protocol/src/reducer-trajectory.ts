@@ -4,10 +4,12 @@ import { assertNoStoredValueRefs } from "./stored-values.js";
 import {
   applyApprovalEvent,
   applyInvocationEvent,
+  applyTaskEvent,
   applyMessageEvent,
   type ApprovalMap,
   type InvocationMap,
   type MessageMap,
+  type TaskMap,
   type ProjectedTurn,
   type TurnMap,
 } from "./handlers.js";
@@ -28,6 +30,7 @@ export interface TrajectoryState {
   turns: TurnMap;
   messages: MessageMap;
   invocations: InvocationMap;
+  tasks: TaskMap;
   approvals: ApprovalMap;
   systemEvents: TrajectoryEvent[];
   eventIds: string[];
@@ -40,6 +43,7 @@ export function createInitialTrajectoryState(): TrajectoryState {
     turns: {},
     messages: {},
     invocations: {},
+    tasks: {},
     approvals: {},
     systemEvents: [],
     eventIds: [],
@@ -67,6 +71,8 @@ export function reduceTrajectory(state: TrajectoryState, event: TrajectoryEvent)
     next = { ...next, messages: applyMessageEvent(next.messages, event as never, event.seq) };
   } else if (event.kind.startsWith("invocation.")) {
     next = { ...next, invocations: applyInvocationEvent(next.invocations, event as never) };
+  } else if (event.kind.startsWith("task.")) {
+    next = { ...next, tasks: applyTaskEvent(next.tasks, event as never) };
   } else if (event.kind.startsWith("approval.")) {
     next = { ...next, approvals: applyApprovalEvent(next.approvals, event as never) };
   } else if (event.kind === "turn.opened") {
@@ -152,6 +158,7 @@ export function userVisibleTrajectoryProjection(state: TrajectoryState) {
   return {
     messages: state.messages,
     invocations: state.invocations,
+    tasks: state.tasks,
     approvals: state.approvals,
   };
 }

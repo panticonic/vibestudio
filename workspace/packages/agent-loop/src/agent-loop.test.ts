@@ -547,7 +547,7 @@ describe("agent-loop core lifecycle", () => {
     expect(final.causality).toMatchObject({ messageId: msg1, turnId: turn1 });
   });
 
-  it("keeps spawn_subagent launch results trajectory-only so the visible card stays running", () => {
+  it("publishes the completed spawn invocation while the durable task owns child progress", () => {
     const s = scenario();
     prompt(s);
     resolveEffect(s, ids.modelEffect(msg0), {
@@ -574,7 +574,7 @@ describe("agent-loop core lifecycle", () => {
 
     const terminal = s.log.find((row) => row.envelopeId === ids.invocationTerminal("spawn-1"))!;
     expect(terminal.payloadKind).toBe("invocation.completed");
-    expect(terminal.publish).toBe(false);
+    expect(terminal.publish).toBe(true);
     expect(s.state.entries.map((entry) => entry.kind)).toContain("tool-result");
   });
 

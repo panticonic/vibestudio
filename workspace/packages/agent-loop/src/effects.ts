@@ -528,8 +528,6 @@ export function outcomeEvents(
         : {}),
       turnId: descriptor.turnId,
     };
-    const publishToolTerminal =
-      descriptor.kind !== "local_tool" || descriptor.tool !== "spawn_subagent" || outcome.isError;
     return [
       {
         envelopeId: ids.invocationTerminal(descriptor.invocationId),
@@ -562,7 +560,7 @@ export function outcomeEvents(
               ...(outcome.turnControl ? { turnControl: outcome.turnControl } : {}),
             }),
         causality,
-        publish: publishToolTerminal,
+        publish: true,
       },
     ];
   }

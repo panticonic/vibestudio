@@ -40,7 +40,7 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
   }),
 }));
 
-import type { ChatMessage, InvocationCardPayload } from "@workspace/agentic-core";
+import type { ChatMessage, TaskCardPayload } from "@workspace/agentic-core";
 import { LOCAL_FALLBACK_MODEL_REF } from "@workspace/model-catalog/catalog";
 import { ChatMessageActionsContext } from "../context/ChatContext.js";
 import { MessageList } from "./MessageList.js";
@@ -850,21 +850,21 @@ describe("MessageList typing indicators (roster-based)", () => {
 describe("SubagentRunCard", () => {
   function subagentMessage(overrides: {
     id: string;
-    execution: InvocationCardPayload["execution"];
-    subagent: NonNullable<InvocationCardPayload["subagent"]>;
+    execution: TaskCardPayload["execution"];
+    subagent: NonNullable<TaskCardPayload["subagent"]>;
     complete: boolean;
   }): ChatMessage {
     return {
       id: `subagent-${overrides.id}`,
       senderId: "agent-1",
       content: "",
-      contentType: "invocation",
+      contentType: "task",
       kind: "message",
       complete: overrides.complete,
-      invocation: {
+      task: {
         id: overrides.id,
-        name: "spawn_subagent",
-        arguments: {},
+        taskType: "subagent",
+        title: overrides.subagent.label ?? "Subagent",
         execution: overrides.execution,
         subagent: overrides.subagent,
       },

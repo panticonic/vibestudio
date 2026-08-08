@@ -160,7 +160,7 @@ export interface SubagentProgressOutboxEntry {
   messageSeq: number;
   parentChannelId: string;
   participantId: string;
-  event: AgenticEvent<"invocation.progress">;
+  event: AgenticEvent<"task.progress">;
   attempts: number;
   nextAttemptAt: number;
   lastError: string | null;
@@ -188,7 +188,7 @@ function toProgressOutboxEntry(row: SubagentProgressOutboxSqlRow): SubagentProgr
     messageSeq: Number(row.message_seq),
     parentChannelId: row.parent_channel_id,
     participantId: row.participant_id,
-    event: JSON.parse(row.event_json) as AgenticEvent<"invocation.progress">,
+    event: JSON.parse(row.event_json) as AgenticEvent<"task.progress">,
     attempts: Number(row.attempts),
     nextAttemptAt: Number(row.next_attempt_at),
     lastError: row.last_error,
@@ -574,7 +574,7 @@ export class SubagentRunStore {
     messageSeq: number;
     parentChannelId: string;
     participantId: string;
-    event: AgenticEvent<"invocation.progress">;
+    event: AgenticEvent<"task.progress">;
     now: number;
   }): void {
     this.sql.exec(

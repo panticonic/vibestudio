@@ -103,7 +103,6 @@ function closedTurnIntegrityFailure(
   const invocation = Object.values(channelView.invocations).find(
     (candidate) =>
       candidate.turnId === turnId &&
-      !candidate.subagent &&
       candidate.status !== "completed" &&
       candidate.status !== "failed" &&
       candidate.status !== "cancelled" &&

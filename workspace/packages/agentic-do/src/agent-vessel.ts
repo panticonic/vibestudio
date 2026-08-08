@@ -217,6 +217,18 @@ function subagentRunHandle(runId: string): string {
     : runId;
 }
 
+function subagentLaunchReceipt(run: Pick<SubagentRunRow, "runId" | "status">): string {
+  const handle = subagentRunHandle(run.runId);
+  if (run.status !== "starting" && run.status !== "running") {
+    return `subagent ${handle} already exists with status ${run.status}`;
+  }
+  return (
+    `subagent ${handle} is running in the background. Continue independent foreground work, ` +
+    `or call suspend_turn({ reason: "waiting_for_background" }) if no foreground work remains. ` +
+    `Do not inspect, read, merge, or close merely to wait; terminal delivery will resume you.`
+  );
+}
+
 function subagentVcsCommandId(
   phase: "merge",
   run: Pick<SubagentRunRow, "runId" | "parentContextId" | "childContextId">,
@@ -5372,7 +5384,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * Launch `spawn_subagent`. Mints the child context (deterministic under
    * `targetKey`) + child agent entity, explicitly creates the task trajectory
    * fork, wires the task channel (child subscribes, parent watches explicit messages),
-   * seeds the task, records the run + the parent-trajectory invocation card,
+   * seeds the task, records the run + the parent-trajectory task card,
    * then returns a run handle.
    * Guarded by depth/fan-out. Any failure settles inline as a tool error.
    */
@@ -5422,7 +5434,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               protocolContent: [
                 {
                   type: "text",
-                  text: `subagent already exists: ${subagentRunHandle(existingRun.runId)}`,
+                  text: subagentLaunchReceipt(existingRun),
                 },
               ],
               details: this.subagentRunDetails(existingRun),
@@ -5690,7 +5702,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
       return {
         result: {
-          protocolContent: [{ type: "text", text: `spawned subagent ${subagentRunHandle(runId)}` }],
+          protocolContent: [{ type: "text", text: subagentLaunchReceipt(runningRun) }],
           details: this.subagentRunDetails(runningRun),
         },
         isError: false,
@@ -5870,7 +5882,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         protocolContent: [
           {
             type: "text",
-            text: `spawned ${agentKind} subagent ${subagentRunHandle(runId)}`,
+            text: `${agentKind} ${subagentLaunchReceipt(runningRun)}`,
           },
         ],
         details: this.subagentRunDetails(runningRun),
@@ -5963,18 +5975,21 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         if (!agentic) continue;
         const eventKind = typeof agentic.kind === "string" ? agentic.kind : null;
         if (!eventKind) continue;
-        const invocationId = (agentic.causality as { invocationId?: unknown } | undefined)
-          ?.invocationId;
-        if (invocationId !== runId) continue;
+        const taskId = (agentic.causality as { taskId?: unknown } | undefined)?.taskId;
+        if (taskId !== runId) continue;
         const payload =
           agentic.payload && typeof agentic.payload === "object"
             ? (agentic.payload as Record<string, unknown>)
             : {};
-        const subagent =
-          payload["subagent"] && typeof payload["subagent"] === "object"
-            ? (payload["subagent"] as Record<string, unknown>)
+        const details =
+          payload["details"] && typeof payload["details"] === "object"
+            ? (payload["details"] as Record<string, unknown>)
             : null;
-        if (eventKind === "invocation.started" && subagent) {
+        const subagent =
+          details?.["subagent"] && typeof details["subagent"] === "object"
+            ? (details["subagent"] as Record<string, unknown>)
+            : null;
+        if (eventKind === "task.started" && subagent) {
           const taskChannelId = subagent["taskChannelId"];
           const contextId = subagent["contextId"];
           const parentContextId = subagent["parentContextId"];
@@ -6034,16 +6049,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           continue;
         }
         if (!recovered) continue;
-        if (subagent && typeof subagent["sourceEventId"] === "string") {
-          recovered = { ...recovered, sourceEventId: subagent["sourceEventId"] };
+        const result =
+          payload["result"] && typeof payload["result"] === "object"
+            ? (payload["result"] as Record<string, unknown>)
+            : null;
+        const terminalDetails =
+          result?.["details"] && typeof result["details"] === "object"
+            ? (result["details"] as Record<string, unknown>)
+            : details;
+        if (terminalDetails && typeof terminalDetails["sourceEventId"] === "string") {
+          recovered = { ...recovered, sourceEventId: terminalDetails["sourceEventId"] };
         }
-        if (eventKind === "invocation.completed") {
+        if (eventKind === "task.completed") {
           recovered = { ...recovered, status: "completed" };
-        } else if (eventKind === "invocation.failed") {
+        } else if (eventKind === "task.failed") {
           recovered = { ...recovered, status: "failed" };
-        } else if (eventKind === "invocation.cancelled") {
+        } else if (eventKind === "task.cancelled") {
           recovered = { ...recovered, status: "cancelled" };
-        } else if (eventKind === "invocation.abandoned") {
+        } else if (eventKind === "task.abandoned") {
           recovered = { ...recovered, status: "abandoned" };
         }
       }
@@ -6769,25 +6792,26 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
     const actor = this.cardActor(run.parentChannelId, participantId);
     const event = {
-      kind: "invocation.started",
+      kind: "task.started",
       actor,
-      causality: { invocationId: run.runId as never },
+      causality: { taskId: run.runId as never, invocationId: run.runId as never },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
-        name: "spawn_subagent",
-        invocationType: "agent",
-        userVisible: true,
+        taskType: "subagent",
+        title: run.label || "Subagent",
         summary: run.label,
-        subagent: {
-          runId: run.runId,
-          mode: run.mode,
-          taskChannelId: run.taskChannelId,
-          contextId: run.childContextId,
-          parentContextId: run.parentContextId,
-          childEntityId: run.childEntityId,
-          label: run.label,
-          agentKind: run.agentKind,
-          launchConfig: run.launchConfig,
+        details: {
+          subagent: {
+            runId: run.runId,
+            mode: run.mode,
+            taskChannelId: run.taskChannelId,
+            contextId: run.childContextId,
+            parentContextId: run.parentContextId,
+            childEntityId: run.childEntityId,
+            label: run.label,
+            agentKind: run.agentKind,
+            launchConfig: run.launchConfig,
+          },
         },
       },
       createdAt: new Date().toISOString(),
@@ -6804,10 +6828,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     text: string
   ): Promise<void> {
     const kindByOutcome = {
-      completed: "invocation.completed",
-      failed: "invocation.failed",
-      cancelled: "invocation.cancelled",
-      abandoned: "invocation.abandoned",
+      completed: "task.completed",
+      failed: "task.failed",
+      cancelled: "task.cancelled",
+      abandoned: "task.abandoned",
     } as const;
     const terminalOutcomeByOutcome = {
       completed: "success",
@@ -6823,7 +6847,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // may have been refreshed after `run` was captured).
     const sourceEventId =
       this.subagentRuns.get(run.runId)?.sourceEventId ?? run.sourceEventId ?? null;
-    const subagent = sourceEventId ? { subagent: { sourceEventId } } : {};
+    const terminalDetails = {
+      runId: subagentRunHandle(run.runId),
+      outcome: terminalOutcomeByOutcome[outcome],
+      ...(sourceEventId ? { sourceEventId } : {}),
+    };
     const payload: Record<string, unknown> =
       outcome === "completed"
         ? {
@@ -6833,22 +6861,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             result: {
               protocolContent: [{ type: "text", text }],
               details: {
-                runId: subagentRunHandle(run.runId),
-                outcome: "success",
+                ...terminalDetails,
               },
             },
-            ...subagent,
           }
         : {
             protocol: AGENTIC_PROTOCOL_VERSION,
             reason: text,
             terminalOutcome: terminalOutcomeByOutcome[outcome],
-            ...subagent,
+            details: terminalDetails,
           };
     const event = {
       kind: kindByOutcome[outcome],
       actor,
-      causality: { invocationId: run.runId as never },
+      causality: { taskId: run.runId as never, invocationId: run.runId as never },
       payload,
       createdAt: new Date().toISOString(),
     } as unknown as AgenticEvent;
@@ -7148,13 +7174,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const participantId =
       this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
     const actor = this.cardActor(run.parentChannelId, participantId);
-    const progressEvent: AgenticEvent<"invocation.progress"> = {
-      kind: "invocation.progress",
+    const progressEvent: AgenticEvent<"task.progress"> = {
+      kind: "task.progress",
       actor,
-      causality: { invocationId: run.runId as never },
+      causality: { taskId: run.runId as never, invocationId: run.runId as never },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
-        subagent: update,
+        data: { subagent: update },
       },
       createdAt: new Date().toISOString(),
     };
@@ -7210,7 +7236,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * Resolve whether an inbound envelope wakes the loop NOW, per the channel's
    * wakePolicy. Non-default policies consume the event here. An explicit
    * supervisor message is routed to the owning run's parent channel; ordinary
-   * progress remains in the durable task-channel log and invocation card.
+   * progress remains in the durable task-channel log and parent task card.
    */
   private async resolveWake(
     channelId: string,

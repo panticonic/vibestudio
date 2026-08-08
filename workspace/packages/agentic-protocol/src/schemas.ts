@@ -59,6 +59,7 @@ export const causalitySchema = z
     messageId: idSchema.optional(),
     blockId: idSchema.optional(),
     invocationId: idSchema.optional(),
+    taskId: idSchema.optional(),
     transportCallId: z.string().optional(),
     approvalId: idSchema.optional(),
     modelToolCallId: z.string().optional(),
@@ -248,49 +249,6 @@ const invocationStartedPayloadSchema = z
     requiresApproval: z.boolean().optional(),
     userVisible: z.boolean().optional(),
     summary: z.string().optional(),
-    subagent: z
-      .object({
-        runId: idSchema,
-        mode: z.enum(["fresh", "fork"]),
-        taskChannelId: idSchema,
-        contextId: idSchema,
-        parentContextId: idSchema.nullable().optional(),
-        childEntityId: z.string().min(1).optional(),
-        label: z.string(),
-        // Reasoning engine of the child run — drives the SubagentRunCard kind
-        // badge. Optional/tolerant: older spawn payloads simply render no badge.
-        agentKind: z.string().min(1).optional(),
-        // Bounded, non-secret runtime selection captured at launch.
-        launchConfig: z.record(z.string(), z.unknown()).nullable().optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
-const subagentProgressUpdateSchema = z
-  .object({
-    kind: z.enum([
-      "turn-started",
-      "turn-finished",
-      "tool-started",
-      "tool-progress",
-      "tool-completed",
-      "tool-failed",
-      "tool-cancelled",
-      "tool-abandoned",
-      "title-changed",
-      "said",
-    ]),
-    tool: z.string().optional(),
-    // Pairs `tool-started` with its terminal update on the parent card.
-    callId: z.string().min(1).optional(),
-    // Bounded by the emitter (see boundedProgressValue) — never the full payload.
-    args: z.record(z.string(), z.unknown()).optional(),
-    result: z.unknown().optional(),
-    text: z.string().optional(),
-    messageSeq: z.number().int().nonnegative(),
-    say: z.boolean().optional(),
   })
   .strict();
 
@@ -300,7 +258,61 @@ const invocationProgressPayloadSchema = z
     message: z.string().optional(),
     progress: z.number().min(0).max(1).optional(),
     data: z.unknown().optional(),
-    subagent: subagentProgressUpdateSchema.optional(),
+  })
+  .strict();
+
+const taskStartedPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    taskType: z.string().min(1),
+    title: z.string().min(1),
+    summary: z.string().optional(),
+    details: z.unknown().optional(),
+  })
+  .strict();
+
+const taskProgressPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    message: z.string().optional(),
+    progress: z.number().min(0).max(1).optional(),
+    data: z.unknown().optional(),
+  })
+  .strict();
+
+const taskCompletedPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    result: z.unknown().optional(),
+    summary: z.string().optional(),
+    terminalOutcome: z.literal("success"),
+  })
+  .strict();
+
+const taskFailedPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    reason: z.string(),
+    details: z.unknown().optional(),
+    terminalOutcome: z.enum(["tool_error", "infrastructure_error"]),
+  })
+  .strict();
+
+const taskCancelledPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    reason: z.string(),
+    details: z.unknown().optional(),
+    terminalOutcome: z.enum(["cancelled", "stale_dispatch"]),
+  })
+  .strict();
+
+const taskAbandonedPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    reason: z.string(),
+    details: z.unknown().optional(),
+    terminalOutcome: z.literal("abandoned"),
   })
   .strict();
 
@@ -633,6 +645,12 @@ export const eventKindSchemas = {
     "invocation.abandoned",
     invocationTerminalFailurePayloadSchema
   ),
+  "task.started": eventSchema("task.started", taskStartedPayloadSchema),
+  "task.progress": eventSchema("task.progress", taskProgressPayloadSchema),
+  "task.completed": eventSchema("task.completed", taskCompletedPayloadSchema),
+  "task.failed": eventSchema("task.failed", taskFailedPayloadSchema),
+  "task.cancelled": eventSchema("task.cancelled", taskCancelledPayloadSchema),
+  "task.abandoned": eventSchema("task.abandoned", taskAbandonedPayloadSchema),
   "approval.requested": eventSchema("approval.requested", approvalRequestedPayloadSchema),
   "approval.resolved": eventSchema("approval.resolved", approvalResolvedPayloadSchema),
   "ui.inline_rendered": eventSchema("ui.inline_rendered", uiInlineRenderedPayloadSchema),
@@ -695,6 +713,13 @@ export const agenticEventSchema = z
         code: z.ZodIssueCode.custom,
         path: ["causality", "invocationId"],
         message: "invocation events require causality.invocationId",
+      });
+    }
+    if (event.kind.startsWith("task.") && !causality?.taskId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["causality", "taskId"],
+        message: "task events require causality.taskId",
       });
     }
     if (

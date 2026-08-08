@@ -36,6 +36,7 @@ import {
   type EventId,
   type InvocationId,
   type MessageId,
+  type TaskId,
   type TrajectoryEvent,
   type TrajectoryId,
   type TurnId,
@@ -1079,6 +1080,63 @@ describe("@workspace/agentic-protocol reducers", () => {
 
     expect(state.invocations["inv-1"]?.status).toBe("completed");
     expect(state.invocations["inv-1"]?.result).toBe("contents");
+  });
+
+  it("projects durable tasks independently from their launching invocation", () => {
+    const taskId = brandId<TaskId>("task-1");
+    const events: AgenticEvent[] = [
+      {
+        kind: "task.started",
+        actor: agent,
+        causality: { taskId, invocationId: brandId<InvocationId>("spawn-1") },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          taskType: "subagent",
+          title: "Repository audit",
+          details: { subagent: { runId: "task-1" } },
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      },
+      {
+        kind: "task.progress",
+        actor: agent,
+        causality: { taskId },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          message: "reading",
+          progress: 0.5,
+        },
+        createdAt: "2026-05-20T12:00:01.000Z",
+      },
+    ];
+    const state = events
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(state.tasks["task-1"]).toMatchObject({
+      taskId: "task-1",
+      taskType: "subagent",
+      title: "Repository audit",
+      status: "running",
+      progress: [{ message: "reading", progress: 0.5 }],
+    });
+    expect(state.invocations).toEqual({});
+  });
+
+  it("rejects subagent lifecycle fields on ordinary invocation events", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: "spawn-1" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "spawn_subagent",
+        subagent: { runId: "spawn-1" },
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it("merges invocation updates by invocation id across participant envelopes", () => {

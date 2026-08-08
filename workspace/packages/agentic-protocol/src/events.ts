@@ -14,6 +14,7 @@ import type {
   EventId,
   InvocationId,
   MessageId,
+  TaskId,
   TrajectoryId,
   TurnId,
 } from "./ids.js";
@@ -92,6 +93,12 @@ export type EventKind =
   | "invocation.failed"
   | "invocation.cancelled"
   | "invocation.abandoned"
+  | "task.started"
+  | "task.progress"
+  | "task.completed"
+  | "task.failed"
+  | "task.cancelled"
+  | "task.abandoned"
   | "approval.requested"
   | "approval.resolved"
   | "ui.inline_rendered"
@@ -123,6 +130,7 @@ export interface EventCausality {
   messageId?: MessageId;
   blockId?: BlockId;
   invocationId?: InvocationId;
+  taskId?: TaskId;
   transportCallId?: string;
   approvalId?: ApprovalId;
   modelToolCallId?: string;
@@ -404,7 +412,7 @@ export type SubagentProgressKind =
 
 /**
  * One structured progress update relayed from a subagent's task channel onto
- * the parent run, published as an `invocation.progress` payload facet. Every
+ * the parent run, published as a `task.progress` payload facet. Every
  * field is inline (fold-readable); the emitter bounds `text`.
  */
 export interface SubagentProgressUpdate {
@@ -454,26 +462,12 @@ export type InvocationPayload =
       requiresApproval?: boolean;
       userVisible?: boolean;
       summary?: string;
-      /** Present when this invocation opens a subagent run; identifies the child
-       *  task channel + context and how it was spawned (fresh vs trajectory-fork). */
-      subagent?: {
-        runId: string;
-        mode: "fresh" | "fork";
-        taskChannelId: string;
-        contextId: string;
-        parentContextId?: string | null;
-        childEntityId?: string;
-        label: string;
-      };
     }
   | {
       protocol: "agentic.trajectory.v1";
       message?: string;
       progress?: number;
       data?: unknown;
-      /** Present when this progress entry is a relayed subagent update. Inline
-       *  and bounded by the emitter — the fold and the card read it directly. */
-      subagent?: SubagentProgressUpdate;
     }
   | {
       protocol: "agentic.trajectory.v1";
@@ -482,6 +476,51 @@ export type InvocationPayload =
     }
   | InvocationCompletedPayload
   | InvocationFailurePayload;
+
+export interface TaskStartedPayload {
+  protocol: "agentic.trajectory.v1";
+  taskType: string;
+  title: string;
+  summary?: string;
+  details?: unknown;
+}
+
+export interface TaskProgressPayload {
+  protocol: "agentic.trajectory.v1";
+  message?: string;
+  progress?: number;
+  data?: unknown;
+}
+
+export interface TaskCompletedPayload {
+  protocol: "agentic.trajectory.v1";
+  result?: unknown;
+  summary?: string;
+  terminalOutcome: "success";
+}
+
+type TaskFailurePayloadBase<Outcome extends InvocationTerminalFailureOutcome> = {
+  protocol: "agentic.trajectory.v1";
+  reason: string;
+  terminalOutcome: Outcome;
+  details?: unknown;
+};
+
+export type TaskFailedPayload = TaskFailurePayloadBase<
+  Extract<InvocationOutcome, "tool_error" | "infrastructure_error">
+>;
+export type TaskCancelledPayload = TaskFailurePayloadBase<
+  Extract<InvocationOutcome, "cancelled" | "stale_dispatch">
+>;
+export type TaskAbandonedPayload = TaskFailurePayloadBase<"abandoned">;
+
+export type TaskPayload =
+  | TaskStartedPayload
+  | TaskProgressPayload
+  | TaskCompletedPayload
+  | TaskFailedPayload
+  | TaskCancelledPayload
+  | TaskAbandonedPayload;
 
 export function invocationCompletedPayload(
   opts: Omit<InvocationCompletedPayload, "protocol" | "terminalOutcome"> = {}
@@ -782,6 +821,8 @@ export type PayloadFor<K extends EventKind> = K extends "message.received" | "me
         ? MessagePayload
         : K extends `invocation.${string}`
           ? InvocationPayloadFor<K>
+          : K extends `task.${string}`
+            ? TaskPayload
           : K extends `approval.${string}`
             ? ApprovalPayload
             : K extends "ui.feedback"

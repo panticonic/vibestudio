@@ -11,11 +11,10 @@ import type {
   ParticipantRef,
   ParticipantSelector,
   SandboxSourcePayload,
-  SubagentProgressUpdate,
   UsagePayload,
 } from "./events.js";
 import type { AgentToolFailure } from "./tool-failure.js";
-import type { ApprovalId, InvocationId, MessageId, TurnId } from "./ids.js";
+import type { ApprovalId, InvocationId, MessageId, TaskId, TurnId } from "./ids.js";
 import type { InvocationOutcome, MessageOutcome, MessageTier } from "./constants.js";
 
 export type MessageStatus = "started" | "streaming" | "completed" | "failed";
@@ -27,6 +26,13 @@ export type InvocationStatus =
   | "cancelled"
   | "abandoned";
 export type ApprovalStatus = "requested" | "granted" | "denied";
+export type TaskStatus =
+  | "started"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "abandoned";
 
 export interface ProjectedMessage {
   messageId: MessageId;
@@ -93,7 +99,6 @@ export interface ProjectedInvocation {
     message?: string;
     progress?: number;
     data?: unknown;
-    subagent?: SubagentProgressUpdate;
   }>;
   requiresApproval?: boolean;
   userVisible?: boolean;
@@ -104,20 +109,28 @@ export interface ProjectedInvocation {
   terminalOutcome?: InvocationOutcome;
   terminalReasonCode?: string;
   failure?: AgentToolFailure;
-  /** Present when this invocation is a subagent run. Spawn fields are folded
-   *  from `invocation.started`; semantic integration lives in the engine-owned
-   *  VCS projection rather than this lifecycle event. */
-  subagent?: {
-    runId?: string;
-    mode?: "fresh" | "fork";
-    taskChannelId?: string;
-    contextId?: string;
-    parentContextId?: string | null;
-    childEntityId?: string;
-    label?: string;
-    /** Reasoning engine of the child run — SubagentRunCard badge. */
-    agentKind?: string;
-  };
+}
+
+export interface ProjectedTask {
+  taskId: TaskId;
+  actor: ActorRef;
+  taskType?: string;
+  title?: string;
+  summary?: string;
+  details?: unknown;
+  status: TaskStatus;
+  result?: unknown;
+  progress: Array<{
+    at: string;
+    message?: string;
+    progress?: number;
+    data?: unknown;
+  }>;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt?: string;
+  terminalReason?: string;
+  terminalOutcome?: InvocationOutcome;
 }
 
 export interface ProjectedApproval {
@@ -171,6 +184,7 @@ export interface ProjectedTurn {
 
 export type MessageMap = Record<string, ProjectedMessage>;
 export type InvocationMap = Record<string, ProjectedInvocation>;
+export type TaskMap = Record<string, ProjectedTask>;
 export type ApprovalMap = Record<string, ProjectedApproval>;
 export type InlineUiMap = Record<string, ProjectedInlineUi>;
 export type TurnMap = Record<string, ProjectedTurn>;
@@ -535,9 +549,6 @@ export function applyInvocationEvent(
         status: "started",
         startedAt: existing.startedAt ?? event.createdAt,
         updatedAt: event.createdAt,
-        ...("subagent" in payload && payload.subagent
-          ? { subagent: { ...existing.subagent, ...payload.subagent } }
-          : {}),
       },
     };
   }
@@ -561,8 +572,6 @@ export function applyInvocationEvent(
             message: "message" in payload ? payload.message : undefined,
             progress: "progress" in payload ? payload.progress : undefined,
             data: "data" in payload ? payload.data : undefined,
-            subagent:
-              "subagent" in payload ? (payload.subagent as SubagentProgressUpdate) : undefined,
           },
         ],
       },
@@ -638,6 +647,95 @@ export function applyInvocationEvent(
       terminalReasonCode:
         "terminalReasonCode" in payload ? payload.terminalReasonCode : existing.terminalReasonCode,
       failure: "failure" in payload ? payload.failure : existing.failure,
+    },
+  };
+}
+
+function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "abandoned"
+  );
+}
+
+export function applyTaskEvent(
+  tasks: TaskMap,
+  event: AgenticEvent<Extract<EventKind, `task.${string}`>>
+): TaskMap {
+  const taskId = event.causality?.taskId;
+  if (!taskId) throw new Error(`${event.kind} requires taskId`);
+  const existing = tasks[taskId] ?? {
+    taskId,
+    actor: event.actor,
+    status: "started" as const,
+    progress: [],
+  };
+  if (isTerminalTaskStatus(existing.status)) return tasks;
+  const payload = event.payload;
+
+  if (event.kind === "task.started") {
+    return {
+      ...tasks,
+      [taskId]: {
+        ...existing,
+        actor: event.actor,
+        taskType: "taskType" in payload ? payload.taskType : existing.taskType,
+        title: "title" in payload ? payload.title : existing.title,
+        summary: "summary" in payload ? payload.summary : existing.summary,
+        details: "details" in payload ? payload.details : existing.details,
+        status: "started",
+        startedAt: existing.startedAt ?? event.createdAt,
+        updatedAt: event.createdAt,
+      },
+    };
+  }
+
+  if (event.kind === "task.progress") {
+    return {
+      ...tasks,
+      [taskId]: {
+        ...existing,
+        status: "running",
+        updatedAt: event.createdAt,
+        progress: [
+          ...existing.progress,
+          {
+            at: event.createdAt,
+            message: "message" in payload ? payload.message : undefined,
+            progress: "progress" in payload ? payload.progress : undefined,
+            data: "data" in payload ? payload.data : undefined,
+          },
+        ],
+      },
+    };
+  }
+
+  if (event.kind === "task.completed") {
+    return {
+      ...tasks,
+      [taskId]: {
+        ...existing,
+        status: "completed",
+        result: "result" in payload ? payload.result : undefined,
+        summary: "summary" in payload ? payload.summary : existing.summary,
+        terminalOutcome: "success",
+        completedAt: event.createdAt,
+        updatedAt: event.createdAt,
+      },
+    };
+  }
+
+  return {
+    ...tasks,
+    [taskId]: {
+      ...existing,
+      status: event.kind.replace("task.", "") as TaskStatus,
+      terminalReason: "reason" in payload ? payload.reason : undefined,
+      terminalOutcome: "terminalOutcome" in payload ? payload.terminalOutcome : undefined,
+      completedAt: event.createdAt,
+      updatedAt: event.createdAt,
     },
   };
 }

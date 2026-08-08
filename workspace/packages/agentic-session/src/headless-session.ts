@@ -86,8 +86,15 @@ export interface SessionSnapshot {
     args?: unknown;
     result?: unknown;
     consoleOutput?: string;
-    progress?: SubagentProgressEntry[];
     error?: string;
+  }>;
+  tasks: Array<{
+    id: string;
+    type: string;
+    title: string;
+    status: string;
+    progress?: SubagentProgressEntry[];
+    result?: unknown;
   }>;
   debugEvents: readonly (AgentDebugPayload & { ts: number })[];
   /** Live/terminal state of the one acknowledged session teardown path. */
@@ -1020,13 +1027,22 @@ export class HeadlessSession {
         args: message.invocation!.arguments,
         result: message.invocation!.execution.result,
         consoleOutput: message.invocation!.execution.consoleOutput,
-        progress: message.invocation!.execution.progress,
         error: message.invocation!.execution.isError
           ? invocationErrorMessage(
               message.invocation!.execution.result,
               message.invocation!.execution.description || "Invocation failed"
             )
           : undefined,
+      }));
+    const tasks = this.messages
+      .filter((message) => message.task)
+      .map((message) => ({
+        id: message.task!.id,
+        type: message.task!.taskType,
+        title: message.task!.title,
+        status: message.task!.execution.status,
+        progress: message.task!.execution.progress,
+        result: message.task!.execution.result,
       }));
     return {
       channelId: this._channelId,
@@ -1036,6 +1052,7 @@ export class HeadlessSession {
       ownsAgentContext: this._ownsAgentContext,
       messages: this.messages,
       invocations,
+      tasks,
       debugEvents: this._debugEvents,
       cleanup: { ...this._cleanupState },
       cleanupErrors: [...this._cleanupErrors],

@@ -20,12 +20,14 @@ import type {
   InvocationMap,
   MessageMap,
   ProjectedActionBar,
+  TaskMap,
   TurnMap,
 } from "./handlers.js";
 import {
   applyApprovalEvent,
   applyInvocationEvent,
   applyMessageEvent,
+  applyTaskEvent,
   applyUiEvent,
   participantKey,
   resolveIntendedRecipients,
@@ -127,6 +129,7 @@ export interface ChannelViewState {
   credentialRequests: Record<string, ProjectedCredentialRequest>;
   messages: MessageMap;
   invocations: InvocationMap;
+  tasks: TaskMap;
   approvals: ApprovalMap;
   inlineUi: Record<string, InlineUiMap>;
   actionBars: Record<string, ProjectedActionBar | undefined>;
@@ -153,6 +156,7 @@ export function createInitialChannelViewState(): ChannelViewState {
     credentialRequests: {},
     messages: {},
     invocations: {},
+    tasks: {},
     approvals: {},
     inlineUi: {},
     actionBars: {},
@@ -292,6 +296,11 @@ export function reduceChannelView(
     next = {
       ...next,
       invocations: applyInvocationEvent(next.invocations, event as never),
+    };
+  } else if (event.kind.startsWith("task.")) {
+    next = {
+      ...next,
+      tasks: applyTaskEvent(next.tasks, event as never),
     };
   } else if (event.kind.startsWith("approval.")) {
     next = {

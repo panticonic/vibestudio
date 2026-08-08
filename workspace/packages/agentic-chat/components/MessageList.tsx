@@ -37,9 +37,7 @@ type InlineItemType = "thinking" | "toolcall-progress" | "invocation" | "typing"
 function getInlineItemType(msg: ChatMessage): InlineItemType | null {
   if (msg.contentType === "thinking") return "thinking";
   if (msg.contentType === "toolcall-progress") return "toolcall-progress";
-  // Subagent runs render as a standalone SubagentRunCard, NOT an inline pill —
-  // exclude them here so grouping doesn't swallow them into a pill row.
-  if (msg.contentType === "invocation" && msg.invocation?.subagent) return null;
+  if (msg.contentType === "task") return null;
   if (msg.contentType === "invocation") return "invocation";
   if (msg.contentType === "typing") return "typing";
   if (msg.contentType === "custom" && msg.custom?.displayMode === "inline") return "custom";
@@ -672,7 +670,7 @@ export const MessageList = React.memo(function MessageList({
       }
 
       // Subagent runs bypass the grouping/MessageCard path for a richer card.
-      if (msg.invocation?.subagent) {
+      if (msg.task?.subagent) {
         return (
           <Flex className="message-item" direction="column">
             <SubagentRunCard msg={msg} />

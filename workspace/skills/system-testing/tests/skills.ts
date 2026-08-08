@@ -121,9 +121,9 @@ async function waitForStalledChildTool(
 ): Promise<{ invocationId: string; tool: string | null }> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const spawn = [...session.snapshot().invocations]
+    const spawn = [...session.snapshot().tasks]
       .reverse()
-      .find((invocation) => invocation.name === "spawn_subagent");
+      .find((task) => task.type === "subagent");
     const progress = spawn?.progress?.find(
       (entry) => entry.kind === "tool-started" || entry.kind === "tool-progress"
     );

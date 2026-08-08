@@ -29,6 +29,7 @@ import type {
   ProjectedCustomMessage,
   ProjectedInvocation,
   ProjectedMessage,
+  ProjectedTask,
   ProjectedSystemNotice,
   ProjectedTurn,
 } from "@workspace/agentic-protocol";
@@ -41,7 +42,12 @@ import {
   readDiagnosticMetadata,
   summarizeMessageBlocks,
 } from "@workspace/agentic-protocol";
-import type { InvocationCardPayload, SubagentProgressEntry } from "./invocation-card-payload.js";
+import type { InvocationCardPayload } from "./invocation-card-payload.js";
+import type {
+  SubagentProgressEntry,
+  SubagentRunState,
+  TaskCardPayload,
+} from "./task-card-payload.js";
 
 type StoredValueRefPreview = { preview?: string };
 
@@ -59,6 +65,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
     )
   );
   const invocations = Object.values(state.invocations).map(projectedInvocationToChatMessage);
+  const tasks = Object.values(state.tasks).map(projectedTaskToChatMessage);
   const approvals = Object.values(state.approvals).map(projectedApprovalToChatMessage);
   const terminalAssistantMessageTurnIds = new Set(
     Object.values(state.messages)
@@ -157,6 +164,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   return [
     ...messages,
     ...invocations,
+    ...tasks,
     ...approvals,
     ...turns,
     ...waitingTurns,
@@ -728,11 +736,6 @@ function projectedApprovalToChatMessage(approval: ProjectedApproval): ChatMessag
 
 function projectedInvocationToChatMessage(invocation: ProjectedInvocation): ChatMessage {
   const status = invocationCardStatus(invocation);
-  // Structured subagent progress entries, stamped with the reducer's per-entry
-  // event time. Non-subagent progress (message/fraction) is not card-rendered.
-  const progress: SubagentProgressEntry[] = invocation.progress.flatMap((entry) =>
-    entry.subagent ? [{ ...entry.subagent, at: entry.at }] : []
-  );
   const inferred = inferInvocationDisplay(invocation.result);
   const name =
     meaningfulInvocationName(invocation.name) ??
@@ -769,9 +772,7 @@ function projectedInvocationToChatMessage(invocation: ProjectedInvocation): Chat
         invocation.outputs.length > 0
           ? invocation.outputs.map((output) => stringifyOutput(output)).join("\n")
           : undefined,
-      ...(progress.length > 0 ? { progress } : {}),
     },
-    ...(invocation.subagent ? { subagent: invocation.subagent } : {}),
   };
   return {
     id: `invocation:${invocation.invocationId}`,
@@ -812,9 +813,79 @@ function invocationCardStatus(
       }
       if (invocation.status === "completed") return "complete";
       if (invocation.status === "running") return "running";
-      if (invocation.subagent && invocation.status === "started") return "running";
       return "pending";
   }
+}
+
+function subagentDetails(value: unknown): SubagentRunState | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = (value as Record<string, unknown>)["subagent"];
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined;
+  const record = candidate as Record<string, unknown>;
+  if (typeof record["runId"] !== "string") return undefined;
+  return record as SubagentRunState;
+}
+
+function subagentProgress(value: unknown, at: string): SubagentProgressEntry | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = (value as Record<string, unknown>)["subagent"];
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined;
+  const record = candidate as Record<string, unknown>;
+  if (typeof record["kind"] !== "string" || typeof record["messageSeq"] !== "number") {
+    return undefined;
+  }
+  return { ...(record as unknown as SubagentProgressEntry), at };
+}
+
+function projectedTaskToChatMessage(task: ProjectedTask): ChatMessage & { sortTime: number } {
+  const subagent = task.taskType === "subagent" ? subagentDetails(task.details) : undefined;
+  const status: TaskCardPayload["execution"]["status"] =
+    task.status === "completed"
+      ? "complete"
+      : task.status === "failed"
+        ? "error"
+        : task.status === "cancelled" || task.status === "abandoned"
+          ? task.status
+          : task.status === "started" || task.status === "running"
+            ? "running"
+            : "pending";
+  const progress = task.progress.flatMap((entry) => {
+    const projected = subagentProgress(entry.data, entry.at);
+    return projected ? [projected] : [];
+  });
+  progress.sort(
+    (left, right) =>
+      left.messageSeq - right.messageSeq || Date.parse(left.at) - Date.parse(right.at)
+  );
+  const payload: TaskCardPayload = {
+    id: task.taskId,
+    taskType: task.taskType ?? "task",
+    title: task.title ?? "Background task",
+    execution: {
+      status,
+      ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+      description: task.terminalReason ?? task.summary ?? "",
+      ...(progress.length > 0 ? { progress } : {}),
+      ...(task.result !== undefined ? { result: displayStoredValue(task.result) } : {}),
+      isError: status === "error",
+    },
+    ...(subagent ? { subagent } : {}),
+  };
+  return {
+    id: `task:${task.taskId}`,
+    senderId: task.actor.id,
+    content: JSON.stringify(payload),
+    contentType: "task",
+    kind: "message",
+    complete: status !== "pending" && status !== "running",
+    task: payload,
+    senderMetadata: {
+      name: task.actor.displayName ?? task.actor.id,
+      type: task.actor.kind,
+      handle: task.actor.id,
+    },
+    sortTime: Date.parse(task.updatedAt ?? task.completedAt ?? task.startedAt ?? "") || 0,
+  };
 }
 
 function invocationDescription(invocation: ProjectedInvocation, inferredSummary?: string): string {

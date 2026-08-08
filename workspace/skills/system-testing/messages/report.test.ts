@@ -164,6 +164,7 @@ describe("reportStage", () => {
       agentContextId: "ctx-test",
       messages,
       invocations: [{ id: "call-1", name: "read", status: "complete" }],
+      tasks: [],
       debugEvents: [],
       cleanup: {
         phase: "complete" as const,

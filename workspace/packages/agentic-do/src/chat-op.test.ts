@@ -1704,20 +1704,23 @@ class SubagentSpawnProbe extends TestVessel {
         messageId: `ik:subagent-started:${runId}`,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: {
-          kind: "invocation.started",
+          kind: "task.started",
           actor: { kind: "agent", id: AGENT_ID, displayName: "TestAgent" },
-          causality: { invocationId: runId },
+          causality: { taskId: runId, invocationId: runId },
           payload: {
             protocol: "agentic.trajectory.v1",
-            name: "spawn_subagent",
-            subagent: {
-              runId,
-              mode: "fresh",
-              taskChannelId: `task-${runId}`,
-              contextId: `ctx-${runId}`,
-              parentContextId: "ctx-1",
-              childEntityId: `do:workers/agent-worker:AiChatWorker:subagent-${runId}`,
-              label: "recovered subagent",
+            taskType: "subagent",
+            title: "recovered subagent",
+            details: {
+              subagent: {
+                runId,
+                mode: "fresh",
+                taskChannelId: `task-${runId}`,
+                contextId: `ctx-${runId}`,
+                parentContextId: "ctx-1",
+                childEntityId: `do:workers/agent-worker:AiChatWorker:subagent-${runId}`,
+                label: "recovered subagent",
+              },
             },
           },
           createdAt: new Date().toISOString(),
@@ -2457,7 +2460,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       childContextId: "ctx-child",
     });
     expect(probe.rpcCalls.some((call) => call.method === "runtime.createEntity")).toBe(true);
-    expect(probe.channelStub.published.some((p) => p.event.kind === "invocation.started")).toBe(
+    expect(probe.channelStub.published.some((p) => p.event.kind === "task.started")).toBe(
       true
     );
     const startedIndex = probe.channelStub.published.findIndex(
@@ -2625,7 +2628,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(seeds[1]?.event).toEqual(seeds[0]?.event);
   });
 
-  it("recovers a missing subagent row from the parent invocation card for inspect", async () => {
+  it("recovers a missing subagent row from the parent task card for inspect", async () => {
     const probe = await makeSubagentSpawnProbe();
     probe.seedSubagentStartedInParentChannelForTest("inv-recovered");
     probe.respondToVcs(
@@ -2743,7 +2746,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     ]);
   });
 
-  it("recovers a missing subagent row from the parent invocation card for transcript reads", async () => {
+  it("recovers a missing subagent row from the parent task card for transcript reads", async () => {
     const probe = await makeSubagentSpawnProbe();
     probe.seedSubagentStartedInParentChannelForTest("inv-recovered");
     probe.channelStub.replay.set("task-inv-recovered", [
@@ -3327,12 +3330,12 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     await probe.dispatchSubagentProgressForTest();
 
     const progress = probe.channelStub.published.find(
-      (p) => p.event.kind === "invocation.progress" && p.event.causality?.invocationId === "inv-1"
+      (p) => p.event.kind === "task.progress" && p.event.causality?.taskId === "inv-1"
     );
     expect(progress?.event).toMatchObject({
-      kind: "invocation.progress",
+      kind: "task.progress",
       payload: {
-        subagent: { kind: "turn-started", messageSeq: 42 },
+        data: { subagent: { kind: "turn-started", messageSeq: 42 } },
       },
     });
   });
@@ -3357,15 +3360,16 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
 
     const progress = probe.channelStub.published.find(
       (entry) =>
-        entry.event.kind === "invocation.progress" &&
-        entry.event.causality?.invocationId === "inv-1"
+        entry.event.kind === "task.progress" && entry.event.causality?.taskId === "inv-1"
     );
     expect(progress?.event).toMatchObject({
       payload: {
-        subagent: {
-          kind: "title-changed",
-          text: "Persistent task store",
-          messageSeq: 43,
+        data: {
+          subagent: {
+            kind: "title-changed",
+            text: "Persistent task store",
+            messageSeq: 43,
+          },
         },
       },
     });
@@ -3521,8 +3525,8 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     await probe.dispatchSubagentProgressForTest(Date.now() + 1_000);
     const progress = probe.channelStub.published.filter(
       (entry) =>
-        entry.event.causality?.invocationId === ("inv-1" as never) &&
-        entry.event.kind === "invocation.progress"
+        entry.event.causality?.taskId === ("inv-1" as never) &&
+        entry.event.kind === "task.progress"
     );
     expect(progress.map((entry) => entry.idempotencyKey)).toEqual([
       firstKey,
@@ -3571,15 +3575,15 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
 
     const projection = probe.channelStub.published.find(
       (entry) => entry.idempotencyKey === "subagent-progress:inv-1:44:invocation.completed"
-    )?.event.payload as { subagent?: SubagentProgressUpdate } | undefined;
-    expect(projection?.subagent).toMatchObject({
+    )?.event.payload as { data?: { subagent?: SubagentProgressUpdate } } | undefined;
+    expect(projection?.data?.subagent).toMatchObject({
       kind: "tool-completed",
       callId: "child-eval-1",
       sourceChannelId: "task-inv-1",
       messageSeq: 44,
       resultTruncated: true,
     });
-    expect(projection?.subagent?.result).toMatchObject({
+    expect(projection?.data?.subagent?.result).toMatchObject({
       details: {
         returnValue: { status: "failed", diagnostics: { __truncated: "depth" } },
       },

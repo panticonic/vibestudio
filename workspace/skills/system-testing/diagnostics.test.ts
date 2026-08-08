@@ -329,6 +329,7 @@ describe("system-testing diagnostics", () => {
       ownsAgentContext: false,
       messages: [],
       invocations: [],
+      tasks: [],
       debugEvents: [],
       cleanup: {
         phase: "complete",

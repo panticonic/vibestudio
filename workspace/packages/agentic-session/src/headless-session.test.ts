@@ -910,17 +910,17 @@ describe("HeadlessSession", () => {
       kind: "message" as const,
       complete: true,
     } satisfies ChatMessage;
-    const childInvocation = {
-      id: `invocation:${invocationId}`,
+    const childTask = {
+      id: `task:${invocationId}`,
       senderId: "agent-1",
       content: "",
-      contentType: "invocation" as const,
+      contentType: "task" as const,
       kind: "message" as const,
       complete: false,
-      invocation: {
+      task: {
         id: invocationId,
-        name: "spawn_subagent",
-        arguments: {},
+        taskType: "subagent",
+        title: "background child",
         execution: {
           status: "running" as const,
           description: "",
@@ -948,9 +948,9 @@ describe("HeadlessSession", () => {
     const wait = session.waitForIdle({ debounce: 5, timeoutMs: 1000 });
     (session as any)._chatMessages = new Map<string, ChatMessage>([
       [idleMessage.id, idleMessage],
-      [childInvocation.id, childInvocation],
+      [childTask.id, childTask],
     ]);
-    (session as any)._chatMessageOrder = [idleMessage.id, childInvocation.id];
+    (session as any)._chatMessageOrder = [idleMessage.id, childTask.id];
     (session as any)._hasIncomplete = true;
     (session as any).notifyListeners();
     await vi.advanceTimersByTimeAsync(4);

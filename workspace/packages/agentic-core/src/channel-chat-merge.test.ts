@@ -16,6 +16,7 @@ import {
   type InvocationId,
   type MessageId,
   type MessageRole,
+  type TaskId,
   type TurnId,
 } from "@workspace/agentic-protocol";
 
@@ -1872,65 +1873,76 @@ describe("chatMessagesFromChannelView", () => {
   });
 
   it("projects subagent progress updates as a structured timestamped feed with running status", () => {
-    const started: AgenticEvent<"invocation.started"> = {
-      kind: "invocation.started",
+    const started: AgenticEvent<"task.started"> = {
+      kind: "task.started",
       actor: agent,
-      causality: { invocationId: brandId<InvocationId>("inv-subagent") },
+      causality: { taskId: brandId<TaskId>("inv-subagent") },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
-        name: "spawn_subagent",
-        request: { task: "audit the repo" },
-        subagent: {
-          runId: "inv-subagent",
-          mode: "fresh",
-          taskChannelId: "task-inv-subagent",
-          contextId: "ctx-inv-subagent",
-          label: "background audit",
+        taskType: "subagent",
+        title: "background audit",
+        details: {
+          subagent: {
+            runId: "inv-subagent",
+            mode: "fresh",
+            taskChannelId: "task-inv-subagent",
+            contextId: "ctx-inv-subagent",
+            label: "background audit",
+          },
         },
       },
       createdAt: "2026-05-20T12:00:01.000Z",
     };
-    const progressEvents: Array<AgenticEvent<"invocation.progress">> = [
+    const progressEvents: Array<AgenticEvent<"task.progress">> = [
       {
-        kind: "invocation.progress",
+        kind: "task.progress",
         actor: agent,
-        causality: { invocationId: brandId<InvocationId>("inv-subagent") },
+        causality: { taskId: brandId<TaskId>("inv-subagent") },
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
-          subagent: { kind: "turn-started", messageSeq: 41 },
+          data: { subagent: { kind: "turn-started", messageSeq: 41 } },
         },
         createdAt: "2026-05-20T12:00:02.000Z",
       },
       {
-        kind: "invocation.progress",
+        kind: "task.progress",
         actor: agent,
-        causality: { invocationId: brandId<InvocationId>("inv-subagent") },
+        causality: { taskId: brandId<TaskId>("inv-subagent") },
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
-          subagent: { kind: "tool-started", tool: "Read", messageSeq: 42 },
+          data: { subagent: { kind: "tool-started", tool: "Read", messageSeq: 42 } },
         },
         createdAt: "2026-05-20T12:00:03.000Z",
       },
       {
-        kind: "invocation.progress",
+        kind: "task.progress",
         actor: agent,
-        causality: { invocationId: brandId<InvocationId>("inv-subagent") },
+        causality: { taskId: brandId<TaskId>("inv-subagent") },
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
-          subagent: { kind: "said", text: "Found three issues so far.", messageSeq: 43, say: true },
+          data: {
+            subagent: {
+              kind: "said",
+              text: "Found three issues so far.",
+              messageSeq: 43,
+              say: true,
+            },
+          },
         },
         createdAt: "2026-05-20T12:00:04.000Z",
       },
     ];
 
-    const state = [started, ...progressEvents]
+    // Parent relays may arrive out of order when the child executes calls in
+    // parallel; the task card restores authoritative child-channel order.
+    const state = [started, progressEvents[1]!, progressEvents[0]!, progressEvents[2]!]
       .map((event, index) => envelope(event, index + 1))
       .reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
-      contentType: "invocation",
+      contentType: "task",
       complete: false,
-      invocation: {
+      task: {
         id: "inv-subagent",
         subagent: { runId: "inv-subagent", label: "background audit" },
         execution: {
@@ -2015,20 +2027,23 @@ describe("chatMessagesFromChannelView", () => {
   });
 
   it("projects a started subagent card without progress as running", () => {
-    const started: AgenticEvent<"invocation.started"> = {
-      kind: "invocation.started",
+    const started: AgenticEvent<"task.started"> = {
+      kind: "task.started",
       actor: agent,
-      causality: { invocationId: brandId<InvocationId>("inv-subagent-started") },
+      causality: { taskId: brandId<TaskId>("inv-subagent-started") },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
-        name: "spawn_subagent",
-        subagent: {
-          runId: "inv-subagent-started",
-          mode: "fork",
-          taskChannelId: "task-inv-subagent-started",
-          contextId: "ctx-inv-subagent-started",
-          parentContextId: "ctx-parent",
-          label: "background fork",
+        taskType: "subagent",
+        title: "background fork",
+        details: {
+          subagent: {
+            runId: "inv-subagent-started",
+            mode: "fork",
+            taskChannelId: "task-inv-subagent-started",
+            contextId: "ctx-inv-subagent-started",
+            parentContextId: "ctx-parent",
+            label: "background fork",
+          },
         },
       },
       createdAt: "2026-05-20T12:00:01.000Z",
@@ -2037,11 +2052,77 @@ describe("chatMessagesFromChannelView", () => {
     const state = [envelope(started, 1)].reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
-      contentType: "invocation",
-      invocation: {
+      contentType: "task",
+      task: {
         id: "inv-subagent-started",
         execution: { status: "running" },
         subagent: { parentContextId: "ctx-parent" },
+      },
+    });
+  });
+
+  it("keeps the completed spawn invocation separate from the running child task", () => {
+    const invocationId = brandId<InvocationId>("spawn-separated");
+    const taskId = brandId<TaskId>("spawn-separated");
+    const events: AgenticEvent[] = [
+      {
+        kind: "invocation.started",
+        actor: agent,
+        causality: { invocationId },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          name: "spawn_subagent",
+          request: { task: "audit the repo" },
+        },
+        createdAt: "2026-05-20T12:00:01.000Z",
+      },
+      {
+        kind: "task.started",
+        actor: agent,
+        causality: { taskId, invocationId },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          taskType: "subagent",
+          title: "repo audit",
+          details: {
+            subagent: {
+              runId: "spawn-separated",
+              mode: "fresh",
+              taskChannelId: "task-spawn-separated",
+              contextId: "ctx-spawn-separated",
+              label: "repo audit",
+            },
+          },
+        },
+        createdAt: "2026-05-20T12:00:02.000Z",
+      },
+      {
+        kind: "invocation.completed",
+        actor: agent,
+        causality: { invocationId },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          result: { details: { runId: "spawn-separated", status: "running" } },
+          terminalOutcome: "success",
+        },
+        createdAt: "2026-05-20T12:00:03.000Z",
+      },
+    ];
+    const state = events
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    const messages = chatMessagesFromChannelView(state);
+
+    expect(messages.find((message) => message.contentType === "invocation")).toMatchObject({
+      complete: true,
+      invocation: { id: "spawn-separated", execution: { status: "complete" } },
+    });
+    expect(messages.find((message) => message.contentType === "task")).toMatchObject({
+      complete: false,
+      task: {
+        id: "spawn-separated",
+        taskType: "subagent",
+        execution: { status: "running" },
       },
     });
   });

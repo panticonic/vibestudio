@@ -17,6 +17,7 @@ import type {
   TurnReasonCode,
 } from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
+import type { TaskCardPayload } from "./task-card-payload.js";
 
 export type SandboxSource = { type: "code"; code: string } | { type: "file"; path: string };
 
@@ -244,6 +245,8 @@ export interface ChatMessage {
    * directly instead of re-parsing `content`.
    */
   invocation?: InvocationCardPayload;
+  /** Durable background-task card, separate from the invocation that launched it. */
+  task?: TaskCardPayload;
   inlineUi?: InlineUiCardPayload;
   approval?: ApprovalCardPayload;
   custom?: CustomMessageCardPayload;

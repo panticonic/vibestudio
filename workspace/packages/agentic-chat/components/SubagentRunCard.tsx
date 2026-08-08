@@ -20,8 +20,7 @@ import {
 
 /**
  * SubagentRunCard — how a spawned child run appears in its parent's transcript.
- * Routed here from `MessageList.renderItem` for any invocation carrying an
- * `invocation.subagent` payload.
+ * Routed here from `MessageList.renderItem` for a durable subagent task card.
  *
  * The card has two sources of truth, in order of availability:
  *
@@ -115,11 +114,8 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<BodyView>("activity");
 
-  const invocation = msg.invocation;
-  const progressFeed = useMemo(
-    () => invocation?.execution.progress ?? [],
-    [invocation?.execution.progress]
-  );
+  const task = msg.task;
+  const progressFeed = useMemo(() => task?.execution.progress ?? [], [task?.execution.progress]);
   const activity = useMemo(() => consolidateSubagentActivity(progressFeed), [progressFeed]);
   const truncatedPreview = useMemo(() => {
     for (let index = activity.length - 1; index >= 0; index -= 1) {
@@ -142,16 +138,16 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
     return null;
   }, [activity]);
 
-  const subagent = invocation?.subagent;
-  const status = invocation?.execution.status ?? "pending";
+  const subagent = task?.subagent;
+  const status = task?.execution.status ?? "pending";
   const isLive = isLiveStatus(status);
-  const now = useNow(Boolean(invocation && subagent) && isLive);
-  if (!invocation || !subagent) return null;
+  const now = useNow(Boolean(task && subagent) && isLive);
+  if (!task || !subagent) return null;
 
   const channelTitle = [...progressFeed]
     .reverse()
     .find((entry) => entry.kind === "title-changed" && entry.text?.trim())?.text;
-  const label = channelTitle || subagent.label || invocation.name || "Subagent";
+  const label = channelTitle || subagent.label || task.title || "Subagent";
   const canOpenPanel = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
   const canObserve = Boolean(childTranscript && subagent.taskChannelId);
 
@@ -159,8 +155,8 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const latest = latestActivity(activity);
   const preview =
     previewOf(latest) ??
-    (invocation.execution.description.trim()
-      ? { content: invocation.execution.description.trim() }
+    (task.execution.description.trim()
+      ? { content: task.execution.description.trim() }
       : {
           content: isLive ? "Waiting for the child agent to start" : "No child updates yet",
         });
@@ -288,9 +284,9 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
 
         {open && (
           <Box className="subagent-details">
-            {invocation.execution.description && (
+            {task.execution.description && (
               <div className="subagent-description">
-                <MessageContent content={invocation.execution.description} isStreaming={false} />
+                <MessageContent content={task.execution.description} isStreaming={false} />
               </div>
             )}
 

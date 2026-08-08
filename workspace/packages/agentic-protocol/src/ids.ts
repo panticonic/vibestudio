@@ -7,6 +7,7 @@ export type TurnId = Brand<string, "TurnId">;
 export type MessageId = Brand<string, "MessageId">;
 export type BlockId = Brand<string, "BlockId">;
 export type InvocationId = Brand<string, "InvocationId">;
+export type TaskId = Brand<string, "TaskId">;
 export type ApprovalId = Brand<string, "ApprovalId">;
 export type EnvelopeId = Brand<string, "EnvelopeId">;
 export type ChannelId = Brand<string, "ChannelId">;
