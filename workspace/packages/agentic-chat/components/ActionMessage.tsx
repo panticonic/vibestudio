@@ -131,7 +131,6 @@ export function toolPresentation(payload: InvocationCardPayload): {
     return {
       displayName: "Close Subagent",
       preview: `${args["discard"] ? "Discard" : "Close"}${runId ? ` ${runId}` : ""}`,
-      color: args["discard"] ? "amber" : undefined,
     };
   }
   const preview = formatInvocationPreview(payload.arguments, payload.execution.description, 120);
