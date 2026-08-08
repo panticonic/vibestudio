@@ -98,9 +98,28 @@ import { contentMappingFromRow } from "./semanticVcsContentMappingCodec.js";
 type Row = Record<string, unknown>;
 type PlacedFileState = Extract<WorkspaceFileState, { presence: "placed" }>;
 type PresentRepositoryState = Extract<WorkspaceRepositoryMember, { presence: "present" }>;
+type ContentEndpoint = {
+  fileId: string;
+  contentHash: string;
+  coordinateKind: "utf16" | "byte";
+  coordinateExtent: number;
+};
+type LatestAppliedFileChange = {
+  fileId: string;
+  appliedChangeId: string;
+  changeId: string;
+  workUnitId: string;
+  commandId: string;
+  kind: string;
+  contentClass: "internal" | "external";
+  externalKeys: string[];
+  content: ContentEndpoint | null;
+};
 
 const MAX_WORKING_APPLICATIONS = 10_000;
 const MAX_ANCESTRY_EDGES = 100_000;
+const stateFileKey = (state: StateNodeRef, fileId: string): string =>
+  `${stateNodeKey(state)}\0${fileId}`;
 
 const boundedMemoryText = (value: string, maximum: number): string | null => {
   const normalized = value.trim();
@@ -5407,15 +5426,7 @@ export class SemanticWorkspace {
     return lineage;
   }
 
-  /**
-   * Resolve the latest exact authoring work unit for a page of files in one
-   * ancestry query. The former per-file loop repeated the complete
-   * first-parent walk and two SQL lookups for every listed file, turning a
-   * directory-name provenance check into hundreds of serialized semantic
-   * calls. This query preserves the same ordering rule as
-   * `latestAppliedChangeForFile`: newest application, then newest applied
-   * change within that application.
-   */
+  /** Resolve page provenance through the shared batched ancestry projection. */
   private fileLineagesAt(
     state: StateNodeRef,
     fileIds: readonly string[]
@@ -5428,60 +5439,6 @@ export class SemanticWorkspace {
       externalKeys: string[];
     }
   > {
-    if (fileIds.length === 0) return new Map();
-    const applications = this.firstParentLineage(state).applicationIds;
-    const rows = this.deps.sql
-      .exec(
-        `WITH selected_applications AS (
-           SELECT CAST(key AS INTEGER) AS application_ordinal,
-                  CAST(value AS TEXT) AS application_id
-             FROM json_each(?)
-         ),
-         selected_files AS (
-           SELECT CAST(value AS TEXT) AS file_id FROM json_each(?)
-         ),
-         candidates AS (
-           SELECT coordinate.file_id, applied.applied_change_id, applied.ordinal,
-                  selected.application_ordinal, change.change_id, change.work_unit_id,
-                  work.content_class, work.external_lineage_json
-             FROM selected_applications selected
-             JOIN gad_applied_changes applied
-               ON applied.application_id = selected.application_id
-             JOIN gad_changes change ON change.change_id = applied.change_id
-             JOIN gad_work_units work ON work.work_unit_id = change.work_unit_id
-             JOIN gad_change_coordinates coordinate ON coordinate.change_id = change.change_id
-             JOIN selected_files file ON file.file_id = coordinate.file_id
-           UNION
-           SELECT CAST(json_extract(predicate.predicate_json, '$.fileId') AS TEXT),
-                  applied.applied_change_id, applied.ordinal,
-                  selected.application_ordinal, change.change_id, change.work_unit_id,
-                  work.content_class, work.external_lineage_json
-             FROM selected_applications selected
-             JOIN gad_applied_changes applied
-               ON applied.application_id = selected.application_id
-             JOIN gad_changes change ON change.change_id = applied.change_id
-             JOIN gad_work_units work ON work.work_unit_id = change.work_unit_id
-             JOIN gad_applied_change_predicates predicate
-               ON predicate.applied_change_id = applied.applied_change_id
-             JOIN selected_files file
-               ON file.file_id =
-                  CAST(json_extract(predicate.predicate_json, '$.fileId') AS TEXT)
-         ),
-         ranked AS (
-           SELECT *,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY file_id
-                    ORDER BY application_ordinal DESC, ordinal DESC
-                  ) AS lineage_rank
-             FROM candidates
-         )
-         SELECT file_id, change_id, work_unit_id, content_class, external_lineage_json
-           FROM ranked
-          WHERE lineage_rank = 1`,
-        canonicalJson(applications),
-        canonicalJson([...new Set(fileIds)])
-      )
-      .toArray() as Row[];
     const result = new Map<
       string,
       {
@@ -5491,27 +5448,12 @@ export class SemanticWorkspace {
         externalKeys: string[];
       }
     >();
-    for (const row of rows) {
-      const fileId = String(row["file_id"]);
-      const contentClass = row["content_class"];
-      if (contentClass !== "internal" && contentClass !== "external") {
-        throw new SemanticVcsError(
-          "IntegrityFailure",
-          `File ${fileId} has no valid persisted content class`
-        );
-      }
-      const externalKeys = JSON.parse(String(row["external_lineage_json"]));
-      if (!Array.isArray(externalKeys) || !externalKeys.every((key) => typeof key === "string")) {
-        throw new SemanticVcsError(
-          "IntegrityFailure",
-          `File ${fileId} has invalid persisted external lineage`
-        );
-      }
+    for (const [fileId, latest] of this.latestAppliedChangesForFiles(state, fileIds)) {
       result.set(fileId, {
-        authoredChangeId: String(row["change_id"]),
-        authoredByWorkUnitId: String(row["work_unit_id"]),
-        contentClass,
-        externalKeys,
+        authoredChangeId: latest.changeId,
+        authoredByWorkUnitId: latest.workUnitId,
+        contentClass: latest.contentClass,
+        externalKeys: latest.externalKeys,
       });
     }
     return result;
@@ -5574,17 +5516,36 @@ export class SemanticWorkspace {
     basis: StateNodeRef,
     draft: MutationDraft,
     ingress: SemanticDispatchRequest["ingress"]["contextIntegrity"]
-  ): { class: "internal" | "external"; externalKeys: string[] } {
+  ): {
+    class: "internal" | "external";
+    externalKeys: string[];
+    latestFileChanges: Map<string, LatestAppliedFileChange>;
+  } {
     const externalKeys = new Set<string>(ingress.class === "external" ? ingress.externalKeys : []);
     const workUnitIds = new Set<string>();
+    const latestFileChanges = new Map<string, LatestAppliedFileChange>();
+    const filesByState = new Map<string, { state: StateNodeRef; fileIds: Set<string> }>();
     const includeFile = (state: StateNodeRef, fileId: unknown): void => {
       if (typeof fileId !== "string" || fileId.length === 0) return;
-      const source = this.latestAppliedChangeForFile(state, fileId);
-      if (source) workUnitIds.add(source.workUnitId);
+      const key = stateNodeKey(state);
+      let selection = filesByState.get(key);
+      if (!selection) {
+        selection = { state, fileIds: new Set() };
+        filesByState.set(key, selection);
+      }
+      selection.fileIds.add(fileId);
     };
     for (const change of draft.changes) {
       includeFile(basis, change.base?.["fileId"]);
       if (change.source) includeFile(asState(change.source.state), change.source.fileId);
+    }
+    for (const selection of filesByState.values()) {
+      for (const [fileId, source] of this.latestAppliedChangesForFiles(selection.state, [
+        ...selection.fileIds,
+      ])) {
+        latestFileChanges.set(stateFileKey(selection.state, fileId), source);
+        workUnitIds.add(source.workUnitId);
+      }
     }
     for (const changeId of draft.incorporatedChangeIds) {
       const row = this.deps.sql
@@ -5639,7 +5600,11 @@ export class SemanticWorkspace {
       );
     }
     const sorted = [...externalKeys].sort(compareUtf16CodeUnits);
-    return { class: sorted.length > 0 ? "external" : "internal", externalKeys: sorted };
+    return {
+      class: sorted.length > 0 ? "external" : "internal",
+      externalKeys: sorted,
+      latestFileChanges,
+    };
   }
 
   private persistWorkingMutation(
@@ -5674,6 +5639,7 @@ export class SemanticWorkspace {
       contentClass: contentIntegrity.class,
       externalKeys: contentIntegrity.externalKeys,
     });
+    const setupCompletedAt = Date.now();
     const changes: ChangeRecord[] = draft.changes.map((change) => {
       const withoutIdentity = {
         ...change,
@@ -5693,6 +5659,7 @@ export class SemanticWorkspace {
         }),
       };
     });
+    const changesCompletedAt = Date.now();
     const changeIdAt = (ordinal: number): string => {
       const value = changes[ordinal]?.changeId;
       if (!value)
@@ -5725,13 +5692,16 @@ export class SemanticWorkspace {
         value.resultPath === null && value.changeRef !== null ? changeIdFor(value.changeRef) : null,
       newRepository: value.newRepository,
     }));
+    const transitionsCompletedAt = Date.now();
     const workspaceChangeSet =
       fileTransitions.length || repoTransitions.length
         ? this.planWorkspaceFacts(basisRoot, fileTransitions, repoTransitions)
         : null;
+    const workspacePlanCompletedAt = Date.now();
     const workspaceFacts = workspaceChangeSet
       ? this.deps.store.facts.prepare(workspaceChangeSet)
       : null;
+    const workspaceProofCompletedAt = Date.now();
     const resultRoot = workspaceFacts
       ? workspaceFacts.persistence.resultRoot.workspaceFactRootId
       : basisRoot;
@@ -5791,11 +5761,45 @@ export class SemanticWorkspace {
       resultWorkspaceFactRootId: resultRoot,
       semanticProtocol: SEMANTIC_PROTOCOL,
     };
+    const applicationIdentityCompletedAt = Date.now();
     const newFileChangeIds = new Set(
       fileTransitions
         .filter((transition) => transition.newFile)
         .map((transition) => transition.changeId)
     );
+    const contentParentsByState = new Map<string, { state: StateNodeRef; fileIds: Set<string> }>();
+    const selectContentParent = (state: StateNodeRef, fileId: string): void => {
+      const key = stateNodeKey(state);
+      let selection = contentParentsByState.get(key);
+      if (!selection) {
+        selection = { state, fileIds: new Set() };
+        contentParentsByState.set(key, selection);
+      }
+      selection.fileIds.add(fileId);
+    };
+    for (const change of appliedChangeSources) {
+      const child = this.contentEndpoint(change.result) ?? this.contentEndpoint(change.base);
+      if (!child) continue;
+      if (change.kind === "file-copy") {
+        if (change.source) {
+          selectContentParent(asState(change.source.state), change.source.fileId);
+        }
+      } else if (!newFileChangeIds.has(change.changeId)) {
+        selectContentParent(basis, child.fileId);
+      }
+    }
+    const contentParents = new Map(contentIntegrity.latestFileChanges);
+    for (const selection of contentParentsByState.values()) {
+      const missingFileIds = [...selection.fileIds].filter(
+        (fileId) => !contentParents.has(stateFileKey(selection.state, fileId))
+      );
+      for (const [fileId, parent] of this.latestAppliedChangesForFiles(
+        selection.state,
+        missingFileIds
+      )) {
+        contentParents.set(stateFileKey(selection.state, fileId), parent);
+      }
+    }
     const derivedContentEdges = appliedChanges.flatMap((appliedChange, ordinal) => {
       const change = appliedChangeSources[ordinal];
       if (!change) return [];
@@ -5817,9 +5821,9 @@ export class SemanticWorkspace {
         );
       }
       if (change.kind !== "file-copy" && newFileChangeIds.has(change.changeId)) return [];
-      const parent = copySource
-        ? this.latestAppliedChangeForFile(copySource.state, copySource.fileId)
-        : this.latestAppliedChangeForFile(basis, child.fileId);
+      const parentState = copySource ? copySource.state : basis;
+      const parentFileId = copySource ? copySource.fileId : child.fileId;
+      const parent = contentParents.get(stateFileKey(parentState, parentFileId)) ?? null;
       if (!parent) {
         if (copySource) {
           throw new SemanticVcsError(
@@ -5829,7 +5833,7 @@ export class SemanticWorkspace {
         }
         return [];
       }
-      const parentEndpoint = this.appliedContentEndpoint(parent.appliedChangeId);
+      const parentEndpoint = parent.content;
       if (!parentEndpoint) {
         if (copySource) {
           throw new SemanticVcsError(
@@ -5951,6 +5955,7 @@ export class SemanticWorkspace {
       (edge, index, values) =>
         values.findIndex((candidate) => candidate.contentEdgeId === edge.contentEdgeId) === index
     );
+    const contentEdgesCompletedAt = Date.now();
     const decisions: IntegrationDecisionRecord[] = (draft.decisions ?? []).map((decision) => {
       const complete: Omit<IntegrationDecisionRecord, "decisionId"> = {
         ...decision,
@@ -6006,6 +6011,14 @@ export class SemanticWorkspace {
         changes: changes.length,
         repositories: repoTransitions.length,
         files: fileTransitions.length,
+        setupMs: setupCompletedAt - profileStartedAt,
+        changeIdentitiesMs: changesCompletedAt - setupCompletedAt,
+        transitionsMs: transitionsCompletedAt - changesCompletedAt,
+        workspacePlanMs: workspacePlanCompletedAt - transitionsCompletedAt,
+        workspaceProofMs: workspaceProofCompletedAt - workspacePlanCompletedAt,
+        applicationIdentitiesMs: applicationIdentityCompletedAt - workspaceProofCompletedAt,
+        contentEdgesMs: contentEdgesCompletedAt - applicationIdentityCompletedAt,
+        planAssemblyMs: applicationPersistenceStartedAt - contentEdgesCompletedAt,
         prepareMs: applicationPersistenceStartedAt - profileStartedAt,
         applicationPersistenceMs: profileCompletedAt - applicationPersistenceStartedAt,
         totalMs,
@@ -10529,12 +10542,7 @@ export class SemanticWorkspace {
     };
   }
 
-  private contentEndpoint(endpoint: Row | null): {
-    fileId: string;
-    contentHash: string;
-    coordinateKind: "utf16" | "byte";
-    coordinateExtent: number;
-  } | null {
+  private contentEndpoint(endpoint: Row | null): ContentEndpoint | null {
     if (
       endpoint?.["kind"] !== "file" ||
       typeof endpoint["fileId"] !== "string" ||
@@ -10552,12 +10560,7 @@ export class SemanticWorkspace {
     };
   }
 
-  private appliedContentEndpoint(appliedChangeId: string): {
-    fileId: string;
-    contentHash: string;
-    coordinateKind: "utf16" | "byte";
-    coordinateExtent: number;
-  } | null {
+  private appliedContentEndpoint(appliedChangeId: string): ContentEndpoint | null {
     const row = this.deps.sql
       .exec(
         `SELECT applied_base_json, applied_result_json
@@ -10665,54 +10668,122 @@ export class SemanticWorkspace {
     });
   }
 
+  /**
+   * Resolve the latest exact applied change for a file set in one ancestry
+   * query. Semantic mutations use the same result for integrity classification
+   * and content-parent derivation, avoiding thousands of serialized SQL calls.
+   * Ordering is unchanged: newest application, then newest applied change
+   * within that application.
+   */
+  private latestAppliedChangesForFiles(
+    state: StateNodeRef,
+    fileIds: readonly string[]
+  ): Map<string, LatestAppliedFileChange> {
+    if (fileIds.length === 0) return new Map();
+    const applications = this.firstParentLineage(state).applicationIds;
+    const rows = this.deps.sql
+      .exec(
+        `WITH selected_applications AS (
+           SELECT CAST(key AS INTEGER) AS application_ordinal,
+                  CAST(value AS TEXT) AS application_id
+             FROM json_each(?)
+         ),
+         selected_files AS (
+           SELECT CAST(value AS TEXT) AS file_id FROM json_each(?)
+         ),
+         candidates AS (
+           SELECT coordinate.file_id, applied.applied_change_id,
+                  applied.applied_base_json, applied.applied_result_json, applied.ordinal,
+                  selected.application_ordinal, change.change_id, change.kind,
+                  change.work_unit_id, work.command_id, work.content_class,
+                  work.external_lineage_json
+             FROM selected_applications selected
+             JOIN gad_applied_changes applied
+               ON applied.application_id = selected.application_id
+             JOIN gad_changes change ON change.change_id = applied.change_id
+             JOIN gad_work_units work ON work.work_unit_id = change.work_unit_id
+             JOIN gad_change_coordinates coordinate ON coordinate.change_id = change.change_id
+             JOIN selected_files file ON file.file_id = coordinate.file_id
+           UNION
+           SELECT CAST(json_extract(predicate.predicate_json, '$.fileId') AS TEXT),
+                  applied.applied_change_id, applied.applied_base_json,
+                  applied.applied_result_json, applied.ordinal,
+                  selected.application_ordinal, change.change_id, change.kind,
+                  change.work_unit_id, work.command_id, work.content_class,
+                  work.external_lineage_json
+             FROM selected_applications selected
+             JOIN gad_applied_changes applied
+               ON applied.application_id = selected.application_id
+             JOIN gad_changes change ON change.change_id = applied.change_id
+             JOIN gad_work_units work ON work.work_unit_id = change.work_unit_id
+             JOIN gad_applied_change_predicates predicate
+               ON predicate.applied_change_id = applied.applied_change_id
+             JOIN selected_files file
+               ON file.file_id =
+                  CAST(json_extract(predicate.predicate_json, '$.fileId') AS TEXT)
+         ),
+         ranked AS (
+           SELECT *,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY file_id
+                    ORDER BY application_ordinal DESC, ordinal DESC
+                  ) AS lineage_rank
+             FROM candidates
+         )
+         SELECT file_id, applied_change_id, applied_base_json, applied_result_json,
+                change_id, kind, work_unit_id, command_id, content_class,
+                external_lineage_json
+           FROM ranked
+          WHERE lineage_rank = 1`,
+        canonicalJson(applications),
+        canonicalJson([...new Set(fileIds)])
+      )
+      .toArray() as Row[];
+    const result = new Map<string, LatestAppliedFileChange>();
+    for (const row of rows) {
+      const fileId = String(row["file_id"]);
+      const contentClass = row["content_class"];
+      if (contentClass !== "internal" && contentClass !== "external") {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `File ${fileId} has no valid persisted content class`
+        );
+      }
+      const externalKeys = JSON.parse(String(row["external_lineage_json"]));
+      if (!Array.isArray(externalKeys) || !externalKeys.every((key) => typeof key === "string")) {
+        throw new SemanticVcsError(
+          "IntegrityFailure",
+          `File ${fileId} has invalid persisted external lineage`
+        );
+      }
+      const appliedResult =
+        row["applied_result_json"] == null
+          ? null
+          : (JSON.parse(String(row["applied_result_json"])) as Row);
+      const appliedBase =
+        row["applied_base_json"] == null
+          ? null
+          : (JSON.parse(String(row["applied_base_json"])) as Row);
+      result.set(fileId, {
+        fileId,
+        appliedChangeId: String(row["applied_change_id"]),
+        changeId: String(row["change_id"]),
+        workUnitId: String(row["work_unit_id"]),
+        commandId: String(row["command_id"]),
+        kind: String(row["kind"]),
+        contentClass,
+        externalKeys,
+        content: this.contentEndpoint(appliedResult) ?? this.contentEndpoint(appliedBase),
+      });
+    }
+    return result;
+  }
+
   private latestAppliedChangeForFile(
     state: StateNodeRef,
     fileId: string
-  ):
-    | (Row & {
-        changeId: string;
-        appliedChangeId: string;
-        workUnitId: string;
-        commandId: string;
-        kind: string;
-      })
-    | null {
-    const applications = this.firstParentLineage(state).applicationIds;
-    const row = this.deps.sql
-      .exec(
-        `SELECT applied.applied_change_id, change.change_id, change.kind,
-              change.work_unit_id, work.command_id
-         FROM json_each(?) selected
-         JOIN gad_applied_changes applied
-           ON applied.application_id = CAST(selected.value AS TEXT)
-         JOIN gad_changes change ON change.change_id = applied.change_id
-         JOIN gad_work_units work ON work.work_unit_id = change.work_unit_id
-        WHERE EXISTS (
-                SELECT 1 FROM gad_change_coordinates coordinate
-                 WHERE coordinate.change_id = change.change_id
-                   AND coordinate.file_id = ?
-              )
-           OR EXISTS (
-                SELECT 1 FROM gad_applied_change_predicates predicate
-                 WHERE predicate.applied_change_id = applied.applied_change_id
-                   AND json_extract(predicate.predicate_json, '$.fileId') = ?
-              )
-        ORDER BY CAST(selected.key AS INTEGER) DESC, applied.ordinal DESC LIMIT 1`,
-        canonicalJson(applications),
-        fileId,
-        fileId
-      )
-      .toArray()[0] as Row | undefined;
-    return row
-      ? {
-          ...row,
-          changeId: String(row["change_id"]),
-          appliedChangeId: String(row["applied_change_id"]),
-          workUnitId: String(row["work_unit_id"]),
-          commandId: String(row["command_id"]),
-          kind: String(row["kind"]),
-        }
-      : null;
+  ): LatestAppliedFileChange | null {
+    return this.latestAppliedChangesForFiles(state, [fileId]).get(fileId) ?? null;
   }
 }
 
