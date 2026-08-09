@@ -1,10 +1,9 @@
 # Claude Code Sessions as First-Class Channel Agents
 
-Status: ACTIVE ARCHITECTURE CHECKPOINT (2026-08-09, rev 5). The managed interactive
-launch materializer and narrow host seam are implemented; end-to-end extension-headless
-activation/broker integration, a filesystem/network confidentiality envelope, and
-permission relay remain explicit follow-up boundaries. Do not read historical W1–W7
-targets as landed behavior.
+Status: ACTIVE ARCHITECTURE CHECKPOINT (2026-08-09, rev 5). The interactive and
+extension-headless managed launchers own the narrow broker/environment seam; a
+filesystem/network confidentiality envelope and permission relay remain explicit
+follow-up boundaries. Do not read historical W1–W7 targets as landed behavior.
 Rev 2 replaced the earlier `agent-external` participant-class redesign with a userland
 **linked-agent vessel**: the Claude Code session's system identity is a real agent DO,
 and the local process is a thin peripheral attached to it.
@@ -654,12 +653,13 @@ against the context receive `EROFS`, while scratch stays usable. The launch fail
 when bubblewrap is absent or on a platform without an audited backend. `chmod`, Claude
 permission mode, and prompt instructions are not treated as containment.
 
-This checkpoint removes ambient environment and Vibestudio credential exposure from the
-interactive CLI launcher, but does not claim filesystem or network confidentiality:
+This checkpoint removes ambient environment and Vibestudio credential exposure from both
+managed launch owners, but does not claim filesystem or network confidentiality:
 the current bubblewrap declaration still read-binds `/` and leaves the host network
 available. Replacing that with an allowlisted external-agent runtime envelope is a
-separate boundary change. The extension-headless launcher must adopt the same broker and
-environment owner seam before this checkpoint is complete for that launch path.
+separate boundary change. A live extension launch keeps its authority only in memory; on
+extension restart it fails closed by adopting and retiring the exact durable process group
+before credential/profile release instead of persisting a reconstructable bearer.
 
 There are now two explicit states only:
 
@@ -719,9 +719,8 @@ model, wire protocol, and schemaVersion untouched.)
 There are no compatibility/adoption paths: the linked-agent vessel, context terminals,
 explicit launcher, narrow broker, and contained bridge form one managed architecture.
 Unfinished boundaries stay unavailable rather than being simulated: permission relay is
-not advertised, extension-headless launch must adopt the same broker owner seam, and the
-filesystem/network envelope replaces (rather than layers exceptions onto) the current
-read-only-root declaration.
+not advertised, and the filesystem/network envelope replaces (rather than layers
+exceptions onto) the current read-only-root declaration.
 
 **Workstreams** (parallelizable; dependency edges are for construction order only, not
 shipping order):

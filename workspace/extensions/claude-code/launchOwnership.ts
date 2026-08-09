@@ -30,6 +30,7 @@ const materializationSchema = z
   .object({
     profileDir: z.string().min(1),
     logPath: z.string().min(1),
+    broker: z.object({ socketPath: z.string().min(1), generation: z.string().min(1) }).strict(),
     credentialState: credentialStateSchema.nullable(),
   })
   .strict();
@@ -51,12 +52,11 @@ const processIdentitySchema = z
 
 export const claudeLaunchRecordSchema = z
   .object({
-    version: z.literal(2),
+    version: z.literal(3),
     launchId: z.string().min(1),
     entityId: z.string().min(1),
     contextId: z.string().min(1),
     channelId: z.string().min(1),
-    vesselRef: z.string().min(1),
     ownerKind: z.enum(["external-cli", "extension-headless"]),
     phase: z.enum(["preparing", "active", "retiring", "released"]),
     agentId: z.string().min(1).nullable(),
@@ -92,6 +92,31 @@ export const claudeLaunchRecordSchema = z
 export type ClaudeLaunchRecord = z.infer<typeof claudeLaunchRecordSchema>;
 export type ClaudeLaunchOwnerKind = ClaudeLaunchRecord["ownerKind"];
 
+const version2LaunchRecordSchema = z
+  .object({
+    version: z.literal(2),
+    launchId: z.string().min(1),
+    entityId: z.string().min(1),
+    contextId: z.string().min(1),
+    channelId: z.string().min(1),
+    vesselRef: z.string().min(1),
+    ownerKind: z.enum(["external-cli", "extension-headless"]),
+    phase: z.enum(["preparing", "active", "retiring", "released"]),
+    agentId: z.string().min(1).nullable(),
+    preparedAt: z.string().datetime(),
+    releasedAt: z.string().datetime().optional(),
+    materialization: z
+      .object({
+        profileDir: z.string().min(1),
+        logPath: z.string().min(1),
+        credentialState: credentialStateSchema.nullable(),
+      })
+      .strict()
+      .nullable(),
+    process: processIdentitySchema.nullable(),
+  })
+  .strict();
+
 const legacyLaunchRecordSchema = z
   .object({
     launchId: z.string().min(1),
@@ -107,11 +132,29 @@ const legacyLaunchRecordSchema = z
 export function parseClaudeLaunchRecord(value: unknown, key: string): ClaudeLaunchRecord {
   const parsed = claudeLaunchRecordSchema.safeParse(value);
   if (parsed.success) return parsed.data;
+  const version2 = version2LaunchRecordSchema.safeParse(value);
+  if (version2.success) {
+    const { vesselRef: _discardedVesselRef, materialization, ...record } = version2.data;
+    return claudeLaunchRecordSchema.parse({
+      ...record,
+      version: 3,
+      materialization: materialization
+        ? {
+            ...materialization,
+            broker: {
+              socketPath: path.join(materialization.profileDir, "bridge.sock"),
+              generation: record.launchId,
+            },
+          }
+        : null,
+    });
+  }
   const legacy = legacyLaunchRecordSchema.safeParse(value);
   if (legacy.success) {
+    const { vesselRef: _discardedVesselRef, ...record } = legacy.data;
     return {
-      version: 2,
-      ...legacy.data,
+      version: 3,
+      ...record,
       ownerKind: "external-cli",
       phase: "active",
       materialization: null,
@@ -129,6 +172,7 @@ export function materializationReceipt(
   return {
     profileDir: launch.profileDir,
     logPath: path.join(launch.profileDir, "headless.log"),
+    broker: launch.broker,
     credentialState: launch.credentialState,
   };
 }
@@ -151,6 +195,12 @@ export function recoverMaterializedLaunch(
     path.resolve(receipt.logPath) !== path.join(profileDir, "headless.log")
   ) {
     throw ownershipError("Claude materialization receipt is outside its exact launch root");
+  }
+  if (
+    path.resolve(receipt.broker.socketPath) !== path.join(profileDir, "bridge.sock") ||
+    receipt.broker.generation !== record.launchId
+  ) {
+    throw ownershipError("Claude broker receipt is outside its exact launch generation");
   }
   const credentialState = receipt.credentialState;
   if (

@@ -56,17 +56,21 @@ describe.skipIf(process.platform === "win32")("Claude durable launch ownership",
     const logPath = path.join(profileDir, "headless.log");
     const log = ownBoundedLaunchLog(fixture, logPath, 4_096);
     const record: ClaudeLaunchRecord = {
-      version: 2,
+      version: 3,
       launchId,
       entityId: "entity-1",
       contextId: "context-1",
       channelId: "channel-1",
-      vesselRef: "vessel-1",
       ownerKind: "extension-headless",
       phase: "active",
       agentId: "agent-1",
       preparedAt: new Date().toISOString(),
-      materialization: { profileDir, logPath, credentialState: null },
+      materialization: {
+        profileDir,
+        logPath,
+        broker: { socketPath: path.join(profileDir, "bridge.sock"), generation: launchId },
+        credentialState: null,
+      },
       process: created.identity,
     };
     const persisted = parseClaudeLaunchRecord(JSON.parse(JSON.stringify(record)), "fixture");
@@ -117,5 +121,40 @@ describe.skipIf(process.platform === "win32")("Claude durable launch ownership",
     expect(() => recoverMaterializedLaunch(record, "/tmp/exact-root")).toThrow(
       expect.objectContaining({ code: "EOWNERSHIP" })
     );
+  });
+
+  it("migrates a version-2 receipt without retaining its vessel coordinate", () => {
+    const profileDir = "/state/agent-launch/Z2VuZXJhdGlvbg.unique";
+    const migrated = parseClaudeLaunchRecord(
+      {
+        version: 2,
+        launchId: "generation",
+        entityId: "entity",
+        contextId: "context",
+        channelId: "channel",
+        vesselRef: "do:secret-routing-coordinate",
+        ownerKind: "extension-headless",
+        phase: "active",
+        agentId: "agent-id",
+        preparedAt: new Date().toISOString(),
+        materialization: {
+          profileDir,
+          logPath: path.join(profileDir, "headless.log"),
+          credentialState: null,
+        },
+        process: null,
+      },
+      "version-2.json"
+    );
+    expect(migrated).toMatchObject({
+      version: 3,
+      materialization: {
+        broker: {
+          socketPath: path.join(profileDir, "bridge.sock"),
+          generation: "generation",
+        },
+      },
+    });
+    expect(migrated).not.toHaveProperty("vesselRef");
   });
 });

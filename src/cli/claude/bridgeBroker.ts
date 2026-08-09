@@ -1,10 +1,8 @@
-import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
+import { createClaudeBridgeAuthority } from "@vibestudio/shared/claudeBridgeAuthority";
 import {
   startClaudeBridgeBroker,
   type ClaudeBridgeAuthority,
   type ClaudeBridgeBroker,
-  type ClaudeBridgeJson,
-  type ClaudeBridgeStreamRecord,
 } from "@vibestudio/shared/claudeBridgeBroker";
 import { loadCliCredentials, type CliStoredPairing } from "../credentialStore.js";
 import { RpcClient } from "../rpcClient.js";
@@ -34,49 +32,15 @@ export function createCliClaudeBridgeAuthority(input: {
   const client = (input.makeClient ?? ((credential) => new RpcClient(credential)))(
     transportCredential(input.serverUrl, input.agentToken)
   );
-  const vesselCall = <T>(method: string, args: unknown[]): Promise<T> =>
-    client.callTargetPush<T>(input.vesselRef, method, args);
-  return {
-    openBridge: async function* (request, signal): AsyncIterable<ClaudeBridgeStreamRecord> {
-      const response = await client.stream(input.vesselRef, "openBridge", [request], { signal });
-      for await (const record of readChannelSubscriptionRecords<
-        {
-          ok: true;
-          bridgeSessionId: string;
-          attachmentGeneration: string;
-          pendingCount: number;
-          primaryChannelId: string | null;
-          contextId: string | null;
-          channelIds: string[];
-        },
-        Record<string, unknown>
-      >(response)) {
-        if (record.kind === "subscribed") {
-          yield { kind: "subscribed", result: record.result };
-        } else {
-          yield { kind: "event", payload: record.payload as never };
-        }
-      }
-    },
-    say: (request) => vesselCall("say", [request]) as Promise<ClaudeBridgeJson>,
-    complete: ({ report, outcome }) =>
-      vesselCall("completeFromBridge", [{ report, outcome }]) as Promise<ClaudeBridgeJson>,
-    requestPermission: async () => {
-      throw new Error(
-        "Claude permission relay is disabled until workspace approvals provide a trusted verdict"
-      );
-    },
-    acceptDelivery: (request) =>
-      vesselCall("acceptDelivery", [request]) as Promise<ClaudeBridgeJson>,
-    ingestHookEvent: (request) =>
-      vesselCall("ingestHookEvent", [request]) as Promise<ClaudeBridgeJson>,
-    listSkills: () => client.call("workspace.listSkills", []) as Promise<ClaudeBridgeJson>,
-    readSkill: ({ name }) =>
-      client.call("workspace.readSkill", [name]) as Promise<ClaudeBridgeJson>,
-    linkedStatus: () => vesselCall("linkedStatus", []) as Promise<ClaudeBridgeJson>,
+  return createClaudeBridgeAuthority({
+    callVessel: <T>(method: string, args: unknown[]) =>
+      client.callTargetPush<T>(input.vesselRef, method, args),
+    streamVessel: (method, args, signal) =>
+      client.stream(input.vesselRef, method, args, { signal }),
+    callWorkspace: <T>(method: string, args: unknown[]) => client.call<T>(method, args),
     onRecovery: (handler) => client.onRecovery(handler),
     close: () => client.close(),
-  };
+  });
 }
 
 export async function startCliClaudeBridgeBroker(input: {

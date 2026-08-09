@@ -12,12 +12,21 @@ import {
   type ClaudeLaunchProfile,
   type MaterializedClaudeLaunch,
 } from "@vibestudio/shared/claudeLaunchProfile";
-import { confineClaudeReadOnly } from "@vibestudio/shared/claudeReadOnlyLaunch";
+import { createClaudeBridgeAuthority } from "@vibestudio/shared/claudeBridgeAuthority";
+import {
+  startClaudeBridgeBroker,
+  type ClaudeBridgeBroker,
+} from "@vibestudio/shared/claudeBridgeBroker";
+import {
+  claudeContainedSpawnEnvironment,
+  confineClaudeReadOnly,
+} from "@vibestudio/shared/claudeReadOnlyLaunch";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import {
   OwnedProcessGroup,
   type OwnedProcessGroupHandle,
 } from "@vibestudio/shared/ownedProcessGroup";
+import { WsRpcClient } from "@vibestudio/shared/wsRpcClient";
 import {
   launchAgentIntoChannel,
   subagentFirstTaskPrompt,
@@ -241,22 +250,78 @@ export async function activate(ctx: ExtensionContext) {
     vesselRef: string;
     child: ChildProcess;
     owner: OwnedProcessGroupHandle;
+    broker: ClaudeBridgeBroker;
     log: BoundedLaunchLog;
     logPath: string;
     deliberate: boolean;
+    retirement: Promise<void> | null;
   }
 
   const headlessLaunches = new Map<string, HeadlessLaunch>();
   const terminalLaunches = new Map<string, InspectLaunchResult>();
   const channelTransactions = new Map<string, Promise<unknown>>();
   const finalizations = new Map<string, Promise<boolean>>();
+  const failAfterBrokerCleanup = async (
+    broker: ClaudeBridgeBroker,
+    failure: unknown,
+    message: string
+  ): Promise<never> => {
+    try {
+      await broker.close();
+    } catch (cleanupFailure) {
+      throw new AggregateError([failure, cleanupFailure], message);
+    }
+    throw failure;
+  };
+  const failAfterSpawnCleanup = async (
+    owner: OwnedProcessGroupHandle,
+    broker: ClaudeBridgeBroker,
+    failure: unknown,
+    message: string
+  ): Promise<never> => {
+    const failures = [failure];
+    try {
+      await owner.retire();
+    } catch (cleanupFailure) {
+      failures.push(cleanupFailure);
+    }
+    try {
+      await broker.close();
+    } catch (cleanupFailure) {
+      failures.push(cleanupFailure);
+    }
+    if (failures.length > 1) throw new AggregateError(failures, message);
+    throw failure;
+  };
+  const retireHeadlessLaunch = (launch: HeadlessLaunch): Promise<void> => {
+    if (launch.retirement) return launch.retirement;
+    const retirement = (async () => {
+      await launch.owner.retire();
+      let cleanupError: unknown;
+      try {
+        launch.log.close();
+      } catch (error) {
+        cleanupError = error;
+      }
+      try {
+        await launch.broker.close();
+      } catch (error) {
+        cleanupError ??= error;
+      }
+      if (cleanupError) throw cleanupError;
+    })();
+    launch.retirement = retirement;
+    retirement.catch(() => {
+      if (launch.retirement === retirement) launch.retirement = null;
+    });
+    return retirement;
+  };
   const terminateHeadlessLaunches = () => {
     for (const launch of headlessLaunches.values()) {
       launch.deliberate = true;
       // retire() signals synchronously before its first finite wait. Durable
       // recovery completes absence proof if the extension host exits first.
-      void launch.owner
-        .retire()
+      void retireHeadlessLaunch(launch)
         .then(() => finalizeHeadlessLaunch(launch, null, null))
         .catch((failure: unknown) => {
           ctx.log.warn?.("Claude Code shutdown retirement failed", {
@@ -389,10 +454,11 @@ export async function activate(ctx: ExtensionContext) {
       record = { ...record, phase: "retiring" };
       await writeLaunchRecord(record);
 
-      const owner =
-        live?.owner ?? (record.process ? OwnedProcessGroup.adopt(record.process) : null);
-      if (owner) await owner.retire();
-      live?.log.close();
+      if (live) {
+        await retireHeadlessLaunch(live);
+      } else if (record.process) {
+        await OwnedProcessGroup.adopt(record.process).retire();
+      }
       if (record.process) {
         record = { ...record, process: null };
         await writeLaunchRecord(record);
@@ -571,23 +637,70 @@ export async function activate(ctx: ExtensionContext) {
       profileDir: materialized.profileDir,
       contextDirectory: contextFolder,
     });
-    const child = spawn(confined.command, confined.args, {
-      cwd: contextFolder,
-      env: { ...process.env, ...materialized.env, ...confined.env },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
+    const rpcClient = new WsRpcClient({
+      url: currentServerUrl(),
+      callerId: `agent:${prepared.entityId}`,
+      callerKind: "agent",
+      getToken: () => prepared.profile.environment.VIBESTUDIO_AGENT_TOKEN,
+      clientLabel: "Vibestudio Claude channel bridge",
+      logPrefix: "[claude-headless-bridge]",
     });
+    const authority = createClaudeBridgeAuthority({
+      callVessel: <T>(method: string, args: unknown[]) =>
+        rpcClient.callTarget<T>(prepared.vesselRef, method, args),
+      streamVessel: (method, args, signal) =>
+        rpcClient.stream(prepared.vesselRef, method, args, { signal }),
+      callWorkspace: <T>(method: string, args: unknown[]) => rpcClient.call<T>(method, args),
+      onRecovery: (handler) => rpcClient.onRecovery(() => handler()),
+      close: () => rpcClient.close(),
+    });
+    const broker = await startClaudeBridgeBroker({
+      socketPath: materialized.broker.socketPath,
+      generation: materialized.broker.generation,
+      authority,
+    });
+    let child: ChildProcess;
+    try {
+      child = spawn(confined.command, confined.args, {
+        cwd: contextFolder,
+        env: claudeContainedSpawnEnvironment({
+          profileDir: materialized.profileDir,
+          launchEnv: materialized.env,
+          confinementEnv: confined.env,
+        }),
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
+      });
+    } catch (failure) {
+      return failAfterBrokerCleanup(
+        broker,
+        failure,
+        "Claude headless spawn failed and its channel broker could not be closed"
+      );
+    }
     const owner = OwnedProcessGroup.create(child);
     if (!owner.identity) {
-      await owner.retire();
-      throw error("EEXECUTOR_UNAVAILABLE", "Durable Claude process ownership is unavailable");
+      const failure = error(
+        "EEXECUTOR_UNAVAILABLE",
+        "Durable Claude process ownership is unavailable"
+      );
+      return failAfterSpawnCleanup(
+        owner,
+        broker,
+        failure,
+        "Claude process ownership failed and its process group or channel broker could not be retired"
+      );
     }
     let log: BoundedLaunchLog;
     try {
       log = ownBoundedLaunchLog(child, logPath);
     } catch (failure) {
-      await owner.retire();
-      throw failure;
+      return failAfterSpawnCleanup(
+        owner,
+        broker,
+        failure,
+        "Claude log ownership failed and its process group or channel broker could not be retired"
+      );
     }
 
     const launch: HeadlessLaunch = {
@@ -598,9 +711,11 @@ export async function activate(ctx: ExtensionContext) {
       vesselRef: prepared.vesselRef,
       child,
       owner,
+      broker,
       log,
       logPath,
       deliberate: false,
+      retirement: null,
     };
     headlessLaunches.set(launch.generationId, launch);
     child.once("exit", (code, signal) => {
@@ -662,8 +777,7 @@ export async function activate(ctx: ExtensionContext) {
   ): Promise<void> {
     const record = await readLaunchRecord(launchKey(launch.generationId));
     if (!record) throw error("ECORRUPT", `Missing owned launch ${launch.generationId}`);
-    await launch.owner.retire();
-    launch.log.close();
+    await retireHeadlessLaunch(launch);
     const inspectedLog = readLaunchLog(launch.logPath, 262_144);
     const completion =
       code === 0 && signal === null ? parseClaudeStreamCompletion(inspectedLog.tail) : null;
@@ -804,12 +918,11 @@ export async function activate(ctx: ExtensionContext) {
       });
 
       const record: ClaudeLaunchRecord = {
-        version: 2,
+        version: 3,
         launchId: profile.launchId,
         entityId,
         contextId,
         channelId,
-        vesselRef,
         ownerKind,
         phase: "preparing",
         agentId: credential.agentId,

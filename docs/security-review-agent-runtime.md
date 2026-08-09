@@ -11,7 +11,7 @@ Four verified boundary defects nevertheless undermine that model:
 
 | ID   | Severity     | Finding                                                                                                                                                                                                                                                                                  | Confidence |
 | ---- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| AR-1 | **Critical** | A linked headless Claude process receives the trusted extension's bearer environment, a read-only mount of the entire host, and unrestricted host networking. The “read-only context” sandbox therefore prevents writes but not host-secret disclosure or extension impersonation.       | High       |
+| AR-1 | **Critical** | A linked Claude process receives a read-only mount of the entire host and unrestricted host networking. The “read-only context” sandbox therefore prevents writes but not host-secret disclosure through native reads and provider egress.                                               | High       |
 | AR-2 | **Critical** | Arbitrary authenticated participants may directly call a terminal panel; the panel discards the original caller and acts as a deputy for shell sessions it owns. A participant can enumerate sessions, read scrollback, and inject terminal input without the command approval boundary. | High       |
 | AR-3 | **High**     | Shell approval presentation is not the command that `shell:true` executes. Raw arguments are concatenated into a script after being displayed as quoted literals; caller-controlled environment overrides can also change executable meaning without appearing in the approval.          | High       |
 | AR-4 | **High**     | Host-buffered and streamed proxy fetches can automatically follow redirects after authorizing only the first URL. Redirects can cross raw-egress origins, internal-network boundaries, or credential path audiences without a new authorization decision.                                | High       |
@@ -62,9 +62,9 @@ A local operating-system attacker already able to act as the Vibestudio user's U
 
 **Severity:** Critical\
 **Confidence:** High\
-**Status:** Accepted risk as of 2026-07-27; interactive-launch credential/env exposure
-partially remediated 2026-08-09; filesystem/network envelope and extension-headless
-integration remain open
+**Status:** Accepted risk as of 2026-07-27; direct credential/environment inheritance
+remediated for both managed launch owners 2026-08-09; filesystem/process/network envelope
+remains open
 
 ### Evidence
 
@@ -74,8 +74,8 @@ The linked-Claude confinement helper describes its goal as a read-only managed p
 - `packages/shared/src/claudeReadOnlyLaunch.ts:68-99` invokes bubblewrap with `--ro-bind / /`.
 - The launch does not unshare or mediate networking (`packages/shared/src/claudeReadOnlyLaunch.ts:68-99`).
 
-The extension-headless subagent launch still inherits the extension host's complete
-environment until it adopts the shared broker/environment owner seam:
+Before the 2026-08-09 broker checkpoint, the extension-headless subagent launch inherited
+the extension host's complete environment:
 
 - `workspace/extensions/claude-code/index.ts:322-332` builds the Claude argv and spawns with `env: { ...process.env, ...materialized.env, ...confined.env }`.
 - Every extension child receives a bearer for the trusted extension identity in `VIBESTUDIO_EXTENSION_RPC_TOKEN` and its gateway URL (`packages/extension-host/src/processManager.ts:68-88`).
@@ -99,10 +99,11 @@ The projection is read-only, but native reads are not scoped to it. The child ca
 - Credential records default beneath the same profile data root (`packages/credential-client/src/encryptedJsonStore.ts:348`).
 
 The shared materializer no longer writes the scoped agent token, server route, vessel, or
-entity into Claude's environment, MCP config, or diagnostic profile. The raw token remains
-only in the launch owner's in-memory preparation response. The extension path is currently
-incomplete because it has not yet constructed the corresponding owner-side broker, and it
-still spreads the trusted extension bearer and ambient environment into its child.
+entity into Claude's environment, MCP config, diagnostic profile, or durable launch record.
+The raw token remains only in each launch owner's in-memory preparation response. Both the
+interactive CLI and extension-headless launchers now construct their own owner-side broker
+and build the child environment from the explicit shared allowlist, so the trusted extension
+bearer and ambient environment no longer enter Claude.
 
 ### Exploit preconditions
 
@@ -112,7 +113,12 @@ Any of the following is sufficient:
 2. the subagent reads a malicious repository file as part of an otherwise legitimate task;
 3. the external model or CLI integration is compromised.
 
-No filesystem write exploit is required. Native Bash can read host files, inspect the inherited environment, and use the shared network namespace. The extension bearer can also be replayed against the gateway as the reviewed extension principal.
+No filesystem write exploit is required. Native Bash can read host files and use the
+unmediated network. The child no longer inherits the extension environment directly, but
+the current mount/process declaration does not establish a minimal root or a reviewed PID
+visibility boundary; same-user process state can therefore re-expose ambient credentials.
+Any recovered extension bearer can be replayed against the gateway as the reviewed
+extension principal.
 
 ### Impact
 
@@ -141,8 +147,8 @@ Claude's `auto`/`manual` modes can remain useful UX policies, but they must not 
 
 ### 2026-08-09 narrow-broker checkpoint
 
-The interactive CLI launcher now owns a per-generation Unix broker and the raw
-Vibestudio credential/transport. Claude and its MCP channel host receive only an opaque
+Each managed launcher now owns a per-generation Unix broker and the raw Vibestudio
+credential/transport. Claude and its MCP channel host receive only an opaque
 socket path plus generation and can invoke a fixed, schema-validated set of channel,
 hook, skill-resource, and status operations. A permission-request schema is reserved,
 but the authority rejects it and the MCP server omits the optional relay capability until
@@ -157,11 +163,17 @@ coordinates while excluding agent tokens, extension/server bearers, provider API
 variables, SSH/GPG agent sockets, Node injection variables, and arbitrary ambient state.
 Claude's isolated provider `.credentials.json` is still necessarily readable by Claude.
 
+The extension-owned durable record retains only the non-secret broker socket/generation
+coordinate. Natural exit and explicit release retire the exact process group and drain its
+log before closing the broker, reconciling the provider credential, revoking the scoped
+agent credential, and deleting the profile. On extension restart the launcher cannot
+reconstruct the in-memory authority without reintroducing a persisted bearer, so it fails
+closed: it adopts and retires the recorded process group before credential/profile release.
+
 This is a principal/environment reduction, not resolution of AR-1. The current
 bubblewrap declaration still exposes the host filesystem read-only and the host network
-without mediation. The extension-headless launcher also remains vulnerable until it owns
-the same broker lifecycle and uses the same complete environment builder. No filesystem
-or network confidentiality claim should be inferred from this checkpoint.
+without mediation. No filesystem or network confidentiality claim should be inferred from
+this checkpoint.
 
 ## AR-2 — Direct RPC plus caller-erasing panel wrappers creates a terminal deputy
 
