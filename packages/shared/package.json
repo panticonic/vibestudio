@@ -66,6 +66,8 @@
     "./moduleImports": "./src/moduleImports.ts",
     "./managedService": "./src/managedService.ts",
     "./npmInstaller": "./src/npmInstaller.ts",
+    "./ownedProcessGroup": "./src/ownedProcessGroup.ts",
+    "./ownedProcessIdentity": "./src/ownedProcessIdentity.ts",
     "./panelAccessPolicy": "./src/panelAccessPolicy.ts",
     "./panelChrome": "./src/panelChrome.ts",
     "./panelCommands": "./src/panelCommands.ts",
