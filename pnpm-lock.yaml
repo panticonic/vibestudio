@@ -1170,6 +1170,9 @@ importers:
 
   workspace/about/new:
     dependencies:
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/about-shared':
         specifier: workspace:*
         version: link:../../packages/about-shared

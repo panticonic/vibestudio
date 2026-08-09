@@ -37,6 +37,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "workspace-service:browser.data",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",
@@ -76,6 +85,7 @@
     }
   },
   "dependencies": {
+    "@vibestudio/shared": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/about-shared": "workspace:*"

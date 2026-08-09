@@ -1,19 +1,27 @@
 /**
  * New Panel Page - Shell panel for launching panels from workspace.
- * Opens with Cmd/Ctrl+T and displays available panels with a chat prompt input.
+ * Opens with Cmd/Ctrl+T and provides one launcher for panels, history, URLs, and chat.
  */
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { Card, Flex, Heading, Text, Box, Button, TextField, Spinner } from "@radix-ui/themes";
+import { Card, Flex, Heading, Text, Box, Button, TextArea, Spinner } from "@radix-ui/themes";
 import {
   PlusIcon,
-  MagnifyingGlassIcon,
   ChatBubbleIcon,
-  PaperPlaneIcon,
-  ChevronRightIcon,
+  GlobeIcon,
+  ClockIcon,
+  DashboardIcon,
+  EnterIcon,
+  MagicWandIcon,
 } from "@radix-ui/react-icons";
-import { buildPanelLink, panel, workspace } from "@workspace/runtime";
+import { browserData, buildPanelLink, panel, workspace } from "@workspace/runtime";
+import {
+  canonicalizeUrlForAddress,
+  mergeBrowserAddressSuggestions,
+  normalizeBrowserAddressSuggestions,
+  type BrowserAddressSuggestion,
+} from "@vibestudio/shared/panelChrome";
 import { useIsMobile } from "@workspace/react/responsive";
-import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
+import { AboutThemeRoot, AboutPage, Section } from "../../packages/about-shared/ui";
 import {
   collectLaunchablePanelGroups,
   LAUNCHABLE_PANEL_CACHE_KEY,
@@ -22,6 +30,26 @@ import {
   type LaunchablePanel,
   type LaunchablePanelGroups,
 } from "./launchablePanels";
+import { browserUrlFromEntry } from "./entryIntent";
+import {
+  PANEL_USAGE_CACHE_KEY,
+  parsePanelUsage,
+  rankLaunchablePanels,
+  recordPanelUsage,
+  serializePanelUsage,
+  type PanelUsage,
+} from "./launcherSuggestions";
+
+interface NavigationTarget {
+  source: string;
+  href?: string;
+}
+
+type LauncherSuggestion =
+  | { id: string; kind: "panel"; panel: LaunchablePanel }
+  | { id: string; kind: "history"; browser: BrowserAddressSuggestion }
+  | { id: string; kind: "url"; url: string }
+  | { id: string; kind: "chat"; prompt: string };
 
 function readCachedPanelGroups(): LaunchablePanelGroups | null {
   try {
@@ -41,69 +69,54 @@ function cachePanelGroups(groups: LaunchablePanelGroups): void {
   }
 }
 
-function PanelCard({
-  node,
-  pending,
-  disabled,
-  onActivate,
-}: {
-  node: LaunchablePanel;
-  pending: boolean;
-  disabled: boolean;
-  onActivate: (path: string, href: string) => void;
-}) {
-  const isMobile = useIsMobile();
-  const href = buildPanelLink(node.path);
-  return (
-    <Card asChild>
-      <a
-        href={href}
-        aria-busy={pending || undefined}
-        aria-disabled={disabled || undefined}
-        onClick={(event) => {
-          if (
-            event.defaultPrevented ||
-            event.button !== 0 ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey ||
-            event.altKey
-          ) {
-            return;
-          }
-          event.preventDefault();
-          if (!disabled) onActivate(node.path, href);
-        }}
-        style={{
-          textDecoration: "none",
-          color: "inherit",
-          pointerEvents: disabled ? "none" : undefined,
-          opacity: disabled && !pending ? 0.55 : 1,
-        }}
-      >
-        <Flex align="center" justify="between" gap="3">
-          <Flex
-            align={isMobile ? "start" : "center"}
-            direction={isMobile ? "column" : "row"}
-            gap={isMobile ? "0" : "3"}
-            style={{ minWidth: 0 }}
-          >
-            <Text weight="medium" size="2">
-              {node.title}
-            </Text>
-            <Text size="1" color="gray">
-              {node.description ?? `Open ${node.title}`}
-            </Text>
-          </Flex>
-          {pending ? (
-            <Spinner style={{ flexShrink: 0 }} />
-          ) : (
-            <ChevronRightIcon style={{ flexShrink: 0, color: "var(--gray-8)" }} />
-          )}
-        </Flex>
-      </a>
-    </Card>
-  );
+function readPanelUsage(): PanelUsage {
+  try {
+    return parsePanelUsage(window.localStorage.getItem(PANEL_USAGE_CACHE_KEY));
+  } catch {
+    return {};
+  }
+}
+
+function suggestionLabel(suggestion: LauncherSuggestion): string {
+  if (suggestion.kind === "panel") return suggestion.panel.title;
+  if (suggestion.kind === "history") return suggestion.browser.title || suggestion.browser.url;
+  if (suggestion.kind === "url") return `Open ${suggestion.url}`;
+  return `Chat: ${suggestion.prompt}`;
+}
+
+function suggestionMeta(suggestion: LauncherSuggestion): string {
+  if (suggestion.kind === "panel") {
+    return suggestion.panel.description ?? suggestion.panel.path;
+  }
+  if (suggestion.kind === "history") return suggestion.browser.url;
+  if (suggestion.kind === "url") return "Browser panel";
+  return "New chat";
+}
+
+function suggestionAction(suggestion: LauncherSuggestion): { title: string; detail: string } {
+  if (suggestion.kind === "panel") {
+    return {
+      title: `Open ${suggestion.panel.title}`,
+      detail: suggestion.panel.description ?? suggestion.panel.path,
+    };
+  }
+  if (suggestion.kind === "history") {
+    return {
+      title: `Revisit ${suggestion.browser.title || suggestion.browser.url}`,
+      detail: suggestion.browser.url,
+    };
+  }
+  if (suggestion.kind === "url") {
+    return { title: "Open in a browser panel", detail: suggestion.url };
+  }
+  return { title: "Start Agentic Chat", detail: "Send this message as the opening prompt." };
+}
+
+function SuggestionIcon({ kind }: { kind: LauncherSuggestion["kind"] }) {
+  if (kind === "panel") return <DashboardIcon />;
+  if (kind === "history") return <ClockIcon />;
+  if (kind === "url") return <GlobeIcon />;
+  return <ChatBubbleIcon />;
 }
 
 function NewPanelPage() {
@@ -114,14 +127,32 @@ function NewPanelPage() {
   const [loading, setLoading] = useState(panelGroups === null);
   const [error, setError] = useState<string | null>(null);
   const [promptInput, setPromptInput] = useState("");
-  const [filter, setFilter] = useState("");
+  const [panelUsage, setPanelUsage] = useState<PanelUsage>(readPanelUsage);
+  const [browserSuggestions, setBrowserSuggestions] = useState<BrowserAddressSuggestion[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
   const hasPanelGroupsRef = useRef(panelGroups !== null);
   const lastFetchStartedAtRef = useRef(0);
   const navigationStartedRef = useRef(false);
-  const lastNavigationRef = useRef<{ path: string; href: string } | null>(null);
+  const lastNavigationRef = useRef<NavigationTarget | null>(null);
+  const historyRequestRef = useRef(0);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const resizeRafRef = useRef(0);
+
+  const resizeInput = useCallback(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    cancelAnimationFrame(resizeRafRef.current);
+    resizeRafRef.current = requestAnimationFrame(() => {
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight}px`;
+    });
+  }, []);
+
+  useEffect(() => () => cancelAnimationFrame(resizeRafRef.current), []);
 
   const fetchData = useCallback((): Promise<void> => {
     if (fetchInFlightRef.current) return fetchInFlightRef.current;
@@ -158,7 +189,7 @@ function NewPanelPage() {
     });
     const offNavigationError = panel.onChildCreationError(({ url, error }) => {
       const target = lastNavigationRef.current;
-      if (!target || !url.includes(`/${target.path}/`)) return;
+      if (!target?.href || !url.includes(`/${target.source}/`)) return;
       navigationStartedRef.current = false;
       setPendingPath(null);
       setNavigationError(error);
@@ -169,182 +200,364 @@ function NewPanelPage() {
     };
   }, [fetchData]);
 
-  const beginNavigation = useCallback((path: string, href: string) => {
+  useEffect(() => {
+    const requestId = ++historyRequestRef.current;
+    const timer = window.setTimeout(
+      () => {
+        const query = promptInput.trim();
+        const request = query
+          ? browserData.searchHistoryForAutocomplete(query, 50)
+          : browserData.getHistory({ limit: 50 });
+        void request
+          .then((rows) => {
+            if (historyRequestRef.current !== requestId) return;
+            setBrowserSuggestions(normalizeBrowserAddressSuggestions(rows));
+            setHistoryError(null);
+          })
+          .catch((cause: unknown) => {
+            if (historyRequestRef.current !== requestId) return;
+            setBrowserSuggestions([]);
+            setHistoryError(cause instanceof Error ? cause.message : String(cause));
+          });
+      },
+      promptInput ? 120 : 0
+    );
+    return () => window.clearTimeout(timer);
+  }, [promptInput]);
+
+  const beginNavigation = useCallback((target: NavigationTarget) => {
     if (navigationStartedRef.current) return;
     navigationStartedRef.current = true;
-    lastNavigationRef.current = { path, href };
-    setPendingPath(path);
+    lastNavigationRef.current = target;
+    setPendingPath(target.source);
     setNavigationError(null);
-    // Keep the anchor href for normal browser affordances, but let the trusted
-    // host translate the managed URL into a panel navigation. Failures arrive
-    // through panel.onChildCreationError; handling that event clears the
-    // pending state instead of leaving this launcher permanently disabled.
-    requestAnimationFrame(() => window.location.assign(href));
+    if (target.href) {
+      // Keep anchor hrefs for normal browser affordances, but let the trusted
+      // host translate the managed URL into a panel navigation.
+      requestAnimationFrame(() => window.location.assign(target.href!));
+      return;
+    }
+
+    void panel.reopen({ source: target.source }).catch((error: unknown) => {
+      navigationStartedRef.current = false;
+      setPendingPath(null);
+      setNavigationError(error instanceof Error ? error.message : String(error));
+    });
   }, []);
 
-  const handleNewChat = useCallback(() => {
-    const prompt = promptInput.trim();
-    if (!prompt || pendingPath) return;
-    beginNavigation(
-      "panels/chat",
-      buildPanelLink("panels/chat", { stateArgs: { initialPrompt: prompt } })
+  const browserUrl = useMemo(() => browserUrlFromEntry(promptInput), [promptInput]);
+
+  const suggestions = useMemo<LauncherSuggestion[]>(() => {
+    const query = promptInput.trim();
+    const panels = panelGroups ? [...panelGroups.panels, ...panelGroups.about] : [];
+    const panelMatches = rankLaunchablePanels(panels, query, panelUsage, query ? 4 : 5).map(
+      (launchable): LauncherSuggestion => ({
+        id: `panel:${launchable.path}`,
+        kind: "panel",
+        panel: launchable,
+      })
     );
-  }, [beginNavigation, pendingPath, promptInput]);
+    const directCanonical = browserUrl ? canonicalizeUrlForAddress(browserUrl) : null;
+    const historyMatches = mergeBrowserAddressSuggestions(
+      [browserSuggestions],
+      query,
+      query ? 4 : 5
+    )
+      .filter(
+        (suggestion) =>
+          !directCanonical || canonicalizeUrlForAddress(suggestion.url) !== directCanonical
+      )
+      .map(
+        (browser): LauncherSuggestion => ({
+          id: `history:${browser.url}`,
+          kind: "history",
+          browser,
+        })
+      );
 
-  const filteredPanelGroups = useMemo(() => {
-    if (!panelGroups) return { panels: [], about: [] };
-    const query = filter.trim().toLowerCase();
-    if (!query) return panelGroups;
-    const matches = (node: LaunchablePanel) =>
-      node.path.toLowerCase().includes(query) || node.title.toLowerCase().includes(query);
-    return {
-      panels: panelGroups.panels.filter(matches),
-      about: panelGroups.about.filter(matches),
-    };
-  }, [panelGroups, filter]);
+    return [
+      ...(browserUrl
+        ? ([{ id: `url:${browserUrl}`, kind: "url", url: browserUrl }] as LauncherSuggestion[])
+        : []),
+      ...panelMatches,
+      ...historyMatches,
+      ...(!browserUrl && query
+        ? ([{ id: `chat:${query}`, kind: "chat", prompt: query }] as LauncherSuggestion[])
+        : []),
+    ].slice(0, 10);
+  }, [browserSuggestions, browserUrl, panelGroups, panelUsage, promptInput]);
 
-  const filteredPanels = [...filteredPanelGroups.panels, ...filteredPanelGroups.about];
-  const panelCount = (panelGroups?.panels.length ?? 0) + (panelGroups?.about.length ?? 0);
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [promptInput]);
+
+  useEffect(() => {
+    if (selectedIndex >= suggestions.length) {
+      setSelectedIndex(Math.max(0, suggestions.length - 1));
+    }
+  }, [selectedIndex, suggestions.length]);
+
+  const activateSuggestion = useCallback(
+    (suggestion: LauncherSuggestion | undefined) => {
+      if (!suggestion || pendingPath) return;
+      if (suggestion.kind === "url") {
+        beginNavigation({ source: suggestion.url });
+        return;
+      }
+      if (suggestion.kind === "history") {
+        beginNavigation({ source: suggestion.browser.url });
+        return;
+      }
+      if (suggestion.kind === "chat") {
+        beginNavigation({
+          source: "panels/chat",
+          href: buildPanelLink("panels/chat", {
+            stateArgs: { initialPrompt: suggestion.prompt },
+          }),
+        });
+        return;
+      }
+
+      const nextUsage = recordPanelUsage(panelUsage, suggestion.panel.path, Date.now());
+      setPanelUsage(nextUsage);
+      try {
+        window.localStorage.setItem(PANEL_USAGE_CACHE_KEY, serializePanelUsage(nextUsage));
+      } catch {
+        // Usage only improves ordering; navigation does not depend on storage.
+      }
+      beginNavigation({
+        source: suggestion.panel.path,
+        href: buildPanelLink(suggestion.panel.path),
+      });
+    },
+    [beginNavigation, panelUsage, pendingPath]
+  );
+
+  const selectedSuggestion = suggestions[selectedIndex];
+  const selectedAction = selectedSuggestion ? suggestionAction(selectedSuggestion) : null;
 
   return (
     <AboutPage icon={<PlusIcon width={20} height={20} />} title="New Panel" maxWidth={640}>
-      {/* New chat hero */}
       <Section>
         <Flex align="center" gap="2" mb="3">
-          <ChatBubbleIcon style={{ color: "var(--accent-9)" }} />
-          <Heading size="3">Start a chat</Heading>
+          <GlobeIcon style={{ color: "var(--accent-9)" }} />
+          <Heading size="3">Open anything</Heading>
         </Flex>
+        <Text as="p" size="2" color="gray" mb="3">
+          Search panels and browser history, enter a web address, or start a chat. Frequently used
+          destinations appear first.
+        </Text>
         <Flex gap="2" direction={isMobile ? "column" : "row"}>
-          <TextField.Root
+          <TextArea
+            ref={inputRef}
             autoFocus
-            aria-label="Chat request"
+            role="combobox"
+            aria-label="Search panels and history, enter a web address, or start a chat"
+            aria-autocomplete="list"
+            aria-expanded={suggestions.length > 0}
+            aria-controls="launcher-suggestions"
+            aria-activedescendant={
+              selectedSuggestion ? "launcher-suggestion-" + selectedIndex : undefined
+            }
             size="3"
-            style={{ flex: 1 }}
-            placeholder="Ask anything to open a new chat..."
+            rows={1}
+            style={{
+              flex: 1,
+              minHeight: 42,
+              maxHeight: isMobile ? 140 : 180,
+              resize: "none",
+              overflowY: "auto",
+            }}
+            placeholder="Search panels or history, enter an address, or ask an agent..."
             value={promptInput}
-            onChange={(e) => setPromptInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleNewChat()}
+            onInput={resizeInput}
+            onChange={(event) => {
+              setPromptInput(event.target.value);
+              setSelectedIndex(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown" && suggestions.length > 1) {
+                event.preventDefault();
+                setSelectedIndex((current) => (current + 1) % suggestions.length);
+              } else if (event.key === "ArrowUp" && suggestions.length > 1) {
+                event.preventDefault();
+                setSelectedIndex(
+                  (current) => (current - 1 + suggestions.length) % suggestions.length
+                );
+              } else if (event.key === "Enter" && !event.shiftKey && selectedSuggestion) {
+                event.preventDefault();
+                activateSuggestion(selectedSuggestion);
+              } else if (event.key === "Escape") {
+                setSelectedIndex(0);
+              }
+            }}
           />
-          <Button size="3" onClick={handleNewChat} disabled={!promptInput.trim() || !!pendingPath}>
-            {pendingPath === "panels/chat" ? <Spinner /> : <PaperPlaneIcon />} Chat
+          <Button
+            size="3"
+            onClick={() => activateSuggestion(selectedSuggestion)}
+            disabled={!selectedSuggestion || !!pendingPath}
+          >
+            {pendingPath ? <Spinner /> : <EnterIcon />}
+            {selectedSuggestion?.kind === "chat" ? "Start chat" : "Open"}
           </Button>
+        </Flex>
+        <Flex align="center" justify="between" mt="2" gap="3" wrap="wrap">
+          <Text size="1" color="gray">
+            ↑ ↓ choose · Enter confirm · Shift+Enter newline
+          </Text>
         </Flex>
       </Section>
 
-      {/* Panel list */}
-      {loading && !panelGroups ? (
-        <Flex align="center" justify="center" gap="2" py="6">
-          <Spinner />
-          <Text color="gray">Loading panels...</Text>
-        </Flex>
-      ) : error && !panelGroups ? (
-        <Section>
-          <Flex direction="column" gap="3" align="start">
-            <Text color="red" size="2">
-              Failed to load workspace panels: {error}
+      {selectedSuggestion && selectedAction ? (
+        <Card
+          mb="3"
+          style={{
+            background:
+              "linear-gradient(135deg, var(--accent-3), color-mix(in srgb, var(--accent-2) 65%, transparent))",
+            boxShadow: "inset 3px 0 0 var(--accent-9)",
+          }}
+        >
+          <Flex align="center" justify="between" gap="3">
+            <Flex align="center" gap="3" style={{ minWidth: 0 }}>
+              <Box style={{ flexShrink: 0, color: "var(--accent-10)" }}>
+                {selectedSuggestion.kind === "chat" ? (
+                  <MagicWandIcon width={18} height={18} />
+                ) : (
+                  <SuggestionIcon kind={selectedSuggestion.kind} />
+                )}
+              </Box>
+              <Flex direction="column" style={{ minWidth: 0 }}>
+                <Text size="1" color="gray" weight="medium">
+                  ENTER WILL
+                </Text>
+                <Text size="3" weight="bold" truncate>
+                  {selectedAction.title}
+                </Text>
+                <Text size="1" color="gray" truncate>
+                  {selectedAction.detail}
+                </Text>
+              </Flex>
+            </Flex>
+            <Text size="1" weight="bold" style={{ flexShrink: 0, color: "var(--accent-11)" }}>
+              ↵ Enter
             </Text>
-            <Button variant="soft" onClick={() => void fetchData()}>
-              Retry
+          </Flex>
+        </Card>
+      ) : null}
+
+      {loading && !panelGroups && suggestions.length === 0 ? (
+        <Flex align="center" justify="center" gap="2" py="5">
+          <Spinner />
+          <Text color="gray">Loading suggestions...</Text>
+        </Flex>
+      ) : suggestions.length ? (
+        <Box>
+          <Flex align="center" justify="between" mb="2">
+            <Text size="1" color="gray" weight="bold">
+              {promptInput.trim() ? "MATCHING DESTINATIONS" : "FREQUENT DESTINATIONS"}
+            </Text>
+            <Text size="1" color="gray">
+              {suggestions.length} {suggestions.length === 1 ? "option" : "options"}
+            </Text>
+          </Flex>
+          <Flex
+            id="launcher-suggestions"
+            role="listbox"
+            aria-label="Open suggestions"
+            direction="column"
+            gap="2"
+          >
+            {suggestions.map((suggestion, index) => {
+              const selected = index === selectedIndex;
+              return (
+                <Card asChild key={suggestion.id}>
+                  <button
+                    id={"launcher-suggestion-" + index}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    disabled={pendingPath !== null}
+                    onMouseEnter={() => setSelectedIndex(index)}
+                    onClick={() => activateSuggestion(suggestion)}
+                    style={{
+                      width: "100%",
+                      border: 0,
+                      textAlign: "left",
+                      color: "inherit",
+                      cursor: pendingPath ? "default" : "pointer",
+                      background: selected ? "var(--accent-3)" : undefined,
+                      boxShadow: selected ? "inset 0 0 0 1px var(--accent-7)" : undefined,
+                      transition: "background 120ms ease, box-shadow 120ms ease",
+                    }}
+                  >
+                    <Flex align="center" justify="between" gap="3">
+                      <Flex align="center" gap="3" style={{ minWidth: 0 }}>
+                        <Box style={{ flexShrink: 0, color: "var(--accent-9)" }}>
+                          <SuggestionIcon kind={suggestion.kind} />
+                        </Box>
+                        <Flex direction="column" style={{ minWidth: 0 }}>
+                          <Text weight="medium" size="2" truncate>
+                            {suggestionLabel(suggestion)}
+                          </Text>
+                          <Text size="1" color="gray" truncate>
+                            {suggestionMeta(suggestion)}
+                          </Text>
+                        </Flex>
+                      </Flex>
+                      <Text size="1" color="gray" style={{ flexShrink: 0 }}>
+                        {suggestion.kind === "panel"
+                          ? "Panel"
+                          : suggestion.kind === "history"
+                            ? "History"
+                            : suggestion.kind === "url"
+                              ? "Website"
+                              : "Chat"}
+                      </Text>
+                    </Flex>
+                  </button>
+                </Card>
+              );
+            })}
+          </Flex>
+        </Box>
+      ) : (
+        <Text color="gray" size="2">
+          No matching panels or browser history.
+        </Text>
+      )}
+
+      {error ? (
+        <Text color={panelGroups ? "orange" : "red"} size="2" mt="3">
+          {panelGroups ? "The saved panel list may be out of date." : "Panels are unavailable."}{" "}
+          <Button variant="ghost" size="1" onClick={() => void fetchData()}>
+            Retry
+          </Button>
+        </Text>
+      ) : null}
+      {historyError ? (
+        <Text color="orange" size="2" mt="2">
+          Browser history suggestions are unavailable.
+        </Text>
+      ) : null}
+      {navigationError ? (
+        <Section>
+          <Flex direction="column" gap="2" align="start">
+            <Text color="red" size="2">
+              Couldn&apos;t open the selection: {navigationError}
+            </Text>
+            <Button
+              variant="soft"
+              color="red"
+              onClick={() => {
+                const target = lastNavigationRef.current;
+                if (target) beginNavigation(target);
+              }}
+            >
+              Try again
             </Button>
           </Flex>
         </Section>
-      ) : (
-        <Box>
-          {error ? (
-            <Section>
-              <Flex direction="column" gap="2" align="start">
-                <Text color="orange" size="2">
-                  Showing the saved panel list because refreshing it failed: {error}
-                </Text>
-                <Button variant="soft" onClick={() => void fetchData()}>
-                  Refresh
-                </Button>
-              </Flex>
-            </Section>
-          ) : null}
-          {navigationError ? (
-            <Section>
-              <Flex direction="column" gap="2" align="start">
-                <Text color="red" size="2">
-                  Couldn&apos;t open the panel: {navigationError}
-                </Text>
-                <Button
-                  variant="soft"
-                  color="red"
-                  onClick={() => {
-                    const target = lastNavigationRef.current;
-                    if (target) beginNavigation(target.path, target.href);
-                  }}
-                >
-                  Try again
-                </Button>
-              </Flex>
-            </Section>
-          ) : null}
-          <Flex align="center" justify="between" gap="3" mb="3">
-            <Heading size="3">Panels</Heading>
-            <TextField.Root
-              size="2"
-              style={{ width: isMobile ? "50%" : 220 }}
-              placeholder="Filter..."
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && filteredPanels[0]) {
-                  e.preventDefault();
-                  const first = filteredPanels[0];
-                  beginNavigation(first.path, buildPanelLink(first.path));
-                }
-              }}
-              aria-label="Filter panels; press Enter to open the first result"
-            >
-              <TextField.Slot>
-                <MagnifyingGlassIcon />
-              </TextField.Slot>
-            </TextField.Root>
-          </Flex>
-
-          {filteredPanels.length > 0 ? (
-            <Flex direction="column" gap="5">
-              {filteredPanelGroups.panels.length > 0 ? (
-                <Flex direction="column" gap="2">
-                  {filteredPanelGroups.panels.map((node) => (
-                    <PanelCard
-                      key={node.path}
-                      node={node}
-                      pending={pendingPath === node.path}
-                      disabled={pendingPath !== null}
-                      onActivate={beginNavigation}
-                    />
-                  ))}
-                </Flex>
-              ) : null}
-              {filteredPanelGroups.about.length > 0 ? (
-                <Box>
-                  <Heading size="3" mb="3">
-                    About
-                  </Heading>
-                  <Flex direction="column" gap="2">
-                    {filteredPanelGroups.about.map((node) => (
-                      <PanelCard
-                        key={node.path}
-                        node={node}
-                        pending={pendingPath === node.path}
-                        disabled={pendingPath !== null}
-                        onActivate={beginNavigation}
-                      />
-                    ))}
-                  </Flex>
-                </Box>
-              ) : null}
-            </Flex>
-          ) : (
-            <Text color="gray" size="2">
-              {panelCount === 0 ? "No panels found in workspace" : `No panels match "${filter}"`}
-            </Text>
-          )}
-        </Box>
-      )}
+      ) : null}
     </AboutPage>
   );
 }
