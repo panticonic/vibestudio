@@ -9,7 +9,7 @@
  * changes, and its cancellation is the unsubscribe operation.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { events, type EventName, type EventPayloads } from "./client.js";
 
 // Re-export for consumers
@@ -61,8 +61,9 @@ export function useShellEvent<E extends EventName>(
   // Use ref to store the latest callback without triggering effect re-runs
   const callbackRef = useRef(callback);
 
-  // Update ref on every render (no effect trigger)
-  useEffect(() => {
+  // Keep an already-installed listener aligned with this commit. A passive
+  // effect leaves a window where it can dispatch to the previous render.
+  useLayoutEffect(() => {
     callbackRef.current = callback;
   });
 

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { render } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listeners = new Map<string, (payload: unknown) => void>();
@@ -17,6 +18,22 @@ import { useDirectShellEvent } from "./useDirectShellEvent";
 
 function Probe({ onChange }: { onChange: (payload: unknown) => void }) {
   useDirectShellEvent("user-notifications-changed", onChange as never);
+  return null;
+}
+
+function CommitProbe({
+  onChange,
+  payload,
+}: {
+  onChange: (payload: unknown) => void;
+  payload?: unknown;
+}) {
+  useDirectShellEvent("user-notifications-changed", onChange as never);
+  useLayoutEffect(() => {
+    if (payload !== undefined) {
+      listeners.get("user-notifications-changed")?.(payload);
+    }
+  }, [payload]);
   return null;
 }
 
@@ -48,5 +65,16 @@ describe("useDirectShellEvent", () => {
 
     rendered.unmount();
     expect(stopListening).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the current callback for an event delivered during an update commit", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const rendered = render(<CommitProbe onChange={first} />);
+
+    rendered.rerender(<CommitProbe onChange={second} payload={{ changedAt: 20 }} />);
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith({ changedAt: 20 });
   });
 });
