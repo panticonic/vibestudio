@@ -71,8 +71,13 @@ import { dispatchLayoutDrop, parseLayoutDropId } from "../../layout/dropTargets"
 // Constants
 // ============================================================================
 
-/** Indentation width per depth level in pixels */
-export const INDENTATION_WIDTH = 14;
+/**
+ * Indentation width per depth level in pixels. Doubles as the drag-projection
+ * quantum (horizontal offset / this = intended depth change), so it is a floor
+ * on how twitchy re-nesting feels as much as a density knob — the tree gets its
+ * headroom for deep nesting from here, but not below roughly a caret's width.
+ */
+export const INDENTATION_WIDTH = 12;
 
 /** Special ID for the end-of-list drop zone */
 export const END_DROP_ZONE_ID = "__end_drop_zone__";

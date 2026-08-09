@@ -63,13 +63,17 @@ import { ThemeSettings } from "./ThemeSettings";
 // Style Constants
 // ============================================================================
 
-const ROW_HEIGHT = 26;
+// Density is tuned for depth, not for a single row looking comfortable. Every
+// pixel here is paid once per level of nesting, so a tree eight deep in a 260px
+// sidebar has no title left to read. Rows sit at the tightest height a 14px
+// title still centres in.
+const ROW_HEIGHT = 22;
 /** Height of an owner band header row. */
-const OWNER_BAND_HEIGHT = 22;
+const OWNER_BAND_HEIGHT = 18;
 /** Left padding before the caret gutter of a depth-0 row. */
-const ROW_PADDING_LEFT = 8;
+const ROW_PADDING_LEFT = 6;
 /** Fixed-width gutter that holds the expand caret so titles align by depth. */
-const CARET_SLOT = 16;
+const CARET_SLOT = 14;
 const ACTION_BUTTON_SIZE = 18;
 const PANEL_TREE_PAGE_SIZE = 50;
 
@@ -79,7 +83,7 @@ const AUTO_EXPAND_DELAY_MS = 600;
 // Connector geometry: stems sit in the indent gutter and a rounded elbow turns
 // into each child row. Encoded per-row as a `guides` string (see buildGuides).
 /** Horizontal offset of a stem within its indent step. */
-const GUIDE_OFFSET = 6;
+const GUIDE_OFFSET = 5;
 /** Width of the elbow's horizontal run — ends exactly at the row's content. */
 const ELBOW_WIDTH = INDENTATION_WIDTH - GUIDE_OFFSET;
 const ELBOW_RADIUS = 4;
@@ -714,7 +718,7 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
   );
 
   return (
-    <Box p="2">
+    <Box p="1">
       <Button
         variant="soft"
         color="gray"
@@ -732,7 +736,7 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
           belong to the whole app rather than any panel. The switcher is its own
           button so the icon buttons beside it stay separately clickable — a row
           that is itself a button can't contain other buttons. */}
-      <Flex align="center" gap="1" mt="2">
+      <Flex align="center" gap="1" mt="1">
         {activeWorkspaceName ? (
           <Flex
             className="app-tree-workspace app-touch-target"
@@ -1330,11 +1334,11 @@ export function LazyPanelTreeSidebar({
       <Flex
         align="center"
         gap="1"
-        mx="2"
+        mx="1"
         mb="1"
         px="2"
         style={{
-          minHeight: 28,
+          minHeight: 24,
           borderRadius: 5,
           background: "var(--gray-a3)",
           border: "1px solid var(--gray-a5)",
