@@ -26,7 +26,11 @@ import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
-import type { IndexablePanel, PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
+import type {
+  IndexablePanel,
+  PanelSearchResult,
+  PanelSourceUsage,
+} from "@vibestudio/shared/panelSearchTypes";
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
@@ -414,10 +418,10 @@ function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void
 
 export class WorkspaceDO extends DurableObjectBase {
   static override rpcMethods = workspaceStateEngineMethods;
-  static override schemaVersion = 29;
+  static override schemaVersion = 30;
 
   protected override schemaProductionBaseline() {
-    return { version: 29, name: "workspace-state-v29" } as const;
+    return { version: 30, name: "workspace-state-v30" } as const;
   }
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -559,6 +563,13 @@ export class WorkspaceDO extends DurableObjectBase {
         keywords TEXT,
         access_count INTEGER NOT NULL DEFAULT 0,
         last_indexed_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS panel_source_usage (
+        source TEXT PRIMARY KEY,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_accessed_at INTEGER NOT NULL DEFAULT 0
       )
     `);
     this.sql.exec(`
@@ -3263,11 +3274,50 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  panelIncrementAccess(entityId: string): void {
-    this.sql.exec(
-      `UPDATE panel_search_metadata SET access_count = access_count + 1 WHERE slot_id = ?`,
-      entityId
-    );
+  panelIncrementAccess(slotId: string): void {
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE panel_search_metadata SET access_count = access_count + 1 WHERE slot_id = ?`,
+        slotId
+      );
+      const row = this.sql
+        .exec(`SELECT searchable_path FROM panel_search_metadata WHERE slot_id = ?`, slotId)
+        .toArray()[0];
+      const source = row?.["searchable_path"];
+      if (typeof source !== "string" || source.length === 0) return;
+      this.sql.exec(
+        `INSERT INTO panel_source_usage (source, access_count, last_accessed_at)
+         VALUES (?, 1, ?)
+         ON CONFLICT(source) DO UPDATE SET
+           access_count = panel_source_usage.access_count + 1,
+           last_accessed_at = excluded.last_accessed_at`,
+        source,
+        Date.now()
+      );
+    });
+  }
+
+  @schemaRpc()
+  panelSourceUsage(limit = 200): PanelSourceUsage[] {
+    const boundedLimit = Math.max(1, Math.min(200, limit));
+    const rows = this.sql
+      .exec(
+        `SELECT source, access_count, last_accessed_at
+           FROM panel_source_usage
+          ORDER BY access_count DESC, last_accessed_at DESC, source ASC
+          LIMIT ?`,
+        boundedLimit
+      )
+      .toArray() as Array<{
+      source: string;
+      access_count: number;
+      last_accessed_at: number;
+    }>;
+    return rows.map((row) => ({
+      source: row.source,
+      accessCount: row.access_count,
+      lastAccessedAt: row.last_accessed_at,
+    }));
   }
 
   /**

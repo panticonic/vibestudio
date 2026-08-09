@@ -172,6 +172,7 @@ export const panelTree: PanelTreeApi = {
   page: (input) => getRuntime().panelTree.page(input),
   path: (id) => getRuntime().panelTree.path(id),
   search: (input) => getRuntime().panelTree.search(input),
+  sourceUsage: (limit) => getRuntime().panelTree.sourceUsage(limit),
   parent: (id) => getRuntime().panelTree.parent(id),
   navigate: (id, source, options) => getRuntime().panelTree.navigate(id, source, options),
   navigateHistory: (id, delta) => getRuntime().panelTree.navigateHistory(id, delta),

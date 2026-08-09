@@ -9,7 +9,7 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import type { PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
+import type { PanelSearchResult, PanelSourceUsage } from "@vibestudio/shared/panelSearchTypes";
 import type {
   WorkspacePanelDetail,
   WorkspacePanelTreePage,
@@ -246,6 +246,8 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         dispatch<undefined>("slotCloseCleanupAck", [slotIds]),
       "panel.search": (_ctx, [query, limit]) =>
         dispatch<PanelSearchResult[]>("panelSearch", [query, limit]),
+      "panel.sourceUsage": (_ctx, [limit]) =>
+        dispatch<PanelSourceUsage[]>("panelSourceUsage", [limit]),
       "panel.index": async (_ctx, [input]) => {
         const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [input.id]);
         if (detail?.entity.id && deps.isEntityTitleExplicit?.(detail.entity.id)) {

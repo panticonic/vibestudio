@@ -17,6 +17,13 @@ export interface PanelSearchResult {
   matchContext?: string;
 }
 
+/** Durable, source-level launch frequency shared by every workspace client. */
+export interface PanelSourceUsage {
+  source: string;
+  accessCount: number;
+  lastAccessedAt: number;
+}
+
 export interface IndexablePanel {
   id: string;
   title: string;

@@ -216,6 +216,14 @@ const PanelTreeNodeSchema = z
   })
   .strict();
 
+const PanelSourceUsageSchema = z
+  .object({
+    source: z.string(),
+    accessCount: z.number().int().nonnegative(),
+    lastAccessedAt: z.number().nonnegative(),
+  })
+  .strict();
+
 export const PanelTreePageInputSchema = z
   .object({
     group: PanelTreeGroupSchema,
@@ -742,6 +750,23 @@ export const workspaceStateMethods = defineServiceMethods({
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: z.array(PanelSearchResultSchema),
+  },
+  "panel.sourceUsage": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Workspace-member aggregate panel usage read; no C1-C4 or G1-G5 rule applies",
+    },
+    args: z.tuple([z.number().int().positive().max(200).optional()]),
+    description: "Durable source-level panel launch frequency for launcher ranking.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: z.array(PanelSourceUsageSchema),
   },
   "panel.index": {
     agentFacing: false,

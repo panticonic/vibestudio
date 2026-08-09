@@ -1,4 +1,5 @@
 import type { RpcClient } from "@vibestudio/rpc";
+import type { PanelSourceUsage } from "@vibestudio/shared/panelSearchTypes";
 import type { PanelLifecycleResult, PanelPlacementHint } from "@vibestudio/shared/types";
 import type {
   PanelTreeNode,
@@ -139,6 +140,8 @@ export interface PanelRuntimeTree {
   page(input: PanelTreePageInput): Promise<PanelRuntimeTreePage>;
   path(id: string): Promise<PanelRuntimeTreePath | null>;
   search(input: PanelTreeSearchInput): Promise<PanelRuntimeTreeSearchPage>;
+  /** Durable, workspace-wide launch frequency grouped by panel source. */
+  sourceUsage(limit?: number): Promise<PanelSourceUsage[]>;
   parent(id: string): PanelHandle | null;
   navigate(id: string, source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
   navigateHistory(
@@ -1267,6 +1270,9 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         })),
         nextCursor: page.nextCursor,
       };
+    },
+    sourceUsage(limit = 200) {
+      return callState<PanelSourceUsage[]>("panel.sourceUsage", [limit]);
     },
     parent(id) {
       const parentId =

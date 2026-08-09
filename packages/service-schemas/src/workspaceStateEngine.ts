@@ -556,6 +556,7 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     returns: z.array(z.object({ id: z.string().min(1), title: z.string() }).strict()),
   },
   panelSearch: { ...workspaceStateMethods["panel.search"] },
+  panelSourceUsage: { ...workspaceStateMethods["panel.sourceUsage"] },
   panelRebuildIndex: { ...workspaceStateMethods["panel.rebuildIndex"] },
 });
 

@@ -155,6 +155,13 @@ export class WorkspaceDOTestable extends WorkspaceDO {
       )
     `);
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS panel_source_usage (
+        source TEXT PRIMARY KEY,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_accessed_at INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS workspace_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL

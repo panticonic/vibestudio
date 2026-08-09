@@ -350,6 +350,8 @@ function runtimeHarness(
             ],
             nextCursor: null,
           } as T;
+        case "workspace-state.panel.sourceUsage":
+          return [{ source: "panels/terminal", accessCount: 12, lastAccessedAt: 1234 }] as T;
         case "workspace-state.panelTree.path":
           return {
             revision: 17,
@@ -903,6 +905,15 @@ describe("panel runtime topology composition", () => {
     expect(call).toHaveBeenCalledWith("main", "workspace-state.panelTree.page", [
       { group: { kind: "roots", ownerUserId: "usr-other" }, limit: 10 },
     ]);
+  });
+
+  it("reads bounded durable source usage through the panel tree", async () => {
+    const { runtime, call } = runtimeHarness();
+
+    await expect(runtime.panelTree.sourceUsage(25)).resolves.toEqual([
+      { source: "panels/terminal", accessCount: 12, lastAccessedAt: 1234 },
+    ]);
+    expect(call).toHaveBeenCalledWith("main", "workspace-state.panel.sourceUsage", [25]);
   });
 
   it("renames an arbitrary slot directly on the builtin topology owner", async () => {

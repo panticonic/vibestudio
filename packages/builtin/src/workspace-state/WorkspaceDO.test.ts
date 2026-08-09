@@ -1779,6 +1779,13 @@ describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
     instance.panelIncrementAccess("slot-1");
     instance.panelIncrementAccess("slot-1");
     expect(readMetadata("slot-1")?.["access_count"]).toBe(3);
+    expect(instance.panelSourceUsage()).toEqual([
+      {
+        source: "/projects/foo",
+        accessCount: 3,
+        lastAccessedAt: expect.any(Number),
+      },
+    ]);
   });
 
   it("entitySetDisplayTitle works for non-panel entities and clears with null/empty", () => {

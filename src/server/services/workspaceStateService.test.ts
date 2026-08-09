@@ -429,6 +429,7 @@ describe("workspaceStateService — slot-state change hook", () => {
     ["entity.resolveActive", ["e1"]],
     ["entity.resolve", ["e1"]],
     ["panel.search", ["q", 10]],
+    ["panel.sourceUsage", [20]],
     ["panel.incrementAccess", ["e1"]],
   ];
 
