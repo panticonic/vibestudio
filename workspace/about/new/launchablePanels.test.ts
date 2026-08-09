@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceNode } from "@workspace/runtime";
-import { collectLaunchablePanels } from "./launchablePanels";
+import { collectLaunchablePanelGroups } from "./launchablePanels";
 
 function node(
   path: string,
@@ -28,9 +28,9 @@ function node(
   };
 }
 
-describe("collectLaunchablePanels", () => {
-  it("returns only visible panel targets", () => {
-    const panels = collectLaunchablePanels([
+describe("collectLaunchablePanelGroups", () => {
+  it("groups visible panel targets by workspace source", () => {
+    const groups = collectLaunchablePanelGroups([
       node("panels", {
         children: [
           node("panels/terminal", { launchable: true, title: "Terminal" }),
@@ -39,17 +39,17 @@ describe("collectLaunchablePanels", () => {
         ],
       }),
       node("about", {
-        children: [node("about/help", { launchable: true, title: "Help" })],
+        children: [
+          node("about/help", { launchable: true, title: "Help" }),
+          node("about/about", { launchable: true, title: "About Vibestudio" }),
+        ],
       }),
       node("skills/example"),
       node("extensions/example"),
       node("workers/agent", { launchable: true, title: "Agent" }),
     ]);
 
-    expect(panels.map((panel) => panel.path)).toEqual([
-      "panels/chat",
-      "about/help",
-      "panels/terminal",
-    ]);
+    expect(groups.panels.map((panel) => panel.path)).toEqual(["panels/chat", "panels/terminal"]);
+    expect(groups.about.map((panel) => panel.path)).toEqual(["about/about", "about/help"]);
   });
 });

@@ -15,7 +15,7 @@ import { buildPanelLink, panel, workspace } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react/responsive";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
 import type { WorkspaceTree, WorkspaceNode } from "@workspace/runtime";
-import { collectLaunchablePanels } from "./launchablePanels";
+import { collectLaunchablePanelGroups } from "./launchablePanels";
 
 function PanelCard({
   node,
@@ -161,17 +161,25 @@ function NewPanelPage() {
     );
   }, [beginNavigation, pendingPath, promptInput]);
 
-  const panels = useMemo(() => (tree ? collectLaunchablePanels(tree.children) : []), [tree]);
+  const panelGroups = useMemo(
+    () => (tree ? collectLaunchablePanelGroups(tree.children) : { panels: [], about: [] }),
+    [tree]
+  );
 
-  const filteredPanels = useMemo(() => {
+  const filteredPanelGroups = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    if (!query) return panels;
-    return panels.filter(
-      (node) =>
-        node.path.toLowerCase().includes(query) ||
-        (node.launchable?.title ?? node.name).toLowerCase().includes(query)
-    );
-  }, [panels, filter]);
+    if (!query) return panelGroups;
+    const matches = (node: WorkspaceNode) =>
+      node.path.toLowerCase().includes(query) ||
+      (node.launchable?.title ?? node.name).toLowerCase().includes(query);
+    return {
+      panels: panelGroups.panels.filter(matches),
+      about: panelGroups.about.filter(matches),
+    };
+  }, [panelGroups, filter]);
+
+  const filteredPanels = [...filteredPanelGroups.panels, ...filteredPanelGroups.about];
+  const panelCount = panelGroups.panels.length + panelGroups.about.length;
 
   return (
     <AboutPage icon={<PlusIcon width={20} height={20} />} title="New Panel" maxWidth={640}>
@@ -260,20 +268,42 @@ function NewPanelPage() {
           </Flex>
 
           {filteredPanels.length > 0 ? (
-            <Flex direction="column" gap="2">
-              {filteredPanels.map((node) => (
-                <PanelCard
-                  key={node.path}
-                  node={node}
-                  pending={pendingPath === node.path}
-                  disabled={pendingPath !== null}
-                  onActivate={beginNavigation}
-                />
-              ))}
+            <Flex direction="column" gap="5">
+              {filteredPanelGroups.panels.length > 0 ? (
+                <Flex direction="column" gap="2">
+                  {filteredPanelGroups.panels.map((node) => (
+                    <PanelCard
+                      key={node.path}
+                      node={node}
+                      pending={pendingPath === node.path}
+                      disabled={pendingPath !== null}
+                      onActivate={beginNavigation}
+                    />
+                  ))}
+                </Flex>
+              ) : null}
+              {filteredPanelGroups.about.length > 0 ? (
+                <Box>
+                  <Heading size="3" mb="3">
+                    About
+                  </Heading>
+                  <Flex direction="column" gap="2">
+                    {filteredPanelGroups.about.map((node) => (
+                      <PanelCard
+                        key={node.path}
+                        node={node}
+                        pending={pendingPath === node.path}
+                        disabled={pendingPath !== null}
+                        onActivate={beginNavigation}
+                      />
+                    ))}
+                  </Flex>
+                </Box>
+              ) : null}
             </Flex>
           ) : (
             <Text color="gray" size="2">
-              {panels.length === 0 ? "No panels found in workspace" : `No panels match "${filter}"`}
+              {panelCount === 0 ? "No panels found in workspace" : `No panels match "${filter}"`}
             </Text>
           )}
         </Box>

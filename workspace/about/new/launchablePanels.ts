@@ -1,19 +1,31 @@
 import type { WorkspaceNode } from "@workspace/runtime";
 
-/** Flatten a workspace tree into the visible entries this panel can launch. */
-export function collectLaunchablePanels(nodes: WorkspaceNode[]): WorkspaceNode[] {
-  const result: WorkspaceNode[] = [];
-  for (const node of nodes) {
-    if (
-      node.launchable &&
-      !node.launchable.hidden &&
-      (node.path.startsWith("panels/") || node.path.startsWith("about/"))
-    ) {
-      result.push(node);
+export interface LaunchablePanelGroups {
+  panels: WorkspaceNode[];
+  about: WorkspaceNode[];
+}
+
+const byTitle = (a: WorkspaceNode, b: WorkspaceNode) =>
+  (a.launchable?.title ?? a.name).localeCompare(b.launchable?.title ?? b.name);
+
+/** Collect visible launch targets into the categories shown by the launcher. */
+export function collectLaunchablePanelGroups(nodes: WorkspaceNode[]): LaunchablePanelGroups {
+  const groups: LaunchablePanelGroups = { panels: [], about: [] };
+
+  const visit = (node: WorkspaceNode) => {
+    if (node.launchable && !node.launchable.hidden) {
+      if (node.path.startsWith("panels/")) groups.panels.push(node);
+      else if (node.path.startsWith("about/")) groups.about.push(node);
     }
-    result.push(...collectLaunchablePanels(node.children));
+
+    node.children.forEach(visit);
+  };
+
+  for (const node of nodes) {
+    visit(node);
   }
-  return result.sort((a, b) =>
-    (a.launchable?.title ?? a.name).localeCompare(b.launchable?.title ?? b.name)
-  );
+
+  groups.panels.sort(byTitle);
+  groups.about.sort(byTitle);
+  return groups;
 }
