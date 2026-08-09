@@ -14,26 +14,41 @@ import { isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { discoverPackageGraph, type GraphNode } from "../buildV2/packageGraph.js";
 import { readWorkspaceSkillEntry } from "./workspaceSkills.js";
 
-interface ScanCache {
-  tree: WorkspaceTree;
-  at: number;
+interface InFlightScan {
+  generation: number;
+  promise: Promise<WorkspaceTree>;
 }
 
-const TREE_CACHE_TTL_MS = 2_000;
-
 export class WorkspaceTreeScanner {
-  private cache: ScanCache | null = null;
+  private cache: WorkspaceTree | null = null;
+  private inFlight: InFlightScan | null = null;
+  private generation = 0;
 
   constructor(private readonly sourceRoot: string | (() => Promise<string>)) {}
 
   invalidate(): void {
     this.cache = null;
+    this.generation += 1;
   }
 
   async getSourceTree(): Promise<WorkspaceTree> {
-    if (this.cache && Date.now() - this.cache.at < TREE_CACHE_TTL_MS) {
-      return this.cache.tree;
+    // The source root is an immutable semantic projection. Protected
+    // publications explicitly invalidate this scanner, so a time-based expiry
+    // only turns an unchanged catalog into repeated materialization and I/O.
+    if (this.cache) return this.cache;
+    if (this.inFlight?.generation === this.generation) return this.inFlight.promise;
+
+    const generation = this.generation;
+    const promise = this.scan(generation);
+    this.inFlight = { generation, promise };
+    try {
+      return await promise;
+    } finally {
+      if (this.inFlight?.promise === promise) this.inFlight = null;
     }
+  }
+
+  private async scan(generation: number): Promise<WorkspaceTree> {
     const workspaceRoot =
       typeof this.sourceRoot === "string" ? this.sourceRoot : await this.sourceRoot();
     const graphByPath = new Map(
@@ -85,7 +100,10 @@ export class WorkspaceTreeScanner {
       }
     }
     const tree: WorkspaceTree = { children };
-    this.cache = { tree, at: Date.now() };
+    // A publication may have landed while the old projection was being read.
+    // Return that request's coherent result, but never install it as the cache
+    // for the newer generation.
+    if (generation === this.generation) this.cache = tree;
     return tree;
   }
 
