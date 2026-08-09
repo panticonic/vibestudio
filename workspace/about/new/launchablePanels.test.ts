@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceNode } from "@workspace/runtime";
-import { collectLaunchablePanelGroups } from "./launchablePanels";
+import {
+  collectLaunchablePanelGroups,
+  parseCachedLaunchablePanelGroups,
+  serializeLaunchablePanelGroups,
+} from "./launchablePanels";
 
 function node(
   path: string,
@@ -49,7 +53,42 @@ describe("collectLaunchablePanelGroups", () => {
       node("workers/agent", { launchable: true, title: "Agent" }),
     ]);
 
-    expect(groups.panels.map((panel) => panel.path)).toEqual(["panels/chat", "panels/terminal"]);
-    expect(groups.about.map((panel) => panel.path)).toEqual(["about/about", "about/help"]);
+    expect(groups).toEqual({
+      panels: [
+        { path: "panels/chat", title: "Chat" },
+        { path: "panels/terminal", title: "Terminal" },
+      ],
+      about: [
+        { path: "about/about", title: "About Vibestudio" },
+        { path: "about/help", title: "Help" },
+      ],
+    });
+  });
+
+  it("round-trips the small launcher projection through its versioned cache", () => {
+    const groups = {
+      panels: [{ path: "panels/chat", title: "Chat", description: "Start a chat" }],
+      about: [{ path: "about/help", title: "Help" }],
+    };
+
+    expect(parseCachedLaunchablePanelGroups(serializeLaunchablePanelGroups(groups))).toEqual(
+      groups
+    );
+  });
+
+  it("ignores malformed, obsolete, and cross-namespace cache entries", () => {
+    expect(parseCachedLaunchablePanelGroups("not json")).toBeNull();
+    expect(parseCachedLaunchablePanelGroups(JSON.stringify({ version: 0, groups: {} }))).toBeNull();
+    expect(
+      parseCachedLaunchablePanelGroups(
+        JSON.stringify({
+          version: 1,
+          groups: {
+            panels: [{ path: "workers/agent", title: "Agent" }],
+            about: [],
+          },
+        })
+      )
+    ).toBeNull();
   });
 });

@@ -14,8 +14,32 @@ import {
 import { buildPanelLink, panel, workspace } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react/responsive";
 import { AboutThemeRoot, AboutPage, Section } from "@workspace/about-shared/ui";
-import type { WorkspaceTree, WorkspaceNode } from "@workspace/runtime";
-import { collectLaunchablePanelGroups } from "./launchablePanels";
+import {
+  collectLaunchablePanelGroups,
+  LAUNCHABLE_PANEL_CACHE_KEY,
+  parseCachedLaunchablePanelGroups,
+  serializeLaunchablePanelGroups,
+  type LaunchablePanel,
+  type LaunchablePanelGroups,
+} from "./launchablePanels";
+
+function readCachedPanelGroups(): LaunchablePanelGroups | null {
+  try {
+    return parseCachedLaunchablePanelGroups(
+      window.localStorage.getItem(LAUNCHABLE_PANEL_CACHE_KEY)
+    );
+  } catch {
+    return null;
+  }
+}
+
+function cachePanelGroups(groups: LaunchablePanelGroups): void {
+  try {
+    window.localStorage.setItem(LAUNCHABLE_PANEL_CACHE_KEY, serializeLaunchablePanelGroups(groups));
+  } catch {
+    // Storage is an optimization; the authoritative source-tree read still works without it.
+  }
+}
 
 function PanelCard({
   node,
@@ -23,7 +47,7 @@ function PanelCard({
   disabled,
   onActivate,
 }: {
-  node: WorkspaceNode;
+  node: LaunchablePanel;
   pending: boolean;
   disabled: boolean;
   onActivate: (path: string, href: string) => void;
@@ -65,10 +89,10 @@ function PanelCard({
             style={{ minWidth: 0 }}
           >
             <Text weight="medium" size="2">
-              {node.launchable?.title ?? node.name}
+              {node.title}
             </Text>
             <Text size="1" color="gray">
-              {node.launchable?.description ?? `Open ${node.launchable?.title ?? node.name}`}
+              {node.description ?? `Open ${node.title}`}
             </Text>
           </Flex>
           {pending ? (
@@ -84,26 +108,32 @@ function PanelCard({
 
 function NewPanelPage() {
   const isMobile = useIsMobile();
-  const [tree, setTree] = useState<WorkspaceTree | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [panelGroups, setPanelGroups] = useState<LaunchablePanelGroups | null>(
+    readCachedPanelGroups
+  );
+  const [loading, setLoading] = useState(panelGroups === null);
   const [error, setError] = useState<string | null>(null);
   const [promptInput, setPromptInput] = useState("");
   const [filter, setFilter] = useState("");
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
+  const hasPanelGroupsRef = useRef(panelGroups !== null);
   const lastFetchStartedAtRef = useRef(0);
   const navigationStartedRef = useRef(false);
   const lastNavigationRef = useRef<{ path: string; href: string } | null>(null);
 
-  const fetchData = useCallback((force = false): Promise<void> => {
-    if (!force && fetchInFlightRef.current) return fetchInFlightRef.current;
+  const fetchData = useCallback((): Promise<void> => {
+    if (fetchInFlightRef.current) return fetchInFlightRef.current;
 
     lastFetchStartedAtRef.current = Date.now();
-    setLoading(true);
+    if (!hasPanelGroupsRef.current) setLoading(true);
     const request = (async () => {
       try {
-        setTree(await workspace.sourceTree());
+        const groups = collectLaunchablePanelGroups((await workspace.sourceTree()).children);
+        hasPanelGroupsRef.current = true;
+        setPanelGroups(groups);
+        cachePanelGroups(groups);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -161,17 +191,12 @@ function NewPanelPage() {
     );
   }, [beginNavigation, pendingPath, promptInput]);
 
-  const panelGroups = useMemo(
-    () => (tree ? collectLaunchablePanelGroups(tree.children) : { panels: [], about: [] }),
-    [tree]
-  );
-
   const filteredPanelGroups = useMemo(() => {
+    if (!panelGroups) return { panels: [], about: [] };
     const query = filter.trim().toLowerCase();
     if (!query) return panelGroups;
-    const matches = (node: WorkspaceNode) =>
-      node.path.toLowerCase().includes(query) ||
-      (node.launchable?.title ?? node.name).toLowerCase().includes(query);
+    const matches = (node: LaunchablePanel) =>
+      node.path.toLowerCase().includes(query) || node.title.toLowerCase().includes(query);
     return {
       panels: panelGroups.panels.filter(matches),
       about: panelGroups.about.filter(matches),
@@ -179,7 +204,7 @@ function NewPanelPage() {
   }, [panelGroups, filter]);
 
   const filteredPanels = [...filteredPanelGroups.panels, ...filteredPanelGroups.about];
-  const panelCount = panelGroups.panels.length + panelGroups.about.length;
+  const panelCount = (panelGroups?.panels.length ?? 0) + (panelGroups?.about.length ?? 0);
 
   return (
     <AboutPage icon={<PlusIcon width={20} height={20} />} title="New Panel" maxWidth={640}>
@@ -207,24 +232,36 @@ function NewPanelPage() {
       </Section>
 
       {/* Panel list */}
-      {loading ? (
+      {loading && !panelGroups ? (
         <Flex align="center" justify="center" gap="2" py="6">
           <Spinner />
           <Text color="gray">Loading panels...</Text>
         </Flex>
-      ) : error ? (
+      ) : error && !panelGroups ? (
         <Section>
           <Flex direction="column" gap="3" align="start">
             <Text color="red" size="2">
               Failed to load workspace panels: {error}
             </Text>
-            <Button variant="soft" onClick={() => void fetchData(true)}>
+            <Button variant="soft" onClick={() => void fetchData()}>
               Retry
             </Button>
           </Flex>
         </Section>
       ) : (
         <Box>
+          {error ? (
+            <Section>
+              <Flex direction="column" gap="2" align="start">
+                <Text color="orange" size="2">
+                  Showing the saved panel list because refreshing it failed: {error}
+                </Text>
+                <Button variant="soft" onClick={() => void fetchData()}>
+                  Refresh
+                </Button>
+              </Flex>
+            </Section>
+          ) : null}
           {navigationError ? (
             <Section>
               <Flex direction="column" gap="2" align="start">
