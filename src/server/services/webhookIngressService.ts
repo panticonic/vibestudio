@@ -34,6 +34,7 @@ import {
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
+import type { ContextIntegrityFact } from "@vibestudio/rpc";
 
 /**
  * Skew tolerance for the authenticated backhaul frame timestamp. Generous fail-loud backstop:
@@ -171,7 +172,11 @@ export interface WebhookIngressServiceDeps {
     repoPath: string;
   } | null>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-  dispatchToTarget?: (target: WebhookTarget, event: WebhookDeliveryEvent) => Promise<unknown>;
+  dispatchToTarget?: (
+    target: WebhookTarget,
+    event: WebhookDeliveryEvent,
+    verifiedExternalContext: ContextIntegrityFact
+  ) => Promise<unknown>;
   /** Backhaul registrar; relay-mode subscriptions register through it. */
   relayRegistrar?: WebhookRelayRegistrar;
 }
@@ -492,7 +497,18 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     };
     if (deps.dispatchToTarget) {
       try {
-        await deps.dispatchToTarget(subscription.target, event);
+        await deps.dispatchToTarget(
+          subscription.target,
+          event,
+          verifiedWebhookExternalContext({
+            subscriptionId: subscription.subscriptionId,
+            transport: "relay",
+            deliveryReceipt: `${frame.deliveryId}:${crypto
+              .createHash("sha256")
+              .update(rawBody)
+              .digest("hex")}`,
+          })
+        );
       } catch (err) {
         if (subscription.response.dispatchError === "ack") {
           return remember(
@@ -595,7 +611,15 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     };
     if (deps.dispatchToTarget) {
       try {
-        await deps.dispatchToTarget(subscription.target, event);
+        await deps.dispatchToTarget(
+          subscription.target,
+          event,
+          verifiedWebhookExternalContext({
+            subscriptionId: subscription.subscriptionId,
+            transport: "direct",
+            deliveryReceipt: crypto.createHash("sha256").update(rawBody).digest("hex"),
+          })
+        );
       } catch (err) {
         if (subscription.response.dispatchError === "ack") {
           return sendAccepted(res, subscription, {
@@ -697,6 +721,27 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       },
     },
   };
+}
+
+function verifiedWebhookExternalContext(input: {
+  subscriptionId: string;
+  transport: "direct" | "relay";
+  deliveryReceipt: string;
+}): ContextIntegrityFact {
+  const digest = crypto
+    .createHash("sha256")
+    .update("vibestudio-verified-webhook-ingress-v1\0")
+    .update(input.subscriptionId)
+    .update("\0")
+    .update(input.transport)
+    .update("\0")
+    .update(input.deliveryReceipt)
+    .digest("hex");
+  return Object.freeze({
+    class: "external" as const,
+    latchEpoch: 0,
+    externalKeys: Object.freeze([`api:webhook:${digest}`]),
+  });
 }
 
 function isReplay(

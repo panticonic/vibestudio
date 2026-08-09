@@ -6,9 +6,10 @@ import type {
   RpcStreamOptions,
   RpcStreamRequest,
 } from "./types.js";
-import type { DirectAuthorityAttestation } from "./authority.js";
+import type { ContextIntegrityFact, DirectAuthorityAttestation } from "./authority.js";
 
 const EXECUTION_SESSION_NONCE = Symbol.for("vibestudio.rpc.executionSessionNonce");
+const VERIFIED_EXTERNAL_CONTEXT = Symbol.for("vibestudio.rpc.verifiedExternalContext");
 
 /**
  * Bind one trusted runtime-created options object to a live evaluated-execution
@@ -35,6 +36,53 @@ export function executionSessionNonceFor(
   if (!options) return undefined;
   const nonce = (options as Record<PropertyKey, unknown>)[EXECUTION_SESSION_NONCE];
   return typeof nonce === "string" ? nonce : undefined;
+}
+
+/**
+ * Attach one host-verified external ingress fact to an in-process call.
+ *
+ * Like evaluated-execution admission, this rides a non-enumerable runtime-only
+ * property. JSON/wire callers therefore cannot copy, forge, or downgrade it.
+ * The receiver gets an immutable copy so later mutation cannot change the
+ * authority fact after the host verification boundary has accepted it.
+ */
+export function bindVerifiedExternalContext<T extends RpcCallOptions>(
+  options: T,
+  fact: ContextIntegrityFact
+): T {
+  if (
+    fact.class !== "external" ||
+    !Number.isSafeInteger(fact.latchEpoch) ||
+    fact.latchEpoch < 0 ||
+    fact.externalKeys.length < 1 ||
+    fact.externalKeys.length > 256 ||
+    !fact.externalKeys.every(
+      (key) => typeof key === "string" && key.length > 0 && key.length <= 1_024
+    )
+  ) {
+    throw new TypeError("Verified external context must contain bounded external lineage");
+  }
+  const sealed = Object.freeze({
+    class: "external" as const,
+    latchEpoch: fact.latchEpoch,
+    externalKeys: Object.freeze([...new Set(fact.externalKeys)]),
+  });
+  Object.defineProperty(options, VERIFIED_EXTERNAL_CONTEXT, {
+    value: sealed,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return options;
+}
+
+/** Host-side accessor for the runtime-only fact bound above. */
+export function verifiedExternalContextFor(
+  options: RpcCallOptions | undefined
+): ContextIntegrityFact | null {
+  if (!options) return null;
+  const fact = (options as Record<PropertyKey, unknown>)[VERIFIED_EXTERNAL_CONTEXT];
+  return fact && typeof fact === "object" ? (fact as ContextIntegrityFact) : null;
 }
 
 /** Authenticated transport caller before it is sanitized for user handlers. */

@@ -451,7 +451,7 @@ describe("PubSubChannel", () => {
     caller.authorization.context.contextIntegrity = {
       class: "external",
       latchEpoch: 2,
-      externalKeys: ["web:example.com", "msg:source/earlier"],
+      externalKeys: [`api:webhook:${"a".repeat(64)}`, "web:example.com", "msg:source/earlier"],
     };
 
     await instance.subscribe("agent:outside", {
@@ -475,7 +475,7 @@ describe("PubSubChannel", () => {
 
     expect(envelope).toMatchObject({
       contentClass: "external",
-      externalKeys: ["web:example.com", "msg:source/earlier"],
+      externalKeys: [`api:webhook:${"a".repeat(64)}`, "web:example.com", "msg:source/earlier"],
     });
   });
 

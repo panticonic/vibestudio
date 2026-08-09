@@ -407,6 +407,12 @@ export type ServiceContext = {
    * can never populate this field.
    */
   attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
+  /**
+   * Invocation-scoped outside lineage inherited from a host-verified ingress
+   * or exact active authority parent. Boundary code owns this field; service
+   * arguments and wire metadata can never populate it.
+   */
+  inheritedContextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact;
   /** Verified root initiator for prompts/audit when a deputy (notably EvalDO)
    * transports the operation. Domain routing still uses `caller`. */
   authorizingCaller?: VerifiedCaller;

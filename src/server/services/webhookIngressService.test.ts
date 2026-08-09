@@ -21,6 +21,7 @@ import {
   WEBHOOK_HARD_MAX_BODY_BYTES,
 } from "../../../packages/shared/src/webhooks/ingress.js";
 import { resolveWebhookDirectMaxBodyBytes } from "./webhookIngressService.js";
+import type { ContextIntegrityFact } from "@vibestudio/rpc";
 
 const RELAY_BASE_URL = "https://hooks.test";
 const DIRECT_BASE_URL = "https://direct.test";
@@ -148,7 +149,11 @@ function buildRelayFrame(opts: {
 
 function setup(extra: Partial<WebhookIngressServiceDeps> = {}) {
   const store = new InMemoryWebhookIngressStore();
-  const dispatched: Array<{ target: WebhookTarget; event: WebhookDeliveryEvent }> = [];
+  const dispatched: Array<{
+    target: WebhookTarget;
+    event: WebhookDeliveryEvent;
+    verifiedExternalContext: ContextIntegrityFact;
+  }> = [];
   const registered: string[] = [];
   const unregistered: string[] = [];
   const svc = createWebhookIngressService({
@@ -159,8 +164,8 @@ function setup(extra: Partial<WebhookIngressServiceDeps> = {}) {
       registerWebhook: (id) => registered.push(id),
       unregisterWebhook: (id) => unregistered.push(id),
     },
-    dispatchToTarget: async (target, event) => {
-      dispatched.push({ target, event });
+    dispatchToTarget: async (target, event, verifiedExternalContext) => {
+      dispatched.push({ target, event, verifiedExternalContext });
     },
     ...extra,
   });
@@ -608,6 +613,13 @@ describe("webhookIngressService — public ingress route", () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]!.target).toEqual(TARGET);
     expect(dispatched[0]!.event.payload).toEqual({ type: "json", json: { event: "push" } });
+    expect(dispatched[0]!.verifiedExternalContext).toEqual({
+      class: "external",
+      latchEpoch: 0,
+      externalKeys: [expect.stringMatching(/^api:webhook:[a-f0-9]{64}$/)],
+    });
+    expect(Object.isFrozen(dispatched[0]!.verifiedExternalContext)).toBe(true);
+    expect(Object.isFrozen(dispatched[0]!.verifiedExternalContext.externalKeys)).toBe(true);
 
     // A relay RETRY of the SAME deliveryId re-acks the cached response without re-dispatching.
     const retry = await svc.internal.deliverRelayWebhook(frame);
@@ -858,6 +870,47 @@ describe("webhookIngressService — public ingress route", () => {
       type: "json",
       json: { provider: "direct" },
     });
+    expect(dispatched[0]!.verifiedExternalContext).toEqual({
+      class: "external",
+      latchEpoch: 0,
+      externalKeys: [expect.stringMatching(/^api:webhook:[a-f0-9]{64}$/)],
+    });
+  });
+
+  it("dispatches a valid direct HMAC with sealed lineage and appends nothing for a bad signature", async () => {
+    const { svc, dispatched } = setup();
+    const sub = await provision(
+      svc,
+      { type: "hmac-sha256", headerName: "X-Sig", secret: "direct-secret", prefix: "sha256=" },
+      undefined,
+      { delivery: { mode: "direct" }, payload: { type: "json" } }
+    );
+    const body = Buffer.from('{"contentClass":"internal","externalKeys":[]}');
+    const path = `/_r/s/webhookIngress/${sub.subscriptionId}`;
+    const valid = createMockReqRes("POST", path, body, {
+      "x-sig": `sha256=${crypto.createHmac("sha256", "direct-secret").update(body).digest("hex")}`,
+    });
+    await findRoute(svc)(valid.req, valid.res, { subscriptionId: sub.subscriptionId });
+
+    expect(valid.captured.status).toBe(202);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]!.verifiedExternalContext).toMatchObject({
+      class: "external",
+      externalKeys: [expect.stringMatching(/^api:webhook:[a-f0-9]{64}$/)],
+    });
+
+    const validAgain = createMockReqRes("POST", path, body, {
+      "x-sig": `sha256=${crypto.createHmac("sha256", "direct-secret").update(body).digest("hex")}`,
+    });
+    await findRoute(svc)(validAgain.req, validAgain.res, { subscriptionId: sub.subscriptionId });
+    expect(dispatched[1]!.verifiedExternalContext.externalKeys).toEqual(
+      dispatched[0]!.verifiedExternalContext.externalKeys
+    );
+
+    const invalid = createMockReqRes("POST", path, body, { "x-sig": "sha256=wrong" });
+    await findRoute(svc)(invalid.req, invalid.res, { subscriptionId: sub.subscriptionId });
+    expect(invalid.captured.status).toBe(401);
+    expect(dispatched).toHaveLength(2);
   });
 
   it("decodes Cloud Pub/Sub envelopes generically", async () => {

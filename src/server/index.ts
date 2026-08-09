@@ -55,6 +55,7 @@ import {
 } from "./workspaceUnitDeclarationFingerprint.js";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
+import { joinContextIntegrity } from "@vibestudio/shared/authority/contextIntegrity";
 import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import { hostBuildOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
 import { WorkspaceRpcMethodUndeclaredError } from "./workspaceRpcCatalogMismatch.js";
@@ -976,7 +977,7 @@ async function main() {
           resourceKey,
           tier,
           reviewedClosure,
-          contextIntegrity:
+          contextIntegrity: joinContextIntegrity(
             sessionOrigin && caller.agentBinding
               ? contextIntegrityStore.effectiveFact({
                   sessionId,
@@ -984,6 +985,8 @@ async function main() {
                   conduitBlessed,
                 })
               : { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
+            ctx.inheritedContextIntegrity ?? null
+          ) ?? { class: "not-applicable", latchEpoch: 0, externalKeys: [] },
           grantStore: capabilityGrantStore,
         }),
         ...(reviewedClosureChangeRequired ? { reviewedClosureChangeRequired: true } : {}),
@@ -3993,11 +3996,13 @@ async function main() {
           },
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-          dispatchToTarget: async (target, event) => {
+          dispatchToTarget: async (target, event, verifiedExternalContext) => {
+            const { bindVerifiedExternalContext } = await import("@vibestudio/rpc/internal");
             await rpcServer.server.callTarget(
               `do:${target.source}:${target.className}:${target.objectKey}`,
               target.method,
-              [event]
+              [event],
+              bindVerifiedExternalContext({}, verifiedExternalContext)
             );
           },
         });
