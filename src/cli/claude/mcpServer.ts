@@ -39,6 +39,10 @@ export interface McpToolResult {
   isError?: boolean;
 }
 
+export type ChannelNotificationMeta = Record<string, string>;
+
+const CHANNEL_META_KEY = /^[A-Za-z0-9_]+$/;
+
 export function toolText(text: string, isError = false): McpToolResult {
   return { content: [{ type: "text", text }], ...(isError ? { isError: true } : {}) };
 }
@@ -74,20 +78,33 @@ export interface McpServerOptions {
     tool_name: string;
     description?: string;
     input_preview?: string;
-  }) => void;
-  onInitialized?: () => void;
+  }) => void | Promise<void>;
+  onInitialized?: () => void | Promise<void>;
+  onTransportFailure?: (error: Error) => void;
   log?: (message: string) => void;
 }
 
 export class McpStdioServer {
   private buffer = "";
   private started = false;
+  private writeTail: Promise<void> = Promise.resolve();
+  private transportFailure: Error | null = null;
+  private readonly activeWriteFailures = new Set<(error: Error) => void>();
+  private initializedSettled = false;
+  private readonly initializedPromise: Promise<void>;
+  private resolveInitialized!: () => void;
+  private rejectInitialized!: (error: Error) => void;
 
   constructor(
     private readonly input: Readable,
     private readonly output: Writable,
     private readonly options: McpServerOptions
-  ) {}
+  ) {
+    this.initializedPromise = new Promise<void>((resolve, reject) => {
+      this.resolveInitialized = resolve;
+      this.rejectInitialized = reject;
+    });
+  }
 
   start(): void {
     if (this.started) return;
@@ -97,6 +114,20 @@ export class McpStdioServer {
       this.buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
       this.drain();
     });
+    this.input.once("error", (error) => this.failTransport(asError(error, "MCP stdin failed")));
+    this.input.once("end", () =>
+      this.failBeforeInitialized("MCP stdin ended before initialization")
+    );
+    this.input.once("close", () =>
+      this.failBeforeInitialized("MCP stdin closed before initialization")
+    );
+    this.output.once("error", (error) => this.failTransport(asError(error, "MCP stdout failed")));
+    this.output.once("close", () => this.failTransport(new Error("MCP stdout closed")));
+  }
+
+  /** Resolves only after Claude completes the MCP initialize handshake. */
+  whenInitialized(): Promise<void> {
+    return this.initializedPromise;
   }
 
   private drain(): void {
@@ -127,14 +158,18 @@ export class McpStdioServer {
     // Notifications (no id): initialized + permission requests.
     if (id === undefined || id === null) {
       if (method === "notifications/initialized") {
-        this.options.onInitialized?.();
+        if (!this.initializedSettled) {
+          this.initializedSettled = true;
+          this.resolveInitialized();
+        }
+        await this.options.onInitialized?.();
         return;
       }
       if (method === PERMISSION_REQUEST_NOTIFICATION) {
         const requestId = str(params["request_id"]);
         const toolName = str(params["tool_name"]);
         if (requestId && toolName) {
-          this.options.onPermissionRequest?.({
+          await this.options.onPermissionRequest?.({
             request_id: requestId,
             tool_name: toolName,
             description: optStr(params["description"]),
@@ -148,9 +183,8 @@ export class McpStdioServer {
 
     switch (method) {
       case "initialize": {
-        const requested = optStr(params["protocolVersion"]);
-        this.respond(id, {
-          protocolVersion: requested ?? MCP_PROTOCOL_VERSION,
+        await this.respond(id, {
+          protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: {
             tools: {},
             ...(this.options.resources ? { resources: {} } : {}),
@@ -162,37 +196,37 @@ export class McpStdioServer {
         return;
       }
       case "ping":
-        this.respond(id, {});
+        await this.respond(id, {});
         return;
       case "tools/list":
-        this.respond(id, { tools: this.options.tools });
+        await this.respond(id, { tools: this.options.tools });
         return;
       case "resources/list": {
         if (!this.options.resources) {
-          this.respondError(id, -32601, "resources are not supported");
+          await this.respondError(id, -32601, "resources are not supported");
           return;
         }
         try {
-          this.respond(id, { resources: await this.options.resources.list() });
+          await this.respond(id, { resources: await this.options.resources.list() });
         } catch (err) {
-          this.respondError(id, -32603, err instanceof Error ? err.message : String(err));
+          await this.respondError(id, -32603, err instanceof Error ? err.message : String(err));
         }
         return;
       }
       case "resources/read": {
         if (!this.options.resources) {
-          this.respondError(id, -32601, "resources are not supported");
+          await this.respondError(id, -32601, "resources are not supported");
           return;
         }
         const uri = str(params["uri"]);
         if (!uri) {
-          this.respondError(id, -32602, "resources/read requires a uri");
+          await this.respondError(id, -32602, "resources/read requires a uri");
           return;
         }
         try {
-          this.respond(id, await this.options.resources.read(uri));
+          await this.respond(id, await this.options.resources.read(uri));
         } catch (err) {
-          this.respondError(id, -32603, err instanceof Error ? err.message : String(err));
+          await this.respondError(id, -32603, err instanceof Error ? err.message : String(err));
         }
         return;
       }
@@ -200,47 +234,145 @@ export class McpStdioServer {
         const name = str(params["name"]);
         const args = (params["arguments"] ?? {}) as Record<string, unknown>;
         if (!name) {
-          this.respondError(id, -32602, "tools/call requires a tool name");
+          await this.respondError(id, -32602, "tools/call requires a tool name");
           return;
         }
         try {
           const result = await this.options.onToolCall(name, args, String(id));
-          this.respond(id, result);
+          await this.respond(id, result);
         } catch (err) {
-          this.respond(id, toolText(err instanceof Error ? err.message : String(err), true));
+          await this.respond(id, toolText(err instanceof Error ? err.message : String(err), true));
         }
         return;
       }
       default:
-        this.respondError(id, -32601, `method not found: ${method}`);
+        await this.respondError(id, -32601, `method not found: ${method}`);
     }
   }
 
   /** Push a channel event into the session (queued to the next turn boundary). */
-  notifyChannel(content: string, meta: Record<string, unknown>): void {
-    this.notify(CHANNEL_NOTIFICATION, { content, meta });
+  notifyChannel(content: string, meta: ChannelNotificationMeta = {}): Promise<void> {
+    assertChannelNotification(content, meta);
+    return this.notify(CHANNEL_NOTIFICATION, { content, meta });
   }
 
   /** Deliver a permission verdict for a relayed request. */
-  notifyPermission(requestId: string, behavior: "allow" | "deny"): void {
-    this.notify(PERMISSION_VERDICT_NOTIFICATION, { request_id: requestId, behavior });
+  notifyPermission(requestId: string, behavior: "allow" | "deny"): Promise<void> {
+    return this.notify(PERMISSION_VERDICT_NOTIFICATION, { request_id: requestId, behavior });
   }
 
-  notify(method: string, params: Record<string, unknown>): void {
-    this.write({ jsonrpc: "2.0", method, params });
+  notify(method: string, params: Record<string, unknown>): Promise<void> {
+    return this.write({ jsonrpc: "2.0", method, params });
   }
 
-  private respond(id: number | string, result: unknown): void {
-    this.write({ jsonrpc: "2.0", id, result });
+  private respond(id: number | string, result: unknown): Promise<void> {
+    return this.write({ jsonrpc: "2.0", id, result });
   }
 
-  private respondError(id: number | string, code: number, message: string): void {
-    this.write({ jsonrpc: "2.0", id, error: { code, message } });
+  private respondError(id: number | string, code: number, message: string): Promise<void> {
+    return this.write({ jsonrpc: "2.0", id, error: { code, message } });
   }
 
-  private write(message: Record<string, unknown>): void {
-    this.output.write(`${JSON.stringify(message)}\n`);
+  private write(message: Record<string, unknown>): Promise<void> {
+    const frame = `${JSON.stringify(message)}\n`;
+    const write = this.writeTail.then(() => this.writeFrame(frame));
+    this.writeTail = write.catch(() => undefined);
+    return write;
   }
+
+  private writeFrame(frame: string): Promise<void> {
+    if (this.transportFailure) return Promise.reject(this.transportFailure);
+    return new Promise<void>((resolve, reject) => {
+      let writeReturned = false;
+      let writeAccepted = false;
+      let writeCallbackCompleted = false;
+      let drainObserved = false;
+      let settled = false;
+
+      const dispose = (): void => {
+        this.output.off("drain", onDrain);
+        this.activeWriteFailures.delete(fail);
+      };
+      const succeedIfComplete = (): void => {
+        if (
+          settled ||
+          !writeReturned ||
+          !writeCallbackCompleted ||
+          (!writeAccepted && !drainObserved)
+        ) {
+          return;
+        }
+        settled = true;
+        dispose();
+        resolve();
+      };
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        dispose();
+        reject(error);
+      };
+      const onDrain = (): void => {
+        drainObserved = true;
+        succeedIfComplete();
+      };
+
+      this.activeWriteFailures.add(fail);
+      this.output.on("drain", onDrain);
+      try {
+        writeAccepted = this.output.write(frame, (error?: Error | null) => {
+          if (error) {
+            fail(error);
+            return;
+          }
+          writeCallbackCompleted = true;
+          succeedIfComplete();
+        });
+        writeReturned = true;
+        if (writeAccepted) this.output.off("drain", onDrain);
+        succeedIfComplete();
+      } catch (error) {
+        fail(asError(error, "MCP stdout write failed"));
+      }
+    });
+  }
+
+  private failBeforeInitialized(message: string): void {
+    if (this.initializedSettled) return;
+    this.failTransport(new Error(message));
+  }
+
+  private failTransport(error: Error): void {
+    if (this.transportFailure) return;
+    this.transportFailure = error;
+    if (!this.initializedSettled) {
+      this.initializedSettled = true;
+      this.rejectInitialized(error);
+    }
+    for (const fail of [...this.activeWriteFailures]) fail(error);
+    this.options.onTransportFailure?.(error);
+  }
+}
+
+export function assertChannelNotification(
+  content: unknown,
+  meta: Record<string, unknown>
+): asserts content is string {
+  if (typeof content !== "string") {
+    throw new TypeError("Claude channel notification content must be a string");
+  }
+  for (const [key, value] of Object.entries(meta)) {
+    if (!CHANNEL_META_KEY.test(key)) {
+      throw new TypeError(`Claude channel notification meta key is not an identifier: ${key}`);
+    }
+    if (typeof value !== "string") {
+      throw new TypeError(`Claude channel notification meta value must be a string: ${key}`);
+    }
+  }
+}
+
+function asError(error: unknown, fallback: string): Error {
+  return error instanceof Error ? error : new Error(error === undefined ? fallback : String(error));
 }
 
 function str(value: unknown): string {

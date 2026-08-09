@@ -23,6 +23,7 @@ import { normalizeServerBaseUrl } from "../serverUrl.js";
 import {
   McpStdioServer,
   toolText,
+  type ChannelNotificationMeta,
   type McpResourceContents,
   type McpResourceDef,
   type McpToolDef,
@@ -344,6 +345,84 @@ export interface ChannelHostDeps {
   log?: (message: string) => void;
 }
 
+export const CLAUDE_CHANNEL_READINESS = Object.freeze({
+  mcpTransport: "initialized",
+  channelRegistration: "unconfirmed",
+  reason: "claude-protocol-has-no-registration-ack",
+});
+
+const OFFICIAL_CHANNEL_META_KEYS = [
+  "channel_id",
+  "seq",
+  "from",
+  "from_handle",
+  "kind",
+  "turn_id",
+] as const;
+
+/** Adapt durable event details to Claude's public string-only meta schema. */
+export function channelNotificationMeta(
+  raw: Record<string, unknown>,
+  kind: "message" | "prompt" | "interrupt"
+): ChannelNotificationMeta {
+  const candidate: Record<string, unknown> = { ...raw, kind };
+  const result: ChannelNotificationMeta = {};
+  for (const key of OFFICIAL_CHANNEL_META_KEYS) {
+    const value = candidate[key];
+    if (typeof value === "string") {
+      result[key] = value;
+    } else if (key === "seq" && typeof value === "number" && Number.isFinite(value)) {
+      result[key] = String(value);
+    }
+  }
+  return result;
+}
+
+interface ChannelMcpDelivery {
+  notifyChannel(content: string, meta: ChannelNotificationMeta): Promise<void>;
+  notifyPermission(requestId: string, behavior: "allow" | "deny"): Promise<void>;
+}
+
+/** Deliver one bridge record without advancing its durable cursor prematurely. */
+export async function deliverBridgePayload(
+  payload: unknown,
+  deps: {
+    channelId: string;
+    mcp: ChannelMcpDelivery;
+    callVessel(method: string, args: unknown[]): Promise<unknown>;
+  }
+): Promise<void> {
+  const event = (payload ?? {}) as Record<string, unknown>;
+  switch (event["kind"]) {
+    case "message":
+    case "prompt": {
+      const seq = Number(event["seq"]);
+      const content = typeof event["content"] === "string" ? event["content"] : "";
+      const meta = (event["meta"] ?? {}) as Record<string, unknown>;
+      await deps.mcp.notifyChannel(
+        content,
+        channelNotificationMeta(meta, event["kind"] as "message" | "prompt")
+      );
+      if (Number.isFinite(seq)) await deps.callVessel("ackDelivery", [{ seq }]);
+      return;
+    }
+    case "permission": {
+      const requestId = typeof event["requestId"] === "string" ? event["requestId"] : "";
+      const behavior = event["behavior"] === "allow" ? "allow" : "deny";
+      if (requestId) await deps.mcp.notifyPermission(requestId, behavior);
+      return;
+    }
+    case "interrupt":
+      await deps.mcp.notifyChannel(
+        "[interrupt requested from the workspace]",
+        channelNotificationMeta({ channel_id: deps.channelId }, "interrupt")
+      );
+      return;
+    default:
+      return;
+  }
+}
+
 export async function runChannelHostLoop(
   config: BridgeConfig,
   deps: ChannelHostDeps = {}
@@ -365,6 +444,8 @@ export async function runChannelHostLoop(
   const turns = new TurnTracker();
   const pendingToolIds = new Map<string, string>();
   let shuttingDown = false;
+  let requestShutdown: ((code: number) => void) | null = null;
+  let pendingMcpFailure: Error | null = null;
 
   // ── MCP toward Claude Code ────────────────────────────────────────────────
   const mcp = new McpStdioServer(process.stdin, process.stdout, {
@@ -395,61 +476,29 @@ export async function runChannelHostLoop(
       }
       return toolText(`unknown tool: ${name}`, true);
     },
-    onPermissionRequest: (params) => {
-      void vessel
-        .call("requestPermission", [
+    onPermissionRequest: async (params) => {
+      try {
+        await vessel.call("requestPermission", [
           {
             requestId: params.request_id,
             toolName: params.tool_name,
             description: params.description,
             inputPreview: params.input_preview,
           },
-        ])
-        .catch((err) => {
-          // Relay unavailable → fail closed immediately so the session isn't stuck.
-          log(`permission relay failed (denying): ${err instanceof Error ? err.message : err}`);
-          mcp.notifyPermission(params.request_id, "deny");
-        });
+        ]);
+      } catch (err) {
+        // Relay unavailable → fail closed immediately so the session isn't stuck.
+        log(`permission relay failed (denying): ${err instanceof Error ? err.message : err}`);
+        await mcp.notifyPermission(params.request_id, "deny");
+      }
+    },
+    onTransportFailure: (error) => {
+      log(`MCP transport failed: ${error.message}`);
+      if (requestShutdown) requestShutdown(1);
+      else pendingMcpFailure = error;
     },
   });
   mcp.start();
-
-  const handleBridgePayload = (payload: unknown): void => {
-    const event = (payload ?? {}) as Record<string, unknown>;
-    switch (event["kind"]) {
-      case "message":
-      case "prompt": {
-        const seq = Number(event["seq"]);
-        const content = typeof event["content"] === "string" ? event["content"] : "";
-        const meta = (event["meta"] ?? {}) as Record<string, unknown>;
-        mcp.notifyChannel(content, { ...meta, kind: event["kind"] });
-        // Ack AFTER the notification is on stdout: ack = handed to Claude Code
-        // (queued); turn.closed is the processed marker (plan §7.5).
-        if (Number.isFinite(seq)) {
-          void vessel.call("ackDelivery", [{ seq }]).catch((err) => {
-            log(`ack ${seq} failed: ${err instanceof Error ? err.message : err}`);
-          });
-        }
-        return;
-      }
-      case "permission": {
-        const requestId = typeof event["requestId"] === "string" ? event["requestId"] : "";
-        const behavior = event["behavior"] === "allow" ? "allow" : "deny";
-        if (requestId) mcp.notifyPermission(requestId, behavior);
-        return;
-      }
-      case "interrupt":
-        // No MCP interrupt primitive exists; surface it as a channel event so
-        // the model sees the request at the next turn boundary.
-        mcp.notifyChannel("[interrupt requested from the workspace]", {
-          channel_id: config.channelId,
-          kind: "interrupt",
-        });
-        return;
-      default:
-        return;
-    }
-  };
 
   // ── Response-owned bridge lifetime ────────────────────────────────────────
   let hookServer: ReturnType<typeof startHookSocketServer> | null = null;
@@ -501,6 +550,8 @@ export async function runChannelHostLoop(
     await client.close().catch(() => undefined);
     resolveDone(code);
   };
+  requestShutdown = (code) => void shutdown(code);
+  if (pendingMcpFailure) requestShutdown(1);
 
   const openBridge = async (): Promise<void> => {
     const previous = activeBridge;
@@ -529,6 +580,7 @@ export async function runChannelHostLoop(
                 pid: process.pid,
                 agentKind: "claude-code",
                 permissionCapability: "claude-code.tool",
+                channelReadiness: CLAUDE_CHANNEL_READINESS,
               },
             },
           ],
@@ -546,7 +598,11 @@ export async function runChannelHostLoop(
             continue;
           }
           if (!acknowledged) throw new Error("Linked bridge delivered data before its ACK");
-          handleBridgePayload(record.payload);
+          await deliverBridgePayload(record.payload, {
+            channelId: config.channelId,
+            mcp,
+            callVessel: (method, args) => vessel.call(method, args),
+          });
         }
         if (!acknowledged) throw new Error("Linked bridge closed before its ACK");
         if (!controller.signal.aborted && activeBridge?.generation === generation) {
@@ -586,6 +642,17 @@ export async function runChannelHostLoop(
   process.stdin.once("end", () => void shutdown(0));
   process.stdin.once("close", () => void shutdown(0));
 
+  const initialized = await Promise.race([
+    mcp.whenInitialized().then(
+      () => true,
+      () => false
+    ),
+    done.then(() => false),
+  ]);
+  if (!initialized) return await done;
+  log(
+    "MCP initialized; Claude channel registration remains unconfirmed because the protocol has no registration acknowledgement"
+  );
   await queueBridgeOpen();
   stopRecovery = await client.onRecovery(() => {
     log("transport recovered; replacing bridge response");

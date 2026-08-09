@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import {
   assertClaudeCodeVersion,
   claudeLaunchProfile,
@@ -12,6 +15,12 @@ import {
 } from "./claudeLaunchProfile.js";
 
 let root: string;
+const execFileAsync = promisify(execFile);
+
+const installedClaude = (process.env["PATH"] ?? "")
+  .split(path.delimiter)
+  .map((directory) => path.join(directory, "claude"))
+  .find((candidate) => existsSync(candidate));
 
 beforeEach(async () => {
   root = await mkdtemp(path.join(os.tmpdir(), "claude-launch-profile-"));
@@ -64,9 +73,8 @@ describe("ClaudeLaunchProfile", () => {
     expect(launch.profileDir.startsWith(profilesRoot)).toBe(true);
     expect(launch.argv).toEqual([
       "claude",
-      "--channels",
-      "server:vibestudio",
       "--dangerously-load-development-channels",
+      "server:vibestudio",
       "--mcp-config",
       path.join(launch.profileDir, "mcp.json"),
       "--settings",
@@ -92,6 +100,21 @@ describe("ClaudeLaunchProfile", () => {
     expect((await stat(launch.profileDir)).mode & 0o777).toBe(0o700);
     expect((await stat(path.join(launch.profileDir, "env.json"))).mode & 0o777).toBe(0o600);
   });
+
+  it.runIf(installedClaude !== undefined)(
+    "confirms the installed Claude parser requires an entry for the development-channel flag",
+    async () => {
+      let failure: (Error & { stderr?: string }) | null = null;
+      try {
+        await execFileAsync(installedClaude!, ["--dangerously-load-development-channels"]);
+      } catch (error) {
+        failure = error as Error & { stderr?: string };
+      }
+      expect(failure?.stderr).toMatch(
+        /--dangerously-load-development-channels <servers\.\.\.>.*argument missing/
+      );
+    }
+  );
 
   it("releases one exact materialization without deleting a newer generation", async () => {
     const profilesRoot = path.join(root, "profiles");

@@ -150,9 +150,8 @@ export async function materializeClaudeLaunch(input: {
     const settings = { hooks };
     const argv = [
       profile.executable,
-      "--channels",
-      "server:vibestudio",
       "--dangerously-load-development-channels",
+      "server:vibestudio",
       "--mcp-config",
       finalMcpPath,
       "--settings",

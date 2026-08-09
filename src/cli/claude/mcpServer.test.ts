@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
 import {
   CHANNEL_NOTIFICATION,
   McpStdioServer,
@@ -49,6 +50,32 @@ function harness(overrides: Partial<McpServerOptions> = {}) {
   return { server, sent, send, flush };
 }
 
+class ControlledWritable extends Writable {
+  readonly chunks: string[] = [];
+  private readonly completions: Array<() => void> = [];
+
+  constructor() {
+    super({ highWaterMark: 1 });
+  }
+
+  override _write(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void
+  ): void {
+    this.chunks.push(chunk.toString("utf8"));
+    this.completions.push(() => callback());
+  }
+
+  completeOne(): void {
+    const complete = this.completions.shift();
+    if (!complete) throw new Error("no controlled write is pending");
+    complete();
+  }
+}
+
+const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 describe("McpStdioServer", () => {
   it("answers initialize with channel capabilities and instructions", async () => {
     const { sent, send, flush } = harness();
@@ -61,11 +88,25 @@ describe("McpStdioServer", () => {
     await flush();
     expect(sent).toHaveLength(1);
     const result = sent[0]!.result!;
-    expect(result["protocolVersion"]).toBe("2025-01-01");
+    expect(result["protocolVersion"]).toBe("2025-06-18");
     const caps = result["capabilities"] as Record<string, Record<string, unknown>>;
     expect(caps["experimental"]).toHaveProperty(["claude/channel"]);
     expect(caps["experimental"]).toHaveProperty(["claude/channel/permission"]);
     expect(result["instructions"]).toBe("test instructions");
+  });
+
+  it("does not report MCP initialization until Claude sends initialized", async () => {
+    const { server, send, flush } = harness();
+    let initialized = false;
+    void server.whenInitialized().then(() => {
+      initialized = true;
+    });
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    await flush();
+    expect(initialized).toBe(false);
+    send({ jsonrpc: "2.0", method: "notifications/initialized" });
+    await server.whenInitialized();
+    expect(initialized).toBe(true);
   });
 
   it("round-trips tools/list and tools/call, splitting coalesced lines", async () => {
@@ -93,7 +134,9 @@ describe("McpStdioServer", () => {
   it("relays permission requests in and verdicts out", async () => {
     const requests: string[] = [];
     const { server, sent, send, flush } = harness({
-      onPermissionRequest: (params) => requests.push(params.request_id),
+      onPermissionRequest: (params) => {
+        requests.push(params.request_id);
+      },
     });
     send({
       jsonrpc: "2.0",
@@ -103,19 +146,104 @@ describe("McpStdioServer", () => {
     await flush();
     expect(requests).toEqual(["pr-1"]);
 
-    server.notifyPermission("pr-1", "allow");
-    await flush();
+    await server.notifyPermission("pr-1", "allow");
     const verdict = sent.find((m) => m.method === PERMISSION_VERDICT_NOTIFICATION);
     expect(verdict?.params).toEqual({ request_id: "pr-1", behavior: "allow" });
   });
 
   it("pushes channel notifications with content + meta", async () => {
-    const { server, sent, flush } = harness();
-    server.notifyChannel("hello", { channel_id: "chan", seq: 7 });
-    await flush();
+    const { server, sent } = harness();
+    await server.notifyChannel("hello", { channel_id: "chan", seq: "7" });
     const note = sent.find((m) => m.method === CHANNEL_NOTIFICATION);
-    expect(note?.params).toEqual({ content: "hello", meta: { channel_id: "chan", seq: 7 } });
+    expect(note?.params).toEqual({ content: "hello", meta: { channel_id: "chan", seq: "7" } });
   });
+
+  it("rejects non-string content, non-identifier keys, and non-string meta values", () => {
+    const { server } = harness();
+    expect(() => server.notifyChannel(42 as never, {})).toThrow(/content must be a string/);
+    expect(() => server.notifyChannel("hello", { "not-valid": "x" })).toThrow(
+      /key is not an identifier/
+    );
+    expect(() => server.notifyChannel("hello", { seq: 7 } as never)).toThrow(
+      /value must be a string/
+    );
+  });
+
+  it("serializes notifications and waits for callback plus drain before the next write", async () => {
+    const input = new PassThrough();
+    const output = new ControlledWritable();
+    const server = new McpStdioServer(input, output, {
+      serverName: "vibestudio",
+      serverVersion: "0.0.0",
+      instructions: "test",
+      tools: [],
+      onToolCall: async () => toolText("ok"),
+    });
+    server.start();
+
+    let firstSettled = false;
+    const first = server.notifyChannel("first", { seq: "1" }).then(() => {
+      firstSettled = true;
+    });
+    const second = server.notifyChannel("second", { seq: "2" });
+    await turn();
+    expect(output.chunks).toHaveLength(1);
+    expect(firstSettled).toBe(false);
+
+    output.completeOne();
+    await first;
+    await turn();
+    expect(output.chunks).toHaveLength(2);
+    expect(output.chunks[0]).toContain('"content":"first"');
+    expect(output.chunks[1]).toContain('"content":"second"');
+    output.completeOne();
+    await second;
+  });
+
+  it("handles a synchronous write callback without losing acceptance", async () => {
+    const events = new EventEmitter();
+    const chunks: string[] = [];
+    const output = Object.assign(events, {
+      write(chunk: string, callback: (error?: Error | null) => void): boolean {
+        chunks.push(chunk);
+        callback();
+        return true;
+      },
+    }) as unknown as Writable;
+    const server = new McpStdioServer(new PassThrough(), output, {
+      serverName: "vibestudio",
+      serverVersion: "0.0.0",
+      instructions: "test",
+      tools: [],
+      onToolCall: async () => toolText("ok"),
+    });
+    server.start();
+    await server.notifyChannel("one", { seq: "1" });
+    expect(chunks).toHaveLength(1);
+  });
+
+  it.each(["error", "close"] as const)(
+    "rejects active and queued writes when stdout emits %s",
+    async (terminal) => {
+      const output = new ControlledWritable();
+      const server = new McpStdioServer(new PassThrough(), output, {
+        serverName: "vibestudio",
+        serverVersion: "0.0.0",
+        instructions: "test",
+        tools: [],
+        onToolCall: async () => toolText("ok"),
+      });
+      server.start();
+      void server.whenInitialized().catch(() => undefined);
+      const first = server.notifyChannel("first", { seq: "1" });
+      const second = server.notifyChannel("second", { seq: "2" });
+      await turn();
+      if (terminal === "error") output.emit("error", new Error("stdout exploded"));
+      else output.emit("close");
+      await expect(first).rejects.toThrow(terminal === "error" ? /stdout exploded/ : /closed/);
+      await expect(second).rejects.toThrow(terminal === "error" ? /stdout exploded/ : /closed/);
+    }
+  );
 
   it("errors unknown methods and surfaces tool errors as isError results", async () => {
     const { sent, send, flush } = harness({

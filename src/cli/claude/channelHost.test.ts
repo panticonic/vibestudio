@@ -5,7 +5,10 @@ import * as path from "node:path";
 import {
   bridgeInstructions,
   bridgeRpcCredential,
+  channelNotificationMeta,
+  CLAUDE_CHANNEL_READINESS,
   createSkillResources,
+  deliverBridgePayload,
   normalizeServerUrl,
   resolveBridgeConfig,
   skillNameFromUri,
@@ -66,6 +69,98 @@ describe("normalizeServerUrl", () => {
     expect(() => normalizeServerUrl("ws://127.0.0.1:4123/rpc")).toThrow(
       /Unsupported server URL protocol/
     );
+  });
+});
+
+describe("Claude channel boundary", () => {
+  it("keeps registration explicitly unconfirmed after MCP initialization", () => {
+    expect(CLAUDE_CHANNEL_READINESS).toEqual({
+      mcpTransport: "initialized",
+      channelRegistration: "unconfirmed",
+      reason: "claude-protocol-has-no-registration-ack",
+    });
+    expect(CLAUDE_CHANNEL_READINESS).not.toHaveProperty("ready");
+  });
+
+  it("projects only reviewed string identifiers into notification meta", () => {
+    expect(
+      channelNotificationMeta(
+        {
+          channel_id: "chan-1",
+          seq: 42,
+          from: "agent-1",
+          from_handle: undefined,
+          turn_id: "turn-1",
+          mentions: ["alice"],
+          "unsafe-key": "drop",
+          structured: { stays: "durable" },
+        },
+        "message"
+      )
+    ).toEqual({
+      channel_id: "chan-1",
+      seq: "42",
+      from: "agent-1",
+      kind: "message",
+      turn_id: "turn-1",
+    });
+  });
+
+  it("acknowledges durable delivery only after MCP transport acceptance", async () => {
+    const order: string[] = [];
+    let accept!: () => void;
+    const accepted = new Promise<void>((resolve) => {
+      accept = resolve;
+    });
+    const delivery = deliverBridgePayload(
+      {
+        kind: "message",
+        seq: 9,
+        content: "hello",
+        meta: { channel_id: "chan-1", seq: 100, mentions: ["alice"] },
+      },
+      {
+        channelId: "chan-1",
+        mcp: {
+          notifyChannel: async (_content, meta) => {
+            order.push(`notify:${meta["seq"]}`);
+            await accepted;
+            order.push("accepted");
+          },
+          notifyPermission: async () => undefined,
+        },
+        callVessel: async (method, args) => {
+          order.push(`${method}:${JSON.stringify(args)}`);
+        },
+      }
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(order).toEqual(["notify:100"]);
+    accept();
+    await delivery;
+    expect(order).toEqual(["notify:100", "accepted", 'ackDelivery:[{"seq":9}]']);
+  });
+
+  it("does not acknowledge when MCP transport acceptance fails", async () => {
+    const calls: string[] = [];
+    await expect(
+      deliverBridgePayload(
+        { kind: "prompt", seq: 4, content: "hello", meta: {} },
+        {
+          channelId: "chan-1",
+          mcp: {
+            notifyChannel: async () => {
+              throw new Error("stdout closed");
+            },
+            notifyPermission: async () => undefined,
+          },
+          callVessel: async (method) => {
+            calls.push(method);
+          },
+        }
+      )
+    ).rejects.toThrow(/stdout closed/);
+    expect(calls).toEqual([]);
   });
 });
 
