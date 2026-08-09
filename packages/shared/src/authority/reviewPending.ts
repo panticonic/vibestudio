@@ -69,6 +69,17 @@ function hasReviewPendingCode(error: CodedError): boolean {
     // that nothing is pending.
     if (candidate["code"] === "EREVIEWPENDING") return true;
     if (candidate["errorCode"] === "EREVIEWPENDING") return true;
+    // Some RPC boundaries preserve the structured authority payload while
+    // dropping the convenience error code. `reasonCode` is the canonical
+    // domain discriminator, not prose, so it is equally safe to recognize.
+    const failure = candidate["authorityFailure"];
+    if (
+      typeof failure === "object" &&
+      failure !== null &&
+      (failure as Record<string, unknown>)["reasonCode"] === "review-pending"
+    ) {
+      return true;
+    }
   }
   return false;
 }

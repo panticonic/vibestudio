@@ -51,6 +51,13 @@ describe("pendingReviewNotice", () => {
     ).toBe("what's in your workspace");
   });
 
+  it("reads the typed authority reason when an RPC hop drops the error code", () => {
+    expect(pendingReviewNotice({ errorData: accessError()["errorData"] })).toMatchObject({
+      approvalId: "workspace-creation-review",
+      title: "what's in your workspace",
+    });
+  });
+
   it("recognizes the outcome even when the payload did not survive the hop", () => {
     // A surface that can only say "waiting on a review" is still telling the
     // truth; one that says "could not be loaded" next to a Retry is not.
