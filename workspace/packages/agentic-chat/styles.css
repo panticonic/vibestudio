@@ -216,7 +216,10 @@
 }
 
 .chat-header-card {
-  --card-padding: var(--space-1) var(--chat-panel-padding);
+  --base-card-padding-top: var(--space-1);
+  --base-card-padding-right: var(--chat-panel-padding);
+  --base-card-padding-bottom: var(--space-1);
+  --base-card-padding-left: var(--chat-panel-padding);
 }
 
 .chat-header-menu-button {
