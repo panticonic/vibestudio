@@ -1212,6 +1212,86 @@ describe("EvalDO cancellation + forced recovery", () => {
     });
   });
 
+  it("runs explicit cancellation cleanup in its registering execution context", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    seedPendingRun(sql, "run-context-owner");
+
+    const runP = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "run-context-owner"
+    );
+    await started;
+    const ownerExecution = { contextId: "owner-cell" };
+    const foreignExecution = { contextId: "foreign-cell" };
+    const seen: unknown[] = [];
+    const handler = priv<
+      (execution: unknown, callback: () => Promise<void>) => () => Promise<void>
+    >(instance, "bindRunCancelHandler").call(instance, ownerExecution, async () => {
+      seen.push(priv<() => unknown>(instance, "requireActiveEvalExecution").call(instance));
+    });
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "run-context-owner",
+      new Set([handler])
+    );
+
+    const activeExecution = priv<{
+      run<T>(store: unknown, callback: () => T): T;
+    }>(instance, "activeEvalExecution");
+    await expect(
+      activeExecution.run(foreignExecution, () =>
+        priv<(id: string) => Promise<{ ok: boolean; forcedReset: boolean }>>(
+          instance,
+          "cancel"
+        ).call(instance, "run-context-owner")
+      )
+    ).resolves.toEqual({ ok: true, forcedReset: false });
+
+    expect(seen).toEqual([ownerExecution]);
+    expect(() =>
+      priv<() => unknown>(instance, "requireActiveEvalExecution").call(instance)
+    ).toThrow(/actively executing/);
+    await runP;
+  });
+
+  it("runs deadline cleanup in its registering execution context", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { runLocked } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    seedPendingRun(sql, "deadline-context-owner", {
+      code: "await never();",
+      timeoutMs: 5,
+    });
+    sql.exec(
+      `UPDATE runs SET deadline_at = ? WHERE run_id = ?`,
+      Date.now() + 5,
+      "deadline-context-owner"
+    );
+    const ownerExecution = { contextId: "deadline-owner-cell" };
+    const seen: unknown[] = [];
+    const handler = priv<
+      (execution: unknown, callback: () => Promise<void>) => () => Promise<void>
+    >(instance, "bindRunCancelHandler").call(instance, ownerExecution, async () => {
+      seen.push(priv<() => unknown>(instance, "requireActiveEvalExecution").call(instance));
+    });
+    priv<Map<string, Set<() => Promise<void>>>>(instance, "runCancelHandlers").set(
+      "deadline-context-owner",
+      new Set([handler])
+    );
+
+    await expect(
+      priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+        instance,
+        "deadline-context-owner"
+      )
+    ).resolves.toMatchObject({ failureCode: "eval_deadline_exceeded" });
+    expect(seen).toEqual([ownerExecution]);
+    expect(() =>
+      priv<() => unknown>(instance, "requireActiveEvalExecution").call(instance)
+    ).toThrow(/actively executing/);
+  });
+
   it("keeps the durable run non-terminal while gated cleanup is still running", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const { runLocked, started } = blockUntilAborted();

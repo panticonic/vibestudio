@@ -484,6 +484,10 @@ export class EvalDO extends DurableObjectBase {
    *  executes these BEFORE aborting outbound RPC so child runtimes can retire
    *  through the normal authority path instead of becoming orphans. */
   private readonly runCancelHandlers = new Map<string, Set<() => void | Promise<void>>>();
+  /** One owner-cleanup execution per run. Deadline, explicit cancellation, and
+   *  reset callers join this promise rather than re-entering or overlooking a
+   *  cleanup already started by another lifecycle edge. */
+  private readonly runCancelExecutions = new Map<string, Promise<void>>();
   /**
    * Live event delivery is ordered per run. Terminal events close the host
    * event-sink route, so concurrent waitUntil publishes would otherwise let a
@@ -1369,11 +1373,14 @@ export class EvalDO extends DurableObjectBase {
       if (deadlineAt != null) {
         const remaining = deadlineAt - Date.now();
         if (remaining <= 0) {
+          if ((this.runCancelHandlers.get(runId)?.size ?? 0) > 0) cleanupPhase.active = true;
           controller.abort(evalDeadlineAbortReason(args.timeoutMs));
-          cleanupPhase.active = true;
           await this.executeRunCancelHandlers(runId);
         } else {
           timer = setTimeout(() => {
+            if ((this.runCancelHandlers.get(runId)?.size ?? 0) > 0) cleanupPhase.active = true;
+            const cleanup = this.executeRunCancelHandlers(runId);
+            void cleanup.catch(() => undefined);
             controller.abort(evalDeadlineAbortReason(args.timeoutMs));
           }, remaining);
           timer.unref?.();
@@ -1392,7 +1399,12 @@ export class EvalDO extends DurableObjectBase {
       this.runChain = ran.catch(() => undefined);
       result = await ran;
       if (controller.signal.aborted && deadlineAt !== null) {
-        cleanupPhase.active = true;
+        if (
+          this.runCancelExecutions.has(runId) ||
+          (this.runCancelHandlers.get(runId)?.size ?? 0) > 0
+        ) {
+          cleanupPhase.active = true;
+        }
         try {
           await this.executeRunCancelHandlers(runId);
           // Cancellation handlers deliberately run outside the sandbox's
@@ -1432,6 +1444,21 @@ export class EvalDO extends DurableObjectBase {
           ""
       );
       const deadlineFired = deadlineAt !== null && controller.signal.aborted;
+      if (deadlineFired) {
+        if (
+          this.runCancelExecutions.has(runId) ||
+          (this.runCancelHandlers.get(runId)?.size ?? 0) > 0
+        ) {
+          cleanupPhase.active = true;
+        }
+        try {
+          await this.executeRunCancelHandlers(runId);
+          await this.scopeManager?.persist();
+        } catch (error) {
+          cancellationCleanupError = error;
+          console.error(`[EvalDO] cancellation cleanup failed for timed-out run ${runId}`, error);
+        }
+      }
       // A fired deadline is not carte blanche: only an error DERIVED from the
       // abort (the reason itself, an AbortError, or an abort-caused transport
       // rejection in the cause chain) is the timeout. Anything else is a real
@@ -1457,9 +1484,13 @@ export class EvalDO extends DurableObjectBase {
             success: false,
             console: "",
             error: `eval timed out after ${args.timeoutMs}ms${
-              /cancellation cleanup failed/iu.test(err instanceof Error ? err.message : String(err))
-                ? `; ${err instanceof Error ? err.message : String(err)}`
-                : ""
+              cancellationCleanupError === undefined
+                ? ""
+                : `; cancellation cleanup failed: ${
+                    cancellationCleanupError instanceof Error
+                      ? cancellationCleanupError.message
+                      : String(cancellationCleanupError)
+                  }`
             }`,
             failureKind: "cancelled",
             failureCode: "eval_deadline_exceeded",
@@ -1483,6 +1514,7 @@ export class EvalDO extends DurableObjectBase {
       this.runCheckpointDigests.delete(runId);
       this.runAborts.delete(runId);
       this.runCleanupPhases.delete(runId);
+      this.runCancelExecutions.delete(runId);
       if (!controller.signal.aborted) this.runCancelHandlers.delete(runId);
       this.releaseUnloadedExecutionRoots(runId);
     }
@@ -2095,6 +2127,7 @@ export class EvalDO extends DurableObjectBase {
     this.runAborts.clear();
     this.runCleanupPhases.clear();
     this.runCancelHandlers.clear();
+    this.runCancelExecutions.clear();
     return { ok: true };
   }
 
@@ -2296,6 +2329,8 @@ export class EvalDO extends DurableObjectBase {
   }
 
   private async executeRunCancelHandlers(runId: string): Promise<void> {
+    const active = this.runCancelExecutions.get(runId);
+    if (active) return active;
     const handlers = [...(this.runCancelHandlers.get(runId) ?? [])];
     this.runCancelHandlers.delete(runId);
     if (handlers.length === 0) return;
@@ -2304,6 +2339,13 @@ export class EvalDO extends DurableObjectBase {
     // able to claim child resources first. Deferring invocation to a microtask
     // lets the guest's abort/finally retire those resources before cleanup has
     // even started.
+    let resolveExecution!: () => void;
+    let rejectExecution!: (error: unknown) => void;
+    const execution = new Promise<void>((resolve, reject) => {
+      resolveExecution = resolve;
+      rejectExecution = reject;
+    });
+    this.runCancelExecutions.set(runId, execution);
     const pending = handlers.map((handler) => {
       try {
         return Promise.resolve(handler());
@@ -2311,8 +2353,22 @@ export class EvalDO extends DurableObjectBase {
         return Promise.reject(error);
       }
     });
-    const results = await Promise.allSettled(pending);
-    this.throwCancellationCleanupFailures(results, `run ${runId}`);
+    void Promise.allSettled(pending).then((results) => {
+      try {
+        this.throwCancellationCleanupFailures(results, `run ${runId}`);
+        resolveExecution();
+      } catch (error) {
+        rejectExecution(error);
+      }
+    });
+    return execution;
+  }
+
+  private bindRunCancelHandler(
+    execution: EvalExecutionContext,
+    handler: () => void | Promise<void>
+  ): () => void | Promise<void> {
+    return () => this.activeEvalExecution.run(execution, handler);
   }
 
   private throwCancellationCleanupFailures(
@@ -2357,7 +2413,11 @@ export class EvalDO extends DurableObjectBase {
       `UPDATE runs SET status = 'cancelled'
        WHERE status IN ('pending', 'running', 'cancelling')`
     );
-    const runIds = new Set([...this.runAborts.keys(), ...this.runCancelHandlers.keys()]);
+    const runIds = new Set([
+      ...this.runAborts.keys(),
+      ...this.runCancelHandlers.keys(),
+      ...this.runCancelExecutions.keys(),
+    ]);
     for (const id of runIds) {
       const phase = this.runCleanupPhases.get(id);
       if (phase) phase.active = true;
@@ -2370,6 +2430,7 @@ export class EvalDO extends DurableObjectBase {
       phase.active = false;
       phase.revoked = true;
     }
+    this.runCancelExecutions.clear();
     if (!cleanupSettlement.settled) {
       console.warn(
         `[EvalDO] force reset continued after cancellation cleanup exceeded ${this.cancellationGraceMs}ms`
@@ -2551,7 +2612,9 @@ export class EvalDO extends DurableObjectBase {
                   throw new Error("ctx.onCancel requires a cleanup function");
                 }
                 const handlers = this.runCancelHandlers.get(runId) ?? new Set();
-                handlers.add(handler as () => void | Promise<void>);
+                handlers.add(
+                  this.bindRunCancelHandler(execution, handler as () => void | Promise<void>)
+                );
                 this.runCancelHandlers.set(runId, handlers);
               },
             }
