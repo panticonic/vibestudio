@@ -123,7 +123,7 @@ function getDropIndicatorStyle(depth: number, top: number | string): CSSProperti
   return {
     position: "absolute",
     left: ROW_PADDING_LEFT + depth * INDENTATION_WIDTH,
-    right: 8,
+    right: ROW_PADDING_LEFT,
     height: 2,
     backgroundColor: COLORS.dropIndicator,
     borderRadius: 1,
@@ -468,6 +468,7 @@ const SortableTreeItem = memo(
       backgroundColor: getRowBackground(isSelected, isHovered, isVisible),
       borderRadius: "var(--radius-2)",
       paddingLeft: ROW_PADDING_LEFT + depth * INDENTATION_WIDTH,
+      paddingRight: ROW_PADDING_LEFT,
       transition: "background-color var(--motion-fast) var(--ease-standard)",
     };
 
@@ -487,7 +488,6 @@ const SortableTreeItem = memo(
           onKeyDown={handleKeyDown}
           align="center"
           gap="1"
-          pr="2"
           role="treeitem"
           aria-expanded={hasChildren ? !collapsed : undefined}
           data-panel-tree-row="true"
@@ -718,7 +718,7 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
   );
 
   return (
-    <Box p="1">
+    <Box px="2" py="1">
       <Button
         variant="soft"
         color="gray"
@@ -853,8 +853,7 @@ function OwnerBandHeader({
     <Flex
       align="center"
       gap="2"
-      px="2"
-      style={{ height: OWNER_BAND_HEIGHT }}
+      style={{ height: OWNER_BAND_HEIGHT, paddingInline: ROW_PADDING_LEFT }}
       role="heading"
       aria-level={2}
       aria-label={
@@ -1250,7 +1249,7 @@ export function LazyPanelTreeSidebar({
 
   const diagnostics =
     treeLoadError || selfIdentityError ? (
-      <Flex direction="column" gap="1" mx="1" mb="1">
+      <Flex direction="column" gap="1" mx="2" mb="1">
         {treeLoadError ? (
           <Flex
             role="alert"
@@ -1334,7 +1333,8 @@ export function LazyPanelTreeSidebar({
       <Flex
         align="center"
         gap="1"
-        mx="1"
+        mx="2"
+        mt="1"
         mb="1"
         px="2"
         style={{
@@ -1379,7 +1379,6 @@ export function LazyPanelTreeSidebar({
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
         <Box
-          p="1"
           style={{
             position: "relative",
             height: virtualizer.getTotalSize(),
