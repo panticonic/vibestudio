@@ -1,12 +1,14 @@
 /** One keyboard-first launcher for panels, browser destinations, and Agentic Chat. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Card, Flex, Heading, Spinner, Text, TextArea } from "@radix-ui/themes";
+import type { CSSProperties, ReactNode } from "react";
+import { Box, Button, Callout, Flex, Spinner, Text } from "@radix-ui/themes";
 import {
-  ChatBubbleIcon,
   ClockIcon,
   EnterIcon,
+  ExclamationTriangleIcon,
   GlobeIcon,
   MagicWandIcon,
+  MagnifyingGlassIcon,
   PlusIcon,
 } from "@radix-ui/react-icons";
 import { browserData, buildPanelLink, panel, panelTree, workspace } from "@workspace/runtime";
@@ -17,8 +19,8 @@ import {
   type BrowserAddressSuggestion,
 } from "@vibestudio/shared/panelChrome";
 import type { PanelSourceUsage } from "@vibestudio/shared/panelSearchTypes";
-import { useIsMobile, useViewportHeight } from "@workspace/react/responsive";
-import { AboutPage, AboutThemeRoot, Section } from "../../packages/about-shared/ui";
+import { useIsMobile } from "@workspace/react/responsive";
+import { AboutPage, AboutThemeRoot } from "../../packages/about-shared/ui";
 import { browserUrlFromEntry } from "./entryIntent";
 import {
   collectLaunchablePanelGroups,
@@ -30,7 +32,9 @@ import {
 import {
   autocompleteForSuggestion,
   buildLauncherSuggestions,
+  groupLauncherSuggestions,
   parseLauncherInput,
+  type LauncherMode,
   type LauncherSuggestion,
   type PanelUsage,
 } from "./launcherSuggestions";
@@ -50,8 +54,19 @@ interface OpenPanel {
 
 type DisplaySuggestion = LauncherSuggestion & { openPanel?: OpenPanel };
 
+type ModePrefix = "" | ">" | "@" | "/";
+
 const PANEL_USAGE_CACHE_KEY = "vibestudio:new-panel-durable-usage";
 const CATALOG_REVALIDATE_INTERVAL_MS = 30_000;
+
+/** With nothing typed there is no relevance signal, so lead with the workspace. */
+const IDLE_GROUP_ORDER: LauncherSuggestion["kind"][] = ["panel", "history", "url", "chat"];
+
+const MODES: Array<{ prefix: Exclude<ModePrefix, "">; mode: LauncherMode; label: string }> = [
+  { prefix: ">", mode: "panels", label: "Panels" },
+  { prefix: "@", mode: "history", label: "History" },
+  { prefix: "/", mode: "chat", label: "Chat" },
+];
 
 function readCachedPanelGroups(): LaunchablePanelGroups | null {
   try {
@@ -161,59 +176,30 @@ function destinationSource(suggestion: LauncherSuggestion): string | null {
   return null;
 }
 
+/** The row's primary line: what the destination is, never how to reach it. */
 function suggestionLabel(suggestion: LauncherSuggestion): string {
   if (suggestion.kind === "panel") return suggestion.panel.title;
   if (suggestion.kind === "history") return suggestion.browser.title || suggestion.browser.url;
-  if (suggestion.kind === "url") return `Open ${suggestion.url}`;
-  return `Chat: ${suggestion.prompt}`;
+  if (suggestion.kind === "url") return suggestion.url;
+  return "Start a new Agentic Chat";
 }
 
-function suggestionMeta(suggestion: LauncherSuggestion): string {
+/** The row's secondary line: where it leads or what activating it will do. */
+function suggestionMeta(suggestion: DisplaySuggestion): string {
   if (suggestion.kind === "panel") return suggestion.panel.description ?? suggestion.panel.path;
   if (suggestion.kind === "history") return suggestion.browser.url;
-  if (suggestion.kind === "url") return "New browser panel";
-  return "New Agentic Chat";
+  if (suggestion.kind === "url") return "Open in a new browser panel";
+  return `Send “${suggestion.prompt}” as the opening message`;
 }
 
-function actionFor(suggestion: DisplaySuggestion): { title: string; detail: string } {
-  if (suggestion.openPanel) {
-    return { title: `Focus ${suggestionLabel(suggestion)}`, detail: "This panel is already open." };
-  }
-  if (suggestion.kind === "panel") {
-    return {
-      title: `Open ${suggestion.panel.title}`,
-      detail: suggestion.panel.description ?? suggestion.panel.path,
-    };
-  }
-  if (suggestion.kind === "history") {
-    return { title: `Revisit ${suggestionLabel(suggestion)}`, detail: suggestion.browser.url };
-  }
-  if (suggestion.kind === "url")
-    return { title: "Open in a browser panel", detail: suggestion.url };
-  return { title: "Start Agentic Chat", detail: "Send this as the opening message." };
+function activationLabel(suggestion: DisplaySuggestion | undefined): string {
+  if (!suggestion) return "Open";
+  if (suggestion.openPanel) return "Focus";
+  return suggestion.kind === "chat" ? "Send" : "Open";
 }
 
-function panelMonogram(path: string, title: string) {
-  const hue = [...path].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 0);
-  return (
-    <Flex
-      align="center"
-      justify="center"
-      aria-hidden="true"
-      style={{
-        width: 26,
-        height: 26,
-        borderRadius: 8,
-        flexShrink: 0,
-        fontSize: 12,
-        fontWeight: 700,
-        color: `hsl(${hue} 65% 35%)`,
-        background: `hsl(${hue} 75% 88%)`,
-      }}
-    >
-      {title.trim().charAt(0).toUpperCase() || "P"}
-    </Flex>
-  );
+function panelHue(path: string): number {
+  return [...path].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 0);
 }
 
 function SuggestionIcon({
@@ -223,19 +209,126 @@ function SuggestionIcon({
   suggestion: LauncherSuggestion;
   favicon?: string;
 }) {
-  if (favicon && (suggestion.kind === "history" || suggestion.kind === "url")) {
-    return <img src={favicon} alt="" width={22} height={22} style={{ borderRadius: 5 }} />;
+  if (suggestion.kind === "panel") {
+    return (
+      <span
+        className="launcher-icon launcher-monogram"
+        aria-hidden="true"
+        style={{ "--launcher-hue": panelHue(suggestion.panel.path) } as CSSProperties}
+      >
+        {suggestion.panel.title.trim().charAt(0).toUpperCase() || "P"}
+      </span>
+    );
   }
-  if (suggestion.kind === "panel")
-    return panelMonogram(suggestion.panel.path, suggestion.panel.title);
-  if (suggestion.kind === "history") return <ClockIcon width={20} height={20} />;
-  if (suggestion.kind === "url") return <GlobeIcon width={20} height={20} />;
-  return <ChatBubbleIcon width={20} height={20} />;
+  if (suggestion.kind === "chat") {
+    return (
+      <span className="launcher-icon launcher-icon-chat" aria-hidden="true">
+        <MagicWandIcon width={16} height={16} />
+      </span>
+    );
+  }
+  return (
+    <span className="launcher-icon" aria-hidden="true">
+      {favicon ? (
+        <img src={favicon} alt="" />
+      ) : suggestion.kind === "history" ? (
+        <ClockIcon width={16} height={16} />
+      ) : (
+        <GlobeIcon width={16} height={16} />
+      )}
+    </span>
+  );
+}
+
+function LauncherNotice({ color, children }: { color: "orange" | "red"; children: ReactNode }) {
+  return (
+    <Callout.Root color={color} size="1" variant="surface">
+      <Callout.Icon>
+        <ExclamationTriangleIcon />
+      </Callout.Icon>
+      <Callout.Text>
+        <Flex align="center" gap="3" wrap="wrap">
+          {children}
+        </Flex>
+      </Callout.Text>
+    </Callout.Root>
+  );
+}
+
+function SuggestionRow({
+  suggestion,
+  selected,
+  pending,
+  disabled,
+  favicon,
+  onSelect,
+  onActivate,
+}: {
+  suggestion: DisplaySuggestion;
+  selected: boolean;
+  pending: boolean;
+  disabled: boolean;
+  favicon?: string;
+  onSelect: () => void;
+  onActivate: () => void;
+}) {
+  const body = (
+    <>
+      <SuggestionIcon suggestion={suggestion} favicon={favicon} />
+      <span className="launcher-row-text">
+        <span className="launcher-title">{suggestionLabel(suggestion)}</span>
+        <span className="launcher-meta">{suggestionMeta(suggestion)}</span>
+      </span>
+      <span className="launcher-row-trailing">
+        {suggestion.openPanel ? <span className="launcher-open-badge">Already open</span> : null}
+        {pending ? (
+          <Spinner size="1" />
+        ) : selected ? (
+          <span className="launcher-enter">↵ {activationLabel(suggestion)}</span>
+        ) : null}
+      </span>
+    </>
+  );
+  const shared = {
+    className: "launcher-row",
+    id: `launcher-${suggestion.id}`,
+    role: "option",
+    "aria-selected": selected,
+    "aria-disabled": disabled || undefined,
+    onMouseMove: onSelect,
+  };
+
+  // A panel destination is a real link, so the usual browser gestures — middle
+  // click, modifier click, copy address — keep working. Everything else is a
+  // command with no addressable target.
+  const href =
+    suggestion.kind === "panel" && !suggestion.openPanel
+      ? buildPanelLink(suggestion.panel.path)
+      : undefined;
+  if (href) {
+    return (
+      <a
+        {...shared}
+        href={href}
+        onClick={(event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          if (!disabled) onActivate();
+        }}
+      >
+        {body}
+      </a>
+    );
+  }
+  return (
+    <button {...shared} type="button" disabled={disabled} onClick={onActivate}>
+      {body}
+    </button>
+  );
 }
 
 function NewPanelPage() {
   const isMobile = useIsMobile();
-  const viewportHeight = useViewportHeight();
   const [panelGroups, setPanelGroups] = useState<LaunchablePanelGroups | null>(
     readCachedPanelGroups
   );
@@ -395,15 +488,25 @@ function NewPanelPage() {
     [browserSuggestions, browserUrl, panelGroups, panelUsage, value]
   );
 
-  const suggestions = useMemo<DisplaySuggestion[]>(() => {
-    return baseSuggestions.map((suggestion) => {
-      const source = destinationSource(suggestion);
-      const openPanel = source
-        ? openPanels.find((entry) => entry.source === source || entry.canonicalSource === source)
-        : undefined;
-      return openPanel ? { ...suggestion, openPanel } : suggestion;
-    });
-  }, [baseSuggestions, openPanels]);
+  const groups = useMemo(
+    () =>
+      groupLauncherSuggestions<DisplaySuggestion>(
+        baseSuggestions.map((suggestion) => {
+          const source = destinationSource(suggestion);
+          const openPanel = source
+            ? openPanels.find(
+                (entry) => entry.source === source || entry.canonicalSource === source
+              )
+            : undefined;
+          return openPanel ? { ...suggestion, openPanel } : suggestion;
+        }),
+        parsedInput.query.trim() ? undefined : IDLE_GROUP_ORDER
+      ),
+    [baseSuggestions, openPanels, parsedInput]
+  );
+
+  // The keyboard walks exactly what the eye walks: grouped display order.
+  const suggestions = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 
   useEffect(() => {
     setSelectedId((current) => {
@@ -451,15 +554,18 @@ function NewPanelPage() {
     return () => clearTimeout(timer);
   }, [favicons, suggestions]);
 
+  const maxInputHeight = isMobile ? 144 : 190;
   const resizeInput = useCallback(() => {
     cancelAnimationFrame(resizeRafRef.current);
     resizeRafRef.current = requestAnimationFrame(() => {
       const input = inputRef.current;
       if (!input) return;
       input.style.height = "auto";
-      input.style.height = `${Math.min(input.scrollHeight, isMobile ? 144 : 190)}px`;
+      input.style.height = `${Math.min(input.scrollHeight, maxInputHeight)}px`;
     });
-  }, [isMobile]);
+  }, [maxInputHeight]);
+  // Programmatic edits (completion, mode toggles, clearing) resize too.
+  useEffect(() => resizeInput(), [resizeInput, value]);
   useEffect(() => () => cancelAnimationFrame(resizeRafRef.current), []);
 
   const beginNavigation = useCallback((target: NavigationTarget, id: string) => {
@@ -521,304 +627,240 @@ function NewPanelPage() {
     setSelectedId(suggestions[next]!.id);
   };
 
-  const action = selected ? actionFor(selected) : null;
-  const actionLabel = selected?.openPanel ? "Focus" : selected?.kind === "chat" ? "Send" : "Open";
-  const listMaxHeight = Math.max(150, Math.min(440, viewportHeight - (isMobile ? 335 : 390)));
+  const replaceInput = useCallback((next: string, caret = next.length) => {
+    selectionTouchedRef.current = false;
+    setSelectedId(null);
+    setValue(next);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(caret, caret);
+    });
+  }, []);
+
+  const toggleMode = (prefix: Exclude<ModePrefix, "">) =>
+    replaceInput(
+      parsedInput.prefix === prefix ? parsedInput.query : `${prefix}${parsedInput.query}`
+    );
+
+  const actionLabel = activationLabel(selected);
+  const showGhost = !!completion && !value.includes("\n");
 
   return (
-    <AboutPage icon={<PlusIcon width={20} height={20} />} title="New Panel" maxWidth={680}>
-      <Section>
-        <Flex align="center" gap="2" mb="2">
-          <GlobeIcon style={{ color: "var(--accent-9)" }} />
-          <Heading size="3">Open anything</Heading>
-        </Flex>
-        <Text as="p" size="2" color="gray" mb="3">
-          Search panels and history, enter a web address, or write a request for Agentic Chat.
-        </Text>
-        <Flex gap="2" mb="2" wrap="wrap" aria-label="Launcher shortcuts">
-          <Text size="1" color={parsedInput.mode === "panels" ? undefined : "gray"}>
-            <kbd className="launcher-shortcut">&gt;</kbd> panels
-          </Text>
-          <Text size="1" color={parsedInput.mode === "history" ? undefined : "gray"}>
-            <kbd className="launcher-shortcut">@</kbd> history
-          </Text>
-          <Text size="1" color={parsedInput.mode === "chat" ? undefined : "gray"}>
-            <kbd className="launcher-shortcut">/</kbd> chat
-          </Text>
-        </Flex>
-        <Flex gap="2" direction={isMobile ? "column" : "row"}>
-          <Box position="relative" style={{ flex: 1, minWidth: 0 }}>
-            {completion && !value.includes("\n") ? (
-              <Box
-                aria-hidden="true"
-                position="absolute"
-                style={{
-                  inset: "11px 12px auto",
-                  zIndex: 0,
-                  whiteSpace: "pre",
-                  pointerEvents: "none",
-                  font: "inherit",
-                }}
-              >
-                <span style={{ visibility: "hidden" }}>{value}</span>
-                <span style={{ color: "var(--gray-8)" }}>{completion.suffix}</span>
-              </Box>
-            ) : null}
-            <TextArea
-              ref={inputRef}
-              autoFocus
-              role="combobox"
-              aria-label="Search panels and history, enter a web address, or start a chat"
-              aria-autocomplete="both"
-              aria-expanded={suggestions.length > 0}
-              aria-controls="launcher-suggestions"
-              aria-activedescendant={selected ? `launcher-${selected.id}` : undefined}
-              enterKeyHint={selected?.kind === "chat" ? "send" : "go"}
-              size="3"
-              rows={1}
-              style={{
-                minHeight: 44,
-                maxHeight: isMobile ? 144 : 190,
-                resize: "none",
-                overflowY: "auto",
-                background: "transparent",
-                position: "relative",
-              }}
-              placeholder="Panel, history, address, or ask an agent…"
-              value={value}
-              onInput={resizeInput}
-              onChange={(event) => {
-                selectionTouchedRef.current = false;
-                setSelectedId(null);
-                setValue(event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "ArrowDown") {
-                  event.preventDefault();
-                  chooseOffset(1);
-                } else if (event.key === "ArrowUp") {
-                  event.preventDefault();
-                  chooseOffset(-1);
-                } else if ((event.key === "Tab" || event.key === "ArrowRight") && completion) {
-                  if (event.key === "Tab" || inputRef.current?.selectionStart === value.length) {
-                    event.preventDefault();
-                    setValue(completion.value);
-                    requestAnimationFrame(() =>
-                      inputRef.current?.setSelectionRange(
-                        completion.value.length,
-                        completion.value.length
-                      )
-                    );
-                  }
-                } else if (event.key === "Enter" && !event.shiftKey && selected) {
-                  event.preventDefault();
-                  activate(selected);
-                } else if (event.key === "Escape") {
+    <AboutPage
+      icon={<PlusIcon width={20} height={20} />}
+      title="New Panel"
+      subtitle="Jump to a panel, revisit a page, or ask an agent."
+      maxWidth={720}
+    >
+      <Box className="launcher-search">
+        <div className="launcher-field">
+          <div className="launcher-entry">
+            <MagnifyingGlassIcon className="launcher-entry-icon" width={18} height={18} />
+            <div className="launcher-input-wrap">
+              {showGhost ? (
+                <div className="launcher-ghost" aria-hidden="true">
+                  <span className="launcher-ghost-typed">{value}</span>
+                  <span className="launcher-ghost-suffix">{completion.suffix}</span>
+                </div>
+              ) : null}
+              <textarea
+                ref={inputRef}
+                className="launcher-input"
+                autoFocus
+                rows={1}
+                role="combobox"
+                aria-label="Search panels and history, enter a web address, or start a chat"
+                aria-autocomplete="both"
+                aria-expanded={suggestions.length > 0}
+                aria-controls="launcher-suggestions"
+                aria-activedescendant={selected ? `launcher-${selected.id}` : undefined}
+                enterKeyHint={selected?.kind === "chat" ? "send" : "go"}
+                style={{ maxHeight: maxInputHeight }}
+                placeholder="Panel, address, or ask an agent…"
+                value={value}
+                onChange={(event) => {
                   selectionTouchedRef.current = false;
-                  setSelectedId(suggestions[0]?.id ?? null);
-                }
-              }}
-            />
-          </Box>
-          <Button size="3" onClick={() => activate(selected)} disabled={!selected || !!pendingId}>
-            {pendingId ? <Spinner /> : <EnterIcon />}
-            {actionLabel}
-          </Button>
-        </Flex>
-        <Text as="p" size="1" color="gray" mt="2">
-          ↑ ↓ choose · Tab or → complete · Enter {actionLabel.toLowerCase()} · Shift+Enter newline
-        </Text>
-      </Section>
-
-      {selected && action ? (
-        <Card
-          className="launcher-preview"
-          mb="3"
-          style={{
-            position: isMobile ? "sticky" : "static",
-            top: isMobile ? 8 : undefined,
-            zIndex: 4,
-            background:
-              "linear-gradient(135deg, var(--accent-3), color-mix(in srgb, var(--accent-2) 62%, transparent))",
-            boxShadow:
-              "inset 3px 0 0 var(--accent-9), 0 8px 28px color-mix(in srgb, var(--accent-9) 10%, transparent)",
-          }}
-        >
-          <Flex align="center" justify="between" gap="3">
-            <Flex align="center" gap="3" style={{ minWidth: 0 }}>
-              <Box style={{ flexShrink: 0, color: "var(--accent-10)" }}>
-                {selected.kind === "chat" ? (
-                  <MagicWandIcon width={19} height={19} />
-                ) : (
-                  <SuggestionIcon
-                    suggestion={selected}
-                    favicon={
-                      selected.kind === "history"
-                        ? (favicons[selected.browser.url] ?? undefined)
-                        : selected.kind === "url"
-                          ? (favicons[selected.url] ?? undefined)
-                          : undefined
+                  setSelectedId(null);
+                  setValue(event.target.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    chooseOffset(1);
+                  } else if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    chooseOffset(-1);
+                  } else if ((event.key === "Tab" || event.key === "ArrowRight") && completion) {
+                    if (event.key === "Tab" || inputRef.current?.selectionStart === value.length) {
+                      event.preventDefault();
+                      replaceInput(completion.value);
                     }
-                  />
-                )}
-              </Box>
-              <Flex direction="column" style={{ minWidth: 0 }}>
-                <Text size="1" color="gray" weight="medium">
-                  ENTER WILL
-                </Text>
-                <Text size="3" weight="bold" truncate>
-                  {action.title}
-                </Text>
-                <Text size="1" color="gray" truncate>
-                  {action.detail}
-                </Text>
-              </Flex>
-            </Flex>
-            <Text size="1" weight="bold" style={{ flexShrink: 0, color: "var(--accent-11)" }}>
-              ↵ {actionLabel}
-            </Text>
-          </Flex>
-        </Card>
+                  } else if (event.key === "Enter" && !event.shiftKey && selected) {
+                    event.preventDefault();
+                    activate(selected);
+                  } else if (event.key === "Escape" && value) {
+                    event.preventDefault();
+                    replaceInput("");
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <div className="launcher-actions">
+            <div className="launcher-modes" aria-label="Search scope">
+              {MODES.map((mode) => (
+                <button
+                  key={mode.prefix}
+                  type="button"
+                  className="launcher-mode"
+                  aria-pressed={parsedInput.mode === mode.mode}
+                  onClick={() => toggleMode(mode.prefix)}
+                >
+                  <span className="launcher-key">{mode.prefix}</span>
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+            <Button
+              size="2"
+              onClick={() => activate(selected)}
+              disabled={!selected || !!pendingId}
+              style={{ flexShrink: 0 }}
+            >
+              {pendingId ? <Spinner size="1" /> : <EnterIcon />}
+              {actionLabel}
+            </Button>
+          </div>
+        </div>
+        <p className="launcher-hint">
+          {[
+            { keys: ["↑", "↓"], label: "choose" },
+            { keys: ["Tab"], label: "complete" },
+            { keys: ["↵"], label: actionLabel.toLowerCase() },
+            { keys: ["⇧", "↵"], label: "new line" },
+          ].map((hint) => (
+            <span key={hint.label} className="launcher-hint-item">
+              {hint.keys.map((key) => (
+                <kbd key={key} className="launcher-hint-key">
+                  {key}
+                </kbd>
+              ))}
+              {hint.label}
+            </span>
+          ))}
+        </p>
+      </Box>
+
+      {catalogError ? (
+        <LauncherNotice color={panelGroups ? "orange" : "red"}>
+          <Text size="2">
+            {panelGroups
+              ? "Panel suggestions may be out of date."
+              : "The panel catalog could not be loaded."}
+          </Text>
+          <Button size="1" variant="soft" onClick={() => void refreshCatalog(true)}>
+            Retry
+          </Button>
+        </LauncherNotice>
+      ) : null}
+      {historyError ? (
+        <LauncherNotice color="orange">
+          <Text size="2">
+            Browser history is unavailable right now — panels and addresses still work.
+          </Text>
+        </LauncherNotice>
+      ) : null}
+      {navigationError ? (
+        <LauncherNotice color="red">
+          <Text size="2">Couldn&apos;t open that destination: {navigationError}</Text>
+          <Button
+            size="1"
+            variant="soft"
+            color="red"
+            onClick={() => {
+              const target = lastNavigationRef.current;
+              if (target && selected) beginNavigation(target, selected.id);
+            }}
+          >
+            Try again
+          </Button>
+        </LauncherNotice>
       ) : null}
 
       {loading && !panelGroups && !suggestions.length ? (
-        <Flex align="center" justify="center" gap="2" py="5">
-          <Spinner />
-          <Text color="gray">Loading destinations…</Text>
+        <Flex direction="column" gap="2" aria-busy="true" aria-label="Loading destinations">
+          {[0, 1, 2, 3].map((row) => (
+            <div key={row} className="launcher-skeleton" />
+          ))}
         </Flex>
       ) : suggestions.length ? (
-        <Box>
-          <Flex align="center" justify="between" mb="2">
-            <Text size="1" color="gray" weight="bold">
-              {parsedInput.mode === "all"
-                ? parsedInput.query.trim()
-                  ? "BEST MATCHES"
-                  : "FREQUENT DESTINATIONS"
-                : `${parsedInput.mode.toUpperCase()} MODE`}
-            </Text>
-            <Text size="1" color="gray">
-              {suggestions.length} {suggestions.length === 1 ? "option" : "options"}
-            </Text>
-          </Flex>
-          <Flex
-            id="launcher-suggestions"
-            role="listbox"
-            aria-label="Open suggestions"
-            direction="column"
-            gap="2"
-            style={{ overflowY: "auto", maxHeight: listMaxHeight, scrollPadding: 8 }}
-          >
-            {suggestions.map((suggestion) => {
-              const isSelected = suggestion.id === selected?.id;
-              const favicon =
-                suggestion.kind === "history"
-                  ? favicons[suggestion.browser.url]
-                  : suggestion.kind === "url"
-                    ? favicons[suggestion.url]
-                    : undefined;
-              return (
-                <Card asChild key={suggestion.id}>
-                  <button
-                    className="launcher-suggestion"
-                    id={`launcher-${suggestion.id}`}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
+        <div
+          className="launcher-results"
+          id="launcher-suggestions"
+          role="listbox"
+          aria-label="Destinations"
+        >
+          {groups.map((group) => (
+            <section key={group.kind} role="group" aria-labelledby={`launcher-group-${group.kind}`}>
+              <h2 className="launcher-group-label" id={`launcher-group-${group.kind}`}>
+                {group.label}
+              </h2>
+              <div className="launcher-group-items">
+                {group.items.map((suggestion) => (
+                  <SuggestionRow
+                    key={suggestion.id}
+                    suggestion={suggestion}
+                    selected={suggestion.id === selected?.id}
+                    pending={suggestion.id === pendingId}
                     disabled={!!pendingId}
-                    onMouseEnter={() => {
+                    favicon={
+                      (suggestion.kind === "history"
+                        ? favicons[suggestion.browser.url]
+                        : suggestion.kind === "url"
+                          ? favicons[suggestion.url]
+                          : undefined) ?? undefined
+                    }
+                    onSelect={() => {
+                      if (suggestion.id === selectedId) return;
                       selectionTouchedRef.current = true;
                       setSelectedId(suggestion.id);
                     }}
-                    onClick={() => activate(suggestion)}
-                    style={{
-                      width: "100%",
-                      border: 0,
-                      textAlign: "left",
-                      color: "inherit",
-                      cursor: pendingId ? "default" : "pointer",
-                      background: isSelected ? "var(--accent-3)" : undefined,
-                      boxShadow: isSelected ? "inset 0 0 0 1px var(--accent-7)" : undefined,
-                      transform: isSelected ? "translateX(2px)" : "translateX(0)",
-                    }}
-                  >
-                    <Flex align="center" justify="between" gap="3">
-                      <Flex align="center" gap="3" style={{ minWidth: 0 }}>
-                        <Box style={{ flexShrink: 0, color: "var(--accent-9)" }}>
-                          <SuggestionIcon suggestion={suggestion} favicon={favicon ?? undefined} />
-                        </Box>
-                        <Flex direction="column" style={{ minWidth: 0 }}>
-                          <Text weight="medium" size="2" truncate>
-                            {suggestionLabel(suggestion)}
-                          </Text>
-                          <Text size="1" color="gray" truncate>
-                            {suggestionMeta(suggestion)}
-                          </Text>
-                        </Flex>
-                      </Flex>
-                      <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
-                        {suggestion.openPanel ? (
-                          <Text size="1" color="green" weight="bold">
-                            Already open
-                          </Text>
-                        ) : null}
-                        <Text size="1" color="gray">
-                          {suggestion.kind === "panel"
-                            ? "Panel"
-                            : suggestion.kind === "history"
-                              ? "History"
-                              : suggestion.kind === "url"
-                                ? "Website"
-                                : "Chat"}
-                        </Text>
-                      </Flex>
-                    </Flex>
-                  </button>
-                </Card>
-              );
-            })}
-          </Flex>
-        </Box>
+                    onActivate={() => activate(suggestion)}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
       ) : (
-        <Card>
-          <Text color="gray" size="2">
-            No matches here. Try another term or remove <kbd>{parsedInput.prefix}</kbd> to search
-            everything.
+        <div className="launcher-empty">
+          <Text size="2" color="gray">
+            {parsedInput.prefix
+              ? `Nothing in ${
+                  MODES.find((mode) => mode.prefix === parsedInput.prefix)?.label.toLowerCase() ??
+                  "this scope"
+                } matches “${parsedInput.query}”.`
+              : `Nothing matches “${parsedInput.query}”.`}
           </Text>
-        </Card>
-      )}
-
-      {catalogError ? (
-        <Text color={panelGroups ? "orange" : "red"} size="2" mt="3">
-          Panel suggestions may be out of date.{" "}
-          <Button variant="ghost" size="1" onClick={() => void refreshCatalog(true)}>
-            Retry
-          </Button>
-        </Text>
-      ) : null}
-      {historyError ? (
-        <Text color="orange" size="2" mt="2">
-          Browser history is temporarily unavailable.
-        </Text>
-      ) : null}
-      {navigationError ? (
-        <Section>
-          <Flex direction="column" gap="2" align="start">
-            <Text color="red" size="2">
-              Couldn&apos;t open that destination: {navigationError}
-            </Text>
-            <Button
-              variant="soft"
-              color="red"
-              onClick={() => {
-                const target = lastNavigationRef.current;
-                if (target && selected) beginNavigation(target, selected.id);
-              }}
-            >
-              Try again
-            </Button>
+          <Flex gap="2" justify="center" wrap="wrap" mt="3">
+            {parsedInput.prefix ? (
+              <Button size="2" variant="soft" onClick={() => replaceInput(parsedInput.query)}>
+                Search everything
+              </Button>
+            ) : null}
+            {parsedInput.query.trim() ? (
+              <Button
+                size="2"
+                variant="soft"
+                onClick={() => replaceInput(`/${parsedInput.query.trim()}`)}
+              >
+                <MagicWandIcon />
+                Ask an agent instead
+              </Button>
+            ) : null}
           </Flex>
-        </Section>
-      ) : null}
+        </div>
+      )}
     </AboutPage>
   );
 }

@@ -151,6 +151,51 @@ export function buildLauncherSuggestions(input: {
     .slice(0, input.limit ?? 10);
 }
 
+export const LAUNCHER_GROUP_LABELS: Record<LauncherSuggestion["kind"], string> = {
+  url: "Web address",
+  panel: "Panels",
+  history: "Recent pages",
+  chat: "Ask an agent",
+};
+
+export interface LauncherGroup<T> {
+  kind: LauncherSuggestion["kind"];
+  label: string;
+  items: T[];
+}
+
+/**
+ * Bucket a ranked list by kind for display.
+ *
+ * Groups appear in order of their best-ranked member, so the strongest match
+ * stays first overall and `groups.flatMap(g => g.items)` — the order the
+ * keyboard walks — always matches what is on screen. Pass `order` when there is
+ * no query to rank against: browsing a launcher with nothing typed should lead
+ * with the workspace's own panels rather than whatever page was visited most.
+ */
+export function groupLauncherSuggestions<T extends { kind: LauncherSuggestion["kind"] }>(
+  suggestions: T[],
+  order?: LauncherSuggestion["kind"][]
+): LauncherGroup<T>[] {
+  const groups: LauncherGroup<T>[] = [];
+  const byKind = new Map<LauncherSuggestion["kind"], LauncherGroup<T>>();
+  for (const suggestion of suggestions) {
+    let group = byKind.get(suggestion.kind);
+    if (!group) {
+      group = { kind: suggestion.kind, label: LAUNCHER_GROUP_LABELS[suggestion.kind], items: [] };
+      byKind.set(suggestion.kind, group);
+      groups.push(group);
+    }
+    group.items.push(suggestion);
+  }
+  if (!order) return groups;
+  const rank = (kind: LauncherSuggestion["kind"]) => {
+    const index = order.indexOf(kind);
+    return index < 0 ? order.length : index;
+  };
+  return groups.sort((a, b) => rank(a.kind) - rank(b.kind));
+}
+
 function completionValue(suggestion: LauncherSuggestion): string | null {
   if (suggestion.kind === "panel") return suggestion.panel.title;
   if (suggestion.kind === "history") return suggestion.browser.url;

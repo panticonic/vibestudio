@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   autocompleteForSuggestion,
   buildLauncherSuggestions,
+  groupLauncherSuggestions,
   isLikelyAgentPrompt,
   parseLauncherInput,
 } from "./launcherSuggestions";
@@ -110,5 +111,31 @@ describe("launcher suggestions", () => {
       value: ">Terminal",
       suffix: "inal",
     });
+  });
+
+  it("groups by kind in best-rank order and preserves the flattened walk order", () => {
+    const ranked = [
+      { kind: "url" as const },
+      { kind: "panel" as const },
+      { kind: "history" as const },
+      { kind: "panel" as const },
+    ];
+    const groups = groupLauncherSuggestions(ranked);
+    expect(groups.map((group) => group.kind)).toEqual(["url", "panel", "history"]);
+    expect(groups.map((group) => group.label)).toEqual(["Web address", "Panels", "Recent pages"]);
+    expect(groups.flatMap((group) => group.items)).toEqual([
+      ranked[0],
+      ranked[1],
+      ranked[3],
+      ranked[2],
+    ]);
+  });
+
+  it("leads with the requested group order when there is no query to rank against", () => {
+    const groups = groupLauncherSuggestions(
+      [{ kind: "history" as const }, { kind: "panel" as const }],
+      ["panel", "history"]
+    );
+    expect(groups.map((group) => group.kind)).toEqual(["panel", "history"]);
   });
 });

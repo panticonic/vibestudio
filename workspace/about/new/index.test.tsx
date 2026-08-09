@@ -57,6 +57,9 @@ const historyRow = {
   last_visit: 100,
 };
 
+/** Rows render their destination as the title line, so match that node only. */
+const findRow = (title: string) => screen.findByText(title, { selector: ".launcher-title" });
+
 let storageValues: Map<string, string>;
 let panelFocusCallback: () => void;
 
@@ -170,8 +173,8 @@ describe("new panel launcher", () => {
     const input = screen.getByRole("combobox");
     fireEvent.change(input, { target: { value: "docs" } });
 
-    await screen.findByText("Chat: docs");
-    await screen.findByText("Example Docs");
+    await findRow("Start a new Agentic Chat");
+    await findRow("Example Docs");
     await waitFor(() =>
       expect(screen.getAllByRole("option")[0]?.getAttribute("aria-selected")).toBe("true")
     );
@@ -191,7 +194,7 @@ describe("new panel launcher", () => {
     render(<AboutPanelRoot />);
     const input = screen.getByRole("combobox");
     fireEvent.change(input, { target: { value: "docs" } });
-    const chat = await screen.findByText("Chat: docs");
+    const chat = await findRow("Start a new Agentic Chat");
     fireEvent.keyDown(input, { key: "ArrowDown" });
     resolveHistory([historyRow]);
     await screen.findByText("Example Docs");
@@ -205,7 +208,7 @@ describe("new panel launcher", () => {
     const input = screen.getByRole("combobox");
     fireEvent.change(input, { target: { value: "example.com" } });
 
-    await screen.findAllByText("Open https://example.com/");
+    await findRow("https://example.com/");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mocks.reopen).toHaveBeenCalledWith({ source: "https://example.com/" });
   });
@@ -220,7 +223,7 @@ describe("new panel launcher", () => {
       target: { value: "Please investigate this issue and explain the best next step" },
     });
 
-    await screen.findAllByText("Start Agentic Chat");
+    await findRow("Start a new Agentic Chat");
     await waitFor(() => expect(input.style.height).toBe("96px"));
     expect(input.tagName).toBe("TEXTAREA");
     expect(fireEvent.keyDown(input, { key: "Enter", shiftKey: true })).toBe(true);
@@ -263,5 +266,30 @@ describe("new panel launcher", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(mocks.focus).toHaveBeenCalledTimes(1));
     expect(mocks.reopen).not.toHaveBeenCalled();
+  });
+
+  it("renders panel destinations as addressable links", async () => {
+    render(<AboutPanelRoot />);
+    const row = (await findRow("Terminal")).closest('[role="option"]');
+    expect(row?.tagName).toBe("A");
+    expect(row?.getAttribute("href")).toBe("/panels/terminal/");
+  });
+
+  it("scopes results from the mode chips without losing the typed query", async () => {
+    render(<AboutPanelRoot />);
+    const input = screen.getByRole("combobox") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "chat" } });
+    await findRow("Chat");
+
+    fireEvent.click(screen.getByRole("button", { name: /Panels/ }));
+    await waitFor(() => expect(input.value).toBe(">chat"));
+    await waitFor(() =>
+      expect(screen.queryAllByRole("group").map((group) => group.textContent?.slice(0, 6))).toEqual(
+        ["Panels"]
+      )
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Panels/ }));
+    await waitFor(() => expect(input.value).toBe("chat"));
   });
 });

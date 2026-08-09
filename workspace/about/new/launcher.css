@@ -1,34 +1,368 @@
-.launcher-shortcut {
-  padding: 1px 5px;
-  border: 1px solid var(--gray-6);
-  border-radius: 5px;
-  background: var(--gray-3);
-  box-shadow: 0 1px 0 var(--gray-6);
+/**
+ * Launcher chrome for the New Panel page.
+ *
+ * Every box here is border-box: rows and the field are full-width with padding
+ * and a border, and content-box sizing pushes them past the column, which is
+ * what produced the stray horizontal scrollbar in the first cut.
+ *
+ * Everything keys off Radix scales and the shared token layer, so light and
+ * dark both read correctly without a per-rule branch. The one exception is the
+ * per-panel monogram hue, which carries an explicit pair of theme values.
+ */
+
+.launcher-search,
+.launcher-search *,
+.launcher-results,
+.launcher-results *,
+.launcher-empty,
+.launcher-skeleton {
+  box-sizing: border-box;
+}
+
+/* ---- Search block -------------------------------------------------------- */
+
+.launcher-search {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-block: 8px;
+  background: var(--color-background);
+}
+
+.launcher-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--gray-a6);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: var(--elevation-1);
+  transition:
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.launcher-field:focus-within {
+  border-color: var(--accent-8);
+  box-shadow: 0 0 0 3px var(--accent-a4);
+}
+
+.launcher-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.launcher-entry-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--gray-9);
+}
+
+.launcher-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.launcher-input,
+.launcher-ghost {
   font-family: inherit;
+  font-size: var(--font-size-3);
+  line-height: var(--line-height-3);
+  letter-spacing: var(--letter-spacing-3);
 }
 
-.launcher-preview {
+.launcher-input {
+  display: block;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: var(--line-height-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  overflow-y: auto;
+  resize: none;
+  background: transparent;
+  color: var(--gray-12);
+}
+
+.launcher-input::placeholder {
+  color: var(--gray-9);
+}
+
+/* Sits directly behind the caret line and mirrors the typed text so only the
+   completion suffix is visible. Same font metrics as the input, no offsets. */
+.launcher-ghost {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.launcher-ghost-typed {
+  visibility: hidden;
+}
+
+.launcher-ghost-suffix {
+  color: var(--gray-8);
+}
+
+.launcher-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.launcher-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.launcher-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--gray-a5);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--gray-11);
+  font-family: inherit;
+  font-size: var(--font-size-1);
+  line-height: 1;
+  cursor: pointer;
   transition:
-    background 160ms ease,
-    box-shadow 160ms ease,
-    transform 160ms ease;
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard);
 }
 
-.launcher-suggestion {
+.launcher-mode:hover {
+  background: var(--gray-a3);
+}
+
+.launcher-mode[aria-pressed="true"] {
+  border-color: var(--accent-a7);
+  background: var(--accent-a3);
+  color: var(--accent-11);
+}
+
+.launcher-key {
+  font-family: var(--code-font-family, ui-monospace, monospace);
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.85;
+}
+
+.launcher-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 8px 4px 0;
+  color: var(--gray-11);
+  font-size: var(--font-size-1);
+  line-height: var(--line-height-1);
+}
+
+.launcher-hint-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.launcher-hint-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--gray-a3);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--gray-12);
+}
+
+/* ---- Results ------------------------------------------------------------- */
+
+.launcher-results {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.launcher-group-label {
+  margin: 0 0 4px 2px;
+  color: var(--gray-10);
+  font-size: var(--font-size-1);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.launcher-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.launcher-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--gray-12);
+  font-family: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
   transition:
-    background 140ms ease,
-    box-shadow 140ms ease,
-    transform 140ms ease;
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard);
 }
 
-.launcher-suggestion:focus-visible {
+.launcher-row:hover {
+  background: var(--gray-a3);
+}
+
+.launcher-row[aria-selected="true"] {
+  border-color: var(--accent-a8);
+  background: var(--accent-a4);
+}
+
+.launcher-row:focus-visible {
   outline: 2px solid var(--accent-9);
   outline-offset: -2px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .launcher-preview,
-  .launcher-suggestion {
-    transition: none !important;
-  }
+.launcher-row:disabled {
+  cursor: default;
+}
+
+.launcher-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.launcher-title,
+.launcher-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.launcher-title {
+  font-size: var(--font-size-2);
+  line-height: var(--line-height-2);
+  font-weight: 500;
+}
+
+.launcher-meta {
+  color: var(--gray-10);
+  font-size: var(--font-size-1);
+  line-height: var(--line-height-1);
+}
+
+.launcher-row-trailing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.launcher-enter {
+  color: var(--accent-11);
+  font-size: var(--font-size-1);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.launcher-open-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--grass-a3);
+  color: var(--grass-11);
+  font-size: var(--font-size-1);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ---- Icons --------------------------------------------------------------- */
+
+.launcher-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--gray-a3);
+  color: var(--gray-11);
+  overflow: hidden;
+}
+
+.launcher-icon img {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.launcher-icon-chat {
+  background: var(--accent-a3);
+  color: var(--accent-11);
+}
+
+.launcher-monogram {
+  --monogram-ink: hsl(var(--launcher-hue) 45% 30%);
+  --monogram-tint: hsl(var(--launcher-hue) 55% 90%);
+  background: var(--monogram-tint);
+  color: var(--monogram-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.radix-themes:where(.dark, .dark-theme) .launcher-monogram {
+  --monogram-ink: hsl(var(--launcher-hue) 70% 82%);
+  --monogram-tint: hsl(var(--launcher-hue) 40% 26%);
+}
+
+/* ---- Placeholder state --------------------------------------------------- */
+
+.launcher-skeleton {
+  height: 46px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--gray-a2) 20%, var(--gray-a4) 50%, var(--gray-a2) 80%);
+  background-size: 220% 100%;
+  animation: ambient-shimmer 1.4s linear infinite;
+}
+
+.launcher-empty {
+  padding: 22px 16px;
+  border: 1px dashed var(--gray-a6);
+  border-radius: 12px;
+  color: var(--gray-11);
+  text-align: center;
 }
