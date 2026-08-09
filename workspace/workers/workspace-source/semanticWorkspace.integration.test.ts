@@ -202,6 +202,16 @@ describe("SemanticWorkspace net-effect merge", () => {
     );
     acknowledge(sourceCommitDispatch);
 
+    const queriedApplicationIds: string[][] = [];
+    const comparisonInternals = semantic as unknown as {
+      changesInApplications(applicationIds: string[]): unknown;
+    };
+    const changesInApplications = comparisonInternals.changesInApplications.bind(semantic);
+    comparisonInternals.changesInApplications = (applicationIds) => {
+      queriedApplicationIds.push([...applicationIds]);
+      return changesInApplications(applicationIds);
+    };
+
     const compared = await semantic.dispatch("compare", {
       ingress,
       input: {
@@ -211,6 +221,9 @@ describe("SemanticWorkspace net-effect merge", () => {
       },
     });
     if (compared.kind !== "complete") throw new Error("compare did not complete");
+    expect(queriedApplicationIds).toHaveLength(2);
+    expect(queriedApplicationIds[0]).not.toContain(baseEdit.workingHead.applicationId);
+    expect(queriedApplicationIds[1]).toEqual([]);
     expect(compared.result).toMatchObject({
       resolution: { complete: false, remainingCoordinateCount: 2, concluded: false },
       counts: { adopt: 2, conflict: 0 },

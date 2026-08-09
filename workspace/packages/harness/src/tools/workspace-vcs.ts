@@ -4,7 +4,6 @@ import { Type } from "@sinclair/typebox";
 import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import type {
-  VcsCompareResult,
   VcsCommitResult,
   VcsDiscardResult,
   VcsInspectResult,
@@ -13,7 +12,7 @@ import type {
   VcsStatusResult,
   VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
-import { driveMerge, renderMergeReview } from "../merge-driver.js";
+import { driveMerge, renderCompareReview, renderMergeReview } from "../merge-driver.js";
 import { semanticRootSchema } from "./provenance.js";
 import { resolveToolFile } from "../semantic-file-resolution.js";
 import {
@@ -212,30 +211,6 @@ export type ToolWorkflowVcs = Pick<
   | "readFile"
 >;
 
-function compareText(result: VcsCompareResult): string {
-  const counts = result.counts;
-  const lines = [
-    result.resolution.complete
-      ? `Merge is complete${result.resolution.concluded ? " and concluded" : " but not yet concluded by a merge decision"}.`
-      : `Merge is incomplete; ${result.resolution.remainingCoordinateCount} coordinate${result.resolution.remainingCoordinateCount === 1 ? "" : "s"} remain.`,
-    `Compared ${result.source.kind === "event" ? result.source.eventId : result.source.deltaId}: ` +
-      `${counts.adopt} adopt, ${counts.convergent} convergent, ${counts.composed} composed, ` +
-      `${counts.conflict} conflict, ${counts.resolved} resolved.`,
-  ];
-  for (const intent of result.intents) {
-    lines.push(
-      `intent ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`
-    );
-  }
-  for (const coordinate of result.coordinates)
-    lines.push(
-      `${coordinate.coordinate.kind}:${coordinate.coordinate.id} · ${coordinate.status} · ${coordinate.summary}`
-    );
-  if (result.nextCursor)
-    lines.push(`More coordinates: rerun compare with after=${result.nextCursor}`);
-  return lines.join("\n");
-}
-
 function mutationText(verb: string, result: VcsWorkingMutationResult): string {
   return (
     `${verb} in ${result.applicationId}; work unit ${result.workUnitId}; ` +
@@ -351,7 +326,7 @@ export function createWorkspaceVcsTool(
           ...(command.after ? { cursor: command.after } : {}),
           limit: command.limit ?? 100,
         });
-        return resultOf(command.operation, compareText(result), result);
+        return resultOf(command.operation, renderCompareReview(result), result);
       }
 
       if (command.operation === "merge") {
@@ -372,7 +347,7 @@ export function createWorkspaceVcsTool(
         });
         return resultOf(
           command.operation,
-          renderMergeReview(driven.review, command.sourceEventId),
+          renderMergeReview(driven.review),
           driven
         );
       }

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { VcsMergeResult, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
-import { driveMerge, MergeDriverError, renderMergeReview } from "./merge-driver.js";
+import {
+  driveMerge,
+  MergeDriverError,
+  renderCompareReview,
+  renderMergeReview,
+} from "./merge-driver.js";
 
 const event = (eventId: string): VcsStateNodeRef => ({ kind: "event", eventId });
 const application = (applicationId: string): VcsStateNodeRef => ({
@@ -392,5 +397,54 @@ describe("renderMergeReview", () => {
     expect(text.match(/Intent: trigger · Build the task app/g)).toHaveLength(1);
     expect(text).toContain("Integration: semantically complete");
     expect(text).toContain("remain local until the parent commits them");
+  });
+});
+
+describe("renderCompareReview", () => {
+  it("renders bounded coordinates and deduplicated intent evidence for every caller", () => {
+    const text = renderCompareReview({
+      target: event("target"),
+      source: { kind: "event", eventId: "source" },
+      base: event("base"),
+      resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
+      counts: counts(1),
+      intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 2 },
+      coordinates: [
+        {
+          coordinate: {
+            kind: "file",
+            id: "file:one",
+            paths: { theirs: "packages/example/index.ts" },
+          },
+          status: "adopt",
+          aspects: [],
+          attribution: { ours: [], theirs: [] },
+          resolutions: ["theirs", "ours", "current"],
+          summary: "adopt file packages/example/index.ts",
+        },
+      ],
+      intents: [
+        {
+          workUnitId: "work:one",
+          side: "theirs",
+          state: "pending",
+          intent: { tier: "stated", text: "Add the example" },
+          coordinates: [{ kind: "file", id: "file:one" }],
+        },
+        {
+          workUnitId: "work:two",
+          side: "theirs",
+          state: "pending",
+          intent: { tier: "stated", text: "Add the example" },
+          coordinates: [{ kind: "file", id: "file:one" }],
+        },
+      ],
+      intentsTruncated: false,
+      nextCursor: "cursor:next",
+    });
+
+    expect(text.match(/Intent: theirs\/pending · stated · Add the example/g)).toHaveLength(1);
+    expect(text).toContain("Coordinate: file:file:one · adopt");
+    expect(text).toContain("nextCursor=cursor:next");
   });
 });

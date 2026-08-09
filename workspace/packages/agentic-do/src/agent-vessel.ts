@@ -39,6 +39,7 @@ import {
   formatEvalResult,
   normalizeEvalToolSource,
   resolveToolFile,
+  renderCompareReview,
   renderMergeReview,
   type ChannelEvent,
   type EvalRunResult,
@@ -6296,6 +6297,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     let statusFetchMs = 0;
     let semanticQueryMs = 0;
     let result: unknown;
+    let renderedResult: string | null = null;
     let semanticRun = run;
     let semanticProjections: readonly VcsIntegrationProjection[] = [];
     let semanticWorkingHead: VcsStateNodeRef | undefined;
@@ -6352,6 +6354,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           ? "Comparison includes the child's committed work."
           : "Comparison includes committed work only; workingCounts reports additional uncommitted semantic work.",
       };
+      renderedResult =
+        `${renderCompareReview(comparison)}\n` +
+        (status.clean
+          ? "Child source is committed and clean."
+          : `Child has ${status.workingCounts.changes} additional uncommitted semantic change(s); comparison includes committed work only.`);
     } else if (q === "log") {
       const status = await childStatus;
       statusFetchMs = performance.now() - childStatusStartedAt;
@@ -6393,15 +6400,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         },
       });
     }
-    return this.toolText(typeof result === "string" ? result : JSON.stringify(result, null, 2), {
-      runId: subagentRunHandle(run.runId),
-      query: q,
-      semanticIntegration: semanticIntegrationForRun(
-        semanticRun,
-        semanticProjections,
-        semanticWorkingHead
-      ),
-    });
+    return this.toolText(
+      renderedResult ?? (typeof result === "string" ? result : JSON.stringify(result, null, 2)),
+      {
+        runId: subagentRunHandle(run.runId),
+        query: q,
+        semanticIntegration: semanticIntegrationForRun(
+          semanticRun,
+          semanticProjections,
+          semanticWorkingHead
+        ),
+      }
+    );
   }
 
   /** Merge a child event through the same coordinate engine used everywhere else. */
@@ -6539,7 +6549,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const closeGuidance = closingPermitted
       ? `Close: permitted for ${subagentRunHandle(run.runId)} after verification; closing releases the child resources and retains this integration receipt.`
       : `Close: not permitted yet; ${driven.review.resolution.remainingCoordinateCount} semantic coordinate(s) still require integration or an explicit resolution.`;
-    return this.toolText(`${renderMergeReview(driven.review, sourceEventId)}\n${closeGuidance}`, {
+    return this.toolText(`${renderMergeReview(driven.review)}\n${closeGuidance}`, {
       protocol: SUBAGENT_MERGE_PROTOCOL,
       runId: subagentRunHandle(run.runId),
       sourceEventId,

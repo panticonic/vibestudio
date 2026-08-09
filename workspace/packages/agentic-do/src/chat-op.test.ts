@@ -2699,8 +2699,9 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     const out = await probe.inspectSubagentForTest(runId, "diff");
     const text = (out.content[0] as { text?: string } | undefined)?.text ?? "";
 
-    expect(text).toContain('"source": {');
-    expect(text).toContain('"eventId": "event:child"');
+    expect(text).toContain("Source event:child: 1 adopt");
+    expect(text).toContain("Coordinate: file:child · adopt · child");
+    expect(text).toContain("Child source is committed and clean");
     expect(text.length).toBeLessThan(20_000);
     expect(probe.rpcCalls.filter(({ method }) => method.startsWith("vcs."))).toEqual([
       {

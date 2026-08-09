@@ -7401,6 +7401,7 @@ export class SemanticWorkspace {
     let baseStates: StateNodeRef[];
     let sourceRoot: string;
     let sourceChanges: ChangeRecord[];
+    let sourceApplicationIds: string[] | null = null;
     let sourceEventId: string | null = null;
     let sourceDeltaId: string | null = null;
     if (source.kind === "event") {
@@ -7413,9 +7414,11 @@ export class SemanticWorkspace {
         eventId,
       }));
       sourceRoot = this.deps.store.stateRoot({ kind: "event", eventId: source.eventId });
-      sourceChanges = this.changesInApplications(
-        this.firstParentLineage({ kind: "event", eventId: source.eventId }).applicationIds
-      );
+      sourceApplicationIds = this.firstParentLineage({
+        kind: "event",
+        eventId: source.eventId,
+      }).applicationIds;
+      sourceChanges = [];
     } else {
       const delta = this.deps.store.externalDelta(source.deltaId);
       if (!delta)
@@ -7426,6 +7429,25 @@ export class SemanticWorkspace {
       sourceChanges = this.sourceChangesForDelta(delta);
     }
     const base = baseStates[0]!;
+    let targetComparisonApplicationIds = targetLine.applicationIds;
+    if (sourceApplicationIds) {
+      // Exact applications present on both first-parent lines are shared
+      // history, regardless of whether the graph has one or several maximal
+      // merge bases. Remove that intersection before expanding changes so
+      // comparison cost follows the branch delta rather than the imported
+      // workspace. This reuses the two already-bounded lineage walks.
+      const targetApplicationIds = new Set(targetComparisonApplicationIds);
+      const sharedApplicationIds = new Set(
+        sourceApplicationIds.filter((applicationId) => targetApplicationIds.has(applicationId))
+      );
+      sourceApplicationIds = sourceApplicationIds.filter(
+        (applicationId) => !sharedApplicationIds.has(applicationId)
+      );
+      targetComparisonApplicationIds = targetComparisonApplicationIds.filter(
+        (applicationId) => !sharedApplicationIds.has(applicationId)
+      );
+      sourceChanges = this.changesInApplications(sourceApplicationIds);
+    }
     const baseRoot = this.deps.store.stateRoot(base);
     const targetRoot = this.deps.store.stateRoot(targetState);
     const decisions = this.reachableCoordinateDecisions(targetLine.applicationIds, source);
@@ -7439,7 +7461,7 @@ export class SemanticWorkspace {
         maximum: 10_000,
       });
     }
-    const targetChanges = this.changesInApplications(targetLine.applicationIds);
+    const targetChanges = this.changesInApplications(targetComparisonApplicationIds);
     const sourceChangesByCoordinate = this.changesByMergeCoordinate(sourceChanges);
     const targetChangesByCoordinate = this.changesByMergeCoordinate(targetChanges);
     const initialCoordinates = [...sourceCoordinates.values()];
@@ -7764,24 +7786,26 @@ export class SemanticWorkspace {
     const touched = new Map(
       coordinates.map((coordinate) => [keyFor(coordinate.coordinate), coordinate])
     );
-    const targetRepositoryEntries = this.deps.store.facts.entries(targetRoot, "repository");
-    const targetFileEntries = this.deps.store.facts.entries(targetRoot, "file");
-    const targetRepositoryIds = new Set(targetRepositoryEntries.map((entry) => entry.key));
-    const targetFileIds = new Set(targetFileEntries.map((entry) => entry.key));
-    const targetCoordinates: MergeCoordinate[] = [
-      ...targetRepositoryEntries.map((entry) => ({
-        kind: "repository" as const,
-        id: entry.key,
-      })),
-      ...targetFileEntries.map((entry) => ({ kind: "file" as const, id: entry.key })),
-      ...coordinates.map((coordinate) => coordinate.coordinate),
-    ];
-    const targetEndpointByKey = this.coordinateEndpoints(targetRoot, [
-      ...new Map(targetCoordinates.map((coordinate) => [keyFor(coordinate), coordinate])).values(),
-    ]);
+    // Structural validity depends on the touched coordinates, their destination
+    // occupants, and their repository containers—not on every coordinate in
+    // the workspace. Destination occupants were added to the comparison above,
+    // so keep this pass proportional to the merge neighborhood. Repository
+    // containers are resolved lazily when a touched file references one.
+    const targetEndpointByKey = this.coordinateEndpoints(
+      targetRoot,
+      coordinates.map((coordinate) => coordinate.coordinate)
+    );
+    const targetEndpoint = (coordinate: MergeCoordinate): Row => {
+      const key = keyFor(coordinate);
+      const cached = targetEndpointByKey.get(key);
+      if (cached) return cached;
+      const endpoint = this.coordinateEndpoint(targetRoot, coordinate);
+      targetEndpointByKey.set(key, endpoint);
+      return endpoint;
+    };
     const endpoints = new Map<string, Row>();
     for (const coordinate of coordinates) {
-      const ours = targetEndpointByKey.get(keyFor(coordinate.coordinate))!;
+      const ours = targetEndpoint(coordinate.coordinate);
       const theirs = sourceEndpoints.get(keyFor(coordinate.coordinate));
       if (!theirs) {
         throw new SemanticVcsError(
@@ -7823,37 +7847,24 @@ export class SemanticWorkspace {
       path: string,
       coordinate: MergeCoordinate
     ) => map.set(path, [...(map.get(path) ?? []), coordinate]);
-    for (const entry of targetRepositoryEntries) {
-      const coordinate = { kind: "repository" as const, id: entry.key };
-      const current = targetEndpointByKey.get(keyFor(coordinate))!;
-      if (current["presence"] === "present" && typeof current["repoPath"] === "string") {
-        targetRepositoryOccupants.set(String(current["repoPath"]), coordinate);
-      }
-      const endpoint = endpoints.get(keyFor(coordinate)) ?? current;
-      if (endpoint["presence"] === "present" && typeof endpoint["repoPath"] === "string") {
-        addOwner(repositoryOwners, String(endpoint["repoPath"]), coordinate);
-      }
-    }
     for (const coordinate of coordinates.filter((row) => row.coordinate.kind === "repository")) {
-      if (targetRepositoryIds.has(coordinate.coordinate.id)) continue;
+      const current = targetEndpoint(coordinate.coordinate);
+      if (current["presence"] === "present" && typeof current["repoPath"] === "string") {
+        targetRepositoryOccupants.set(String(current["repoPath"]), coordinate.coordinate);
+      }
       const endpoint = endpoints.get(keyFor(coordinate.coordinate))!;
       if (endpoint["presence"] === "present" && typeof endpoint["repoPath"] === "string") {
         addOwner(repositoryOwners, String(endpoint["repoPath"]), coordinate.coordinate);
       }
     }
-    for (const entry of targetFileEntries) {
-      const coordinate = { kind: "file" as const, id: entry.key };
-      const current = targetEndpointByKey.get(keyFor(coordinate))!;
-      if (current["kind"] === "file") {
-        targetFileOccupants.set(`${current["repositoryId"]}:${current["path"]}`, coordinate);
-      }
-      const endpoint = endpoints.get(keyFor(coordinate)) ?? current;
-      if (endpoint["kind"] === "file") {
-        addOwner(fileOwners, `${endpoint["repositoryId"]}:${endpoint["path"]}`, coordinate);
-      }
-    }
     for (const coordinate of coordinates.filter((row) => row.coordinate.kind === "file")) {
-      if (targetFileIds.has(coordinate.coordinate.id)) continue;
+      const current = targetEndpoint(coordinate.coordinate);
+      if (current["kind"] === "file") {
+        targetFileOccupants.set(
+          `${current["repositoryId"]}:${current["path"]}`,
+          coordinate.coordinate
+        );
+      }
       const endpoint = endpoints.get(keyFor(coordinate.coordinate))!;
       if (endpoint["kind"] === "file") {
         addOwner(
@@ -7897,7 +7908,7 @@ export class SemanticWorkspace {
             baseEndpoints.get(keyFor(coordinate)) ?? this.coordinateEndpoint(baseRoot, coordinate),
             aspect
           ),
-          ours: this.aspectValue(targetEndpointByKey.get(keyFor(coordinate))!, aspect),
+          ours: this.aspectValue(targetEndpoint(coordinate), aspect),
           theirs: this.aspectValue(source, aspect),
           status: "conflict",
         });
@@ -7970,8 +7981,8 @@ export class SemanticWorkspace {
       if (endpoint["kind"] !== "file") continue;
       const repository = { kind: "repository" as const, id: String(endpoint["repositoryId"]) };
       const repositoryEndpoint =
-        endpoints.get(keyFor(repository)) ?? targetEndpointByKey.get(keyFor(repository))!;
-      const targetRepositoryEndpoint = targetEndpointByKey.get(keyFor(repository))!;
+        endpoints.get(keyFor(repository)) ?? targetEndpoint(repository);
+      const targetRepositoryEndpoint = targetEndpoint(repository);
       if (
         targetRepositoryEndpoint["presence"] !== "present" &&
         repositoryEndpoint["presence"] === "present"

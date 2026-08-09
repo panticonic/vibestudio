@@ -129,10 +129,7 @@ export async function driveMerge(input: DriveMergeInput): Promise<DriveMergeResu
       if (preflight.counts.conflict > 0) {
         review = reviewFromCompare(preflight, headline);
         throw new MergeDriverError(
-          renderMergeReview(
-            review,
-            input.source.kind === "event" ? input.source.eventId : undefined
-          ),
+          renderMergeReview(review),
           merges,
           review
         );
@@ -219,7 +216,7 @@ export async function driveMerge(input: DriveMergeInput): Promise<DriveMergeResu
   }
 }
 
-export function renderMergeReview(review: MergeReview, sourceEventId?: string): string {
+export function renderMergeReview(review: MergeReview): string {
   const lines = [
     review.headline,
     `Resolution: complete=${review.resolution.complete}; concluded=${review.resolution.concluded}; remaining=${review.resolution.remainingCoordinateCount}.`,
@@ -250,12 +247,46 @@ export function renderMergeReview(review: MergeReview, sourceEventId?: string): 
   }
   if (review.nextConflictCursor) {
     lines.push(
-      `More conflicts: vcs compare --source ${sourceEventId ?? "<source>"} --status conflict --after ${review.nextConflictCursor}`
+      `More conflicts: nextConflictCursor=${review.nextConflictCursor}; continue compare with the same source and this cursor.`
     );
   }
   if (review.resolution.complete && review.resolution.concluded) {
     lines.push(
       "Integration: semantically complete. The parent workspace may still be dirty because integrated changes remain local until the parent commits them."
+    );
+  }
+  return lines.join("\n");
+}
+
+/** One intent-aware presentation for every semantic comparison surface. */
+export function renderCompareReview(result: VcsCompareResult): string {
+  const counts = result.counts;
+  const lines = [
+    result.resolution.complete
+      ? `Comparison is complete${result.resolution.concluded ? " and semantically concluded" : " but has not been concluded by a merge decision"}.`
+      : `Comparison has ${result.resolution.remainingCoordinateCount} remaining coordinate${result.resolution.remainingCoordinateCount === 1 ? "" : "s"}.`,
+    `Source ${sourceLabel(result.source)}: ${counts.adopt} adopt, ${counts.convergent} convergent, ${counts.composed} composed, ${counts.conflict} conflict, ${counts.resolved} resolved.`,
+  ];
+  const renderedIntents = new Set<string>();
+  for (const intent of result.intents) {
+    const key = `${intent.side}\u0000${intent.state ?? ""}\u0000${intent.intent.tier}\u0000${intent.intent.text}`;
+    if (renderedIntents.has(key)) continue;
+    renderedIntents.add(key);
+    lines.push(
+      `Intent: ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`
+    );
+  }
+  if (result.intentsTruncated) {
+    lines.push("Intent projection is truncated; structured details contain the bounded projection.");
+  }
+  for (const coordinate of result.coordinates) {
+    lines.push(
+      `Coordinate: ${coordinate.coordinate.kind}:${coordinate.coordinate.id} · ${coordinate.status} · ${coordinate.summary}`
+    );
+  }
+  if (result.nextCursor) {
+    lines.push(
+      `More coordinates: nextCursor=${result.nextCursor}; continue compare with the same source and this cursor.`
     );
   }
   return lines.join("\n");

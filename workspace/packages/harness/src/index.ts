@@ -8,7 +8,12 @@
 // the local tools, prompt composition, and shared types.
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
-export { driveMerge, renderMergeReview, MergeDriverError } from "./merge-driver.js";
+export {
+  driveMerge,
+  renderCompareReview,
+  renderMergeReview,
+  MergeDriverError,
+} from "./merge-driver.js";
 export type { DriveMergeInput, DriveMergeResult, MergeReview } from "./merge-driver.js";
 export { resolveToolFile, resolveToolRepository } from "./semantic-file-resolution.js";
 export type { PresentToolRepository, ToolFileResolution } from "./semantic-file-resolution.js";

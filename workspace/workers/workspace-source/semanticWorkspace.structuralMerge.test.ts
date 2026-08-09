@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@vibestudio/content-addressing";
 import { createInMemorySql } from "@vibestudio/durable/test-utils";
 import { createSemanticVcsSchema } from "./semanticVcsSchema.js";
@@ -112,6 +112,7 @@ describe("SemanticWorkspace structural merge planning", () => {
     const committed = pending<{ event: { kind: "event"; eventId: string } }>(committedDispatch);
     acknowledge(committedDispatch);
 
+    const fullWorkspaceScan = vi.spyOn(store.facts, "entries");
     const compared = await semantic.dispatch("compare", {
       ingress,
       input: {
@@ -121,6 +122,7 @@ describe("SemanticWorkspace structural merge planning", () => {
       },
     });
     if (compared.kind !== "complete") throw new Error("compare did not complete");
+    expect(fullWorkspaceScan).not.toHaveBeenCalled();
     const coordinates = (
       compared.result as {
         coordinates: Array<{
