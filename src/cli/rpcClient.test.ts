@@ -400,6 +400,50 @@ describe("rpcClient", () => {
     expect(webRtcMocks.ctor).not.toHaveBeenCalled();
   });
 
+  it("opens sibling transports from one resolved workspace route", async () => {
+    localTransportMocks.resolve.mockResolvedValue({
+      serverUrl: "http://127.0.0.1:46247",
+    });
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) => {
+        requests.push(String(url));
+        if (String(url).endsWith("/refresh-shell")) {
+          return new Response(
+            refreshShellResult("loopback-token", `shell:${PAIRED_CREDS.deviceId}`)
+          );
+        }
+        if (String(url) === "http://127.0.0.1:46247/rpc") {
+          return new Response(
+            rpcResult({
+              workspace: "dev",
+              workspaceId: PAIRED_CREDS.workspaceId,
+              running: true,
+              serverUrl: "http://127.0.0.1:46247/_workspace/dev",
+              workspaceReach: PAIRED_CREDS.workspacePairing,
+              serverId: PAIRED_CREDS.serverId,
+              serverBootId: `boot_${"C".repeat(24)}`,
+            })
+          );
+        }
+        return new Response(rpcResult({ workspace: "dev" }));
+      })
+    );
+
+    const primary = new RpcClient(PAIRED_CREDS);
+    const sibling = await primary.openSiblingConnection();
+    await primary.call("auth.getConnectionInfo", []);
+    await sibling.call("auth.getConnectionInfo", []);
+
+    expect(localTransportMocks.resolve).toHaveBeenCalledOnce();
+    expect(requests.filter((url) => url === "http://127.0.0.1:46247/rpc")).toHaveLength(1);
+    expect(
+      requests.filter((url) => url === "http://127.0.0.1:46247/_workspace/dev/rpc")
+    ).toHaveLength(2);
+    expect(webRtcMocks.ctor).not.toHaveBeenCalled();
+  });
+
   it("does not hide a rejected local workspace route behind a WebRTC fallback", async () => {
     localTransportMocks.resolve.mockRejectedValue(
       new Error("The local hub routed the paired device to a different server or workspace")

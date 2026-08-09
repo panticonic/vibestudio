@@ -6,12 +6,18 @@ import {
   settleSystemTestStartup,
   systemTestJsonPageExpression,
   systemTestDoctorRecovery,
+  systemTestCoordinatorScopeKey,
   systemTestRunCode,
 } from "./systemTestCommands.js";
 import { RpcError } from "./rpcClient.js";
 import { AuthError } from "./output.js";
 
 describe("system-test status polling", () => {
+  it("addresses the durable coordinator separately from the runner notebook", () => {
+    expect(systemTestCoordinatorScopeKey("st_one")).toBe("system-test-coordinator:st_one");
+    expect(systemTestCoordinatorScopeKey("st_one")).not.toBe("st_one");
+  });
+
   it("reopens after a stale one-invocation host attestation", () => {
     expect(
       isRetryableSystemTestStatusReadFailure(
@@ -219,6 +225,36 @@ describe("system-test startup preparation", () => {
       )
     ).resolves.toBe(result);
     expect(reads).toBe(1);
+  });
+
+  it("waits while the required extension set and its provider check settle together", async () => {
+    let reads = 0;
+    const result = await settleSystemTestDoctor(
+      async () => {
+        reads += 1;
+        return reads === 1
+          ? {
+              ok: false,
+              checks: [
+                {
+                  name: "required-extensions",
+                  ok: false,
+                  detail: "declared workspace extensions: claude-code=approval-required",
+                },
+                {
+                  name: "claude-code-extension",
+                  ok: false,
+                  detail: "Extension is not installed; registry status: pending-approval",
+                },
+              ],
+            }
+          : { ok: true, checks: [] };
+      },
+      { deadlineMs: 1_000, pollMs: 0 }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(reads).toBe(2);
   });
 });
 

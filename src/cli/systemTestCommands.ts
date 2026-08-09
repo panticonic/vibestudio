@@ -15,7 +15,6 @@ import type {
 } from "@vibestudio/shared/approvals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
-import { loadCliCredentials, requireDeviceCliCredentials } from "./credentialStore.js";
 import {
   CliError,
   ConnectionError,
@@ -127,15 +126,62 @@ const SYSTEM_TEST_SESSION = "system-tests";
 const SYSTEM_TEST_RUNNER_SOURCE = "workers/system-test-runner";
 const SYSTEM_TEST_RUNNER_CLASS = "SystemTestRunnerDO";
 
-async function systemTestRunnerFor(scope: SessionScope): Promise<RuntimeEntityHandle> {
+export function systemTestCoordinatorScopeKey(runId: string): string {
+  return `system-test-coordinator:${runId}`;
+}
+
+async function systemTestRunnerFor(
+  scope: SessionScope,
+  contextId: string,
+  key: string
+): Promise<RuntimeEntityHandle> {
   const runtime = typedClient("runtime", runtimeMethods, scope.client);
   return runtime.createEntity({
     kind: "do",
     execution: { surface: "code", source: SYSTEM_TEST_RUNNER_SOURCE },
     className: SYSTEM_TEST_RUNNER_CLASS,
-    key: `cli-${scope.session.scopeKey}`,
-    contextId: scope.contextId,
+    key,
+    contextId,
   });
+}
+
+async function withIsolatedSystemTestRunner<T>(
+  scope: SessionScope,
+  use: (runner: RuntimeEntityHandle) => Promise<T>
+): Promise<T> {
+  const runtime = typedClient("runtime", runtimeMethods, scope.client);
+  const context = await runtime.createContext({});
+  let runner: RuntimeEntityHandle | null = null;
+  let result: T | undefined;
+  let operationFailure: unknown = null;
+  try {
+    runner = await systemTestRunnerFor(scope, context.contextId, `cli-utility-${randomUUID()}`);
+    result = await use(runner);
+  } catch (error) {
+    operationFailure = error;
+  }
+
+  const cleanupFailures: unknown[] = [];
+  if (runner) {
+    try {
+      await runtime.retireEntity({ id: runner.id });
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+  }
+  try {
+    await runtime.destroyContext({ contextId: context.contextId, recursive: true });
+  } catch (error) {
+    cleanupFailures.push(error);
+  }
+  if (operationFailure || cleanupFailures.length > 0) {
+    const failures = [operationFailure, ...cleanupFailures].filter(
+      (failure): failure is NonNullable<typeof failure> => failure !== null
+    );
+    if (failures.length === 1) throw failures[0];
+    throw new AggregateError(failures, "System-test utility execution or cleanup failed");
+  }
+  return result as T;
 }
 
 async function resolveSystemTestScope(
@@ -428,10 +474,11 @@ async function startRun(
     sessionName: scope.session.name,
     ownerId: scope.session.entityId,
     contextId: scope.contextId,
-    // Each system-test run is its own finite notebook. Reusing the interactive
-    // session's warm eval scope across runs mixes distinct orchestrator trust
-    // units and is rejected by the execution-session registry.
-    subKey: runId,
+    // The durable CLI coordinator and the blessed runner are different
+    // notebook trust units even when a direct invocation resolves both to the
+    // same owner session. Give the coordinator its own address; the runner
+    // deliberately keeps runId for its finite test notebook.
+    subKey: systemTestCoordinatorScopeKey(runId),
     artifactDir: systemTestArtifactDir(runId, artifactRoot),
     config,
   };
@@ -617,10 +664,11 @@ async function list(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const scope = await resolveSystemTestScope(inv);
-    const runner = await systemTestRunnerFor(scope);
-    const tests = await scope.client.callTarget(runner.targetId, "listSystemTests", [
-      typeof inv.flags["category"] === "string" ? inv.flags["category"] : undefined,
-    ]);
+    const tests = await withIsolatedSystemTestRunner(scope, (runner) =>
+      scope.client.callTarget(runner.targetId, "listSystemTests", [
+        typeof inv.flags["category"] === "string" ? inv.flags["category"] : undefined,
+      ])
+    );
     printResult(tests, {
       json,
       human: () => {
@@ -1242,26 +1290,27 @@ async function cancel(inv: ParsedInvocation): Promise<number> {
 async function doctor(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const readDoctor = async (): Promise<SystemTestDoctorResult> => {
-      const scope = await resolveSystemTestScope(inv);
-      const runner = await systemTestRunnerFor(scope);
-      return scope.client.callTarget(runner.targetId, "doctor", [
-        typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined,
-      ]);
-    };
-    let prepared: Awaited<ReturnType<typeof settleSystemTestStartup>> | null = null;
-    if (inv.flags["approve-startup"] === true) {
-      const approvals = startupApprovalPort();
-      try {
-        prepared = await settleSystemTestStartup(readDoctor, approvals, {
-          onStatus: (status) => console.error(`[system-test] waiting for startup: ${status}`),
-        });
-      } finally {
-        await approvals.close();
+    const scope = await resolveSystemTestScope(inv);
+    const result = await withIsolatedSystemTestRunner(scope, async (runner) => {
+      const readDoctor = (): Promise<SystemTestDoctorResult> =>
+        scope.client.callTarget(runner.targetId, "doctor", [
+          typeof inv.flags["model"] === "string" ? inv.flags["model"] : undefined,
+        ]);
+      let prepared: Awaited<ReturnType<typeof settleSystemTestStartup>> | null = null;
+      if (inv.flags["approve-startup"] === true) {
+        const approvals = await startupApprovalPort(scope);
+        try {
+          prepared = await settleSystemTestStartup(readDoctor, approvals, {
+            onStatus: (status) => console.error(`[system-test] waiting for startup: ${status}`),
+          });
+        } finally {
+          await approvals.close();
+        }
       }
-    }
-    const value = prepared?.doctor ?? (await readDoctor());
-    const result = prepared ? { ...value, startupApprovals: prepared.startupApprovals } : value;
+      const value = prepared?.doctor ?? (await readDoctor());
+      return prepared ? { ...value, startupApprovals: prepared.startupApprovals } : value;
+    });
+    const value = result;
     printResult(result, {
       json,
       human: () => {
@@ -1411,14 +1460,19 @@ function doctorIsWaitingForApprovedBuilds(
   const transientStates = options.allowMissing
     ? /\b(?:missing|pending-approval|approval-required|building)\b/
     : /\b(?:pending-approval|approval-required|building)\b/;
-  return (
-    failures.length === 1 &&
-    failures[0]?.name === "required-extensions" &&
-    transientStates.test(failures[0].detail)
+  const requiredExtensions = failures.find((check) => check.name === "required-extensions");
+  if (!requiredExtensions || !transientStates.test(requiredExtensions.detail)) return false;
+  return failures.every(
+    (check) =>
+      check === requiredExtensions ||
+      (check.name === "claude-code-extension" &&
+        /(?:pending-approval|approval-required|not installed|no active approved build)/u.test(
+          check.detail
+        ))
   );
 }
 
-function startupApprovalPort(): {
+async function startupApprovalPort(scope: SessionScope): Promise<{
   listPending(): Promise<PendingApproval[]>;
   getWorkspaceCreationReviewState(): Promise<WorkspaceCreationReviewState>;
   resolveInstallReview(approval: PendingUnitInstallReviewApproval): Promise<void>;
@@ -1426,15 +1480,10 @@ function startupApprovalPort(): {
   observationRevision(): number;
   waitForChange(afterRevision: number): Promise<void>;
   close(): Promise<void>;
-} {
-  const loaded = loadCliCredentials();
-  if (!loaded?.workspaceName) {
-    throw new CliError("system-test startup preparation requires a selected workspace");
-  }
-  const credentials = requireDeviceCliCredentials(loaded, "system-test startup preparation");
-  const client = typedClient("shellApproval", shellApprovalMethods, new RpcClient(credentials));
-  const eventsRpc = new RpcClient(credentials);
-  const events = new EventsClient(eventsRpc);
+}> {
+  const client = typedClient("shellApproval", shellApprovalMethods, scope.client);
+  const eventRpc = await scope.client.openSiblingConnection();
+  const events = new EventsClient(eventRpc);
   let revision = 0;
   const waiters = new Set<() => void>();
   const changed = () => {
@@ -1474,9 +1523,11 @@ function startupApprovalPort(): {
       removeBuildListener();
       for (const resolve of waiters) resolve();
       waiters.clear();
-      const unsubscribe = events.unsubscribeAll();
-      await eventsRpc.close();
-      await unsubscribe;
+      try {
+        await events.unsubscribeAll();
+      } finally {
+        await eventRpc.close();
+      }
     },
   };
 }

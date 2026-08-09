@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as path from "node:path";
+import * as fs from "node:fs";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import {
@@ -26,7 +27,7 @@ function runCli(instanceId: string, command: readonly string[]): Promise<number>
   });
 }
 
-function prepareFreshInstance(instanceId: string): Promise<void> {
+function prepareFreshInstance(instanceId: string, expectedWorkspaceId: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -40,9 +41,14 @@ function prepareFreshInstance(instanceId: string): Promise<void> {
         "--approve-startup",
         "--json",
       ],
-      { cwd: process.cwd(), env: process.env, stdio: ["ignore", "ignore", "pipe"] }
+      { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] }
     );
+    let output = "";
     let diagnostics = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      output += chunk;
+    });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       diagnostics += chunk;
@@ -58,10 +64,42 @@ function prepareFreshInstance(instanceId: string): Promise<void> {
           )
         );
       } else {
-        resolve();
+        try {
+          const line = output
+            .trim()
+            .split(/\r?\n/u)
+            .reverse()
+            .find((candidate) => candidate.trim().startsWith("{"));
+          const result = line ? (JSON.parse(line) as Record<string, unknown>) : null;
+          const checks = Array.isArray(result?.["checks"])
+            ? (result["checks"] as Array<Record<string, unknown>>)
+            : [];
+          const server = checks.find((check) => check["name"] === "server");
+          const data =
+            server?.["data"] && typeof server["data"] === "object"
+              ? (server["data"] as Record<string, unknown>)
+              : null;
+          if (data?.["workspaceId"] !== expectedWorkspaceId) {
+            throw new Error(
+              `system-test startup preparation reached workspace ${String(data?.["workspaceId"] ?? "unknown")}; expected ${expectedWorkspaceId}`
+            );
+          }
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
       }
     });
   });
+}
+
+function pairedWorkspaceId(instanceRoot: string): string {
+  const credentialsPath = path.join(instanceRoot, "cli-credentials.json");
+  const value = JSON.parse(fs.readFileSync(credentialsPath, "utf8")) as Record<string, unknown>;
+  if (typeof value["workspaceId"] !== "string" || value["workspaceId"].length === 0) {
+    throw new Error(`managed instance credentials do not name a workspace: ${credentialsPath}`);
+  }
+  return value["workspaceId"];
 }
 
 async function main(): Promise<void> {
@@ -104,7 +142,7 @@ async function main(): Promise<void> {
   // leaves a race where it can return at transport readiness and the creation
   // review appears immediately afterward, blocking the first real test.
   if (ensured.created) {
-    await prepareFreshInstance(ensured.instance.id);
+    await prepareFreshInstance(ensured.instance.id, pairedWorkspaceId(ensured.instance.root));
   }
   const command =
     ensured.managed &&

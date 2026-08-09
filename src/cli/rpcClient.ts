@@ -400,6 +400,34 @@ export class RpcClient {
     return await client.onRecovery(handler);
   }
 
+  /**
+   * Open an independent transport to the same resolved workspace endpoint.
+   *
+   * Long-lived streams must not own the connection used for ordinary RPCs.
+   * For a complete workspace credential, resolve the local/remote route once
+   * on this client and clone the resulting endpoint identity rather than
+   * independently routing a second time.
+   */
+  async openSiblingConnection(): Promise<RpcClient> {
+    if (this.cliCredentials) {
+      const local = await this.ensureLocalWorkspaceClient();
+      if (local) return await local.openSiblingConnection();
+    }
+    if (this.rawToken) {
+      return new RpcClient({
+        url: this.url,
+        token: this.rawToken,
+        ...(this.pairing ? { workspacePairing: this.pairing } : {}),
+      });
+    }
+    const device = this.deviceCredential();
+    return new RpcClient({
+      url: this.url,
+      ...device,
+      ...(this.pairing ? { pairing: this.pairing } : {}),
+    });
+  }
+
   async close(): Promise<void> {
     const webRtc = this.webRtcClient;
     const ws = this.wsClient;
