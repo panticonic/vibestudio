@@ -6199,7 +6199,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     parentChannelId?: string,
     page: { limit: number; cursor?: string } = { limit: 20 }
   ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const wrapperStartedAt = performance.now();
+    const wrapperWallStartedAt = Date.now();
     const run = await this.resolveSubagentRun(runId, parentChannelId);
+    const runResolvedAt = performance.now();
     if (!run) {
       throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
     }
@@ -6256,7 +6259,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       });
     }
     const vcs = createSubagentVcsClient(this.rpc);
+    const childStatusStartedAt = performance.now();
     const childStatus = vcs.status({ contextId: run.childContextId });
+    let statusFetchMs = 0;
+    let semanticQueryMs = 0;
     let result: unknown;
     let semanticRun = run;
     let semanticProjections: readonly VcsIntegrationProjection[] = [];
@@ -6265,6 +6271,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         childStatus,
         run.parentContextId ? vcs.status({ contextId: run.parentContextId }) : null,
       ]);
+      statusFetchMs = performance.now() - childStatusStartedAt;
       if (status.clean && status.committed.kind === "event") {
         this.subagentRuns.setSourceEventId(run.runId, status.committed.eventId);
         semanticRun = { ...run, sourceEventId: status.committed.eventId };
@@ -6279,12 +6286,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         childStatus,
         vcs.status({ contextId: run.parentContextId }),
       ]);
+      statusFetchMs = performance.now() - childStatusStartedAt;
+      const queryStartedAt = performance.now();
       const comparison = await vcs.compare({
         target: parentStatus.workingHead,
         source: { kind: "event", eventId: status.committed.eventId },
         limit: page.limit,
         ...(page.cursor ? { cursor: page.cursor } : {}),
       });
+      semanticQueryMs = performance.now() - queryStartedAt;
       if (status.clean && status.committed.kind === "event") {
         this.subagentRuns.setSourceEventId(run.runId, status.committed.eventId);
         semanticRun = { ...run, sourceEventId: status.committed.eventId };
@@ -6309,16 +6319,22 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       };
     } else if (q === "log") {
       const status = await childStatus;
+      statusFetchMs = performance.now() - childStatusStartedAt;
+      const queryStartedAt = performance.now();
       result = await vcs.history({
         root: status.committed,
         direction: "past",
         limit: page.limit,
         ...(page.cursor ? { cursor: page.cursor } : {}),
       });
+      semanticQueryMs = performance.now() - queryStartedAt;
     } else {
       const status = await childStatus;
+      statusFetchMs = performance.now() - childStatusStartedAt;
       const requestedPath = q.replace(/^\/+/, "");
+      const queryStartedAt = performance.now();
       const file = await resolveToolFile(vcs, status.workingHead, requestedPath);
+      semanticQueryMs = performance.now() - queryStartedAt;
       if (!file) {
         throw this.subagentReferenceError(
           `no managed file at ${requestedPath} in subagent ${subagentRunHandle(run.runId)}; ` +
@@ -6327,6 +6343,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         );
       }
       result = file;
+    }
+    const totalMs = performance.now() - wrapperStartedAt;
+    if (totalMs >= 100) {
+      this.traceHotPath(run.parentChannelId, "subagent-inspect.completed", {
+        startedAt: wrapperWallStartedAt,
+        details: {
+          queryKind:
+            q === "status" || q === "diff" || q === "log" ? q : "managed-file",
+          runResolutionMs: Math.round(runResolvedAt - wrapperStartedAt),
+          statusFetchMs: Math.round(statusFetchMs),
+          semanticQueryMs: Math.round(semanticQueryMs),
+          totalMs: Math.round(totalMs),
+        },
+      });
     }
     return this.toolText(typeof result === "string" ? result : JSON.stringify(result, null, 2), {
       runId: subagentRunHandle(run.runId),
@@ -6343,6 +6373,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     toolRpc: RpcClient = this.rpc
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const wrapperStartedAt = performance.now();
+    const wrapperWallStartedAt = Date.now();
     const run = await this.resolveSubagentRun(runId, parentChannelId);
     const runResolvedAt = performance.now();
     if (!run) {
@@ -6451,6 +6482,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         totalMs,
         mergeCalls,
         compareCalls,
+      });
+      this.traceHotPath(run.parentChannelId, "subagent-merge.completed", {
+        startedAt: wrapperWallStartedAt,
+        details: {
+          runResolutionMs: Math.round(runResolvedAt - wrapperStartedAt),
+          sourceVerificationMs: Math.round(sourceVerifiedAt - runResolvedAt),
+          driveMergeMs: Math.round(performance.now() - sourceVerifiedAt),
+          totalMs: Math.round(totalMs),
+          mergeCalls,
+          compareCalls,
+        },
       });
     }
     const closingPermitted =
