@@ -104,13 +104,12 @@ describe("ClaudeLaunchProfile", () => {
     ]);
     expect(launch.env).toMatchObject({
       VIBESTUDIO_LAUNCH_PROFILE: launch.profileDir,
-      VIBESTUDIO_BRIDGE_SOCKET: path.join(launch.profileDir, "bridge.sock"),
-      VIBESTUDIO_BRIDGE_GENERATION: "session:channel/one",
+      VIBESTUDIO_ENTITY_ID: "entity-one",
+      VIBESTUDIO_VESSEL_REF: "do:linked:one",
       CLAUDE_CONFIG_DIR: path.join(launch.profileDir, "claude-config"),
     });
     expect(launch.env).not.toHaveProperty("VIBESTUDIO_AGENT_TOKEN");
     expect(launch.env).not.toHaveProperty("VIBESTUDIO_SERVER_URL");
-    expect(launch.env).not.toHaveProperty("VIBESTUDIO_VESSEL_REF");
     const settings = JSON.parse(
       await readFile(path.join(launch.profileDir, "settings.json"), "utf8")
     );

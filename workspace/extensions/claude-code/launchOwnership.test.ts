@@ -56,7 +56,7 @@ describe.skipIf(process.platform === "win32")("Claude durable launch ownership",
     const logPath = path.join(profileDir, "headless.log");
     const log = ownBoundedLaunchLog(fixture, logPath, 4_096);
     const record: ClaudeLaunchRecord = {
-      version: 3,
+      version: 4,
       launchId,
       entityId: "entity-1",
       contextId: "context-1",
@@ -68,7 +68,6 @@ describe.skipIf(process.platform === "win32")("Claude durable launch ownership",
       materialization: {
         profileDir,
         logPath,
-        broker: { socketPath: path.join(profileDir, "bridge.sock"), generation: launchId },
         credentialState: null,
       },
       process: created.identity,
@@ -147,14 +146,44 @@ describe.skipIf(process.platform === "win32")("Claude durable launch ownership",
       "version-2.json"
     );
     expect(migrated).toMatchObject({
-      version: 3,
+      version: 4,
       materialization: {
-        broker: {
-          socketPath: path.join(profileDir, "bridge.sock"),
-          generation: "generation",
-        },
+        profileDir,
       },
     });
     expect(migrated).not.toHaveProperty("vesselRef");
+  });
+
+  it("parses an obsolete broker receipt only into broker-free retirement state", () => {
+    const profileDir = "/state/agent-launch/Z2VuZXJhdGlvbg.unique";
+    const migrated = parseClaudeLaunchRecord(
+      {
+        version: 3,
+        launchId: "generation",
+        entityId: "entity",
+        contextId: "context",
+        channelId: "channel",
+        ownerKind: "extension-headless",
+        phase: "active",
+        agentId: "agent-id",
+        preparedAt: new Date().toISOString(),
+        materialization: {
+          profileDir,
+          logPath: path.join(profileDir, "headless.log"),
+          broker: {
+            socketPath: path.join(profileDir, "bridge.sock"),
+            generation: "generation",
+          },
+          credentialState: null,
+        },
+        process: null,
+      },
+      "version-3.json"
+    );
+    expect(migrated).toMatchObject({
+      version: 4,
+      materialization: { profileDir, logPath: path.join(profileDir, "headless.log") },
+    });
+    expect(migrated.materialization).not.toHaveProperty("broker");
   });
 });

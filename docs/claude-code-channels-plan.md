@@ -1,9 +1,9 @@
 # Claude Code Sessions as First-Class Channel Agents
 
-Status: ACTIVE ARCHITECTURE CHECKPOINT (2026-08-09, rev 5). The interactive and
-extension-headless managed launchers own the narrow broker/environment seam; a
-filesystem/network confidentiality envelope and permission relay remain explicit
-follow-up boundaries. Do not read historical W1–W7 targets as landed behavior.
+Status: ACTIVE ARCHITECTURE CHECKPOINT (2026-08-09, rev 6). The interactive and
+extension-headless managed launchers provision one isolated ordinary CLI login for
+the linked agent; a filesystem/network confidentiality envelope and permission relay
+remain explicit follow-up boundaries. Do not read historical W1–W7 targets as landed behavior.
 Rev 2 replaced the earlier `agent-external` participant-class redesign with a userland
 **linked-agent vessel**: the Claude Code session's system identity is a real agent DO,
 and the local process is a thin peripheral attached to it.
@@ -29,10 +29,10 @@ workspace, not a foreign process:
    every other agent_, with identity, presence, addressing, and a durable trajectory —
    surfaced to Claude Code via its native **channels** mechanism (an MCP server we
    implement).
-3. It receives a **narrow channel authority**: channel participation, hook telemetry,
-   link status, and workspace-skill resources. It does not receive a
-   general Vibestudio bearer or authenticated fs/vcs/eval CLI surface. Local tools may
-   inspect bytes already present in the read-only projection.
+3. It receives its own **entity-scoped agent identity** through the canonical
+   mode-0600 CLI profile. Claude, channel-host, and ordinary `vibestudio` commands
+   all use that same login and the public CLI/RPC authorization policy. It never
+   receives or impersonates the human device refresh identity.
 4. Tool-use permission prompts remain on Claude Code's local terminal. Remote relay is
    not advertised until a real workspace approval owns the verdict; the existing vessel
    auto-allow dead end is not an approval boundary.
@@ -213,18 +213,19 @@ the linked agent is then invited to _that_ channel.
    `{ protocol: "vibestudio.claude-launch.v1", launchId, executable: "claude",
 environment }`. It contains semantic identity, the short-lived agent credential, vessel,
    and optional subagent duty. This response exists only in launcher memory long enough to
-   construct the authority broker; it is never used as Claude's environment or written as a
-   profile. It
+   materialize the isolated agent CLI profile; it is never used as a spawned
+   environment variable. It
    contains no server URL, context folder, profile directory, skills directory, or
    already-expanded argv.
 5. The machine that will actually execute Claude validates its local Claude Code
    version and materializes the declaration below its own disposable launch-state
    root. That local profile contains `mcp.json`, hook-only `settings.json`, and a
-   mode-`0600` diagnostic `env.json`; its argv points only at those local files. The
-   materializer writes only non-secret context and per-generation broker coordinates.
-   The launcher retains the selected local hub/WebRTC route, token, and vessel in memory
-   and uses them to construct a host-owned broker. Workspace skills are served as
-   authenticated MCP resources through that broker. The launcher removes the profile and calls
+   mode-`0600` diagnostic `env.json`, plus the canonical
+   `home/.config/vibestudio/cli-credentials.json`; its argv points only at local files.
+   The CLI profile intentionally contains the linked agent bearer and its exact direct or
+   pairing-derived workspace reach, never a human device refresh token. Channel-host and
+   arbitrary `vibestudio` subprocesses load it through `loadCliCredentials` and the
+   ordinary `RpcClient`. The launcher removes the profile and calls
    `release` on exit, launch failure, context mismatch, or denied terminal approval.
 
 Owner-only authority fields in the `prepare` response (never written or spawned):
@@ -237,20 +238,13 @@ VIBESTUDIO_CHANNEL_ID       primary channel id
 VIBESTUDIO_VESSEL_REF       linked vessel target
 ```
 
-Claude's materialized environment contains only context/channel identity, the disposable
-profile path, the broker socket path plus exact launch generation, `CLAUDE_CONFIG_DIR`, and
-optional subagent duty. It contains no token, server URL, vessel reference, entity id,
-device credential, or generic RPC route. The spawn environment is deny-by-default: it
+Claude's materialized environment contains non-secret context/channel/entity/vessel
+coordinates, the disposable profile path, `CLAUDE_CONFIG_DIR`, and optional subagent
+duty. It contains no token, server URL, device credential, or generic RPC route.
+The spawn environment is deny-by-default: it
 copies an explicit runtime/locale/certificate/credential-free-proxy allowlist rather than
 spreading `process.env`. Claude's isolated `.credentials.json` remains the unavoidable
 provider login projected into its private config.
-
-The broker endpoint lives at a durable per-generation path inside a mode-`0700` directory;
-the Unix socket itself is created mode `0600`, is ready before Claude is spawned, and is
-unlinked when its launcher owner exits. Possession of the socket coordinate is useful only
-for the exact generation handshake. The protocol has strict, bounded schemas for
-`openBridge`, `say`, `complete`, permission request/delivery, hook ingestion, skill
-list/read, and link status. There is no generic RPC method or caller-selected target.
 
 `release({ entityId, launchId })` revokes only that exact preparation generation's
 credential and removes only its extension-local materialization. A CLI owns and
@@ -442,10 +436,10 @@ CLI scope resolution precedence (implemented once in `resolveSessionScope`):
 3. cwd-upward search for `.vibestudio-context.json`;
 4. the named default session file (today's behavior).
 
-Inside a launched Claude Code session, `vibestudio claude channel-host`, hook `emit`, and
-`status` use only local broker/profile coordinates. Other `vibestudio` commands do not
-inherit an agent credential. A human CLI inside a bound context still uses the separately
-paired device credential under the ordinary scope rules.
+Inside a launched Claude Code session, channel-host and every ordinary `vibestudio`
+command load the same isolated agent profile. Context scope comes from the non-secret
+launch coordinate. Device/hub lifecycle commands explicitly reject agent profiles;
+workspace commands use the ordinary server authorization policy.
 
 ### 6.3 New command group: `channel`
 
@@ -475,9 +469,9 @@ describe it, but linked bridge instructions do not advertise it.
 
 The piece Claude Code spawns as its channel MCP server. **A CLI subcommand** — it stays
 host-side in `src/cli/claude/` because it is now genuinely thin: stdio MCP on one side,
-the per-generation Unix broker protocol on the other. The launcher-side broker alone owns
-the credential, route, vessel target, and generic RPC client. All agentic semantics live
-in the vessel (§5); no workspace imports, no boundary tension, no separate bin to ship.
+the ordinary authenticated `RpcClient` on the other. It loads the same canonical
+agent CLI profile available to other commands and targets the owner-provisioned vessel.
+All agentic semantics live in the vessel (§5); no workspace imports and no separate bin.
 
 One process, three relays:
 
@@ -486,15 +480,14 @@ One process, three relays:
 - Declares `claude/channel` and tools. It deliberately omits
   `claude/channel/permission` until the workspace can produce a trusted human verdict.
 - `instructions` teach the session the contract: how `<channel source="vibestudio">`
-  events look, that `say` replies to the conversation, that only already-materialized
-  projection bytes are locally readable, that general fs/vcs/eval authority is absent,
-  and what the meta attributes mean.
+  events look, that `say` replies to the conversation, that ordinary CLI operations
+  run as the linked agent and remain subject to server authorization, and what the
+  meta attributes mean.
 
 ### 7.2 Vessel response (streaming RPC, toward the workspace)
 
-- Connects to the owner-provisioned broker using its socket path and exact generation,
-  then holds the broker's `openBridge` stream open. The broker owns the corresponding
-  `vessel.openBridge` response and raw credential. The channel host requires the ACK
+- Loads the isolated canonical agent profile and holds `vessel.openBridge` through
+  the ordinary `RpcClient`. The channel host requires the ACK
   before binding the hook socket, consumes data records in order, and acks durable
   delivery cursors (§5.1).
 - Transport recovery opens one replacement response after the routed connection is
@@ -523,10 +516,7 @@ verdict the same power as the local terminal. Therefore the bridge must not adve
 `vessel.requestPermission` implementation immediately emitted `allow` with no human
 decision; that is not an approval system and must never be reachable as a relay.
 
-The broker retains a strict request schema for the future seam: the request id is exactly
-five lowercase letters excluding `l`, matching Claude Code's issued IDs. The current CLI
-authority rejects the operation and the MCP server omits the capability. A future
-checkpoint may enable it only when an approvals-service request returns the verdict,
+A future checkpoint may enable it only when an approvals-service request returns the verdict,
 the verdict is bound to the exact still-open request id, and disconnect/cancellation
 retires the pending approval. There is no compatibility fallback to auto-allow.
 
@@ -643,8 +633,8 @@ idempotent past a real complete, so runs never dangle as "running".
 An MCP child cannot retrofit filesystem containment around an already-running Claude
 parent. Plugin/adoption mode is therefore deleted, including its per-context hook
 socket and warning-based divergence path. `channel-host` requires owner-provisioned
-broker socket/generation coordinates; without them, it refuses and directs the user to
-`vibestudio claude`.
+identity/context/vessel coordinates and a matching isolated canonical agent CLI profile;
+without them it refuses and directs the user to `vibestudio claude`.
 
 The launcher executes Claude through Linux bubblewrap. The host filesystem and exact
 context projection are read-only mounts; `/tmp` and one disposable profile-local
@@ -653,13 +643,14 @@ against the context receive `EROFS`, while scratch stays usable. The launch fail
 when bubblewrap is absent or on a platform without an audited backend. `chmod`, Claude
 permission mode, and prompt instructions are not treated as containment.
 
-This checkpoint removes ambient environment and Vibestudio credential exposure from both
-managed launch owners, but does not claim filesystem or network confidentiality:
-the current bubblewrap declaration still read-binds `/` and leaves the host network
+This checkpoint removes ambient environment and bearer environment-variable exposure
+from both managed launch owners. The bearer is intentionally readable through the
+linked agent's own mode-0600 CLI profile. It does not claim filesystem or network
+confidentiality: the current bubblewrap declaration still read-binds `/` and leaves the host network
 available. Replacing that with an allowlisted external-agent runtime envelope is a
-separate boundary change. A live extension launch keeps its authority only in memory; on
-extension restart it fails closed by adopting and retiring the exact durable process group
-before credential/profile release instead of persisting a reconstructable bearer.
+separate boundary change. Durable launch records retain only process/profile coordinates,
+never the bearer or server route. On extension restart the owner adopts and retires the
+exact process group before revoking the credential and removing the profile.
 
 There are now two explicit states only:
 
@@ -717,7 +708,7 @@ model, wire protocol, and schemaVersion untouched.)
 ## 10. Managed-only checkpoint implementation
 
 There are no compatibility/adoption paths: the linked-agent vessel, context terminals,
-explicit launcher, narrow broker, and contained bridge form one managed architecture.
+explicit launcher, isolated agent CLI login, and contained bridge form one managed architecture.
 Unfinished boundaries stay unavailable rather than being simulated: permission relay is
 not advertised, and the filesystem/network envelope replaces (rather than layers
 exceptions onto) the current read-only-root declaration.

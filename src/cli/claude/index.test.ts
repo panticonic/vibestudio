@@ -13,7 +13,7 @@ const AGENT_ID = `agt_${"a".repeat(24)}`;
 const AGENT_TOKEN = `agent:${AGENT_ID}:${"s".repeat(43)}`;
 const SERVER_ID = `srv_${"s".repeat(24)}`;
 const PAIRING = {
-  room: "paired",
+  room: "paired-room",
   fp: "AA".repeat(32),
   sig: "wss://signal.example/",
   v: 2 as const,
@@ -96,8 +96,6 @@ describe("remote Claude launch materialization", () => {
     const profilesRoot = path.join(tmpRoot, "local-cli-state", "claude-launches");
     fs.mkdirSync(contextDirectory, { recursive: true });
     const release = vi.fn(async () => {});
-    const brokerClose = vi.fn(async () => {});
-    const startBroker = vi.fn(async (input) => ({ ...input, close: brokerClose }));
     const spawnLaunch = vi.fn(async (launch: MaterializedClaudeLaunch, cwd: string) => {
       expect(cwd).toBe(contextDirectory);
       expect(launch.profileDir.startsWith(profilesRoot)).toBe(true);
@@ -115,24 +113,15 @@ describe("remote Claude launch materialization", () => {
         contextDirectory,
         profilesRoot,
         cliRoute: {
-          ...directRoute("webrtc://paired/_workspace/dev"),
+          ...directRoute("webrtc://paired-room/_workspace/dev"),
           workspacePairing: PAIRING,
         },
         release,
         spawnLaunch,
-        startBroker,
       })
     ).resolves.toBe(7);
 
     expect(release).toHaveBeenCalledExactlyOnceWith("entity-remote", "entity-remote");
-    expect(startBroker).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentToken: AGENT_TOKEN,
-        serverUrl: "webrtc://paired/_workspace/dev",
-        vesselRef: expect.stringContaining("LinkedAgentWorker"),
-      })
-    );
-    expect(brokerClose).toHaveBeenCalledOnce();
     expect(fs.readdirSync(profilesRoot)).toEqual([]);
   });
 
@@ -151,7 +140,6 @@ describe("remote Claude launch materialization", () => {
         profilesRoot: path.join(tmpRoot, "profiles"),
         cliRoute: directRoute(),
         release: vi.fn(async () => undefined),
-        startBroker: vi.fn(async (input) => ({ ...input, close: vi.fn(async () => undefined) })),
         spawnLaunch: vi.fn(async (launch: MaterializedClaudeLaunch) => {
           fs.writeFileSync(
             path.join(launch.env.CLAUDE_CONFIG_DIR, ".credentials.json"),
@@ -180,7 +168,6 @@ describe("remote Claude launch materialization", () => {
         cliRoute: directRoute(),
         release,
         spawnLaunch,
-        startBroker: vi.fn(),
       })
     ).rejects.toThrow(/local tree is ctx-local/);
     expect(spawnLaunch).not.toHaveBeenCalled();
@@ -206,7 +193,6 @@ describe("remote Claude launch materialization", () => {
         spawnLaunch: vi.fn(async () => {
           throw launchError;
         }),
-        startBroker: vi.fn(async (input) => ({ ...input, close: vi.fn(async () => {}) })),
       })
     ).rejects.toBe(launchError);
   });

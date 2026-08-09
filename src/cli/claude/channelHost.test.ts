@@ -28,12 +28,26 @@ afterEach(() => {
 });
 
 const LAUNCH_ENV = {
+  VIBESTUDIO_ENTITY_ID: "ent-1",
   VIBESTUDIO_CONTEXT_ID: "ctx-1",
   VIBESTUDIO_CHANNEL_ID: "chan-1",
+  VIBESTUDIO_VESSEL_REF: "do:workers/linked-agent:LinkedAgentWorker:linked:ent-1",
   VIBESTUDIO_LAUNCH_PROFILE: "/tmp/vibestudio-test-profile",
-  VIBESTUDIO_BRIDGE_SOCKET: "/tmp/vibestudio-test-profile/bridge.sock",
-  VIBESTUDIO_BRIDGE_GENERATION: "generation-1",
 } as NodeJS.ProcessEnv;
+const AGENT_CREDENTIAL = {
+  schemaVersion: 1 as const,
+  kind: "agent" as const,
+  url: "https://workspace.example/",
+  workspaceId: "workspace-1",
+  workspaceName: "dev",
+  serverId: `srv_${"S".repeat(24)}`,
+  entityId: "ent-1",
+  contextId: "ctx-1",
+  agentId: `agt_${"A".repeat(24)}`,
+  agentToken: `agent:agt_${"A".repeat(24)}:${"T".repeat(43)}`,
+  signedInAt: 1,
+};
+const BRIDGE_ENVIRONMENT = { loadCredentials: () => AGENT_CREDENTIAL };
 
 describe("Claude channel boundary", () => {
   it("keeps registration explicitly unconfirmed after MCP initialization", () => {
@@ -238,31 +252,39 @@ describe("Claude channel boundary", () => {
 
 describe("resolveBridgeConfig", () => {
   it("prefers the complete canonical launch-profile env", async () => {
-    const config = await resolveBridgeConfig({ ...LAUNCH_ENV, VIBESTUDIO_LAUNCH_PROFILE: tmpRoot });
+    const config = await resolveBridgeConfig(
+      { ...LAUNCH_ENV, VIBESTUDIO_LAUNCH_PROFILE: tmpRoot },
+      BRIDGE_ENVIRONMENT
+    );
     expect(config.mode).toBe("launched");
-    expect(config.brokerSocketPath).toBe(LAUNCH_ENV["VIBESTUDIO_BRIDGE_SOCKET"]);
-    expect(config.brokerGeneration).toBe("generation-1");
+    expect(config.credentials).toBe(AGENT_CREDENTIAL);
+    expect(config.vesselRef).toBe(LAUNCH_ENV["VIBESTUDIO_VESSEL_REF"]);
     expect(config.hookSocketPaths[0]).toBe(path.join(tmpRoot, "hook.sock"));
     expect(config.hookSocketPaths).toEqual([path.join(tmpRoot, "hook.sock")]);
   });
 
   it("does not consume ambient credentials or server routing", async () => {
-    const config = await resolveBridgeConfig({
-      ...LAUNCH_ENV,
-      VIBESTUDIO_AGENT_TOKEN: "must-not-be-read",
-      VIBESTUDIO_SERVER_URL: "https://must-not-be-read.invalid",
-      VIBESTUDIO_VESSEL_REF: "must-not-be-read",
-    });
+    const config = await resolveBridgeConfig(
+      {
+        ...LAUNCH_ENV,
+        VIBESTUDIO_AGENT_TOKEN: "must-not-be-read",
+        VIBESTUDIO_SERVER_URL: "https://must-not-be-read.invalid",
+      },
+      BRIDGE_ENVIRONMENT
+    );
     expect(JSON.stringify(config)).not.toMatch(/must-not-be-read/);
   });
 
   it("parses the subagent duty out of the launch env", async () => {
-    const config = await resolveBridgeConfig({
-      ...LAUNCH_ENV,
-      VIBESTUDIO_SUBAGENT_RUN_ID: "run-1",
-      VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: "chan-parent",
-      VIBESTUDIO_SUBAGENT_CONTRACT: "## Subagent Operating Contract\ncontract body",
-    });
+    const config = await resolveBridgeConfig(
+      {
+        ...LAUNCH_ENV,
+        VIBESTUDIO_SUBAGENT_RUN_ID: "run-1",
+        VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID: "chan-parent",
+        VIBESTUDIO_SUBAGENT_CONTRACT: "## Subagent Operating Contract\ncontract body",
+      },
+      BRIDGE_ENVIRONMENT
+    );
     expect(config.subagent).toEqual({
       runId: "run-1",
       parentChannelId: "chan-parent",
@@ -271,16 +293,16 @@ describe("resolveBridgeConfig", () => {
   });
 
   it("leaves subagent unset without the run-id env", async () => {
-    const config = await resolveBridgeConfig({
-      ...LAUNCH_ENV,
-      VIBESTUDIO_SUBAGENT_CONTRACT: "orphan contract",
-    });
+    const config = await resolveBridgeConfig(
+      { ...LAUNCH_ENV, VIBESTUDIO_SUBAGENT_CONTRACT: "orphan contract" },
+      BRIDGE_ENVIRONMENT
+    );
     expect(config.subagent).toBeUndefined();
   });
 
   it("rejects a partial launch env loudly", async () => {
     await expect(
-      resolveBridgeConfig({ VIBESTUDIO_BRIDGE_GENERATION: "generation-1" } as NodeJS.ProcessEnv)
+      resolveBridgeConfig({ VIBESTUDIO_CONTEXT_ID: "ctx-1" } as NodeJS.ProcessEnv)
     ).rejects.toThrow(/owner-provisioned/);
   });
 
@@ -292,10 +314,11 @@ describe("resolveBridgeConfig", () => {
 describe("bridgeInstructions", () => {
   const baseConfig: BridgeConfig = {
     mode: "launched",
+    credentials: AGENT_CREDENTIAL,
+    entityId: "ent-1",
     contextId: "ctx-1",
     channelId: "chan-1",
-    brokerSocketPath: "/profile/bridge.sock",
-    brokerGeneration: "generation-1",
+    vesselRef: LAUNCH_ENV["VIBESTUDIO_VESSEL_REF"]!,
     hookSocketPaths: [],
   };
 
@@ -305,12 +328,11 @@ describe("bridgeInstructions", () => {
     expect(text).not.toContain("spawned as a SUBAGENT");
     // Discovery pointers are always present.
     expect(text).toContain("vibestudio-agent");
-    expect(text).toContain("receives no workspace bearer credential");
-    expect(text).toContain("Server-side fs/vcs/panel access, eval, and managed mutations");
-    expect(text).toContain("repositories already materialized");
+    expect(text).toContain("ordinary entity-scoped `vibestudio` CLI login");
+    expect(text).toContain("public CLI operation authorized");
+    expect(text).toContain("may begin sparse");
     expect(text).toContain("Native Edit/Write/Bash changes");
-    expect(text).not.toContain("pre-scoped to this context");
-    expect(text).not.toContain("vibestudio fs");
+    expect(text).toContain("vibestudio fs");
     expect(text).not.toContain("full-power surface");
   });
 
@@ -387,8 +409,8 @@ describe("workspace skill resources", () => {
     const firstText = first.contents[0]!.text;
     expect(firstText.startsWith(WORKSPACE_SKILL_ADDENDUM)).toBe(true);
     expect(firstText).toContain("translate as you read");
-    expect(firstText).toContain("no general authenticated `vibestudio` CLI");
-    expect(firstText).toContain("ask the workspace agent");
+    expect(firstText).toContain("ordinary");
+    expect(firstText).toContain("without a human device identity");
     expect(firstText.endsWith("# Skill body")).toBe(true);
 
     // Second read (any skill): session already has the translation rules.

@@ -46,26 +46,6 @@ const processOwnerApiMock = vi.hoisted(() => ({
   adopt: vi.fn(),
 }));
 
-const brokerApiMock = vi.hoisted(() => {
-  const brokers: Array<{
-    socketPath: string;
-    generation: string;
-    close: ReturnType<typeof vi.fn>;
-  }> = [];
-  return {
-    brokers,
-    start: vi.fn(async (input: { socketPath: string; generation: string }) => {
-      const broker = {
-        socketPath: input.socketPath,
-        generation: input.generation,
-        close: vi.fn(async () => undefined),
-      };
-      brokers.push(broker);
-      return broker;
-    }),
-  };
-});
-
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: childProcessMock.spawn,
@@ -76,11 +56,6 @@ vi.mock("@vibestudio/shared/ownedProcessGroup", () => ({
     create: processOwnerApiMock.create,
     adopt: processOwnerApiMock.adopt,
   },
-}));
-
-vi.mock("@vibestudio/shared/claudeBridgeBroker", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@vibestudio/shared/claudeBridgeBroker")>()),
-  startClaudeBridgeBroker: brokerApiMock.start,
 }));
 
 // The executing-host version probe is deterministic in orchestration tests;
@@ -218,8 +193,6 @@ afterEach(() => {
   childProcessMock.child.on.mockClear();
   childProcessMock.child.once.mockClear();
   childProcessMock.child.kill.mockClear();
-  brokerApiMock.start.mockClear();
-  brokerApiMock.brokers.splice(0);
   processOwnerMock.retire.mockClear();
   processOwnerApiMock.create.mockReset();
   processOwnerApiMock.create.mockReturnValue(processOwnerMock);
@@ -530,8 +503,8 @@ describe("@workspace-extensions/claude-code prepare", () => {
       PATH: process.env["PATH"],
       VIBESTUDIO_CONTEXT_ID: CONTEXT,
       VIBESTUDIO_CHANNEL_ID: CHANNEL,
-      VIBESTUDIO_BRIDGE_SOCKET: expect.stringContaining("/bridge.sock"),
-      VIBESTUDIO_BRIDGE_GENERATION: result.generationId,
+      VIBESTUDIO_ENTITY_ID: result.entityId,
+      VIBESTUDIO_VESSEL_REF: result.vesselRef,
       // Subagent duty rides the session env so the bridge can state it in the
       // MCP instructions instead of hedging.
       VIBESTUDIO_SUBAGENT_RUN_ID: "run-1",
@@ -542,8 +515,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
     });
     for (const secret of [
       "VIBESTUDIO_AGENT_TOKEN",
-      "VIBESTUDIO_ENTITY_ID",
-      "VIBESTUDIO_VESSEL_REF",
       "VIBESTUDIO_SERVER_URL",
       "VIBESTUDIO_EXTENSION_RPC_TOKEN",
       "VIBESTUDIO_EXTENSION_GATEWAY_URL",
@@ -582,22 +553,17 @@ describe("@workspace-extensions/claude-code prepare", () => {
     );
     const durableLaunch = JSON.parse(storage.get(`launches/${result.generationId}.json`)!);
     expect(durableLaunch).toMatchObject({
-      version: 3,
+      version: 4,
       ownerKind: "extension-headless",
       phase: "active",
       process: { pid: 4242, startCoordinate: "test-start" },
       materialization: {
         profileDir: path.dirname(result.logPath),
         logPath: result.logPath,
-        broker: {
-          socketPath: path.join(path.dirname(result.logPath), "bridge.sock"),
-          generation: result.generationId,
-        },
       },
     });
     expect(JSON.stringify(durableLaunch)).not.toContain(agentToken(1));
     expect(durableLaunch).not.toHaveProperty("vesselRef");
-    expect(brokerApiMock.start).toHaveBeenCalledBefore(childProcessMock.spawn);
 
     expect(
       api.inspectLaunch({
@@ -626,7 +592,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
     });
     expect(released).toEqual({ released: true });
     expect(processOwnerMock.retire).toHaveBeenCalledTimes(1);
-    expect(brokerApiMock.brokers[0]!.close).toHaveBeenCalledOnce();
     expect(existsSync(path.dirname(result.logPath))).toBe(false);
   });
 
@@ -658,32 +623,31 @@ describe("@workspace-extensions/claude-code prepare", () => {
     const releasing = api.release({ entityId: result.entityId, generationId: result.generationId });
     await vi.waitFor(() => expect(processOwnerMock.retire).toHaveBeenCalledTimes(1));
     expect(revoked).not.toContain(agentId(1));
-    expect(brokerApiMock.brokers[0]!.close).not.toHaveBeenCalled();
     expect(existsSync(path.dirname(result.logPath))).toBe(true);
 
     finishRetirement();
     await releasing;
-    expect(brokerApiMock.brokers[0]!.close).toHaveBeenCalledOnce();
-    expect(processOwnerMock.retire).toHaveBeenCalledBefore(brokerApiMock.brokers[0]!.close);
     expect(revoked).toContain(agentId(1));
     expect(existsSync(path.dirname(result.logPath))).toBe(false);
   });
 
-  it("retires the staged generation when broker readiness fails before spawn", async () => {
+  it("retires the staged generation when spawn fails", async () => {
     const { ctx, revoked } = makeCtx(tmpRoot);
     ctx.invocation.current.mockReturnValue({
-      requestId: "req-broker-failure",
+      requestId: "req-spawn-failure",
       extensionName: "@workspace-extensions/claude-code",
       method: "providers.claudeCode.launchSubagent",
       caller: { callerId: "do:parent", callerKind: "do" },
     });
-    brokerApiMock.start.mockRejectedValueOnce(new Error("broker bind failed"));
+    childProcessMock.spawn.mockImplementationOnce(() => {
+      throw new Error("spawn failed");
+    });
     const api = (await activate(ctx as never)).providerContracts.claudeCode;
     await expect(
       api.launchSubagent({
         channelId: CHANNEL,
         subagent: {
-          runId: "run-broker-failure",
+          runId: "run-spawn-failure",
           task: "audit",
           parentRef: "do:parent",
           parentChannelId: "home-chan",
@@ -691,8 +655,8 @@ describe("@workspace-extensions/claude-code prepare", () => {
           depth: 1,
         },
       })
-    ).rejects.toThrow("broker bind failed");
-    expect(childProcessMock.spawn).not.toHaveBeenCalled();
+    ).rejects.toThrow("spawn failed");
+    expect(childProcessMock.spawn).toHaveBeenCalledOnce();
     expect(revoked).toContain(agentId(1));
     expect(existsSync(path.join(tmpRoot, "state", "agent-launch"))).toBe(true);
     expect(readdirSync(path.join(tmpRoot, "state", "agent-launch"))).toEqual([]);
@@ -730,7 +694,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
     );
     expect(restarted.revoked).toContain(agentId(1));
     expect(existsSync(path.dirname(result.logPath))).toBe(false);
-    expect(brokerApiMock.start).toHaveBeenCalledTimes(1);
   });
 
   it("maps whitelisted CLI options onto the argv and drops unsafe values", async () => {
@@ -830,7 +793,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(report![0]).toBe(result.vesselRef);
     expect(report![2]).toEqual({ runId: "run-1", code: 1, signal: null });
     await vi.waitFor(() => expect(existsSync(path.dirname(result.logPath))).toBe(false));
-    expect(brokerApiMock.brokers[0]!.close).toHaveBeenCalledOnce();
     expect(revoked).toContain(agentId(1));
 
     // Relaunch, then a deliberate release-kill: no exit report.
@@ -850,7 +812,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
     )![1] as (code: number | null, signal: string | null) => void;
     exitHandler2(null, "SIGTERM");
     expect(rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit")).toBeUndefined();
-    expect(brokerApiMock.brokers[1]!.close).toHaveBeenCalledOnce();
   });
 
   it("settles a successful headless process from its typed stream result", async () => {

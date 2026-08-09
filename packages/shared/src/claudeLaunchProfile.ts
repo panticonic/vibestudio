@@ -53,15 +53,14 @@ export interface MaterializedClaudeLaunch {
   env: {
     VIBESTUDIO_CONTEXT_ID: string;
     VIBESTUDIO_CHANNEL_ID: string;
+    VIBESTUDIO_ENTITY_ID: string;
+    VIBESTUDIO_VESSEL_REF: string;
     VIBESTUDIO_LAUNCH_PROFILE: string;
-    VIBESTUDIO_BRIDGE_SOCKET: string;
-    VIBESTUDIO_BRIDGE_GENERATION: string;
     CLAUDE_CONFIG_DIR: string;
     VIBESTUDIO_SUBAGENT_RUN_ID?: string;
     VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID?: string;
     VIBESTUDIO_SUBAGENT_CONTRACT?: string;
   };
-  broker: { socketPath: string; generation: string };
   cliCredentialPath: string;
   credentialState: ClaudeCredentialState | null;
 }
@@ -140,7 +139,6 @@ export async function materializeClaudeLaunch(input: {
     const finalMcpPath = path.join(profileDir, "mcp.json");
     const finalSettingsPath = path.join(profileDir, "settings.json");
     const finalClaudeConfigDirectory = path.join(profileDir, "claude-config");
-    const bridgeSocketPath = path.join(profileDir, "bridge.sock");
     const cliConfigDirectory = path.join(stageDir, "home", ".config", "vibestudio");
     const cliCredentialPath = path.join(cliConfigDirectory, "cli-credentials.json");
     const finalCliCredentialPath = path.join(
@@ -195,9 +193,9 @@ export async function materializeClaudeLaunch(input: {
     const env: MaterializedClaudeLaunch["env"] = {
       VIBESTUDIO_CONTEXT_ID: profile.environment.VIBESTUDIO_CONTEXT_ID,
       VIBESTUDIO_CHANNEL_ID: profile.environment.VIBESTUDIO_CHANNEL_ID,
+      VIBESTUDIO_ENTITY_ID: profile.environment.VIBESTUDIO_ENTITY_ID,
+      VIBESTUDIO_VESSEL_REF: profile.environment.VIBESTUDIO_VESSEL_REF,
       VIBESTUDIO_LAUNCH_PROFILE: profileDir,
-      VIBESTUDIO_BRIDGE_SOCKET: bridgeSocketPath,
-      VIBESTUDIO_BRIDGE_GENERATION: profile.launchId,
       CLAUDE_CONFIG_DIR: finalClaudeConfigDirectory,
       ...(profile.environment.VIBESTUDIO_SUBAGENT_RUN_ID
         ? { VIBESTUDIO_SUBAGENT_RUN_ID: profile.environment.VIBESTUDIO_SUBAGENT_RUN_ID }
@@ -244,7 +242,6 @@ export async function materializeClaudeLaunch(input: {
       profileDir,
       argv,
       env,
-      broker: { socketPath: bridgeSocketPath, generation: profile.launchId },
       cliCredentialPath: finalCliCredentialPath,
       credentialState,
     };

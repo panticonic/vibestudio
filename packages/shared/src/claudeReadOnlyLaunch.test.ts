@@ -82,8 +82,8 @@ describe("confineClaudeReadOnly", () => {
     const env = claudeContainedSpawnEnvironment({
       profileDir: path.join(root, "profile"),
       launchEnv: {
-        VIBESTUDIO_BRIDGE_SOCKET: path.join(root, "profile", "bridge.sock"),
-        VIBESTUDIO_BRIDGE_GENERATION: "generation-1",
+        VIBESTUDIO_ENTITY_ID: "entity-1",
+        VIBESTUDIO_VESSEL_REF: "do:linked:one",
         VIBESTUDIO_AGENT_TOKEN: "smuggled-launch-secret",
       },
       confinementEnv: { CLAUDE_CONFIG_DIR: path.join(root, "profile", "claude-config") },
@@ -120,7 +120,8 @@ describe("confineClaudeReadOnly", () => {
       HTTPS_PROXY: "http://proxy.example:8080",
       https_proxy: "https://lower-proxy.example:8443",
       SSL_CERT_FILE: "/etc/ssl/certs/ca-certificates.crt",
-      VIBESTUDIO_BRIDGE_GENERATION: "generation-1",
+      VIBESTUDIO_ENTITY_ID: "entity-1",
+      VIBESTUDIO_VESSEL_REF: "do:linked:one",
     });
     expect(env["HOME"]).toBe(path.join(root, "profile", "home"));
     for (const secret of [

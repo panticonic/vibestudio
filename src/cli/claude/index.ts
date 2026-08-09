@@ -12,8 +12,6 @@ import {
   type MaterializedClaudeLaunch,
   type ClaudeCliRoute,
 } from "@vibestudio/shared/claudeLaunchProfile";
-import type { ClaudeBridgeBroker } from "@vibestudio/shared/claudeBridgeBroker";
-import { ClaudeBridgeBrokerClient } from "@vibestudio/shared/claudeBridgeBroker";
 import {
   claudeContainedSpawnEnvironment,
   confineClaudeReadOnly,
@@ -30,7 +28,6 @@ import {
   findContextBindingLocation,
 } from "../contextBinding.js";
 import { resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
-import { startCliClaudeBridgeBroker } from "./bridgeBroker.js";
 
 /**
  * `vibestudio claude` command group. The CLI stays Claude-agnostic apart from
@@ -155,11 +152,9 @@ export async function executePreparedClaudeLaunch(input: {
   cliRoute: ClaudeCliRoute;
   release: (entityId: string, launchId: string) => Promise<void>;
   spawnLaunch?: typeof spawnClaude;
-  startBroker?: typeof startCliClaudeBridgeBroker;
 }): Promise<number> {
   const { prepared } = input;
   let launch: MaterializedClaudeLaunch | undefined;
-  let broker: ClaudeBridgeBroker | undefined;
   let outcome: { ok: true; exitCode: number } | { ok: false; error: unknown };
   try {
     if (prepared.contextId !== input.expectedContextId) {
@@ -173,13 +168,6 @@ export async function executePreparedClaudeLaunch(input: {
       profilesRoot: input.profilesRoot,
       cliRoute: input.cliRoute,
     });
-    broker = await (input.startBroker ?? startCliClaudeBridgeBroker)({
-      socketPath: launch.broker.socketPath,
-      generation: launch.broker.generation,
-      serverUrl: input.cliRoute.url,
-      agentToken: prepared.profile.environment.VIBESTUDIO_AGENT_TOKEN,
-      vesselRef: prepared.profile.environment.VIBESTUDIO_VESSEL_REF,
-    });
     outcome = {
       ok: true,
       exitCode: await (input.spawnLaunch ?? spawnClaude)(launch, input.contextDirectory),
@@ -189,11 +177,6 @@ export async function executePreparedClaudeLaunch(input: {
   }
 
   let cleanupError: unknown;
-  try {
-    await broker?.close();
-  } catch (error) {
-    cleanupError = error;
-  }
   try {
     if (launch) await reconcileClaudeLaunchCredential(launch);
   } catch (error) {
@@ -388,9 +371,7 @@ async function runStatus(json: boolean): Promise<number> {
   const creds = loadCliCredentials();
   if (binding && creds) assertBindingWorkspace(binding, creds);
   const launched = Boolean(
-    env["VIBESTUDIO_BRIDGE_SOCKET"] &&
-    env["VIBESTUDIO_BRIDGE_GENERATION"] &&
-    env["VIBESTUDIO_LAUNCH_PROFILE"]
+    env["VIBESTUDIO_ENTITY_ID"] && env["VIBESTUDIO_VESSEL_REF"] && env["VIBESTUDIO_LAUNCH_PROFILE"]
   );
   const bridgeSocket = bridgeHookSocket(env, binding);
 
@@ -401,19 +382,23 @@ async function runStatus(json: boolean): Promise<number> {
 
   const lines: string[] = [
     `tier: ${tier} (${tier === 2 ? "contained linked session" : "CLI only"})`,
-    `paired device credential: ${creds ? `yes (${creds.url})` : "no"}`,
+    `CLI identity: ${creds ? `${creds.kind} (${creds.url})` : "none"}`,
     `context binding: ${binding ? `${binding.workspaceId}/${binding.contextId}` : "none (not inside a context folder)"}`,
-    `agent credential env: ${env["VIBESTUDIO_AGENT_TOKEN"] ? "unexpectedly present" : "absent (broker-owned)"}`,
+    `agent credential env: ${env["VIBESTUDIO_AGENT_TOKEN"] ? "unexpectedly present" : "absent (profile-owned)"}`,
     `launch profile: ${env["VIBESTUDIO_LAUNCH_PROFILE"] ?? "absent"}`,
     `bridge hook socket: ${bridgeSocket ?? "absent"}`,
   ];
 
   if (launched) {
-    let client: ClaudeBridgeBrokerClient | undefined;
+    let client: RpcClient | undefined;
     try {
       const config = await resolveBridgeConfig(env);
-      client = new ClaudeBridgeBrokerClient(config.brokerSocketPath, config.brokerGeneration);
-      const status = (await client.call("linkedStatus", {})) as unknown as Record<string, unknown>;
+      client = new RpcClient(config.credentials);
+      const status = await client.callTargetPush<Record<string, unknown>>(
+        config.vesselRef,
+        "linkedStatus",
+        []
+      );
       lines.push(
         `attached: ${String(status["attached"])}`,
         `pending events: ${String(status["pendingCount"])}`,

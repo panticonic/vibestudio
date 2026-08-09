@@ -30,7 +30,6 @@ const materializationSchema = z
   .object({
     profileDir: z.string().min(1),
     logPath: z.string().min(1),
-    broker: z.object({ socketPath: z.string().min(1), generation: z.string().min(1) }).strict(),
     credentialState: credentialStateSchema.nullable(),
   })
   .strict();
@@ -52,7 +51,7 @@ const processIdentitySchema = z
 
 export const claudeLaunchRecordSchema = z
   .object({
-    version: z.literal(3),
+    version: z.literal(4),
     launchId: z.string().min(1),
     entityId: z.string().min(1),
     contextId: z.string().min(1),
@@ -91,6 +90,31 @@ export const claudeLaunchRecordSchema = z
 
 export type ClaudeLaunchRecord = z.infer<typeof claudeLaunchRecordSchema>;
 export type ClaudeLaunchOwnerKind = ClaudeLaunchRecord["ownerKind"];
+
+const version3LaunchRecordSchema = z
+  .object({
+    version: z.literal(3),
+    launchId: z.string().min(1),
+    entityId: z.string().min(1),
+    contextId: z.string().min(1),
+    channelId: z.string().min(1),
+    ownerKind: z.enum(["external-cli", "extension-headless"]),
+    phase: z.enum(["preparing", "active", "retiring", "released"]),
+    agentId: z.string().min(1).nullable(),
+    preparedAt: z.string().datetime(),
+    releasedAt: z.string().datetime().optional(),
+    materialization: z
+      .object({
+        profileDir: z.string().min(1),
+        logPath: z.string().min(1),
+        broker: z.object({ socketPath: z.string().min(1), generation: z.string().min(1) }).strict(),
+        credentialState: credentialStateSchema.nullable(),
+      })
+      .strict()
+      .nullable(),
+    process: processIdentitySchema.nullable(),
+  })
+  .strict();
 
 const version2LaunchRecordSchema = z
   .object({
@@ -132,28 +156,35 @@ const legacyLaunchRecordSchema = z
 export function parseClaudeLaunchRecord(value: unknown, key: string): ClaudeLaunchRecord {
   const parsed = claudeLaunchRecordSchema.safeParse(value);
   if (parsed.success) return parsed.data;
+  const version3 = version3LaunchRecordSchema.safeParse(value);
+  if (version3.success) {
+    const materialization = version3.data.materialization;
+    return claudeLaunchRecordSchema.parse({
+      ...version3.data,
+      version: 4,
+      materialization: materialization
+        ? {
+            profileDir: materialization.profileDir,
+            logPath: materialization.logPath,
+            credentialState: materialization.credentialState,
+          }
+        : null,
+    });
+  }
   const version2 = version2LaunchRecordSchema.safeParse(value);
   if (version2.success) {
     const { vesselRef: _discardedVesselRef, materialization, ...record } = version2.data;
     return claudeLaunchRecordSchema.parse({
       ...record,
-      version: 3,
-      materialization: materialization
-        ? {
-            ...materialization,
-            broker: {
-              socketPath: path.join(materialization.profileDir, "bridge.sock"),
-              generation: record.launchId,
-            },
-          }
-        : null,
+      version: 4,
+      materialization,
     });
   }
   const legacy = legacyLaunchRecordSchema.safeParse(value);
   if (legacy.success) {
     const { vesselRef: _discardedVesselRef, ...record } = legacy.data;
     return {
-      version: 3,
+      version: 4,
       ...record,
       ownerKind: "external-cli",
       phase: "active",
@@ -172,7 +203,6 @@ export function materializationReceipt(
   return {
     profileDir: launch.profileDir,
     logPath: path.join(launch.profileDir, "headless.log"),
-    broker: launch.broker,
     credentialState: launch.credentialState,
   };
 }
@@ -195,12 +225,6 @@ export function recoverMaterializedLaunch(
     path.resolve(receipt.logPath) !== path.join(profileDir, "headless.log")
   ) {
     throw ownershipError("Claude materialization receipt is outside its exact launch root");
-  }
-  if (
-    path.resolve(receipt.broker.socketPath) !== path.join(profileDir, "bridge.sock") ||
-    receipt.broker.generation !== record.launchId
-  ) {
-    throw ownershipError("Claude broker receipt is outside its exact launch generation");
   }
   const credentialState = receipt.credentialState;
   if (

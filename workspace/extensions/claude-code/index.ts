@@ -12,11 +12,6 @@ import {
   type ClaudeLaunchProfile,
   type MaterializedClaudeLaunch,
 } from "@vibestudio/shared/claudeLaunchProfile";
-import { createClaudeBridgeAuthority } from "@vibestudio/shared/claudeBridgeAuthority";
-import {
-  startClaudeBridgeBroker,
-  type ClaudeBridgeBroker,
-} from "@vibestudio/shared/claudeBridgeBroker";
 import {
   claudeContainedSpawnEnvironment,
   confineClaudeReadOnly,
@@ -26,7 +21,6 @@ import {
   OwnedProcessGroup,
   type OwnedProcessGroupHandle,
 } from "@vibestudio/shared/ownedProcessGroup";
-import { WsRpcClient } from "@vibestudio/shared/wsRpcClient";
 import {
   launchAgentIntoChannel,
   subagentFirstTaskPrompt,
@@ -250,7 +244,6 @@ export async function activate(ctx: ExtensionContext) {
     vesselRef: string;
     child: ChildProcess;
     owner: OwnedProcessGroupHandle;
-    broker: ClaudeBridgeBroker;
     log: BoundedLaunchLog;
     logPath: string;
     deliberate: boolean;
@@ -261,32 +254,14 @@ export async function activate(ctx: ExtensionContext) {
   const terminalLaunches = new Map<string, InspectLaunchResult>();
   const channelTransactions = new Map<string, Promise<unknown>>();
   const finalizations = new Map<string, Promise<boolean>>();
-  const failAfterBrokerCleanup = async (
-    broker: ClaudeBridgeBroker,
-    failure: unknown,
-    message: string
-  ): Promise<never> => {
-    try {
-      await broker.close();
-    } catch (cleanupFailure) {
-      throw new AggregateError([failure, cleanupFailure], message);
-    }
-    throw failure;
-  };
   const failAfterSpawnCleanup = async (
     owner: OwnedProcessGroupHandle,
-    broker: ClaudeBridgeBroker,
     failure: unknown,
     message: string
   ): Promise<never> => {
     const failures = [failure];
     try {
       await owner.retire();
-    } catch (cleanupFailure) {
-      failures.push(cleanupFailure);
-    }
-    try {
-      await broker.close();
     } catch (cleanupFailure) {
       failures.push(cleanupFailure);
     }
@@ -302,11 +277,6 @@ export async function activate(ctx: ExtensionContext) {
         launch.log.close();
       } catch (error) {
         cleanupError = error;
-      }
-      try {
-        await launch.broker.close();
-      } catch (error) {
-        cleanupError ??= error;
       }
       if (cleanupError) throw cleanupError;
     })();
@@ -637,28 +607,6 @@ export async function activate(ctx: ExtensionContext) {
       profileDir: materialized.profileDir,
       contextDirectory: contextFolder,
     });
-    const rpcClient = new WsRpcClient({
-      url: currentServerUrl(),
-      callerId: `agent:${prepared.entityId}`,
-      callerKind: "agent",
-      getToken: () => prepared.profile.environment.VIBESTUDIO_AGENT_TOKEN,
-      clientLabel: "Vibestudio Claude channel bridge",
-      logPrefix: "[claude-headless-bridge]",
-    });
-    const authority = createClaudeBridgeAuthority({
-      callVessel: <T>(method: string, args: unknown[]) =>
-        rpcClient.callTarget<T>(prepared.vesselRef, method, args),
-      streamVessel: (method, args, signal) =>
-        rpcClient.stream(prepared.vesselRef, method, args, { signal }),
-      callWorkspace: <T>(method: string, args: unknown[]) => rpcClient.call<T>(method, args),
-      onRecovery: (handler) => rpcClient.onRecovery(() => handler()),
-      close: () => rpcClient.close(),
-    });
-    const broker = await startClaudeBridgeBroker({
-      socketPath: materialized.broker.socketPath,
-      generation: materialized.broker.generation,
-      authority,
-    });
     let child: ChildProcess;
     try {
       child = spawn(confined.command, confined.args, {
@@ -672,11 +620,7 @@ export async function activate(ctx: ExtensionContext) {
         detached: true,
       });
     } catch (failure) {
-      return failAfterBrokerCleanup(
-        broker,
-        failure,
-        "Claude headless spawn failed and its channel broker could not be closed"
-      );
+      throw failure;
     }
     const owner = OwnedProcessGroup.create(child);
     if (!owner.identity) {
@@ -686,9 +630,8 @@ export async function activate(ctx: ExtensionContext) {
       );
       return failAfterSpawnCleanup(
         owner,
-        broker,
         failure,
-        "Claude process ownership failed and its process group or channel broker could not be retired"
+        "Claude process ownership failed and its process group could not be retired"
       );
     }
     let log: BoundedLaunchLog;
@@ -697,9 +640,8 @@ export async function activate(ctx: ExtensionContext) {
     } catch (failure) {
       return failAfterSpawnCleanup(
         owner,
-        broker,
         failure,
-        "Claude log ownership failed and its process group or channel broker could not be retired"
+        "Claude log ownership failed and its process group could not be retired"
       );
     }
 
@@ -711,7 +653,6 @@ export async function activate(ctx: ExtensionContext) {
       vesselRef: prepared.vesselRef,
       child,
       owner,
-      broker,
       log,
       logPath,
       deliberate: false,
@@ -918,7 +859,7 @@ export async function activate(ctx: ExtensionContext) {
       });
 
       const record: ClaudeLaunchRecord = {
-        version: 3,
+        version: 4,
         launchId: profile.launchId,
         entityId,
         contextId,
