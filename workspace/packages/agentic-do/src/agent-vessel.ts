@@ -102,6 +102,8 @@ import {
   vcsMethods,
   type VcsIntegrationProjection,
   type VcsMergeInput,
+  type VcsStateNodeRef,
+  type VcsStatusResult,
 } from "@vibestudio/service-schemas/vcs";
 import { toCredentialConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
@@ -258,9 +260,18 @@ function semanticIntegrationFromProjection(projection: VcsIntegrationProjection)
   return { state, ...projection };
 }
 
+function sameVcsStateNodeRef(left: unknown, right: VcsStateNodeRef): boolean {
+  if (!left || typeof left !== "object") return false;
+  const candidate = left as Record<string, unknown>;
+  return right.kind === "event"
+    ? candidate["kind"] === "event" && candidate["eventId"] === right.eventId
+    : candidate["kind"] === "application" && candidate["applicationId"] === right.applicationId;
+}
+
 function semanticIntegrationForRun(
   run: SubagentRunRow,
-  projections: readonly VcsIntegrationProjection[] = []
+  projections: readonly VcsIntegrationProjection[] = [],
+  currentWorkingHead?: VcsStateNodeRef
 ): Record<string, unknown> {
   const live = run.sourceEventId
     ? projections.find(
@@ -269,7 +280,20 @@ function semanticIntegrationForRun(
     : undefined;
   if (live) return semanticIntegrationFromProjection(live);
   const receipt = run.semanticIntegrationSnapshot;
-  if (receipt && (run.status === "closed" || typeof receipt["committedEventId"] === "string")) {
+  if (receipt && run.status === "closed") {
+    return receipt;
+  }
+  const receiptSource = receipt?.["source"];
+  if (
+    receipt &&
+    currentWorkingHead &&
+    run.sourceEventId &&
+    receiptSource &&
+    typeof receiptSource === "object" &&
+    (receiptSource as Record<string, unknown>)["kind"] === "event" &&
+    (receiptSource as Record<string, unknown>)["eventId"] === run.sourceEventId &&
+    sameVcsStateNodeRef(receipt["asOfWorkingHead"], currentWorkingHead)
+  ) {
     return receipt;
   }
   return { state: "unattempted", sourceEventId: run.sourceEventId };
@@ -1085,7 +1109,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    */
   private supervisedSubagentRuntimePrompt(
     channelId: string,
-    projectionsByContext: ReadonlyMap<string, readonly VcsIntegrationProjection[]> = new Map()
+    parentStatusByContext: ReadonlyMap<
+      string,
+      Pick<VcsStatusResult, "workingHead" | "integrating">
+    > = new Map()
   ): string {
     const all = this.subagentRuns
       .listAll()
@@ -1096,9 +1123,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const shown = all.slice(0, limit);
     const rows = shown.map((run) => {
       const config = run.launchConfig ? ` config=${JSON.stringify(run.launchConfig)}` : "";
+      const parentStatus = run.parentContextId
+        ? parentStatusByContext.get(run.parentContextId)
+        : undefined;
       const semantic = semanticIntegrationForRun(
         run,
-        run.parentContextId ? projectionsByContext.get(run.parentContextId) : undefined
+        parentStatus?.integrating,
+        parentStatus?.workingHead
       );
       return (
         `- ${subagentRunHandle(run.runId)} (${run.label || "unlabeled"}): ` +
@@ -1148,10 +1179,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           ? signal.reason
           : new Error("prompt preparation aborted");
       }
-      const projectionsByContext = new Map(
-        statuses.map(([contextId, status]) => [contextId, status.integrating] as const)
-      );
-      const supervised = this.supervisedSubagentRuntimePrompt(channelId, projectionsByContext);
+      const parentStatusByContext = new Map(statuses);
+      const supervised = this.supervisedSubagentRuntimePrompt(channelId, parentStatusByContext);
       const parts = [subagent ? subagentRuntimePrompt(subagent) : "", supervised].filter(Boolean);
       return parts.length > 0 ? parts.join("\n\n") : undefined;
     })();
@@ -6210,6 +6239,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     let result: unknown;
     let semanticRun = run;
     let semanticProjections: readonly VcsIntegrationProjection[] = [];
+    let semanticWorkingHead: VcsStateNodeRef | undefined;
     if (q === "status") {
       const [status, parentStatus] = await Promise.all([
         childStatus,
@@ -6220,6 +6250,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         semanticRun = { ...run, sourceEventId: status.committed.eventId };
       }
       semanticProjections = parentStatus?.integrating ?? [];
+      semanticWorkingHead = parentStatus?.workingHead;
       result = status;
     } else if (q === "diff") {
       if (!run.parentContextId) {
@@ -6240,6 +6271,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         semanticRun = { ...run, sourceEventId: status.committed.eventId };
       }
       semanticProjections = parentStatus.integrating;
+      semanticWorkingHead = parentStatus.workingHead;
       result = {
         child: {
           contextId: status.contextId,
@@ -6281,7 +6313,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return this.toolText(typeof result === "string" ? result : JSON.stringify(result, null, 2), {
       runId: subagentRunHandle(run.runId),
       query: q,
-      semanticIntegration: semanticIntegrationForRun(semanticRun, semanticProjections),
+      semanticIntegration: semanticIntegrationForRun(
+        semanticRun,
+        semanticProjections,
+        semanticWorkingHead
+      ),
     });
   }
 
@@ -6537,7 +6573,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         )
       : undefined;
     const observedRun = { ...run, sourceEventId: retainedSourceEventId };
-    const semanticIntegration = semanticIntegrationForRun(observedRun, targetStatus.integrating);
+    const semanticIntegration = semanticIntegrationForRun(
+      observedRun,
+      targetStatus.integrating,
+      targetStatus.workingHead
+    );
     const complete =
       semanticIntegration["state"] === "complete" && semanticIntegration["stale"] !== true;
     const shouldDiscard = discard || run.discardedBeforeIntegration;

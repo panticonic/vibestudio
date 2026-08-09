@@ -2918,6 +2918,66 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     const methods = probe.rpcCalls.map(({ method }) => method);
     expect(methods.filter((method) => method === "vcs.merge")).toHaveLength(1);
     expect(methods).not.toContain("vcs.commit");
+
+    probe.respondToVcs(
+      "status",
+      semanticStatus("ctx-1", "event:parent", target, false),
+      semanticStatus("ctx-child", sourceEventId, { kind: "event", eventId: sourceEventId }, true)
+    );
+    await expect(probe.closeSubagentForTest(runId)).resolves.toMatchObject({
+      details: {
+        status: "closed",
+        semanticIntegration: expect.objectContaining({ state: "complete" }),
+      },
+    });
+    expect(probe.subagentRunForTest(runId)).toMatchObject({
+      status: "closed",
+      semanticIntegrationSnapshot: expect.objectContaining({
+        state: "complete",
+        asOfWorkingHead: target,
+      }),
+    });
+  });
+
+  it("does not reuse an unchanged merge receipt after the parent working head advances", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    const runId = "inv-unchanged-stale";
+    probe.insertSubagentRunForTest({ runId, status: "running" });
+    const target = { kind: "application" as const, applicationId: "application:target" };
+    const advanced = { kind: "application" as const, applicationId: "application:advanced" };
+    const sourceEventId = "event:source";
+    probe.respondToVcs(
+      "status",
+      semanticStatus("ctx-1", "event:parent", target, false),
+      semanticStatus("ctx-child", sourceEventId, { kind: "event", eventId: sourceEventId }, true)
+    );
+    probe.respondToVcs("merge", {
+      status: "unchanged",
+      contextId: "ctx-1",
+      workingHead: target,
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+      counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 1 },
+      intents: [],
+      intentsTruncated: false,
+      conflicts: [],
+      nextConflictCursor: null,
+    });
+    await probe.mergeSubagentForTest(runId);
+
+    probe.respondToVcs(
+      "status",
+      semanticStatus("ctx-1", "event:parent", advanced, false),
+      semanticStatus("ctx-child", sourceEventId, { kind: "event", eventId: sourceEventId }, true)
+    );
+    await expect(probe.closeSubagentForTest(runId)).rejects.toMatchObject({
+      code: "IntegrationIncomplete",
+      errorData: expect.objectContaining({
+        code: "IntegrationIncomplete",
+        operation: "subagent-close",
+        integration: { state: "unattempted", sourceEventId },
+      }),
+    });
+    expect(probe.subagentRunForTest(runId)?.status).toBe("running");
   });
 
   it("returns the engine's bounded conflict page without a wrapper compare", async () => {
