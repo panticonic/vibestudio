@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { assertClaudeCodeVersion } from "@vibestudio/shared/claudeLaunchProfile";
-import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 const childProcessMock = vi.hoisted(() => {
   const child = {
@@ -170,7 +168,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(parseClaudeStreamCompletion('{"type":"assistant","result":"not terminal"}')).toBeNull();
   });
 
-  it("keeps only adaptLaunch flat and matches the declared provider contract", async () => {
+  it("exposes only the declared managed provider contract", async () => {
     const { ctx } = makeCtx(tmpRoot);
     const activated = await activate(ctx as never);
     const manifest = JSON.parse(
@@ -181,7 +179,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
       };
     };
 
-    expect(Object.keys(activated)).toEqual(["providerContracts", "adaptLaunch"]);
+    expect(Object.keys(activated)).toEqual(["providerContracts"]);
     expect(Object.keys(activated.providerContracts.claudeCode)).toEqual(
       manifest.vibestudio.extension.providerContracts.claudeCode.methods
     );
@@ -260,75 +258,6 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(await api.resolvePrimaryChannel({ contextId: CONTEXT })).toBeNull();
     await api.prepare({ channelId: CHANNEL });
     expect(await api.resolvePrimaryChannel({ contextId: CONTEXT })).toEqual({ channelId: CHANNEL });
-  });
-
-  ledgerTest("execution.claude-code", async () => {
-    const { ctx } = makeCtx(tmpRoot);
-    const activated = await activate(ctx as never);
-
-    const adapted = await activated.adaptLaunch({
-      contextId: CONTEXT,
-      argv: ["claude"],
-      cwd: path.join(tmpRoot, ".context-projections", "v5", CONTEXT),
-      env: { ORIGINAL: "yes" },
-      intent: { channelId: CHANNEL },
-    });
-
-    expect(adapted?.argv[0]).toBe("claude");
-    expect(adapted?.env).toMatchObject({
-      ORIGINAL: "yes",
-      VIBESTUDIO_SERVER_URL: "http://127.0.0.1:5000",
-      VIBESTUDIO_CONTEXT_ID: CONTEXT,
-    });
-    const profileDir = adapted?.env["VIBESTUDIO_LAUNCH_PROFILE"];
-    expect(profileDir && existsSync(path.join(profileDir, "mcp.json"))).toBe(true);
-    expect(adapted?.cleanup).toEqual({
-      method: "release",
-      args: [
-        {
-          entityId: "session:chan-1",
-          generationId: expect.any(String),
-        },
-      ],
-    });
-    await activated.providerContracts.claudeCode.release(
-      adapted!.cleanup.args[0] as { entityId: string; generationId: string }
-    );
-    expect(profileDir && existsSync(profileDir)).toBe(false);
-  });
-
-  it("revokes the prepared credential when local materialization fails", async () => {
-    const { ctx, revoked } = makeCtx(tmpRoot);
-    const activated = await activate(ctx as never);
-    vi.mocked(assertClaudeCodeVersion).mockRejectedValueOnce(new Error("unsupported local Claude"));
-
-    await expect(
-      activated.adaptLaunch({
-        contextId: CONTEXT,
-        argv: ["claude"],
-        cwd: tmpRoot,
-        env: {},
-        intent: { channelId: CHANNEL },
-      })
-    ).rejects.toThrow("unsupported local Claude");
-    expect(revoked).toEqual(["agt_1"]);
-  });
-
-  it("rejects a terminal intent for another context and releases its credential", async () => {
-    const { ctx, revoked } = makeCtx(tmpRoot);
-    const activated = await activate(ctx as never);
-
-    await expect(
-      activated.adaptLaunch({
-        contextId: "ctx-other",
-        argv: ["claude"],
-        cwd: tmpRoot,
-        env: {},
-        intent: { channelId: CHANNEL },
-      })
-    ).rejects.toThrow(/not terminal context ctx-other/);
-    expect(revoked).toEqual(["agt_1"]);
-    expect(ctx.workspace.ensureContextFolder).not.toHaveBeenCalled();
   });
 
   it("subagent launch: skips the approval, threads subagent duty into vessel state, returns vessel identity", async () => {

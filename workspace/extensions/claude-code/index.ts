@@ -228,12 +228,6 @@ export function parseClaudeStreamCompletion(logTail: string): ClaudeStreamComple
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
-export type PublicApi = Pick<Api, "adaptLaunch">;
-declare module "@vibestudio/extension" {
-  interface WorkspaceExtensions {
-    "@workspace-extensions/claude-code": PublicApi;
-  }
-}
 
 export async function activate(ctx: ExtensionContext) {
   interface HeadlessLaunch {
@@ -812,76 +806,11 @@ export async function activate(ctx: ExtensionContext) {
     return rec?.channelId ? { channelId: rec.channelId } : null;
   }
 
-  async function adaptLaunch(input: {
-    contextId: string;
-    argv: string[];
-    cwd: string;
-    env: Record<string, string>;
-    intent?: Record<string, unknown>;
-  }): Promise<{
-    env: Record<string, string>;
-    argv: string[];
-    cleanup: { method: string; args: unknown[] };
-  } | null> {
-    // Launch-adapter handler (§4.3): a bare `claude` in a context terminal. With
-    // no known conversation channel for the context we return null so the shell
-    // extension launches the session untouched — channels are never created here.
-    const intendedChannel = input.intent?.["channelId"];
-    if (intendedChannel !== undefined && typeof intendedChannel !== "string") {
-      throw error("EINVAL", "Claude launch intent channelId must be a string");
-    }
-    const primary = intendedChannel
-      ? { channelId: intendedChannel }
-      : await resolvePrimaryChannel({ contextId: input.contextId });
-    if (!primary) return null;
-    const prepared = await prepare({ channelId: primary.channelId });
-    try {
-      if (prepared.contextId !== input.contextId) {
-        throw error(
-          "ECONTEXT",
-          `Channel ${primary.channelId} belongs to context ${prepared.contextId}, not terminal context ${input.contextId}`
-        );
-      }
-      const { launch } = await materializeLocalLaunch(prepared);
-      return {
-        env: { ...input.env, ...launch.env },
-        argv: launch.argv,
-        cleanup: {
-          method: "release",
-          args: [{ entityId: prepared.entityId, generationId: prepared.profile.launchId }],
-        },
-      };
-    } catch (error) {
-      await release({ entityId: prepared.entityId, generationId: prepared.profile.launchId });
-      throw error;
-    }
-  }
-
-  // Register the launch adapter so a bare `claude` in a context-scoped terminal
-  // is upgraded into a connected agent (§4.3). Best-effort: the shell extension
-  // (W3a) owns `registerLaunchAdapter`; if it isn't available yet, detection just
-  // falls back to launching Claude Code untouched.
-  try {
-    await ctx.extensions.invoke("@workspace-extensions/shell", "registerLaunchAdapter", [
-      {
-        id: "claude-code",
-        match: { pattern: "\\bclaude(-code)?\\b" },
-        detect: { kind: "claude-code" },
-        handler: { extension: "@workspace-extensions/claude-code", method: "adaptLaunch" },
-      },
-    ]);
-  } catch (err) {
-    ctx.log.info?.("claude-code launch adapter not registered", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
   ctx.health.healthy({ summary: "Claude Code launch orchestrator activated" });
 
   return {
     providerContracts: {
       claudeCode: { prepare, launchSubagent, inspectLaunch, release, resolvePrimaryChannel },
     },
-    adaptLaunch,
   };
 }
