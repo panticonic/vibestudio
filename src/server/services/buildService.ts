@@ -47,9 +47,7 @@ export function createBuildService(deps: {
             : build.metadata;
         const diagnostics =
           diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
-        return diagnostics && diagnostics.length > 0
-          ? { ...metadata, diagnostics }
-          : metadata;
+        return diagnostics && diagnostics.length > 0 ? { ...metadata, diagnostics } : metadata;
       },
       getBuildReport: (_ctx, [unit, ref]) => deps.buildSystem.getBuildReport(unit, ref),
       getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),

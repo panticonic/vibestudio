@@ -16,14 +16,8 @@ describe("reloadRegisteredPanelPresentation", () => {
       })),
     };
 
-    await expect(
-      reloadRegisteredPanelPresentation(bridge, "panel:tree/chat")
-    ).resolves.toBe(true);
-    expect(bridge.sendHostCommand).toHaveBeenCalledWith(
-      "panel:tree/chat",
-      "reloadPanel",
-      []
-    );
+    await expect(reloadRegisteredPanelPresentation(bridge, "panel:tree/chat")).resolves.toBe(true);
+    expect(bridge.sendHostCommand).toHaveBeenCalledWith("panel:tree/chat", "reloadPanel", []);
   });
 
   it("leaves an unregistered panel to the allocation fallback", async () => {
@@ -32,9 +26,7 @@ describe("reloadRegisteredPanelPresentation", () => {
       sendHostCommand: vi.fn(),
     };
 
-    await expect(
-      reloadRegisteredPanelPresentation(bridge, "panel:tree/chat")
-    ).resolves.toBe(false);
+    await expect(reloadRegisteredPanelPresentation(bridge, "panel:tree/chat")).resolves.toBe(false);
     expect(bridge.sendHostCommand).not.toHaveBeenCalled();
   });
 
@@ -44,8 +36,8 @@ describe("reloadRegisteredPanelPresentation", () => {
       sendHostCommand: vi.fn(async () => ({ reloaded: false })),
     };
 
-    await expect(
-      reloadRegisteredPanelPresentation(bridge, "panel:tree/chat")
-    ).rejects.toThrow("Presentation host did not reload panel panel:tree/chat");
+    await expect(reloadRegisteredPanelPresentation(bridge, "panel:tree/chat")).rejects.toThrow(
+      "Presentation host did not reload panel panel:tree/chat"
+    );
   });
 });

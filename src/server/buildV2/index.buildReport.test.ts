@@ -269,14 +269,8 @@ describe("BuildSystemV2 — explicit build reports", () => {
     };
     env = await loadWithMocks();
 
-    const first = await env.buildSystem.getBuildReport(
-      "@workspace-panels/app",
-      CANDIDATE_VIEW
-    );
-    const second = await env.buildSystem.getBuildReport(
-      "@workspace-panels/app",
-      CANDIDATE_VIEW
-    );
+    const first = await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
+    const second = await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
 
     expect(first).toMatchObject({
       status: "failed",
