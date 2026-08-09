@@ -238,7 +238,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
         style={{ minWidth: 0 }}
       >
         <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0, flex: "1 1 240px" }}>
-          <Text size="5" weight="bold" style={{ minWidth: 0 }}>
+          <Text size="4" weight="bold" style={{ minWidth: 0 }}>
             {title}
           </Text>
         </Flex>
@@ -349,11 +349,11 @@ function ChatHeaderOverflowMenu({
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
           <IconButton
+            className="chat-header-menu-button"
             variant="soft"
             color="gray"
-            size="2"
+            size="1"
             aria-label="Chat menu"
-            style={{ minWidth: 40, minHeight: 40 }}
           >
             <DotsHorizontalIcon />
           </IconButton>

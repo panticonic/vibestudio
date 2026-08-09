@@ -215,6 +215,22 @@
   --card-border-width: 0;
 }
 
+.chat-header-card {
+  --card-padding: var(--space-1) var(--chat-panel-padding);
+}
+
+.chat-header-menu-button {
+  min-inline-size: 32px;
+  min-block-size: 32px;
+}
+
+@media (pointer: coarse) {
+  .chat-header-menu-button {
+    min-inline-size: 40px;
+    min-block-size: 40px;
+  }
+}
+
 .chat-surface-card::before {
   background-color: var(--gray-2);
   backdrop-filter: none;
