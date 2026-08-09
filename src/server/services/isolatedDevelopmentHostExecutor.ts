@@ -10,7 +10,7 @@ import {
   type OwnedProcessIdentity,
 } from "../../dev/ownedProcessIdentity.js";
 import { bootstrapInstanceCli } from "../../dev/bootstrapInstanceCli.js";
-import { loadCliCredentials } from "../../cli/credentialStore.js";
+import { loadCliCredentials, requireDeviceCliCredentials } from "../../cli/credentialStore.js";
 import { pairRemoteDevice } from "../../cli/remoteClient.js";
 import { RpcClient } from "../../cli/rpcClient.js";
 import {
@@ -643,12 +643,13 @@ async function createIsolatedDevelopmentManager(input: {
   instance: DevInstanceRecord;
   childGatewayUrl: string;
 }): Promise<IsolatedDevelopmentManager> {
-  const credentials = loadCliCredentials(input.credentialFile);
-  if (!credentials) {
+  const loaded = loadCliCredentials(input.credentialFile);
+  if (!loaded) {
     throw Object.assign(new Error("Isolated management credential was not retained"), {
       code: "ECLI_BOOTSTRAP",
     });
   }
+  const credentials = requireDeviceCliCredentials(loaded, "isolated development manager");
   const client = new RpcClient(credentials);
   try {
     await client.call("developmentClientExecutor.bindIsolatedManager", [

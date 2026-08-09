@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:f16fd105193925d7e9ea1c7d13c50ad8c5025c89da06ab783c0394f9d7be78b5",
+  "censusDigest": "sha256:e622082311ea939e5fff5db1a682515b53db303d324dc42810b39e8fa920d3e4",
   "decisions": {
     "host:panelRuntime.awaitAttempt": {
       "review": "exact-panel-attempt-readiness-read",

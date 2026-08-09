@@ -9749,11 +9749,11 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:workspace/workers/linked-agent/linked-agent-worker.ts:ackDelivery",
+      "id": "direct:workspace/workers/linked-agent/linked-agent-worker.ts:acceptDelivery",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/linked-agent/linked-agent-worker.ts",
       "source": "workers/linked-agent",
-      "method": "ackDelivery",
+      "method": "acceptDelivery",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "workspace/workers/linked-agent/linked-agent-worker.ts"
@@ -9763,7 +9763,7 @@
       ],
       "sensitivity": "write",
       "tier": "open",
-      "capability": "rpc:ackDelivery",
+      "capability": "rpc:acceptDelivery",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -9782,7 +9782,7 @@
         "exact-resource-scope",
         "next-dispatch-revocation"
       ],
-      "r3aRequirement": "capability(host,rpc:ackDelivery)",
+      "r3aRequirement": "capability(host,rpc:acceptDelivery)",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9824,6 +9824,48 @@
         "next-dispatch-revocation"
       ],
       "r3aRequirement": "capability(host,rpc:completeFromBridge)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/workers/linked-agent/linked-agent-worker.ts:deliveryReceipt",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/linked-agent/linked-agent-worker.ts",
+      "source": "workers/linked-agent",
+      "method": "deliveryReceipt",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/linked-agent/linked-agent-worker.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "rpc:deliveryReceipt",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(capability(host,rpc:deliveryReceipt),allOf(capability(code,rpc:deliveryReceipt),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10031,47 +10073,6 @@
         "next-dispatch-revocation"
       ],
       "r3aRequirement": "anyOf(capability(host,rpc:reportExternalResult),allOf(capability(code,rpc:reportExternalResult),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:workspace/workers/linked-agent/linked-agent-worker.ts:requestPermission",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/linked-agent/linked-agent-worker.ts",
-      "source": "workers/linked-agent",
-      "method": "requestPermission",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/linked-agent/linked-agent-worker.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "capability": "external-tool.execute",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "capability(host,rpc:requestPermission)",
       "r3b": {
         "review": "unchanged-parity",
         "change": null

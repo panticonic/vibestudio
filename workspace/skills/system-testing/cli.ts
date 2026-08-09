@@ -530,6 +530,16 @@ export async function systemTestDoctor(
     "declared workspace extensions are approved and build-ready"
   );
   await capture(
+    "claude-code-extension",
+    () =>
+      rpc.call("main", "extensions.invokeProvider", [
+        "claudeCode",
+        "resolvePrimaryChannel",
+        ["system-test-doctor-probe"],
+      ]),
+    "Claude Code provider is registered and activatable"
+  );
+  await capture(
     "model",
     async () => {
       const modelRoute = systemTestModelRoute(primaryModel, typeof expectedModel !== "string");

@@ -245,11 +245,15 @@ describe("@workspace-extensions/claude-code prepare", () => {
       readFileSync(new URL("./package.json", import.meta.url), "utf8")
     ) as {
       vibestudio: {
-        extension: { providerContracts: { claudeCode: { methods: string[] } } };
+        extension: {
+          providerContracts: { claudeCode: { methods: string[] } };
+          methodAuthority: Record<string, unknown>;
+        };
       };
     };
 
     expect(Object.keys(activated)).toEqual(["providerContracts"]);
+    expect(manifest.vibestudio.extension.methodAuthority).toEqual({});
     expect(Object.keys(activated.providerContracts.claudeCode)).toEqual(
       manifest.vibestudio.extension.providerContracts.claudeCode.methods
     );

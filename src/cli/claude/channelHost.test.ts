@@ -110,7 +110,6 @@ describe("Claude channel boundary", () => {
             await accepted;
             order.push("accepted");
           },
-          notifyPermission: async () => undefined,
         },
         callVessel: async (method, args) => {
           order.push(`${method}:${JSON.stringify(args)}`);
@@ -150,7 +149,6 @@ describe("Claude channel boundary", () => {
             notifyChannel: async () => {
               throw new Error("stdout closed");
             },
-            notifyPermission: async () => undefined,
           },
           callVessel: async (method) => {
             calls.push(method);

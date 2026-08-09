@@ -22,7 +22,7 @@ import {
   attachedHostHttpRoutes,
   attachedHostParentHttpRoutes,
 } from "./attachedHostTransport.js";
-import type { CliCredentials } from "../../cli/credentialStore.js";
+import type { CliDeviceCredentials } from "../../cli/credentialStore.js";
 
 const FACTS = {
   parentHostId: "host:parent",
@@ -251,7 +251,7 @@ describe("attached-host HTTP routed connectivity", () => {
     const credentials = {
       deviceId: "device-bootstrap",
       refreshToken: "refresh-bootstrap",
-    } as CliCredentials;
+    } as CliDeviceCredentials;
     const events: string[] = [];
     const call = vi.fn(async (method: string, args: unknown[]) => {
       events.push(method);

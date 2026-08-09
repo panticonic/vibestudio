@@ -13,7 +13,11 @@ import {
   type AttachedHostParentHello,
   type AttachedHostSessionProof,
 } from "@vibestudio/service-schemas/attachedHosts";
-import { loadCliCredentials, type CliCredentials } from "../../cli/credentialStore.js";
+import {
+  loadCliCredentials,
+  requireDeviceCliCredentials,
+  type CliDeviceCredentials,
+} from "../../cli/credentialStore.js";
 import { RpcClient } from "../../cli/rpcClient.js";
 import { revokeRemoteDevice } from "../../cli/remoteClient.js";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
@@ -29,7 +33,7 @@ const MAX_ROUTE_BODY_BYTES = 2 * 1024 * 1024;
  * dropped immediately after server-confirmed device revocation.
  */
 export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
-  private credentials: CliCredentials | null = null;
+  private credentials: CliDeviceCredentials | null = null;
   private client: Pick<RpcClient, "call" | "close"> | null = null;
   private revoked = false;
   private revocationConfirmed = false;
@@ -38,7 +42,7 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     private readonly credentialFile: string,
     private readonly operations: {
       load: typeof loadCliCredentials;
-      createClient: (credentials: CliCredentials) => Pick<RpcClient, "call" | "close">;
+      createClient: (credentials: CliDeviceCredentials) => Pick<RpcClient, "call" | "close">;
       revoke: typeof revokeRemoteDevice;
       exists: typeof fs.existsSync;
       unlink: typeof fs.unlinkSync;
@@ -117,7 +121,7 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
     return (this.client ??= this.operations.createClient(this.loadCredentials()));
   }
 
-  private loadCredentials(): CliCredentials {
+  private loadCredentials(): CliDeviceCredentials {
     if (this.credentials) return this.credentials;
     const loaded = this.operations.load(this.credentialFile);
     if (!loaded) {
@@ -126,7 +130,7 @@ export class CliAttachedHostBootstrapPort implements AttachedHostBootstrapPort {
         "Exact isolated-host bootstrap credential is unavailable"
       );
     }
-    return (this.credentials = loaded);
+    return (this.credentials = requireDeviceCliCredentials(loaded, "attached host bootstrap"));
   }
 
   private assertUsable(): void {

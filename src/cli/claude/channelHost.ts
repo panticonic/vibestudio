@@ -339,7 +339,6 @@ export function channelNotificationMeta(
 
 interface ChannelMcpDelivery {
   notifyChannel(content: string, meta: ChannelNotificationMeta): Promise<void>;
-  notifyPermission(requestId: string, behavior: "allow" | "deny"): Promise<void>;
 }
 
 export class BridgeTurnBatcher {
@@ -464,12 +463,6 @@ export async function deliverBridgePayload(
           batchId,
         },
       ]);
-      return;
-    }
-    case "permission": {
-      const requestId = typeof event["requestId"] === "string" ? event["requestId"] : "";
-      const behavior = event["behavior"] === "allow" ? "allow" : "deny";
-      if (requestId) await deps.mcp.notifyPermission(requestId, behavior);
       return;
     }
     case "interrupt":
