@@ -44,11 +44,18 @@ export type ClaudeLaunchProfile = z.infer<typeof claudeLaunchProfileSchema>;
 export interface MaterializedClaudeLaunch {
   profileDir: string;
   argv: string[];
-  env: ClaudeLaunchEnvironment & {
-    VIBESTUDIO_SERVER_URL: string;
+  env: {
+    VIBESTUDIO_CONTEXT_ID: string;
+    VIBESTUDIO_CHANNEL_ID: string;
     VIBESTUDIO_LAUNCH_PROFILE: string;
+    VIBESTUDIO_BRIDGE_SOCKET: string;
+    VIBESTUDIO_BRIDGE_GENERATION: string;
     CLAUDE_CONFIG_DIR: string;
+    VIBESTUDIO_SUBAGENT_RUN_ID?: string;
+    VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID?: string;
+    VIBESTUDIO_SUBAGENT_CONTRACT?: string;
   };
+  broker: { socketPath: string; generation: string };
   credentialState: ClaudeCredentialState | null;
 }
 
@@ -99,7 +106,7 @@ export async function materializeClaudeLaunch(input: {
   hostClaudeConfigDirectory?: string;
 }): Promise<MaterializedClaudeLaunch> {
   const profile = parseClaudeLaunchProfile(input.profile);
-  if (!input.serverUrl) throw new Error("Claude launch materialization requires a serverUrl");
+  if (!input.serverUrl) throw new Error("Claude launch owner requires a serverUrl");
 
   const name = Buffer.from(profile.launchId, "utf8").toString("base64url");
   const materializationId = randomUUID();
@@ -116,6 +123,7 @@ export async function materializeClaudeLaunch(input: {
     const finalMcpPath = path.join(profileDir, "mcp.json");
     const finalSettingsPath = path.join(profileDir, "settings.json");
     const finalClaudeConfigDirectory = path.join(profileDir, "claude-config");
+    const bridgeSocketPath = path.join(profileDir, "bridge.sock");
     await mkdir(claudeConfigDirectory, { mode: 0o700 });
 
     const hostClaudeConfigDirectory = path.resolve(
@@ -158,10 +166,24 @@ export async function materializeClaudeLaunch(input: {
       finalSettingsPath,
     ];
     const env: MaterializedClaudeLaunch["env"] = {
-      ...profile.environment,
-      VIBESTUDIO_SERVER_URL: input.serverUrl,
+      VIBESTUDIO_CONTEXT_ID: profile.environment.VIBESTUDIO_CONTEXT_ID,
+      VIBESTUDIO_CHANNEL_ID: profile.environment.VIBESTUDIO_CHANNEL_ID,
       VIBESTUDIO_LAUNCH_PROFILE: profileDir,
+      VIBESTUDIO_BRIDGE_SOCKET: bridgeSocketPath,
+      VIBESTUDIO_BRIDGE_GENERATION: profile.launchId,
       CLAUDE_CONFIG_DIR: finalClaudeConfigDirectory,
+      ...(profile.environment.VIBESTUDIO_SUBAGENT_RUN_ID
+        ? { VIBESTUDIO_SUBAGENT_RUN_ID: profile.environment.VIBESTUDIO_SUBAGENT_RUN_ID }
+        : {}),
+      ...(profile.environment.VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID
+        ? {
+            VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID:
+              profile.environment.VIBESTUDIO_SUBAGENT_PARENT_CHANNEL_ID,
+          }
+        : {}),
+      ...(profile.environment.VIBESTUDIO_SUBAGENT_CONTRACT
+        ? { VIBESTUDIO_SUBAGENT_CONTRACT: profile.environment.VIBESTUDIO_SUBAGENT_CONTRACT }
+        : {}),
     };
 
     await Promise.all([
@@ -170,7 +192,13 @@ export async function materializeClaudeLaunch(input: {
       writeFile(envPath, `${JSON.stringify({ ...env, argv }, null, 2)}\n`, { mode: 0o600 }),
     ]);
     await rename(stageDir, profileDir);
-    return { profileDir, argv, env, credentialState };
+    return {
+      profileDir,
+      argv,
+      env,
+      broker: { socketPath: bridgeSocketPath, generation: profile.launchId },
+      credentialState,
+    };
   } catch (error) {
     await rm(stageDir, { recursive: true, force: true });
     throw error;

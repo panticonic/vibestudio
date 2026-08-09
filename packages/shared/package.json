@@ -32,6 +32,7 @@
     "./channelEnvelopePaging": "./src/channelEnvelopePaging.ts",
     "./channelInvites": "./src/channelInvites.ts",
     "./claudeLaunchProfile": "./src/claudeLaunchProfile.ts",
+    "./claudeBridgeBroker": "./src/claudeBridgeBroker.ts",
     "./claudeReadOnlyLaunch": "./src/claudeReadOnlyLaunch.ts",
     "./chromeTrust": "./src/chromeTrust.ts",
     "./connect": "./src/connect.ts",

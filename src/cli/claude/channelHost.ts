@@ -3,9 +3,8 @@
  * channel MCP server (plan §7). One process, four relays:
  *
  *   1. stdio MCP toward Claude Code (channel events in, say/complete out),
- *   2. vessel attachment over WS RPC toward the workspace,
- *   3. permission relay (Claude Code permission_request ⇄ workspace approval),
- *   4. hook ingestion (unix socket ← `vibestudio claude emit`).
+ *   2. vessel attachment through the launcher-owned narrow broker,
+ *   3. hook ingestion (unix socket ← `vibestudio claude emit`).
  *
  * Only the controlled `vibestudio claude` launcher may start this bridge. That
  * launcher places Claude behind the OS read-only projection boundary before
@@ -15,11 +14,11 @@
  */
 
 import * as path from "node:path";
-import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
-import { loadCliCredentials, type CliStoredPairing } from "../credentialStore.js";
-import { RpcClient, type RawTokenCredential } from "../rpcClient.js";
-import { AuthError, CliError } from "../output.js";
-import { normalizeServerBaseUrl } from "../serverUrl.js";
+import {
+  ClaudeBridgeBrokerClient,
+  type ClaudeBridgeJson,
+} from "@vibestudio/shared/claudeBridgeBroker";
+import { CliError } from "../output.js";
 import {
   McpStdioServer,
   toolText,
@@ -38,15 +37,10 @@ import {
 
 export interface BridgeConfig {
   mode: "launched";
-  /** Current HTTP base or selected WebRTC route the RpcClient dials. */
-  serverUrl: string;
-  /** Present when an agent token rides the paired device's WebRTC route. */
-  workspacePairing?: CliStoredPairing;
-  agentToken: string;
-  entityId: string;
   contextId: string;
   channelId: string;
-  vesselRef: string;
+  brokerSocketPath: string;
+  brokerGeneration: string;
   /** Unix socket paths to listen on for hook emissions. */
   hookSocketPaths: string[];
   /** Present when this session was spawned as a subagent (launch profile carries
@@ -63,15 +57,6 @@ export interface BridgeSubagentInfo {
   contract: string;
 }
 
-/** One canonical bridge credential: agent auth plus transport reach. */
-export function bridgeRpcCredential(config: BridgeConfig): RawTokenCredential {
-  return {
-    url: config.serverUrl,
-    token: config.agentToken,
-    ...(config.workspacePairing ? { workspacePairing: config.workspacePairing } : {}),
-  };
-}
-
 /** Parse the optional subagent duty out of a launch-profile env record. */
 function subagentFromEnv(env: Record<string, string | undefined>): BridgeSubagentInfo | undefined {
   const runId = env["VIBESTUDIO_SUBAGENT_RUN_ID"];
@@ -83,72 +68,32 @@ function subagentFromEnv(env: Record<string, string | undefined>): BridgeSubagen
   };
 }
 
-/** Validate a canonical launch-profile server base URL. */
-export function normalizeServerUrl(raw: string): string {
-  return normalizeServerBaseUrl(raw);
-}
-
-export interface BridgeEnvironment {
-  /** Test seam for resolving a paired WebRTC launch route. */
-  loadCredentials?: typeof loadCliCredentials;
-}
-
 /**
  * Resolve a complete controlled-launch profile. There is no fallback path: an
  * already-running Claude process cannot be made read-only by this child MCP
  * server, so accepting one would reopen an unprovenanced native-write path.
  */
-export async function resolveBridgeConfig(
-  env: NodeJS.ProcessEnv,
-  environment: BridgeEnvironment = {}
-): Promise<BridgeConfig> {
-  const token = env["VIBESTUDIO_AGENT_TOKEN"];
-  if (token) {
-    const serverUrl = env["VIBESTUDIO_SERVER_URL"];
-    const entityId = env["VIBESTUDIO_ENTITY_ID"];
-    const contextId = env["VIBESTUDIO_CONTEXT_ID"];
-    const channelId = env["VIBESTUDIO_CHANNEL_ID"];
-    const vesselRef = env["VIBESTUDIO_VESSEL_REF"];
-    const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
-    if (!serverUrl || !entityId || !contextId || !channelId || !vesselRef || !profile) {
-      throw new CliError(
-        "incomplete launch profile env: VIBESTUDIO_AGENT_TOKEN is set but " +
-          "SERVER_URL/ENTITY_ID/CONTEXT_ID/CHANNEL_ID/VESSEL_REF/LAUNCH_PROFILE are not all present"
-      );
-    }
-    const subagent = subagentFromEnv(env);
-    const reach = launchReach(serverUrl, environment.loadCredentials ?? loadCliCredentials);
-    return {
-      mode: "launched",
-      ...reach,
-      agentToken: token,
-      entityId,
-      contextId,
-      channelId,
-      vesselRef,
-      hookSocketPaths: [path.join(profile, "hook.sock")],
-      ...(subagent ? { subagent } : {}),
-    };
-  }
-  throw new CliError(
-    "unmanaged linked-Claude adoption is unsupported: launch with `vibestudio claude` so the managed context is OS-read-only"
-  );
-}
-
-function launchReach(
-  serverUrl: string,
-  load: typeof loadCliCredentials
-): Pick<BridgeConfig, "serverUrl" | "workspacePairing"> {
-  if (new URL(serverUrl).protocol !== "webrtc:") {
-    return { serverUrl: normalizeServerUrl(serverUrl) };
-  }
-  const creds = load();
-  if (!creds || creds.url !== serverUrl) {
-    throw new AuthError(
-      "launch profile selects a WebRTC route that does not match the paired CLI credential"
+export async function resolveBridgeConfig(env: NodeJS.ProcessEnv): Promise<BridgeConfig> {
+  const contextId = env["VIBESTUDIO_CONTEXT_ID"];
+  const channelId = env["VIBESTUDIO_CHANNEL_ID"];
+  const profile = env["VIBESTUDIO_LAUNCH_PROFILE"];
+  const brokerSocketPath = env["VIBESTUDIO_BRIDGE_SOCKET"];
+  const brokerGeneration = env["VIBESTUDIO_BRIDGE_GENERATION"];
+  if (!contextId || !channelId || !profile || !brokerSocketPath || !brokerGeneration) {
+    throw new CliError(
+      "unmanaged linked-Claude adoption is unsupported: launch with `vibestudio claude` so the managed context and bridge authority are owner-provisioned"
     );
   }
-  return { serverUrl: creds.url, workspacePairing: creds.workspacePairing };
+  const subagent = subagentFromEnv(env);
+  return {
+    mode: "launched",
+    contextId,
+    channelId,
+    brokerSocketPath: path.resolve(brokerSocketPath),
+    brokerGeneration,
+    hookSocketPaths: [path.join(profile, "hook.sock")],
+    ...(subagent ? { subagent } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -224,21 +169,21 @@ export const WORKSPACE_SKILL_ADDENDUM = `> **You are reading a WORKSPACE skill a
 > - Pi loop tools named in skills (\`spawn_subagent\`, \`read_subagent\`,
 >   \`inspect_subagent\`, \`merge_subagent\`, \`suspend_turn\`, \`ask_user\`, panel
 >   \`handle.*\`) are NOT your tools. Your MCP tools are \`say\` and \`complete\`;
->   the \`vibestudio\` CLI is available for read-only \`fs\`/\`vcs\` orientation and
->   channel/panel diagnostics. Managed mutations and eval require an in-process
->   invocation edge that linked sessions do not have, so the server refuses them.
+>   workspace skills are available as MCP resources. This session deliberately
+>   has no general authenticated \`vibestudio\` CLI or in-process invocation edge,
+>   so server-side fs/vcs/panel access, managed mutations, and eval are unavailable.
 >   You cannot spawn subagents — \`say\` a delegation or implementation request to
 >   the workspace agent in your conversation instead.
 > - TypeScript snippets that import \`@workspace/*\` or call runtime bindings are
 >   examples for in-process agents, not commands this linked session can execute.
-> - Panel automation examples (\`handle.cdp.screenshot()\` etc.) map to
->   the linked session's read-only \`vibestudio panel screenshot/console\`
->   diagnostics. Mutation examples require an in-process agent.
-> - Approval prompts skills mention resolve as workspace approval cards for
->   the user (or fail closed); do not expect an interactive prompt locally.
+> - Panel automation examples (\`handle.cdp.screenshot()\` etc.) require an
+>   in-process agent; ask the workspace agent with \`say\` when they are relevant.
+> - Approval examples do not map to a workspace relay in this checkpoint.
+>   Interactive Claude Code permissions remain in its local terminal; headless
+>   permissions follow the launcher's explicit permission mode.
 > - Files a skill references beside its SKILL.md (RECIPES.md, references/…)
->   live in the workspace tree next to it — the skill's repo path is in this
->   resource's description. Read them with \`vibestudio fs read <repoPath>/<file>\`.
+>   are not exported by this narrow resource bridge. Ask the workspace agent to
+>   read or summarize an adjacent file when the SKILL.md alone is insufficient.
 
 ---
 
@@ -298,20 +243,19 @@ export function bridgeInstructions(config: BridgeConfig): string {
       "final answers are mirrored into the conversation's trajectory automatically — `say` is " +
       "for messages the conversation should actually receive.",
     "",
-    "The `vibestudio` CLI in this session is pre-scoped to this context " +
-      `(context ${config.contextId}, channel ${config.channelId}): use \`vibestudio fs\` reads and ` +
-      "`vibestudio vcs status/compare/history/blame` to inspect semantic state, and " +
-      "`vibestudio channel send/history/tail` for conversations. This linked process has no " +
-      "in-process tool-invocation edge, so managed fs/vcs mutations and `vibestudio eval` " +
-      "fail closed. Native Edit/Write/Bash changes to projected repository bytes are not " +
+    "This linked process receives no workspace bearer credential and has no general authenticated " +
+      "`vibestudio` CLI. Its server authority is intentionally limited to the `say`/`complete` " +
+      "channel tools, hook telemetry, link status, and the workspace-skill " +
+      "resources on this MCP server. Server-side fs/vcs/panel access, eval, and managed mutations " +
+      "are unavailable. Native Edit/Write/Bash changes to projected repository bytes are not " +
       "semantic work and will be discarded by projection; do not use them. Ask the workspace " +
-      "agent with `say` when implementation is required. The `vibestudio-agent` skill in this " +
-      "MCP server's resources documents the exact boundary.",
+      "agent with `say` when implementation or additional inspection is required. The " +
+      "`vibestudio-agent` skill resource documents the exact boundary.",
     "",
-    "The read-only context projection materializes repos on demand, so a fresh checkout can look almost " +
-      "empty to local `ls`/glob. Discover the tree with `vibestudio fs ls /` (server-side, " +
-      "authoritative) before concluding files are missing; `vibestudio fs` reads " +
-      "materialize the repos they touch onto disk for your local tools.",
+    "The local context is a read-only projection and may contain only repositories already " +
+      "materialized by the workspace. Local reads and searches can inspect those bytes. If required " +
+      "content is absent, ask the workspace agent to inspect or materialize it; do not infer that " +
+      "the semantic workspace lacks the file.",
     "",
     "The workspace's own skill library (how-to guides for working in THIS workspace: " +
       "subagents, testing, panel dev, provenance, …) is exposed as MCP resources on this " +
@@ -341,7 +285,7 @@ export function bridgeInstructions(config: BridgeConfig): string {
 }
 
 export interface ChannelHostDeps {
-  makeClient?: (config: BridgeConfig) => RpcClient;
+  makeClient?: (config: BridgeConfig) => ClaudeBridgeBrokerClient;
   log?: (message: string) => void;
 }
 
@@ -430,13 +374,33 @@ export async function runChannelHostLoop(
   const log = deps.log ?? ((message: string) => console.error(`[channel-host] ${message}`));
   const client = deps.makeClient
     ? deps.makeClient(config)
-    : new RpcClient(bridgeRpcCredential(config));
+    : new ClaudeBridgeBrokerClient(config.brokerSocketPath, config.brokerGeneration);
 
   const vessel = {
-    call: <T>(method: string, args: unknown[] = []): Promise<T> =>
-      client.callTargetPush<T>(config.vesselRef, method, args),
-    stream: (method: string, args: unknown[], signal: AbortSignal): Promise<Response> =>
-      client.stream(config.vesselRef, method, args, { signal }),
+    call: async <T>(method: string, args: unknown[] = []): Promise<T> => {
+      const payload = (args[0] ?? {}) as never;
+      let result: ClaudeBridgeJson;
+      switch (method) {
+        case "say":
+          result = await client.call("say", payload);
+          break;
+        case "completeFromBridge":
+          result = await client.call("complete", payload);
+          break;
+        case "requestPermission":
+          result = await client.call("requestPermission", payload);
+          break;
+        case "ackDelivery":
+          result = await client.call("ackDelivery", payload);
+          break;
+        case "ingestHookEvent":
+          result = await client.call("ingestHookEvent", payload);
+          break;
+        default:
+          throw new Error(`Unsupported Claude bridge vessel operation: ${method}`);
+      }
+      return result as T;
+    },
   };
 
   const sessionId = `bridge:${process.pid}:${Date.now().toString(36)}`;
@@ -453,7 +417,13 @@ export async function runChannelHostLoop(
     serverVersion: "1.0.0",
     instructions: bridgeInstructions(config),
     tools: [SAY_TOOL, COMPLETE_TOOL],
-    resources: createSkillResources((method, args) => client.call(method, args)),
+    resources: createSkillResources(async (method, args) => {
+      if (method === "workspace.listSkills") return (await client.call("listSkills", {})) as never;
+      if (method === "workspace.readSkill") {
+        return (await client.call("readSkill", { name: String(args[0] ?? "") })) as never;
+      }
+      throw new Error(`Unsupported Claude bridge resource operation: ${method}`);
+    }),
     log,
     onToolCall: async (name, args, requestId): Promise<McpToolResult> => {
       if (name === "say") {
@@ -475,22 +445,6 @@ export async function runChannelHostLoop(
         return toolText("task completed — the parent has been settled");
       }
       return toolText(`unknown tool: ${name}`, true);
-    },
-    onPermissionRequest: async (params) => {
-      try {
-        await vessel.call("requestPermission", [
-          {
-            requestId: params.request_id,
-            toolName: params.tool_name,
-            description: params.description,
-            inputPreview: params.input_preview,
-          },
-        ]);
-      } catch (err) {
-        // Relay unavailable → fail closed immediately so the session isn't stuck.
-        log(`permission relay failed (denying): ${err instanceof Error ? err.message : err}`);
-        await mcp.notifyPermission(params.request_id, "deny");
-      }
     },
     onTransportFailure: (error) => {
       log(`MCP transport failed: ${error.message}`);
@@ -570,26 +524,19 @@ export async function runChannelHostLoop(
     });
     const terminal = (async () => {
       try {
-        const response = await vessel.stream(
-          "openBridge",
-          [
-            {
-              sessionInfo: {
-                bridge: sessionId,
-                mode: config.mode,
-                pid: process.pid,
-                agentKind: "claude-code",
-                permissionCapability: "claude-code.tool",
-                channelReadiness: CLAUDE_CHANNEL_READINESS,
-              },
+        const response = client.openBridge(
+          {
+            sessionInfo: {
+              bridge: sessionId,
+              mode: config.mode,
+              pid: process.pid,
+              agentKind: "claude-code",
+              channelReadiness: CLAUDE_CHANNEL_READINESS,
             },
-          ],
+          },
           controller.signal
         );
-        for await (const record of readChannelSubscriptionRecords<
-          { pendingCount: number },
-          Record<string, unknown>
-        >(response)) {
+        for await (const record of response) {
           if (activeBridge?.generation !== generation) break;
           if (record.kind === "subscribed") {
             if (acknowledged) throw new Error("Linked bridge sent more than one ACK");

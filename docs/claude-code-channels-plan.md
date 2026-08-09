@@ -1,7 +1,10 @@
 # Claude Code Sessions as First-Class Channel Agents
 
-Status: IMPLEMENTED (2026-07-06, rev 3 — big-bang, all workstreams W1–W7 landed together;
-typecheck host/userland/mobile, all unit suites, and the boundary checker green).
+Status: ACTIVE ARCHITECTURE CHECKPOINT (2026-08-09, rev 5). The managed interactive
+launch materializer and narrow host seam are implemented; end-to-end extension-headless
+activation/broker integration, a filesystem/network confidentiality envelope, and
+permission relay remain explicit follow-up boundaries. Do not read historical W1–W7
+targets as landed behavior.
 Rev 2 replaced the earlier `agent-external` participant-class redesign with a userland
 **linked-agent vessel**: the Claude Code session's system identity is a real agent DO,
 and the local process is a thin peripheral attached to it.
@@ -27,11 +30,13 @@ workspace, not a foreign process:
    every other agent_, with identity, presence, addressing, and a durable trajectory —
    surfaced to Claude Code via its native **channels** mechanism (an MCP server we
    implement).
-3. It has the `vibestudio` CLI auto-scoped for **read-only semantic orientation** and
-   channel participation. Managed mutation and eval fail closed: a linked hook report is
-   evidence of a Claude tool call, not an invocation-scoped execution authority.
-4. Its tool-use **permission prompts flow into our approvals system**, so the user
-   approves Claude Code actions from the workspace UI or mobile like any other approval.
+3. It receives a **narrow channel authority**: channel participation, hook telemetry,
+   link status, and workspace-skill resources. It does not receive a
+   general Vibestudio bearer or authenticated fs/vcs/eval CLI surface. Local tools may
+   inspect bytes already present in the read-only projection.
+4. Tool-use permission prompts remain on Claude Code's local terminal. Remote relay is
+   not advertised until a real workspace approval owns the verdict; the existing vessel
+   auto-allow dead end is not an approval boundary.
 5. Everything above works from **one command / one click** — no manual pairing, config
    authoring, or session-file bookkeeping.
 
@@ -106,7 +111,7 @@ Remaining friction points, and the verdict on each (extend, don't work around):
 | CLI context scoping ignores cwd                       | cwd/env context discovery with explicit precedence (§6.2)              |
 | No identity for autonomous external processes         | New `agent` caller kind + entity-scoped credentials (§3)               |
 | No messaging surface in the CLI                       | New `channel` command group over shared schemas (§6.3)                 |
-| Claude Code permission prompts invisible to workspace | Permission relay → approvals service, via the vessel (§7.3)            |
+| Claude Code permission prompts invisible to workspace | Keep relay disabled until approvals own a trusted verdict (§7.3)       |
 | No structured trajectory for external agents          | Hooks → vessel → `agentic.trajectory.v1` (§7.4)                        |
 | No exact linked mutation ingress                      | Keep managed paths read-only; do not invent identity transport (§6.6)  |
 
@@ -205,20 +210,25 @@ the linked agent is then invited to _that_ channel.
    entity + context + vessel. (The auth service allows this call for `extension`
    callers; the approval gate for first-time agent launches renders through
    `ctx.approvals`, same as shell-extension approvals.)
-4. Return one strict, portable **launch declaration**:
+4. Return one strict, portable, owner-only **launch declaration**:
    `{ protocol: "vibestudio.claude-launch.v1", launchId, executable: "claude",
-environment }`. It contains semantic identity and optional subagent duty only. It
+environment }`. It contains semantic identity, the short-lived agent credential, vessel,
+   and optional subagent duty. This response exists only in launcher memory long enough to
+   construct the authority broker; it is never used as Claude's environment or written as a
+   profile. It
    contains no server URL, context folder, profile directory, skills directory, or
    already-expanded argv.
 5. The machine that will actually execute Claude validates its local Claude Code
    version and materializes the declaration below its own disposable launch-state
    root. That local profile contains `mcp.json`, hook-only `settings.json`, and a
    mode-`0600` diagnostic `env.json`; its argv points only at those local files. The
-   materializer injects the selected local hub/WebRTC route and profile directory.
-   Workspace skills are served as authenticated MCP resources by the bridge. The launcher removes the profile and calls
+   materializer writes only non-secret context and per-generation broker coordinates.
+   The launcher retains the selected local hub/WebRTC route, token, and vessel in memory
+   and uses them to construct a host-owned broker. Workspace skills are served as
+   authenticated MCP resources through that broker. The launcher removes the profile and calls
    `release` on exit, launch failure, context mismatch, or denied terminal approval.
 
-Portable environment (consumed by bridge, CLI, and hooks):
+Owner-only authority fields in the `prepare` response (never written or spawned):
 
 ```
 VIBESTUDIO_AGENT_TOKEN      agent:<agentId>:<token>   (never the device credential)
@@ -228,8 +238,20 @@ VIBESTUDIO_CHANNEL_ID       primary channel id
 VIBESTUDIO_VESSEL_REF       linked vessel target
 ```
 
-`VIBESTUDIO_SERVER_URL` and `VIBESTUDIO_LAUNCH_PROFILE` exist only in the locally materialized process environment.
-They are never transported in `prepare`.
+Claude's materialized environment contains only context/channel identity, the disposable
+profile path, the broker socket path plus exact launch generation, `CLAUDE_CONFIG_DIR`, and
+optional subagent duty. It contains no token, server URL, vessel reference, entity id,
+device credential, or generic RPC route. The spawn environment is deny-by-default: it
+copies an explicit runtime/locale/certificate/credential-free-proxy allowlist rather than
+spreading `process.env`. Claude's isolated `.credentials.json` remains the unavoidable
+provider login projected into its private config.
+
+The broker endpoint lives at a durable per-generation path inside a mode-`0700` directory;
+the Unix socket itself is created mode `0600`, is ready before Claude is spawned, and is
+unlinked when its launcher owner exits. Possession of the socket coordinate is useful only
+for the exact generation handshake. The protocol has strict, bounded schemas for
+`openBridge`, `say`, `complete`, permission request/delivery, hook ingestion, skill
+list/read, and link status. There is no generic RPC method or caller-selected target.
 
 `release({ entityId, launchId })` revokes only that exact preparation generation's
 credential and removes only its extension-local materialization. A CLI owns and
@@ -417,14 +439,14 @@ rematerializing semantic state. Both files are excluded from VCS projection/diff
 CLI scope resolution precedence (implemented once in `resolveSessionScope`):
 
 1. `--context <id>` / `--session <name>` explicit flags;
-2. `VIBESTUDIO_CONTEXT_ID` (+ `VIBESTUDIO_AGENT_TOKEN` ⇒ also selects the agent
-   credential and `agent` caller kind instead of the device credential);
+2. `VIBESTUDIO_CONTEXT_ID` for non-authoritative context selection;
 3. cwd-upward search for `.vibestudio-context.json`;
 4. the named default session file (today's behavior).
 
-Net effect: inside a launched Claude Code session, **every** `vibestudio` invocation is
-automatically scoped to the right server, credential, and context with zero flags. A
-human `cd`-ing into a context folder gets the same.
+Inside a launched Claude Code session, `vibestudio claude channel-host`, hook `emit`, and
+`status` use only local broker/profile coordinates. Other `vibestudio` commands do not
+inherit an agent credential. A human CLI inside a bound context still uses the separately
+paired device credential under the ordinary scope rules.
 
 ### 6.3 New command group: `channel`
 
@@ -454,24 +476,28 @@ describe it, but linked bridge instructions do not advertise it.
 
 The piece Claude Code spawns as its channel MCP server. **A CLI subcommand** — it stays
 host-side in `src/cli/claude/` because it is now genuinely thin: stdio MCP on one side,
-WS RPC + shared schemas on the other. All agentic semantics live in the vessel (§5); no
-workspace imports, no boundary tension, no separate bin to ship.
+the per-generation Unix broker protocol on the other. The launcher-side broker alone owns
+the credential, route, vessel target, and generic RPC client. All agentic semantics live
+in the vessel (§5); no workspace imports, no boundary tension, no separate bin to ship.
 
-One process, four relays:
+One process, three relays:
 
 ### 7.1 Channel MCP server (stdio, toward Claude Code)
 
-- Declares `claude/channel`, `claude/channel/permission`, and tools.
+- Declares `claude/channel` and tools. It deliberately omits
+  `claude/channel/permission` until the workspace can produce a trusted human verdict.
 - `instructions` teach the session the contract: how `<channel source="vibestudio">`
-  events look, that `say` replies to the conversation, that read-only CLI discovery is
-  pre-scoped to this context, that mutation/eval fail closed without an in-process
-  causal invocation, and what the meta attributes mean.
+  events look, that `say` replies to the conversation, that only already-materialized
+  projection bytes are locally readable, that general fs/vcs/eval authority is absent,
+  and what the meta attributes mean.
 
 ### 7.2 Vessel response (streaming RPC, toward the workspace)
 
-- Connects with `VIBESTUDIO_AGENT_TOKEN` and holds `vessel.openBridge`'s response open.
-  It requires the ACK before binding the hook socket, consumes data records in order,
-  and acks durable delivery cursors (§5.1).
+- Connects to the owner-provisioned broker using its socket path and exact generation,
+  then holds the broker's `openBridge` stream open. The broker owns the corresponding
+  `vessel.openBridge` response and raw credential. The channel host requires the ACK
+  before binding the hook socket, consumes data records in order, and acks durable
+  delivery cursors (§5.1).
 - Transport recovery opens one replacement response after the routed connection is
   restored. An unexpected response end is fatal to the channel-host process; there is
   no independent application retry loop that could mask a broken transport.
@@ -490,16 +516,20 @@ meta: { channel_id, seq, from, from_handle, kind, turn_id }
     is on task duty, §5.2/§8.2).
     Secondary-channel messaging goes through `vibestudio channel send` (§6.3) or eval.
 
-### 7.3 Permission relay → approvals service
+### 7.3 Permission relay is disabled pending a real approval owner
 
-`notifications/claude/channel/permission_request` → `vessel.requestPermission` → the
-vessel files a first-class workspace approval (`approvals.requestExternal({ entityId,
-capability: "claude-code.tool", operation, description, preview, requestId })`, a new
-approvals-service method callable by `do`) **and** publishes an `invocation.waiting`
-event on the channel, so the conversation shows "Claude Code wants to run `npm install`"
-with inline approve/deny. The verdict resolves through the vessel back to the bridge as
-`notifications/claude/channel/permission` `{request_id, behavior}`. One approval, two
-surfaces, single source of truth. A detached/dead bridge auto-denies on timeout.
+The official contract makes permission relay an optional capability and gives a remote
+verdict the same power as the local terminal. Therefore the bridge must not advertise
+`claude/channel/permission` merely because it can transport a request. The old
+`vessel.requestPermission` implementation immediately emitted `allow` with no human
+decision; that is not an approval system and must never be reachable as a relay.
+
+The broker retains a strict request schema for the future seam: the request id is exactly
+five lowercase letters excluding `l`, matching Claude Code's issued IDs. The current CLI
+authority rejects the operation and the MCP server omits the capability. A future
+checkpoint may enable it only when an approvals-service request returns the verdict,
+the verdict is bound to the exact still-open request id, and disconnect/cancellation
+retires the pending approval. There is no compatibility fallback to auto-allow.
 
 ### 7.4 Trajectory reporting (hooks → vessel)
 
@@ -553,14 +583,10 @@ including after detached replay. A terminal prompt stores its exact prompt messa
 and points the turn to it. Thus message → turn → invocation is walkable without a second
 prompt copy.
 
-**Permission races (the one real dual-surface conflict).** In interactive mode the
-terminal shows a permission prompt _and_ the relay forwards it (§7.3), so the local
-human and workspace approvers can both answer. First verdict wins. Claude Code sends
-no cancellation when the terminal answers, so the vessel cleans up: if PreToolUse
-arrives for the pending request (tool proceeded ⇒ approved locally) or the turn closes
-without the relay verdict being consumed, the vessel resolves the workspace approval
-as "answered at the terminal". No dangling approval cards; a detached bridge still
-auto-denies on timeout.
+**Permission ownership.** There is currently one surface only: Claude Code's terminal.
+The bridge does not claim the optional relay capability. If remote approvals are added,
+Claude Code's local/remote first-verdict behavior requires one approval owner to bind and
+retire the exact request id; hook inference is not a substitute for that ownership.
 
 **Cursor/ack semantics.** The bridge acks the vessel when a notification has been
 handed to Claude Code (queued), not when processed; `turn.closed` is the processed
@@ -617,8 +643,9 @@ idempotent past a real complete, so runs never dangle as "running".
 
 An MCP child cannot retrofit filesystem containment around an already-running Claude
 parent. Plugin/adoption mode is therefore deleted, including its per-context hook
-socket and warning-based divergence path. `channel-host` requires the complete
-launcher profile; without it, it refuses and directs the user to `vibestudio claude`.
+socket and warning-based divergence path. `channel-host` requires owner-provisioned
+broker socket/generation coordinates; without them, it refuses and directs the user to
+`vibestudio claude`.
 
 The launcher executes Claude through Linux bubblewrap. The host filesystem and exact
 context projection are read-only mounts; `/tmp` and one disposable profile-local
@@ -626,6 +653,13 @@ context projection are read-only mounts; `/tmp` and one disposable profile-local
 against the context receive `EROFS`, while scratch stays usable. The launch fails closed
 when bubblewrap is absent or on a platform without an audited backend. `chmod`, Claude
 permission mode, and prompt instructions are not treated as containment.
+
+This checkpoint removes ambient environment and Vibestudio credential exposure from the
+interactive CLI launcher, but does not claim filesystem or network confidentiality:
+the current bubblewrap declaration still read-binds `/` and leaves the host network
+available. Replacing that with an allowlisted external-agent runtime envelope is a
+separate boundary change. The extension-headless launcher must adopt the same broker and
+environment owner seam before this checkpoint is complete for that launch path.
 
 There are now two explicit states only:
 
@@ -660,10 +694,10 @@ There are now two explicit states only:
    folder, while its disposable materialization receipt lives privately under
    `.gad/`. The projection epoch is bumped; no endpoint-bearing marker or legacy
    parser remains. The projector/diff layer ignores both host-owned files.
-7. **Approvals service**: new `requestExternal` method callable by `do`; approval
-   payloads gain the external-agent capability shape.
+7. **Permission relay**: no approvals-service schema change has landed. The MCP
+   capability is omitted until one real approval owner and exact-ID lifecycle exist.
 8. **`vibestudio.yml` / extension registry**: new `linked-agent` worker declaration;
-   new `@workspace-extensions/claude-code` extension; extended `auth`/`approvals` host
+   new `@workspace-extensions/claude-code` extension; extended `auth` host
    service schemas (no new host service — the orchestrator is the extension).
 9. **Shell agent detection**: regex matching over joined argv and authority-bearing
    launch adapters are removed. Display metadata is derived only from the executable
@@ -680,14 +714,14 @@ There are now two explicit states only:
 (Channel substrate: **no breaking changes** — rev 2 deliberately leaves the participant
 model, wire protocol, and schemaVersion untouched.)
 
-## 10. Big-bang implementation
+## 10. Managed-only checkpoint implementation
 
-Everything in this plan is **one scope, one integration branch, one landing**. There
-are no compatibility paths: the linked-agent vessel, context terminals, extension,
-contained bridge, permission relay, `channel` CLI group, remote context mirrors, and
-Claude Code reviewer-subagent target merge in the same cut, with §9 applied
-simultaneously and replaced paths deleted outright (dead-code audit included in the
-cut, per project policy).
+There are no compatibility/adoption paths: the linked-agent vessel, context terminals,
+explicit launcher, narrow broker, and contained bridge form one managed architecture.
+Unfinished boundaries stay unavailable rather than being simulated: permission relay is
+not advertised, extension-headless launch must adopt the same broker owner seam, and the
+filesystem/network envelope replaces (rather than layers exceptions onto) the current
+read-only-root declaration.
 
 **Workstreams** (parallelizable; dependency edges are for construction order only, not
 shipping order):
@@ -703,14 +737,15 @@ shipping order):
   (prepare/release, launch profiles), context bindings, CLI scope precedence,
   `vibestudio claude`.
 - **W4 Contained bridge** — `vibestudio claude channel-host` (MCP channel server,
-  response stream, hooks emit, say/complete, permission relay) behind one fail-closed
+  response stream, hooks emit, say/complete; permission relay intentionally absent) behind one fail-closed
   bubblewrap launch. Unmanaged adoption/plugin paths are deleted.
 - **W5 CLI surfaces** — `channel` group (list/history/send/tail/roster), remote
   context snapshot export (`context mirror`, `mirror` service), explicit linked
   read-only boundary, and skill rewrite (tier probing).
-- **W6 Approvals & UI** — `approvals.requestExternal`, dual-surface race resolution,
-  roster/card badges, terminal↔conversation linking, SubagentRunCard parity for
-  Claude Code subagents.
+- **W6 Approvals & UI** — pending: a real `approvals.requestExternal` owner and
+  dual-surface race resolution are prerequisites for advertising permission relay;
+  roster/card badges, terminal↔conversation linking, and SubagentRunCard parity are
+  separate presentation work.
 - **W7 Subagent target** — `spawn_subagent` `agentKind: "claude-code"`, extension-owned
   headless reviewer/orienter launch, terminal-settle integration. It cannot implement
   managed changes until §6.6 has one canonical mutation surface.
@@ -734,8 +769,8 @@ together, plus typecheck, unit suites, and the boundary checker:
 4. A panel message reaches the live session as a `<channel>` event; the reply lands in
    the conversation; the trajectory shows turns, tool invocations, and mirrored final
    messages; mid-turn channel messages queue to the next turn boundary.
-5. A Claude Code `Bash` permission is approved from the workspace UI; a
-   terminal-answered permission auto-resolves its workspace approval card.
+5. Claude Code permission relay is absent until the dedicated approvals acceptance set
+   proves exact-ID human verdicts and local/remote race cleanup.
 6. An unmanaged `channel-host` refuses before adopting identity. A controlled launch
    proves native context writes fail with `EROFS` and explicit scratch writes pass.
 7. On a second machine over WebRTC: `context mirror` exports the exact context
@@ -765,8 +800,8 @@ together, plus typecheck, unit suites, and the boundary checker:
   external interactive sessions).
 - **Prompt injection**: the vessel forwards channel content into a tool-bearing session.
   The enforced boundary is: vessel-side addressing gate, workspace-internal channel
-  membership (paired identities only), the `agent` caller-kind ceiling, and the
-  permission relay keeping a human on the trigger for sensitive tools. Externally-fed
+  membership (paired identities only), the `agent` caller-kind ceiling, and Claude
+  Code's local permission policy for sensitive tools. Externally-fed
   channels (webhook ingress → conversation) must not be permitted to address linked
   agents; that rule ships in this cut as part of the vessel's addressing gate, and
   relaxing it would require its own security review.

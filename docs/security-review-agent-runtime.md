@@ -62,7 +62,9 @@ A local operating-system attacker already able to act as the Vibestudio user's U
 
 **Severity:** Critical\
 **Confidence:** High\
-**Status:** Accepted risk as of 2026-07-27; containerization is the intended boundary
+**Status:** Accepted risk as of 2026-07-27; interactive-launch credential/env exposure
+partially remediated 2026-08-09; filesystem/network envelope and extension-headless
+integration remain open
 
 ### Evidence
 
@@ -72,7 +74,8 @@ The linked-Claude confinement helper describes its goal as a read-only managed p
 - `packages/shared/src/claudeReadOnlyLaunch.ts:68-99` invokes bubblewrap with `--ro-bind / /`.
 - The launch does not unshare or mediate networking (`packages/shared/src/claudeReadOnlyLaunch.ts:68-99`).
 
-The headless subagent launch then inherits the extension host's complete environment:
+The extension-headless subagent launch still inherits the extension host's complete
+environment until it adopts the shared broker/environment owner seam:
 
 - `workspace/extensions/claude-code/index.ts:322-332` builds the Claude argv and spawns with `env: { ...process.env, ...materialized.env, ...confined.env }`.
 - Every extension child receives a bearer for the trusted extension identity in `VIBESTUDIO_EXTENSION_RPC_TOKEN` and its gateway URL (`packages/extension-host/src/processManager.ts:68-88`).
@@ -84,9 +87,10 @@ The child also receives native Bash and defaults to autonomous permission handli
 - `workspace/extensions/claude-code/index.ts:101-121` implements that default and also accepts `bypassPermissions`.
 - `workspace/extensions/claude-code/index.ts:431-452` skips first-launch human approval for a subagent because parent spawn is treated as authorization.
 
-This is inconsistent with the instructions presented to the external model:
-
-- `src/cli/claude/channelHost.ts:300-313` says the CLI is pre-scoped to the context and native changes to projected repository bytes are discarded.
+The current channel instructions now state that no general authenticated CLI is present
+and that only already-materialized projection bytes are the intended local read surface.
+That prompt is truthful about product authority, but it cannot enforce confidentiality
+while bubblewrap still mounts the rest of the host read-only.
 
 The projection is read-only, but native reads are not scoped to it. The child can read the user's home directory, SSH configuration and private keys, other workspaces, Vibestudio state, and its parent extension's environment. On the AES fallback credential store, the encryption key and ciphertext are both files under the same profile tree:
 
@@ -94,7 +98,11 @@ The projection is read-only, but native reads are not scoped to it. The child ca
 - `packages/credential-client/src/encryptedJsonStore.ts:105-159` uses that adjacent key for AES-GCM encryption and decryption.
 - Credential records default beneath the same profile data root (`packages/credential-client/src/encryptedJsonStore.ts:348`).
 
-The materialized scoped agent token is itself expected to be available to the linked process (`workspace/extensions/claude-code/index.ts:498-525`). The unexpected escalation is that the process also receives the trusted extension bearer and the rest of the host.
+The shared materializer no longer writes the scoped agent token, server route, vessel, or
+entity into Claude's environment, MCP config, or diagnostic profile. The raw token remains
+only in the launch owner's in-memory preparation response. The extension path is currently
+incomplete because it has not yet constructed the corresponding owner-side broker, and it
+still spreads the trusted extension bearer and ambient environment into its child.
 
 ### Exploit preconditions
 
@@ -122,7 +130,7 @@ Introduce a host-owned `ExternalAgentLaunch`/`ContainedProcess` abstraction whos
 
 - a minimal root filesystem assembled from reviewed runtime directories and the exact context projection, not `--ro-bind / /`;
 - a dedicated sanitized Claude profile containing only the account/session material required by this launch;
-- `--clearenv` semantics and an allowlist such as locale, `PATH`, the scoped agent credential, launch-profile coordinates, and explicit scratch variables;
+- `--clearenv` semantics and an allowlist such as locale, `PATH`, non-secret broker/profile coordinates, and explicit scratch variables;
 - no extension RPC bearer, server service token, unrelated provider variable, or ambient home path;
 - a network policy that permits the linked provider and the scoped Vibestudio bridge through attributed mediation rather than raw host networking;
 - a new PID namespace and an owned process tree with bounded teardown.
@@ -130,6 +138,30 @@ Introduce a host-owned `ExternalAgentLaunch`/`ContainedProcess` abstraction whos
 The linked model still needs provider login, context reads, a scratch directory, and the Vibestudio bridge. Those should be explicit launch inputs, not recovered by exposing the host home and environment. If Claude's provider credential currently lives in the user's normal profile, project the minimum sanitized provider state or broker the provider connection; do not make the whole profile visible to preserve convenience.
 
 Claude's `auto`/`manual` modes can remain useful UX policies, but they must not be treated as containment. Parent spawn authorizes the child relationship and task; it does not grant ambient authority held by the extension process.
+
+### 2026-08-09 narrow-broker checkpoint
+
+The interactive CLI launcher now owns a per-generation Unix broker and the raw
+Vibestudio credential/transport. Claude and its MCP channel host receive only an opaque
+socket path plus generation and can invoke a fixed, schema-validated set of channel,
+hook, skill-resource, and status operations. A permission-request schema is reserved,
+but the authority rejects it and the MCP server omits the optional relay capability until
+a real approvals owner exists. The endpoint directory/socket
+are `0700`/`0600`; startup is bind-ready before spawn; owner close aborts and joins
+streams and queued work, closes the authority, and unlinks the endpoint. There is no
+generic RPC or caller-selected target escape.
+
+Its spawn environment is also explicit and deny-by-default. It preserves required
+runtime path, locale, terminal, absolute certificate paths, and credential-free proxy
+coordinates while excluding agent tokens, extension/server bearers, provider API-key
+variables, SSH/GPG agent sockets, Node injection variables, and arbitrary ambient state.
+Claude's isolated provider `.credentials.json` is still necessarily readable by Claude.
+
+This is a principal/environment reduction, not resolution of AR-1. The current
+bubblewrap declaration still exposes the host filesystem read-only and the host network
+without mediation. The extension-headless launcher also remains vulnerable until it owns
+the same broker lifecycle and uses the same complete environment builder. No filesystem
+or network confidentiality claim should be inferred from this checkpoint.
 
 ## AR-2 — Direct RPC plus caller-erasing panel wrappers creates a terminal deputy
 
@@ -440,7 +472,10 @@ These controls make a simple `../` or symlink escape through the portable filesy
 - Claude launch rotation revokes the previous credential, and release revokes the current credential and removes the materialized profile (`workspace/extensions/claude-code/index.ts:490-560`, `workspace/extensions/claude-code/index.ts:580-609`).
 - Materialized profile directories/files use 0700/0600 and unique materialization IDs (`packages/shared/src/claudeLaunchProfile.ts:90-136`).
 
-Those controls limit the intended agent token. AR-1 exists because the same process receives a second, more privileged extension token and broad host visibility.
+Those controls limit the intended agent token. The interactive launcher now keeps it
+behind the narrow broker. AR-1 remains because all linked processes retain broad host
+read/network visibility, and the not-yet-migrated extension-headless process additionally
+receives a second, more privileged extension token.
 
 ### Model credentials and attributed egress
 

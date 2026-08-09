@@ -77,7 +77,7 @@ class ControlledWritable extends Writable {
 const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("McpStdioServer", () => {
-  it("answers initialize with channel capabilities and instructions", async () => {
+  it("answers initialize without claiming an unconfigured permission relay", async () => {
     const { sent, send, flush } = harness();
     send({
       jsonrpc: "2.0",
@@ -91,7 +91,7 @@ describe("McpStdioServer", () => {
     expect(result["protocolVersion"]).toBe("2025-06-18");
     const caps = result["capabilities"] as Record<string, Record<string, unknown>>;
     expect(caps["experimental"]).toHaveProperty(["claude/channel"]);
-    expect(caps["experimental"]).toHaveProperty(["claude/channel/permission"]);
+    expect(caps["experimental"]).not.toHaveProperty(["claude/channel/permission"]);
     expect(result["instructions"]).toBe("test instructions");
   });
 
@@ -138,6 +138,13 @@ describe("McpStdioServer", () => {
         requests.push(params.request_id);
       },
     });
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    await flush();
+    const capabilities = sent[0]!.result!["capabilities"] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(capabilities["experimental"]).toHaveProperty(["claude/channel/permission"]);
     send({
       jsonrpc: "2.0",
       method: PERMISSION_REQUEST_NOTIFICATION,

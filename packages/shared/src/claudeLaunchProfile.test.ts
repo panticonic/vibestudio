@@ -81,10 +81,14 @@ describe("ClaudeLaunchProfile", () => {
       path.join(launch.profileDir, "settings.json"),
     ]);
     expect(launch.env).toMatchObject({
-      VIBESTUDIO_SERVER_URL: "webrtc://local-pairing/_workspace/dev",
       VIBESTUDIO_LAUNCH_PROFILE: launch.profileDir,
+      VIBESTUDIO_BRIDGE_SOCKET: path.join(launch.profileDir, "bridge.sock"),
+      VIBESTUDIO_BRIDGE_GENERATION: "session:channel/one",
       CLAUDE_CONFIG_DIR: path.join(launch.profileDir, "claude-config"),
     });
+    expect(launch.env).not.toHaveProperty("VIBESTUDIO_AGENT_TOKEN");
+    expect(launch.env).not.toHaveProperty("VIBESTUDIO_SERVER_URL");
+    expect(launch.env).not.toHaveProperty("VIBESTUDIO_VESSEL_REF");
     const settings = JSON.parse(
       await readFile(path.join(launch.profileDir, "settings.json"), "utf8")
     );
@@ -99,6 +103,9 @@ describe("ClaudeLaunchProfile", () => {
     });
     expect((await stat(launch.profileDir)).mode & 0o777).toBe(0o700);
     expect((await stat(path.join(launch.profileDir, "env.json"))).mode & 0o777).toBe(0o600);
+    const diagnostic = await readFile(path.join(launch.profileDir, "env.json"), "utf8");
+    expect(diagnostic).not.toContain("agent:one:secret");
+    expect(diagnostic).not.toContain("webrtc://local-pairing");
   });
 
   it.runIf(installedClaude !== undefined)(
@@ -131,11 +138,9 @@ describe("ClaudeLaunchProfile", () => {
       hostClaudeConfigDirectory: path.join(root, "missing-host-config"),
     });
     expect(second.profileDir).not.toBe(first.profileDir);
-    expect(
-      JSON.parse(await readFile(path.join(second.profileDir, "env.json"), "utf8"))
-    ).toMatchObject({
-      VIBESTUDIO_SERVER_URL: "http://second",
-    });
+    const secondDiagnostic = await readFile(path.join(second.profileDir, "env.json"), "utf8");
+    expect(secondDiagnostic).not.toContain("http://second");
+    expect(secondDiagnostic).not.toContain("agent:one:secret");
     await removeMaterializedClaudeLaunch(first);
     await expect(stat(first.profileDir)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(stat(second.profileDir)).resolves.toBeDefined();

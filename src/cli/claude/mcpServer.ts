@@ -4,7 +4,8 @@
  * Speaks JSON-RPC 2.0, newline-delimited (one message per line — the MCP stdio
  * transport framing; no Content-Length headers). Implements exactly the subset
  * the channel contract needs: `initialize` (declaring the experimental
- * `claude/channel` + `claude/channel/permission` capabilities), `tools/list`,
+ * `claude/channel` and, only with a configured relay, `claude/channel/permission`
+ * capabilities), `tools/list`,
  * `tools/call`, `ping`, and the channel notification methods in both
  * directions. Transport-agnostic over Readable/Writable for tests.
  */
@@ -188,7 +189,10 @@ export class McpStdioServer {
           capabilities: {
             tools: {},
             ...(this.options.resources ? { resources: {} } : {}),
-            experimental: { "claude/channel": {}, "claude/channel/permission": {} },
+            experimental: {
+              "claude/channel": {},
+              ...(this.options.onPermissionRequest ? { "claude/channel/permission": {} } : {}),
+            },
           },
           serverInfo: { name: this.options.serverName, version: this.options.serverVersion },
           instructions: this.options.instructions,

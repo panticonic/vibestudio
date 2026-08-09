@@ -6,11 +6,17 @@ import * as path from "node:path";
 import {
   assertClaudeCodeVersion,
   materializeClaudeLaunch,
+  reconcileClaudeLaunchCredential,
   removeMaterializedClaudeLaunch,
   type ClaudeLaunchProfile,
   type MaterializedClaudeLaunch,
 } from "@vibestudio/shared/claudeLaunchProfile";
-import { confineClaudeReadOnly } from "@vibestudio/shared/claudeReadOnlyLaunch";
+import type { ClaudeBridgeBroker } from "@vibestudio/shared/claudeBridgeBroker";
+import { ClaudeBridgeBrokerClient } from "@vibestudio/shared/claudeBridgeBroker";
+import {
+  claudeContainedSpawnEnvironment,
+  confineClaudeReadOnly,
+} from "@vibestudio/shared/claudeReadOnlyLaunch";
 import { cliConfigRoot } from "../configPaths.js";
 import { loadCliCredentials } from "../credentialStore.js";
 import { RpcClient } from "../rpcClient.js";
@@ -22,7 +28,8 @@ import {
   findContextBinding,
   findContextBindingLocation,
 } from "../contextBinding.js";
-import { bridgeRpcCredential, resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
+import { resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
+import { startCliClaudeBridgeBroker } from "./bridgeBroker.js";
 
 /**
  * `vibestudio claude` command group. The CLI stays Claude-agnostic apart from
@@ -141,9 +148,11 @@ export async function executePreparedClaudeLaunch(input: {
   serverUrl: string;
   release: (entityId: string, launchId: string) => Promise<void>;
   spawnLaunch?: typeof spawnClaude;
+  startBroker?: typeof startCliClaudeBridgeBroker;
 }): Promise<number> {
   const { prepared } = input;
   let launch: MaterializedClaudeLaunch | undefined;
+  let broker: ClaudeBridgeBroker | undefined;
   let outcome: { ok: true; exitCode: number } | { ok: false; error: unknown };
   try {
     if (prepared.contextId !== input.expectedContextId) {
@@ -157,6 +166,13 @@ export async function executePreparedClaudeLaunch(input: {
       profilesRoot: input.profilesRoot,
       serverUrl: input.serverUrl,
     });
+    broker = await (input.startBroker ?? startCliClaudeBridgeBroker)({
+      socketPath: launch.broker.socketPath,
+      generation: launch.broker.generation,
+      serverUrl: input.serverUrl,
+      agentToken: prepared.profile.environment.VIBESTUDIO_AGENT_TOKEN,
+      vesselRef: prepared.profile.environment.VIBESTUDIO_VESSEL_REF,
+    });
     outcome = {
       ok: true,
       exitCode: await (input.spawnLaunch ?? spawnClaude)(launch, input.contextDirectory),
@@ -167,9 +183,19 @@ export async function executePreparedClaudeLaunch(input: {
 
   let cleanupError: unknown;
   try {
-    if (launch) await removeMaterializedClaudeLaunch(launch);
+    await broker?.close();
   } catch (error) {
     cleanupError = error;
+  }
+  try {
+    if (launch) await reconcileClaudeLaunchCredential(launch);
+  } catch (error) {
+    cleanupError ??= error;
+  }
+  try {
+    if (launch) await removeMaterializedClaudeLaunch(launch);
+  } catch (error) {
+    cleanupError ??= error;
   }
   try {
     await input.release(prepared.entityId, prepared.profile.launchId);
@@ -193,7 +219,11 @@ export function spawnClaude(
   return new Promise((resolve, reject) => {
     const child = spawn(confined.command, confined.args, {
       cwd: contextDirectory,
-      env: { ...process.env, ...launch.env, ...confined.env },
+      env: claudeContainedSpawnEnvironment({
+        profileDir: launch.profileDir,
+        launchEnv: launch.env,
+        confinementEnv: confined.env,
+      }),
       stdio: "inherit",
     });
     child.on("error", reject);
@@ -310,8 +340,11 @@ async function runStatus(json: boolean): Promise<number> {
   const binding = findContextBinding(process.cwd());
   const creds = loadCliCredentials();
   if (binding && creds) assertBindingWorkspace(binding, creds);
-  const launched = Boolean(env["VIBESTUDIO_AGENT_TOKEN"] && env["VIBESTUDIO_LAUNCH_PROFILE"]);
-  const agentToken = env["VIBESTUDIO_AGENT_TOKEN"];
+  const launched = Boolean(
+    env["VIBESTUDIO_BRIDGE_SOCKET"] &&
+    env["VIBESTUDIO_BRIDGE_GENERATION"] &&
+    env["VIBESTUDIO_LAUNCH_PROFILE"]
+  );
   const bridgeSocket = bridgeHookSocket(env, binding);
 
   // Tier model: 2 = our OS-contained terminal launch, 0 = paired CLI only.
@@ -323,29 +356,26 @@ async function runStatus(json: boolean): Promise<number> {
     `tier: ${tier} (${tier === 2 ? "contained linked session" : "CLI only"})`,
     `paired device credential: ${creds ? `yes (${creds.url})` : "no"}`,
     `context binding: ${binding ? `${binding.workspaceId}/${binding.contextId}` : "none (not inside a context folder)"}`,
-    `agent credential env: ${agentToken ? "present" : "absent"}`,
+    `agent credential env: ${env["VIBESTUDIO_AGENT_TOKEN"] ? "unexpectedly present" : "absent (broker-owned)"}`,
     `launch profile: ${env["VIBESTUDIO_LAUNCH_PROFILE"] ?? "absent"}`,
     `bridge hook socket: ${bridgeSocket ?? "absent"}`,
   ];
 
-  if (agentToken && env["VIBESTUDIO_SERVER_URL"]) {
+  if (launched) {
+    let client: ClaudeBridgeBrokerClient | undefined;
     try {
       const config = await resolveBridgeConfig(env);
-      const client = new RpcClient(bridgeRpcCredential(config));
-      const status = await client.callTarget<Record<string, unknown>>(
-        config.vesselRef,
-        "linkedStatus",
-        []
-      );
+      client = new ClaudeBridgeBrokerClient(config.brokerSocketPath, config.brokerGeneration);
+      const status = (await client.call("linkedStatus", {})) as unknown as Record<string, unknown>;
       lines.push(
-        `vessel: ${config.vesselRef}`,
         `attached: ${String(status["attached"])}`,
         `pending events: ${String(status["pendingCount"])}`,
         `channels: ${(status["channelIds"] as string[] | undefined)?.join(", ") ?? ""}`
       );
-      await client.close().catch(() => undefined);
     } catch (err) {
       lines.push(`vessel status: unavailable (${err instanceof Error ? err.message : err})`);
+    } finally {
+      await client?.close().catch(() => undefined);
     }
   }
 

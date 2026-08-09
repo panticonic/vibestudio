@@ -80,11 +80,14 @@ describe("remote Claude launch materialization", () => {
     const profilesRoot = path.join(tmpRoot, "local-cli-state", "claude-launches");
     fs.mkdirSync(contextDirectory, { recursive: true });
     const release = vi.fn(async () => {});
+    const brokerClose = vi.fn(async () => {});
+    const startBroker = vi.fn(async (input) => ({ ...input, close: brokerClose }));
     const spawnLaunch = vi.fn(async (launch: MaterializedClaudeLaunch, cwd: string) => {
       expect(cwd).toBe(contextDirectory);
       expect(launch.profileDir.startsWith(profilesRoot)).toBe(true);
       expect(launch.argv.join(" ")).toContain(profilesRoot);
-      expect(launch.env.VIBESTUDIO_SERVER_URL).toBe("webrtc://paired/_workspace/dev");
+      expect(launch.env).not.toHaveProperty("VIBESTUDIO_AGENT_TOKEN");
+      expect(launch.env).not.toHaveProperty("VIBESTUDIO_SERVER_URL");
       expect(fs.existsSync(path.join(launch.profileDir, "mcp.json"))).toBe(true);
       return 7;
     });
@@ -98,11 +101,52 @@ describe("remote Claude launch materialization", () => {
         serverUrl: "webrtc://paired/_workspace/dev",
         release,
         spawnLaunch,
+        startBroker,
       })
     ).resolves.toBe(7);
 
     expect(release).toHaveBeenCalledExactlyOnceWith("entity-remote", "entity-remote");
+    expect(startBroker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentToken: "agent:remote:secret",
+        serverUrl: "webrtc://paired/_workspace/dev",
+        vesselRef: expect.stringContaining("LinkedAgentWorker"),
+      })
+    );
+    expect(brokerClose).toHaveBeenCalledOnce();
     expect(fs.readdirSync(profilesRoot)).toEqual([]);
+  });
+
+  it("preserves a provider credential refresh from the isolated launch config", async () => {
+    const hostConfig = path.join(tmpRoot, "host-claude");
+    const hostCredential = path.join(hostConfig, ".credentials.json");
+    fs.mkdirSync(hostConfig, { recursive: true });
+    fs.writeFileSync(hostCredential, '{"accessToken":"old"}', { mode: 0o600 });
+    const previousConfig = process.env["CLAUDE_CONFIG_DIR"];
+    process.env["CLAUDE_CONFIG_DIR"] = hostConfig;
+    try {
+      await executePreparedClaudeLaunch({
+        prepared: prepared(),
+        expectedContextId: "ctx-remote",
+        contextDirectory: tmpRoot,
+        profilesRoot: path.join(tmpRoot, "profiles"),
+        serverUrl: "http://local",
+        release: vi.fn(async () => undefined),
+        startBroker: vi.fn(async (input) => ({ ...input, close: vi.fn(async () => undefined) })),
+        spawnLaunch: vi.fn(async (launch: MaterializedClaudeLaunch) => {
+          fs.writeFileSync(
+            path.join(launch.env.CLAUDE_CONFIG_DIR, ".credentials.json"),
+            '{"accessToken":"refreshed"}',
+            { mode: 0o600 }
+          );
+          return 0;
+        }),
+      });
+      expect(fs.readFileSync(hostCredential, "utf8")).toContain("refreshed");
+    } finally {
+      if (previousConfig === undefined) delete process.env["CLAUDE_CONFIG_DIR"];
+      else process.env["CLAUDE_CONFIG_DIR"] = previousConfig;
+    }
   });
 
   it("releases a minted credential when local and prepared context identities diverge", async () => {
@@ -117,6 +161,7 @@ describe("remote Claude launch materialization", () => {
         serverUrl: "http://local",
         release,
         spawnLaunch,
+        startBroker: vi.fn(),
       })
     ).rejects.toThrow(/local tree is ctx-local/);
     expect(spawnLaunch).not.toHaveBeenCalled();
@@ -142,6 +187,7 @@ describe("remote Claude launch materialization", () => {
         spawnLaunch: vi.fn(async () => {
           throw launchError;
         }),
+        startBroker: vi.fn(async (input) => ({ ...input, close: vi.fn(async () => {}) })),
       })
     ).rejects.toBe(launchError);
   });
