@@ -37,6 +37,7 @@ import type {
   InternalRpcRequest,
   InternalRpcStreamRequest,
 } from "@vibestudio/rpc/internal";
+import { verifiedExternalContextFor } from "@vibestudio/rpc/internal";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
 import {
   decodeControlFrame,
@@ -149,6 +150,7 @@ import {
 import { StreamingRelay } from "./rpcServer/streamingRelay.js";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import { lineageClasses } from "@vibestudio/shared/authorization";
+import { joinContextIntegrity } from "@vibestudio/shared/authority/contextIntegrity";
 import {
   receiverAuthorityPolicy,
   standingAgentScopeEligible,
@@ -346,6 +348,8 @@ type RelayCallerScope = {
   authenticatedCaller: VerifiedCaller;
   /** Host-resolved initiator whose verified account subject authorizes the operation. */
   authorizingCaller: VerifiedCaller;
+  /** Exact outside lineage retained by the host's active invocation parent. */
+  inheritedContextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
 };
 
 type ResolvedExtensionParent = {
@@ -532,6 +536,7 @@ export class RpcServer {
       testPolicy: AgentExecutionTestPolicy | null;
       requested: readonly CapabilityScope[] | null;
       authorizingCaller: VerifiedCaller | null;
+      contextIntegrity: import("@vibestudio/rpc").ContextIntegrityFact | null;
     }
   >();
 
@@ -999,6 +1004,7 @@ export class RpcServer {
     testPolicy: AgentExecutionTestPolicy | null;
     requested: readonly CapabilityScope[] | null;
     authorizingCaller: VerifiedCaller | null;
+    contextIntegrity: import("@vibestudio/rpc").ContextIntegrityFact | null;
   } | null {
     if (authorityParentNonce === undefined) return null;
     if (
@@ -1052,6 +1058,13 @@ export class RpcServer {
     const requested = productBuiltinByIdentity(ref.source, ref.className)
       ? productBuiltinMethodRequests(ref.source, ref.className, authorization.method)
       : null;
+    const inheritedContextIntegrity = authorization.context.contextIntegrity;
+    const contextIntegrity = inheritedContextIntegrity
+      ? Object.freeze({
+          ...inheritedContextIntegrity,
+          externalKeys: Object.freeze([...inheritedContextIntegrity.externalKeys]),
+        })
+      : null;
     if (this.activeAuthorityParents.has(authorization.nonce)) {
       throw createRelayError("Direct invocation authority nonce is already active", "EACCES");
     }
@@ -1060,6 +1073,7 @@ export class RpcServer {
       testPolicy,
       requested,
       authorizingCaller,
+      contextIntegrity,
     };
     this.activeAuthorityParents.set(authorization.nonce, entry);
     let active = true;
@@ -3102,6 +3116,9 @@ export class RpcServer {
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(readOnly ? { readOnly: true } : {}),
+        ...(authorityParent?.contextIntegrity
+          ? { inheritedContextIntegrity: authorityParent.contextIntegrity }
+          : {}),
         signal,
       };
       const dispatched = await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
@@ -3129,6 +3146,9 @@ export class RpcServer {
       {
         authenticatedCaller,
         authorizingCaller,
+        ...(authorityParent?.contextIntegrity
+          ? { inheritedContextIntegrity: authorityParent.contextIntegrity }
+          : {}),
       }
     );
   }
@@ -3232,6 +3252,13 @@ export class RpcServer {
     args: unknown[] = [],
     options?: RpcCallOptions
   ): Promise<T> {
+    const inheritedContextIntegrity = verifiedExternalContextFor(options);
+    if (inheritedContextIntegrity && !targetId.startsWith("do:")) {
+      throw new Error("Verified external context requires a direct Durable Object target");
+    }
+    const hostCaller = inheritedContextIntegrity
+      ? createHostCaller("main", "server", SYSTEM_SUBJECT)
+      : null;
     return this.relayCall(
       "main",
       "server",
@@ -3239,7 +3266,14 @@ export class RpcServer {
       method,
       args,
       undefined,
-      options
+      options,
+      hostCaller
+        ? {
+            authenticatedCaller: hostCaller,
+            authorizingCaller: hostCaller,
+            inheritedContextIntegrity,
+          }
+        : undefined
     ) as Promise<T>;
   }
 
@@ -3346,6 +3380,8 @@ export class RpcServer {
     /** Response streams cannot be replayed after EACQUIRE; park before dispatch. */
     waitForAuthority?: boolean;
     signal?: AbortSignal;
+    /** Host-retained outside lineage; never accepted from call args or wire metadata. */
+    inheritedContextIntegrity?: import("@vibestudio/rpc").ContextIntegrityFact | null;
     /** Number of exact inline retries already performed after preauthorization. */
     preauthorizedRetries?: number;
   }): Promise<DirectAuthorityAttestation> {
@@ -3430,6 +3466,11 @@ export class RpcServer {
           ? workspaceAuthority.presentation
           : undefined
       );
+    const residentContextIntegrity =
+      this.deps.contextIntegrityFactForSession?.(sessionId, input.caller) ??
+      (input.caller.agentBinding
+        ? { class: "internal" as const, latchEpoch: 0, externalKeys: [] }
+        : { class: "not-applicable" as const, latchEpoch: 0, externalKeys: [] });
     const authorityFacts = {
       caller: input.caller,
       source: input.ref.source,
@@ -3446,10 +3487,8 @@ export class RpcServer {
       grantStore: this.deps.capabilityGrantStore,
       reviewedClosure: this.deps.reviewedClosureFactForSession?.(sessionId) ?? null,
       contextIntegrity:
-        this.deps.contextIntegrityFactForSession?.(sessionId, input.caller) ??
-        (input.caller.agentBinding
-          ? { class: "internal" as const, latchEpoch: 0, externalKeys: [] }
-          : { class: "not-applicable" as const, latchEpoch: 0, externalKeys: [] }),
+        joinContextIntegrity(residentContextIntegrity, input.inheritedContextIntegrity ?? null) ??
+        residentContextIntegrity,
       ...(receiverResourceKey ? { resourceKey: receiverResourceKey } : {}),
     } as const;
     const attestation = workspaceAuthority
@@ -4021,6 +4060,9 @@ export class RpcServer {
         ref,
         method,
         args,
+        ...(relayCallerScope?.inheritedContextIntegrity !== undefined
+          ? { inheritedContextIntegrity: relayCallerScope.inheritedContextIntegrity }
+          : {}),
         readOnly: meta?.readOnly,
         signal: meta?.signal,
       });
