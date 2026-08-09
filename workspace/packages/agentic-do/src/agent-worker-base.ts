@@ -37,6 +37,7 @@ import type { VcsCommitResult } from "@vibestudio/service-schemas/vcs";
 import { SUPPORTED_IMAGE_TYPES } from "@workspace/pubsub";
 import {
   AgentVesselBase,
+  subagentRunHandle,
   type AgentPromptResources,
   type AgentToolExecutionContext,
   type ApprovalLevel,
@@ -344,7 +345,33 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         validateConfig: (content) =>
           toolRpc.call("main", "workspace.validateConfig", [content]).then(() => undefined),
       }),
-      createSuspendTurnTool(),
+      createSuspendTurnTool({
+        guard: ({ reason }) => {
+          if (reason !== "waiting_for_background") return { suspend: true };
+          const supervised = this.subagentRuns
+            .listAll()
+            .filter((run) => run.parentChannelId === channelId && run.status !== "closed");
+          const live = supervised.filter(
+            (run) => run.status === "starting" || run.status === "running"
+          );
+          if (live.length > 0) return { suspend: true };
+          const completedRunsAwaitingIntegration = supervised
+            .filter((run) => {
+              const integration = run.semanticIntegrationSnapshot;
+              return !run.discardedBeforeIntegration && integration?.["state"] !== "complete";
+            })
+            .map((run) => subagentRunHandle(run.runId));
+          return {
+            suspend: false,
+            reason: "no_live_supervised_runs",
+            message:
+              completedRunsAwaitingIntegration.length > 0
+                ? `Turn not suspended: no supervised subagent is live. Integrate or explicitly discard and close ${completedRunsAwaitingIntegration.join(", ")}.`
+                : "Turn not suspended: no supervised subagent is live. Continue or finish the foreground request.",
+            details: { completedRunsAwaitingIntegration },
+          };
+        },
+      }),
       ...(hasAskableUser(this.rosterSnapshot(channelId)) ? [this.createAskUserTool()] : []),
       ...createWebTools({
         rpc: {

@@ -2315,6 +2315,55 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
     expect(newModelCalls).toHaveLength(0);
   });
 
+  it("delivers an after-turn message immediately when the open turn is parked", () => {
+    const s = scenario();
+    promptWith(s, { envelopeId: "env-1", sourceMessageId: "u1" });
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "suspend-1",
+          name: "suspend_turn",
+          arguments: { reason: "waiting_for_background" },
+        },
+      ],
+      stopReason: "completed",
+    });
+    resolveEffect(s, ids.invocationEffect("suspend-1"), {
+      kind: "tool",
+      result: {
+        protocolContent: [{ type: "text", text: "Turn suspended." }],
+        details: { suspendTurn: true, reason: "waiting_for_background" },
+      },
+      turnControl: {
+        kind: "suspend",
+        reason: "waiting_for_background",
+        summary: "Suspended until background work or user input arrives",
+      },
+      isError: false,
+    });
+
+    expect(s.state.openTurn?.waitingAtSeq).toBeDefined();
+    expect(pendingEffectIds(s)).toEqual([]);
+
+    promptWith(s, {
+      envelopeId: "env-terminal",
+      sourceMessageId: "subagent-terminal:run-1",
+      content: "Subagent run-1 completed.",
+      metadata: { deliverAfterTurn: true },
+    });
+
+    expect(s.state.deferredPostTurnQueue).toHaveLength(0);
+    expect(s.state.openTurn?.waitingAtSeq).toBeUndefined();
+    expect(
+      s.state.entries.some(
+        (entry) => entry.kind === "user" && entry.sourceMessageId === "subagent-terminal:run-1"
+      )
+    ).toBe(true);
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
+  });
+
   it("does not let future-turn artifact preparation deadlock the current tool continuation", () => {
     const s = scenario();
     promptWith(s, { envelopeId: "env-1", sourceMessageId: "u1" });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { VcsMergeResult, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
-import { driveMerge, MergeDriverError } from "./merge-driver.js";
+import { driveMerge, MergeDriverError, renderMergeReview } from "./merge-driver.js";
 
 const event = (eventId: string): VcsStateNodeRef => ({ kind: "event", eventId });
 const application = (applicationId: string): VcsStateNodeRef => ({
@@ -358,5 +358,39 @@ describe("driveMerge", () => {
       name: "MergeDriverError",
       message: "Merge made no progress while mergeable coordinates remain",
     });
+  });
+});
+
+describe("renderMergeReview", () => {
+  it("deduplicates repeated intent evidence and distinguishes integration from commit state", () => {
+    const text = renderMergeReview({
+      headline: "Merge child",
+      resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
+      counts: counts(),
+      intents: [
+        {
+          workUnitId: "work:one",
+          side: "ours",
+          state: "settled",
+          intent: { tier: "trigger", text: "Build the task app" },
+          coordinates: [],
+        },
+        {
+          workUnitId: "work:two",
+          side: "theirs",
+          state: "merged",
+          intent: { tier: "trigger", text: "Build the task app" },
+          coordinates: [],
+        },
+      ],
+      intentsTruncated: false,
+      composed: [],
+      conflicts: [],
+      nextConflictCursor: null,
+    });
+
+    expect(text.match(/Intent: trigger · Build the task app/g)).toHaveLength(1);
+    expect(text).toContain("Integration: semantically complete");
+    expect(text).toContain("remain local until the parent commits them");
   });
 });

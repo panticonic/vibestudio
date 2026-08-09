@@ -211,7 +211,7 @@ const SUBAGENT_RUN_HANDLE_LENGTH = 24;
 /** Tool-facing run handle. The canonical id is the spawning invocation id and
  *  can be extremely long; the store deliberately resolves this unique prefix,
  *  with or without its display ellipsis, with a small transcription tolerance. */
-function subagentRunHandle(runId: string): string {
+export function subagentRunHandle(runId: string): string {
   return runId.length > SUBAGENT_RUN_HANDLE_LENGTH
     ? `${runId.slice(0, SUBAGENT_RUN_HANDLE_LENGTH)}…`
     : runId;
@@ -4550,6 +4550,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.traceHotPath(channelId, "deferred-eval.completed", { source: "inline" });
       return this.deferredEvalSettlement(invocationId, settlement.result);
     }
+    await this.publishDeferredEvalPending(channelId, invocationId, runId);
     return { deferred: true, reason: "external-result" };
   }
 
@@ -4616,7 +4617,53 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         failureCode: "eval_cancelled",
       });
     }
+    await this.publishDeferredEvalPending(channelId, invocationId, runId);
     return { deferred: true, reason: "external-result" };
+  }
+
+  /**
+   * A deferred invocation is deliberately non-terminal, but it must never look
+   * like an empty terminal. Publish a durable, idempotent lifecycle fact after
+   * eval.start is acknowledged (and on read-only recovery) so the UI and an
+   * operator can distinguish "pending; do not retry" from every settled state.
+   */
+  private async publishDeferredEvalPending(
+    channelId: string,
+    invocationId: string,
+    runId: string
+  ): Promise<void> {
+    const participantId = this.subscriptions.getParticipantId(channelId) ?? this.participantId();
+    const actor = this.cardActor(channelId, participantId);
+    const event: AgenticEvent<"invocation.progress"> = {
+      kind: "invocation.progress",
+      actor,
+      causality: { invocationId: invocationId as never },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        message: `Eval is running as ${runId}; this invocation is pending. Do not retry.`,
+        data: {
+          eval: {
+            runId,
+            state: "running",
+            retryDirective: "do_not_retry",
+          },
+        },
+      },
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      await this.createChannelClient(channelId).publishAgenticEvent(participantId, event, {
+        idempotencyKey: `eval-pending:${runId}`,
+        senderMetadata: actor.metadata,
+      });
+    } catch (error) {
+      // The invocation outbox and EvalDO run remain authoritative. A failed
+      // explanatory projection must not settle or re-execute durable eval.
+      console.warn(
+        `[AgentVessel] failed to publish pending state for ${runId}; eval remains parked:`,
+        error instanceof Error ? error.message : error
+      );
+    }
   }
 
   /** Shared terminal formatting for both the first-dispatch settlement and the
@@ -5281,11 +5328,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       config: opts.config,
       replay: false,
     });
-    // A trajectory fork can inherit the parent's open turn and pending
-    // spawn_subagent invocation. Settle that pre-cut control state before the
-    // parent is allowed to publish the child seed. Otherwise the seed races an
-    // inherited continuation and the child can execute a ghost parent model
-    // call with its not-yet-prepared prompt config.
+    // Fold hydration preserves the inherited semantic entries but normalizes
+    // all pre-cut prompt/control projections. Wake validates that quiescent
+    // boundary; only the later child seed may open executable work.
     await this.driver.wake(opts.taskChannelId);
     return subscription;
   }
@@ -5339,10 +5384,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return { content: [{ type: "text", text }], details: details ?? {} };
   }
 
-  private async trajectoryHeadSeq(channelId: string): Promise<number> {
+  /**
+   * Fork only completed conversational history. The currently open parent turn
+   * contains executable control state (and often an assistant tool-call block
+   * whose results do not exist yet); inheriting it produces dangling calls and
+   * lets a child continue the supervisor's work before its own task seed.
+   */
+  private async trajectoryForkSeq(channelId: string): Promise<number> {
     try {
       const loop = await this.driver.loop(channelId);
-      return loop.state.lastSeq;
+      return loop.state.openTurn
+        ? Math.max(0, loop.state.openTurn.openedAtSeq - 1)
+        : loop.state.lastSeq;
     } catch {
       return 0;
     }
@@ -5623,7 +5676,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       // keeps observer-side roster/presence bookkeeping from claiming the task
       // trajectory as a root log.
       const parentLogId = logIdForChannel(channelId);
-      const parentSeq = mode === "fork" ? await this.trajectoryHeadSeq(channelId) : 0;
+      const parentSeq = mode === "fork" ? await this.trajectoryForkSeq(channelId) : 0;
       if (mode === "fork") {
         await this.ensureSubagentTaskTrajectoryFork({
           parentLogId,
@@ -6400,10 +6453,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         compareCalls,
       });
     }
-    return this.toolText(renderMergeReview(driven.review, sourceEventId), {
+    const closingPermitted =
+      driven.review.resolution.complete && driven.review.resolution.concluded;
+    const closeGuidance = closingPermitted
+      ? `Close: permitted for ${subagentRunHandle(run.runId)} after verification; closing releases the child resources and retains this integration receipt.`
+      : `Close: not permitted yet; ${driven.review.resolution.remainingCoordinateCount} semantic coordinate(s) still require integration or an explicit resolution.`;
+    return this.toolText(`${renderMergeReview(driven.review, sourceEventId)}\n${closeGuidance}`, {
       protocol: SUBAGENT_MERGE_PROTOCOL,
       runId: subagentRunHandle(run.runId),
       sourceEventId,
+      closingPermitted,
       ...driven,
     });
   }
@@ -6783,6 +6842,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         sourceMessageId: `subagent-terminal:${run.runId}`,
         content,
         senderRef,
+        // A lifecycle terminal must get its own model turn when the supervisor
+        // is already handling user input. Folding it into that active turn can
+        // let an otherwise good answer semantically consume the notification
+        // without integrating the child result.
+        metadata: { deliverAfterTurn: true },
       },
     });
   }

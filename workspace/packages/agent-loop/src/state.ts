@@ -422,6 +422,32 @@ export interface AgentState {
   deferredPostTurnQueue: DeferredPrompt[];
 }
 
+/**
+ * A trajectory fork inherits semantic conversation entries, not executable
+ * delivery state. Replaying the parent's prefix under a new agent identity can
+ * otherwise leave the latest user message as a pending prompt: the parent's
+ * turn lifecycle is correctly foreign to the child and therefore never clears
+ * it. Keep the entries for context/cache reuse while dropping every pre-cut
+ * prompt/control projection. New child-channel input is always post-cut.
+ */
+export function normalizeForkControlState(state: AgentState): AgentState {
+  if (state.forkSeq <= 0) return state;
+  const pendingPrompt =
+    state.pendingPrompt && state.pendingPrompt.seq <= state.forkSeq ? null : state.pendingPrompt;
+  const pendingPromptPreparations = Object.fromEntries(
+    Object.entries(state.pendingPromptPreparations).filter(
+      ([, preparation]) => preparation.requestedAtSeq > state.forkSeq
+    )
+  );
+  return {
+    ...state,
+    pendingPrompt,
+    pendingPromptPreparations,
+    steeringQueue: state.steeringQueue.filter((entry) => entry.seq > state.forkSeq),
+    deferredPostTurnQueue: state.deferredPostTurnQueue.filter((entry) => entry.seq > state.forkSeq),
+  };
+}
+
 export const GENESIS_LAST_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
 export interface InitialStateInput {

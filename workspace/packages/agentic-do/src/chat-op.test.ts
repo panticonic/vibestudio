@@ -1915,6 +1915,26 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     });
     // The poll backstop check happened even on the first dispatch.
     expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(true);
+    expect(
+      probe.channelStub.published.find(
+        (entry) => entry.idempotencyKey === `eval-pending:${ids.invocationEffect("inv-1")}`
+      )
+    ).toMatchObject({
+      event: {
+        kind: "invocation.progress",
+        causality: { invocationId: "inv-1" },
+        payload: {
+          message: expect.stringContaining("pending. Do not retry"),
+          data: {
+            eval: {
+              runId: ids.invocationEffect("inv-1"),
+              state: "running",
+              retryDirective: "do_not_retry",
+            },
+          },
+        },
+      },
+    });
   });
 
   it("cancels a parked eval when its owning channel is being retired", async () => {
@@ -3655,6 +3675,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       command?: { source?: { envelopeId?: string }; content?: string };
     };
     expect(firstWake.command?.source?.envelopeId).toBe("subagent-terminal:inv-1:completed");
+    expect(firstWake.command).toMatchObject({ metadata: { deliverAfterTurn: true } });
     expect(firstWake.command?.content).toContain("First result.");
     expect(firstWake.command?.content).toContain("1 other supervised subagent remains live");
     expect(firstWake.command?.content).toContain("inv-1 (first audit): completed");

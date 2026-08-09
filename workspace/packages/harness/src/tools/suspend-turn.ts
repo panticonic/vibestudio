@@ -24,12 +24,34 @@ const suspendTurnSchema = Type.Object(
 export type SuspendTurnInput = Static<typeof suspendTurnSchema>;
 
 export interface SuspendTurnDetails {
-  suspendTurn: true;
-  reason: NonNullable<SuspendTurnInput["reason"]>;
+  suspendTurn: boolean;
+  reason: string;
   noteToSelf?: string;
+  completedRunsAwaitingIntegration?: string[];
 }
 
-export function createSuspendTurnTool(): AgentTool<typeof suspendTurnSchema> {
+export interface SuspendTurnGuardResult {
+  suspend: boolean;
+  reason?: string;
+  message?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface SuspendTurnToolOptions {
+  /**
+   * Validate the requested wait against the runtime state that owns its wake
+   * condition. This runs immediately before suspension, so a terminal event
+   * that arrived after the model chose the tool can invalidate a stale wait.
+   */
+  guard?: (input: {
+    reason: NonNullable<SuspendTurnInput["reason"]>;
+    noteToSelf?: string;
+  }) => SuspendTurnGuardResult | Promise<SuspendTurnGuardResult>;
+}
+
+export function createSuspendTurnTool(
+  options: SuspendTurnToolOptions = {}
+): AgentTool<typeof suspendTurnSchema> {
   return {
     name: "suspend_turn",
     label: "suspend turn",
@@ -38,6 +60,27 @@ export function createSuspendTurnTool(): AgentTool<typeof suspendTurnSchema> {
     parameters: suspendTurnSchema,
     execute: async (_toolCallId, params): Promise<AgentToolResult<SuspendTurnDetails>> => {
       const reason = params.reason ?? "no_foreground_work";
+      const guarded = await options.guard?.({
+        reason,
+        ...(params.noteToSelf ? { noteToSelf: params.noteToSelf } : {}),
+      });
+      if (guarded && !guarded.suspend) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                guarded.message ??
+                "Turn was not suspended because its waiting condition is no longer true.",
+            },
+          ],
+          details: {
+            suspendTurn: false,
+            reason: guarded.reason ?? "waiting_condition_invalidated",
+            ...(guarded.details ?? {}),
+          },
+        };
+      }
       return {
         content: [{ type: "text", text: "Turn suspended." }],
         details: {
