@@ -45,7 +45,7 @@ export const MIN_PANE_HEIGHT = 160;
 export const SINGLE_COLUMN_BREAKPOINT = 1100;
 export const COLUMN_DIVIDER_WIDTH = 7;
 /** Reserved shell chrome above each native pane; kept thin for drop targeting. */
-export const PANE_DROP_HANDLE_HEIGHT = 6;
+export const PANE_DROP_HANDLE_HEIGHT = 5;
 /** A horizontal pane divider uses the same hit-target thickness as column dividers. */
 export const PANE_DIVIDER_HEIGHT = COLUMN_DIVIDER_WIDTH;
 /** Per-pane vertical overhead used by the placement engine's fit calculation. */

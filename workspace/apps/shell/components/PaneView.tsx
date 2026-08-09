@@ -72,7 +72,14 @@ export function PaneView({
         // only thicken the rail below into a band.
         outline: markFocused ? "1px solid var(--gray-a7)" : "1px solid var(--gray-a4)",
         outlineOffset: -1,
-        borderRadius: "var(--radius-2)",
+        // Square, deliberately. A radius here only ever reached the top two
+        // corners: the top strip is shell DOM and gets clipped, while the rest
+        // of the pane is a natively composited view that `overflow: hidden`
+        // cannot touch — so the frame read rounded above and square below.
+        // Rounding both would mean rounding the native view host-side; flush is
+        // the house style for structural panes anyway (see overrides.css, where
+        // the sidebar card sets border-radius: 0 for the same reason).
+        borderRadius: 0,
         overflow: "hidden",
       }}
     >
@@ -102,7 +109,10 @@ export function PaneView({
       >
         <Box
           style={{
-            height: 2,
+            // Three of the rail's five pixels, leaving a pixel of air above and
+            // below so the grip reads as sitting in the strip rather than
+            // filling it. Any shorter and the radius has nothing to round.
+            height: 3,
             width: markFocused ? 40 : 24,
             borderRadius: 999,
             backgroundColor: isDropOver
