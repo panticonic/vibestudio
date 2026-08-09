@@ -1,20 +1,20 @@
-# Official template repositories: slim base, build-proven dependencies, Git registry
+# Official template repositories: overlapping contributions with agentic composition
 
-Status: corrected 2026-08-09. No optional template repositories or verified
-template catalog entries are currently deployed. All three planned extraction
-outcomes still ship in `workspace/` as part of the base product. Extraction is
-ready for private candidate repositories; promotion and product cutover remain
-blocked on the functional verification checklist and promotion CI. Publishing
-a standalone npm SDK is explicitly not an extraction prerequisite.
+Status: updated 2026-08-10. The three optional templates have been published
+through the running app as private `v1.0.0` candidate repositories. They remain
+in `workspace/` until product cutover, and no verified template catalog entries
+or external base repository have been deployed. Promotion and product cutover
+therefore remain outstanding; publishing a standalone npm SDK is explicitly
+not an extraction prerequisite.
 
 ## Outcome
 
 The single packaged workspace source is replaced by independently released
 Git repositories, composed by a userland package that ships in base:
 
-- **`vibestudio-workspace-base`** — the smallest workspace that is genuinely
-  useful on its own; the root every workspace is created from; independently
-  bootable with its flattened runtime manifest present.
+- **`vibestudio-workspace-base`** — the useful default workspace distribution.
+  It is one possible source of shared infrastructure, not an authoring parent
+  whose release coordinates feature templates must capture.
 - **Feature template repositories** — one per user-visible outcome (news,
   Spectrolite, and examples), each publishing the repositories it needs to
   contribute. Templates correspond to outcomes a user would ask for, never to
@@ -42,11 +42,11 @@ Already true in-tree, so no longer plan material:
   reach it through the generic extension broker
   (`src/cli/templateComposerClient.ts`). The broker forwards and holds no
   template logic or state.
-- The host's only template-specific act is bootstrap: acquire one exact root
-  pin, import, publish (`workspaceRootTemplateBootstrap.ts`,
-  `acquireRootTemplateSnapshot.ts`). `initWorkspace` retains three exclusive
-  source kinds (`templateDir`, `forkFrom`, `rootTemplate`); the first becomes
-  a dev-mode convenience and the pin becomes the product path (D5).
+- The host's only template-specific act is workspace bootstrap
+  (`workspaceRootTemplateBootstrap.ts`, `acquireRootTemplateSnapshot.ts`).
+  Bootstrap may acquire an exact Git snapshot so creation is reproducible, but
+  that installation fact is not copied into feature-template authoring or
+  publication (D5).
 - `WORKSPACE_SYSTEM_EPOCH = 57`, exact-match, enforced at manifest parse.
 
 Why userland composition is sound — recorded once, not re-argued: every step
@@ -73,8 +73,7 @@ no commit:
 # meta/template.yml
 templates:
   use:
-    - name: base
-      url: git+https://github.com/vibestudio/workspace-base.git
+    - url: git+https://github.com/vibestudio/vibestudio-workspace-base.git
       credential: github-main # optional; how to reach it, not which version
 ```
 
@@ -106,17 +105,15 @@ lock-anchoring verification are unchanged. The three-file separation stands:
 `meta/templates/workspace.yml` (workspace-authored top layer), and the
 generated flattened `meta/vibestudio.yml` — the only manifest the host reads.
 
-**The build gate:** before publication the operation imports the resolved
-repositories into its own context and builds the affected unit closure at
-`ctx:<operationId>`. Only a clean build publishes; publication is atomic, so
-a failed build leaves protected main untouched with no observable
-intermediate. On failure, an agent repairs _inside the operation context_ and
-the fix ships in the same publication — the workspace atomically receives
-"News, plus whatever made News build," and the repair is a modelled
-divergence with the existing reconcile/suggest upstreaming path.
-Non-interactive callers fail closed: discard the context, report the failing
-units. The gate is compile-and-type, not behavioral; extending it to system
-tests is possible precisely because the harness lives in base.
+**The checks:** authoring validates the selected contribution in the current
+composed workspace—the state the author can actually inspect and repair. A
+consumer then composes the contribution with its own installed sources and
+runs build/type/static checks against that result. Failures retain an ordinary
+semantic context with structured diagnostics so an agent can fix or merge the
+combination; they do not become a non-actionable dependency-version rejection.
+Protected main advances only after the reviewed result is publishable. The
+checks are compile-and-type, not a promise that one template release works with
+every historical base.
 
 Scope discipline: the gate builds the affected unit closure, not the whole
 workspace — Build V2's unit graph computes it. What URL-only resolution gives
@@ -194,35 +191,28 @@ repository's CI carries a lint asserting it. Reserved paths (e.g. a root
 (`TEMPLATE_RESERVED_PATH_POLICY = "exclude"`) rather than aborting
 acquisition.
 
-### D5. Workspaces are created from base as a pin, not a copy
+### D5. Bootstrap identity is not a publication dependency
 
-In the resolver, a locally present repo path wins and the template owns
-nothing — so if creation kept copying base's units as ordinary files, base
-could never own or update them; it would be frozen at whatever shipped.
-Therefore creation acquires base over the network as an exact pin (the
-`rootTemplate` source kind), and the host imports its tree as ordinary
-**local** repositories — deliberately, because generating a lock requires
-composition and the host does not compose.
+Workspace creation and feature-template publication answer different
+questions. Creation needs a concrete source snapshot to materialize. A
+workspace lock records the exact Git coordinates it resolved so that this one
+workspace can update intentionally and reproduce its current composition.
+Neither fact gives base exclusive ownership of any repository, and neither is
+embedded into a feature release as a validated parent.
 
-**Adoption:** on the composer's first run it resolves base as the root
-without treating its repositories as local, so base claims them the ordinary
-way. The content is byte-identical to the bootstrap import, the delta is
-empty, and the publication adds exactly the lock and fragment. From then on
-base is a normal template on the normal pull path. Base must therefore have
-no template dependencies of its own (satisfied by construction); a
-third-party root must likewise be independently bootable, with any declared
-dependencies completed by the composer's first run.
-
-Offline first-run is explicitly not a requirement: a usable cache would be a
-real Git checkout satisfying every exact-snapshot precondition, seeded into
-per-profile state and garbage-collected on pin changes — none of it worth
-building unless offline creation becomes a requirement (§Deferred).
+An author may select repositories that an installed base also contributes.
+If base is installed, inspection can explain which selected or required parts
+overlap or could be inherited. If it is not installed, the feature can publish
+a self-contained contribution. In both cases the feature manifest contains
+only semantic dependency URLs. On installation, ordinary VCS deltas merge all
+contributors and local edits; the resulting workspace—not an authoring-time
+base pin—is the compatibility boundary.
 
 ## Repository inventory
 
 | Repository                        | Contents                                                                                                                                                                                                                                                                                                               |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio-workspace-base`       | Every repository not assigned to one of the three optional outcomes below, including Google Workspace, GitHub, local models, mobile, shell, browser, terminal, onboarding + templates skills, model settings, pubsub, shared integrations and channel-fork packages, agent/runtime/UI foundations, and developer tools |
+| `vibestudio-workspace-base`       | The complete default workspace other than the three outcomes selected for extraction in this cut. It may overlap a feature template when that feature needs to distribute shared-infrastructure changes.                                                                                                                              |
 | `vibestudio-template-news`        | `panels/news`, `workers/news-agent`, and `packages/feeds`; shared `packages/channel-fork` remains in base because base-owned agent chat also consumes it                                                                                                                                                               |
 | `vibestudio-template-spectrolite` | Spectrolite panel, MDX editor package                                                                                                                                                                                                                                                                                  |
 | `vibestudio-template-examples`    | `panels/hello-vanilla`, `panels/hello-svelte`, `workers/hello`, and `workers/sample-do`; these modern examples were restored after an earlier cleanup deleted them instead of extracting them                                                                                                                          |
@@ -237,12 +227,49 @@ lever is the audience split — user-facing tooling stays, the platform
 self-test harness moves out — which under D1 is an ordinary feature template
 declaring base by URL (§Deferred).
 
-**Package placement:** an internal package stays with the feature that owns
-it and moves to base only when two or more templates genuinely share it.
-Moving a package later is an ownership transfer surfacing as a user-facing
-conflict decision on their next update — so bias plausibly-shared packages
-into base from the start, and keep the dedicated ownership-transfer system
-test (§Test matrix).
+**Package selection is not ownership.** The rows describe the initial useful
+contributions, not an exclusive partition. A feature normally includes its
+direct implementation and deterministic package/runtime closure. It may also
+include a shared repository when distributing a coherent infrastructure
+change. Later overlap is an ordinary contribution delta and may require an
+ordinary merge decision; no ownership-transfer protocol exists.
+
+## Published candidate releases (2026-08-10)
+
+All three candidates were inspected and published through
+`@workspace-extensions/template-composer`, reached through the generic in-app
+extension broker. Each authoring manifest contains only this semantic
+dependency:
+
+```yaml
+templates:
+  use:
+    - url: git+https://github.com/panticonic/vibestudio-workspace-base.git
+```
+
+There is no base ref, commit, snapshot, or version in any feature manifest.
+Base was not installed in the publishing workspace, so the authoring closure
+made each release self-contained by including every required repository from
+the observed protected workspace state. This is intentional overlap, not a
+temporary ownership workaround.
+
+| Template | Published repository | Immutable release | Commit | Snapshot |
+| --- | --- | --- | --- | --- |
+| Examples | `panticonic/vibestudio-template-examples` | `refs/tags/v1.0.0` | `5385e586db97e6d69ceed74be72a307f9a22e46f` | `v1-sha256:708bb68e5cdc9b14ac8d535c4aae49134d49288332868744e546220873c7ef50` |
+| News | `panticonic/vibestudio-template-news` | `refs/tags/v1.0.0` | `7151f486dfdf2ced4c86c976a0c8b0386b28c88c` | `v1-sha256:468e6b191a0a893e3ac79960eee998ac7e7952bb3a284d202c563dd4cb6bb0fd` |
+| Spectrolite | `panticonic/vibestudio-template-spectrolite` | `refs/tags/v1.0.0` | `a82fef4d4848e1a3f61d562e82a735d7be68abb9` | `v1-sha256:e09838884c3c61ffaea5403f6b0c74321138f8e22bfd6084de0f0da38fb3b277` |
+
+The publication receipts are authoritative because Git Bridge reads the
+published commit back into an exact snapshot before returning. News also
+exercised crash/retry behavior: its first CLI request timed out while the
+server-side publication continued, and replaying the same durable command ID
+returned the one existing release. The intermediate concurrent replay exposed
+a remaining DX defect: publication calls are idempotent after settlement but
+are not serialized while the first invocation is still in flight, so two live
+invocations can contend on the same Git ref. Before presenting unattended
+publication as fully polished, the Composer should coalesce concurrent calls
+for one command ID and the CLI transport should tolerate long build gates (or
+switch to a durable start/status protocol).
 
 ## Registry design
 
@@ -270,9 +297,10 @@ entries:
 - `promoted` carries an exact commit and snapshot; promotion is the review
   gate, so "latest" can never mean "whatever landed a minute ago" — this is
   what makes lock-first resolution safe as the default.
-- Promotion CI verifies the snapshot digest, checks epoch against the current
-  base release, and **composes and builds the candidate against the promoted
-  base** — the same gate D1 applies in the user's workspace.
+- Promotion CI verifies the snapshot digest and epoch and composes the
+  candidate in one maintained representative workspace. That is useful
+  release evidence, not an exact-base compatibility claim. Every consumer
+  still checks its own composed result and receives repairable diagnostics.
 - The manifest remains the source of dependency truth; the registry records
   what an entry resolved to, never what it depends on. Registry CI enforces a
   unique id ↔ URL mapping.
@@ -285,8 +313,9 @@ entries:
   drive a first-run install set (each add is its own approval and operation;
   a batch would mean N sequential approvals and conflict decisions a new user
   cannot answer). Registry CI nonetheless composes and builds the full
-  recommended set together against base, which keeps a first-run set cheap to
-  add later — only the batch-approval surface would remain to build.
+  recommended set together in a representative workspace, which keeps a
+  first-run set cheap to add later — only the batch-approval surface would
+  remain to build.
 - The composer caches the last verified registry snapshot; an unreachable
   registry leaves installed workspaces fully usable.
 
@@ -321,10 +350,10 @@ A template repository is a Vibestudio source fragment, not necessarily an
 independently installable npm monorepo. Its meaningful test matrix is:
 
 ```text
-exact Vibestudio host release
-        + exact base template release
-        + optional template release
-        -> Vibestudio build, typecheck, and system tests
+consumer's Vibestudio host/system epoch
+        + consumer's installed contributions and local edits
+        + optional template contribution
+        -> compose, build, typecheck, static checks, and agent repair if needed
 ```
 
 Dependency resolution follows the composed source graph:
@@ -339,17 +368,18 @@ versioned host SDK package set is not a blocker. The gates are instead:
 
 1. Workspace-owned implementations live in base/template source while the
    host retains only narrow platform contracts.
-2. Every optional template is composed against an exact promoted base and
-   exact host release, never local monorepo state.
-3. `systemEpoch` proves the host/workspace ABI; the composition lock proves
-   exact repository identity.
+2. Authoring checks the current protected workspace state; installation checks
+   the consumer's actual composition. Neither invents universal compatibility.
+3. `systemEpoch` proves the host/workspace ABI; the workspace lock records
+   exact installed Git identities without turning them into release
+   dependencies.
 4. CI exercises the composed result. A bare `git clone && pnpm install &&
 pnpm build` of one optional repository is neither required nor presented as
    meaningful validation.
 
 ## Migration sequence
 
-Done (verified in-tree): ownership inversion — the composer package,
+Done (verified in-tree): responsibility inversion — the composer package,
 extension, and skill exist; the host has no template service; CLI routes
 through the extension broker; the exact-pin creation path and bootstrap
 adoption inspection exist.
@@ -358,7 +388,7 @@ Current migration state:
 
 1. **Done:** userland GAD, receiver-enforced capabilities, clone-first
    bootstrap, package residency, deletion, and host-without-workspace gates.
-2. **Done:** the ownership inventory in §Repository inventory is reflected by
+2. **Done:** the contribution inventory in §Repository inventory is reflected by
    the authoring inventory/closure API and validated against buildable source.
 3. **Done:** onboarding uses runtime owner discovery and has no compile-time
    imports of capability implementations. While every planned extraction
@@ -366,24 +396,27 @@ Current migration state:
    functionality, never as an installable template.
 4. **Done:** URL-only `templates.use`, lock-first resolution, derived aliases,
    exact epoch matching, and build-gated publication are live.
-5. **Done:** establish the composed host + base + optional validation contract
+5. **Done:** establish the consumer-composition validation and repair contract
    (§Extracted-repository validation contract); no npm SDK publication gate.
-6. Extract the final repository set from the current workspace:
-   `vibestudio-workspace-base` plus exactly three optional templates:
-   `examples`, `news`, and `spectrolite`. Everything not selected by one of
-   those three templates remains in base for this cut. In particular, Google
-   Workspace, GitHub, local models, mobile, browser, and terminal functionality
-   remain in base.
-7. Introduce release tagging and cross-repository composition tests; create
-   the registry repository with build-gated promotion.
+6. **Feature candidates done:** extract and publish exactly three optional
+   templates—`examples`, `news`, and `spectrolite`—from the current workspace.
+   The external `vibestudio-workspace-base` repository is still outstanding.
+   Everything not selected by one of those three templates remains in base for
+   this cut. In particular, Google Workspace, GitHub, local models, mobile,
+   browser, and terminal functionality remain in base.
+7. **Publication done; promotion outstanding:** the three private `v1.0.0`
+   candidates were published through the in-app authoring path with the exact
+   coordinates recorded above. Add representative cross-composition tests,
+   fix the concurrent same-command publication race and long-call transport
+   DX, then create the registry repository with reviewed promotion.
 8. **Code side done:** the verified Git registry client binds selection to
    registry commit + snapshot across the service schema, composer, skill
    contract, onboarding, CLI, and tests. Creating and promoting the external
    registry repository remains part of step 7.
-9. Switch workspace creation to the exact base pin as the product default
-   (D5), delete the in-tree `workspace/` source, and prove that production
-   builds and fresh workspace creation have no checkout-relative workspace
-   fallback.
+9. Separately cut over workspace creation to an externally published base
+   snapshot, delete the in-tree `workspace/` source, and prove that production
+   builds and fresh workspace creation have no checkout-relative fallback.
+   This does not republish or revalidate feature templates against that base.
 10. **After repositories and catalog entries are deployed**, change onboarding
     discovery and presentation so capabilities supplied by
     an optional template are shown as installable, not ready or configurable.
@@ -398,31 +431,32 @@ The split is closed-world for this release:
 
 | Repository                        | Content rule                                                                                                                                                                                                                                                                                                                                              |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio-workspace-base`       | Every current workspace repository not owned by one of the three rows below, plus the root workspace metadata, lockfile, default manifest, onboarding core, Google Workspace, GitHub, local models, mobile, template composer/registry client, shell, browser, terminal, and system-test infrastructure required to install and verify optional templates |
+| `vibestudio-workspace-base`       | Everything retained in the default distribution for this cut, including root metadata, onboarding, Google Workspace, GitHub, local models, mobile, template composer/registry client, shell, browser, terminal, and system-test infrastructure. It may overlap the feature rows.                                                   |
 | `vibestudio-template-examples`    | Example/demo repositories and their declarations only                                                                                                                                                                                                                                                                                                     |
 | `vibestudio-template-news`        | News panel/agent and direct dependencies                                                                                                                                                                                                                                                                                                                  |
 | `vibestudio-template-spectrolite` | Spectrolite panel and direct dependencies                                                                                                                                                                                                                                                                                                                 |
 
 Selections are produced and validated by the authoring inventory/closure API.
-The table names outcomes; it is not a hand-maintained file list. A repository
-shared by base and an optional outcome stays in base and is inherited through
-the exact base parent. No source repository is copied into two published
-templates.
+The table names outcomes; it is not a hand-maintained file list or an ownership
+map. The same repository may be contributed by base and any number of feature
+templates. Ordered contribution ledgers plus ordinary semantic VCS deltas
+represent that overlap explicitly.
 
 The monorepo may contain extraction tooling and fixtures, but it must not
 contain a live or fallback copy of the workspace source after cutover. The only
-default-workspace input is the promoted base template URL and exact release
-pin resolved through the ordinary clone-first template path.
+default-workspace input is an explicitly configured base template source
+resolved through the ordinary clone-first path. Its installed exact coordinate
+lives in that workspace's lock, not in downstream feature releases.
 
 ## Test matrix
 
 Run before step 9 changes how workspaces are created:
 
-- Creation from a pinned base root; creation with registry or base remote
+- Creation from an external base snapshot; creation with registry or base remote
   unreachable fails actionably with no half-initialized workspace.
-- Adding each official feature independently; use synthetic templates for the
-  generic two-template repository-overlap and explicit-conflict-decision case,
-  because the official three-way partition is intentionally disjoint.
+- Adding each official feature independently, plus two-template repository
+  overlap and explicit-conflict-decision cases using real or synthetic
+  contributions.
 - Lock-first resolution: an add never moves an already-locked base and
   performs no network lookup for it.
 - The build gate blocks publication: a non-building feature leaves protected
@@ -430,15 +464,17 @@ Run before step 9 changes how workspaces are created:
   repair ships atomically in the same publication; a repaired template stays
   reconcilable on later pull (divergence as external deltas, never a clobber
   or silent fork); a headless add whose build fails cancels cleanly.
-- Registry CI refuses to promote a version that does not build against the
-  promoted base; registry offline serves the cached catalog; registry-content
-  staleness between read and add (commit/snapshot mismatch, including a reused
-  revision string over changed content) is rejected.
+- Registry CI refuses to promote a version that does not build in its
+  maintained representative composition; registry offline serves the cached
+  catalog; registry-content staleness between read and add (commit/snapshot
+  mismatch, including a reused revision string over changed content) is
+  rejected.
 - Update discovery through a completed pull, including tag selection across
   a prerelease and its release; rejection/rollback of an in-flight add.
 - Suggestion acceptance and decline through the acquisition flow (D3),
   including the re-derive-and-re-ask path after a concurrent publish.
-- Package ownership transfer between two templates across an update.
+- A repository becoming overlapping, ceasing to overlap, and changing in two
+  templates across updates.
 - A file at a container-section root fails the template repository's own CI
   lint (D4); epoch mismatch produces the explicit upgrade error.
 - The host does no composition: with the composer removed, template
@@ -448,8 +484,8 @@ Run before step 9 changes how workspaces are created:
 
 Decided against for now, recorded so the reasoning is not relitigated:
 
-- **Offline first-run** (D5): revisit only if creation must work without
-  connectivity; the cache cost is described there.
+- **Offline first-run**: revisit only if creation must work without
+  connectivity; it requires a verified local acquisition cache.
 - **Automatic installation of a first-run recommended set**: `recommended`
   remains presentational. After an optional repository and its verified catalog
   entry are deployed, onboarding may recommend and offer it, but installation
