@@ -133,9 +133,33 @@ interface InstallReviewRowBase {
   change?: InstallRowChange;
 }
 
+/**
+ * Which provider currently fills a declared protocol.
+ *
+ * A unit declares service dependencies by stable protocol, so its manifest
+ * names a contract rather than an implementation. That keeps the declaration
+ * stable across provider changes, but it also means the manifest alone cannot
+ * answer "who does this talk to today". This is the resolved answer for one
+ * exact workspace state, carried next to the row the user actually reads.
+ */
+export interface ServiceBindingFact {
+  protocol: string;
+  availability: "required" | "optional";
+  /** Null when no provider currently implements the declared protocol. */
+  serviceName: string | null;
+  providerUnit: string | null;
+  catalogDigest: string | null;
+}
+
 export interface InstallReviewPermissionRow extends InstallReviewRowBase {
   kind: "permission";
   row: AuthorityRow;
+  /**
+   * Present on `workspace-service:` rows whose provider resolved from a
+   * declared protocol. The row's own copy names the concrete service; this
+   * records the contract it was reached through.
+   */
+  binding?: ServiceBindingFact;
 }
 
 export interface InstallReviewBehaviorRow extends InstallReviewRowBase {
@@ -175,6 +199,12 @@ export interface InstallReviewRowsInput {
   /** Behavioral facts the review contributes itself; always headline (§10). */
   behaviors?: readonly InstallBehaviorFact[];
   userlandDefinitions?: UserlandDefinitions;
+  /**
+   * Protocol declarations resolved against one exact workspace state, so a
+   * service row can name the contract it came from as well as the provider
+   * currently filling it.
+   */
+  serviceBindings?: readonly ServiceBindingFact[];
   /** Exact workspace declarations for dynamic service envelopes. */
   presentationFor?: CapabilityPresentationResolver;
   /**
@@ -209,6 +239,13 @@ export function installReviewRows(input: InstallReviewRowsInput): InstallReviewR
   const isUpdate = input.previousRequests !== undefined && input.previousRequests !== null;
   const notableRows: InstallReviewRow[] = [];
   const everydayRows: InstallReviewRow[] = [];
+  // Keyed by the concrete capability the fold derived from each protocol, which
+  // is what a permission row carries.
+  const bindingByCapability = new Map<string, ServiceBindingFact>(
+    (input.serviceBindings ?? [])
+      .filter((binding) => binding.serviceName !== null)
+      .map((binding) => [`workspace-service:${binding.serviceName}`, binding] as const)
+  );
 
   for (const request of input.requests) {
     const key = requestKey(request);
@@ -219,6 +256,7 @@ export function installReviewRows(input: InstallReviewRowsInput): InstallReviewR
       key,
       userlandDefinitions: input.userlandDefinitions,
       presentationFor: input.presentationFor,
+      binding: bindingByCapability.get(request.capability),
       change: !isUpdate
         ? undefined
         : !previous
@@ -247,6 +285,7 @@ export function installReviewRows(input: InstallReviewRowsInput): InstallReviewR
       key,
       userlandDefinitions: input.userlandDefinitions,
       presentationFor: input.presentationFor,
+      binding: bindingByCapability.get(request.capability),
       change: "removed",
       selectedByDefault: false,
       removed: true,
@@ -276,6 +315,7 @@ function buildPermissionRow(input: {
   key: string;
   userlandDefinitions: UserlandDefinitions | undefined;
   presentationFor: CapabilityPresentationResolver | undefined;
+  binding?: ServiceBindingFact | undefined;
   change: InstallRowChange | undefined;
   selectedByDefault: boolean;
   removed?: boolean;
@@ -364,6 +404,7 @@ function buildPermissionRow(input: {
     selectable,
     selectedByDefault: selectable && input.selectedByDefault,
     ...(input.change ? { change: input.change } : {}),
+    ...(input.binding ? { binding: input.binding } : {}),
   };
 }
 

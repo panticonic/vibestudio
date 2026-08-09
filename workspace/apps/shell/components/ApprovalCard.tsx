@@ -128,6 +128,9 @@ export function ApprovalCard({
   layout = "card",
   emit,
 }: ApprovalCardProps) {
+  const lifecycleState = approval.lifecycle?.state ?? "ready";
+  const validationPending = lifecycleState === "preparing";
+  const validationTerminal = lifecycleState === "failed" || lifecycleState === "cancelled";
   // Secret-config / credential-input values are held locally and only leave the
   // surface on submit.
   const [secretConfigValues, setSecretConfigValues] = useState<Record<string, string>>({});
@@ -186,7 +189,7 @@ export function ApprovalCard({
     } else if (event.key === "ArrowRight" && queue?.canNext) {
       event.preventDefault();
       emitForApproval({ type: "browse", dir: "next" });
-    } else if (key === "d") {
+    } else if (key === "d" && !validationPending) {
       event.preventDefault();
       if (approval.kind === "browser-permission") {
         // Browser permission decisions have no one-shot "deny": dismissing
@@ -207,7 +210,7 @@ export function ApprovalCard({
       } else if (approval.kind !== "device-code") {
         emitForApproval({ type: "decide", decision: "deny" });
       }
-    } else if (event.key === "Enter" && !actionPending) {
+    } else if (event.key === "Enter" && !actionPending && lifecycleState === "ready") {
       event.preventDefault();
       if (approval.kind === "client-config") {
         emitForApproval({ type: "submit-client-config", values: secretConfigValues });
@@ -308,6 +311,7 @@ export function ApprovalCard({
     ) : (
       <StandardApprovalActions
         approval={approval}
+        terminal={validationTerminal}
         decide={(decision) => emitForApproval({ type: "decide", decision })}
         onBlock={() => emitForApproval({ type: "decide", decision: "lock" })}
       />
@@ -387,6 +391,21 @@ export function ApprovalCard({
             <Box id={`approval-summary-${approval.approvalId}`}>
               <ApprovalMarkdown source={copy.summary} tone="muted" compact />
             </Box>
+            {lifecycleState !== "ready" ? (
+              <Text
+                size="1"
+                color={lifecycleState === "failed" ? "red" : "gray"}
+                role="status"
+                aria-live="polite"
+              >
+                {lifecycleState === "preparing"
+                  ? "Checking builds, schemas, and authority…"
+                  : (approval.lifecycle?.diagnostics?.[0] ??
+                    (lifecycleState === "cancelled"
+                      ? "Publication was cancelled."
+                      : "Workspace validation failed."))}
+              </Text>
+            ) : null}
 
             <Flex align="center" gap="1" wrap="wrap" style={{ minWidth: 0 }}>
               <CallerChip caller={caller} onShow={() => emitForApproval({ type: "show-panel" })} />
@@ -598,7 +617,11 @@ export function ApprovalCard({
           review's actions live here rather than at the end of its list, because
           `Add to workspace` under fifty-three parts is a decision you have to go
           looking for. */}
-      <fieldset className="approval-card-footer" disabled={actionPending} aria-busy={actionPending}>
+      <fieldset
+        className="approval-card-footer"
+        disabled={actionPending || validationPending}
+        aria-busy={actionPending || validationPending}
+      >
         {approval.kind === "unit-install-review" ? (
           <InstallReviewActions
             approval={approval}
@@ -610,9 +633,9 @@ export function ApprovalCard({
           />
         ) : null}
         {actions}
-        {actionPending ? (
+        {actionPending || validationPending ? (
           <Text size="1" color="gray" ml="2" role="status" aria-live="polite">
-            Saving…
+            {validationPending ? "Preparing review…" : "Saving…"}
           </Text>
         ) : null}
       </fieldset>
@@ -815,16 +838,20 @@ function CallerChip({ caller, onShow }: { caller: CallerInfo; onShow: () => void
 
 function StandardApprovalActions({
   approval,
+  terminal,
   decide,
   onBlock,
 }: {
   approval: PendingCredentialApproval | PendingCapabilityApproval;
+  terminal: boolean;
   decide: (decision: ApprovalDecision) => void;
   onBlock: () => void;
 }) {
   const recommendedDecision = getRecommendedStandardDecision(approval);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
-  const actions = getStandardApprovalDecisionActions(approval);
+  const actions = getStandardApprovalDecisionActions(approval).filter(
+    (action) => !terminal || action.decision === "deny"
+  );
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       {actions.map((action) => {

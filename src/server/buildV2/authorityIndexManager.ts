@@ -12,7 +12,15 @@ import type {
 export class AuthorityIndexManager {
   private readonly published = new Map<string, AuthorityDependencyIndex>();
   private readonly pending = new Map<string, AuthorityDependencyIndex>();
-  private readonly flights = new Map<string, Promise<AuthorityDependencyIndex>>();
+  private readonly flights = new Map<
+    string,
+    {
+      promise: Promise<AuthorityDependencyIndex>;
+      controller: AbortController;
+      waiters: number;
+      persistentWaiter: boolean;
+    }
+  >();
   private readonly analyzed = new Map<string, AuthorityDependencyIndex>();
   private readonly maxEntries: number;
 
@@ -43,8 +51,9 @@ export class AuthorityIndexManager {
   indexAt(
     stateHash: string,
     epoch: AuthorityAnalysisEpoch,
-    create: () => Promise<AuthorityDependencyIndex>,
-    exactInputDigest?: string
+    create: (signal: AbortSignal) => Promise<AuthorityDependencyIndex>,
+    exactInputDigest?: string,
+    signal?: AbortSignal
   ): Promise<AuthorityDependencyIndex> {
     const key = exactInputDigest ?? `${stateHash}\0${this.epochKey(epoch)}`;
     const analyzed = this.analyzed.get(key);
@@ -52,10 +61,52 @@ export class AuthorityIndexManager {
       this.touch(this.analyzed, key, analyzed);
       return Promise.resolve(analyzed);
     }
+    const attach = (
+      flight: {
+        promise: Promise<AuthorityDependencyIndex>;
+        controller: AbortController;
+        waiters: number;
+        persistentWaiter: boolean;
+      },
+      waiterSignal?: AbortSignal
+    ): Promise<AuthorityDependencyIndex> => {
+      if (!waiterSignal) {
+        flight.persistentWaiter = true;
+        return flight.promise;
+      }
+      if (waiterSignal.aborted) return Promise.reject(waiterSignal.reason);
+      flight.waiters += 1;
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const leave = () => {
+          if (settled) return;
+          settled = true;
+          waiterSignal.removeEventListener("abort", onAbort);
+          flight.waiters -= 1;
+          if (flight.waiters === 0 && !flight.persistentWaiter) flight.controller.abort();
+        };
+        const onAbort = () => {
+          leave();
+          reject(waiterSignal.reason ?? new Error("Authority analysis cancelled"));
+        };
+        waiterSignal.addEventListener("abort", onAbort, { once: true });
+        void flight.promise.then(
+          (value) => {
+            leave();
+            resolve(value);
+          },
+          (error: unknown) => {
+            leave();
+            reject(error);
+          }
+        );
+      });
+    };
     const existing = this.flights.get(key);
-    if (existing) return existing;
+    if (existing) return attach(existing, signal);
 
-    const flight = create().then(
+    const controller = new AbortController();
+    const promise = create(controller.signal).then(
       (index) => {
         this.flights.delete(key);
         if (index.complete && index.blockingConsumers.size === 0) {
@@ -68,8 +119,14 @@ export class AuthorityIndexManager {
         throw error;
       }
     );
+    const flight = {
+      promise,
+      controller,
+      waiters: 0,
+      persistentWaiter: signal === undefined,
+    };
     this.flights.set(key, flight);
-    return flight;
+    return attach(flight, signal);
   }
 
   publishedBaseline(epoch: AuthorityAnalysisEpoch): AuthorityDependencyIndex | null {

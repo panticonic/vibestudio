@@ -93,6 +93,80 @@ describe("userland authority facts", () => {
     });
   });
 
+  it("uses the query argument of the host-side durable service client", () => {
+    const facts = analyze(`
+      declare module "@vibestudio/shared/workspaceServiceRpc" {
+        export function createDurableObjectServiceClient(
+          rpc: object,
+          query: string,
+          objectKey?: string | null
+        ): { call(method: string, ...args: unknown[]): Promise<unknown> };
+      }
+      import { createDurableObjectServiceClient } from "@vibestudio/shared/workspaceServiceRpc";
+      declare const rpc: object;
+      const client = createDurableObjectServiceClient(rpc, "example.notes.v1", "notes");
+      void client.call("deleteNote");
+    `);
+    expect(facts).toHaveLength(2);
+    expect(facts[0]?.serviceQueries).toMatchObject({
+      kind: "literals",
+      values: new Set(["example.notes.v1"]),
+    });
+    expect(facts[0]?.objectKeys).toMatchObject({
+      kind: "literals",
+      values: new Set(["notes"]),
+    });
+  });
+
+  it("uses the query argument of the worker runtime's unbound service client", () => {
+    const facts = analyze(`
+      declare module "@workspace/runtime/worker" {
+        export function createDurableObjectServiceClient(
+          rpc: object,
+          query: string,
+          objectKey?: string | null
+        ): { call(method: string, ...args: unknown[]): Promise<unknown> };
+      }
+      import { createDurableObjectServiceClient } from "@workspace/runtime/worker";
+      declare const rpc: object;
+      createDurableObjectServiceClient(rpc, "example.notes.v1", "notes");
+    `);
+    expect(facts[0]?.serviceQueries).toMatchObject({
+      kind: "literals",
+      values: new Set(["example.notes.v1"]),
+    });
+  });
+
+  it("attributes testkit's generic service helpers to their caller", () => {
+    const facts = analyze(`
+      declare module "@workspace/testkit" {
+        export function callDO(query: string, method: string): Promise<unknown>;
+        export function profileDO(query: string, run: () => Promise<void>): Promise<unknown>;
+      }
+      import { callDO, profileDO } from "@workspace/testkit";
+      void callDO("example.notes.v1", "getNote");
+      void profileDO("example.other.v1", async () => undefined);
+    `);
+    expect(facts.map((fact) => fact.serviceQueries)).toEqual([
+      { kind: "literals", values: new Set(["example.notes.v1"]) },
+      { kind: "literals", values: new Set(["example.other.v1"]) },
+    ]);
+  });
+
+  it("uses the public channel protocol when connectViaRpc omits its override", () => {
+    const facts = analyze(`
+      declare module "@workspace/pubsub" {
+        export function connectViaRpc(options: { channel: string }): object;
+      }
+      import { connectViaRpc } from "@workspace/pubsub";
+      connectViaRpc({ channel: "news" });
+    `);
+    expect(facts[0]?.serviceQueries).toMatchObject({
+      kind: "literals",
+      values: new Set(["vibestudio.channel.v1"]),
+    });
+  });
+
   it("retains external executable module provenance", () => {
     const facts = analyze("export const value = 1;", [
       {

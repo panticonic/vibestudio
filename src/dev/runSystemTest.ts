@@ -98,7 +98,12 @@ async function main(): Promise<void> {
   // instances are deliberately left alone: their reviews may belong to an
   // interactive user. Managed instances retain ownership across launcher
   // retries, including recovery from a failed first doctor call.
-  if (ensured.created && parsed.command[0] !== "doctor") {
+  // Provisioning is not complete at the ready-file boundary. Run the same
+  // semantic startup barrier for every newly created instance, including a
+  // caller whose first command is doctor. Relying on that outer doctor alone
+  // leaves a race where it can return at transport readiness and the creation
+  // review appears immediately afterward, blocking the first real test.
+  if (ensured.created) {
     await prepareFreshInstance(ensured.instance.id);
   }
   const command =

@@ -281,6 +281,52 @@ describe("building rows from a declaration", () => {
     expect(everydayRows.every((row) => row.timing === "on-add" && row.selectable)).toBe(true);
   });
 
+  it("names the protocol a service row was reached through, and its current provider", () => {
+    // The manifest declares protocols, so the reviewer cannot tell from it
+    // alone which provider a unit talks to. The row has to carry that join.
+    const { notableRows, everydayRows } = installReviewRows({
+      requests: [request("workspace-service:local-notifications")],
+      serviceBindings: [
+        {
+          protocol: "example.notifications.v1",
+          availability: "required",
+          serviceName: "local-notifications",
+          providerUnit: "@workspace-workers/notifications",
+          catalogDigest: "catalog-notifications",
+        },
+      ],
+    });
+
+    const rows = [...notableRows, ...everydayRows];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind === "permission" ? rows[0].binding : undefined).toEqual({
+      protocol: "example.notifications.v1",
+      availability: "required",
+      serviceName: "local-notifications",
+      providerUnit: "@workspace-workers/notifications",
+      catalogDigest: "catalog-notifications",
+    });
+  });
+
+  it("leaves a service row unbound when no declaration resolved to it", () => {
+    const { notableRows, everydayRows } = installReviewRows({
+      requests: [request("workspace-service:local-notifications")],
+      serviceBindings: [
+        {
+          protocol: "example.other.v1",
+          availability: "optional",
+          serviceName: null,
+          providerUnit: null,
+          catalogDigest: null,
+        },
+      ],
+    });
+
+    const rows = [...notableRows, ...everydayRows];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.kind === "permission" ? rows[0].binding : "absent").toBe(undefined);
+  });
+
   it("never offers a checkbox for a critical request", () => {
     const { notableRows } = installReviewRows({ requests: [request("git.publish", "critical")] });
     expect(notableRows).toHaveLength(1);

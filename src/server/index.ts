@@ -2345,6 +2345,7 @@ async function main() {
         {
           appRoot,
           dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+          workspaceIdStability: workspaceIsEphemeral ? "ephemeral" : "stable",
           workspaceAuthorityEnvironmentAt: async (stateHash) => {
             const { exactWorkspaceServiceBindings } =
               await import("./buildV2/userlandAuthority.js");
@@ -2790,7 +2791,43 @@ async function main() {
           pin ? { url: pin.url, ref: pin.ref, version: pin.ref } : undefined
         );
       },
-      validateCandidateWorkspaceState: async (stateHash, changedPaths) => {
+      beginCandidateReview: (candidate) => {
+        const runtimeKind = candidate.caller.runtime.kind;
+        const callerKind = ["panel", "app", "worker", "do", "extension"].includes(runtimeKind)
+          ? (runtimeKind as "panel" | "app" | "worker" | "do" | "extension")
+          : "system";
+        approvalQueue.beginPreparation?.({
+          kind: "capability",
+          capability: "workspace-main-advance",
+          dedupKey: `workspace-publication:${candidate.publicationId}`,
+          callerId: candidate.caller.runtime.id,
+          callerKind,
+          repoPath: candidate.caller.code?.repoPath ?? "vibestudio/session",
+          effectiveVersion: candidate.caller.code?.effectiveVersion ?? candidate.stateHash,
+          ...(candidate.caller.subject
+            ? { requestedByUserId: candidate.caller.subject.userId }
+            : {}),
+          ...(candidate.signal ? { signal: candidate.signal } : {}),
+          attention: "interrupt",
+          title: "Preparing workspace update…",
+          description:
+            "Checking builds, schemas, and authority before this review can be accepted.",
+          resource: {
+            type: "vcs-head",
+            label: "Head",
+            value:
+              candidate.repoPaths.length === 1
+                ? `${candidate.repoPaths[0]} main`
+                : `${candidate.repoPaths.length} workspace repositories`,
+          },
+          grantResourceKey: `workspace-source-change:publication:${candidate.publicationId}`,
+        });
+      },
+      failCandidateReview: (publicationId, error) =>
+        approvalQueue.failPreparation?.(`workspace-publication:${publicationId}`, error),
+      discardCandidateReview: (publicationId) =>
+        approvalQueue.discardPreparation?.(`workspace-publication:${publicationId}`),
+      validateCandidateWorkspaceState: async (stateHash, changedPaths, signal) => {
         const candidateConfig = await loadWorkspaceConfigFromState(stateHash);
         const candidateDecls = buildWorkspaceDeclarations(candidateConfig);
         const buildSystem = assertPresent(buildSystemInstance);
@@ -2810,7 +2847,11 @@ async function main() {
           for (const route of candidateDecls.routes) {
             if (route.durableObject) addClass(route.source, route.durableObject.className);
           }
-          const unitNames = await buildSystem.listAffectedBuildUnits(stateHash, changedPaths);
+          const unitNames = await buildSystem.listAffectedBuildUnits(
+            stateHash,
+            changedPaths,
+            signal
+          );
           // A manifest-only change can expose a previously undeclared class
           // without changing its worker files. Probe every referenced source
           // against the exact candidate state in that case.
@@ -2925,7 +2966,7 @@ async function main() {
               );
             }
           }
-          await buildSystem.stageAuthorityIndex(stateHash);
+          await buildSystem.stageAuthorityIndex(stateHash, signal);
         } catch (error) {
           buildSystem.discardAuthorityIndex(stateHash);
           throw error;
@@ -6963,11 +7004,10 @@ async function main() {
     );
   });
 
-  // Authority publication remains fully on-demand and durably cached. Its
-  // cold compiler snapshot uses the synchronous TypeScript bridge and can hold
-  // the server event loop for many seconds on a large workspace; running it
-  // speculatively made unrelated RPC and file tools appear hung. Do not launch
-  // that CPU-bound pass until it can be moved off the server thread.
+  // Authority indexing is manifest-only at the unchanged analyzer epoch. Any
+  // proof revalidation it schedules uses the dedicated analysis worker, so it
+  // is safe to begin opportunistically only after the ready record is visible.
+  steadyStateBuildSystem.prewarmAuthorityIndex();
 
   // Eval libraries are additionally warmed for persistent workspaces. Apps and
   // extensions continue to activate their own dependency graphs on demand.

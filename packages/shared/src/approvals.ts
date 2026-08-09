@@ -259,6 +259,11 @@ export interface PendingApprovalBase {
   repoPath: string;
   effectiveVersion: string;
   requestedAt: number;
+  /** Validation lifecycle for publication reviews; ordinary approvals are immediately ready. */
+  lifecycle?: {
+    state: "preparing" | "ready" | "failed" | "cancelled";
+    diagnostics?: readonly string[];
+  };
   /** Whether shell chrome should open this request immediately or keep it in the waiting pill. */
   attention?: "interrupt" | "queue";
   /**
@@ -430,6 +435,15 @@ export interface ReviewedUnit {
   /** Exact, version-bound manifest review plus human-oriented change groups. */
   authority?: {
     requests: readonly UnitAuthorityRequest[];
+    serviceRequests: readonly import("./authorityManifest.js").WorkspaceServiceProtocolRequest[];
+    previousServiceRequests: readonly import("./authorityManifest.js").WorkspaceServiceProtocolRequest[];
+    serviceBindings?: readonly {
+      protocol: string;
+      availability: "required" | "optional";
+      serviceName: string | null;
+      providerUnit: string | null;
+      catalogDigest: string | null;
+    }[];
     /** Receiver-owned userland capabilities in the proposed exact build. */
     provides: readonly import("./authorityManifest.js").UserlandCapabilityDefinition[];
     /** Receiver-owned capabilities in the previously approved exact build. */

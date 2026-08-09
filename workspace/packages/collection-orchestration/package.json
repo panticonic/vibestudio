@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "vibestudio": {
+    "authority": {
+      "provides": [],
+      "requests": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.channel.v1",
+          "availability": "required"
+        }
+      ]
+    }
+  },
   "exports": {
     ".": "./src/index.ts"
   },

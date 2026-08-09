@@ -1334,7 +1334,7 @@ export const PanelStack = memo(function PanelStack({
               borderBottom: isMobile ? 0 : undefined,
             }}
           >
-            <Flex direction="column" gap="2" style={{ flex: 1, minHeight: 0 }}>
+            <Flex direction="column" gap="1" style={{ flex: 1, minHeight: 0 }}>
               {isMobile && (
                 <Flex align="center" justify="end" px="1" pt="1">
                   <IconButton

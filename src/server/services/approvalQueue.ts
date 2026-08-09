@@ -570,7 +570,29 @@ interface QueueEntry {
   settlement?: Promise<void>;
 }
 
+function preparationDiagnostics(error: unknown): string[] {
+  const structured = (error as { errorData?: { diagnostics?: unknown } } | null)?.errorData
+    ?.diagnostics;
+  if (Array.isArray(structured)) {
+    const diagnostics = structured.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const row = value as { file?: unknown; line?: unknown; message?: unknown };
+      if (typeof row.message !== "string") return [];
+      const location =
+        typeof row.file === "string" && row.file.length > 0
+          ? `${row.file}${typeof row.line === "number" && row.line > 0 ? `:${row.line}` : ""}: `
+          : "";
+      return [`${location}${row.message}`];
+    });
+    if (diagnostics.length > 0) return diagnostics;
+  }
+  return [error instanceof Error ? error.message : String(error)];
+}
+
 export interface ApprovalQueue {
+  beginPreparation?(req: CapabilityApprovalQueueRequest & { dedupKey: string }): string;
+  failPreparation?(dedupKey: string, error: unknown): void;
+  discardPreparation?(dedupKey: string): void;
   request(req: UnitInstallReviewQueueRequest): Promise<UnitInstallReviewQueueDecision>;
   request(req: AuthorityApprovalQueueRequest): Promise<AuthorityApprovalQueueDecision>;
   requestWithHandle?(req: DecisionApprovalQueueRequest): ApprovalQueueRequestHandle;
@@ -726,6 +748,7 @@ export function createApprovalQueue(deps: {
   const resolveTitle = deps.resolveTitle ?? (() => undefined);
   const entriesById = new Map<string, QueueEntry>();
   const entriesByDedupKey = new Map<string, QueueEntry>();
+  const preparationsByProducerKey = new Map<string, QueueEntry>();
   const pendingListeners = new Set<(pending: PendingApproval[]) => void>();
 
   function emitPendingChanged(): void {
@@ -798,6 +821,9 @@ export function createApprovalQueue(deps: {
     if (entriesById.get(entry.approval.approvalId) !== entry) return;
     entriesById.delete(entry.approval.approvalId);
     entriesByDedupKey.delete(entry.dedupKey);
+    for (const [key, prepared] of preparationsByProducerKey) {
+      if (prepared === entry) preparationsByProducerKey.delete(key);
+    }
   }
 
   /**
@@ -1211,6 +1237,7 @@ export function createApprovalQueue(deps: {
       repoPath: req.repoPath,
       effectiveVersion: req.effectiveVersion,
       requestedAt: Date.now(),
+      lifecycle: { state: "ready" as const },
       ...(req.attention ? { attention: req.attention } : {}),
       ...(callerTitle !== undefined ? { callerTitle } : {}),
       ...(requester ? { requester } : {}),
@@ -1524,8 +1551,31 @@ export function createApprovalQueue(deps: {
       throw new Error("Credential approvals must declare their allowed decisions");
     }
     const dedupKey = dedupKeyFor(req);
-    let entry = entriesByDedupKey.get(dedupKey);
+    const preparationKey =
+      "dedupKey" in req && typeof req.dedupKey === "string" ? req.dedupKey : null;
+    let entry =
+      (preparationKey ? preparationsByProducerKey.get(preparationKey) : undefined) ??
+      entriesByDedupKey.get(dedupKey);
     let newEntry = false;
+    if (entry?.approval.lifecycle?.state === "preparing") {
+      const prepared = entry.approval;
+      const ready = createPendingApproval(req);
+      entry.approval = {
+        ...ready,
+        approvalId: prepared.approvalId,
+        requestedAt: prepared.requestedAt,
+        lifecycle: { state: "ready" },
+      } as PendingApproval;
+      entriesByDedupKey.delete(entry.dedupKey);
+      entry.dedupKey = dedupKey;
+      entriesByDedupKey.set(dedupKey, entry);
+      if (preparationKey) preparationsByProducerKey.delete(preparationKey);
+      emitPendingChanged();
+      console.log("[Approvals] Publication review ready", {
+        approvalId: prepared.approvalId,
+        timeToReadyMs: Date.now() - prepared.requestedAt,
+      });
+    }
     if (!entry) {
       const approval = createPendingApproval(req);
       entry = {
@@ -1690,6 +1740,81 @@ export function createApprovalQueue(deps: {
   }
 
   return {
+    beginPreparation(req) {
+      if (typeof req.dedupKey !== "string") {
+        throw new Error("Preparing approvals require a stable producer key");
+      }
+      const producerKey = req.dedupKey;
+      const dedupKey = dedupKeyFor(req);
+      const existing = preparationsByProducerKey.get(producerKey);
+      if (existing) return existing.approval.approvalId;
+      const approval = {
+        ...createPendingApproval(req),
+        lifecycle: { state: "preparing" as const },
+      };
+      const entry: QueueEntry = {
+        approval,
+        dedupKey,
+        requestedByUserId: req.requestedByUserId,
+        waiters: new Map(),
+        fieldInputWaiters: new Map(),
+        deviceCodeWaiters: new Map(),
+        missionReviewWaiters: new Map(),
+        nextWaiterId: 0,
+      };
+      entriesById.set(approval.approvalId, entry);
+      entriesByDedupKey.set(dedupKey, entry);
+      preparationsByProducerKey.set(producerKey, entry);
+      if (req.signal) {
+        const cancel = () => {
+          const current = preparationsByProducerKey.get(producerKey);
+          if (!current || current.approval.lifecycle?.state !== "preparing") return;
+          current.approval = {
+            ...current.approval,
+            lifecycle: { state: "cancelled", diagnostics: ["Publication was cancelled"] },
+          };
+          emitPendingChanged();
+          console.log("[Approvals] Publication review cancelled", {
+            approvalId: current.approval.approvalId,
+            elapsedMs: Date.now() - current.approval.requestedAt,
+          });
+        };
+        if (req.signal.aborted) queueMicrotask(cancel);
+        else req.signal.addEventListener("abort", cancel, { once: true });
+      }
+      emitPendingChanged();
+      console.log("[Approvals] Publication preparation visible", {
+        approvalId: approval.approvalId,
+        timeToVisibleMs: Date.now() - approval.requestedAt,
+      });
+      return approval.approvalId;
+    },
+
+    failPreparation(dedupKey, error) {
+      const entry = preparationsByProducerKey.get(dedupKey);
+      if (!entry || entry.approval.lifecycle?.state !== "preparing") return;
+      entry.approval = {
+        ...entry.approval,
+        lifecycle: {
+          state: "failed",
+          diagnostics: preparationDiagnostics(error),
+        },
+      };
+      emitPendingChanged();
+      console.log("[Approvals] Publication review failed", {
+        approvalId: entry.approval.approvalId,
+        elapsedMs: Date.now() - entry.approval.requestedAt,
+      });
+    },
+
+    discardPreparation(dedupKey) {
+      const entry = preparationsByProducerKey.get(dedupKey);
+      if (!entry || entry.approval.lifecycle?.state !== "preparing") return;
+      preparationsByProducerKey.delete(dedupKey);
+      removeEntry(entry);
+      emitPendingChanged();
+    },
+
     request: requestDecision,
 
     requestWithHandle: requestDecisionWithHandle,
@@ -1784,6 +1909,17 @@ export function createApprovalQueue(deps: {
     async resolve(approvalId, decision, resolver) {
       const entry = entriesById.get(approvalId);
       if (!entry) return;
+      if (entry.approval.lifecycle?.state === "preparing") {
+        throw new Error("Approval is still preparing and cannot be resolved");
+      }
+      if (
+        (entry.approval.lifecycle?.state === "failed" ||
+          entry.approval.lifecycle?.state === "cancelled") &&
+        decision !== "dismiss" &&
+        decision !== "deny"
+      ) {
+        throw new Error(`Approval is ${entry.approval.lifecycle.state} and cannot be granted`);
+      }
       if (entry.approval.kind === "unit-install-review") {
         throw new Error("Unit install reviews must be resolved through resolveInstallReview");
       }
@@ -1885,6 +2021,9 @@ export function createApprovalQueue(deps: {
         };
       }
       const approval = entry.approval;
+      if (approval.lifecycle?.state !== undefined && approval.lifecycle.state !== "ready") {
+        throw new Error(`Install review is ${approval.lifecycle.state} and cannot be resolved`);
+      }
       const parts = new Map(approval.parts.map((part) => [part.identityKey, part]));
       if (resolution.decision === "cancel") {
         // Cancel leaves the workspace untouched, and the selection can never be

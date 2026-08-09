@@ -127,13 +127,29 @@ body,
 .app-shell-panel-card[data-shell-panel-sidebar="true"] {
   --card-background-color: var(--app-chrome-bg);
   background-color: var(--app-chrome-bg);
+  /* A Card's size prop buys a generous inset that suits a content card and
+     wastes a navigator: sixteen pixels on each side is an eighth of a 260px
+     sidebar spent on nothing, before the tree has indented anything. The rows,
+     filter field and footer each carry their own small gutter, so the outer
+     inset goes to zero and the tree runs to the edges of its column. */
+  --card-padding: 0;
 }
 
 /* Panel tree scroller. The slim thumb is global (tokens.css); what's specific
    here is the reserved gutter: the virtualizer measures this element, so a
    scrollbar that appears and disappears as rows expand would reflow the tree. */
 .panel-tree-scroll {
-  scrollbar-gutter: stable;
+  /* `stable` alone reserves the lane on the inline-end side only, so the tree
+     sat 10px off the right edge and 0 off the left while the filter and footer
+     — which are outside this scroller — used their own margin and matched
+     neither. `both-edges` makes the reserved lane symmetric, and a narrower
+     scrollbar scoped to this scroller brings it down to the same gutter the
+     rest of the sidebar uses, so one value lines up every region. Reserving
+     (rather than overlaying) is still required: the virtualizer measures this
+     element, so a scrollbar appearing as rows expand would reflow the tree. */
+  scrollbar-gutter: stable both-edges;
+  --scrollbar-size: 8px;
+  --scrollbar-inset: 2px;
 }
 
 /* Radix Card paints its surface border on `::after`, so the element's

@@ -1003,6 +1003,7 @@ function ReviewRow({
   const headline = installRowHeadline(row);
   const detail =
     row.kind === "behavior" ? INSTALL_BEHAVIOR_COPY[row.fact].detail : row.row.resource;
+  const binding = row.kind === "permission" ? row.binding : undefined;
   const timing = INSTALL_ROW_TIMING_COPY[row.timing];
   const domainLabel = row.kind === "permission" ? AUTHORITY_DOMAINS[row.row.domain].label : null;
 
@@ -1041,6 +1042,18 @@ function ReviewRow({
         <Text size="1" color="gray">
           {detail}
         </Text>
+        {/* The unit's manifest names a protocol, not a provider, so the
+            manifest alone cannot say who it talks to. Name the contract and
+            the provider currently filling it, in that order: the contract is
+            the durable fact, the provider is the current answer. */}
+        {binding ? (
+          <Text size="1" color="gray">
+            {binding.serviceName
+              ? `Uses ${binding.protocol} — currently provided by ${binding.serviceName}`
+              : `Uses ${binding.protocol} — no provider in this workspace`}
+            {binding.availability === "optional" ? " (optional)" : ""}
+          </Text>
+        ) : null}
         {/* Cleared at install has no second line: it simply works once added. */}
         {timing ? (
           <Text size="1" color="gray">

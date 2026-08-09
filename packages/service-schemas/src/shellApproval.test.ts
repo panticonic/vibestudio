@@ -108,6 +108,13 @@ describe("shellApproval service contract", () => {
                 selectable: false,
                 selectedByDefault: false,
                 row,
+                binding: {
+                  protocol: "example.notes.v1",
+                  availability: "required",
+                  serviceName: "notes",
+                  providerUnit: "@workspace-workers/notes",
+                  catalogDigest: "catalog:v1",
+                },
               },
             ],
             everydayRows: [],
@@ -120,5 +127,13 @@ describe("shellApproval service contract", () => {
       },
     ]);
     expect(parsed).toHaveLength(1);
+    const review = parsed[0];
+    // `listPending` returns the union of every approval kind; only the install
+    // review carries parts, so narrow before reading them.
+    expect(review?.kind).toBe("unit-install-review");
+    if (review?.kind !== "unit-install-review") throw new Error("expected an install review");
+    expect(review.parts[0]?.notableRows[0]).toMatchObject({
+      binding: { protocol: "example.notes.v1", serviceName: "notes" },
+    });
   });
 });

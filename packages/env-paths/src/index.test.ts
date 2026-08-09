@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getCentralDataPath, getProfileDataPath } from "./index.js";
+import { getCentralDataPath, getProfileDataPath, getSharedDerivedDataPath } from "./index.js";
 
 describe("profile and instance paths", () => {
   const previousInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
@@ -19,5 +19,6 @@ describe("profile and instance paths", () => {
     process.env["VIBESTUDIO_INSTANCE_ROOT"] = "./relative-instance";
     expect(getCentralDataPath()).toBe(path.resolve("relative-instance"));
     expect(getProfileDataPath()).not.toBe(getCentralDataPath());
+    expect(getSharedDerivedDataPath()).toBe(path.join(getProfileDataPath(), "derived-cache"));
   });
 });

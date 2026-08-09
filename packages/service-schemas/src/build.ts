@@ -12,6 +12,7 @@ import type {
   UnitAuthorityManifest,
   UnitAuthorityRequest,
   UserlandCapabilityDefinition,
+  WorkspaceServiceProtocolRequest,
 } from "@vibestudio/shared/authorityManifest";
 import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
 import type { Sha256 } from "@vibestudio/shared/execution/identity";
@@ -67,6 +68,17 @@ export const UserlandCapabilityDefinitionSchema = z
 export const UnitAuthorityManifestSchema = z
   .object({
     requests: z.array(UnitAuthorityRequestSchema).readonly(),
+    serviceRequests: z
+      .array(
+        z
+          .object({
+            protocol: z.string().min(1),
+            availability: z.enum(["required", "optional"]),
+          })
+          .strict() satisfies z.ZodType<WorkspaceServiceProtocolRequest>
+      )
+      .readonly()
+      .default([]),
     provides: z.array(UserlandCapabilityDefinitionSchema).readonly(),
   })
   .strict() satisfies z.ZodType<UnitAuthorityManifest>;
@@ -657,10 +669,7 @@ export const buildMethods = defineServiceMethods({
       "Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. Pass includeExecutableModules:false for compact profiling and provenance reads that do not need the sealed source inventory.",
     args: z.tuple([
       z.string(),
-      z
-        .object({ includeExecutableModules: z.boolean().optional() })
-        .strict()
-        .optional(),
+      z.object({ includeExecutableModules: z.boolean().optional() }).strict().optional(),
     ]),
     returns: buildMetadataSchema
       .extend({ diagnostics: z.array(buildDiagnosticSchema).optional() })

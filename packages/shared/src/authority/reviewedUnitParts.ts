@@ -89,6 +89,10 @@ export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPar
     requests: unit.authority?.requests ?? [],
     ...(input.previousRequests === undefined ? {} : { previousRequests: input.previousRequests }),
     behaviors: behaviorsOf(unit, surfaces),
+    // The manifest declares protocols, not providers. Carrying the resolved
+    // binding lets a service row name the contract it came from alongside the
+    // provider currently filling it.
+    ...(unit.authority?.serviceBindings ? { serviceBindings: unit.authority.serviceBindings } : {}),
     ...(input.userlandDefinitions ? { userlandDefinitions: input.userlandDefinitions } : {}),
     ...(input.presentationFor ? { presentationFor: input.presentationFor } : {}),
     ...(input.previouslyCleared ? { previouslyCleared: input.previouslyCleared } : {}),

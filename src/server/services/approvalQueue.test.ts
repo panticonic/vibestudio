@@ -41,6 +41,69 @@ function unitInstallReviewRequest(
 }
 
 describe("approvalQueue", () => {
+  it("atomically advances one publication approval from preparing to ready", async () => {
+    const { queue } = createQueue();
+    const dedupKey = "workspace-publication:event-1";
+    const approvalId = queue.beginPreparation!({
+      kind: "capability",
+      capability: "workspace-main-advance",
+      dedupKey,
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      title: "Preparing workspace update…",
+    });
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({ approvalId, lifecycle: { state: "preparing" } }),
+    ]);
+    await expect(queue.resolve(approvalId, "once")).rejects.toThrow(/still preparing/);
+
+    const decision = queue.request(unitInstallReviewRequest({ dedupKey }));
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({
+        approvalId,
+        kind: "unit-install-review",
+        lifecycle: { state: "ready" },
+      }),
+    ]);
+    await queue.resolveInstallReview(approvalId, { decision: "cancel" });
+    await expect(decision).resolves.toBe("dismiss");
+  });
+
+  it("updates a preparing publication with structured build diagnostics", () => {
+    const { queue } = createQueue();
+    const dedupKey = "workspace-publication:event-failed";
+    const approvalId = queue.beginPreparation!({
+      kind: "capability",
+      capability: "workspace-main-advance",
+      dedupKey,
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      title: "Preparing workspace update…",
+    });
+
+    queue.failPreparation!(dedupKey, {
+      errorData: {
+        diagnostics: [
+          { file: "workers/store/index.ts", line: 12, message: "Undeclared service protocol" },
+        ],
+      },
+    });
+
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({
+        approvalId,
+        lifecycle: {
+          state: "failed",
+          diagnostics: ["workers/store/index.ts:12: Undeclared service protocol"],
+        },
+      }),
+    ]);
+  });
+
   it("fails closed when a credential producer omits its decision contract", () => {
     const { queue } = createQueue();
     expect(() =>
@@ -1202,6 +1265,8 @@ describe("install review provenance and result", () => {
           evidence: "exact" as const,
         },
       ],
+      serviceRequests: [],
+      previousServiceRequests: [],
       provides: [],
       // The review derives its own rows from `requests`; these carry the
       // producer's precomputed view, which this fixture does not exercise.

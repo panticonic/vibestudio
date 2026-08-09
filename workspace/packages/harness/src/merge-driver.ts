@@ -226,10 +226,13 @@ export function renderMergeReview(review: MergeReview, sourceEventId?: string): 
     `Coordinates: ${review.counts.adopt} adopt, ${review.counts.convergent} convergent, ${review.counts.composed} composed, ${review.counts.conflict} conflict, ${review.counts.resolved} resolved.`,
   ];
   if (review.sourceHeadline) lines.push(`Source: ${review.sourceHeadline}`);
+  const renderedIntents = new Set<string>();
   for (const intent of review.intents) {
-    lines.push(
-      `Intent: ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`
-    );
+    if (intent.intent.tier === "trigger" && intent.intent.text === review.sourceHeadline) continue;
+    const key = `${intent.intent.tier}\u0000${intent.intent.text}`;
+    if (renderedIntents.has(key)) continue;
+    renderedIntents.add(key);
+    lines.push(`Intent: ${intent.intent.tier} · ${intent.intent.text}`);
   }
   if (review.intentsTruncated)
     lines.push(
@@ -248,6 +251,11 @@ export function renderMergeReview(review: MergeReview, sourceEventId?: string): 
   if (review.nextConflictCursor) {
     lines.push(
       `More conflicts: vcs compare --source ${sourceEventId ?? "<source>"} --status conflict --after ${review.nextConflictCursor}`
+    );
+  }
+  if (review.resolution.complete && review.resolution.concluded) {
+    lines.push(
+      "Integration: semantically complete. The parent workspace may still be dirty because integrated changes remain local until the parent commits them."
     );
   }
   return lines.join("\n");

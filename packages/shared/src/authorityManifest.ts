@@ -10,8 +10,19 @@ export interface UnitAuthorityManifest {
    * A trailing `*` is the only supported capability wildcard.
    */
   requests: readonly UnitAuthorityRequest[];
+  /**
+   * Stable service protocols this unit may resolve. These declarations build
+   * the review dependency index; they are not grants. Admission and runtime
+   * enforcement remain bound to the concrete workspace-service provider.
+   */
+  serviceRequests?: readonly WorkspaceServiceProtocolRequest[];
   /** Receiver-owned capabilities provided by this exact executable build. */
   provides: readonly UserlandCapabilityDefinition[];
+}
+
+export interface WorkspaceServiceProtocolRequest {
+  protocol: string;
+  availability: "required" | "optional";
 }
 
 export type UserlandGrantScope = "once" | "task" | "agent" | "mission" | "version" | "session";
@@ -47,6 +58,8 @@ export interface UnitAuthorityRequest extends CapabilityScope {
 }
 
 export const NO_AUTHORITY_REQUESTS: readonly UnitAuthorityRequest[] = Object.freeze([]);
+export const NO_SERVICE_PROTOCOL_REQUESTS: readonly WorkspaceServiceProtocolRequest[] =
+  Object.freeze([]);
 export const NO_USERLAND_CAPABILITIES: readonly UserlandCapabilityDefinition[] = Object.freeze([]);
 
 /**
@@ -150,7 +163,9 @@ export function parseUnitAuthorityManifest(
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  const unknownKeys = keys.filter((key) => key !== "requests" && key !== "provides");
+  const unknownKeys = keys.filter(
+    (key) => key !== "requests" && key !== "serviceRequests" && key !== "provides"
+  );
   if (unknownKeys.length > 0) {
     throw new Error(`${label} has unknown field(s): ${unknownKeys.join(", ")}`);
   }
@@ -162,8 +177,53 @@ export function parseUnitAuthorityManifest(
   }
   return Object.freeze({
     requests: parseAuthorityRequests(value, label),
+    serviceRequests: parseWorkspaceServiceProtocolRequests(record["serviceRequests"], label),
     provides: parseUserlandCapabilities(record["provides"], label),
   });
+}
+
+export function parseWorkspaceServiceProtocolRequests(
+  value: unknown,
+  label = "vibestudio.authority"
+): readonly WorkspaceServiceProtocolRequest[] {
+  // An omitted collection has the same stable meaning as an empty collection.
+  // There is no permissive fallback: code that resolves a service is rejected
+  // by the per-unit proof unless its exact protocol appears here.
+  if (value === undefined) return NO_SERVICE_PROTOCOL_REQUESTS;
+  if (!Array.isArray(value)) throw new Error(`${label}.serviceRequests must be an array`);
+  const seen = new Set<string>();
+  const requests = value.map((entry, index) => {
+    const entryLabel = `${label}.serviceRequests[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${entryLabel} must be an object`);
+    }
+    const candidate = entry as Record<string, unknown>;
+    const unknown = Object.keys(candidate).filter(
+      (key) => key !== "protocol" && key !== "availability"
+    );
+    if (unknown.length > 0) {
+      throw new Error(`${entryLabel} has unknown field(s): ${unknown.join(", ")}`);
+    }
+    if (typeof candidate["protocol"] !== "string") {
+      throw new Error(`${entryLabel}.protocol must be a string`);
+    }
+    const protocol = candidate["protocol"].trim();
+    if (!/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/u.test(protocol)) {
+      throw new Error(`${entryLabel}.protocol is not a canonical protocol identifier`);
+    }
+    if (candidate["availability"] !== "required" && candidate["availability"] !== "optional") {
+      throw new Error(`${entryLabel}.availability must be "required" or "optional"`);
+    }
+    if (seen.has(protocol)) {
+      throw new Error(`${label}.serviceRequests contains duplicate protocol ${protocol}`);
+    }
+    seen.add(protocol);
+    return {
+      protocol,
+      availability: candidate["availability"],
+    } satisfies WorkspaceServiceProtocolRequest;
+  });
+  return Object.freeze(requests.sort((a, b) => a.protocol.localeCompare(b.protocol)));
 }
 
 export function parseUserlandCapabilities(

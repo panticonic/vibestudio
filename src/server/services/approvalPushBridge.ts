@@ -134,6 +134,7 @@ function payloadFor(
 }
 
 function shouldPushApproval(approval: PendingApproval): boolean {
+  if (approval.lifecycle?.state === "preparing") return false;
   // The launch gate is answered on the device that is starting, in a host-owned
   // window. Pushing it to a phone would offer a decision that device cannot
   // carry out.

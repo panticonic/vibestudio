@@ -17,6 +17,10 @@ export const EFFECT_IMPLEMENTATION_PACKAGES = new Set([
   "@workspace/react",
   "@workspace/svelte",
   "@workspace/about-shared",
+  "@workspace/agentic-core",
+  "@workspace/agentic-chat",
+  "@workspace/pubsub",
+  "@workspace/testkit",
 ]);
 
 export function isEffectImplementationPackage(packageName: string): boolean {

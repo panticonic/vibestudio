@@ -1173,7 +1173,11 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
       // Send-after-turn while a turn is open: append the recv (the fold stashes
       // it in deferredPostTurnQueue) but do NOT fire a model call — degrading to
       // steer would otherwise reach nextModelCall and fire a redundant call.
-      if (command.metadata?.deliverAfterTurn && state.openTurn) {
+      if (
+        command.metadata?.deliverAfterTurn &&
+        state.openTurn &&
+        state.openTurn.waitingAtSeq === undefined
+      ) {
         return {
           append: [recvItem(command), promptArtifactsRequestedItem(command)],
           effects: [],

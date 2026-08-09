@@ -204,11 +204,23 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
           }),
         ])
       );
+      // Service dependencies are declared by stable protocol, so the diagnostic
+      // names the protocol the code resolved and the manifest key that must
+      // declare it — not the concrete provider capability, which stays derived
+      // and separately granted.
       expect(diags).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             source: "authority",
-            message: expect.stringContaining("workspace-service:local-notifications"),
+            message: expect.stringContaining("example.notifications.v1"),
+          }),
+        ])
+      );
+      expect(diags).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: "authority",
+            message: expect.stringContaining("vibestudio.authority.serviceRequests"),
           }),
         ])
       );

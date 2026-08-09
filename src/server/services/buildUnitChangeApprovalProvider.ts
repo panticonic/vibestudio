@@ -116,12 +116,13 @@ export function createBuildUnitChangeApprovalProvider(deps: {
           ),
           previous.unitName
         )
-      : { requests: [], provides: [] };
+      : { requests: [], serviceRequests: [], provides: [] };
     const authority = authorityReviewFromPackageJson(
       packageJsonSource,
       candidate.unitName,
       {
         requests: previousAuthority.requests,
+        serviceRequests: previousAuthority.serviceRequests,
         provides: previousAuthority.provides,
       },
       deps.describeCapability,
@@ -132,8 +133,10 @@ export function createBuildUnitChangeApprovalProvider(deps: {
       effectiveVersion: candidate.effectiveVersion,
       authority: {
         requests: authority.requests,
+        serviceRequests: authority.serviceRequests,
         provides: authority.provides,
       },
+      serviceBindingDigest: sha256Canonical(candidate.serviceBindings ?? []),
     };
     // A prepared publication may have completed admission before its ref write
     // failed. Exact identity is the durable deduplication key in every case;
@@ -149,8 +152,10 @@ export function createBuildUnitChangeApprovalProvider(deps: {
       externalDeps: candidate.externalDeps,
       authority: {
         requests: authority.requests,
+        serviceRequests: authority.serviceRequests,
         provides: authority.provides,
       },
+      serviceBindings: candidate.serviceBindings ?? [],
     })}`;
     pendingIdentities.set(identityKey, {
       identity: approvalIdentity,
@@ -172,11 +177,15 @@ export function createBuildUnitChangeApprovalProvider(deps: {
         previous !== null &&
         sha256Canonical({
           requests: previousAuthority.requests,
+          serviceRequests: previousAuthority.serviceRequests,
           provides: previousAuthority.provides,
+          serviceBindings: previous?.serviceBindings ?? [],
         }) ===
           sha256Canonical({
             requests: authority.requests,
+            serviceRequests: authority.serviceRequests,
             provides: authority.provides,
+            serviceBindings: candidate.serviceBindings ?? [],
           }),
       unit: {
         unitKind: candidate.kind,
@@ -191,7 +200,7 @@ export function createBuildUnitChangeApprovalProvider(deps: {
         source: { kind: "workspace-repo", repo: candidate.unitPath, ref: "main" },
         ev: candidate.effectiveVersion,
         capabilities: [],
-        authority,
+        authority: { ...authority, serviceBindings: candidate.serviceBindings ?? [] },
         dependencyEvs: candidate.dependencyEvs,
         externalDeps: candidate.externalDeps,
         integrity: null,
@@ -373,6 +382,7 @@ function identityFingerprint(identity: BuildUnitIdentityResolution): string {
     effectiveVersion: identity.effectiveVersion,
     dependencyEvs: identity.dependencyEvs,
     externalDeps: identity.externalDeps,
+    serviceBindings: identity.serviceBindings ?? [],
   });
 }
 

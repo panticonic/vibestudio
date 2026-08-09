@@ -1,6 +1,7 @@
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type { ExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
 import type { WorkspaceServiceCallFact } from "./userlandAuthorityAnalyzer.js";
+import type { WorkspaceServiceProtocolRequest } from "@vibestudio/shared/authorityManifest";
 
 export interface AuthorityAnalysisEpoch {
   analyzerVersion: string;
@@ -66,6 +67,34 @@ export async function authorityDependencyIndexFromFacts(input: {
   environment: ExactWorkspaceAuthorityEnvironment;
   blockingConsumers?: ReadonlySet<string>;
 }): Promise<AuthorityDependencyIndex> {
+  const consumers = input.consumers.map((consumer) => {
+    const serviceQueries = new Set<string>();
+    for (const fact of consumer.facts) {
+      if (fact.serviceQueries.kind !== "literals") continue;
+      for (const query of fact.serviceQueries.values) serviceQueries.add(query);
+    }
+    return {
+      unitName: consumer.unitName,
+      effectiveVersion: consumer.effectiveVersion,
+      moduleClosureDigest: consumer.moduleClosureDigest,
+      serviceQueries,
+    };
+  });
+  return authorityDependencyIndexFromConsumerQueries({ ...input, consumers });
+}
+
+async function authorityDependencyIndexFromConsumerQueries(input: {
+  stateHash: string;
+  epoch: AuthorityAnalysisEpoch;
+  consumers: readonly {
+    unitName: string;
+    effectiveVersion: string;
+    moduleClosureDigest: string;
+    serviceQueries: ReadonlySet<string>;
+  }[];
+  environment: ExactWorkspaceAuthorityEnvironment;
+  blockingConsumers?: ReadonlySet<string>;
+}): Promise<AuthorityDependencyIndex> {
   const consumerInputs = new Map<
     string,
     { effectiveVersion: string; moduleClosureDigest: string; serviceQueries: ReadonlySet<string> }
@@ -74,20 +103,15 @@ export async function authorityDependencyIndexFromFacts(input: {
   const consumersByProviderUnit = new Map<string, Set<string>>();
   const providersByQuery = new Map<string, { providerUnit: string; catalogDigest: string }>();
   for (const consumer of input.consumers) {
-    const queries = new Set<string>();
-    for (const fact of consumer.facts) {
-      if (fact.serviceQueries.kind !== "literals") continue;
-      for (const query of fact.serviceQueries.values) {
-        queries.add(query);
-        const byQuery = consumersByQuery.get(query) ?? new Set<string>();
-        byQuery.add(consumer.unitName);
-        consumersByQuery.set(query, byQuery);
-      }
+    for (const query of consumer.serviceQueries) {
+      const byQuery = consumersByQuery.get(query) ?? new Set<string>();
+      byQuery.add(consumer.unitName);
+      consumersByQuery.set(query, byQuery);
     }
     consumerInputs.set(consumer.unitName, {
       effectiveVersion: consumer.effectiveVersion,
       moduleClosureDigest: consumer.moduleClosureDigest,
-      serviceQueries: queries,
+      serviceQueries: new Set(consumer.serviceQueries),
     });
   }
   for (const binding of input.environment.services) {
@@ -130,6 +154,56 @@ export async function authorityDependencyIndexFromFacts(input: {
     ...withoutDigest,
     digest: authorityDependencyIndexDigest(withoutDigest),
   };
+}
+
+/**
+ * Construct the whole-workspace selection index from reviewed manifests.
+ * Unlike the per-unit proof, this operation never needs a TypeScript Program.
+ */
+export async function authorityDependencyIndexFromDeclarations(input: {
+  stateHash: string;
+  epoch: AuthorityAnalysisEpoch;
+  consumers: readonly {
+    unitName: string;
+    effectiveVersion: string;
+    serviceRequests: readonly WorkspaceServiceProtocolRequest[];
+  }[];
+  environment: ExactWorkspaceAuthorityEnvironment;
+}): Promise<AuthorityDependencyIndex> {
+  const consumers = input.consumers.map((consumer) => ({
+    unitName: consumer.unitName,
+    effectiveVersion: consumer.effectiveVersion,
+    moduleClosureDigest: sha256Canonical({
+      version: 1,
+      epoch: input.epoch,
+      unitName: consumer.unitName,
+      effectiveVersion: consumer.effectiveVersion,
+      serviceRequests: [...consumer.serviceRequests].sort((a, b) =>
+        a.protocol.localeCompare(b.protocol)
+      ),
+    }),
+    serviceQueries: new Set(consumer.serviceRequests.map((request) => request.protocol)),
+  }));
+  const availableQueries = new Set(
+    input.environment.services.flatMap((binding) => [binding.name, ...binding.protocols])
+  );
+  const blockingConsumers = new Set<string>();
+  for (const consumer of input.consumers) {
+    if (
+      consumer.serviceRequests.some(
+        (request) => request.availability === "required" && !availableQueries.has(request.protocol)
+      )
+    ) {
+      blockingConsumers.add(consumer.unitName);
+    }
+  }
+  return authorityDependencyIndexFromConsumerQueries({
+    stateHash: input.stateHash,
+    epoch: input.epoch,
+    consumers,
+    environment: input.environment,
+    blockingConsumers,
+  });
 }
 
 export function authorityConsumersForProviderChanges(

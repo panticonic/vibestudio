@@ -26,6 +26,12 @@
     },
     "authority": {
       "provides": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.channel.v1",
+          "availability": "required"
+        }
+      ],
       "requests": [
         {
           "capability": "context.boundary",

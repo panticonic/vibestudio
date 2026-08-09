@@ -4,6 +4,7 @@ import { applyEvent } from "./fold.js";
 import { buildModelContext } from "./context.js";
 import {
   initialAgentState,
+  normalizeForkControlState,
   type AgentLoopConfig,
   type AgentState,
   type ModelRequestDescriptor,
@@ -74,6 +75,41 @@ function request(contextThroughSeq: number): ModelRequestDescriptor {
 }
 
 describe("fold: an agent only owns turns it authored", () => {
+  it("keeps inherited context but never executes a pre-cut parent prompt", () => {
+    const parentId = "agent:parent";
+    const childId = "agent:child";
+    let state = initialAgentState({
+      channelId: "task",
+      config,
+      selfId: childId,
+      forkSeq: 3,
+    });
+    state = applyEvent(
+      state,
+      envelope(
+        parentId,
+        "message.completed",
+        {
+          role: "user",
+          blocks: [{ type: "text", content: "Parent request" }],
+          outcome: "completed",
+          turnTriggerEnvelopeId: "parent-message",
+          senderRef: { kind: "user", id: "user:1", participantId: "user:1" },
+        },
+        { messageId: "parent-message" },
+        1
+      )
+    );
+    state = applyEvent(state, turnOpened(parentId, "parent-turn", 2));
+
+    expect(state.pendingPrompt?.seq).toBe(1);
+    const normalized = normalizeForkControlState(state);
+
+    expect(normalized.pendingPrompt).toBeNull();
+    expect(normalized.entries).toEqual(state.entries);
+    expect(buildModelContext(normalized)).toEqual(buildModelContext(state));
+  });
+
   it("carries a stable UI interaction from ingress metadata into model context", () => {
     const selfId = "agent:self";
     const interaction = {

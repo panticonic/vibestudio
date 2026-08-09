@@ -137,9 +137,30 @@ function programSourceFiles(program: Program): ts.SourceFile[] {
   });
 }
 
+interface MaterializedSourceFile {
+  readonly file: string;
+  readonly sourceFile: ts.SourceFile;
+  readonly isWorkspace: boolean;
+  readonly isExternal: boolean;
+}
+
+function materializeSourceFiles(
+  sourceFiles: readonly ts.SourceFile[],
+  sourceRoot: string
+): readonly MaterializedSourceFile[] {
+  return sourceFiles.map((sourceFile) => {
+    // `SourceFile` is a synchronous remote-AST proxy. Reading fileName here
+    // once is materially different from reading it for every consumer during
+    // dependency composition.
+    const file = path.resolve(sourceFile.fileName);
+    const isWorkspace = isWithin(sourceRoot, file);
+    return { file, sourceFile, isWorkspace, isExternal: !isWorkspace };
+  });
+}
+
 function resolvedImportGraphs(
   project: Project,
-  sourceFiles: readonly ts.SourceFile[],
+  sourceFiles: readonly MaterializedSourceFile[],
   workspaceFiles: ReadonlySet<string>
 ): {
   workspace: Map<string, ReadonlySet<string>>;
@@ -148,8 +169,8 @@ function resolvedImportGraphs(
   const checker = project.checker;
   const workspace = new Map<string, ReadonlySet<string>>();
   const all = new Map<string, ReadonlySet<string>>();
-  for (const sourceFile of sourceFiles) {
-    const source = path.resolve(sourceFile.fileName);
+  for (const materialized of sourceFiles) {
+    const { file: source, sourceFile } = materialized;
     const imports = new Set<string>();
     const workspaceImports = new Set<string>();
     // TypeScript already records every static import, re-export, import-equals,
@@ -190,17 +211,17 @@ async function nearestPackageManifest(file: string): Promise<string | null> {
 }
 
 async function compilerDependencies(
-  sourceFiles: readonly ts.SourceFile[],
+  sourceFilesByPath: ReadonlyMap<string, ts.SourceFile>,
   reachable: ReadonlySet<string>,
   sourceRoot: string,
   configFiles: readonly string[],
   cache: Map<string, readonly AuthorityCompilerDependency[]>
 ): Promise<AuthorityCompilerDependency[]> {
   const contents = new Map<string, string>();
-  for (const sourceFile of sourceFiles) {
-    const file = path.resolve(sourceFile.fileName);
-    if (!reachable.has(file) || isWithin(sourceRoot, file) || file.startsWith("/@typescript/lib/"))
-      continue;
+  for (const file of reachable) {
+    if (isWithin(sourceRoot, file) || file.startsWith("/@typescript/lib/")) continue;
+    const sourceFile = sourceFilesByPath.get(file);
+    if (!sourceFile) continue;
     let dependencies = cache.get(file);
     if (!dependencies) {
       const discovered: AuthorityCompilerDependency[] = [
@@ -410,19 +431,23 @@ export async function createAuthorityCompilerSnapshot(
       maxProgramMs = Math.max(maxProgramMs, groupProgramMs);
       const importGraphStartedAt = Date.now();
       const groupSourceFiles = programSourceFiles(program);
+      const materializedSourceFiles = materializeSourceFiles(groupSourceFiles, sourceRoot);
       const groupWorkspaceFiles = new Set(
-        groupSourceFiles
-          .map((sourceFile) => path.resolve(sourceFile.fileName))
-          .filter((file) => isWithin(sourceRoot, file))
+        materializedSourceFiles.filter((entry) => entry.isWorkspace).map((entry) => entry.file)
       );
-      const importGraphs = resolvedImportGraphs(project, groupSourceFiles, groupWorkspaceFiles);
+      const sourceFilesByPath = new Map(
+        materializedSourceFiles.map((entry) => [entry.file, entry.sourceFile] as const)
+      );
+      const importGraphs = resolvedImportGraphs(
+        project,
+        materializedSourceFiles,
+        groupWorkspaceFiles
+      );
       importGraphMs += Date.now() - importGraphStartedAt;
       const groupImports = importGraphs.workspace;
       const allImports = importGraphs.all;
       const externalFiles = new Set(
-        groupSourceFiles
-          .map((sourceFile) => path.resolve(sourceFile.fileName))
-          .filter((file) => !isWithin(sourceRoot, file))
+        materializedSourceFiles.filter((entry) => entry.isExternal).map((entry) => entry.file)
       );
       const importedTargets = new Set([...allImports.values()].flatMap((imports) => [...imports]));
       const ambientExternalFiles = new Set(
@@ -450,7 +475,7 @@ export async function createAuthorityCompilerSnapshot(
         dependenciesByConsumer.set(
           consumer.name,
           await compilerDependencies(
-            groupSourceFiles,
+            sourceFilesByPath,
             compilerReachable,
             sourceRoot,
             [...group.configFiles],

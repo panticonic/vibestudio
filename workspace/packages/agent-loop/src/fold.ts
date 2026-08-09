@@ -221,7 +221,11 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       // queue ONLY. Skipping `entries` is exactly what keeps it out of the
       // current turn's context (context is built from entries up to
       // contextThroughSeq).
-      if (metadata?.deliverAfterTurn && state.openTurn) {
+      if (
+        metadata?.deliverAfterTurn &&
+        state.openTurn &&
+        state.openTurn.waitingAtSeq === undefined
+      ) {
         const deferred: DeferredPrompt = {
           sourceMessageId: sourceMessageId ?? String(envelope.envelopeId),
           envelopeId: String(envelope.envelopeId),

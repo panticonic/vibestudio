@@ -3,6 +3,7 @@ import * as os from "os";
 
 let _userDataPath: string | null = null;
 const INSTANCE_ROOT_ENV = "VIBESTUDIO_INSTANCE_ROOT";
+const SHARED_DERIVED_CACHE_ENV = "VIBESTUDIO_SHARED_DERIVED_CACHE_DIR";
 
 /** Explicitly set the user-data directory (for headless/test use). */
 export function setUserDataPath(p: string): void {
@@ -44,11 +45,28 @@ export function getCentralDataPath(): string {
 /**
  * Get the user profile root shared by independent Vibestudio instances.
  *
- * Only user-owned configuration and provider credentials belong here.
- * Runtime state must use getCentralDataPath() instead.
+ * User-owned configuration and provider credentials belong here. Runtime state
+ * must use getCentralDataPath(); cross-instance derived data must use the
+ * narrower getSharedDerivedDataPath() API below.
  */
 export function getProfileDataPath(): string {
   return platformDefault();
+}
+
+/**
+ * Deletable, content-addressed derived data that is safe to reuse between
+ * independent instances in one profile. Callers must validate every hit from
+ * exact source identities; leases, databases, credentials, and mutable runtime
+ * state never belong here.
+ */
+export function getSharedDerivedDataPath(): string {
+  // Deliberately profile-level, so independent instances reuse the same
+  // validated derived data. That makes it the one root an instance root cannot
+  // isolate, so supervisors and tests need an explicit override to keep runs
+  // hermetic — and it must be an environment variable, because worker threads
+  // inherit the environment but not a module-level setter.
+  const override = process.env[SHARED_DERIVED_CACHE_ENV]?.trim();
+  return override ? path.resolve(override) : path.join(getProfileDataPath(), "derived-cache");
 }
 
 /** Get the directory containing all managed workspaces. */

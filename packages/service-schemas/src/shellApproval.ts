@@ -168,6 +168,13 @@ const pendingApprovalBaseShape = {
   repoPath: z.string(),
   effectiveVersion: z.string(),
   requestedAt: z.number(),
+  lifecycle: z
+    .object({
+      state: z.enum(["preparing", "ready", "failed", "cancelled"]),
+      diagnostics: z.array(z.string()).readonly().optional(),
+    })
+    .strict()
+    .optional(),
   attention: z.enum(["interrupt", "queue"]).optional(),
   callerTitle: z.string().optional(),
   requester: approvalRequesterSchema.optional(),
@@ -193,9 +200,24 @@ const installRowBaseShape = {
   change: z.enum(["added", "removed", "retiered"]).optional(),
 };
 
+const serviceBindingFactSchema = z
+  .object({
+    protocol: z.string().min(1),
+    availability: z.enum(["required", "optional"]),
+    serviceName: z.string().nullable(),
+    providerUnit: z.string().nullable(),
+    catalogDigest: z.string().nullable(),
+  })
+  .strict();
+
 const installReviewRowSchema = z.union([
   z
-    .object({ ...installRowBaseShape, kind: z.literal("permission"), row: authorityRowSchema })
+    .object({
+      ...installRowBaseShape,
+      kind: z.literal("permission"),
+      row: authorityRowSchema,
+      binding: serviceBindingFactSchema.optional(),
+    })
     .strict(),
   z
     .object({

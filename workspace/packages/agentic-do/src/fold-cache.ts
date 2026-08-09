@@ -9,6 +9,7 @@ import type { SqlStorage } from "@workspace/runtime/worker";
 import {
   applyEvent,
   initialAgentState,
+  normalizeForkControlState,
   overlayInputConfig,
   type AgentLoopConfig,
   type AgentState,
@@ -109,12 +110,12 @@ export class FoldCache {
       // Input settings overlay, but fold-owned config (roster) is preserved —
       // input.config carries an empty sentinel roster, so a naive overlay
       // would wipe the folded roster and silently break channel tools.
-      return {
+      return normalizeForkControlState({
         ...cached,
         forkSeq,
         selfId: input.selfId,
         config: overlayInputConfig(cached.config, input.config),
-      };
+      });
     }
 
     let state: AgentState;
@@ -137,6 +138,7 @@ export class FoldCache {
     } else {
       state = await this.coldRefold(empty(), input.logId, input.head, forkSeq);
     }
+    state = normalizeForkControlState(state);
     this.write(state);
     return state;
   }

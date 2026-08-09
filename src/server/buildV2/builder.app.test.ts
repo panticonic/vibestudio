@@ -136,6 +136,7 @@ describe("buildUnit app builds", () => {
     expect(result.buildKey).toBe(result.metadata.buildKey);
     expect(result.metadata.authority).toEqual({
       provides: [],
+      serviceRequests: [],
       requests: [
         {
           capability: "app.getInfo",
