@@ -698,6 +698,7 @@ async function main() {
       }
       await manager.restoreDurableObjectEntity(record);
     },
+    getBootGeneration: () => workerdManagerForGateway?.getBootGeneration() ?? 0,
     onPermanentFailure: (incident) => {
       runtimeDiagnostics.record({
         workspaceId,
@@ -1348,6 +1349,7 @@ async function main() {
   const cleanupRuntimeEntityRecord = async (
     record: import("@vibestudio/shared/runtime/entitySpec").EntityRecord
   ) => {
+    durableObjectExecutionReadiness.forget(record.id);
     const { cleanupRuntimeEntity } = await import("./runtimeEntityCleanup.js");
     await cleanupRuntimeEntity(record, {
       panelRuntimeCoordinator: panelRuntimeCoordinatorForCleanup,

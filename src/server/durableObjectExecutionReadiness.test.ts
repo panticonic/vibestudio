@@ -55,15 +55,21 @@ describe("DurableObjectExecutionReadiness", () => {
       incidentCount: 1,
     });
     expect(readiness.inspect()).toEqual({
+      cachedExecutions: 0,
+      cacheHits: 0,
+      cacheMisses: 2,
+      coalescedRestores: 0,
       restoreAttempts: 2,
       restoreSuccesses: 0,
       restoreFailures: 2,
+      restoreDurationMs: expect.any(Number),
       permanentIncidents: 1,
       blockedIncarnations: 1,
     });
   });
 
   it("reports recovery and permits a later incident for the same incarnation", async () => {
+    let bootGeneration = 1;
     const onPermanentFailure = vi.fn();
     const onRecovered = vi.fn();
     const restoreExactExecution = vi
@@ -74,6 +80,7 @@ describe("DurableObjectExecutionReadiness", () => {
     const readiness = new DurableObjectExecutionReadiness({
       resolveActiveEntity: async () => RECORD,
       restoreExactExecution,
+      getBootGeneration: () => bootGeneration,
       onPermanentFailure,
       onRecovered,
     });
@@ -82,6 +89,7 @@ describe("DurableObjectExecutionReadiness", () => {
       code: "RUNTIME_IMAGE_UNAVAILABLE",
     });
     await readiness.ensureReady(REF);
+    bootGeneration += 1;
     await expect(readiness.ensureReady(REF)).rejects.toMatchObject({
       code: "RUNTIME_IMAGE_UNAVAILABLE",
     });
@@ -99,7 +107,7 @@ describe("DurableObjectExecutionReadiness", () => {
     });
   });
 
-  it("re-derives disposable readiness from the active row on every invocation", async () => {
+  it("re-validates the active row but restores once per sealed boot identity", async () => {
     const resolveActiveEntity = vi.fn(async () => RECORD);
     const restoreExactExecution = vi.fn(async () => undefined);
     const readiness = new DurableObjectExecutionReadiness({
@@ -112,7 +120,65 @@ describe("DurableObjectExecutionReadiness", () => {
 
     expect(resolveActiveEntity).toHaveBeenCalledTimes(2);
     expect(restoreExactExecution).toHaveBeenNthCalledWith(1, RECORD);
-    expect(restoreExactExecution).toHaveBeenNthCalledWith(2, RECORD);
+    expect(restoreExactExecution).toHaveBeenCalledTimes(1);
+    expect(readiness.inspect()).toMatchObject({ cacheHits: 1, cacheMisses: 1 });
+  });
+
+  it("restores again after the workerd boot generation changes", async () => {
+    let bootGeneration = 4;
+    const restoreExactExecution = vi.fn(async () => undefined);
+    const readiness = new DurableObjectExecutionReadiness({
+      resolveActiveEntity: async () => RECORD,
+      restoreExactExecution,
+      getBootGeneration: () => bootGeneration,
+    });
+
+    await readiness.ensureReady(REF);
+    bootGeneration = 5;
+    await readiness.ensureReady(REF);
+
+    expect(restoreExactExecution).toHaveBeenCalledTimes(2);
+    expect(readiness.inspect()).toMatchObject({ cacheHits: 0, cacheMisses: 2 });
+  });
+
+  it("forgets cached execution evidence when an entity retires", async () => {
+    const restoreExactExecution = vi.fn(async () => undefined);
+    const readiness = new DurableObjectExecutionReadiness({
+      resolveActiveEntity: async () => RECORD,
+      restoreExactExecution,
+    });
+
+    await readiness.ensureReady(REF);
+    expect(readiness.inspect().cachedExecutions).toBe(1);
+    readiness.forget(RECORD.id);
+    expect(readiness.inspect().cachedExecutions).toBe(0);
+    await readiness.ensureReady(REF);
+    expect(restoreExactExecution).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent restoration of one sealed boot identity", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const restoreExactExecution = vi.fn(() => gate);
+    const readiness = new DurableObjectExecutionReadiness({
+      resolveActiveEntity: async () => RECORD,
+      restoreExactExecution,
+    });
+
+    const first = readiness.ensureReady(REF);
+    const second = readiness.ensureReady(REF);
+    await vi.waitFor(() => expect(restoreExactExecution).toHaveBeenCalledOnce());
+    release();
+    await Promise.all([first, second]);
+
+    expect(readiness.inspect()).toMatchObject({
+      cacheMisses: 2,
+      coalescedRestores: 1,
+      restoreAttempts: 1,
+      restoreSuccesses: 1,
+    });
   });
 
   it("fails closed before restoration when the durable identity is retired", async () => {
@@ -158,6 +224,8 @@ describe("DurableObjectExecutionReadiness", () => {
     });
 
     await readiness.materialize(RECORD);
+    await readiness.materialize(RECORD);
+    expect(restoreExactExecution).toHaveBeenCalledTimes(2);
     expect(restoreExactExecution).toHaveBeenCalledWith(RECORD);
   });
 });
