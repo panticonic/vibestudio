@@ -80,6 +80,8 @@ const CLIENT_FACTORY_NAMES = new Set([
   "durableObjectService",
   "createDurableObjectServiceClient",
   "connectViaRpc",
+  "callDO",
+  "profileDO",
 ]);
 const RPC_METHOD_NAMES = new Set(["call", "stream", "streamReadable"]);
 
@@ -156,6 +158,32 @@ function isWorkspaceServiceImportDeclaration(declaration: ts.Node): boolean {
     ts.isStringLiteralLikeNode(specifier) &&
     (/(?:^|\/)workspaceServiceRpc$/u.test(specifier.text) ||
       /(?:^|\/)pubsub(?:\/|$)/u.test(specifier.text))
+  );
+}
+
+function importSpecifierOf(declaration: ts.Node): string | null {
+  if (!ts.isImportSpecifier(declaration) && !ts.isImportClause(declaration)) return null;
+  let importDeclaration: ts.Node | undefined = declaration.parent;
+  while (importDeclaration && !ts.isImportDeclaration(importDeclaration)) {
+    importDeclaration = importDeclaration.parent;
+  }
+  if (!ts.isImportDeclaration(importDeclaration)) return null;
+  return ts.isStringLiteralLikeNode(importDeclaration.moduleSpecifier)
+    ? importDeclaration.moduleSpecifier.text
+    : null;
+}
+
+function isTestkitServiceImportDeclaration(declaration: ts.Node): boolean {
+  const specifier = importSpecifierOf(declaration);
+  return specifier !== null && /(?:^|\/)testkit(?:\/|$)/u.test(specifier);
+}
+
+function isUnboundServiceClientImportDeclaration(declaration: ts.Node): boolean {
+  const specifier = importSpecifierOf(declaration);
+  return (
+    specifier !== null &&
+    (/(?:^|\/)workspaceServiceRpc$/u.test(specifier) ||
+      /(?:^|\/)runtime\/worker(?:\/|$)/u.test(specifier))
   );
 }
 
@@ -346,7 +374,6 @@ export function analyzeWorkspaceServiceCalls(
   const isFactoryCall = (call: ts.CallExpression): boolean => {
     const name = callCalleeName(call);
     if (!name || !CLIENT_FACTORY_NAMES.has(name)) return false;
-    if (name === "connectViaRpc") return true;
     if (
       name === "durableObjectService" &&
       ts.isPropertyAccessExpression(call.expression) &&
@@ -367,7 +394,8 @@ export function analyzeWorkspaceServiceCalls(
       declarationsOf(input.project, rawSymbol).some(
         (declaration) =>
           isRuntimeImportDeclaration(declaration) ||
-          isWorkspaceServiceImportDeclaration(declaration)
+          isWorkspaceServiceImportDeclaration(declaration) ||
+          isTestkitServiceImportDeclaration(declaration)
       )
     ) {
       return true;
@@ -378,7 +406,8 @@ export function analyzeWorkspaceServiceCalls(
       declarationsOf(input.project, symbol).some(
         (declaration) =>
           isRuntimeImportDeclaration(declaration) ||
-          isWorkspaceServiceImportDeclaration(declaration)
+          isWorkspaceServiceImportDeclaration(declaration) ||
+          isTestkitServiceImportDeclaration(declaration)
       ) ?? false
     );
   };
@@ -419,7 +448,7 @@ export function analyzeWorkspaceServiceCalls(
             queries:
               protocolProperty && ts.isPropertyAssignment(protocolProperty)
                 ? abstractString(checker, protocolProperty.initializer, resolveString, seen)
-                : { kind: "unknown" },
+                : { kind: "literals", values: new Set(["vibestudio.channel.v1"]) },
             objectKeys:
               channelProperty && ts.isPropertyAssignment(channelProperty)
                 ? abstractString(checker, channelProperty.initializer, resolveString, seen)
@@ -427,14 +456,31 @@ export function analyzeWorkspaceServiceCalls(
             client: true,
           };
         }
-        const first = current.arguments[0];
+        const factoryName = callCalleeName(current);
+        const declarations = declarationsOf(
+          input.project,
+          checker.getSymbolAtLocation(current.expression)
+        );
+        // The host-side workspaceServiceRpc helper accepts (rpc, query,
+        // objectKey); the public runtime wrapper binds rpc and accepts (query,
+        // objectKey). They intentionally share a name and semantic result, so
+        // select arguments from the declaration's module rather than arity or
+        // value heuristics (a dynamic query may itself look like an RPC value).
+        const queryIndex =
+          factoryName === "createDurableObjectServiceClient" &&
+          declarations.some(isUnboundServiceClientImportDeclaration)
+            ? 1
+            : 0;
+        const query = current.arguments[queryIndex];
+        const objectKey = current.arguments[queryIndex + 1];
+        const genericTestkitHelper = factoryName === "callDO" || factoryName === "profileDO";
         return {
-          queries: abstractString(checker, first ?? current, resolveString, seen),
+          queries: abstractString(checker, query ?? current, resolveString, seen),
           objectKeys:
-            current.arguments.length > 1
-              ? abstractString(checker, current.arguments[1]!, resolveString, seen)
+            !genericTestkitHelper && objectKey
+              ? abstractString(checker, objectKey, resolveString, seen)
               : { kind: "not-applicable" },
-          client: true,
+          client: !genericTestkitHelper,
         };
       }
       if (ts.isIdentifier(current.expression)) {

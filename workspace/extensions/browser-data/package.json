@@ -9,6 +9,12 @@
     "sourcemap": true,
     "authority": {
       "provides": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.browser-data.v1",
+          "availability": "required"
+        }
+      ],
       "requests": [
         {
           "capability": "browser-data.delete",

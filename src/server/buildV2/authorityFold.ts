@@ -239,6 +239,9 @@ export async function authorityDiagnosticsForProgram(input: {
   };
   const literalValues = (value: AbstractString): string[] | null =>
     value.kind === "literals" ? [...value.values].sort() : null;
+  const declaredServices = new Map(
+    (authority.serviceRequests ?? []).map((request) => [request.protocol, request] as const)
+  );
   const objectKeyValues = (
     service: ExactResolvedService,
     value: AbstractString | { kind: "not-applicable" }
@@ -308,9 +311,20 @@ export async function authorityDiagnosticsForProgram(input: {
     }
     const resolved: Array<{ query: string; service: ExactResolvedService }> = [];
     for (const query of queries) {
+      const declaration = declaredServices.get(query);
+      if (!declaration) {
+        addDiagnostic(
+          fact,
+          `Installed code resolves workspace service protocol '${query}' but vibestudio.authority.serviceRequests does not declare it.`,
+          `Declare ${JSON.stringify({ protocol: query, availability: "required" })} in vibestudio.authority.serviceRequests; this declaration is review vocabulary and does not replace the concrete provider capability grant.`
+        );
+        continue;
+      }
       const result = await input.environment!.resolveService(query);
       if (result.kind === "missing") {
-        addDiagnostic(fact, `No workspace service is registered for literal query '${query}'.`);
+        if (declaration.availability === "required") {
+          addDiagnostic(fact, `Required workspace service protocol '${query}' is unavailable.`);
+        }
       } else if (result.kind === "inaccessible") {
         addDiagnostic(
           fact,

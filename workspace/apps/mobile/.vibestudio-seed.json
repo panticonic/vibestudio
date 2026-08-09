@@ -3,8 +3,8 @@
   "unitKind": "app",
   "name": "@workspace-apps/mobile",
   "sourceRepo": "apps/mobile",
-  "sourceDigest": "9df8b9b20682748845bce5648e67f4a038378074fc4f734fffcfb74f437c36d0",
+  "sourceDigest": "61afe1ec6d26cbd0017605430a942dba52cb6b85c1f19fe65df43f76bc5aedcc",
   "signatureKeyId": "vibestudio-dev-seed-v1",
-  "signature": "vibestudio-dev-seed-sha256:81cfd9de6381412089f1c8909dd7feace05168ad6035cc25b6f7d8c7e82829ab",
+  "signature": "vibestudio-dev-seed-sha256:ffd7e92f6cf9d6985434365ee3af64f1ecb6407405fa0a46276360187959999c",
   "createdBy": "vibestudio"
 }

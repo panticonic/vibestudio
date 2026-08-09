@@ -19,6 +19,12 @@
     },
     "authority": {
       "provides": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.channel.v1",
+          "availability": "required"
+        }
+      ],
       "requests": [
         {
           "capability": "account.profile.read",

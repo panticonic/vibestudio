@@ -1246,6 +1246,8 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const blobsDir = path.join(tempStatePath(), "blobs");
     const next = await stageTree(blobsDir, [{ path: "vibestudio.yml", body: "changed\n" }]);
     const approve = vi.fn();
+    const beginCandidateReview = vi.fn();
+    const failCandidateReview = vi.fn();
     const validateCandidateWorkspaceState = vi.fn(async () => {
       throw new Error("workspace-source coordinates changed");
     });
@@ -1258,6 +1260,8 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       },
       ensureStateMirrored: vi.fn(async () => undefined),
       workspaceViewWithReposAt: vi.fn(async () => "state:candidate"),
+      beginCandidateReview,
+      failCandidateReview,
       validateCandidateWorkspaceState,
     });
 
@@ -1270,6 +1274,19 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       )
     ).rejects.toThrow("workspace-source coordinates changed");
     expect(validateCandidateWorkspaceState).toHaveBeenCalledWith("state:candidate", ["meta"]);
+    expect(beginCandidateReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publicationId: "publication:test",
+        stateHash: "state:candidate",
+      })
+    );
+    expect(beginCandidateReview.mock.invocationCallOrder[0]).toBeLessThan(
+      validateCandidateWorkspaceState.mock.invocationCallOrder[0]!
+    );
+    expect(failCandidateReview).toHaveBeenCalledWith(
+      "publication:test",
+      expect.objectContaining({ message: "workspace-source coordinates changed" })
+    );
     expect(approve).not.toHaveBeenCalled();
   });
 

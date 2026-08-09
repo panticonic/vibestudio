@@ -103,7 +103,13 @@ describe("userland authority fold", () => {
       sourceRoot: root,
       unitRelativePath: ".",
       units: [{ name: "consumer", relativePath: "." }],
-      manifest: { authority: { requests: [], provides: [] } },
+      manifest: {
+        authority: {
+          requests: [],
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+          provides: [],
+        },
+      },
       environment,
     });
 
@@ -133,7 +139,13 @@ describe("userland authority fold", () => {
         { name: "@workspace/empty", relativePath: "packages/empty" },
         { name: "@workspace/unrelated", relativePath: "packages/unrelated" },
       ],
-      manifest: { authority: { requests: [], provides: [] } },
+      manifest: {
+        authority: {
+          requests: [],
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+          provides: [],
+        },
+      },
     });
 
     expect(diagnostics).toEqual([]);
@@ -149,7 +161,13 @@ describe("userland authority fold", () => {
       sourceRoot: root,
       unitRelativePath: ".",
       units: [{ name: "@workspace/library", relativePath: "." }],
-      manifest: { authority: { requests: [], provides: [] } },
+      manifest: {
+        authority: {
+          requests: [],
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+          provides: [],
+        },
+      },
     });
 
     expect(diagnostics).toEqual(
@@ -176,6 +194,7 @@ describe("userland authority fold", () => {
       units: [{ name: "consumer", relativePath: "." }],
       manifest: {
         authority: {
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
           requests: [
             {
               capability: "context.boundary",
@@ -244,6 +263,7 @@ describe("userland authority fold", () => {
       ],
       manifest: {
         authority: {
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
           requests: [
             {
               capability: "context.boundary",
@@ -280,7 +300,13 @@ describe("userland authority fold", () => {
       sourceRoot: root,
       unitRelativePath: ".",
       units: [{ name: "consumer", relativePath: "." }],
-      manifest: { authority: { requests: [], provides: [] } },
+      manifest: {
+        authority: {
+          requests: [],
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+          provides: [],
+        },
+      },
       environment,
     });
     expect(diagnostics).toEqual(
@@ -312,6 +338,7 @@ describe("userland authority fold", () => {
       units: [{ name: "consumer", relativePath: "." }],
       manifest: {
         authority: {
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
           requests: [
             {
               capability: "context.boundary",
@@ -376,6 +403,7 @@ describe("userland authority fold", () => {
       ],
       manifest: {
         authority: {
+          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
           requests: [
             {
               capability: "context.boundary",

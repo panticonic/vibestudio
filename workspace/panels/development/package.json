@@ -17,6 +17,12 @@
     ],
     "authority": {
       "provides": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.development.v1",
+          "availability": "required"
+        }
+      ],
       "requests": [
         {
           "capability": "agent.credentials.manage",

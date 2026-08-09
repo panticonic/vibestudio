@@ -78,6 +78,8 @@ export function summarizeAuthorityManifest(
 ) {
   return {
     ...summarizeAuthorityRequests(manifest.requests, previous.requests, presentationFor),
+    serviceRequests: manifest.serviceRequests ?? [],
+    previousServiceRequests: previous.serviceRequests ?? [],
     provides: manifest.provides,
     previousProvides: previous.provides,
   };

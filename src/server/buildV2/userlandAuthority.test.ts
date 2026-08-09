@@ -5,7 +5,10 @@ import { describe, expect, it } from "vitest";
 import type { PackageManifest } from "@vibestudio/shared/types";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { directorySourceProvider } from "./buildSource.js";
-import { resolveProviderCatalog } from "./userlandAuthority.js";
+import {
+  createExactWorkspaceAuthorityEnvironment,
+  resolveProviderCatalog,
+} from "./userlandAuthority.js";
 
 function authority(title: string) {
   return {
@@ -43,6 +46,29 @@ function providerNode(root: string, manifestAuthority: ReturnType<typeof authori
 }
 
 describe("exact userland provider catalogs", () => {
+  it("includes product builtins in the same exact service resolver universe", async () => {
+    const environment = createExactWorkspaceAuthorityEnvironment({
+      stateHash: "state:catalog",
+      services: [],
+      resolveCatalog: async () => {
+        throw new Error("A product builtin must not use the workspace catalog resolver");
+      },
+    });
+
+    const development = await environment.resolveService("vibestudio.development.v1");
+    expect(development).toMatchObject({
+      kind: "resolved",
+      service: {
+        binding: { name: "development", source: "vibestudio/internal" },
+        catalog: {
+          provider: { unitName: "@panticonic/builtin/development" },
+          digest: expect.any(String),
+        },
+      },
+    });
+    expect(environment.services.some((service) => service.name === "missions")).toBe(true);
+  });
+
   it("projects the exact materialized provider and coalesces identical extraction", async () => {
     const root = mkdtempSync(join(tmpdir(), "vibestudio-userland-catalog-"));
     mkdirSync(join(root, "workers/notes"), { recursive: true });

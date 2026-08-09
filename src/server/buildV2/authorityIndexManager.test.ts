@@ -55,6 +55,42 @@ describe("authority index manager", () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps shared analysis alive until the final cancellable waiter leaves", async () => {
+    const manager = new AuthorityIndexManager();
+    const expected = index("state:published");
+    const first = new AbortController();
+    const second = new AbortController();
+    let analysisSignal: AbortSignal | undefined;
+    const pending = new Promise<AuthorityDependencyIndex>(() => undefined);
+    const create = vi.fn((signal: AbortSignal) => {
+      analysisSignal = signal;
+      return pending;
+    });
+
+    const firstWaiter = manager.indexAt(
+      expected.stateHash,
+      expected.epoch,
+      create,
+      undefined,
+      first.signal
+    );
+    const secondWaiter = manager.indexAt(
+      expected.stateHash,
+      expected.epoch,
+      create,
+      undefined,
+      second.signal
+    );
+    first.abort(new Error("first left"));
+    await expect(firstWaiter).rejects.toThrow("first left");
+    expect(analysisSignal?.aborted).toBe(false);
+
+    second.abort(new Error("second left"));
+    await expect(secondWaiter).rejects.toThrow("second left");
+    expect(analysisSignal?.aborted).toBe(true);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it("returns an incomplete attempt without retaining it for the same-state retry", async () => {
     const manager = new AuthorityIndexManager();
     const incomplete = {

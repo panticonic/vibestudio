@@ -35,6 +35,7 @@ interface AdmittedUnitVersion {
   repoPath: string;
   effectiveVersion: string;
   authorityDigest: string;
+  serviceBindingDigest: string;
   origin: UnitAdmissionOrigin;
   admittedAt: number;
   /**
@@ -76,7 +77,7 @@ interface AdmittedUnitVersion {
 export type UnitSourceOrigin = UnitInstallSourceOrigin;
 
 interface AdmittedUnitVersionFile {
-  schemaVersion: 3;
+  schemaVersion: 4;
   admissions: AdmittedUnitVersion[];
 }
 
@@ -84,6 +85,7 @@ export interface UnitAdmissionIdentity {
   repoPath: string;
   effectiveVersion: string;
   authority: UnitAuthorityManifest;
+  serviceBindingDigest?: string;
 }
 
 export interface UnitAdmissionRecord extends UnitAdmissionIdentity {
@@ -322,6 +324,7 @@ export class UnitAdmissionStore {
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         authorityDigest: authorityDigest(identity.authority),
+        serviceBindingDigest: identity.serviceBindingDigest ?? sha256Canonical([]),
         origin,
         admittedAt: now,
         ...(source
@@ -427,7 +430,7 @@ export class UnitAdmissionStore {
       throw error;
     }
     const parsed = JSON.parse(source) as Partial<AdmittedUnitVersionFile>;
-    if (parsed.schemaVersion !== 3 || !Array.isArray(parsed.admissions)) {
+    if (parsed.schemaVersion !== 4 || !Array.isArray(parsed.admissions)) {
       // Cutover, not migration. An older file records admissions that were
       // taken when admission still implied blanket authority, so re-reading it
       // would leave units admitted and ungranted — running, but asking for
@@ -447,7 +450,7 @@ export class UnitAdmissionStore {
   private save(admissions = this.admissions): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
     const state: AdmittedUnitVersionFile = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       admissions: [...admissions.values()].sort((left, right) =>
         identityKey(left).localeCompare(identityKey(right))
       ),
@@ -462,23 +465,29 @@ function authorityDigest(authority: UnitAuthorityManifest): string {
   // is a different unit.
   return sha256Canonical({
     requests: authority.requests,
+    serviceRequests: authority.serviceRequests ?? [],
     provides: authority.provides,
   });
 }
 
 function identityKey(
   identity:
-    | Pick<AdmittedUnitVersion, "repoPath" | "effectiveVersion" | "authorityDigest">
+    | Pick<
+        AdmittedUnitVersion,
+        "repoPath" | "effectiveVersion" | "authorityDigest" | "serviceBindingDigest"
+      >
     | UnitAdmissionIdentity
 ): string {
   const digest =
     "authorityDigest" in identity ? identity.authorityDigest : authorityDigest(identity.authority);
-  return `${identity.repoPath}\0${identity.effectiveVersion}\0${digest}`;
+  const serviceBindingDigest = identity.serviceBindingDigest ?? sha256Canonical([]);
+  return `${identity.repoPath}\0${identity.effectiveVersion}\0${digest}\0${serviceBindingDigest}`;
 }
 
 const ADMISSION_KEYS = new Set([
   "admittedAt",
   "authorityDigest",
+  "serviceBindingDigest",
   "effectiveVersion",
   "origin",
   "repoPath",
@@ -515,6 +524,8 @@ function isAdmission(value: unknown): value is AdmittedUnitVersion {
     record["effectiveVersion"].length > 0 &&
     typeof record["authorityDigest"] === "string" &&
     /^[0-9a-f]{64}$/u.test(record["authorityDigest"]) &&
+    typeof record["serviceBindingDigest"] === "string" &&
+    /^[0-9a-f]{64}$/u.test(record["serviceBindingDigest"]) &&
     UNIT_ADMISSION_ORIGINS.includes(record["origin"] as UnitAdmissionOrigin) &&
     typeof record["admittedAt"] === "number" &&
     Number.isFinite(record["admittedAt"])

@@ -274,6 +274,25 @@ const serverConfig = {
   },
 };
 
+const authorityAnalysisWorkerConfig = {
+  entryPoints: ["src/server/buildV2/authorityAnalysisWorker.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: "dist/authority-analysis-worker.mjs",
+  external: ["@vibestudio/typecheck", "typescript"],
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
+const authorityAnalysisWorkerElectronConfig = {
+  ...authorityAnalysisWorkerConfig,
+  format: "cjs",
+  outfile: "dist/authority-analysis-worker.cjs",
+};
+
 const clientConfig = {
   entryPoints: ["src/cli/client.ts"],
   bundle: true,
@@ -603,16 +622,30 @@ async function build() {
     };
     const serverElectronWithBundle = {
       ...serverElectronConfig,
-      define: { ...(serverElectronConfig.define ?? {}), ...internalDoBundleDefine },
+      define: {
+        ...(serverElectronConfig.define ?? {}),
+        ...internalDoBundleDefine,
+        "globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__": JSON.stringify(
+          "authority-analysis-worker.cjs"
+        ),
+      },
     };
     const serverWithBundle = {
       ...serverConfig,
-      define: { ...(serverConfig.define ?? {}), ...internalDoBundleDefine },
+      define: {
+        ...(serverConfig.define ?? {}),
+        ...internalDoBundleDefine,
+        "globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__": JSON.stringify(
+          "authority-analysis-worker.mjs"
+        ),
+      },
     };
     // Both server bundles consume the internal-DO output captured above.
     const serverBuilds = await Promise.all([
       buildHostArtifact(serverElectronWithBundle),
       buildHostArtifact(serverWithBundle),
+      buildHostArtifact(authorityAnalysisWorkerElectronConfig),
+      buildHostArtifact(authorityAnalysisWorkerConfig),
     ]);
     assertHostBuildMetafiles(serverBuilds);
 

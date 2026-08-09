@@ -66,6 +66,16 @@
           ]
         }
       ],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.channel.v1",
+          "availability": "required"
+        },
+        {
+          "protocol": "vibestudio.gad.workspace.v1",
+          "availability": "required"
+        }
+      ],
       "requests": [
         {
           "capability": "agent.credentials.manage",

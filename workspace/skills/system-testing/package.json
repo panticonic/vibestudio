@@ -3,6 +3,22 @@
   "version": "0.1.0",
   "description": "Automated system testing via headless agentic sessions",
   "type": "module",
+  "vibestudio": {
+    "authority": {
+      "requests": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.development.v1",
+          "availability": "required"
+        },
+        {
+          "protocol": "vibestudio.models.v1",
+          "availability": "required"
+        }
+      ],
+      "provides": []
+    }
+  },
   "exports": {
     ".": "./index.ts",
     "./cli": "./cli.ts",

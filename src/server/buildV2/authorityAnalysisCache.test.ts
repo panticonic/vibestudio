@@ -16,6 +16,7 @@ import {
 import type { WorkspaceServiceCallFact } from "./userlandAuthorityAnalyzer.js";
 
 const epoch = { analyzerVersion: "analyzer:v1", rpcSchemaVersion: "schema:v1" };
+const factEpoch = { analyzerVersion: epoch.analyzerVersion };
 
 function hash(content: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
@@ -79,11 +80,11 @@ describe("durable authority analysis cache", () => {
 
   it("atomically restores a complete exact index and reusable unit facts", () => {
     const consumer: AuthorityConsumerIdentity = {
-      epoch,
+      epoch: factEpoch,
       unitName: "@workspace-panels/example",
       effectiveVersion: "ev:example",
       moduleClosureDigest: authorityModuleClosureDigest({
-        epoch,
+        epoch: factEpoch,
         unitName: "@workspace-panels/example",
         effectiveVersion: "ev:example",
         compilerDependencies: [],
@@ -93,6 +94,7 @@ describe("durable authority analysis cache", () => {
       stateHash: "state:published",
       epoch,
       environmentDigest: "environment:v1",
+      consumerSource: "analyzer-facts",
       graphDigest: "graph:v1",
     };
     const first = new AuthorityAnalysisCache(filePath);
@@ -122,9 +124,70 @@ describe("durable authority analysis cache", () => {
     ).toEqual(index(identity, consumer));
   });
 
-  it("shares content-addressed facts across workspace-local index caches", () => {
-    const consumer: AuthorityConsumerIdentity = {
+  it("retains interleaved commits through one instance per workspace", () => {
+    // `commit` is a read-modify-write over the workspace-local file. Two
+    // instances over the same file each hold their own in-memory copy, so the
+    // second write drops the first's entries. The analysis worker therefore
+    // keeps exactly one instance per workspace and serializes executions; this
+    // pins the property that reuse is what makes overlapping commits safe.
+    const consumerFor = (unitName: string): AuthorityConsumerIdentity => ({
+      epoch: factEpoch,
+      unitName,
+      effectiveVersion: `ev:${unitName}`,
+      moduleClosureDigest: authorityModuleClosureDigest({
+        epoch: factEpoch,
+        unitName,
+        effectiveVersion: `ev:${unitName}`,
+        compilerDependencies: [],
+      }),
+    });
+    const identityFor = (stateHash: string): AuthorityIndexIdentity => ({
+      stateHash,
       epoch,
+      environmentDigest: "environment:v1",
+      consumerSource: "analyzer-facts",
+      graphDigest: `graph:${stateHash}`,
+    });
+    const published = consumerFor("@workspace-panels/published");
+    const candidate = consumerFor("@workspace-panels/candidate");
+    const publishedIdentity = identityFor("state:published");
+    const candidateIdentity = identityFor("state:candidate");
+
+    const shared = new AuthorityAnalysisCache(filePath, path.join(root, "facts"));
+    shared.commit(publishedIdentity, index(publishedIdentity, published), [
+      { identity: published, dependencies: [], facts: [fact()] },
+    ]);
+    shared.commit(candidateIdentity, index(candidateIdentity, candidate), [
+      { identity: candidate, dependencies: [], facts: [fact()] },
+    ]);
+
+    const afterRestart = new AuthorityAnalysisCache(filePath, path.join(root, "facts"));
+    expect(afterRestart.fact(published)?.facts).toHaveLength(1);
+    expect(afterRestart.fact(candidate)?.facts).toHaveLength(1);
+    for (const [identity, consumer] of [
+      [publishedIdentity, published],
+      [candidateIdentity, candidate],
+    ] as const) {
+      expect(
+        afterRestart.index(
+          identity,
+          new Map([
+            [
+              consumer.unitName,
+              {
+                effectiveVersion: consumer.effectiveVersion,
+                moduleClosureDigest: consumer.moduleClosureDigest,
+              },
+            ],
+          ])
+        )
+      ).toEqual(index(identity, consumer));
+    }
+  });
+
+  it("shares content-addressed facts and complete indexes across workspace caches", () => {
+    const consumer: AuthorityConsumerIdentity = {
+      epoch: factEpoch,
       unitName: "@workspace-panels/example",
       effectiveVersion: "ev:example",
       moduleClosureDigest: "closure:shared",
@@ -133,6 +196,7 @@ describe("durable authority analysis cache", () => {
       stateHash: "state:first-workspace",
       epoch,
       environmentDigest: "environment:v1",
+      consumerSource: "analyzer-facts",
       graphDigest: "graph:v1",
     };
     const sharedFacts = path.join(root, "shared-facts");
@@ -163,7 +227,73 @@ describe("durable authority analysis cache", () => {
           ],
         ])
       )
+    ).toEqual(index(identity, consumer));
+  });
+
+  it("reuses provider-independent facts across an RPC schema epoch change", () => {
+    const consumer: AuthorityConsumerIdentity = {
+      epoch: factEpoch,
+      unitName: "@workspace-panels/example",
+      effectiveVersion: "ev:example",
+      moduleClosureDigest: "closure:shared",
+    };
+    const identity: AuthorityIndexIdentity = {
+      stateHash: "state:published",
+      epoch,
+      environmentDigest: "environment:v1",
+      consumerSource: "analyzer-facts",
+      graphDigest: "graph:v1",
+    };
+    const cache = new AuthorityAnalysisCache(filePath);
+    cache.commit(identity, index(identity, consumer), [
+      { identity: consumer, dependencies: [], facts: [fact()] },
+    ]);
+
+    expect(
+      cache.factForConsumer({
+        epoch: factEpoch,
+        unitName: consumer.unitName,
+        effectiveVersion: consumer.effectiveVersion,
+      })?.facts
+    ).toEqual([fact()]);
+    expect(
+      cache.index(
+        {
+          ...identity,
+          epoch: { ...identity.epoch, rpcSchemaVersion: "schema:v2" },
+        },
+        new Map()
+      )
     ).toBeNull();
+  });
+
+  it("restores a declaration index without requiring analyzer facts", () => {
+    const consumer: AuthorityConsumerIdentity = {
+      epoch: factEpoch,
+      unitName: "@workspace-panels/example",
+      effectiveVersion: "ev:example",
+      moduleClosureDigest: "manifest:declarations",
+    };
+    const identity: AuthorityIndexIdentity = {
+      stateHash: "state:published",
+      epoch,
+      environmentDigest: "environment:v1",
+      consumerSource: "manifest-declarations",
+      graphDigest: "graph:v1",
+    };
+    const sharedFacts = path.join(root, "shared-facts");
+    new AuthorityAnalysisCache(path.join(root, "workspace-a.json"), sharedFacts).commit(
+      identity,
+      index(identity, consumer),
+      []
+    );
+
+    expect(
+      new AuthorityAnalysisCache(path.join(root, "workspace-b.json"), sharedFacts).index(
+        identity,
+        new Map([[consumer.unitName, { effectiveVersion: consumer.effectiveVersion }]])
+      )
+    ).toEqual(index(identity, consumer));
   });
 
   it("revalidates exact compiler dependencies without a global root fingerprint", () => {
@@ -173,11 +303,11 @@ describe("durable authority analysis cache", () => {
       { path: dependencyPath, contentHash: hash(fs.readFileSync(dependencyPath, "utf8")) },
     ];
     const consumer: AuthorityConsumerIdentity = {
-      epoch,
+      epoch: factEpoch,
       unitName: "@workspace-panels/example",
       effectiveVersion: "ev:example",
       moduleClosureDigest: authorityModuleClosureDigest({
-        epoch,
+        epoch: factEpoch,
         unitName: "@workspace-panels/example",
         effectiveVersion: "ev:example",
         compilerDependencies: dependencies,
@@ -187,6 +317,7 @@ describe("durable authority analysis cache", () => {
       stateHash: "state:published",
       epoch,
       environmentDigest: "environment:v1",
+      consumerSource: "analyzer-facts",
       graphDigest: "graph-without-global-root-deps",
     };
     const cache = new AuthorityAnalysisCache(filePath);
@@ -219,7 +350,7 @@ describe("durable authority analysis cache", () => {
 
   it("rejects index reuse when environment, graph, or covered closure identity changes", () => {
     const consumer: AuthorityConsumerIdentity = {
-      epoch,
+      epoch: factEpoch,
       unitName: "@workspace-panels/example",
       effectiveVersion: "ev:example",
       moduleClosureDigest: "closure:v1",
@@ -228,6 +359,7 @@ describe("durable authority analysis cache", () => {
       stateHash: "state:published",
       epoch,
       environmentDigest: "environment:v1",
+      consumerSource: "analyzer-facts",
       graphDigest: "graph:v1",
     };
     const cache = new AuthorityAnalysisCache(filePath);
@@ -255,7 +387,7 @@ describe("durable authority analysis cache", () => {
     fs.writeFileSync(filePath, "{not-json");
     const cache = new AuthorityAnalysisCache(filePath);
     const consumer: AuthorityConsumerIdentity = {
-      epoch,
+      epoch: factEpoch,
       unitName: "unit",
       effectiveVersion: "ev",
       moduleClosureDigest: "closure",
@@ -265,7 +397,7 @@ describe("durable authority analysis cache", () => {
 
   it("commits service-query sets to the authority index digest", () => {
     const consumer: AuthorityConsumerIdentity = {
-      epoch,
+      epoch: factEpoch,
       unitName: "@workspace-panels/example",
       effectiveVersion: "ev:example",
       moduleClosureDigest: "closure:v1",
@@ -274,6 +406,7 @@ describe("durable authority analysis cache", () => {
       stateHash: "state:published",
       epoch,
       environmentDigest: "environment:v1",
+      consumerSource: "analyzer-facts",
       graphDigest: "graph:v1",
     };
     const first = index(identity, consumer);
@@ -301,7 +434,7 @@ describe("durable authority analysis cache", () => {
 
   it("rejects persistence when any consumer blocked analysis", () => {
     const consumer: AuthorityConsumerIdentity = {
-      epoch,
+      epoch: factEpoch,
       unitName: "@workspace-panels/broken",
       effectiveVersion: "ev:broken",
       moduleClosureDigest: "closure:broken",
@@ -310,6 +443,7 @@ describe("durable authority analysis cache", () => {
       stateHash: "state:blocked",
       epoch,
       environmentDigest: "environment:v1",
+      consumerSource: "analyzer-facts",
       graphDigest: "graph:v1",
     };
     const blocked = {

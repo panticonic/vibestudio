@@ -16,6 +16,7 @@ import type { BuildSourceProvider } from "./buildSource.js";
 import { collectTransitiveInternalDeps } from "./buildSource.js";
 import { collectWorkspaceRpcCatalog, type WorkspaceRpcMethodDoc } from "./workspaceRpcCatalog.js";
 import { workspaceRpcSchema } from "./workspaceRpcSchemas.js";
+import { PRODUCT_BUILTIN_CATALOG } from "@vibestudio/shared/productBuiltinCatalog.generated";
 
 export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v1";
 
@@ -102,6 +103,75 @@ export interface ExactWorkspaceAuthorityEnvironment {
   services: readonly ExactWorkspaceServiceBinding[];
   digest: string;
   resolveService(query: string): Promise<ServiceResolution>;
+}
+
+type ProductBuiltinService = Extract<(typeof PRODUCT_BUILTIN_CATALOG)[number], { kind: "service" }>;
+
+function productBuiltinAuthority(service: ProductBuiltinService): {
+  binding: ExactWorkspaceServiceBinding;
+  catalog: UserlandServiceAuthorityCatalog;
+} {
+  const digest = sha256Canonical(service);
+  const principals = service.principals.filter(isPrincipal);
+  const methods = new Map<string, UserlandMethodAuthority>();
+  for (const [name, raw] of Object.entries(service.methods)) {
+    const method = raw as {
+      capability: string;
+      tier: "open" | "gated" | "critical";
+      sensitivity: "read" | "write" | "admin" | "destructive";
+      principals: readonly string[];
+      session?: "codeOnly";
+    };
+    const methodPrincipals = method.principals.filter(isPrincipal);
+    const access = {
+      principals: methodPrincipals,
+      codeOnly: method.session === "codeOnly",
+      codeReachable: principals.includes("code") && methodPrincipals.includes("code"),
+    };
+    methods.set(
+      name,
+      method.tier === "open"
+        ? { kind: "open", tier: "open", access }
+        : {
+            kind: "protected",
+            localCapability: method.capability,
+            canonicalCapability: method.capability,
+            definitionDigest: sha256Canonical({ service: service.name, method: name, raw }),
+            tier: method.tier,
+            sensitivity: method.sensitivity,
+            resource: { kind: "receiver-object", resourceType: `builtin:${service.name}` },
+            access,
+          }
+    );
+  }
+  return {
+    binding: {
+      name: service.name,
+      protocols: service.protocols,
+      source: service.source,
+      title: service.title,
+      action: service.action,
+      description: service.description,
+      notability: "everyday",
+      presentation: service.presentation,
+      principals,
+      target: {
+        kind: "durable-object",
+        className: service.className,
+        defaultObjectKey: null,
+      },
+    },
+    catalog: {
+      provider: {
+        unitName: `@panticonic/builtin/${service.name}`,
+        source: service.source,
+        effectiveVersion: digest,
+        className: service.className,
+      },
+      methods,
+      digest,
+    },
+  };
 }
 
 export interface ProviderCatalogResolverInput {
@@ -396,14 +466,21 @@ export function createExactWorkspaceAuthorityEnvironment(input: {
   services: readonly ExactWorkspaceServiceBinding[];
   resolveCatalog(binding: ExactWorkspaceServiceBinding): Promise<UserlandServiceAuthorityCatalog>;
 }): ExactWorkspaceAuthorityEnvironment {
+  const builtinAuthorities = PRODUCT_BUILTIN_CATALOG.filter(
+    (entry): entry is ProductBuiltinService => entry.kind === "service"
+  ).map(productBuiltinAuthority);
+  const builtinCatalogs = new Map(
+    builtinAuthorities.map(({ binding, catalog }) => [binding.name, catalog])
+  );
+  const allServices = [...builtinAuthorities.map(({ binding }) => binding), ...input.services];
   const byKey = new Map<string, ExactWorkspaceServiceBinding>();
-  for (const service of input.services) {
+  for (const service of allServices) {
     for (const key of [service.name, ...service.protocols]) {
       if (byKey.has(key)) throw new Error(`Duplicate workspace service key ${JSON.stringify(key)}`);
       byKey.set(key, service);
     }
   }
-  const services = Object.freeze(input.services.map((service) => Object.freeze({ ...service })));
+  const services = Object.freeze(allServices.map((service) => Object.freeze({ ...service })));
   return {
     stateHash: input.stateHash,
     services,
@@ -411,7 +488,7 @@ export function createExactWorkspaceAuthorityEnvironment(input: {
     async resolveService(query: string): Promise<ServiceResolution> {
       const binding = byKey.get(query);
       if (!binding) return { kind: "missing", query };
-      const catalog = await input.resolveCatalog(binding);
+      const catalog = builtinCatalogs.get(binding.name) ?? (await input.resolveCatalog(binding));
       const service = { stateHash: input.stateHash, binding, catalog };
       if (!binding.principals.includes("code")) return { kind: "inaccessible", query, service };
       return { kind: "resolved", service };

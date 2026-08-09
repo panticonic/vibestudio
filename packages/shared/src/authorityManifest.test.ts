@@ -11,6 +11,7 @@ describe("unit authority manifest", () => {
   it("requires the one canonical installed-code request section", () => {
     expect(parseUnitAuthorityManifest({ requests: [], provides: [] })).toEqual({
       requests: [],
+      serviceRequests: [],
       provides: [],
     });
     expect(() => parseUnitAuthorityManifest({})).toThrow(/requests/);
@@ -18,6 +19,32 @@ describe("unit authority manifest", () => {
     expect(() =>
       parseUnitAuthorityManifest({ requests: [], provides: [], futureAuthority: [] })
     ).toThrow(/unknown field.*futureAuthority/);
+  });
+
+  it("seals canonical service protocol review declarations", () => {
+    expect(
+      parseUnitAuthorityManifest({
+        requests: [],
+        serviceRequests: [
+          { protocol: "vibestudio.notes.v1", availability: "optional" },
+          { protocol: "vibestudio.channel.v1", availability: "required" },
+        ],
+        provides: [],
+      }).serviceRequests
+    ).toEqual([
+      { protocol: "vibestudio.channel.v1", availability: "required" },
+      { protocol: "vibestudio.notes.v1", availability: "optional" },
+    ]);
+    expect(() =>
+      parseUnitAuthorityManifest({
+        requests: [],
+        serviceRequests: [
+          { protocol: "vibestudio.notes.v1", availability: "required" },
+          { protocol: "vibestudio.notes.v1", availability: "optional" },
+        ],
+        provides: [],
+      })
+    ).toThrow(/duplicate protocol/);
   });
 
   it("requires exact installed-code requests and rejects dynamic wildcard authority", () => {

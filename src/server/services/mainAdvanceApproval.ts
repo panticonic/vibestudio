@@ -126,8 +126,12 @@ export function createMainRefAdvanceGate(deps: {
   /** Reject candidate workspace-wide invariants before prompting or advancing refs. */
   validateCandidateWorkspaceState?(
     stateHash: string,
-    changedPaths: readonly string[]
+    changedPaths: readonly string[],
+    signal?: AbortSignal
   ): Promise<void>;
+  beginCandidateReview?(candidate: MainAdvanceApprovalCandidate): void;
+  failCandidateReview?(publicationId: string, error: unknown): void;
+  discardCandidateReview?(publicationId: string): void;
   /** Host-computed dependents of a repo being DELETED (repos whose build unit
    *  imports it), for the severe deletion prompt's dependents warning (§5) —
    *  derived from the build dependency graph at the live workspace view. Absent
@@ -172,10 +176,33 @@ export function createMainRefAdvanceGate(deps: {
     // resolves each seed to its unit and reverse dependency closure; this
     // keeps publication validation on the same topology as state-triggered
     // builds without requiring a full workspace sweep.
-    await deps.validateCandidateWorkspaceState?.(
-      candidateView,
-      batch.entries.map((entry) => entry.repoPath)
-    );
+    const preparingCandidate: MainAdvanceApprovalCandidate = {
+      caller: context.caller,
+      ...(context.signal ? { signal: context.signal } : {}),
+      repoPaths: batch.entries.map((entry) => entry.repoPath),
+      changedPaths: batch.entries.map((entry) => entry.repoPath),
+      stateHash: candidateView,
+      publicationId: batch.publication.publicationId,
+      ...(context.via ? { via: context.via } : {}),
+    };
+    if (batch.entries.some((entry) => entry.next !== null)) {
+      deps.beginCandidateReview?.(preparingCandidate);
+    }
+    try {
+      const changedRepoPaths = batch.entries.map((entry) => entry.repoPath);
+      if (context.signal) {
+        await deps.validateCandidateWorkspaceState?.(
+          candidateView,
+          changedRepoPaths,
+          context.signal
+        );
+      } else {
+        await deps.validateCandidateWorkspaceState?.(candidateView, changedRepoPaths);
+      }
+    } catch (error) {
+      deps.failCandidateReview?.(batch.publication.publicationId, error);
+      throw error;
+    }
 
     if (batch.entries.length === 0) {
       await deps.approvalGate.approveSemanticAdvance({
@@ -198,18 +225,23 @@ export function createMainRefAdvanceGate(deps: {
       review: DiffReviewEntry;
       changedPaths: string[];
     }> = [];
-    for (const entry of batch.entries) {
-      perEntry.push({
-        entry,
-        ...(await observePublicationStage(
-          "build-diff-review",
-          {
-            repoPaths: [entry.repoPath],
-            publicationId: batch.publication.publicationId,
-          },
-          () => buildDiffReviewEntry(deps, entry)
-        )),
-      });
+    try {
+      for (const entry of batch.entries) {
+        perEntry.push({
+          entry,
+          ...(await observePublicationStage(
+            "build-diff-review",
+            {
+              repoPaths: [entry.repoPath],
+              publicationId: batch.publication.publicationId,
+            },
+            () => buildDiffReviewEntry(deps, entry)
+          )),
+        });
+      }
+    } catch (error) {
+      deps.failCandidateReview?.(batch.publication.publicationId, error);
+      throw error;
     }
     const diffReview = perEntry.map((e) => e.review);
     const completions: MainAdvanceApprovalCompletion[] = [];
@@ -261,9 +293,11 @@ export function createMainRefAdvanceGate(deps: {
           ...(context.via ? { via: context.via } : {}),
         });
         if (completion) completions.push(completion);
+        deps.discardCandidateReview?.(batch.publication.publicationId);
       }
     } catch (error) {
       for (const completion of completions) await completion.failed(error);
+      deps.failCandidateReview?.(batch.publication.publicationId, error);
       throw error;
     }
     if (completions.length === 0) return;

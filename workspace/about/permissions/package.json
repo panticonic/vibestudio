@@ -9,6 +9,12 @@
     "autoArchiveWhenEmpty": true,
     "authority": {
       "provides": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.missions.v1",
+          "availability": "required"
+        }
+      ],
       "requests": [
         {
           "capability": "agent.credentials.manage",

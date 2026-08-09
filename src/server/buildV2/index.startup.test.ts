@@ -71,14 +71,26 @@ describe("BuildSystemV2 startup", () => {
   let workspaceRoot: string;
   let buildSystem: BuildSystemV2 | null;
   let previousSharedBuildCacheDir: string | undefined;
+  let previousInstanceRoot: string | undefined;
+  let previousSharedDerivedCacheDir: string | undefined;
 
   beforeEach(async () => {
     vi.resetModules();
     previousSharedBuildCacheDir = process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
+    previousInstanceRoot = process.env["VIBESTUDIO_INSTANCE_ROOT"];
+    previousSharedDerivedCacheDir = process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-startup-"));
     workspaceRoot = path.join(root, "workspace");
     const { setUserDataPath } = await import("@vibestudio/env-paths");
     setUserDataPath(path.join(root, "state"));
+    // setUserDataPath only rebinds this thread's module state. The authority
+    // analysis worker is a separate module registry, so durable-cache isolation
+    // has to travel as an environment variable that the worker inherits. Both
+    // roots matter: the instance root holds per-workspace cache files, and the
+    // shared derived root holds content-addressed facts that are otherwise
+    // reused across instances — including across test runs.
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = path.join(root, "state");
+    process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = path.join(root, "derived-cache");
     buildSystem = null;
   });
 
@@ -90,6 +102,16 @@ describe("BuildSystemV2 startup", () => {
       delete process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"];
     } else {
       process.env["VIBESTUDIO_SHARED_BUILD_CACHE_DIR"] = previousSharedBuildCacheDir;
+    }
+    if (previousInstanceRoot === undefined) {
+      delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
+    } else {
+      process.env["VIBESTUDIO_INSTANCE_ROOT"] = previousInstanceRoot;
+    }
+    if (previousSharedDerivedCacheDir === undefined) {
+      delete process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"];
+    } else {
+      process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previousSharedDerivedCacheDir;
     }
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -226,29 +248,26 @@ describe("BuildSystemV2 startup", () => {
         await vi.importActual<typeof import("./typecheckFold.js")>("./typecheckFold.js");
       return { ...actual, typecheckProgramForUnit: vi.fn(async () => ({ mocked: true })) };
     });
-    vi.doMock("./userlandAuthorityAnalyzer.js", async () => {
-      const actual = await vi.importActual<typeof import("./userlandAuthorityAnalyzer.js")>(
-        "./userlandAuthorityAnalyzer.js"
-      );
-      return { ...actual, analyzeWorkspaceServiceCalls: vi.fn(() => []) };
-    });
-
     const source = fakeWorkspaceSource(workspaceRoot);
     const options = { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) };
     const { initBuildSystemV2 } = await import("./index.js");
-    const { analyzeWorkspaceServiceCalls } = await import("./userlandAuthorityAnalyzer.js");
+    // The analyzer now runs inside the analysis worker, so the compiler pass is
+    // observable from this thread only at the worker boundary.
+    const { AuthorityAnalysisWorkerClient } = await import("./authorityAnalysisWorkerClient.js");
+    const compilerSnapshot = vi.spyOn(AuthorityAnalysisWorkerClient.prototype, "compilerSnapshot");
+
     buildSystem = await initBuildSystemV2(workspaceRoot, source, [], options);
     await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
-    expect(analyzeWorkspaceServiceCalls).toHaveBeenCalledTimes(1);
+    expect(compilerSnapshot).toHaveBeenCalledTimes(1);
     await buildSystem.shutdown();
     buildSystem = null;
 
     buildSystem = await initBuildSystemV2(workspaceRoot, source, [], options);
     await buildSystem.listAffectedBuildUnits(TEST_STATE, []);
-    expect(analyzeWorkspaceServiceCalls).toHaveBeenCalledTimes(1);
+    expect(compilerSnapshot).toHaveBeenCalledTimes(1);
 
+    compilerSnapshot.mockRestore();
     vi.doUnmock("./typecheckFold.js");
-    vi.doUnmock("./userlandAuthorityAnalyzer.js");
   });
 
   it("materializes the union of cold authority consumer closures once", async () => {
@@ -267,13 +286,6 @@ describe("BuildSystemV2 startup", () => {
         await vi.importActual<typeof import("./typecheckFold.js")>("./typecheckFold.js");
       return { ...actual, typecheckProgramForUnit: vi.fn(async () => ({ mocked: true })) };
     });
-    vi.doMock("./userlandAuthorityAnalyzer.js", async () => {
-      const actual = await vi.importActual<typeof import("./userlandAuthorityAnalyzer.js")>(
-        "./userlandAuthorityAnalyzer.js"
-      );
-      return { ...actual, analyzeWorkspaceServiceCalls: vi.fn(() => []) };
-    });
-
     const base = fakeWorkspaceSource(workspaceRoot);
     const materializeForBuild = vi.fn(
       async (_units: Parameters<BuildSourceProvider["materializeForBuild"]>[0]) => ({
@@ -282,7 +294,8 @@ describe("BuildSystemV2 startup", () => {
     );
     const source = { ...base, materializeForBuild };
     const { initBuildSystemV2 } = await import("./index.js");
-    const { analyzeWorkspaceServiceCalls } = await import("./userlandAuthorityAnalyzer.js");
+    const { AuthorityAnalysisWorkerClient } = await import("./authorityAnalysisWorkerClient.js");
+    const compilerSnapshot = vi.spyOn(AuthorityAnalysisWorkerClient.prototype, "compilerSnapshot");
     buildSystem = await initBuildSystemV2(workspaceRoot, source, [], {
       workspaceAuthorityEnvironmentAt: async () => ({ services: [] }),
     });
@@ -294,10 +307,10 @@ describe("BuildSystemV2 startup", () => {
       "@workspace/alpha",
       "@workspace/beta",
     ]);
-    expect(analyzeWorkspaceServiceCalls).toHaveBeenCalledTimes(1);
+    expect(compilerSnapshot).toHaveBeenCalledTimes(1);
 
+    compilerSnapshot.mockRestore();
     vi.doUnmock("./typecheckFold.js");
-    vi.doUnmock("./userlandAuthorityAnalyzer.js");
   });
 
   it("diagnoses host-owned retention roots without deleting stored builds", async () => {

@@ -2,6 +2,18 @@
   "name": "@workspace-skills/onboarding",
   "version": "0.1.0",
   "type": "module",
+  "vibestudio": {
+    "authority": {
+      "provides": [],
+      "requests": [],
+      "serviceRequests": [
+        {
+          "protocol": "vibestudio.models.v1",
+          "availability": "required"
+        }
+      ]
+    }
+  },
   "exports": {
     ".": "./index.ts",
     "./catalog": "./catalog.ts",

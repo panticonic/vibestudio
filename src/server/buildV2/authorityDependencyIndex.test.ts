@@ -1,7 +1,43 @@
 import { describe, expect, it, vi } from "vitest";
-import { authorityDependencyIndexFromFacts } from "./authorityDependencyIndex.js";
+import {
+  authorityDependencyIndexFromDeclarations,
+  authorityDependencyIndexFromFacts,
+} from "./authorityDependencyIndex.js";
 
 describe("authority dependency index completeness", () => {
+  it("builds consumer query edges from manifests without analyzer facts", async () => {
+    const result = await authorityDependencyIndexFromDeclarations({
+      stateHash: "state:declared",
+      epoch: { analyzerVersion: "analyzer:v1", rpcSchemaVersion: "schema:v1" },
+      consumers: [
+        {
+          unitName: "@workspace-panels/notes",
+          effectiveVersion: "ev:notes-panel",
+          serviceRequests: [
+            { protocol: "example.notes.v1", availability: "required" },
+            { protocol: "example.search.v1", availability: "optional" },
+          ],
+        },
+      ],
+      environment: {
+        stateHash: "state:declared",
+        services: [],
+        digest: "environment:none",
+        async resolveService(query: string) {
+          return { kind: "missing" as const, query };
+        },
+      },
+    });
+
+    expect(result.consumersByQuery.get("example.notes.v1")).toEqual(
+      new Set(["@workspace-panels/notes"])
+    );
+    expect(result.consumersByQuery.get("example.search.v1")).toEqual(
+      new Set(["@workspace-panels/notes"])
+    );
+    expect(result.blockingConsumers).toEqual(new Set(["@workspace-panels/notes"]));
+  });
+
   it("marks an index incomplete when any consumer blocked local analysis", async () => {
     const result = await authorityDependencyIndexFromFacts({
       stateHash: "state:blocked",

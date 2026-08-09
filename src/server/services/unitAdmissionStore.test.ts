@@ -277,12 +277,13 @@ describe("UnitAdmissionStore", () => {
     fs.writeFileSync(
       filePath,
       JSON.stringify({
-        schemaVersion: 3,
+        schemaVersion: 4,
         admissions: [
           {
             repoPath: "panels/example",
             effectiveVersion: "ev-1",
             authorityDigest: "a".repeat(64),
+            serviceBindingDigest: "b".repeat(64),
             origin: "launch-gate",
             admittedAt: 1,
           },

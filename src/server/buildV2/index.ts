@@ -16,6 +16,7 @@
  */
 
 import * as path from "path";
+import { performance } from "node:perf_hooks";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
 import {
   computeEffectiveVersions,
@@ -62,23 +63,25 @@ import {
 } from "./userlandAuthority.js";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
+  authorityDependencyIndexFromDeclarations,
   authorityDependencyIndexFromFacts,
   authorityConsumersForProviderChanges,
   type AuthorityDependencyIndex,
 } from "./authorityDependencyIndex.js";
 import { AuthorityIndexManager } from "./authorityIndexManager.js";
 import {
-  AuthorityAnalysisCache,
   authorityModuleClosureDigest,
   type AuthorityCompilerDependency,
   type AuthorityConsumerIdentity,
   type AuthorityIndexIdentity,
 } from "./authorityAnalysisCache.js";
 import { analyzeWorkspaceServiceCalls } from "./userlandAuthorityAnalyzer.js";
-import {
+import type {
+  AuthorityCompilerSnapshot,
   createAuthorityCompilerSnapshot,
-  type AuthorityCompilerSnapshot,
 } from "./authorityCompilerSnapshot.js";
+import { AuthorityAnalysisWorkerClient } from "./authorityAnalysisWorkerClient.js";
+import { isEffectImplementationPackage } from "./authorityEffectBoundary.js";
 import { workspaceRpcSchemaVersion } from "./workspaceRpcSchemas.js";
 import {
   StateTransitionTrigger,
@@ -199,6 +202,13 @@ export interface BuildUnitResolution {
 export interface BuildUnitIdentityResolution extends BuildUnitResolution {
   dependencyEvs: Record<string, string>;
   externalDeps: Record<string, string>;
+  serviceBindings: Array<{
+    protocol: string;
+    availability: "required" | "optional";
+    serviceName: string | null;
+    providerUnit: string | null;
+    catalogDigest: string | null;
+  }>;
 }
 
 interface GraphView {
@@ -212,6 +222,8 @@ export interface BuildUnitCatalogEntry extends BuildUnitResolution {
 }
 
 export interface BuildSystemRootOptions {
+  /** Whether this workspace identity survives a process restart. Diagnostics only. */
+  workspaceIdStability?: "stable" | "ephemeral";
   /**
    * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.
    * Defaults to VIBESTUDIO_APP_ROOT, then dirname(workspaceRoot), for older tests.
@@ -341,10 +353,14 @@ export interface BuildSystemV2 {
    * package renaming, and deletion cannot hide consumers that still need
    * validation. Paths outside both graphs have no build closure.
    */
-  listAffectedBuildUnits(stateHash: string, changedPaths: readonly string[]): Promise<string[]>;
+  listAffectedBuildUnits(
+    stateHash: string,
+    changedPaths: readonly string[],
+    signal?: AbortSignal
+  ): Promise<string[]>;
 
   /** Stage the complete authority index for an exact candidate state. */
-  stageAuthorityIndex(stateHash: string): Promise<void>;
+  stageAuthorityIndex(stateHash: string, signal?: AbortSignal): Promise<void>;
 
   /** Begin opportunistic analysis after the owning host has published readiness. */
   prewarmAuthorityIndex(): void;
@@ -514,11 +530,14 @@ export async function initBuildSystemV2(
     }
   };
   const authorityIndexManager = new AuthorityIndexManager();
-  const authorityAnalysisCache = AuthorityAnalysisCache.forWorkspace(source.workspaceId);
+  const authorityAnalysisWorker = new AuthorityAnalysisWorkerClient(
+    rootOptions.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? path.dirname(workspaceRoot)
+  );
   const authorityEpoch = {
     analyzerVersion: "userland-authority-v5",
     rpcSchemaVersion: workspaceRpcSchemaVersion(),
   } as const;
+  const authorityFactEpoch = { analyzerVersion: authorityEpoch.analyzerVersion } as const;
   const authorityEnvironmentAt = (
     stateHash: string,
     graphAtView: PackageGraph,
@@ -584,9 +603,10 @@ export async function initBuildSystemV2(
     return flight;
   };
 
-  const authorityIndexAt = (
+  const authorityAttestationsAt = (
     stateHash: string,
-    view: GraphView
+    view: GraphView,
+    signal?: AbortSignal
   ): Promise<AuthorityDependencyIndex> => {
     const prepare = async () => {
       const environment = await authorityEnvironmentAt(stateHash, view.graph, view.evMap);
@@ -601,16 +621,16 @@ export async function initBuildSystemV2(
       for (const node of nodes) {
         const effectiveVersion = view.evMap[node.name] ?? "unknown";
         consumerIdentities.set(node.name, {
-          epoch: authorityEpoch,
+          epoch: authorityFactEpoch,
           unitName: node.name,
-          effectiveVersion:
-            effectiveVersion === "unknown" ? `${effectiveVersion}:${stateHash}` : effectiveVersion,
+          effectiveVersion,
         });
       }
       const identity: AuthorityIndexIdentity = {
         stateHash,
         epoch: authorityEpoch,
         environmentDigest: environment.digest,
+        consumerSource: "analyzer-facts",
         graphDigest: sha256Canonical({
           version: 2,
           nodes: nodes.map((node) => ({
@@ -631,7 +651,9 @@ export async function initBuildSystemV2(
       authorityIndexManager.indexAt(
         stateHash,
         authorityEpoch,
-        async () => {
+        async (analysisSignal) => {
+          const restoreStartedAt = Date.now();
+          const restoreEventLoopStart = performance.eventLoopUtilization();
           const expectedConsumers = new Map(
             [...consumerIdentities.keys()].map((unitName) => [
               unitName,
@@ -640,17 +662,25 @@ export async function initBuildSystemV2(
               },
             ])
           );
-          const cacheValidation = authorityAnalysisCache.validation();
-          const persisted = authorityAnalysisCache.index(
+          const persistedLookup = await authorityAnalysisWorker.indexLookup(
+            source.workspaceId,
             identity,
             expectedConsumers,
-            cacheValidation
+            analysisSignal
           );
-          if (persisted) {
+          if (persistedLookup.index) {
+            const eventLoop = performance.eventLoopUtilization(restoreEventLoopStart);
             console.log(
-              `[BuildV2] Restored authority baseline for ${stateHash} from durable cache`
+              `[BuildV2] Restored authority baseline for ${stateHash} from durable cache`,
+              {
+                source: persistedLookup.source,
+                reason: persistedLookup.reason,
+                restoreMs: Date.now() - restoreStartedAt,
+                mainThreadEventLoopUtilization: eventLoop.utilization,
+                mainThreadActiveMs: eventLoop.active,
+              }
             );
-            return persisted;
+            return persistedLookup.index;
           }
           const consumers: Array<{
             unitName: string;
@@ -669,20 +699,48 @@ export async function initBuildSystemV2(
             effectiveVersion: string;
             consumerIdentity: Omit<AuthorityConsumerIdentity, "moduleClosureDigest">;
             factCacheKey: string;
+            cacheable: boolean;
             internalDeps: ReturnType<typeof collectTransitiveInternalDeps>;
           }> = [];
           const analysisStartedAt = Date.now();
+          const eventLoopStart = performance.eventLoopUtilization();
           let memoryFactHits = 0;
           let durableFactHits = 0;
+          const cacheReasons = new Map<string, number>();
+          // One predicate for "this unit has a durable identity". A unit with no
+          // effective version cannot be keyed stably, so it is never cached and
+          // never looked up; deriving that twice invites the two definitions to
+          // disagree and desynchronize the lookup array below.
+          const isCacheable = (unitName: string): boolean =>
+            view.evMap[unitName] !== undefined && view.evMap[unitName] !== "unknown";
+          const cacheableIdentities = [...consumerIdentities.values()].filter((consumer) =>
+            isCacheable(consumer.unitName)
+          );
+          const durableLookups = await authorityAnalysisWorker.factLookups(
+            source.workspaceId,
+            cacheableIdentities,
+            analysisSignal
+          );
+          const durableByUnit = new Map(
+            cacheableIdentities.map((consumer, index) => [
+              consumer.unitName,
+              durableLookups[index]!,
+            ])
+          );
           for (const node of nodes) {
             const effectiveVersion = view.evMap[node.name] ?? "unknown";
             const consumerIdentity = assertPresent(consumerIdentities.get(node.name));
             const factCacheKey = sha256Canonical(consumerIdentity);
-            const durableFacts = authorityAnalysisCache.factForConsumer(
-              consumerIdentity,
-              cacheValidation
+            const cacheable = isCacheable(node.name);
+            const durableLookup = cacheable
+              ? assertPresent(durableByUnit.get(node.name))
+              : { facts: null, reason: "unit-not-cacheable" as const };
+            cacheReasons.set(
+              durableLookup.reason,
+              (cacheReasons.get(durableLookup.reason) ?? 0) + 1
             );
-            const memoryFacts = authorityFactCache.get(factCacheKey);
+            const durableFacts = durableLookup.facts;
+            const memoryFacts = cacheable ? authorityFactCache.get(factCacheKey) : undefined;
             const cachedFacts =
               memoryFacts ??
               (durableFacts
@@ -695,6 +753,11 @@ export async function initBuildSystemV2(
               if (memoryFacts) memoryFactHits += 1;
               else durableFactHits += 1;
               rememberAuthorityFacts(factCacheKey, cachedFacts);
+              const proofError = serviceDeclarationProofError(node, view.graph, cachedFacts.facts);
+              if (proofError) {
+                blockingConsumers.add(node.name);
+                console.warn(`[BuildV2] Authority attestation rejected: ${proofError}`);
+              }
               consumers.push({
                 unitName: node.name,
                 effectiveVersion,
@@ -708,6 +771,7 @@ export async function initBuildSystemV2(
               effectiveVersion,
               consumerIdentity,
               factCacheKey,
+              cacheable,
               internalDeps: collectTransitiveInternalDeps(node, view.graph),
             });
           }
@@ -741,17 +805,20 @@ export async function initBuildSystemV2(
               ReturnType<typeof createAuthorityCompilerSnapshot>
             > | null = null;
             try {
-              compilerSnapshot = await createAuthorityCompilerSnapshot({
-                sourceRoot: materialized.sourceRoot,
-                consumerNames: new Set(missingConsumers.map((consumer) => consumer.node.name)),
-                units: projectedUnits.map((unit) => ({
-                  name: unit.name,
-                  relativePath: unit.relativePath,
-                  effectiveVersion: view.evMap[unit.name],
-                  packageDigest: sha256Canonical(unit.manifest),
-                })),
-                nodeModulesPaths: appNodeModuleRoots,
-              });
+              compilerSnapshot = await authorityAnalysisWorker.compilerSnapshot(
+                {
+                  sourceRoot: materialized.sourceRoot,
+                  consumerNames: new Set(missingConsumers.map((consumer) => consumer.node.name)),
+                  units: projectedUnits.map((unit) => ({
+                    name: unit.name,
+                    relativePath: unit.relativePath,
+                    effectiveVersion: view.evMap[unit.name],
+                    packageDigest: sha256Canonical(unit.manifest),
+                  })),
+                  nodeModulesPaths: appNodeModuleRoots,
+                },
+                analysisSignal
+              );
             } catch (error) {
               for (const consumer of missingConsumers) blockingConsumers.add(consumer.node.name);
               console.warn(
@@ -770,13 +837,16 @@ export async function initBuildSystemV2(
               compilerGroups = compilerSnapshot.groups.length;
 
               for (const consumer of missingConsumers) {
-                const { node, effectiveVersion, consumerIdentity, factCacheKey } = consumer;
+                const { node, effectiveVersion, consumerIdentity, factCacheKey, cacheable } =
+                  consumer;
                 try {
                   const sharedFacts = compilerSnapshot.factsByConsumer.get(node.name);
                   if (!sharedFacts) {
                     throw new Error(`Compiler snapshots omitted consumer ${node.name}`);
                   }
                   const facts = [...sharedFacts];
+                  const proofError = serviceDeclarationProofError(node, view.graph, facts);
+                  if (proofError) throw new Error(proofError);
                   const compilerDependencies = compilerSnapshot.dependenciesByConsumer.get(
                     node.name
                   );
@@ -797,15 +867,17 @@ export async function initBuildSystemV2(
                     moduleClosureDigest: identity.moduleClosureDigest,
                     facts,
                   });
-                  rememberAuthorityFacts(factCacheKey, {
-                    facts,
-                    moduleClosureDigest: identity.moduleClosureDigest,
-                  });
-                  factsToPersist.push({
-                    identity,
-                    dependencies: [...compilerDependencies],
-                    facts,
-                  });
+                  if (cacheable) {
+                    rememberAuthorityFacts(factCacheKey, {
+                      facts,
+                      moduleClosureDigest: identity.moduleClosureDigest,
+                    });
+                    factsToPersist.push({
+                      identity,
+                      dependencies: [...compilerDependencies],
+                      facts,
+                    });
+                  }
                 } catch (error) {
                   blockingConsumers.add(node.name);
                   console.warn(
@@ -829,7 +901,13 @@ export async function initBuildSystemV2(
           if (index.complete) {
             const commitStartedAt = Date.now();
             try {
-              authorityAnalysisCache.commit(identity, index, factsToPersist);
+              await authorityAnalysisWorker.commitCache(
+                source.workspaceId,
+                identity,
+                index,
+                factsToPersist,
+                analysisSignal
+              );
             } catch (error) {
               console.warn(
                 `[BuildV2] Could not persist authority analysis cache:`,
@@ -839,11 +917,18 @@ export async function initBuildSystemV2(
             commitMs = Date.now() - commitStartedAt;
           }
           if (missingConsumers.length > 0) {
+            const eventLoop = performance.eventLoopUtilization(eventLoopStart);
             console.log("[BuildV2] Authority analysis phases", {
               stateHash,
+              workspaceId: source.workspaceId,
+              workspaceIdStability: rootOptions.workspaceIdStability ?? "stable",
               consumers: nodes.length,
+              unknownEffectiveVersions: nodes.filter((node) => !view.evMap[node.name]).length,
               memoryFactHits,
               durableFactHits,
+              cacheReasons: Object.fromEntries(
+                [...cacheReasons].sort(([a], [b]) => a.localeCompare(b))
+              ),
               misses: missingConsumers.length,
               projectionUnits: new Set(
                 missingConsumers.flatMap((consumer) =>
@@ -863,13 +948,147 @@ export async function initBuildSystemV2(
               foldMs,
               commitMs,
               totalMs: Date.now() - analysisStartedAt,
+              mainThreadEventLoopUtilization: eventLoop.utilization,
+              mainThreadActiveMs: eventLoop.active,
               complete: index.complete,
             });
           }
           return index;
         },
-        sha256Canonical(identity)
+        `attestation:${sha256Canonical(identity)}`,
+        signal
       )
+    );
+  };
+  const serviceBindingsForNode = async (
+    node: GraphNode,
+    environment: ExactWorkspaceAuthorityEnvironment | null
+  ): Promise<BuildUnitIdentityResolution["serviceBindings"]> => {
+    const requests = node.manifest.authority?.serviceRequests ?? [];
+    if (!environment) {
+      return requests.map((request) => ({
+        ...request,
+        serviceName: null,
+        providerUnit: null,
+        catalogDigest: null,
+      }));
+    }
+    return Promise.all(
+      requests.map(async (request) => {
+        const resolution = await environment.resolveService(request.protocol);
+        if (resolution.kind !== "resolved" && resolution.kind !== "inaccessible") {
+          return {
+            ...request,
+            serviceName: null,
+            providerUnit: null,
+            catalogDigest: null,
+          };
+        }
+        return {
+          ...request,
+          serviceName: resolution.service.binding.name,
+          providerUnit: resolution.service.binding.source,
+          catalogDigest: resolution.service.catalog.digest,
+        };
+      })
+    );
+  };
+  const serviceDeclarationProofError = (
+    node: GraphNode,
+    graph: PackageGraph,
+    facts: ReturnType<typeof analyzeWorkspaceServiceCalls>
+  ): string | null => {
+    for (const fact of facts) {
+      const owner = graph.tryGet(fact.origin.unitName) ?? node;
+      if (isEffectImplementationPackage(owner.name)) continue;
+      const declared = new Set(
+        (owner.manifest.authority?.serviceRequests ?? []).map((request) => request.protocol)
+      );
+      if (fact.serviceQueries.kind !== "literals") {
+        return `${owner.name} has an unbounded resolveService query at ${fact.origin.file}:${fact.origin.line}`;
+      }
+      for (const query of fact.serviceQueries.values) {
+        if (!declared.has(query)) {
+          return `${owner.name} resolves undeclared workspace service protocol '${query}'`;
+        }
+      }
+    }
+    return null;
+  };
+  const authorityIndexAt = async (
+    stateHash: string,
+    view: GraphView,
+    signal?: AbortSignal
+  ): Promise<AuthorityDependencyIndex> => {
+    const environment = await authorityEnvironmentAt(stateHash, view.graph, view.evMap);
+    const nodes = view.graph
+      .allNodes()
+      .filter((candidate) => candidate.kind !== "template")
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const graphDigest = sha256Canonical({
+      version: 3,
+      nodes: nodes.map((node) => ({
+        name: node.name,
+        effectiveVersion: view.evMap[node.name] ?? "unknown",
+        serviceRequests: node.manifest.authority?.serviceRequests ?? [],
+      })),
+    });
+    const identity: AuthorityIndexIdentity = {
+      stateHash,
+      epoch: authorityEpoch,
+      environmentDigest: environment.digest,
+      graphDigest,
+      consumerSource: "manifest-declarations",
+    };
+    const expectedConsumers = new Map(
+      nodes.map((node) => [node.name, { effectiveVersion: view.evMap[node.name] ?? "unknown" }])
+    );
+    return authorityIndexManager.indexAt(
+      stateHash,
+      authorityEpoch,
+      async (analysisSignal) => {
+        const persistedLookup = await authorityAnalysisWorker.indexLookup(
+          source.workspaceId,
+          identity,
+          expectedConsumers,
+          analysisSignal
+        );
+        if (persistedLookup.index) {
+          console.log(
+            `[BuildV2] Restored manifest authority index for ${stateHash} from shared cache`,
+            { source: persistedLookup.source, reason: persistedLookup.reason }
+          );
+          return persistedLookup.index;
+        }
+        console.log("[BuildV2] Manifest authority index cache miss", {
+          stateHash,
+          workspaceId: source.workspaceId,
+          workspaceIdStability: rootOptions.workspaceIdStability ?? "stable",
+          reason: persistedLookup.reason,
+        });
+        const index = await authorityDependencyIndexFromDeclarations({
+          stateHash,
+          epoch: authorityEpoch,
+          consumers: nodes.map((node) => ({
+            unitName: node.name,
+            effectiveVersion: view.evMap[node.name] ?? "unknown",
+            serviceRequests: node.manifest.authority?.serviceRequests ?? [],
+          })),
+          environment,
+        });
+        if (index.complete) {
+          await authorityAnalysisWorker.commitCache(
+            source.workspaceId,
+            identity,
+            index,
+            [],
+            analysisSignal
+          );
+        }
+        return index;
+      },
+      `manifest:${sha256Canonical(identity)}`,
+      signal
     );
   };
   const executionRootProviders = new ExecutionRootProviderRegistry();
@@ -1085,6 +1304,7 @@ export async function initBuildSystemV2(
 
   let shuttingDown = false;
   let authorityPrewarmStarted = false;
+  const authorityPrewarmController = new AbortController();
   let workspaceBuildPrewarmFlight: Promise<WorkspaceBuildPrewarmResult> | null = null;
   const prewarmAuthorityIndex = (): void => {
     if (authorityPrewarmStarted || shuttingDown || !rootOptions.workspaceAuthorityEnvironmentAt)
@@ -1092,13 +1312,32 @@ export async function initBuildSystemV2(
     authorityPrewarmStarted = true;
     const prewarmState = currentState().stateHash;
     const startedAt = Date.now();
-    void authorityIndexAt(prewarmState, currentState())
+    void authorityIndexAt(prewarmState, currentState(), authorityPrewarmController.signal)
       .then((index) => {
         if (currentState().stateHash !== prewarmState) return;
         authorityIndexManager.establishPublished(index);
         console.log(
           `[BuildV2] Prewarmed authority baseline for ${prewarmState} (${Date.now() - startedAt}ms)`
         );
+        void authorityAttestationsAt(
+          prewarmState,
+          currentState(),
+          authorityPrewarmController.signal
+        )
+          .then((attestations) => {
+            console.log("[BuildV2] Prewarmed authority attestations", {
+              stateHash: prewarmState,
+              complete: attestations.complete,
+              blockingConsumers: [...attestations.blockingConsumers].sort(),
+            });
+          })
+          .catch((error: unknown) => {
+            if (authorityPrewarmController.signal.aborted) return;
+            console.warn(
+              "[BuildV2] Authority attestation prewarm failed:",
+              error instanceof Error ? error.message : String(error)
+            );
+          });
       })
       .catch((error) => {
         console.warn(
@@ -1817,6 +2056,12 @@ export async function initBuildSystemV2(
         effectiveVersion,
         dependencyEvs,
         externalDeps: collectTransitiveExternalDeps(node, graph, workspaceRoot, appNodeModuleRoots),
+        serviceBindings: await serviceBindingsForNode(
+          node,
+          rootOptions.workspaceAuthorityEnvironmentAt
+            ? await authorityEnvironmentAt(stateHash, graph, evMap)
+            : null
+        ),
       };
     },
 
@@ -1840,35 +2085,42 @@ export async function initBuildSystemV2(
         evMap = snapshot.evMap;
       }
       const admittedKinds = kinds ? new Set(kinds) : null;
-      return graph
-        .allNodes()
-        .filter((node) => !admittedKinds || admittedKinds.has(node.kind))
-        .map((node) => {
-          const effectiveVersion = evMap[node.name];
-          if (!effectiveVersion) {
-            throw new Error(`No effective version for ${node.name} at ${stateHash}`);
-          }
-          const dependencyEvs: Record<string, string> = {};
-          for (const dependency of collectTransitiveInternalDeps(node, graph)) {
-            const dependencyEv = evMap[dependency.name];
-            if (dependencyEv) dependencyEvs[dependency.name] = dependencyEv;
-          }
-          return {
-            unitPath: node.relativePath,
-            unitName: node.name,
-            kind: node.kind,
-            stateHash,
-            effectiveVersion,
-            dependencyEvs,
-            externalDeps: collectTransitiveExternalDeps(
-              node,
-              graph,
-              workspaceRoot,
-              appNodeModuleRoots
-            ),
-          };
-        })
-        .sort((left, right) => left.unitName.localeCompare(right.unitName));
+      const environment = rootOptions.workspaceAuthorityEnvironmentAt
+        ? await authorityEnvironmentAt(stateHash, graph, evMap)
+        : null;
+      return Promise.all(
+        graph
+          .allNodes()
+          .filter((node) => !admittedKinds || admittedKinds.has(node.kind))
+          .map(async (node) => {
+            const effectiveVersion = evMap[node.name];
+            if (!effectiveVersion) {
+              throw new Error(`No effective version for ${node.name} at ${stateHash}`);
+            }
+            const dependencyEvs: Record<string, string> = {};
+            for (const dependency of collectTransitiveInternalDeps(node, graph)) {
+              const dependencyEv = evMap[dependency.name];
+              if (dependencyEv) dependencyEvs[dependency.name] = dependencyEv;
+            }
+            return {
+              unitPath: node.relativePath,
+              unitName: node.name,
+              kind: node.kind,
+              stateHash,
+              effectiveVersion,
+              dependencyEvs,
+              externalDeps: collectTransitiveExternalDeps(
+                node,
+                graph,
+                workspaceRoot,
+                appNodeModuleRoots
+              ),
+              serviceBindings: await serviceBindingsForNode(node, environment),
+            };
+          })
+      ).then((identities) =>
+        identities.sort((left, right) => left.unitName.localeCompare(right.unitName))
+      );
     },
 
     async listBuildUnits(
@@ -1977,7 +2229,8 @@ export async function initBuildSystemV2(
 
     async listAffectedBuildUnits(
       stateHash: string,
-      changedPaths: readonly string[]
+      changedPaths: readonly string[],
+      signal?: AbortSignal
     ): Promise<string[]> {
       const ref = validateBuildRef(stateHash);
       if (!ref) throw new Error(`Missing exact state for affected-unit lookup`);
@@ -2016,11 +2269,28 @@ export async function initBuildSystemV2(
         (!publishedIndex || publishedIndex.stateHash !== publishedState)
       ) {
         const publishedView = await viewAt(publishedState);
-        publishedIndex = await authorityIndexAt(publishedState, publishedView);
+        publishedIndex = await authorityIndexAt(publishedState, publishedView, signal);
         authorityIndexManager.establishPublished(publishedIndex);
       }
       if (publishedIndex && rootOptions.workspaceAuthorityEnvironmentAt) {
         for (const name of publishedIndex.blockingConsumers) {
+          if (view.graph.has(name)) names.add(name);
+        }
+      }
+
+      // The declaration index is the cheap dependency map, not proof that the
+      // source obeys those declarations. Join the current-epoch analyzer
+      // attestation before incremental selection. Startup prewarm and a push
+      // share this single flight; if prewarm is still running, publication
+      // waits for it instead of starting another workspace scan.
+      if (rootOptions.workspaceAuthorityEnvironmentAt) {
+        const publishedView = await viewAt(publishedState);
+        const publishedAttestations = await authorityAttestationsAt(
+          publishedState,
+          publishedView,
+          signal
+        );
+        for (const name of publishedAttestations.blockingConsumers) {
           if (view.graph.has(name)) names.add(name);
         }
       }
@@ -2033,9 +2303,10 @@ export async function initBuildSystemV2(
         (changed) => changed === "meta/vibestudio.yml" || changed.startsWith("workers/")
       );
       if (authorityRelevant) {
-        const candidateIndex = await authorityIndexAt(ref, view);
+        const candidateIndex = await authorityIndexAt(ref, view, signal);
         const publishedAuthorityIndex =
-          publishedIndex ?? (await authorityIndexAt(publishedState, await viewAt(publishedState)));
+          publishedIndex ??
+          (await authorityIndexAt(publishedState, await viewAt(publishedState), signal));
         const candidateProviderUnits = new Set(
           view.graph
             .allNodes()
@@ -2077,9 +2348,7 @@ export async function initBuildSystemV2(
           new Set([...candidateProviderUnits, ...publishedProviderUnits]),
           changedQueries
         );
-        for (const name of authorityConsumers) {
-          if (view.graph.has(name)) names.add(name);
-        }
+        addReverseClosure(view.graph, authorityConsumers);
       }
       return view.graph
         .topologicalOrder()
@@ -2087,11 +2356,11 @@ export async function initBuildSystemV2(
         .map((node) => node.name);
     },
 
-    async stageAuthorityIndex(stateHash: string): Promise<void> {
+    async stageAuthorityIndex(stateHash: string, signal?: AbortSignal): Promise<void> {
       const ref = validateBuildRef(stateHash);
       if (!ref) throw new Error("Missing exact state for authority index staging");
       const view = await viewAt(ref);
-      const index = await authorityIndexAt(ref, view);
+      const index = await authorityIndexAt(ref, view, signal);
       if (index.blockingConsumers.size > 0) {
         throw new Error(
           `Authority baseline has blocking consumers: ${[...index.blockingConsumers].sort().join(", ")}`
@@ -2452,8 +2721,10 @@ export async function initBuildSystemV2(
 
     async shutdown(): Promise<void> {
       shuttingDown = true;
+      authorityPrewarmController.abort();
       trigger.stop();
       await workspaceBuildPrewarmFlight?.catch(() => undefined);
+      await authorityAnalysisWorker.close();
       authorityPublicationUnsubscribe();
       setBuildSourceProvider(null);
       console.log("[BuildV2] Shut down");
