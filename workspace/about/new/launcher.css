@@ -1,0 +1,34 @@
+.launcher-shortcut {
+  padding: 1px 5px;
+  border: 1px solid var(--gray-6);
+  border-radius: 5px;
+  background: var(--gray-3);
+  box-shadow: 0 1px 0 var(--gray-6);
+  font-family: inherit;
+}
+
+.launcher-preview {
+  transition:
+    background 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.launcher-suggestion {
+  transition:
+    background 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.launcher-suggestion:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .launcher-preview,
+  .launcher-suggestion {
+    transition: none !important;
+  }
+}

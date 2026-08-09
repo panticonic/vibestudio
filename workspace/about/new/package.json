@@ -73,6 +73,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "open",
+          "evidence": "bounded-dynamic"
+        },
+        {
           "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "prefix",
