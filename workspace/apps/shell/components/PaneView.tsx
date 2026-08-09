@@ -34,6 +34,13 @@ interface PaneViewProps {
  * a brand wash: a saturated slab across the top of every pane fights whatever
  * page is rendering below it. The accent is spent only while a drag is over the
  * rail, where it has to read instantly.
+ *
+ * Only the drop target needs the full six pixels; the *mark* does not. Painting
+ * the whole strip made every pane look capped by a stray scrollbar, so the rail
+ * itself stays transparent and a short centred grip carries the state instead —
+ * grown and darkened when focused, the way a handle is meant to read. Drag-over
+ * is the one case that still washes the entire strip, because at that moment
+ * the question being answered is "how big is the target", not "which pane".
  */
 export function PaneView({
   pane,
@@ -85,15 +92,28 @@ export function PaneView({
         style={{
           height: PANE_DROP_HANDLE_HEIGHT,
           flexShrink: 0,
-          backgroundColor: isDropOver
-            ? "var(--accent-8)"
-            : markFocused
-              ? "var(--gray-a8)"
-              : "var(--gray-a3)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: isDropOver ? "var(--accent-8)" : "transparent",
           cursor: "default",
           transition: "background-color 120ms ease-out",
         }}
-      />
+      >
+        <Box
+          style={{
+            height: 2,
+            width: markFocused ? 40 : 24,
+            borderRadius: 999,
+            backgroundColor: isDropOver
+              ? "var(--accent-1)"
+              : markFocused
+                ? "var(--gray-a8)"
+                : "var(--gray-a5)",
+            transition: "width 120ms ease-out, background-color 120ms ease-out",
+          }}
+        />
+      </Box>
       <Flex direction="column" style={{ flex: "1 1 0", minHeight: 0, minWidth: 0 }}>
         <PaneContent
           paneId={pane.id}
