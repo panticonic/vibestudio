@@ -1187,7 +1187,14 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   async applyPanelExecutionActivated(
     event: import("@vibestudio/shared/events").EventPayloads["panel:executionActivated"]
   ): Promise<void> {
-    if (!this.registry.applyExecutionIdentity(event.panelId, event)) return;
+    if (!this.registry.applyExecutionIdentity(event.panelId, event)) {
+      // Slot creation and server-owned activation are concurrent. A warm build
+      // can activate before the create RPC has returned and inserted the slot
+      // into this host's registry. Rejoin the durable slot projection instead
+      // of making renderer correctness depend on that event ordering.
+      await this.shellCore.refreshPanel(asPanelSlotId(event.panelId));
+      if (!this.registry.applyExecutionIdentity(event.panelId, event)) return;
+    }
     try {
       await this.runtime.convergePreparedPanelView(event.panelId, {
         refreshPresentedIdentity: true,

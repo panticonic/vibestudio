@@ -538,6 +538,41 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     });
   });
 
+  it("rejoins durable state when activation beats the local slot projection", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/activation-before-create-response", [], {
+      runtimeEntityId: "panel:nav-activation-before-create-response",
+      effectiveVersion: "effective-ready",
+      buildKey: "b".repeat(64),
+      executionDigest: "e".repeat(64),
+      authorityRequests: [],
+      artifacts: { buildState: "building", buildProgress: "Loading panel runtime..." },
+    });
+    const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
+    shellCore.refreshPanel.mockImplementationOnce(async () => {
+      registry.addPanel(panel, null, { addAsRoot: true });
+      return panel;
+    });
+
+    await orchestrator.applyPanelExecutionActivated({
+      panelId: panel.id,
+      runtimeEntityId: panel.runtimeEntityId!,
+      effectiveVersion: panel.effectiveVersion!,
+      buildKey: panel.buildKey!,
+      executionDigest: panel.executionDigest!,
+      authorityRequests: [],
+    });
+    await orchestrator.ensureLoaded(panel.id);
+
+    expect(shellCore.refreshPanel).toHaveBeenCalledWith(asPanelSlotId(panel.id));
+    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+      panel.id,
+      expect.stringContaining(`buildKey=${panel.buildKey}`),
+      panel.snapshot.contextId
+    );
+    expect(registry.getPanel(panel.id)?.artifacts.buildState).toBe("ready");
+  });
+
   it("hydrates a presented durable panel before persisting shell layout focus", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presented-before-query");
